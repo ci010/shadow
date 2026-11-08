@@ -666,3 +666,20 @@ These host operations are reached through explicit approved custom tools; adding
 `hostCapabilities` alone does not silently add model tools. Package source changes
 still require the existing exact-version owner review/publication flow. Source
 implementation and unit tests are not live platform end-to-end acceptance.
+
+## Discord channel navigation
+
+Bot conversations do not consume the sidebar's ten ordinary-conversation slots.
+For Discord, persisted origin metadata projects known thread histories beneath
+one Project/Bot/guild-scoped parent-channel entry. The sidebar does not list each
+child thread. Opening a parent shows a searchable post/thread index; each history
+still opens with its original logical session ID. An ordinary text channel's
+category parent is not a thread relationship. Histories without verified ancestry
+remain accessible rather than being assigned by title or guessed from bindings.
+
+This is a display projection, not a subscription change or history migration.
+Legacy `bot:` history and passive `channel-inbox:` history remain separate; grouping
+never replays messages, grants access, starts a synthetic session, or enables a
+quarantined BOT. Parent names come from persisted metadata where available, with
+an explicit channel-ID fallback otherwise. New graph ancestry metadata requires
+the updated backend as well as the updated renderer.

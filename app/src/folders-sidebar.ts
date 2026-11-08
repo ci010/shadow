@@ -1,3 +1,4 @@
+import { DiscordChannelNavigationSchema, type DiscordChannelNavigation } from '../../src/channels/discord-navigation.ts'
 import { t } from './i18n.ts'
 import { sessionActivity } from './session-activity.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
@@ -14,6 +15,8 @@ export const FOLDER_ACTIONS = [
 ] as const
 
 export interface SidebarSession {
+  discordChannel?: DiscordChannelNavigation
+  discordHistoryIds?: string[]
   groupObservation?: import('./service-groups.ts').ServiceGroup
   automation?: AutomationSessionRef
   sessionId: string
@@ -168,6 +171,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       sessionId: session.sessionId,
       projectId: session.projectId as string | undefined,
       channelAddress,
+      discordChannel: session.discordChannel === undefined ? undefined : DiscordChannelNavigationSchema.parse(session.discordChannel),
       inferenceDefaults: isRecord(defaults) && typeof defaults.model === 'string' ? {
         model: defaults.model,
         ...(typeof defaults.contextWindow === "number" ? { contextWindow: defaults.contextWindow } : {}),

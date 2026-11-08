@@ -4132,5 +4132,11 @@
   "Binary asset; inspect the source file before opening.": "二进制资源；打开前请检查源文件。",
   "Project owner access is required to run apps.": "运行应用需要项目所有者权限。",
   "Cancel author testing and stop": "取消作者测试并停止应用",
-  "Closing that window stops the app. Its saved data and usage remain.": "关闭该窗口会停止应用，已保存的数据和使用量仍会保留。"
+  "Closing that window stops the app. Its saved data and usage remain.": "关闭该窗口会停止应用，已保存的数据和使用量仍会保留。",
+  "Channel content": "频道内容",
+  "Choose a post or thread to open its original history.": "选择帖子或讨论串，打开原始历史记录。",
+  "Search posts and threads": "搜索帖子和讨论串",
+  "No posts or threads found.": "未找到帖子或讨论串。",
+  "Passive inbox": "被动收件箱",
+  "Original history": "原始历史记录"
 }

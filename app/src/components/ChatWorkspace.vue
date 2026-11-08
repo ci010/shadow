@@ -1,7 +1,11 @@
 <template>
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
     <div v-show="!childId || wide || route.name === 'project-settings' || route.name === 'agents'" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
-      <FileWorkbench v-if="observedGroupKey(sessionId || '')" :api-base="apiBase" session-id="" :project-id="projectId" :context-key="sessionId || ''" :active="visible" :explorer-enabled="false" :project-navigation-enabled="!embedded" :knowledge-enabled="!embedded" :knowledge-request="knowledgeRequest"
+      <FileWorkbench v-if="discordChannelKey(sessionId || '')" :api-base="apiBase" session-id="" :project-id="projectId" :context-key="sessionId || ''" :active="visible" :explorer-enabled="false" :project-navigation-enabled="!embedded" :knowledge-enabled="!embedded" :knowledge-request="knowledgeRequest"
+        @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)" @project-navigation="emit('project-navigation', $event)" :conversation-title="t('Channel content')">
+        <DiscordChannelIndex :api-base="apiBase" :project-id="projectId || ''" :channel-key="discordChannelKey(sessionId || '')!" :active="visible" @open="emit('navigate', $event)" />
+      </FileWorkbench>
+      <FileWorkbench v-else-if="observedGroupKey(sessionId || '')" :api-base="apiBase" session-id="" :project-id="projectId" :context-key="sessionId || ''" :active="visible" :explorer-enabled="false" :project-navigation-enabled="!embedded" :knowledge-enabled="!embedded" :knowledge-request="knowledgeRequest"
         @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         @project-navigation="emit('project-navigation', $event)" :conversation-title="t('Received messages')">
         <div class="observed-chat"><ChannelGroupContext :api-base="apiBase" :project-id="projectId || ''" :group-key="observedGroupKey(sessionId || '')!" :active="visible" discovery-only /></div>
@@ -34,6 +38,8 @@
 import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import DiscordChannelIndex from './DiscordChannelIndex.vue'
+import { discordChannelKey } from '../discord-navigation.ts'
 import ChatTab from './ChatTab.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
 import ChannelGroupContext from './ChannelGroupContext.vue'

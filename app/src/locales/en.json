@@ -4132,5 +4132,11 @@
   "Binary asset; inspect the source file before opening.": "Binary asset; inspect the source file before opening.",
   "Project owner access is required to run apps.": "Project owner access is required to run apps.",
   "Cancel author testing and stop": "Cancel author testing and stop",
-  "Closing that window stops the app. Its saved data and usage remain.": "Closing that window stops the app. Its saved data and usage remain."
+  "Closing that window stops the app. Its saved data and usage remain.": "Closing that window stops the app. Its saved data and usage remain.",
+  "Channel content": "Channel content",
+  "Choose a post or thread to open its original history.": "Choose a post or thread to open its original history.",
+  "Search posts and threads": "Search posts and threads",
+  "No posts or threads found.": "No posts or threads found.",
+  "Passive inbox": "Passive inbox",
+  "Original history": "Original history"
 }

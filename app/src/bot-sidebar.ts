@@ -1,3 +1,4 @@
+import { projectDiscordChannels } from './discord-navigation.ts'
 import { t } from './i18n.ts'
 import type { SidebarSession } from './folders-sidebar.ts'
 import type { ChannelSetupStatus, ChannelState } from '../../src/channels/setup-contract.ts'
@@ -57,7 +58,7 @@ export function groupBotConversations(sessions: SidebarSession[], projectId: str
     }
     group.sessions.push(session)
   }
-  return { chats, bots: [...groups.values()] }
+  return { chats, bots: [...groups.values()].map(group => ({ ...group, sessions: projectDiscordChannels(group.sessions) })) }
 }
 
 export function botSidebarStorageKey(apiBase: string, projectId: string): string {

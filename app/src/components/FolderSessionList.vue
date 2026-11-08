@@ -27,7 +27,7 @@
       <template v-if="sessionMetadata" #subtitle><SessionListItem :session="session" part="metadata" :metadata="sessionMetadata(session)" /></template>
       <template #icon><SessionListItem :session="session" part="icon" :stage="activityStage(session)" :has-background-tasks="hasBackgroundTasks(session)" :subagents="delegatedActivity(session)" /></template>
       <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
-      <template v-if="!session.sessionId.startsWith('observed-group:')" #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
+      <template v-if="!isDisplayOnlyConversation(session.sessionId)" #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
           <strong class="session-info-title">{{ session.label }}</strong>
@@ -48,7 +48,7 @@
           <p v-if="delegatedLabel(session)">{{ delegatedLabel(session) }}</p>
           <div class="session-info-actions">
             <button type="button" class="session-info-open" @click="$emit('select', session.sessionId); close()">{{ t('Open conversation') }}</button>
-            <button v-if="!session.sessionId.startsWith('observed-group:')" type="button" class="session-info-delete" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="close(); $emit('delete', session.sessionId)">{{ t('Delete conversation') }}</button>
+            <button v-if="!isDisplayOnlyConversation(session.sessionId)" type="button" class="session-info-delete" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="close(); $emit('delete', session.sessionId)">{{ t('Delete conversation') }}</button>
           </div>
           <template v-if="descendants(session).length">
             <h4>{{ t('Related conversations') }}</h4>
@@ -62,6 +62,7 @@
 </template>
 
 <script setup lang="ts">
+import { isDisplayOnlyConversation } from '../discord-navigation.ts'
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
@@ -95,7 +96,7 @@ function descendants(session: SidebarSession) {
   return family(session).slice(1).map(item => ({ ...item, depth: Math.max(0, item.depth - session.depth - 1) }))
 }
 function isSelected(session: SidebarSession) {
-  return props.rail ? family(session).some(item => item.sessionId === props.activeSessionId) : session.sessionId === props.activeSessionId
+  return props.rail ? family(session).some(item => item.sessionId === props.activeSessionId || item.discordHistoryIds?.includes(props.activeSessionId)) : session.sessionId === props.activeSessionId || !!session.discordHistoryIds?.includes(props.activeSessionId)
 }
 function activityStage(session: SidebarSession) {
   return props.rail ? prominentWorkingStage(family(session).map(item => props.stages[item.sessionId])) ?? props.stages[session.sessionId] : props.stages[session.sessionId]
