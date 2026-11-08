@@ -256,7 +256,11 @@ export function groupFolderSessions(folders: FolderRecord[], sessions: SidebarSe
 }) {
   const owners = automationSessionOwners(sessions)
   const allRegular = persistentConversations(sessions).filter(session => !owners.has(session.sessionId))
-  const regular = navigation ? recentSidebarSessions(allRegular, navigation.activeSessionId, PROJECT_SESSION_LIMIT, navigation.draftActivity) : allRegular
+  // Bot conversations have their own disclosure trees, outside the ordinary
+  // chat quota. Keep their source order and apply active-row pinning only to chats.
+  const recentChats = navigation ? new Set(recentSidebarSessions(allRegular.filter(session => !session.channelAddress),
+    navigation.activeSessionId, PROJECT_SESSION_LIMIT, navigation.draftActivity).map(session => session.sessionId)) : undefined
+  const regular = recentChats ? allRegular.filter(session => session.channelAddress || recentChats.has(session.sessionId)) : allRegular
   const folderIds = new Set(folders.map(folder => folder.id))
   const automations = new Map<string, { id: string; name: string; sessions: SidebarSession[] }>()
   for (const session of sessions) {
