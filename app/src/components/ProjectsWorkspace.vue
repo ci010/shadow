@@ -91,6 +91,7 @@
 </template>
 
 <script setup lang="ts">
+import { isDisplayOnlyConversation } from '../discord-navigation.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -375,7 +376,7 @@ function navigate(projectId: string, sessionId: string, child?: string) {
   void router.push({ ...projectChatLocation({ projectId, sessionId }), query: child ? { child } : {} })
 }
 function selectSession(projectId: string, sessionId: string) {
-  if (!sessionId.startsWith('observed-group:') && !selected.value?.sessionId.startsWith('observed-group:') && selected.value?.projectId === projectId) {
+  if (!isDisplayOnlyConversation(sessionId) && !isDisplayOnlyConversation(selected.value?.sessionId ?? '') && selected.value?.projectId === projectId) {
     const instance = instances.get(selected.value.key)
     if (instance) { instance.requestSession(sessionId); closeSidebar(); return }
   }
