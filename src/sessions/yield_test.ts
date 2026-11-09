@@ -557,3 +557,52 @@ test('delivery failure before timeout cancels the timer rather than silently cho
   t.mock.timers.tick(10)
   assert.equal(f.manager.get('child'), null)
 })
+
+
+test('parent escalation disambiguates before publication; only live linked children follow human deferral', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const states: Record<string, SessionState> = {
+    root: { sessionId: 'root', segmentIndex: 0 },
+    other: { sessionId: 'other', segmentIndex: 0 },
+    child1: { sessionId: 'child1', segmentIndex: 0, parentSessionId: 'root' },
+    child2: { sessionId: 'child2', segmentIndex: 0, parentSessionId: 'root' },
+    foreign: { sessionId: 'foreign', segmentIndex: 0, parentSessionId: 'other' },
+  }
+  let published = 0, opened = 0
+  const manager = new YieldManager({
+    getState: id => states[id], getPolicy: id => ({ timeoutMs: id === 'root' ? 100 : null }),
+    notifyParent: async () => {}, notifyUser: async () => { published++ },
+    journal: { open: async request => { opened++; return { ...request, origin: { physicalId: request.sessionId + '-0' } } }, write: async () => {} },
+  })
+  const children = ['child1', 'child2', 'foreign'].map(id => manager.ask(id, question(), signal()))
+  await new Promise(resolve => setImmediate(resolve))
+  const refs = ['child1', 'child2', 'foreign'].map(id => {
+    const request = manager.get(id)!
+    return { sessionId: id, physicalId: request.origin!.physicalId, requestId: request.id }
+  })
+  for (const fields of [{}, { sources: [refs[2]] }, { sources: [{ ...refs[0]!, physicalId: 'wrong-segment' }] }]) {
+    await assert.rejects(manager.ask('root', { ...question(), ...fields }, signal()), /explicit relationship/)
+  }
+  assert.equal(opened, 3, 'Rejected requests must not be journaled')
+  assert.equal(published, 0)
+  const unrelated = manager.ask('root', { ...question(), independent: true }, signal())
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(100)
+  assert.equal((await unrelated).approved, false)
+  for (const id of ['child1', 'child2', 'foreign']) assert.ok(manager.get(id), 'Unrelated human ask cannot settle any child')
+  const escalation = manager.ask('root', { ...question(), sources: [refs[0]!] }, signal())
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(manager.get('child1'), 'Pending human ask must not settle the child')
+  t.mock.timers.tick(100)
+  assert.equal((await escalation).approved, false)
+  const result = await children[0]!
+  assert.equal(result.disposition, 'deferred')
+  assert.equal(result.approved, false)
+  assert.equal(result.option, undefined)
+  assert.ok(manager.get('child2'), 'Unlinked sibling stays answerable')
+  assert.ok(manager.get('foreign'))
+  await manager.answerParent('root', refs[1]!.requestId, 'Change')
+  await manager.answerParent('other', refs[2]!.requestId, 'Stop')
+  assert.equal((await children[1]!).option, 'Change')
+  assert.equal((await children[2]!).option, 'Stop')
+})

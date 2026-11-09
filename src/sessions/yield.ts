@@ -128,6 +128,18 @@ export class YieldManager {
       throw new YieldError('invalid_request', error instanceof Error ? error.message : String(error))
     }
     if (parsed.sources && !this.deps.journal) throw new YieldError('unavailable', 'Decision references require a persistent journal.')
+    // Require an explicit relationship before publishing: a human escalation
+    // without links would leave its child blocked after a deferred answer.
+    const children = [...this.pending.values()].filter(item => item.phase === 'waiting'
+      && item.request.recipient.kind === 'parent' && item.request.recipient.sessionId === sessionId)
+    if (!ownerPolicy && children.length && parsed.independent !== true && !children.some(child =>
+      parsed.sources?.some(source => source.requestId === child.request.id && source.sessionId === child.request.sessionId
+        && source.physicalId === child.request.origin?.physicalId))) {
+      const sources = children.filter(child => child.request.origin).map(child => ({ sessionId: child.request.sessionId,
+        physicalId: child.request.origin!.physicalId, requestId: child.request.id }))
+      throw new YieldError('invalid_request', 'Waiting child decisions need an explicit relationship. Retry this escalation with sources citing the relevant live direct child (up to three): '
+        + JSON.stringify(sources) + '. For an unrelated question, use independent:true without sources. No human question has been published.')
+    }
     const recipient = this.recipient(sessionId)
     if (parsed.workProposal && recipient.kind !== 'user') throw new YieldError('forbidden', 'Work proposal approval requires the human, not a parent agent.')
     const reportingSessionId = this.deps.getState(sessionId)?.decisionOwnerSessionId
@@ -246,10 +258,22 @@ export class YieldManager {
       unaffected: request.brief?.unaffected ?? [] }
     pending.phase = 'answering'
     if (pending.timer !== undefined) clearTimeout(pending.timer)
-    return this.track(this.deps.journal.write({ request, closed: { reason: disposition, message: reason, at: new Date().toISOString() } }).then(() => {
+    return this.track(this.deps.journal.write({ request, closed: { reason: disposition, message: reason, at: new Date().toISOString() } }).then(async () => {
       this.cleanup(pending)
       if (pending.abortReason) pending.reject(pending.abortReason)
       else pending.resolve(result)
+      // Only explicit escalation links to this parent's live children propagate
+      // non-approval. A normal final or unrelated human question changes nothing.
+      if (disposition === 'deferred' || disposition === 'investigation') {
+        await Promise.all((request.sources ?? []).map(async source => {
+          const child = this.requests.get(source.requestId)
+          if (!child || child.phase !== 'waiting' || child.request.sessionId !== source.sessionId
+            || child.request.origin?.physicalId !== source.physicalId
+            || child.request.recipient.kind !== 'parent' || child.request.recipient.sessionId !== request.sessionId) return
+          await this.continueWithoutAnswer(child, disposition,
+            ('The parent escalated this request but received no authorization. ' + reason).slice(0, 4000))
+        }))
+      }
       return result
     }, error => {
       const failure = this.persistenceError(error)
@@ -257,6 +281,12 @@ export class YieldManager {
       pending.reject(failure)
       throw failure
     }))
+  }
+
+  waitingChildren(parentSessionId: string): YieldRequest[] {
+    return [...this.pending.values()].filter(item => item.phase === 'waiting'
+      && item.request.recipient.kind === 'parent' && item.request.recipient.sessionId === parentSessionId)
+      .map(item => snapshot(item.request))
   }
 
   get(sessionId: string): YieldRequest | null {
@@ -283,7 +313,7 @@ export class YieldManager {
     if (previous.workProposal || question.workProposal) throw new YieldError('conflict', 'Return for investigation and create a new work proposal; its exact decision cannot be rewritten.')
     if (!previous.origin || !this.deps.journal?.replace) throw new YieldError('unavailable', 'Decision revisions require a journal.')
     const next = snapshot({
-      ...parseYieldQuestion(question), sources: previous.sources,
+      ...parseYieldQuestion(question), sources: previous.sources, independent: previous.independent,
       workContext: previous.workContext, workStamps: previous.workStamps,
       ...(previous.ownerOnly ? { ownerOnly: true as const } : {}),
       brief: question.brief ?? previous.brief, reportingSessionId: previous.reportingSessionId,

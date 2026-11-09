@@ -722,6 +722,8 @@ export class SessionManager {
     const context = await this.decisionRecords.context(sessionId)
     const reporter = reportingSessionId === sessionId ? undefined : await this.decisionRecords.context(reportingSessionId)
     return { ...context, ...(this.alignment ? { workContext: this.alignment.decisionContext(sessionId) } : {}),
+      childDecisionEscalation: { waiting: this.yields.waitingChildren(sessionId),
+        rule: 'When a child decision is waiting, cite its live reference in sources to escalate it; independent:true (without sources) explicitly marks an unrelated question. Deferred linked escalation resumes the child without approval. Ordinary input does not grant authorization.' },
       userInputs: [...context.userInputs, ...(reporter?.userInputs ?? [])], reportingSessionId,
       notice: `${context.notice} Reporting responsibility does not change who answers or assign Work work.` }
   }
@@ -924,6 +926,15 @@ ${JSON.stringify(request)}`,
     else this.deps.bus.emit('message.outbound', message)
   }
 
+  // Only coordinator-created parent questions may bypass task correction admission.
+  private readonly parentQuestions = new WeakSet<SessionInput>()
+
+  private async deliverParentQuestion(parentId: string, input: SessionInput): Promise<void> {
+    this.parentQuestions.add(input)
+    try { await this.deliver(parentId, input) }
+    finally { this.parentQuestions.delete(input) }
+  }
+
   private async notifyYieldParent(request: YieldRequest): Promise<void> {
     const parentId = request.recipient.sessionId
     const parent = this.getSessionState(parentId)
@@ -933,7 +944,7 @@ ${JSON.stringify(request)}`,
     if (!definitions.some(tool => tool.name === 'reply')) {
       throw new YieldError('unavailable', 'The parent must have the reply tool enabled to answer.')
     }
-    await this.deliver(parentId, {
+    await this.deliverParentQuestion(parentId, {
       kind: 'message', id: request.id, timestamp: new Date().toISOString(),
       source: { kind: 'session', sessionId: request.sessionId, senderName: 'Subagent' },
       policy: 'steering',
@@ -942,6 +953,7 @@ ${JSON.stringify(request)}`,
         JSON.stringify(request),
         'Answer using reply, request_id set to the id above, and text set to one exact option.',
         'Do not merely send a message to the child; that does not resolve this request.',
+        'If human authorization is needed, ask with sources containing this request\'s sessionId, origin.physicalId and id (as requestId). A deferred human escalation then resumes the linked child without approval; never reply with a default on the human\'s behalf.',
         'After answering, continue your original task.',
       ].join('\n'),
     })
@@ -954,7 +966,7 @@ ${JSON.stringify(request)}`,
         ? undefined : this.resolveAgentTypeTools(parent.agentType)).some(tool => tool.name === 'reply')) {
         throw new YieldError('unavailable', 'The parent must have reply enabled to answer.')
       }
-      await this.deliver(parent.sessionId, {
+      await this.deliverParentQuestion(parent.sessionId, {
         kind: 'message', id: request.id, timestamp: request.createdAt, policy: 'steering',
         source: { kind: 'session', sessionId: request.sessionId, senderName: 'Subagent' },
         content: `Your subagent needs input, not new authorization.\n${JSON.stringify(request)}\nUse reply({ request_id: "${request.id}", text: "..." }); a normal message does not resume it.`,
@@ -1551,6 +1563,8 @@ ${JSON.stringify(request)}`,
           throw new Error('Session input references must belong to this project')
         }
       }
+      const parentQuestion = this.parentQuestions.has(input) && !!sourceSessionId
+        && delegationOwner(this.sessionStates[sourceSessionId]) === sessionId
       const completion = input.source.kind === 'event' ? this.completionEvents.get(input.source.eventId) : undefined
       const trustedCompletion = completion?.sourceId === sourceSessionId && completion?.targetId === sessionId
       if (sourceSessionId && !trustedCompletion && input.kind === 'message' && input.policy !== 'silent') {
@@ -1569,7 +1583,8 @@ ${JSON.stringify(request)}`,
             this.sessions[sessionId]?.cancel()
             return { status: 'accepted', sessionId, inputId: input.id }
           }
-          if (!(input.kind === 'message' && input.policy === 'next-step' && input.source.kind === 'session'
+          if (!(parentQuestion && state.mode === 'task' && state.executionStatus === 'running'
+            && this.sessions[sessionId]?.accepting) && !(input.kind === 'message' && input.policy === 'next-step' && input.source.kind === 'session'
             && this.canReceiveSessionMessage(sessionId, input.source.sessionId))) {
             const prefix = `Execution "${sessionId}" does not accept subsequent inputs; message not delivered.`
             if (state.mode === 'task' && input.kind === 'message' && input.source.kind === 'session') {
@@ -1688,9 +1703,11 @@ ${JSON.stringify(request)}`,
           }
         }
         beforeDispatch?.()
-        session.dispatch(deliveryInput, resolveInferenceSettings(
+        const inference = resolveInferenceSettings(
           config, this.deps.conversationPolicies?.resolve(sessionId)?.agent ?? (personal ? this.deps.agentTypes.resolve(personal.agent) : undefined), state?.config,
-        ))
+        )
+        if (parentQuestion && session instanceof EphemeralSession) session.dispatchParentQuestion(deliveryInput, inference)
+        else session.dispatch(deliveryInput, inference)
       } catch (error) {
         if (resume) {
           state!.recovery = recovery
