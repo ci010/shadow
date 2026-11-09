@@ -3,7 +3,7 @@ import type { RemoteFilesystemTarget } from './remote-filesystem-client.ts'
 import { DURABLE_SHELL_OPERATION, isUnknownShellReceipt, RECONCILE_SHELL_OPERATION } from './shell-journal.ts'
 import { ToolOutcomeUnknownError } from '../tools/tool.ts'
 import {
-  MAX_REMOTE_SHELL_TIMEOUT_MS,
+  REMOTE_SHELL_ADMISSION_TIMEOUT_MS,
   parseWorkdirProcessArgs,
 } from './capability-shell.ts'
 
@@ -12,11 +12,12 @@ export async function executeRemoteShell(
   args: unknown,
   timeoutMs: number,
   completedFailure?: () => void,
+  options: { untilExit?: boolean; observe?: (output: string) => void; onReceipt?: (receipt: ExecutionReceiptV1) => void } = {},
 ): Promise<string> {
   target.signal.throwIfAborted()
   const parsed = parseWorkdirProcessArgs(args)
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_REMOTE_SHELL_TIMEOUT_MS) {
-    return `Error: remote exec requires timeout_ms between 1 and ${MAX_REMOTE_SHELL_TIMEOUT_MS}; background execution (timeout_ms=0) is unsupported. Remote commands are terminated on timeout.`
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) {
+    return 'Error: `timeout_ms` must be a finite non-negative integer no greater than 2147483647'
   }
   const createdAt = new Date()
   const jobId = crypto.randomUUID()
@@ -33,12 +34,16 @@ export async function executeRemoteShell(
     turnId: target.executionKey ?? target.turnId,
     nodeId: target.nodeId, workdirId: target.workdirId,
     operation: target.recovering ? RECONCILE_SHELL_OPERATION : DURABLE_SHELL_OPERATION,
-    args: parsed,
+    args: { ...parsed, ...(options.untilExit ? { lifetime: 'until-exit' } : {}) },
     createdAt: createdAt.toISOString(),
-    deadlineAt: new Date(createdAt.getTime() + timeoutMs).toISOString(),
+    deadlineAt: new Date(createdAt.getTime() + (options.untilExit ? REMOTE_SHELL_ADMISSION_TIMEOUT_MS : timeoutMs)).toISOString(),
   }, target.signal)) {
     if (event.type === 'stdout') stdout.push(event.chunk)
     if (event.type === 'stderr') stderr.push(event.chunk)
+    if (event.type === 'stdout' || event.type === 'stderr') {
+      if (stdout.join('').length + stderr.join('').length > 128 * 1024 + 1024) throw new ToolOutcomeUnknownError('Remote output limit exceeded; outcome unknown; command was not re-executed.')
+      options.observe?.(stdout.join('') + (stderr.length ? `\n[stderr]\n${stderr.join('')}` : ''))
+    }
     if ('receipt' in event) {
       if (event.jobId !== jobId || event.receipt.jobId !== jobId || event.receipt.nodeId !== target.nodeId ||
         (event.type === 'completed') !== (event.receipt.state === 'completed')) {
@@ -55,12 +60,13 @@ export async function executeRemoteShell(
       'The original execution outcome remains unknown; the command was not re-executed.',
     )
   }
+  if (terminal) options.onReceipt?.(terminal)
   const output = stdout.join('') + (stderr.length ? `\n[stderr]\n${stderr.join('')}` : '')
   const state = terminal?.state
   if (!terminal || isUnknownShellReceipt(terminal) || (target.recovering && !terminal.reconciledJobId)) {
     throw new ToolOutcomeUnknownError(
       `Remote execution outcome is unknown: ${terminal?.reason?.message ?? 'No terminal receipt was received'}. ` +
-      'Continue checks the original Child execution record; it does not re-execute this command. Partial side effects may remain.',
+      'Reconciliation checks only the original Child execution record; it does not re-execute this command. The command may still be running and partial side effects may remain.',
     )
   }
   if (state !== 'completed' || terminal?.exitCode !== 0) {

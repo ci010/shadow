@@ -29,6 +29,7 @@ import { decodeChunks } from '../utils/decode-chunks.ts'
 import type { LocalProcessExecutor } from '../execution/executor.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
+import { parseWorkdirProcessArgs } from '../execution/capability-shell.ts'
 import { executeRemoteShell } from '../execution/remote-shell-client.ts'
 import { createHash } from 'node:crypto'
 
@@ -270,8 +271,6 @@ export class ExecTool implements Tool<ToolResult> {
     const request = { ...args, script, shell }
     const foreground = context.tools?.executionMode === 'call'
     if (context.remoteWorkdir) {
-      const reason = 'exec cannot enforce a foreground process lifecycle on remote workdirs.'
-      if (foreground) return context.tools.rejectExecution(reason)
       context.signal.throwIfAborted()
       if (typeof args.shell === 'string' && args.shell.trim().toLowerCase() === 'node') {
         return 'Error: shell=node and its inline tool bridge are not supported on remote workdirs.'
@@ -279,31 +278,13 @@ export class ExecTool implements Tool<ToolResult> {
       if (DANGEROUS_PATTERNS.some(pattern => pattern.test(String(args.script)))) {
         return 'Error: command blocked by safety filter'
       }
-      try {
-        // Do not resolve cwd, shells, dotenv, or command interceptors on Main.
-        let completed = false
-        const output = await executeRemoteShell({
-          ...context.remoteWorkdir,
-          sessionId: context.sessionId,
-          turnId: context.messageId ?? context.sessionId,
-          ...(context.toolCallId ? { executionKey: createHash('sha256').update(JSON.stringify([
-            'remote-shell-v1', context.physicalSessionId ?? context.sessionId, context.toolCallId,
-          ])).digest('hex') } : {}),
-          recovering: context.recoveringToolCall,
-          signal: context.signal,
-        }, {
-          script: args.script,
-          ...(args.shell === undefined ? {} : { shell: parseExecShell(args.shell) }),
-          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-          ...(args.args === undefined ? {} : { args: args.args }),
-        }, args.timeout_ms === undefined ? this._defaultTimeoutMs : args.timeout_ms as number, () => { completed = true })
-        context.signal.throwIfAborted()
-        return completed ? completedToolFailure({ isError: true, content: [{ type: 'text', text: output }] }) : output
-      } catch (error) {
-        context.signal.throwIfAborted()
-        if (error instanceof ToolOutcomeUnknownError) throw error
-        return `Error: ${errMsg(error)}`
+      if (foreground) {
+        const denied = context.tools.executionDenial('exec', args)
+        if (denied) return denied
+        return context.tools.runForeground(context.signal, signal => this.executeRemoteRequest(args, { ...context, signal }, true))
       }
+      return this.executeRemoteRequest(args, context)
+
     }
     if (foreground) {
       context.signal.throwIfAborted()
@@ -313,6 +294,105 @@ export class ExecTool implements Tool<ToolResult> {
         this.executeRequest(request, { ...context, signal }, true, cancel))
     }
     return this.executeRequest(request, context, false)
+  }
+
+  private async executeRemoteRequest(args: Record<string, unknown>, context: ExecutionContext, foreground = false): Promise<ToolResult> {
+    const timeoutMs = args.timeout_ms === undefined ? (foreground ? MAX_CALL_TIMEOUT_MS : this._defaultTimeoutMs) : args.timeout_ms
+    if (!Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0 || Number(timeoutMs) > 2_147_483_647) {
+      return 'Error: `timeout_ms` must be a finite non-negative integer no greater than 2147483647'
+    }
+    const wireArgs = {
+      script: args.script,
+      ...(args.shell === undefined ? {} : { shell: parseExecShell(args.shell) }),
+      ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+      ...(args.args === undefined ? {} : { args: args.args }),
+    }
+    try { parseWorkdirProcessArgs(wireArgs) } catch (error) { return `Error: ${errMsg(error)}` }
+    const controller = new AbortController()
+    const abort = () => controller.abort(context.signal.reason)
+    let transferred = false
+    let output = '(no output yet)'
+    let completedFailure = false
+    let cancellationConfirmed = false
+    let remoteFailed = false
+    const detach = () => context.signal.removeEventListener('abort', abort)
+    // As with local OS exec, timeout=0 transfers ownership immediately.
+    if (timeoutMs !== 0) context.signal.addEventListener('abort', abort, { once: true })
+    const completion = executeRemoteShell({
+      ...context.remoteWorkdir!, sessionId: context.sessionId,
+      turnId: context.messageId ?? context.sessionId,
+      ...(context.toolCallId ? { executionKey: createHash('sha256').update(JSON.stringify([
+        'remote-shell-v1', context.physicalSessionId ?? context.sessionId, context.toolCallId,
+      ])).digest('hex') } : {}),
+      recovering: context.recoveringToolCall, signal: controller.signal,
+    }, wireArgs, Number(timeoutMs), () => { completedFailure = true }, {
+      untilExit: !foreground,
+      observe: text => { output = text },
+      onReceipt: receipt => {
+        remoteFailed = receipt.state !== 'completed' || receipt.exitCode !== 0
+        cancellationConfirmed = receipt.state === 'cancelled' || receipt.state === 'completed' || receipt.state === 'expired' || receipt.reason?.code === 'process-exit'
+      },
+    })
+    // Always consume rejections even when the wait window/turn ends first.
+    void completion.catch(() => {})
+    try {
+      let result: { status: string } | null
+      if (foreground) {
+        try { result = await waitForExit(completion, Number(timeoutMs), context.signal) }
+        catch (error) {
+          controller.abort(error)
+          result = await waitForExit(completion, 10_000)
+          if (!result || !cancellationConfirmed) {
+            context.tools.rejectExecution('Remote foreground cleanup could not be verified.')
+            throw new ToolOutcomeUnknownError('Remote foreground cancellation was not confirmed; outcome unknown. Do not rerun.')
+          }
+          throw error
+        }
+        if (!result) {
+          controller.abort(new Error('Foreground wait window expired'))
+          result = await waitForExit(completion, 10_000)
+          if (!result || !cancellationConfirmed) throw new ToolOutcomeUnknownError('Remote foreground deadline cleanup was not confirmed; outcome unknown. Do not rerun.')
+        }
+      } else result = timeoutMs === 0 ? null : await waitForExit(completion, Number(timeoutMs), context.signal)
+      if (result) {
+        context.signal.throwIfAborted()
+        return completedFailure ? completedToolFailure({ isError: true, content: [{ type: 'text', text: result.status }] }) : result.status
+      }
+      const id = this.backgroundTasks.runPromiseTask({
+        kind: 'process', title: `remote exec: ${String(args.script).slice(0, 80)}`,
+        sessionId: context.sessionId, inputId: context.messageId,
+        observe: () => output,
+        callback: { sessionId: context.sessionId, replyTo: { channel: context.channel, chatId: context.chatId }, isGroup: context.isGroup, senderName: 'Background Task' },
+        onCancel: async () => {
+          controller.abort(new Error('Background task cancelled'))
+          const settled = await waitForExit(completion, 10_000)
+          if (!settled || !cancellationConfirmed) throw new Error('Remote cleanup was not confirmed; outcome unknown. Reconcile the original execution; do not rerun.')
+        },
+      }, completion.then(text => {
+        if (remoteFailed) throw new Error(text)
+        return text
+      }, error => {
+        if (error instanceof ToolOutcomeUnknownError) throw new ToolOutcomeUnknownError(
+          'OUTCOME UNKNOWN: the Child command may still be running; this is not a confirmed process failure. ' +
+          'Do not rerun it. Inspect the Child and its original shell journal/side effects. ' +
+          'This background handle cannot reconnect or reconcile; original-call reconciliation is currently an internal recovery API, not a background tool. ' +
+          errMsg(error))
+        throw error
+      }))
+      detach()
+      transferred = true
+      return `${timeoutMs === 0 ? 'Remote process started in background.' : `Remote process still running after ${formatElapsed(Number(timeoutMs))}. Output so far:\n${output}`}\nExecution ID: ${backgroundExecutionId(id)}\nRead v:bg/<executionId> for output; cancel({ executionId }) stops it.`
+    } catch (error) {
+      if (error instanceof ToolOutcomeUnknownError) {
+        if (foreground) context.tools.rejectExecution('Remote foreground cleanup/outcome could not be verified.')
+        throw error
+      }
+      context.signal.throwIfAborted()
+      return `Error: ${errMsg(error)}`
+    } finally {
+      detach()
+      if (!transferred && context.signal.aborted) controller.abort(context.signal.reason)
+    }
   }
 
   private async localEnvironment(context: ExecutionContext): Promise<Record<string, string>> {

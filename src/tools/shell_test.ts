@@ -607,7 +607,7 @@ for (const timeout_ms of [0, 50]) {
   })
 }
 
-test('call exec exposes foreground-only schema and rejects background, invalid limits and remote workdirs before spawn', async () => {
+test('call exec exposes foreground-only schema and rejects background and invalid limits before spawn', async () => {
   const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
   const background = new RecordingBackgroundTasks()
   const tool = execTool(sandbox, executor, background)
@@ -620,9 +620,9 @@ test('call exec exposes foreground-only schema and rejects background, invalid l
     assertMatch(requireToolText(await tool.execute({ script: 'must not spawn', timeout_ms }, ctx)), /background execution is forbidden/)
     assertMatch(requireToolText(await ctx.tools.execute('exec', { script: 'must not spawn', timeout_ms }, ctx)), /background execution is forbidden/)
   }
-  assertMatch(requireToolText(await tool.execute({ script: 'remote must not fall back' }, {
+  assertMatch(requireToolText(await tool.execute({ script: 'remote must not fall back', timeout_ms: 0 }, {
     ...ctx, remoteWorkdir: { nodeId: 'remote', workdirId: 'opaque', executor: {} as any },
-  })), /remote workdirs/)
+  })), /background execution is forbidden/)
   assertEquals(executor.calls.length, 0)
   assertEquals(background.calls, 0)
 })

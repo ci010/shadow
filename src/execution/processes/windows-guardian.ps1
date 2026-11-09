@@ -173,7 +173,7 @@ public static class ShadowProcessGuardian {
 $env:LIB = $savedLib
 $code = [ShadowProcessGuardian]::Run(
     $request.command, [string[]]$request.args, $request.cwd,
-    $request.windowsVerbatimArguments, [long]$request.deadlineAt)
+    $request.windowsVerbatimArguments, $(if ($null -eq $request.deadlineAt) { [long]::MaxValue } else { [long]$request.deadlineAt }))
 $status = @{ code = $code; reason = [ShadowProcessGuardian]::Reason }
 } catch {
     $status.error = $_.Exception.ToString()

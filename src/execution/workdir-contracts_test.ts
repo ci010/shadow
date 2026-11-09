@@ -167,3 +167,14 @@ test('established intermediate identity index reads resourceId in place without 
     assert.equal(await readFile(path, 'utf8'), bytes)
   })
 })
+
+test('until-exit support is a strict shell-only implementation feature', () => {
+  const supportedResource = { ...resource, support: { ...support, shell: { ...support.shell!, untilExit: true } } }
+  assert.equal(validateExecutionSupport(supportedResource.support).success, true)
+  assert.equal(validateExecutionSupport({ ...support, shell: { ...support.shell!, untilExit: 'yes' } }).success, false)
+  assert.doesNotThrow(() => assertExecutionSupported(request({ args: { script: 'echo ok', lifetime: 'until-exit' } }), [supportedResource], { operations: [] }))
+  for (const operation of ['filesystem.read', 'workdir.process.execute', 'process.execute']) {
+    assert.throws(() => assertExecutionSupported(request({ operation, args: { script: 'never', lifetime: 'until-exit' } }), [supportedResource], { operations: [] }))
+  }
+  assert.throws(() => assertExecutionSupported(request({ args: { script: 'never', lifetime: 'forever' } }), [supportedResource], { operations: [] }), /explicit Child support/)
+})

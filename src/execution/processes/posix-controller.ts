@@ -22,7 +22,7 @@ function killGroup(): void {
 }
 
 function stop(reason: Exclude<GuardianReason, 'exited'>): void {
-  if (reason === 'cancelled' && request && Date.now() >= request.deadlineAt) reason = 'deadline-expired'
+  if (reason === 'cancelled' && request && request.deadlineAt !== null && Date.now() >= request.deadlineAt) reason = 'deadline-expired'
   stopping ??= reason
   killGroup()
 }
@@ -50,7 +50,7 @@ process.on('message', value => {
   } else if (value.type === 'admit' && child && !admitted) {
     admitted = true
     if (stopping) stop(stopping)
-    else if (Date.now() >= request!.deadlineAt) stop('deadline-expired')
+    else if (request!.deadlineAt !== null && Date.now() >= request!.deadlineAt) stop('deadline-expired')
     else child.stdin!.end('start\n')
   } else if (value.type === 'stop' && 'reason' in value) {
     const reasons: readonly string[] = ['cancelled', 'deadline-expired', 'owner-lost', 'output-limit', 'supervisor-failed']
@@ -68,7 +68,7 @@ async function run(input: GuardianRequest): Promise<void> {
   let code = -1
   let signal: NodeJS.Signals | null = null
   let failure: string | undefined
-  if (input.deadlineAt <= Date.now()) stopping ??= 'deadline-expired'
+  if (input.deadlineAt !== null && input.deadlineAt <= Date.now()) stopping ??= 'deadline-expired'
   if (!stopping) {
     // Until the outer guardian knows the group ID, controller loss closes this
     // gate instead of leaving an untracked command running.
@@ -101,7 +101,7 @@ async function run(input: GuardianRequest): Promise<void> {
     })
     execution.on('error', error => { failure = error.message; stop('supervisor-failed') })
     execution.once('exit', killGroup)
-    const timer = setTimeout(() => stop('deadline-expired'), Math.max(0, input.deadlineAt - Date.now()))
+    const timer = input.deadlineAt === null ? undefined : setTimeout(() => stop('deadline-expired'), Math.max(0, input.deadlineAt - Date.now()))
     const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
       execution.once('close', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }))
     })

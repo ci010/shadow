@@ -140,10 +140,14 @@ export class ShellJournal {
 }
 
 export class JournaledShellExecutor implements Executor {
+  readonly #active = new Map<string, AbortController>()
   constructor(readonly executor: Executor, readonly journal: ShellJournal) {}
 
   getStatus(jobId: string) { return this.executor.getStatus(jobId) }
-  cancel(jobId: string) { return this.executor.cancel(jobId) }
+  cancel(jobId: string) {
+    this.#active.get(jobId)?.abort(new Error('Remote execution cancelled'))
+    return this.executor.cancel(jobId)
+  }
 
   async assertCanExecute(request: ExecutionRequestV2, signal: AbortSignal): Promise<void> {
     if (!this.executor.assertCanExecute) throw Object.assign(new Error('Durable execution requires admission before journal access'), { code: 'admission-unavailable' })
@@ -151,6 +155,24 @@ export class JournaledShellExecutor implements Executor {
   }
 
   async *execute(request: ExecutionRequestV2, signal: AbortSignal): AsyncIterable<JobEventV1> {
+    // Own cancellation before any asynchronous admission/journal work, not only
+    // after the underlying executor has created its job record.
+    if (request.operation !== DURABLE_SHELL_OPERATION && request.operation !== RECONCILE_SHELL_OPERATION) {
+      yield* this.executor.execute(request, signal)
+      return
+    }
+    const controller = new AbortController()
+    const existing = this.#active.get(request.jobId)
+    if (existing) {
+      yield* this.executeTracked(request, AbortSignal.any([signal, existing.signal]))
+      return
+    }
+    this.#active.set(request.jobId, controller)
+    try { yield* this.executeTracked(request, AbortSignal.any([signal, controller.signal])) }
+    finally { this.#active.delete(request.jobId) }
+  }
+
+  private async *executeTracked(request: ExecutionRequestV2, signal: AbortSignal): AsyncIterable<JobEventV1> {
     const validation = validateExecutionRequestV2(request)
     if (!validation.success) throw new TypeError(validation.errors.join('; '))
     if (request.operation !== DURABLE_SHELL_OPERATION && request.operation !== RECONCILE_SHELL_OPERATION) {
@@ -160,6 +182,10 @@ export class JournaledShellExecutor implements Executor {
     // Admission failures are definite refusals, not unknown execution outcomes.
     try { await this.assertCanExecute(request, signal) }
     catch (error) {
+      if (signal.aborted) {
+        yield failureEvent(request, 'execution-outcome-unknown', 'Cancellation interrupted admission. No new process was started; any prior execution with this identity has not been reconciled.')
+        return
+      }
       const event = failureEvent(request, error instanceof Error && 'code' in error ? String(error.code) : 'admission-denied', error instanceof Error ? error.message : 'Admission denied')
       if ('receipt' in event) { event.type = 'rejected'; event.receipt.state = 'rejected' }
       yield event
@@ -167,7 +193,9 @@ export class JournaledShellExecutor implements Executor {
     }
     let sequence = 0
     try {
-      signal.throwIfAborted()
+      // Even if cancelled, resolve the durable identity before acknowledging:
+      // it may already belong to a prior running execution. A fresh claim can
+      // safely persist a cancellation tombstone without starting a process.
       parseWorkdirProcessArgs(request.args)
       if (request.operation === RECONCILE_SHELL_OPERATION) {
         const result = await this.journal.reconcile({ ...request, operation: DURABLE_SHELL_OPERATION })
@@ -179,6 +207,12 @@ export class JournaledShellExecutor implements Executor {
         const result = await this.journal.reconcile(request)
         if (result.outcome === 'known') yield* replayEvents(request, result.events)
         else yield failureEvent(request, 'execution-outcome-unknown', result.reason)
+        return
+      }
+      if (signal.aborted) {
+        const cancelled = cancellationEvent(request)
+        await this.journal.complete(request, [cancelled])
+        yield cancelled
         return
       }
       const events: JobEventV1[] = []
@@ -193,6 +227,13 @@ export class JournaledShellExecutor implements Executor {
         `Execution could not be safely admitted or reconciled: ${error instanceof Error ? error.message : String(error)}`, sequence)
     }
   }
+}
+
+function cancellationEvent(request: ExecutionRequestV2): JobEventV1 {
+  const timestamp = new Date().toISOString()
+  return { version: 1, jobId: request.jobId, sequence: 0, timestamp, type: 'cancel-acknowledged',
+    receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'cancelled', finishedAt: timestamp,
+      reason: { code: 'cancelled', message: 'Cancellation acknowledged before process admission', retryable: false } } }
 }
 
 function failureEvent(request: ExecutionRequestV2, code: string, message: string, sequence = 0): JobEventV1 {

@@ -390,8 +390,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     const controller = new AbortController()
     record.operationController = controller
     if (record.cancelRequested) controller.abort()
+    const untilExit = record.request.operation === 'workdir.process.execute-once' &&
+      (record.request.args as { lifetime?: unknown })?.lifetime === 'until-exit'
     const remainingMs = Math.min(120_000, Math.max(0, Date.parse(record.request.deadlineAt) - Date.now()))
-    const timer = setTimeout(() => {
+    const timer = untilExit ? undefined : setTimeout(() => {
       record.timedOut = true
       controller.abort()
     }, remainingMs)
@@ -399,9 +401,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     let cleanup: Promise<ManagedProcessStatus> | undefined
     let status: ManagedProcessStatus | undefined
     let cleaned = false
+    const emitted = { stdout: 0, stderr: 0 }
     let outputLimitTimer: ReturnType<typeof setInterval> | undefined
     try {
-      if (remainingMs === 0) {
+      if (!untilExit && remainingMs === 0) {
         record.timedOut = true
         controller.abort()
       }
@@ -410,7 +413,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       controller.signal.throwIfAborted()
       const process = await this.startProcess(args, {
         isolated: true, signal: controller.signal, supervision: {
-          deadlineAt: Math.min(Date.parse(record.request.deadlineAt), Date.now() + remainingMs),
+          deadlineAt: untilExit ? null : Math.min(Date.parse(record.request.deadlineAt), Date.now() + remainingMs),
           resultPath: this.processResultPath?.(record.request),
         },
       })
@@ -423,6 +426,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
         const size = [...process.stdoutChunks, ...process.stderrChunks]
           .reduce((total, chunk) => total + chunk.byteLength, 0)
         if (size > MAX_WORKDIR_PROCESS_OUTPUT_BYTES) controller.abort()
+        else this.emitBoundedProcessOutput(record, process, emitted)
       }, 20)
       this.setState(record, record.cancelRequested ? 'cancelling' : 'running')
       this.push(record, { type: 'started', pid: process.pid })
@@ -434,7 +438,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       ])
       await terminate()
       cleaned = true
-      const tooLarge = this.emitBoundedProcessOutput(record, process)
+      const tooLarge = this.emitBoundedProcessOutput(record, process, emitted, true)
       if ((tooLarge || status.guardian?.reason === 'output-limit') && !record.cancelRequested && !record.timedOut) {
         this.finish(record, 'failed', 'failed', {
           code: 'process-output-too-large',
@@ -455,7 +459,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
           })
           return
         }
-        this.emitBoundedProcessOutput(record, record.process)
+        this.emitBoundedProcessOutput(record, record.process, emitted, true)
       }
       if (record.cancelRequested || record.timedOut) {
         this.finishFromStatus(record, status ?? { success: false, code: -1, signal: null })
@@ -478,7 +482,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     }
   }
 
-  private emitBoundedProcessOutput(record: JobRecord, process: ManagedProcess): boolean {
+  private emitBoundedProcessOutput(record: JobRecord, process: ManagedProcess, emitted = { stdout: 0, stderr: 0 }, final = false): boolean {
     let remaining = MAX_WORKDIR_PROCESS_OUTPUT_BYTES
     let truncated = false
     for (const [type, chunks] of [['stdout', process.stdoutChunks], ['stderr', process.stderrChunks]] as const) {
@@ -488,7 +492,11 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
         kept.push(chunk.subarray(0, remaining))
         remaining = Math.max(0, remaining - chunk.byteLength)
       }
-      const output = decodeChunks(kept, process.shell)
+      const decoded = decodeChunks(kept, process.shell)
+      // A trailing replacement character can be an incomplete multibyte write.
+      const stable = !final && decoded.endsWith('\uFFFD') ? decoded.slice(0, -1) : decoded
+      const output = stable.slice(emitted[type])
+      emitted[type] = stable.length
       // Keep JSON-escaped events comfortably below the transport's 256 KiB frame limit.
       for (let offset = 0; offset < output.length; offset += 8192) {
         this.push(record, { type, chunk: output.slice(offset, offset + 8192) })

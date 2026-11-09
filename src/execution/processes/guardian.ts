@@ -6,7 +6,7 @@ import type { ManagedProcessStatus } from './manager.ts'
 export const GUARDED_OUTPUT_LIMIT = 128 * 1024
 
 export interface ProcessSupervision {
-  deadlineAt: number
+  deadlineAt: number | null
   resultPath?: string
 }
 
