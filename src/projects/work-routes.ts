@@ -55,7 +55,7 @@ export async function projectWorkOverview(sessions: SessionManager, github: Reco
           && proposal.assignmentRevision === record.workflow?.assignmentRevision).length ?? 0,
         interpretationReview: !!record.answerReview, changedAt: record.changedAt,
         objective: record.definition.objective, origin: record.origin, userQuote: record.requestSource?.quote,
-        notes: record.notes, contextChanged: alignment.contextChanged(record),
+        notes: record.notes, result: record.workflow?.result, contextChanged: alignment.contextChanged(record),
         github: github[record.key],
         observation: record.observation,
         decisionInfluences: record.proposals?.filter(proposal => proposal.status === 'applied' && proposal.appliedRevision && proposal.request)
@@ -185,6 +185,21 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
         return c.json({ error: code, stage, correlationId, message: stage === 'overview'
           ? 'Organization finished, but the overview could not be loaded. Refresh the page.'
           : 'Organization could not finish. Previous results were kept.' }, 502)
+      }
+    })
+    // Browser PIN, launch credential and paired devices all authenticate the same
+    // existing human principal used by WebChannel presence/chat, not separate accounts.
+    // Never derive identity from body/query/header input or cache it in live Work state.
+    const completionPrincipal = 'web:web-user'
+    app.get('/api/work/completions', c => c.json({ items: sessions.alignment!.store.workCompletions(completionPrincipal) }))
+    app.post('/api/work/completions', async c => {
+      try {
+        return c.json({ items: sessions.alignment!.store.markWorkCompletionsRead(completionPrincipal, await c.req.json()) })
+      } catch (error) {
+        if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof TypeError) {
+          return c.json({ error: 'invalid_request' }, 400)
+        }
+        throw error
       }
     })
     app.get('/api/work/:key', c => {

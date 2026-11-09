@@ -102,8 +102,9 @@ test('project settings and Knowledge click through history and observed groups w
       await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Usage").click()');await wait(visible('.project-usage'));
       assert.equal((await route()).params.sessionId,undefined);
     }
-    await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Dashboard").click()');
-    await run('document.querySelector(".new-work").click()');
+    assert.equal(await run('!!document.querySelector(".new-work")'),false);
+    await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Board").click()');
+    await run('[...document.querySelectorAll(".workbench-empty button")].find(e=>e.textContent==="Start a conversation").click()');
     await wait('window.fixture.router.currentRoute.value.name==="chat"');
     await wait(visible('.reference-composer'));
     await wait('('+visible('.reference-composer')+').textContent.includes("Help me organize a new work item:")');

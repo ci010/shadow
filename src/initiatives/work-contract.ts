@@ -168,6 +168,31 @@ CREATE TABLE IF NOT EXISTS work_focus (
  session_id TEXT PRIMARY KEY, work_key TEXT REFERENCES work_contracts(id)
 ) STRICT;
 `
+export const workCompletionReferenceSchema = z.object({
+  key: z.string().min(1).max(600), completionId: z.string().min(1).max(700),
+}).strict()
+export const workCompletionReadSchema = z.object({
+  items: z.array(workCompletionReferenceSchema).max(5000),
+}).strict()
+export const workCompletionsSchema = z.object({
+  items: z.array(workCompletionReferenceSchema.extend({
+    sequence: z.number().int().positive(), completedAt: z.string().datetime().nullable(), unread: z.boolean(),
+  }).strict()),
+}).strict()
+export type WorkCompletion = z.infer<typeof workCompletionsSchema>['items'][number]
+
+/** Separate presentation receipts: never Work progress, acceptance or agent input. */
+export const WORK_COMPLETION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS work_completions (
+ id TEXT PRIMARY KEY, work_key TEXT NOT NULL REFERENCES work_contracts(id),
+ sequence INTEGER NOT NULL, completed_at TEXT,
+ UNIQUE(work_key, sequence)
+) STRICT;
+CREATE TABLE IF NOT EXISTS work_completion_reads (
+ principal TEXT NOT NULL, completion_id TEXT NOT NULL REFERENCES work_completions(id),
+ read_at TEXT NOT NULL, PRIMARY KEY(principal, completion_id)
+) STRICT;
+`
 export class WorkConflict extends Error {}
 
 export const workObservationSchema = z.object({

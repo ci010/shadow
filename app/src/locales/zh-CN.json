@@ -310,6 +310,9 @@
   "Shared work notes": "共享工作笔记",
   "A shared notebook, not an execution gate. Routine updates do not wake other agents.": "这是共享笔记，不是执行门禁。普通进展不会唤醒其他 Agent。",
   "Acceptance and boundaries": "验收标准与边界",
+  "Acceptance criteria": "验收标准",
+  "Discuss in a new chat": "在新对话中讨论",
+  "Work boundaries": "工作边界",
   "What changes for the parent goal, and what can continue?": "这对上层目标有什么影响？哪些工作可以继续？",
   "Record assessment": "记录评估",
   "The branch changed. Read its latest note before assessing the impact.": "分支已更新。请先阅读最新笔记，再评估其影响。",
@@ -4147,5 +4150,16 @@
   "{name} · passive inbox": "{name} · 被动收件箱",
   "Parent channel rule": "父频道规则",
   "Exact conversation": "精确会话",
-  "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.": "一个父频道订阅覆盖该频道下新到达且获准接收的公开 thread 和论坛帖子事件。每个 thread 保持独立上下文。子 thread 不会逐项列为配置，也不会回放已有历史。"
+  "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.": "一个父频道订阅覆盖该频道下新到达且获准接收的公开 thread 和论坛帖子事件。每个 thread 保持独立上下文。子 thread 不会逐项列为配置，也不会回放已有历史。",
+  "View completed": "查看已完成",
+  "Newly completed: {count}": "新完成 {count} 项",
+  "Could not load or save completion read state.": "无法加载或保存完成结果的已读状态。",
+  "Completed work": "已完成工作",
+  "Newly completed work": "新完成工作",
+  "Unread only": "仅看未读",
+  "Mark all as read": "全部标为已读",
+  "Read means seen, not accepted. It does not change Work or notify agents.": "已读仅表示知悉，不代表验收，不改变 Work 状态，也不会通知 agent。",
+  "No matching completed work": "没有匹配的已完成工作",
+  "Unread": "未读",
+  "Completion time unavailable": "完成时间不可用"
 }

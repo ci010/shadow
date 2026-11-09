@@ -42,7 +42,6 @@
         </div>
         <div class="node-actions">
           <button type="button" :aria-expanded="details.has(row.item.key)" @click="toggleDetails(row.item.key)">{{ details.has(row.item.key) ? t('Less detail') : t('Inspect notes') }}</button>
-          <button v-if="canWrite" type="button" @click="emit('select', row.item.key)">{{ t('Edit note') }}</button>
           <button v-if="canWrite" type="button" @click="emit('discuss', row.item.key)">{{ t('Discuss this premise') }}</button>
           <span v-if="row.children && !expanded.has(row.item.key)" class="collapsed-count">{{ t('{count} branches', { count: row.children }) }}</span>
         </div>

@@ -43,5 +43,5 @@ button { font: inherit; text-align: left; cursor: pointer; border: 0; background
 .work-github a { color: var(--c-primary); }
 .work-blocker { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--c-warn); overflow-wrap: anywhere; }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
-@media (pointer: coarse) { button { min-height: 44px; } }
+@media (pointer: coarse), (max-width: 700px) { button { min-height: 44px; } }
 </style>

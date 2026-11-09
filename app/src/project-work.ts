@@ -71,10 +71,11 @@ export function workRoots(items: ProjectWorkItem[]): Map<string, string> {
 export function filterWork(items: ProjectWorkItem[], filter: { query: string; root: string; assignee: string; terminal: boolean }) {
   const roots = workRoots(items)
   const query = filter.query.trim().toLowerCase()
-  return items.filter(item => (filter.terminal || !['done', 'cancelled'].includes(item.status ?? ''))
+  const terminalRoots = new Set(items.filter(item => ['done', 'cancelled'].includes(item.status ?? '') && roots.get(item.key) === item.key).map(item => item.key))
+  return items.filter(item => (filter.terminal || !['done', 'cancelled'].includes(item.status ?? '') && !terminalRoots.has(roots.get(item.key)!))
     && (!filter.root || roots.get(item.key) === filter.root)
     && (!filter.assignee || (filter.assignee === 'unassigned' ? item.assignee === null : item.assignee === filter.assignee))
-    && (!query || `${item.title} ${item.key} ${item.objective ?? ''} ${item.notes?.summary ?? ''}`.toLowerCase().includes(query)))
+    && (!query || `${item.title} ${item.key} ${item.objective ?? ''} ${item.notes?.summary ?? ''} ${item.result?.summary ?? ''}`.toLowerCase().includes(query)))
 }
 export function groupWork(items: ProjectWorkItem[], all: ProjectWorkItem[]) {
   const roots = workRoots(all)
@@ -129,4 +130,36 @@ export function workGraph(items: ProjectWorkItem[]) {
   return { nodes, edges, outside,
     width: Math.max(304, ...nodes.map(node => node.x + 280)),
     height: Math.max(200, ...nodes.map(node => node.y + 166)) }
+}
+
+/** Presentation-only active projection; never deletes history or changes saved organization. */
+export function activeWorkOverview(data: ProjectWorkOverview): ProjectWorkOverview {
+  const items = filterWork(data.items, { query: '', root: '', assignee: '', terminal: false })
+  const active = new Set(items.map(item => item.key)), removed = new Set(data.items.filter(item => !active.has(item.key)).map(item => item.key))
+  const sessions = data.sessions.filter(session => {
+    const keys = new Set([...(session.workKeys ?? []), ...(session.workKey ? [session.workKey] : []),
+      ...data.items.filter(item => item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId).map(item => item.key)])
+    return !keys.size || [...keys].some(key => !removed.has(key))
+  })
+  const hiddenSessions = new Set(data.sessions.filter(session => !sessions.includes(session)).map(session => session.sessionId))
+  const focus = data.focus
+  if (!focus) return { ...data, items, sessions }
+  const indexes = new Map<number, number>()
+  const groups = focus.result.groups.flatMap((group, index) => {
+    const topicKeys = group.topicKeys.filter(key => !removed.has(key) && !(key.startsWith('session:') && hiddenSessions.has(key.slice(8))))
+    if (!topicKeys.length) return []
+    indexes.set(index, indexes.size)
+    return [{ ...group, topicKeys, cards: group.cards?.filter(card => card.sources.some(source => !hiddenSessions.has(source.sessionId))) }]
+  })
+  const hierarchy = focus.result.hierarchy?.map(node => ({ ...node, groupIndexes: node.groupIndexes.flatMap(index => indexes.has(index) ? [indexes.get(index)!] : []) }))
+  if (hierarchy) {
+    let changed = true
+    while (changed) {
+      changed = false
+      for (let i = hierarchy.length - 1; i >= 0; i--) if (!hierarchy[i]!.groupIndexes.length && !hierarchy.some(node => node.parentId === hierarchy[i]!.id)) { hierarchy.splice(i, 1); changed = true }
+    }
+  }
+  const sourceKeys = new Set(groups.flatMap(group => group.topicKeys))
+  const sources = focus.sources.filter(source => sourceKeys.has(source.key))
+  return { ...data, items, sessions, focus: groups.length ? { ...focus, inputCount: sources.length, sources, result: { ...focus.result, groups, hierarchy } } : undefined }
 }

@@ -59,3 +59,45 @@ src/sessions/initiative-metadata_test.ts src/sessions/initiative-store-migration
 src/cron/initiative-migration_test.ts src/sessions/work-items_test.ts`
 
 These tests use disposable local fixtures, never production Project databases.
+
+## Completion awareness
+
+The Work board and overview show active work by default, without a permanent
+Done column. **View completed** opens a searchable/filterable history grouped by
+completion date. **Newly completed: N** narrows it to unread results. Result
+summaries and artifact links use existing recorded data; missing completion
+timestamps are explicitly unavailable, not inferred from `changedAt`.
+
+Opening the board or completion list does not acknowledge results. A successfully
+loaded, visible Work detail acknowledges only a completion occurrence no newer
+than the displayed record sequence. **Mark all as read** sends the exact observed
+unread occurrences, independently of search filters. Read means human awareness,
+not acceptance: it never changes Work status, audit history, assignment, or agent
+execution, and has no age-based expiry.
+
+Version 6 gains additive `work_completions` and `work_completion_reads` tables.
+A transition into `done` writes a UUID, host completion time and record sequence
+atomically with the Work record. Notes do not create a new occurrence; reopening
+and completing again does. Historical occurrences remain stored. Existing done
+records get a stable `legacy:<work-key>` occurrence on initialization, initially
+unread. Only a contiguous recorded completion transition supplies a legacy time;
+missing/ambiguous history leaves it null. Existing Work records/events and session
+JSONL/SQLite are not rewritten.
+
+`GET /api/work/completions` returns current done occurrences with `key`,
+`completionId`, `sequence`, nullable `completedAt`, and `unread`.
+`POST /api/work/completions` accepts `{items:[{key,completionId}]}` and returns the
+updated list. Stale/unknown references cannot acknowledge a newer completion.
+Both endpoints require the existing Project authorization, return `no-store`,
+and never accept client-selected identities. The current gateway has one human
+principal (`web:web-user`) shared by its authorized browser/desktop/device
+surfaces, not separate human accounts. Receipts are principal- and Project-scoped;
+they are fetched separately from shared live Work snapshots. Other open clients
+see receipt changes on the next refresh; no new receipt-only realtime stream is
+introduced.
+
+Completion checks: `pnpm exec node --import tsx --test
+src/initiatives/work-completions_test.ts src/projects/work-completions_test.ts
+app/src/project-work_test.ts app/src/work-completions-rendered_test.ts`.
+The rendered fixture uses a disposable Electron user-data directory, synthetic
+Work data and mocked unrelated integrations, never a copied user profile.
