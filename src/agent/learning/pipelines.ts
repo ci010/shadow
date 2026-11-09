@@ -41,7 +41,7 @@ export function learningTask(batch: LearningBatch, ranges: Map<string, { offset:
       : 'Prefer no_change over low-value memory. Distinguish stated goals from inferred motives; retain conditions and counterexamples.',
     batch.pipeline === 'soulReflector' ? 'Use learning_soul for justified identity refinements.' : batch.pipeline === 'encapsulator' ? 'Use learning_memory for decisions and learned_skill for discoverable lessons.' : 'Use write for sourced Wiki updates, log for key events/challenges, and learning_memory for durable conditional decisions.',
     ...(batch.pipeline === 'encapsulator' ? [
-      'Skill maintenance is complete replacement, not append-only growth. learned_skill read returns limits; save validates size, package and revision and persists in one call. A separate check is optional size feedback, not a prerequisite: do not spend a work inference checking an already bounded draft instead of saving it. Max 8000 UTF-16 code units after trim including frontmatter; target <=7200. Consolidate duplicate prose and examples while preserving conditions, exceptions, uncertainty and evidence. Never truncate or drop valuable constraints to fit. Make one focused consolidation if oversized; otherwise report partial with unsaved scope and reserve capacity for learning_result. A check is not a persisted artifact or recovery of an earlier failed save. Plan within eight total inference requests: the eighth is receipt-only, so finish the first supported save by the seventh request, before optional investigation or script experiments. Reserve a work call and draft argument capacity as well as the host-reserved receipt. Persist a sufficiently supported candidate promptly; report partial for remaining unread scope rather than postponing all saves until the finish boundary.',
+      'Skill maintenance is complete replacement, not append-only growth. Prioritize correcting superseded guidance before optional extensions, and report deferred extensions separately. For a minimal correction, learned_skill patch accepts a read revision, unique exact match and replacement (empty to delete); the complete resulting lesson still passes normal size/package/discovery checks. If no unique match or size headroom, read and save a complete reorganization; never create a duplicate skill to evade the limit. learned_skill read returns limits; save validates size, package and revision and persists in one call. A separate check is optional size feedback, not a prerequisite: do not spend a work inference checking an already bounded draft instead of saving it. Max 8000 UTF-16 code units after trim including frontmatter; target <=7200. Consolidate duplicate prose and examples while preserving conditions, exceptions, uncertainty and evidence. Never truncate or drop valuable constraints to fit. Make one focused consolidation if oversized; otherwise report partial with unsaved scope and reserve capacity for learning_result. A check is not a persisted artifact or recovery of an earlier failed save. Plan within eight total inference requests: the eighth is receipt-only, so finish the first supported save by the seventh request, before optional investigation or script experiments. Reserve a work call and draft argument capacity as well as the host-reserved receipt. Persist a sufficiently supported candidate promptly; report partial for remaining unread scope rather than postponing all saves until the finish boundary.',
     ] : []),
     ...(batch.pipeline === 'reflector' ? [
       'First independently assess Wiki knowledge updates, key events/corrections/challenges (including valuable evidence not yet mature enough for a rule), long-term memory, and downstream skill material. Preserve source references, uncertainty and deduplication; no destination requires a write and none grants new authority.',
@@ -195,7 +195,7 @@ export class LearningRuntime {
             if (name === 'learning_result') continue
             const path = typeof args.path === 'string' ? args.path : undefined
             const tracked = name === 'write' || name === 'log'
-              || ['learning_memory', 'learning_soul', 'learned_skill'].includes(name) && args.action === 'save'
+              || ['learning_memory', 'learning_soul', 'learned_skill'].includes(name) && (args.action === 'save' || name === 'learned_skill' && args.action === 'patch')
               || name === 'read' && ['v:sessions/', 'v:memory/', 'v:skills/'].some(prefix => path?.startsWith(prefix))
             if (!tracked) continue
             const key = name === 'learning_memory' ? `memory/decisions/${args.name}.md`
@@ -241,7 +241,7 @@ export class LearningRuntime {
       }
     }
     if (requireResolved && (failures.size || reads.errors().length)) throw new LearningRunError(
-      `Unresolved learning tool failure: ${[...failures.values(), ...reads.errors()].join('; ')}`.slice(0, 8000), false)
+      `Unresolved learning tool failure: ${[...Array.from(failures, ([key, error]) => `[${key}] ${error}`), ...reads.errors()].join('; ')}`.slice(0, 8000), false)
     return batch
   }
 

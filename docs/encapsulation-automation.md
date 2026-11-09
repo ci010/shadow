@@ -238,3 +238,67 @@ Third-pass final local verification:
   execution-mode suite clean on the strength of the filtered pass.
 - Final `pnpm typecheck`: passed backend, A2A bridge, desktop and Vue.
 - Scoped `git diff --check`: passed. Existing concurrent edits were preserved.
+
+
+## Fourth pass: exact corrections and named unresolved failures (2026-11-09)
+
+`learned_skill patch` accepts `name`, the current read `revision`, a nonempty
+unique exact `match`, and `replacement` (empty means deletion). It updates only
+that span, then follows the same complete-lesson trim/8000 UTF-16 limit,
+standalone lesson/schema/name restrictions, shared-store revision-checked save,
+immediate discovery and artifact recording as `save`. Missing/ambiguous matches,
+concurrent changes, oversized results and executable/admin packages are rejected;
+there is no fuzzy/global match, automatic truncation or larger budget. A stale
+revision requires reread/merge, not overwrite. This is a small non-executable
+maintenance operation, not a bypass through general `skill_save`.
+
+Correct guidance superseded by later authoritative human design first; optional
+new diagnostic sections should not crowd that correction out. A minimal patch
+can avoid retransmitting and regrowing the entire lesson. If it cannot fit or
+needs structural changes, save a complete consolidation preserving evidence,
+safety constraints and applicability, and report deferred extensions separately.
+Neither route guarantees semantic quality or a production model choosing to save.
+No duplicate skill should be created just to evade the limit.
+
+The initial suspicion that batch `cc71d395-04ef-4a6c-8803-1e75581b201b`
+incorrectly retained a repaired error was **not supported by the actual calls**:
+- `v:sessions/~1fec58e561491e3e/c/24.1` and `/c/27.1` failed oversized
+  `mixed-version-execution-gate-audit` saves; `/c/21.1`, `/c/21.2` and
+  `/c/24.2` successfully saved three *different* skill names.
+- `v:sessions/~e57a9d2aa335fac3/c/17.1`, `/c/19.1` and `/c/21.1` again
+  failed saves of `mixed-version-execution-gate-audit`, with intact name/action
+  arguments and Zod `too_big` errors.
+- The final attempt's baseline reads and other decision artifact did not save
+  that failed target. Its rejected applied receipt at
+  `v:sessions/~2bf659120c2bfade/c/18.1` therefore correctly retained a blocker.
+
+No production ledger/history/skill was changed or parked batch retried. Recovery
+still requires a later successful **same-name write**, not a read/check or another
+skill's success. Patch is now tracked as such a write: a failed patch retains the
+blocker and a successful same-name patch resolves it. Failure receipts now include
+the target key obtained from the paired call arguments, so a bare `too_big` result
+does not hide which lesson still needs correction. They do not infer a target
+from error text or clear unresolved errors on discovery alone. Read-coverage
+requirements are unchanged.
+
+Disposable focused tests cover real-store correction/deletion, unchanged safety
+and evidence, ambiguous/missing/empty match, oversized/invalid/admin result,
+stale revision and a real intervening peer save with reread/merge. Cross-attempt
+audit fixtures use an actual learning-tool Zod `too_big` result and cover read,
+check, different-name save, same-name save, failed patch and successful patch.
+All five focused files (`pipelines`, `batch-isolation`, `read-coverage`,
+`skill-edit`, `learning-finish`) pass: 50 tests, zero failures. Initial fixture
+mistakes (no skill runtime, a supposedly ambiguous string occurring only once,
+and expected trailing whitespace despite normal save trim) were corrected.
+
+These are code/fixture guarantees, not evidence that the production LLM will
+prioritize the correction, consolidate well, use the patch or produce a useful
+script. Existing synthetic script-test/publication boundaries remain unchanged;
+no tool was invented or published. Source changes have not been built/deployed or
+restarted by this work, and pre-third-build observations must not be attributed
+to the third or fourth version. The parent owns finite read-only follow-up after
+establishing the actually loaded build and admitted run window.
+
+Final fourth-pass `pnpm typecheck` passed backend/scripts, A2A bridge, desktop and
+Vue; scoped `git diff --check` passed. Existing concurrent edits were preserved.
+No commit, push, restart, production knowledge write or ledger mutation occurred.

@@ -649,7 +649,7 @@ test('encapsulation prompts expose bounded maintenance and useful small experime
 
 
 test('oversize failed skill save is recovered by same-name successful replacement, not size check alone', async t => withTempWorkspace(async workspace => {
-  const f = fixture(workspace)
+  const f = fixture(workspace, 0, new SkillsManager(workspace))
   const batch = f.runtime.ledger.create('encapsulator', [], [])
   f.runtime.ledger.bind(batch.id, 'cron:old')
   f.runtime.ledger.interrupt(batch.id, 'oversize write')
@@ -657,19 +657,31 @@ test('oversize failed skill save is recovered by same-name successful replacemen
   for (const id of ['cron:old', 'cron:new']) f.records.set(id, { sessionId: id, segmentIndex: 0, projectId: 'a' })
   let action = 'check'
   let name = 'same-lesson'
+  let failed = false
+  let oldError = ''
+  try { await f.tools.skill.execute({ action: 'save', name, revision: '', content: 'x'.repeat(8001) }, f.context('cron:new')) }
+  catch (error) { oldError = `Error executing learned_skill: ${(error as Error).message}` }
+  assert.match(oldError, /too_big/)
   t.mock.method(f.sessions, 'getHistory', async (id: string) => {
     const old = id === 'cron:old'
     const messages: ChatMessage[] = [
       { role: 'assistant', content: '', tool_calls: [{ id: 'skill', type: 'function', function: { name: 'learned_skill', arguments: JSON.stringify({ action: old ? 'save' : action, name: old ? 'same-lesson' : name }) } }] },
-      { role: 'tool', content: old ? 'Error: content exceeds 8000 characters' : '{"status":"discoverable"}', tool_call_id: 'skill' },
+      { role: 'tool', content: old ? oldError : failed ? 'Error executing learned_skill: Patch match must occur exactly once.' : '{"status":"discoverable"}', tool_call_id: 'skill' },
     ]
     return { messages, total: messages.length }
   })
-  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /exceeds 8000/)
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /too_big/)
+  action = 'read'
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /\[learned_skill:same-lesson\].*Error executing learned_skill/)
   action = 'save'
   name = 'different-lesson'
-  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /exceeds 8000/)
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /too_big/)
   name = 'same-lesson'
+  await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+  action = 'patch'
+  failed = true
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /exactly once/)
+  failed = false
   await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
 }))
 
@@ -727,4 +739,45 @@ test('direct save uses last work call, rejects oversized and stale drafts withou
   assert.doesNotMatch(String(receipt), /^Error:/)
   assert.equal(f.runtime.ledger.batch(batch.id).proposal?.status, 'partial', String(receipt))
   assert.equal(f.runtime.ledger.batch(batch.id).artifacts.length, 1)
+}))
+
+test('exact lesson corrections preserve unrelated evidence and all save boundaries', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const name = 'targeted-correction'
+  const original = `---\nname: ${name}\ndescription: Test scoped maintenance\n---\nRequire obsolete entity.\nNever widen authorization.\nSource: fixture.\nRepeated repeated\n` + 'Evidence. '.repeat(760)
+  await f.runtime.skillStore!.save(name, { 'SKILL.md': original }, null, false, signal())
+  f.runtime.ledger.create('encapsulator', [], [])
+  f.onRun(async id => {
+    const ctx = f.context(id)
+    const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, ctx))
+    const patch = { action: 'patch', name, revision: baseline.revision, match: 'Require obsolete entity.', replacement: 'Use current policy.' }
+    for (const [change, error] of [
+      [{ match: 'not present' }, /exactly once/], [{ match: 'Evidence.' }, /exactly once/],
+      [{ match: '' }, /at least 1/], [{ revision: '' }, /changed since read/],
+      [{ replacement: 'x'.repeat(8000) }, /8000/],
+      [{ match: `name: ${name}`, replacement: 'name: wrong-name' }, /standalone lesson/],
+      [{ match: 'description: Test scoped maintenance', replacement: 'description: Test scoped maintenance\nadmin: true' }, /standalone lesson/],
+    ] as const) {
+      await assert.rejects(f.tools.skill.execute({ ...patch, ...change }, ctx), error)
+      assert.equal(f.runtime.skillStore!.read(name).revision, baseline.revision)
+      assert.equal(f.runtime.ledger.batchFor(id)!.artifacts.length, 0)
+    }
+    await f.tools.skill.execute(patch, ctx)
+    const saved = f.runtime.skillStore!.read(name)
+    assert.equal(saved.files['SKILL.md'].toString(), original.replace(patch.match, patch.replacement).trim())
+    assert(skills.getSkillDirectory(name))
+    await assert.rejects(f.tools.skill.execute(patch, ctx), /changed since read/)
+    await f.tools.skill.execute({ ...patch, revision: saved.revision, match: 'Repeated repeated\n', replacement: '' }, ctx)
+    assert(!f.runtime.skillStore!.read(name).files['SKILL.md'].toString().includes('Repeated repeated'))
+    const beforePeer = f.runtime.skillStore!.read(name)
+    const peerContent = beforePeer.files['SKILL.md'].toString() + '\nPeer evidence retained.'
+    await f.runtime.skillStore!.save(name, { 'SKILL.md': peerContent }, beforePeer.revision, false, signal())
+    await assert.rejects(f.tools.skill.execute({ ...patch, revision: beforePeer.revision, match: 'Use current policy.', replacement: 'Use adopted policy.' }, ctx), /changed since read/)
+    const refreshed = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, ctx))
+    await f.tools.skill.execute({ ...patch, revision: refreshed.revision, match: 'Use current policy.', replacement: 'Use adopted policy.' }, ctx)
+    assert.match(f.runtime.skillStore!.read(name).files['SKILL.md'].toString(), /Peer evidence retained/)
+    await f.tools.result.execute({ status: 'applied', summary: 'Corrected obsolete fixture requirement, retained evidence and safety; optional expansion deferred.' }, ctx)
+  })
+  await f.runtime.run('encapsulator', signal())
 }))
