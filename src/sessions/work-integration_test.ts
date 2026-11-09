@@ -403,15 +403,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     } finally { await f.close(); store.close?.() }
   }))
 
-  test(`${Store.name}: routine notes are silent, impact updates coalesce, and a failed notification reports the committed version`, async t => withTempWorkspace(async workspace => {
+  test(`${Store.name}: routine notes are silent, impact updates coalesce, and pending notification facts retain the latest issue`, async t => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
     try {
       await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
       const work = await f.note({ assignee: id }, coordinator)
       const deliveries: { sessionId: string; input: SessionInput }[] = []
-      let fail = false
       t.mock.method(f.sessions, 'deliver', async (sessionId: string, input: SessionInput): Promise<DeliveryReceipt> => {
-        if (fail) throw new Error('Synthetic unavailable recipient')
         deliveries.push({ sessionId, input }); return { status: 'accepted', sessionId, inputId: input.id }
       })
       f.enableNotifications()
@@ -424,13 +422,117 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(deliveries[0].sessionId, coordinator)
       await f.alignment.reviewNote(actor(coordinator), work.key, f.alignment.get(work.key).sequence, 'Proceed with token metrics')
       assert.equal(deliveries.length, 1)
-      fail = true
       const version = f.alignment.get(work.key).sequence + 1
-      await assert.rejects(update({ attention: { kind: 'dependency', summary: 'The selected report is missing' } }),
-        new RegExp(`version ${version} is saved, but update delivery failed`))
+      await update({ attention: { kind: 'dependency', summary: 'The selected report is missing' } })
+      assert.equal(f.initiatives.pendingWorkNotifications().length, 1)
       assert.equal(f.alignment.get(work.key).sequence, version)
       assert.equal((await f.overview()).items[0].notes?.attention?.summary, 'The selected report is missing')
       assert.equal(f.calls.length, 0)
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: notification markers merge at a safe boundary, discard stale issues, and return a waiting executor without unblocking`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      let work = await f.note({ assignee: id }, coordinator)
+      await f.sessions.deliver(coordinator, { kind: 'message', id: 'manager-user', timestamp: new Date().toISOString(), policy: 'interactive',
+        source: { kind: 'user', sender: { channel: 'web', chatId: 'coordinator', senderId: 'owner', messageId: 'manager-user', admin: true } }, content: 'Continue existing coordination' }, llm)
+      await waitFor(() => f.calls.length === 1)
+      f.enableNotifications()
+      work = await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'blocked', blockedReason: 'Need scope',
+        notes: { attention: { kind: 'scope', summary: 'Old scope question', awaitingResponse: true } } })
+      work = await f.alignment.editNote(actor(), work.key, work.sequence, {
+        notes: { attention: { kind: 'scope', summary: 'Latest scope question', awaitingResponse: true } } })
+      assert.equal(f.calls.length, 1, 'next-step must not abort the current inference')
+      f.calls[0].resolve(done())
+      await waitFor(() => f.calls.length === 2)
+      const notices = f.calls[1].messages.filter(message => message.name === '__work_notification__')
+      assert.equal(notices.length, 1)
+      assert.match(JSON.stringify(notices), /Latest scope question/)
+      assert.doesNotMatch(JSON.stringify(notices), /Old scope question/)
+      assert.equal(f.initiatives.pendingWorkNotifications().length, 0)
+      await f.finish(coordinator)
+      work = await f.alignment.reviewNote(actor(coordinator), work.key, work.sequence, 'Use existing scope')
+      await waitFor(() => f.calls.length === 3)
+      assert.equal(work.workflow?.status, 'blocked', 'review is not an unblock')
+      assert.match(JSON.stringify(f.calls[2].messages), /Coordinator response: Use existing scope/)
+      await f.finish(id)
+      assert.equal(f.initiatives.pendingWorkNotifications().length, 0)
+      const count = f.calls.length
+      work = await f.alignment.editNote(actor(), work.key, work.sequence, { notes: { attention: { kind: 'dependency', summary: 'Now obsolete' } } })
+      // A record-only review consumes no return handoff and cancels an unconsumed issue.
+      await f.alignment.reviewNote(actor(coordinator), work.key, work.sequence, 'Already resolved', undefined, 'record')
+      await delay(20)
+      assert(f.calls.length <= count + 1, 'no review or ack notification loop')
+      await f.finish(coordinator)
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: unavailable coordinator admission keeps facts durable and recovery retries once without creating review`, async t => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      const work = await f.note({ assignee: id }, coordinator)
+      let attempts = 0
+      const mock = t.mock.method(f.sessions, 'deliver', async (): Promise<DeliveryReceipt> => { attempts++; throw new Error('Synthetic unavailable coordinator') })
+      f.enableNotifications()
+      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', notes: { summary: 'Completed' } })
+      assert.equal(attempts, 1)
+      assert.equal(f.initiatives.pendingWorkNotifications().length, 1)
+      assert.equal(f.alignment.get(work.key).notes?.attention, undefined)
+      mock.mock.restore()
+      await f.sessions.recoverWorkNotifications()
+      await waitFor(() => f.calls.length === 1)
+      assert.match(JSON.stringify(f.calls[0].messages), /Reported done: Completed/)
+      await f.finish(coordinator)
+      await f.sessions.recoverWorkNotifications()
+      assert.equal(f.calls.length, 1)
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: admitted but unconsumed markers survive Session stop and restart in the same runtime`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    const managerInput = () => ({ kind: 'message' as const, id: crypto.randomUUID(), timestamp: new Date().toISOString(), policy: 'interactive' as const,
+      source: { kind: 'user' as const, sender: { channel: 'web', chatId: 'coordinator', senderId: 'owner', messageId: crypto.randomUUID(), admin: true } }, content: 'Continue coordination' })
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      const work = await f.note({ assignee: id }, coordinator)
+      await f.sessions.deliver(coordinator, managerInput(), llm)
+      await waitFor(() => f.calls.length === 1)
+      f.enableNotifications()
+      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', notes: { summary: 'Retained handoff' } })
+      const active = f.sessions.getActiveSession(coordinator)!
+      active.stop(); await active.completion
+      assert.equal(f.initiatives.pendingWorkNotifications().length, 1)
+      await f.sessions.deliver(coordinator, managerInput(), llm)
+      await waitFor(() => f.calls.length >= 2)
+      await f.finish(coordinator)
+      assert.equal(f.initiatives.pendingWorkNotifications().length, 0)
+      const noticeMessages = f.calls.flatMap(entry => entry.messages.filter(message => message.name === '__work_notification__'))
+      assert(noticeMessages.some(message => JSON.stringify(message).includes('Retained handoff')))
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: history receipt closes append/settle crash window even after a context segment reset`, async t => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      const work = await f.note({ assignee: id }, coordinator)
+      const settlement = t.mock.method(f.initiatives, 'settleWorkNotifications', () => {})
+      f.enableNotifications()
+      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', notes: { summary: 'One durable handoff' } })
+      await waitFor(() => f.calls.length === 1)
+      await f.finish(coordinator)
+      const pending = f.initiatives.pendingWorkNotifications()
+      assert.equal(pending.length, 1)
+      assert(pending[0].deliveryPhysicalIds?.length)
+      settlement.mock.restore()
+      assert.equal(await f.sessions.clearSessionContext(coordinator), 'cleared')
+      await f.sessions.recoverWorkNotifications()
+      await waitFor(() => f.initiatives.pendingWorkNotifications().length === 0)
+      await delay(20)
+      assert.equal(f.calls.length, 1, 'already persisted handoff must not wake a new inference')
     } finally { await f.close(); store.close?.() }
   }))
 

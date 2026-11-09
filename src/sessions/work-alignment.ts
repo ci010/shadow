@@ -51,11 +51,11 @@ export const WORK_HELP = {
     requestQuote: 'Optional exact quote from the current user input; the host supplies its source' },
   update: { notes: { summary: 'Current conclusion', plan: ['Editable steps, not mandatory gates'], next: 'Next useful action or wait',
     artifacts: [{ label: 'Result', href: 'HTTP(S) or Project-relative resource URL' }], html: 'Optional read-only HTML exhibit; scripts and forms are not supported',
-    attention: { kind: 'assumption|scope|dependency|decision|blocker', summary: 'Only material changes needing the coordinator to act' } },
+    attention: { kind: 'assumption|scope|dependency|decision|blocker', summary: 'Only material changes needing the coordinator to act', awaitingResponse: 'Optional boolean: the executor is waiting for a response; omitted legacy attention is nonwaiting' } },
     status: 'Optional pending|in_progress|blocked|done|cancelled', blockedReason: 'Required when blocked',
     definition: 'Coordinator/human only; same shape as create. Do not turn implementation preferences into user requirements.' },
   assign: { assignee: 'Existing durable session ID or null; responsibility only, not cancellation or permission' },
-  review: { conclusion: 'Coordinator interpretation of a reported impact; does not approve operations' },
+  review: { conclusion: 'Coordinator interpretation of a reported impact; does not approve operations', disposition: 'Optional record|return_to_assignee; waiting attention defaults to return, otherwise record. Return does not unblock, reassign, approve, or require acknowledgement; executor must read latest Work.' },
   discovery: { index: 'v:works/index; 20 receipts per page; follow next', context: 'v:works/context; associated keys', key: 'v:works/keys/<encodeURIComponent(key)>; optional /definition, /notes, /path', search: 'search at v:works; heed bounded-discovery warnings', writes: 'Discover v:tools/work_create, work_update, work_assign, work_review, work_link; invoke_tool with typed fields, no action/data' },
   version: 'Read the current note version before update, assign or review; send only changed fields. Goal revisions change only for semantic changes.',
   link: 'Associate this session with an existing key; does not select focus, assign responsibility, or complete Work.',
@@ -354,12 +354,17 @@ export class WorkAlignment implements WorkToolGuard {
     if (semantic && actor.kind === 'user' && patch.requestQuote === undefined) requestSource = undefined
     if (patch.definition) for (const source of patch.definition.evidence) await this.deps.evidence(source)
     const now = new Date().toISOString()
+    const reportedAttention = patch.notes?.attention
+    const oldAttention = prior.notes?.attention
+    const samePendingAttention = reportedAttention && oldAttention && !oldAttention.reviewed
+      && reportedAttention.kind === oldAttention.kind && reportedAttention.summary === oldAttention.summary
+      && (reportedAttention.awaitingResponse ?? false) === (oldAttention.awaitingResponse ?? false)
     const notes = workNotesSchema.parse({
       ...prior.notes, ...patch.notes,
       basis: parentKey !== prior.workflow.parentKey ? this.basis(parentKey) : prior.notes?.basis ?? this.basis(parentKey),
-      attention: patch.notes?.attention
-        ? { ...patch.notes.attention, version: version + 1, by: this.actorName(actor), at: now }
-        : prior.notes?.attention,
+      attention: samePendingAttention ? oldAttention : reportedAttention
+        ? { ...reportedAttention, version: version + 1, by: this.actorName(actor), at: now }
+        : oldAttention,
     })
     if (parentKey && !notes.relation) throw new WorkConflict('Explain the link to the parent as supports, requires, or assumption.')
     if (!parentKey) notes.relation = undefined
@@ -389,19 +394,22 @@ export class WorkAlignment implements WorkToolGuard {
     return record
   }
 
-  async reviewNote(actor: WorkActor, key: string, version: number, conclusion: string, signal?: AbortSignal): Promise<WorkRecord> {
+  async reviewNote(actor: WorkActor, key: string, version: number, conclusion: string, signal?: AbortSignal,
+    disposition?: 'record' | 'return_to_assignee'): Promise<WorkRecord> {
     signal?.throwIfAborted()
     const prior = this.get(key)
     this.assertController(prior, actor)
     if (prior.sequence !== version) throw new WorkConflict('The branch changed. Read its latest update before reviewing its impact.')
     if (!this.contextChanged(prior) && (!prior.notes?.attention || prior.notes.attention.reviewed)) throw new WorkConflict('There is no pending impact review.')
     const now = new Date().toISOString()
-    const attention = prior.notes?.attention ?? { kind: 'scope' as const, summary: 'An ancestor goal or rationale changed.',
+    const attention: NonNullable<import('../initiatives/work-notes.ts').WorkNotes['attention']> = prior.notes?.attention ?? { kind: 'scope' as const, summary: 'An ancestor goal or rationale changed.',
       version, by: 'runtime', at: now }
     const record: WorkRecord = { ...prior, sequence: version + 1, changedBy: this.actorName(actor), changedAt: now,
       notes: { ...workNotesSchema.parse(prior.notes ?? {}), basis: this.basis(prior.workflow?.parentKey),
       attention: { ...attention, reviewed: {
         by: this.actorName(actor), at: now, conclusion: z.string().trim().min(1).max(2000).parse(conclusion),
+        disposition: z.enum(['record', 'return_to_assignee']).parse(disposition ?? (attention.awaitingResponse ? 'return_to_assignee' : 'record')),
+        assignmentRevision: prior.workflow?.assignmentRevision, version: version + 1,
       } },
     } }
     this.store.saveWork(record, version, this.actorName(actor), 'impact_review')

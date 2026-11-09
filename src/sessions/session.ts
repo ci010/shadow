@@ -98,6 +98,16 @@ export class Session extends BaseSession {
     )
   }
 
+  /** Work-only wake markers resolve against current durable facts at a safe boundary. */
+  prepareWorkNotification?: (input: SessionMessageInput) => Promise<SessionMessageInput | null>
+
+  private async prepareQueuedInput(input: SessionInput): Promise<SessionInput | null> {
+    if (input.kind === 'message' && input.source.kind === 'event' && input.source.type === 'work-notification-wake') {
+      return this.prepareWorkNotification ? this.prepareWorkNotification(input) : null
+    }
+    return input
+  }
+
   // ── Public API ──────────────────────────────────────────────────────────
 
   /** Current turn phase: idle (no turn), llm (waiting on LLM), or tool (executing tools). */
@@ -366,6 +376,9 @@ export class Session extends BaseSession {
         } else if (event.type === 'compact') {
           await this.compact(event.llm)
         } else {
+          const prepared = await this.prepareQueuedInput(event.msg)
+          if (!prepared) { this.scheduleSleepCheck(event.llm); continue }
+          event.msg = prepared
           this.turn = new SessionTurn(event.msg)
           this.activityChanged()
           await this.processInput(
@@ -485,14 +498,20 @@ export class Session extends BaseSession {
       ? locations.workdir.path
       : locations.sessionDataDir
     while (this.turn.steerQueue.length > 0) {
-      const steerQueue = this.turn.steerQueue
+      const queued = this.turn.steerQueue
       this.turn.steerQueue = []
+      const steerQueue: SessionMessageInput[] = []
+      for (const input of queued) {
+        const prepared = await this.prepareQueuedInput(input)
+        if (prepared?.kind === 'message') steerQueue.push(prepared)
+      }
       await this.appendMessages(
         llm,
         ...await Promise.all(
           steerQueue.map((m) => buildUserChatMessage(m, this.workspace, cwd)),
         ),
       )
+      if (!this.messagePersistenceFailed) for (const input of steerQueue) this.inputPersisted?.(input)
       if (this.responseContext && steerQueue.some(input => input.source.kind === 'user')) {
         this.responseContext = { ...this.responseContext, userInvolved: true }
       }

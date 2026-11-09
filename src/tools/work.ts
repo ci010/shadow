@@ -80,8 +80,9 @@ export class WorkTool implements Tool {
         const input = z.object({ assignee: z.string().min(1).max(512).nullable() }).strict().parse(data)
         record = await this.alignment.assignNote(actor, key, version, input.assignee, context.signal)
       } else {
-        const input = z.object({ conclusion: z.string().trim().min(1).max(2000) }).strict().parse(data)
-        record = await this.alignment.reviewNote(actor, key, version, input.conclusion, context.signal)
+        const input = z.object({ conclusion: z.string().trim().min(1).max(2000),
+          disposition: z.enum(['record', 'return_to_assignee']).optional() }).strict().parse(data)
+        record = await this.alignment.reviewNote(actor, key, version, input.conclusion, context.signal, input.disposition)
       }
     }
     return JSON.stringify(workReceipt(record))

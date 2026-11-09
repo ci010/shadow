@@ -26,6 +26,22 @@ Version-5 and other unsupported databases fail explicitly before schema changes
 or WAL configuration. The runtime does not migrate, replace or remove their
 records. Preserve the file and resolve the storage choice explicitly.
 
+## Low-noise coordination delivery
+
+- summary/plan/next/artifacts and ordinary in_progress updates are silent.
+- Entering done or blocked routes one notice to the Work manager, not the session parent. A blocked transition plus attention in one write produces one manager fact.
+- New unreviewed attention reports a material coordination issue. `awaitingResponse: true` means the executor is waiting; old omitted values are nonwaiting. Identical repeated unreviewed attention preserves its version/identity.
+- `work_review` records a conclusion and optional `record | return_to_assignee` disposition. Waiting attention defaults to return; other reviews default to record. Review never changes blocked/status, assignment or authorization. Returned execution must read latest Work; no ack protocol exists.
+- Goal changes notify affected active descendants for reassessment; release warns the previous executor without cancelling running operations. Reassessment reviews retire obsolete context notices.
+
+An additive `work_notifications` delivery-fact table is written in the same transaction as Work, without rewriting legacy records or changing the v6 boundary. It is an internal delivery ledger, not another approval or task system. Delivery/settlement writes produce no Work events. Historical Work is not backfilled into wake events at upgrade.
+
+SessionManager admits at most one Work wake marker per recipient. `next-step` uses the existing input queue and safe checkpoints rather than aborting current inference; consumption merges all currently pending facts. Before appending anything, it checks current assignment generations, manager/assignee, status episode, attention/review identity and ancestor basis. Ended/reassigned/reviewed/reopened episodes are discarded. done reopening and blocked clearing expire the old facts atomically, so subsequent completion/blocking is a new episode. Manager null, manager=assignee and mutation-source=self never invent a recipient or self-wake.
+
+Facts remain pending if the responsible durable session is unavailable, retired, in explicit recovery or cannot admit input. Recovery is attempted on runtime startup, later Work changes and ordinary input admission; there is no polling or LLM retry loop. Temporary task/call executions are not reopened as coordinators. Issues remain visible in notes even without a usable coordinator; no human approval is synthesized.
+
+A physical-log delivery stamp is saved before append. Settlement happens only after the combined notice is persisted. Recovery checks the stamped JSONL/SQLite physical logs (including older context segments) for the host notice receipt before redelivery; stopping a session clears only its in-memory marker reservation. This closes the append/settle crash window without replaying a completed handoff. Normal interrupted-turn recovery still applies: delivered history is not proof that the model completed its response. Delivery facts/receipts are retained; this change adds no garbage collector or cross-runtime distributed consumer lock.
+
 ## Retired Work execution channels
 
 Current Work actions are `context/list/tree/create/update/assign/review/link`.

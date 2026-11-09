@@ -411,3 +411,48 @@ test('legacy persisted temporary bindings restore without reviving durable selec
     for (const id of ['task', 'call']) assert.equal(f.alignment.decisionContext(id)?.originKey, first.key)
   } finally { f.store.close() }
 }))
+
+
+test('attention retry preserves issue identity; review defaults to return only for an explicitly waiting executor', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    let work = await f.create({ assignee: worker })
+    const attention = { kind: 'decision', summary: 'Which supported format?', awaitingResponse: true }
+    work = await f.alignment.editNote(actor(worker), work.key, work.sequence, { notes: { attention } })
+    const issue = work.notes!.attention!
+    work = await f.alignment.editNote(actor(worker), work.key, work.sequence, { notes: { attention, next: 'Await coordinator' } })
+    assert.deepEqual(work.notes!.attention, issue)
+    const before = work
+    await assert.rejects(f.alignment.reviewNote(actor(owner), work.key, work.sequence - 1, 'Use JSON'), /changed/)
+    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Use JSON')
+    assert.equal(work.notes!.attention!.reviewed!.disposition, 'return_to_assignee')
+    assert.equal(work.notes!.attention!.reviewed!.assignmentRevision, before.workflow!.assignmentRevision)
+    assert.deepEqual(work.workflow, JSON.parse(JSON.stringify(before.workflow)))
+    assert.equal(work.revision, before.revision)
+    await assert.rejects(f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Use JSON'), /no pending/)
+    // A report after the review is a new issue, even if its text is unchanged.
+    work = await f.alignment.editNote(actor(worker), work.key, work.sequence, { notes: { attention } })
+    assert(work.notes!.attention!.version > issue.version)
+    assert.equal(work.notes!.attention!.reviewed, undefined)
+    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Logged; no response yet', undefined, 'record')
+    assert.equal(work.notes!.attention!.reviewed!.disposition, 'record')
+  } finally { f.store.close() }
+}))
+
+test('legacy nonwaiting attention defaults to record; explicit return records intent without changing blocked or terminal Work', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    let work = await f.create({ assignee: null })
+    work = await f.alignment.editNote(actor(owner), work.key, work.sequence, { status: 'blocked', blockedReason: 'Need fixture input' })
+    assert.equal(work.notes!.attention!.awaitingResponse, undefined)
+    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Recorded')
+    assert.equal(work.notes!.attention!.reviewed!.disposition, 'record')
+    assert.equal(work.workflow!.status, 'blocked')
+    work = await f.alignment.editNote(actor(owner), work.key, work.sequence, { status: 'done', notes: { summary: 'Fixture finished', attention: { kind: 'scope', summary: 'Result interpretation' } } })
+    const prior = work.workflow
+    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Return intent only', undefined, 'return_to_assignee')
+    assert.equal(work.notes!.attention!.reviewed!.disposition, 'return_to_assignee')
+    assert.deepEqual(work.workflow, JSON.parse(JSON.stringify(prior)))
+    assert.equal(work.workflow!.assignee, null)
+  } finally { f.store.close() }
+}))

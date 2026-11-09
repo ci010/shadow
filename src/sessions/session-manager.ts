@@ -81,6 +81,7 @@ import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { WorkAlignment } from './work-alignment.ts'
+import { currentWorkNotification, workNotificationContent } from '../initiatives/work-notifications.ts'
 import { parseWorkPolicy, type WorkPolicy } from './work-policy.ts'
 import type { WorkRecord } from '../initiatives/work-contract.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
@@ -1512,7 +1513,11 @@ ${JSON.stringify(request)}`,
       if (!this.automaticWorkAdmission) return Promise.reject(new Error('Automatic Work admission controller is unavailable'))
       return this.automaticWorkAdmission(sessionId, input, admit)
     }
-    return admit()
+    const delivery = admit()
+    if (!(input.source.kind === 'event' && (input.source.type === 'work-notification-wake' || input.source.type === 'work-notification'))) {
+      void delivery.then(() => this.recoverWorkNotifications()).catch(error => console.warn(`[work-notifications] Recovery deferred: ${errMsg(error)}`))
+    }
+    return delivery
   }
   private deliverOwned(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig, beforeDispatch?: () => void): Promise<DeliveryReceipt> {
     if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) return Promise.reject(new Error('Passive channel inbox is read-only. Configure a BOT from an owner Web chat.'))
@@ -1614,6 +1619,7 @@ ${JSON.stringify(request)}`,
       }
       const created = !session
       if (!session) session = await this.createActiveSession(sessionId, deliveryInput)
+      if (session instanceof Session) this.configureWorkNotifications(session, sessionId)
       if (this.deleting.has(sessionId)) {
         session.stop()
         throw new DOMException('Session was deleted before admission.', 'AbortError')
@@ -1836,6 +1842,7 @@ ${JSON.stringify(request)}`,
     const onStopped = (id: string) => {
       const completion = this.sessions[id]?.completion
       delete this.sessions[id]
+      this.scheduledWorkNotifications.delete(id)
       this.executionLimits.delete(id)
       if (ctx.state.mode !== 'session') {
         this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
@@ -2923,6 +2930,67 @@ ${JSON.stringify(request)}`,
     })
   }
 
+  private readonly scheduledWorkNotifications = new Set<string>()
+
+  /** Recover durable routing facts, also used after each mutation. One marker per recipient. */
+  async recoverWorkNotifications(): Promise<void> {
+    if (!this.alignment || this.stopped) return
+    const pending = this.alignment.store.pendingWorkNotifications()
+    for (const target of new Set(pending.map(notice => notice.target))) {
+      const state = this.getSessionState(target)
+      // A Work manager is not necessarily a parent. Never invent or reopen an execution.
+      if (!state || (state.mode ?? 'session') !== 'session' || state.retirement || state.recovery
+        || this.scheduledWorkNotifications.has(target)) continue
+      if (!state.lastActivityAt && state.topicRequestHash && state.executionStatus === 'pending') continue
+      this.scheduledWorkNotifications.add(target)
+      try {
+        await this.deliver(target, {
+          kind: 'message', id: `work-wake:${target}:${crypto.randomUUID()}`, timestamp: new Date().toISOString(), policy: 'next-step',
+          source: { kind: 'event', eventId: target, type: 'work-notification-wake', source: 'work-notebook' }, content: '',
+        })
+      } catch (error) {
+        this.scheduledWorkNotifications.delete(target)
+        // Facts remain pending, including when a coordinator has no usable runtime/folder.
+        console.warn(`[work-notifications] Admission deferred for ${target}: ${errMsg(error)}`)
+      }
+    }
+  }
+
+  private configureWorkNotifications(session: Session, target: string): void {
+    session.prepareWorkNotification = async marker => {
+      this.scheduledWorkNotifications.delete(target)
+      if (!this.alignment) return null
+      const store = this.alignment.store
+      const pending = store.pendingWorkNotifications(target)
+      if (!pending.length) return null
+      // A crash between history append and receipt settlement must not duplicate a handoff.
+      const recorded = new Set<string>()
+      const state = this.getSessionState(target)
+      if (!state || state.retirement) return null
+      const physicalIds = new Set([SessionManager.currentPhysicalId(state), ...pending.flatMap(notice => notice.deliveryPhysicalIds ?? [])])
+      for (const physicalId of physicalIds) for await (const row of this.store.readSessionLog(physicalId)) {
+        if (row.role !== 'user' || row.name !== '__work_notification__' || !Array.isArray(row.content)) continue
+        const first = row.content[0] as { type?: string; text?: string } | undefined
+        if (first?.type !== 'text' || !first.text?.startsWith('<event type="work-notification" source="work-notebook"')) continue
+        const text = JSON.stringify(row.content)
+        for (const notice of pending) if (text.includes(`[work-notification:${notice.id}]`)) recorded.add(notice.id)
+      }
+      const records = store.workRecords()
+      const valid = pending.filter(notice => !recorded.has(notice.id) && currentWorkNotification(notice, records))
+      store.settleWorkNotifications(pending.filter(notice => recorded.has(notice.id) || !currentWorkNotification(notice, records)).map(notice => notice.id))
+      if (!valid.length) return null
+      store.stampWorkNotificationDelivery(valid.map(notice => notice.id), SessionManager.currentPhysicalId(state))
+      return { ...marker, source: { kind: 'event', eventId: marker.id, type: 'work-notification', source: 'work-notebook',
+        senderName: '__work_notification__', attributes: { workNotificationIds: valid.map(notice => notice.id) } },
+        content: workNotificationContent(valid, records) }
+    }
+    session.inputPersisted = input => {
+      if (input.source.kind !== 'event' || input.source.type !== 'work-notification') return
+      const ids = input.source.attributes?.workNotificationIds
+      if (Array.isArray(ids) && ids.every(id => typeof id === 'string')) this.alignment?.store.settleWorkNotifications(ids)
+    }
+  }
+
   async notifyWorkChange(record: WorkRecord, previous?: WorkRecord): Promise<void> {
     if (!this.alignment) throw new Error('Work alignment is not configured.')
     for (const sessionId of Object.keys(this.sessionStates)) {
@@ -2938,36 +3006,7 @@ ${JSON.stringify(request)}`,
       }
     }
     if (record.notes) {
-      const recipients = new Map<string, string>()
-      const authority = this.alignment.store.workAuthority(record.subject)
-      if (previous && (previous.revision !== record.revision || previous.workflow?.assignee !== record.workflow?.assignee)) {
-        const descendants = this.alignment.store.initiativeView(record.key).items
-        for (const item of descendants) {
-          if (item.workflow?.assignee) recipients.set(item.workflow.assignee, 'The goal or approach changed. Re-evaluate only affected plans; ordinary tools do not require adoption.')
-        }
-        if (previous.workflow?.assignee && previous.workflow.assignee !== record.workflow?.assignee) {
-          recipients.set(previous.workflow.assignee, 'The work assignment changed. Do not continue obsolete instructions; this does not cancel an already-running operation.')
-        }
-      }
-      const attention = record.notes.attention
-      const hostAutomaticBlock = record.automaticExecution?.stage === 'blocked' && attention?.by === record.automaticExecution.sessionId
-      if (!hostAutomaticBlock && attention && !attention.reviewed && (!previous?.notes?.attention || previous.notes.attention.reviewed) && authority.manager) {
-        recipients.set(authority.manager, `A branch needs an impact assessment (${attention.kind}): ${attention.summary}\nResolve within existing authority or ask at the affected ancestor; do not forward raw implementation questions.`)
-      }
-      for (const [target, reason] of recipients) {
-        const state = this.getSessionState(target)
-        if (target === record.changedBy || !state) continue
-        // The program dispatcher owns the first admission and its crash barrier.
-        if (target === record.automaticExecution?.sessionId && record.automaticExecution.stage === 'claimed') continue
-        if (!previous?.workflow?.assignee && state.topicRequestHash && state.executionStatus === 'pending' && !state.lastActivityAt) continue
-        this.assertFolderAccess(target)
-        await this.deliver(target, {
-          kind: 'message', id: `work-note:${record.key}:${record.sequence}:${target}`, timestamp: new Date().toISOString(),
-          policy: 'steering',
-          source: { kind: 'event', eventId: record.key, type: 'work-note-changed', source: 'work-notebook' },
-          content: `${reason}\nRead v:works/keys/${encodeURIComponent(record.key)} (version ${record.sequence}). Update the relevant note once; no acknowledgement or duplicate status message is needed. Notes do not grant permission.`,
-        })
-      }
+      await this.recoverWorkNotifications()
       return
     }
     if (previous && previous.revision === record.revision

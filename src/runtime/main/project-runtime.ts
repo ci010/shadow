@@ -1762,6 +1762,7 @@ export async function createProjectRuntime(
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   await cronService.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
   await workDispatcher.recover()
+  await sessions.recoverWorkNotifications()
   workDispatchReady = true
   const workJob = cronService.listJobs().find(job => job.program && job.enabled !== false)
   if (workJob) await cronService.runNow(workJob.id)
