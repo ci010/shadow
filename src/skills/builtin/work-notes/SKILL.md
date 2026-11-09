@@ -54,11 +54,16 @@ No adopt, checkpoint, policy, progress or settle protocol is required.
 
 ## Review and completion
 
-Ordinary updates refresh the Project canvas without waking agents. For a material
+Summary/plan/next/artifact and in_progress updates refresh the Project canvas without waking agents. Entering done or blocked notifies the Work manager (not the session parent). A blocked transition and attention in the same update share one notification. Pending notices merge per recipient at the next safe input boundary and obsolete assignment/status/attention episodes are discarded before consumption. Missing coordinators leave the issue visible in Work; do not invent a reviewer or human approval. For a material
 changed premise, dependency, scope, decision or blocker, set notes.attention with
-kind and summary. The coordinator reads the branch, checks the parent impact and
-records `work_review` with a conclusion. Do not duplicate this by messaging or
-periodic status reports. An ancestor change leaves descendants explicitly not yet
+kind and summary; add awaitingResponse=true when the executor is waiting for a
+response. Omitted legacy attention means a nonwaiting report. The coordinator
+reads the branch, checks the parent impact and records `work_review` with a
+conclusion. Optional disposition is record or return_to_assignee: waiting
+attention defaults to return, otherwise to record. Return is a handoff to read
+latest Work, not an unblock, assignment change, permission or acknowledgement
+requirement. A record-only review need not wake the executor. Do not duplicate
+this by messaging or periodic status reports. An ancestor change leaves descendants explicitly not yet
 reassessed; changing a note does not silently clear that state.
 
 For a consequential choice, explain its effect on the user's outcome. Use

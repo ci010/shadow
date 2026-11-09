@@ -33,18 +33,24 @@ export const workNotesSchema = z.object({
   attention: z.object({
     kind: z.enum(['assumption', 'scope', 'dependency', 'decision', 'blocker']),
     summary: text.min(1),
+    /** Legacy omitted attention is a report, not a waiting executor. */
+    awaitingResponse: z.boolean().optional(),
     version: z.number().int().positive(),
     at: z.string().datetime(),
     by: z.string().min(1).max(512),
     reviewed: z.object({
       by: z.string().min(1).max(512), at: z.string().datetime(), conclusion: text.min(1),
+      // Optional on historical reviews; omitted means record-only.
+      disposition: z.enum(['record', 'return_to_assignee']).optional(),
+      assignmentRevision: z.number().int().positive().optional(),
+      version: z.number().int().positive().optional(),
     }).strict().optional(),
   }).strict().optional(),
 }).strict()
 export type WorkNotes = z.infer<typeof workNotesSchema>
 
 export const workNotePatchSchema = workNotesSchema.omit({ attention: true, basis: true }).partial().extend({
-  attention: workNotesSchema.shape.attention.unwrap().pick({ kind: true, summary: true }).optional(),
+  attention: workNotesSchema.shape.attention.unwrap().pick({ kind: true, summary: true, awaitingResponse: true }).optional(),
 }).strict()
 
 export const workContextNodeSchema = z.object({

@@ -1,3 +1,4 @@
+import { workNotifications, currentWorkNotification, type WorkNotification } from './work-notifications.ts'
 import { projectFocusSnapshotSchema, type ProjectFocusSnapshot } from '../projects/focus-contract.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomUUID } from 'node:crypto'
@@ -51,6 +52,7 @@ export class InitiativeStore {
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT; CREATE TABLE IF NOT EXISTS project_focus_summary (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_session_links (session_id TEXT NOT NULL, work_key TEXT NOT NULL, PRIMARY KEY(session_id,work_key)) STRICT;')
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_execution_bindings (session_id TEXT PRIMARY KEY, work_key TEXT NOT NULL) STRICT;')
+      this.#db.exec('CREATE TABLE IF NOT EXISTS work_notifications (id TEXT PRIMARY KEY, target TEXT NOT NULL, pending INTEGER NOT NULL, data TEXT NOT NULL) STRICT;')
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
@@ -238,6 +240,18 @@ export class InitiativeStore {
         this.#write('INSERT INTO work_completions (id,work_key,sequence,completed_at) VALUES (?,?,?,?)',
           [randomUUID(), parsed.key, parsed.sequence, new Date().toISOString()])
       }
+      // Persist routing facts atomically with the mutation, before runtime admission.
+      // Expire old episodes even if a status is reopened and completed again before consumption.
+      for (const row of this.#all('SELECT id,data FROM work_notifications WHERE pending=1')) {
+        const notice = JSON.parse(String(row.data)) as WorkNotification
+        if (!currentWorkNotification(notice, records)
+          || notice.key === parsed.key && notice.kind === 'done' && previous?.workflow?.status !== parsed.workflow?.status) {
+          this.#write('UPDATE work_notifications SET pending=0 WHERE id=?', [String(row.id)])
+        }
+      }
+      for (const notice of workNotifications(parsed, previous, records)) {
+        this.#write('INSERT OR IGNORE INTO work_notifications (id,target,pending,data) VALUES (?,?,1,?)', [notice.id, notice.target, JSON.stringify(notice)])
+      }
       this.#workEvent(parsed.key, actor, kind, notebookEvent ? {
         key: parsed.key, sequence: parsed.sequence, revision: parsed.revision,
         ...(previous?.revision !== parsed.revision ? { definition: parsed.definition, origin: parsed.origin, requestSource: parsed.requestSource } : {}),
@@ -248,6 +262,33 @@ export class InitiativeStore {
     })
   }
 
+
+  /** Read-only pending delivery projection; no ack/read creates another Work event. */
+  pendingWorkNotifications(target?: string): WorkNotification[] {
+    return this.#transaction('', () => this.#all(target === undefined
+      ? 'SELECT data FROM work_notifications WHERE pending=1 ORDER BY rowid'
+      : 'SELECT data FROM work_notifications WHERE pending=1 AND target=? ORDER BY rowid', target === undefined ? [] : [target])
+      .map(row => JSON.parse(String(row.data)) as WorkNotification), undefined, true)
+  }
+
+  /** Remember the physical log before appending, to close the append/settle crash window across segment changes. */
+  stampWorkNotificationDelivery(ids: string[], physicalId: string): void {
+    this.#transaction('', () => {
+      for (const id of ids) {
+        const row = this.#all('SELECT data FROM work_notifications WHERE id=? AND pending=1', [id])[0]
+        if (!row) continue
+        const notice = JSON.parse(String(row.data)) as WorkNotification
+        notice.deliveryPhysicalIds = [...new Set([...(notice.deliveryPhysicalIds ?? []), physicalId])]
+        this.#write('UPDATE work_notifications SET data=? WHERE id=?', [JSON.stringify(notice), id])
+      }
+    })
+  }
+
+  settleWorkNotifications(ids: string[]): void {
+    this.#transaction('', () => {
+      for (const id of ids) this.#write('UPDATE work_notifications SET pending=0 WHERE id=?', [id])
+    })
+  }
 
   #assignmentTarget(sessionId: unknown): void {
     if (sessionId === null) return
@@ -433,7 +474,7 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const workTables = ['work_completions', 'work_completion_reads', 'work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_execution_bindings', 'work_session_links', 'work_observations', 'project_focus_summary']
+    const workTables = ['work_notifications', 'work_completions', 'work_completion_reads', 'work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_execution_bindings', 'work_session_links', 'work_observations', 'project_focus_summary']
     const readable = new Set(workTables)
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!

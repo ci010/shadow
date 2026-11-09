@@ -67,7 +67,7 @@ export abstract class BaseSession {
   protected responseContext: ResponseContext | undefined
   /** Wake output is persisted as history but must never enter platform outbound routing. */
   private suppressWakeOutput = false
-  private messagePersistenceFailed = false
+  protected messagePersistenceFailed = false
   private boundedSystemTask = false
   private boundedLearningTask = false
   private imagePreparationSignal?: AbortSignal
@@ -128,6 +128,9 @@ export abstract class BaseSession {
    * Append messages to the in-memory history and persist to disk.
    * Subclasses may override to add compaction checks (see {@link Session}).
    */
+  /** Host receipt after a newly admitted input is durably in history. */
+  inputPersisted?: (input: SessionInput) => void
+
   protected async appendMessages(
     llm: LlmRuntimeConfig,
     ...messages: ChatMessage[]
@@ -870,6 +873,7 @@ export abstract class BaseSession {
         }
         if (signal.aborted) await this.persistMessages(llm, message)
         else await this.appendMessages(llm, message)
+        if (!this.messagePersistenceFailed) this.inputPersisted?.(input)
       }
 
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
