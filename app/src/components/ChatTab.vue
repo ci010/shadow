@@ -614,6 +614,7 @@ import { groupToolActivity } from '../tool-activity.ts'
 import { toolImages } from '../tool-images.ts'
 import { buildMediaUrl } from '../media-url.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
+import { contentReference } from '../content-references.ts'
 import { conversationLinkSession, conversationMicroAppLink, isDirectConversation } from '../project-coordination.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import ConversationSearch from './ConversationSearch.vue'
@@ -634,6 +635,8 @@ function openConversationLink(event: MouseEvent) {
   if (image) { event.preventDefault(); openImagePreview(image); return }
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
+  const reference = anchor && !anchor.hasAttribute('download') && contentReference(anchor.getAttribute('href') ?? '')
+  if (reference && reference.kind === 'work') { event.preventDefault(); void router.push(reference.href); return }
   const app = anchor && !anchor.hasAttribute('download') &&
     conversationMicroAppLink(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
   if (app) { event.preventDefault(); void router.push(app); return }

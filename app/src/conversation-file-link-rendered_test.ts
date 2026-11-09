@@ -56,12 +56,14 @@ test('conversation links open scoped previews and reveal nested files without na
           import { messageAttachments } from '/src/message-attachments.ts';
           import { discordReviewLink } from '/src/discord-integration.ts';
           import { conversationFileLink } from '/src/conversation-file-link.ts';
+          import { contentReference, workReference } from '/src/content-references.ts';
           import { conversationLinkSession, conversationMicroAppLink } from '/src/project-coordination.ts';
           import { imagePreviewFromEvent } from '/src/image-viewer.ts';
           createApp({ setup() {
             const props = {projectId:'fixture', apiBase:location.origin + '/projects/fixture'};
             const activeSessionId = ref('web:chat-fixture');
             const workbench = ref();
+            const router = {push: destination => {window.referenceDestination = destination}};
             const requestSession = () => { throw new Error('Unexpected conversation navigation') };
             const openImagePreview = () => { throw new Error('Unexpected image preview') };
             ${handler}
@@ -71,7 +73,7 @@ test('conversation links open scoped previews and reveal nested files without na
               contextKey:'fixture', active:true, initialExplorerOpen:true, style:'height:100vh'}, {
               default:() => [
                 h('article', {class:'fixture-message', onClick:openConversationLink,
-                  innerHTML:DOMPurify.sanitize(marked.parse(markdown))}),
+                  innerHTML:DOMPurify.sanitize(marked.parse(markdown + '\\n\\n' + workReference('fixture', 'work:one', 'Referenced work')))}),
                 h(Attachments, {paths:attachments.paths, apiBase:props.apiBase, sessionId:activeSessionId.value,
                   workdir:{kind:'local',displayPath:'C:\\\\synthetic\\\\owner'},
                   onOpen:file => workbench.value.openLinkedFile(file)}),

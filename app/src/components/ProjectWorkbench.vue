@@ -260,14 +260,16 @@ async function closePanel() {
   panel.value = ''
   await nextTick(); rootElement.value?.querySelector<HTMLButtonElement>('.work-view-switch button')?.focus()
 }
+import { workReference } from '../content-references.ts'
+
 async function discussSelected() {
   await nextTick()
-  emit('compose', `About work ${selected.value}${selectedItem.value ? ` (${selectedItem.value.title})` : ''}:\n`)
+  emit('compose', workReference(props.projectId, selected.value, selectedItem.value?.title) + '\n')
 }
 async function discussNode(key: string) {
   const item = data.value?.items.find(item => item.key === key)
   await nextTick()
-  emit('compose', t('Discuss the premise of {title} ({key}):', { title: item?.title ?? key, key }) + '\n')
+  emit('compose', t('Discuss the premise of {title} ({key}):', { title: workReference(props.projectId, key, item?.title), key }) + '\n')
 }
 async function focusRequest(request: ProjectWorkOverview['requests'][number]) {
   view.value = 'history'

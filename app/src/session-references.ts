@@ -1,3 +1,4 @@
+import { referenceLabel as escapeLabel, referenceRoutePart as encodeRoutePart } from './content-references.ts'
 import { t } from './i18n.ts'
 
 export interface ReferenceSession { sessionId: string; title?: string; label?: string }
@@ -18,14 +19,6 @@ export function filterReferenceSessions<T extends ReferenceSession>(sessions: re
   return sessions.filter(session => session.sessionId !== currentId
     && !!session.sessionId && !/[\/\\\s\u0000-\u001f]/u.test(session.sessionId)
     && `${referenceSessionTitle(session)} ${session.sessionId}`.toLocaleLowerCase().includes(needle)).slice(0, 20)
-}
-
-function escapeLabel(text: string) {
-  return text.replace(/[\r\n\u0000-\u001f]+/g, ' ').replace(/[&\\`*_{}\[\]()<>!|]/g, char => `&#${char.charCodeAt(0)};`)
-}
-
-function encodeRoutePart(value: string) {
-  return encodeURIComponent(value).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
 }
 
 /** Plain Markdown survives existing send, queue, retry and persistence paths unchanged.
