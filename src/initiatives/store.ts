@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
-import { WORK_SCHEMA, WorkConflict, workKey, workRecordSchema, workSubjectSchema, workObservationSchema,
+import { WORK_SCHEMA, WORK_COMPLETION_SCHEMA, workCompletionReadSchema, type WorkCompletion, WorkConflict, workKey, workRecordSchema, workSubjectSchema, workObservationSchema,
   type WorkSubject, type WorkAuthority, type WorkRecord, type WorkObservation } from './work-contract.ts'
 
 export type InitiativeRow = Record<string, string | number | null>
@@ -54,12 +54,76 @@ export class InitiativeStore {
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
       }
+      this.#initializeCompletions()
       this.#installAuthorizer()
       this.#validateWorkGraph(this.workRecords())
     } catch (error) {
       this.#db.close()
       throw error
     }
+  }
+
+  /** Additive v6 migration, serialized with writers; no Work record/event is rewritten. */
+  #initializeCompletions(): void {
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      this.#db.exec(WORK_COMPLETION_SCHEMA)
+      const existing = new Set(this.#all('SELECT work_key FROM work_completions').map(row => row.work_key))
+      for (const row of this.#all('SELECT data FROM work_contracts')) {
+        const record = workRecordSchema.parse(JSON.parse(String(row.data)))
+        if (record.workflow?.status !== 'done' || existing.has(record.key)) continue
+        const events = this.#all('SELECT created_at, data FROM work_contract_events WHERE work_key=?', [record.key])
+        const snapshots = events.flatMap(event => {
+          const parsed = JSON.parse(String(event.data))
+          return Number.isSafeInteger(parsed?.sequence) && parsed.sequence <= record.sequence && parsed?.workflow?.status
+            ? [{ sequence: parsed.sequence as number, status: parsed.workflow.status as string, at: String(event.created_at) }] : []
+        }).sort((a, b) => a.sequence - b.sequence)
+        // Only a recorded non-done -> done transition (or creation at sequence 1)
+        // supplies a time. changedAt is a definition timestamp, not completion.
+        let completedAt: string | null = null, previous: typeof snapshots[number] | undefined
+        for (const snapshot of snapshots) {
+          if (snapshot.status !== 'done' || previous && snapshot.sequence !== previous.sequence + 1) completedAt = null
+          else if (previous?.status !== 'done' && (previous || snapshot.sequence === 1)) {
+            completedAt = /^\d{4}-\d{2}-\d{2}T/.test(snapshot.at) && Number.isFinite(Date.parse(snapshot.at)) ? snapshot.at : null
+          }
+          previous = snapshot
+        }
+        if (previous?.status !== 'done' || previous.sequence !== record.sequence) completedAt = null
+        this.#db.prepare('INSERT INTO work_completions (id,work_key,sequence,completed_at) VALUES (?,?,?,?)')
+          .run(`legacy:${record.key}`, record.key, record.sequence, completedAt)
+      }
+      this.#db.exec('COMMIT')
+    } catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  }
+
+  #completionItems(principal: string): WorkCompletion[] {
+    const latest = new Map<string, InitiativeRow>()
+    for (const row of this.#all('SELECT * FROM work_completions ORDER BY sequence')) latest.set(String(row.work_key), row)
+    const read = new Set(this.#all('SELECT completion_id FROM work_completion_reads WHERE principal=?', [principal]).map(row => row.completion_id))
+    return this.#all('SELECT data FROM work_contracts').flatMap(row => {
+      const record = workRecordSchema.parse(JSON.parse(String(row.data))), completion = latest.get(record.key)
+      return record.workflow?.status === 'done' && completion ? [{ key: record.key, completionId: String(completion.id),
+        sequence: Number(completion.sequence), completedAt: completion.completed_at === null ? null : String(completion.completed_at), unread: !read.has(completion.id) }] : []
+    })
+  }
+
+  workCompletions(principal: string): WorkCompletion[] {
+    assertReadPrincipal(principal)
+    return this.#transaction(principal, () => this.#completionItems(principal), undefined, true)
+  }
+
+  /** Stale/unknown references are ignored atomically; they cannot consume a new occurrence. */
+  markWorkCompletionsRead(principal: string, input: unknown): WorkCompletion[] {
+    assertReadPrincipal(principal)
+    const { items } = workCompletionReadSchema.parse(input)
+    return this.#transaction(principal, () => {
+      const current = new Map(this.#completionItems(principal).map(item => [item.key, item.completionId]))
+      const now = new Date().toISOString()
+      for (const item of items) if (current.get(item.key) === item.completionId) {
+        this.#write('INSERT OR IGNORE INTO work_completion_reads (principal,completion_id,read_at) VALUES (?,?,?)', [principal, item.completionId, now])
+      }
+      return this.#completionItems(principal)
+    })
   }
 
   close(): void {
@@ -160,6 +224,10 @@ export class InitiativeStore {
       }
       const notebookEvent = parsed.notes && ['note', 'created', 'assignment', 'impact_review'].includes(kind)
       const previous = prior ? workRecordSchema.parse(JSON.parse(String(prior.data))) : undefined
+      if (parsed.workflow?.status === 'done' && previous?.workflow?.status !== 'done') {
+        this.#write('INSERT INTO work_completions (id,work_key,sequence,completed_at) VALUES (?,?,?,?)',
+          [randomUUID(), parsed.key, parsed.sequence, new Date().toISOString()])
+      }
       this.#workEvent(parsed.key, actor, kind, notebookEvent ? {
         key: parsed.key, sequence: parsed.sequence, revision: parsed.revision,
         ...(previous?.revision !== parsed.revision ? { definition: parsed.definition, origin: parsed.origin, requestSource: parsed.requestSource } : {}),
@@ -347,7 +415,7 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_session_links', 'work_observations', 'project_focus_summary']
+    const workTables = ['work_completions', 'work_completion_reads', 'work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_session_links', 'work_observations', 'project_focus_summary']
     const readable = new Set(workTables)
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!
@@ -423,4 +491,8 @@ export function automaticWorkEligible(record: WorkRecord, records: readonly Work
 export function workDependenciesSatisfied(record: WorkRecord, records: readonly WorkRecord[]): boolean {
   const byKey = new Map(records.map(item => [item.key, item]))
   return !record.workflow?.dependencies.some(key => byKey.get(key)?.workflow?.status !== 'done')
+}
+
+function assertReadPrincipal(principal: string): void {
+  if (typeof principal !== 'string' || !principal.trim() || principal.length > 512 || /[\x00-\x1f]/.test(principal)) throw new TypeError('Invalid completion read principal.')
 }

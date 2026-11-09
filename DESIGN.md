@@ -403,6 +403,51 @@ work. Clicking outside dismisses it; Escape closes it and returns focus to its
 entry. Hidden chat panes dismiss their popover. Permission and session changes still reset their
 appropriate state; the toolbar does not grant backend access.
 
+### Work board
+
+Dashboard and Board canvases are transparent over the existing application dot
+background; do not add another graph dot layer. Keep cards, fields, toolbars and
+detail overlays on their readable theme surfaces. Top-level navigation has no
+View completed tab: Done cards remain on the Board, while Newly completed opens
+the unread result list with its existing read controls.
+
+The board includes Done alongside Pending, In progress, Blocked and Cancelled;
+completed parents and their descendants remain discoverable with the same Work,
+search and assignee filters. Dashboard's active projection remains separate.
+One bounded lane per status owns vertical scrolling, with Work group headings
+inside each lane rather than a separate unbounded board per parent. Wide panes
+allow horizontal lane overflow. Below 900px of available board width, a shared
+selector shows one lane at a time: no stacked, nested vertical scroll regions.
+
+Work lanes virtualize rows using measured card heights (including group headings,
+wrapped blockers and links), not fixed-height clipping. ResizeObserver updates
+geometry; a small overscan and at most one focused row bound mounted cards.
+Arrow keys / Home / End navigate cards and Tab retains card action order across
+virtual boundaries. Filtering and live status changes reset lane geometry.
+Rendering a Done card never acknowledges completion: actual loaded details retain
+the existing occurrence-aware read receipt behavior. Completed history remains
+available for historical lookup and explicit bulk read actions.
+
+### Work details
+
+The Work detail pane uses one title, followed by a distinct objective only when
+it differs from that title. Objectives over 240 characters use a three-line
+preview and a native Goal disclosure; the full authored text remains available.
+Progress status is a short line, while a blocking reason owns a separate readable
+section. Manager and assignee appear once each in a compact, read-only metadata
+group, with session names resolved from the full inventory. Their exact session
+IDs are available through keyboard-focusable HoverInfo hints; Technical details
+contains the Work identifier without repeating either role. There are no role
+selectors or reporting-owner settings in this pane.
+
+Notes remain read-only. The prominent Discuss in a new chat action uses the
+existing new-conversation draft route and appends the Work key and title without
+sending a message or navigating to the assignee's conversation. Progress,
+acceptance criteria and work boundaries have separate reading groups; criteria
+and boundaries use independent disclosures and lists. Use neutral dividers,
+semantic state ink, existing square controls and 44px narrow/coarse-pointer
+targets, not nested decorative cards.
+
 ### Connection and recovery
 
 Sidebar conversation rows use a (200ms) ease-out transform transition when keyed

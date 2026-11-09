@@ -11,8 +11,8 @@ import { createServer, optimizeDeps } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { z } from 'zod'
-import { workDefinitionSchema, workRecordSchema } from '../../src/initiatives/work-contract.ts'
-import { workNotesSchema, workNotePatchSchema } from '../../src/initiatives/work-notes.ts'
+import { workRecordSchema } from '../../src/initiatives/work-contract.ts'
+import { workNotesSchema } from '../../src/initiatives/work-notes.ts'
 import { parseYieldRequest } from '../../src/sessions/yield-contract.ts'
 import { pdfViewerAssets } from '../pdf-viewer-assets.ts'
 
@@ -96,12 +96,23 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
         import '/src/styles.css'; import 'uno.css';
         import { createApp, h, reactive } from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
-        import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
+        import ProjectWorkbench from '/src/components/ProjectWorkbench.vue';
+        import ProjectContextCanvas from '/src/components/ProjectContextCanvas.vue';
+        import WorkAlignment from '/src/components/WorkAlignment.vue';
         import ProjectDeleteDialog from '/src/components/ProjectDeleteDialog.vue';
         import { createProjectLiveState } from '/src/project-live-state.ts';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         import { createLocalMainAdminContext } from '/src/installation-context.ts';
-        const state = reactive({ visible:true, draft:'Keep my unsent draft', navigated:'', deleting:false, deleted:false });
+        const state = reactive({ visible:true, canWrite:true, mode:'canvas', data:null, error:'', revision:0,
+          draft:'Keep my unsent draft', navigated:'', deleting:false, deleted:false });
+        async function loadOverview() {
+          try {
+            const response = await fetch(location.origin + '/projects/p/api/work');
+            if (!response.ok) throw new Error('Could not refresh work');
+            state.data = await response.json(); state.error = ''; state.revision++;
+          } catch(error) { state.error = error.message; }
+        }
+        await loadOverview();
         window.fixture = state;
         window.organizationCalls = 0;
         const originalFetch = window.fetch;
@@ -109,12 +120,12 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
         window.fixtureKeys = ${JSON.stringify({ root: rootKey, note: record.key, grader: graderKey })};
         window.showProjectDelete = () => { state.deleting = true; };
         const installation = reactive(createLocalMainAdminContext(location.origin));
-        window.setAdmin = value => { installation.uiScopes = value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read']; };
-        let observer;
+        window.setAdmin = value => { state.canWrite = value; installation.uiScopes = value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read']; };
+        const observers = new Set();
         const live = createProjectLiveState({ client: () => ({ subscribe: (_topic, value) => {
-          observer = value; return { ready:async () => {}, close:() => {} };
+          observers.add(value); return { ready:async () => {}, close:() => observers.delete(value) };
         } }) });
-        window.invalidateWork = () => observer?.event({ payload:{event:'invalidate'} });
+        window.invalidateWork = async () => { await loadOverview(); for (const observer of observers) observer.event({ payload:{event:'invalidate'} }); };
         const router = createRouter({ history:createMemoryHistory(), routes:[
           { name:'chat', path:'/projects/:projectId/chat/:sessionId?', component:{render:() => null} },
           { name:'project-settings', path:'/projects/:projectId/settings/:section?', component:{render:() => null} },
@@ -126,16 +137,22 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
           : {name:'chat',params:{projectId:'p',sessionId:'web:chat-admin'}});
         window.navigateWork = key => router.replace({query:{work:key}});
         await router.push({name:'chat',params:{projectId:'p',sessionId:'web:chat-admin'}}); await router.isReady();
-        const app = createApp({ render:() => [h(ProjectWorkbench, {
-          apiBase:location.origin + '/projects/p', projectId:'p', projectName:'Release evidence', visible:state.visible, style:'height:100vh',
-          onNavigate:id => { state.navigated = id; }, onCompose:text => { state.draft += '\\n\\n' + text; },
-          onProjectNavigation:tab => window.navigateTab(tab),
-        }, { default:({active}) => h('section', {style:'display:flex;flex:1;flex-direction:column;padding:16px;min-width:0;'}, [
-          h('p','Admin conversation'), h('p',{style:'flex:1;font-size:14px;'},'Compare the release evidence. A grader is one possible approach, not the original goal.'),
-          h('textarea',{id:'fixture-composer',value:state.draft,disabled:!active,
-            style:'box-sizing:border-box;width:100%;min-height:100px;background:var(--c-bg-input);color:var(--c-text);',
-            onInput:event => {state.draft = event.target.value;}}),
-        ]) }), state.deleting ? h(ProjectDeleteDialog, {
+        const app = createApp({ render:() => [
+          state.error ? h('p', {class:'fixture-refresh-error',role:'alert'},state.error) : null,
+          h('div', {style:state.mode === 'canvas' ? '' : 'display:none'}, [h(ProjectContextCanvas, {
+            data:state.data, matches:state.data.items, apiBase:location.origin + '/projects/p', selected:'',
+            canWrite:state.canWrite, active:state.visible && state.mode === 'canvas',
+            onSelect:async key => { await window.navigateWork(key); state.mode='workbench'; }, onUpdated:loadOverview,
+            onDiscuss:key=>{state.draft+='\\nDiscuss the premise of '+key;},
+          })]),
+          state.mode === 'workbench' ? h(ProjectWorkbench, {
+            apiBase:location.origin + '/projects/p', projectId:'p', projectName:'Release evidence', visible:state.visible, style:'height:800px',
+            onNavigate:id => { state.navigated = id; }, onCompose:text => { state.draft += '\\n\\n' + text; },
+          }) : null,
+          !state.canWrite ? h(WorkAlignment, {apiBase:location.origin+'/projects/p',sessionId:'web:fixture',project:true,workKey:window.fixtureKeys.note,embedded:true,expanded:true,
+            canWrite:false,revision:state.revision}) : null,
+          h('textarea',{id:'fixture-composer',value:state.draft,style:'width:100%;min-height:100px',onInput:event=>{state.draft=event.target.value;}}),
+          state.deleting ? h(ProjectDeleteDialog, {
           apiBase:location.origin,project:{id:'p',name:'Release evidence',createdAt:${JSON.stringify(at)}},
           onClose:() => {state.deleting=false;},onDeleted:() => {state.deleted=true;state.deleting=false;},
         }) : null] });
@@ -237,12 +254,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
               if (value.key !== record.key || value.version !== record.sequence) {
                 response.statusCode = 409; json({ message: 'This note changed. Read its current version before updating it.' }); return
               }
-              if (value.action === 'update') {
-                const patch = z.object({ definition: workDefinitionSchema.optional(), notes: workNotePatchSchema.optional() }).strict().parse(value.data)
-                record = { ...record, sequence: record.sequence + 1, revision: record.revision + Number(!!patch.definition),
-                  definition: patch.definition ?? record.definition, origin: patch.definition ? 'human' : record.origin,
-                  notes: workNotesSchema.parse({ ...record.notes, ...patch.notes }) }
-              } else if (value.action === 'review') {
+              if (value.action === 'review') {
                 const { conclusion } = z.object({ conclusion: z.string().min(1) }).parse(value.data)
                 record = { ...record, sequence: record.sequence + 1, notes: workNotesSchema.parse({ ...record.notes,
                   attention: { ...record.notes!.attention, reviewed: { by: 'human', at, conclusion } } }) }
@@ -277,12 +289,13 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
   const [code] = await once(child, 'close')
   assert.equal(code, 0, `${output}\n${JSON.stringify(writes)}`)
   assert.match(output, /WORK_SMOKE_OK/)
-  assert.deepEqual(writes.map(write => write.action), ['update', 'update', 'review'])
-  assert.deepEqual(writes.map(write => write.version), [2, 3, 4])
-  assert.equal(record.definition.objective, 'Corrected final outcome')
+  assert.deepEqual(writes.map(write => write.action), ['review', 'review'], 'Only assessment writes are allowed; note modifications go through Chat tools')
+  assert.deepEqual(writes.map(write => write.version), [2, 3], 'Stale assessment fails before an explicit current-version retry')
+  assert.equal(record.definition.objective, 'Compare release candidates using the available measurements')
+  assert.equal(record.origin, 'agent_interpretation', 'Discuss does not silently rewrite the goal or its provenance')
   assert.equal(record.notes?.attention?.reviewed?.conclusion, 'Token metrics can continue without a grader')
   assert.deepEqual(answers, [{ requestId: question.id, customText: 'Compare token usage; a grader is not required.' }])
   assert.equal(exhibitRequests, 0, 'An exhibit cannot fetch scripts, images, CSS, frames or form destinations')
-  assert.equal(reportingWrites, 1)
-  assert.equal(reportingSessionId, 'web:reviewer')
+  assert.equal(reportingWrites, 0, 'Work details never edits reporting responsibility')
+  assert.equal(reportingSessionId, 'web:fixture')
 })

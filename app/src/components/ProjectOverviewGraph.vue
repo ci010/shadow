@@ -14,7 +14,6 @@
       <p v-else-if="!activeGroup && groups.some(group => group.stale)" class="focus-notice notice">{{ t('Topics changed since organization. This interpretation may be stale.') }}</p>
       <VueFlow @edge-click="({ edge }) => { if (edge.data) { selectedId = edge.data.from; edgeEvidence = trace(edge.data) } }" :nodes="flowNodes" :edges="flowEdges" :nodes-draggable="false" :nodes-connectable="false" :elements-selectable="false" :delete-key-code="null" :min-zoom="0.15" :max-zoom="2" :zoom-on-double-click="false" :default-viewport="{ x: 16, y: 104, zoom: 1 }">
         <template #node-region="regionProps"><OverviewFlowRegion v-bind="regionProps" /></template><template #node-overview="nodeProps"><OverviewFlowNode v-bind="nodeProps" /></template>
-        <Background :gap="24" :size="1" pattern-color="var(--c-border)" />
         <Controls :show-interactive="false" :show-fit-view="false" />
       </VueFlow>
     <div v-if="!visibleNodes.length" class="canvas-empty" role="status"><p>{{ t(query || focus ? 'No matching work' : 'No recorded topics yet') }}</p><button v-if="query || focus" @click="clearFilters">{{ t('Clear filters') }}</button></div>
@@ -31,7 +30,6 @@ import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { markdownHighlight } from '../markdown-highlight.ts'
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
-import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -130,7 +128,7 @@ async function loadContext(key?: string, retry = false) {
  .overview { display:flex;flex:1;min-height:0;min-width:0;position:relative; }
 p { font-size:13px;overflow-wrap:anywhere; }.notice,small,time { font-size:12px;color:var(--c-text-secondary); }
 button,input,select { font:inherit;font-size:12px;border:1px solid var(--c-border);background:var(--c-bg-card);color:var(--c-text);border-radius:6px;padding:8px;min-width:0; }button { cursor:pointer; }button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible { outline:2px solid var(--c-blue); }
-.graph-workspace { position:relative;display:flex;flex:1;min-height:0;min-width:0; }.graph-canvas { position:relative;flex:1;min-height:0;min-width:0;overflow:hidden;background:var(--c-bg-soft); }
+.graph-workspace { position:relative;display:flex;flex:1;min-height:0;min-width:0; }.graph-canvas { position:relative;flex:1;min-height:0;min-width:0;overflow:hidden;background:transparent; }
 .canvas-toolbar { position:absolute;z-index:5;top:12px;left:12px;right:12px;display:flex;align-items:center;gap:6px;width:fit-content;max-width:calc(100% - 24px);padding:6px;background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:10px;box-shadow:0 4px 16px #00000012; }
 .canvas-toolbar input { width:190px; }.canvas-toolbar select { max-width:240px; }.canvas-toolbar button { white-space:nowrap; }
 .canvas-help { position:absolute;z-index:6;top:68px;left:12px;max-width:440px;max-height:calc(100% - 100px);overflow:auto;padding:12px;background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:10px; }

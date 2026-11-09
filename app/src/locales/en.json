@@ -281,6 +281,9 @@
   "Shared work notes": "Shared work notes",
   "A shared notebook, not an execution gate. Routine updates do not wake other agents.": "A shared notebook, not an execution gate. Routine updates do not wake other agents.",
   "Acceptance and boundaries": "Acceptance and boundaries",
+  "Acceptance criteria": "Acceptance criteria",
+  "Discuss in a new chat": "Discuss in a new chat",
+  "Work boundaries": "Work boundaries",
   "What changes for the parent goal, and what can continue?": "What changes for the parent goal, and what can continue?",
   "Record assessment": "Record assessment",
   "The branch changed. Read its latest note before assessing the impact.": "The branch changed. Read its latest note before assessing the impact.",
@@ -4147,5 +4150,16 @@
   "{name} · passive inbox": "{name} · passive inbox",
   "Parent channel rule": "Parent channel rule",
   "Exact conversation": "Exact conversation",
-  "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.": "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed."
+  "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.": "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.",
+  "View completed": "View completed",
+  "Newly completed: {count}": "Newly completed: {count}",
+  "Could not load or save completion read state.": "Could not load or save completion read state.",
+  "Completed work": "Completed work",
+  "Newly completed work": "Newly completed work",
+  "Unread only": "Unread only",
+  "Mark all as read": "Mark all as read",
+  "Read means seen, not accepted. It does not change Work or notify agents.": "Read means seen, not accepted. It does not change Work or notify agents.",
+  "No matching completed work": "No matching completed work",
+  "Unread": "Unread",
+  "Completion time unavailable": "Completion time unavailable"
 }

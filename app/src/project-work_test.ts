@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { projectWorkOverviewSchema, type ProjectWorkItem } from '../../src/projects/work-overview.ts'
-import { filterWork, groupWork, workAttention, workCanvasRows, workGraph, workPath, workRoots } from './project-work.ts'
+import { activeWorkOverview, filterWork, groupWork, workAttention, workCanvasRows, workGraph, workPath, workRoots } from './project-work.ts'
 import { workNotesSchema } from '../../src/initiatives/work-notes.ts'
 
 const item = (key: string, extra: Partial<ProjectWorkItem> = {}): ProjectWorkItem => ({
@@ -70,4 +70,37 @@ test('current note search and attention do not turn execution state or reported 
   assert.deepEqual(filterWork([reviewed], { query: 'token usage', root: '', assignee: '', terminal: true }), [reviewed])
   assert.deepEqual(workAttention({ items: [reviewed], sessions: [{ sessionId: 'worker', title: 'Worker', assignable: false, activity: 'running' }], requests: [], effects: [] }), [])
   assert.equal(reviewed.status, 'done')
+})
+
+test('active overview hides finished roots and their exclusive sessions without mutating completion history', () => {
+  const data = projectWorkOverviewSchema.parse({ items: [item('finished', { status: 'done' }), item('child', { parentKey: 'finished', status: 'done', result: { summary: 'Measured throughput', evidence: [] } }), item('current')],
+    sessions: [
+      { sessionId: 'old', title: 'Old', assignable: true, workKeys: ['finished', 'child'] },
+      { sessionId: 'mixed', title: 'Mixed', assignable: true, workKeys: ['finished', 'current'] },
+      { sessionId: 'free', title: 'Conversation', assignable: true },
+    ], requests: [], effects: [] })
+  const projected = activeWorkOverview(data)
+  assert.deepEqual(projected.items.map(item => item.key), ['current'])
+  assert.deepEqual(projected.sessions.map(item => item.sessionId), ['mixed', 'free'])
+  assert.equal(data.items.length, 3)
+  assert.deepEqual(filterWork(data.items, { query: 'throughput', root: 'finished', assignee: '', terminal: true }).map(item => item.key), ['child'])
+})
+
+test('active projection prunes completed-only organized groups and remaps hierarchy, preserving the saved snapshot', () => {
+  const data = projectWorkOverviewSchema.parse({ items: [item('done', { status: 'done' }), item('active')], sessions: [], requests: [], effects: [],
+    focus: { inferredAt: '2026-01-01T00:00:00Z', origin: 'model_interpretation', inputCount: 2, omittedCount: 0,
+      sources: [{ key: 'done', sequence: 1 }, { key: 'active', sequence: 1 }],
+      result: { groups: ['done', 'active'].map(key => ({ category: key, purpose: key, motivation: key, topicKeys: [key] })),
+        hierarchy: [{ id: 'old', title: 'Old', purpose: 'Old', groupIndexes: [0] }, { id: 'current', title: 'Current', purpose: 'Current', groupIndexes: [1] }] } } })
+  const projection = activeWorkOverview(data)
+  assert.equal(projectWorkOverviewSchema.safeParse(projection).success, true)
+  assert.deepEqual(projection.focus?.result.groups.map(group => group.category), ['active'])
+  assert.deepEqual(projection.focus?.result.hierarchy?.map(node => node.groupIndexes), [[0]])
+  assert.equal(data.focus?.result.groups.length, 2)
+})
+
+test('a completed overall Work no longer owns an active group even if an old child remains pending', () => {
+  const history = [item('finished', { status: 'done' }), item('old-child', { parentKey: 'finished' }), item('current')]
+  assert.deepEqual(filterWork(history, { query: '', root: '', assignee: '', terminal: false }).map(item => item.key), ['current'])
+  assert.equal(filterWork(history, { query: '', root: '', assignee: '', terminal: true }).length, 3)
 })
