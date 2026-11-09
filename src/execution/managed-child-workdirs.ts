@@ -227,7 +227,7 @@ export class ManagedChildWorkdirs {
   #descriptor(binding: WorkdirBinding & { displayName?: string }): WorkdirAdvertisement {
     return {
       version: 2, workdirId: binding.workdirId, nodeId: this.nodeId,
-      support: { operations: [...MANAGED_WORKDIR_OPERATIONS], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000 } },
+      support: { operations: [...MANAGED_WORKDIR_OPERATIONS], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000, untilExit: true } },
       displayName: binding.displayName ?? binding.workdirId, displayPath: binding.rootPath,
       online: !this.#unavailable.has(binding.workdirId),
     }

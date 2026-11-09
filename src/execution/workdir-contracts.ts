@@ -3,7 +3,7 @@ import type { ValidationResult } from './contracts.ts'
 /** Supported implementation features, never Project permission or an independent capability. */
 export interface ExecutionSupport {
   operations: string[]
-  shell?: { shells: string[]; maxInputBytes?: number; maxDeadlineMs?: number }
+  shell?: { shells: string[]; maxInputBytes?: number; maxDeadlineMs?: number; untilExit?: boolean }
 }
 
 /** Directory binding advertisement. The owning device alone knows its actual root. */
@@ -47,8 +47,9 @@ export function validateExecutionSupport(value: unknown, scope?: 'node' | 'workd
   if (value.shell !== undefined) {
     if (!record(value.shell)) errors.push('shell must be an object')
     else {
-      keys(value.shell, ['shells', 'maxInputBytes', 'maxDeadlineMs'], errors)
+      keys(value.shell, ['shells', 'maxInputBytes', 'maxDeadlineMs', 'untilExit'], errors)
       if (!Array.isArray(value.shell.shells) || !value.shell.shells.length || value.shell.shells.some(s => !SHELLS.includes(s)) || new Set(value.shell.shells).size !== value.shell.shells.length) errors.push('shells are invalid')
+      if (value.shell.untilExit !== undefined && typeof value.shell.untilExit !== 'boolean') errors.push('untilExit must be boolean')
       for (const key of ['maxInputBytes', 'maxDeadlineMs']) if (value.shell[key] !== undefined && (!Number.isSafeInteger(value.shell[key]) || Number(value.shell[key]) < 1 || Number(value.shell[key]) > 16_777_216)) errors.push(`${key} is out of bounds`)
     }
   }
@@ -85,6 +86,7 @@ export function assertExecutionSupported(request: { nodeId: string; workdirId?: 
   if (!valid.success || !support.operations.includes(request.operation)) throw new ExecutionAdmissionError('unsupported-operation', 'No live support for this operation on the selected directory/device')
   const shell = SHELL_OPERATIONS.has(request.operation) ? support.shell : undefined
   const args = record(request.args) ? request.args : {}
+  if (args.lifetime !== undefined && (args.lifetime !== 'until-exit' || !shell?.untilExit || !['workdir.process.execute-once', 'workdir.process.reconcile'].includes(request.operation))) throw new ExecutionAdmissionError('execution-upgrade-required', 'Until-exit shell execution requires explicit Child support; upgrade both peers')
   if (shell && ((shell.maxInputBytes && Buffer.byteLength(JSON.stringify(request.args) ?? '', 'utf8') > shell.maxInputBytes) ||
     (shell.maxDeadlineMs && Date.parse(request.deadlineAt) - Date.parse(request.createdAt) > shell.maxDeadlineMs) ||
     (args.shell !== undefined && !shell.shells.includes(String(args.shell))))) throw new ExecutionAdmissionError('operation-conditions-denied', 'Request exceeds shell support limits')

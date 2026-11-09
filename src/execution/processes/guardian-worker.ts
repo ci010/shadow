@@ -33,7 +33,7 @@ function killGroup(): void {
 }
 
 function stop(reason: Exclude<GuardianReason, 'exited'>): void {
-  if (reason === 'cancelled' && request && Date.now() >= request.deadlineAt) reason = 'deadline-expired'
+  if (reason === 'cancelled' && request && request.deadlineAt !== null && Date.now() >= request.deadlineAt) reason = 'deadline-expired'
   stopping ??= reason
   if (!child || child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
@@ -81,7 +81,7 @@ async function run(input: GuardianRequest): Promise<void> {
   let signal: NodeJS.Signals | null = null
   let failure: string | undefined
   let controllerResult: GuardianResult | undefined
-  if (input.deadlineAt <= Date.now()) stopping ??= 'deadline-expired'
+  if (input.deadlineAt !== null && input.deadlineAt <= Date.now()) stopping ??= 'deadline-expired'
   let timer: ReturnType<typeof setTimeout> | undefined
   if (!stopping) {
     const windows = process.platform === 'win32'
@@ -163,7 +163,7 @@ async function run(input: GuardianRequest): Promise<void> {
         if (windows) send({ type: 'started', pid: execution.pid })
         if (stopping) stop(stopping)
       })
-      timer = setTimeout(() => stop('deadline-expired'), Math.max(0, input.deadlineAt - Date.now()))
+      timer = input.deadlineAt === null ? undefined : setTimeout(() => stop('deadline-expired'), Math.max(0, input.deadlineAt - Date.now()))
       const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
         execution.once('close', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }))
       })

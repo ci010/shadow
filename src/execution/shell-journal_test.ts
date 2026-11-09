@@ -175,3 +175,56 @@ test('reconciliation query terminals without a journal marker cannot settle the 
   await assert.rejects(executeRemoteShell({ executor: thrown, nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn',
     recovering: true, signal: new AbortController().signal }, { script: 'echo never' }, 10000), ToolOutcomeUnknownError)
 })
+
+for (const phase of ['admission', 'claim'] as const) {
+  test(`cancellation during asynchronous ${phase} is acknowledged without ever starting a process`, async () => {
+    await withTempWorkspace(async root => {
+      const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+      const journal = new ShellJournal(join(root, 'journal'))
+      const claim = journal.claim.bind(journal)
+      if (phase === 'claim') journal.claim = async request => {
+        const claimed = await claim(request)
+        entered.resolve(); await release.promise
+        return claimed
+      }
+      let spawns = 0
+      const local = new LocalExecutor({ spawn: async () => { spawns++; throw new Error('Must never spawn') } }, 'child',
+        [new CapabilityShell([{ workdirId: 'root', rootPath: root }])], async () => {
+          if (phase === 'admission') { entered.resolve(); await release.promise }
+        })
+      const executor = new JournaledShellExecutor(local, journal)
+      const now = Date.now(), id = crypto.randomUUID()
+      const request: ExecutionRequestV2 = { version: 2, jobId: id, idempotencyKey: id, sessionId: 's', turnId: 't', nodeId: 'child', workdirId: 'root',
+        operation: DURABLE_SHELL_OPERATION, args: { script: 'echo never', lifetime: 'until-exit' },
+        createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 10000).toISOString() }
+      const events: JobEventV1[] = []
+      const completion = (async () => { for await (const event of executor.execute(request, new AbortController().signal)) events.push(event) })()
+      await entered.promise
+      await executor.cancel(id)
+      release.resolve()
+      await completion
+      assert.equal(spawns, 0)
+      assert.equal(events.at(-1)?.type, 'cancel-acknowledged')
+      if (phase === 'claim') {
+        const result = await journal.reconcile(request)
+        assert.equal(result.outcome, 'known')
+        if (result.outcome === 'known') assert.equal(result.events.at(-1)?.type, 'cancel-acknowledged')
+      }
+    })
+  })
+}
+
+test('an old Child without until-exit support refuses before durable claims or process start', async () => {
+  const { assertExecutionSupported } = await import('./workdir-contracts.ts')
+  await withTempWorkspace(async root => {
+    const journal = new ShellJournal(join(root, 'journal'))
+    journal.claim = async () => assert.fail('Unsupported mode must not claim')
+    const local = new LocalExecutor({ spawn: async () => assert.fail('Unsupported mode must not spawn') }, 'child',
+      [new CapabilityShell([{ workdirId: 'root', rootPath: root }])], request => {
+        assertExecutionSupported(request, [{ version: 2, nodeId: 'child', workdirId: 'root', displayName: 'root', online: true,
+          support: { operations: ['workdir.process.execute-once'], shell: { shells: ['sh'], maxDeadlineMs: 120000 } } }], { operations: [] })
+      })
+    const executor = fixtureProjectExecutor('project', new JournaledShellExecutor(local, journal))
+    assert.match(await executeRemoteShell(target(executor), { script: 'echo never' }, 200000, undefined, { untilExit: true }), /execution-upgrade-required/)
+  })
+})

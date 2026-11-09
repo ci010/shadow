@@ -256,21 +256,38 @@ owns a dedicated process group. A stdin gate prevents the command from starting
 until the outer guardian has acknowledged its group ID. If the outer guardian
 dies, the controller stops the group and saves its receipt; if the controller
 dies, the outer guardian stops the acknowledged group and leaves the execution
-outcome unknown. Runtime IPC closure, cancellation, the original deadline, and the
-128 KiB output limit all stop the owned command tree. Windows adds PowerShell
+outcome unknown. Runtime IPC closure, cancellation, and the 128 KiB output limit
+stop the owned command tree. Deadline-enforced foreground shells also stop on
+their original deadline. Negotiated `shell.untilExit` execution instead uses that
+deadline only for admission: `exec.timeout_ms` is a Main wait window (default
+120s, 0 transfers immediately), not a process lifetime. Wait-window expiry
+transfers to the existing `bg:` manager without killing the Child process.
+Background read/completion/continuation/cancel use the same Project/owner controls
+as local exec. Turn abort after transfer does not cancel the background process.
+Cancel before admission/while writing its journal claim cannot be lost merely
+because the underlying executor has not created a job yet; after starting, cancel
+waits for terminal cleanup acknowledgement. A missing acknowledgement after 10s
+is reported as unconfirmed, never as successful cleanup. Windows adds PowerShell
 startup overhead; locked-down environments that prohibit `Add-Type` fail
 explicitly.
 
 Child stores credential-scoped admission tombstones, bounded output, and final
 receipts in `shell-executions-v1` beneath its data directory. New Main uses the
 advertised `workdir.process.execute-once` and `workdir.process.reconcile`
-operations; these use existing V1 job envelopes, not unnegotiated new wire
-fields. Older Children must be updated for this path. Execution identity is
+operations in workdir execution-v2 job envelopes. Until-exit lifetime is an
+explicitly advertised shell implementation feature, not a new permission grant.
+Older Children without `shell.untilExit=true` refuse the request before journal
+claims or process start and must be updated for background execution. Execution identity is
 derived from the saved tool call and its physical session identity, then scoped
 by Project. Records are retained rather than expired into permission to rerun.
 
-A lost receipt pauses the session without fabricating a tool result or allowing
-the model to retry automatically. **Continue** queries the original admission:
+A lost receipt for a still-pending synchronous tool pauses the session without
+fabricating a tool result or allowing the model to retry automatically. An exec
+that already returned a `bg:` ID is different: its runtime-owned background task
+reports `failed` with **OUTCOME UNKNOWN**, possibly still running, and do not
+rerun. That background handle has no reconnect/reconcile tool; inspect the Child
+journal and side effects. Original-call reconciliation remains an internal
+recovery API, not an exposed background recovery command. **Continue** queries the original admission:
 it returns saved output when available, otherwise keeps the outcome unknown.
 It never starts a missing remote shell command. This also applies to legacy
 calls without journal records, changed execution scope, and unavailable records

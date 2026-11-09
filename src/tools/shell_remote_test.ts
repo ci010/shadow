@@ -62,7 +62,7 @@ test('ExecTool remote path sends only resource-relative cwd and does not inherit
   }
   assert.equal(requests[0]?.operation, 'workdir.process.execute-once')
   assert.equal(requests[0]?.nodeId, 'child'); assert.equal(requests[0]?.workdirId, 'opaque')
-  assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', args: ['one'] })
+  assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', args: ['one'], lifetime: 'until-exit' })
   assert.equal(requests[0]?.turnId, 'turn')
   assert(!JSON.stringify(requests).includes('SHADOW_SESSION_DATA_DIR'))
   assert(!JSON.stringify(requests).includes('C:\\Main'))
@@ -72,9 +72,9 @@ test('ExecTool remote rejects unsupported execution modes and malformed inputs b
   const { tool, context, requests } = fixture()
   for (const args of [
     { script: 'echo no', shell: 'node' },
-    { script: 'echo no', timeout_ms: 0 }, { script: 'echo no', timeout_ms: -1 },
+    { script: 'echo no', timeout_ms: -1 },
     { script: 'echo no', timeout_ms: '1' }, { script: 'echo no', timeout_ms: Infinity },
-    { script: 'echo no', timeout_ms: 120001 }, { script: 'echo no', timeout_ms: 0.5 },
+    { script: 'echo no', timeout_ms: 0.5 },
     { script: 'echo no', cwd: '/display/path' }, { script: 'echo no', args: [7] },
   ]) assert.match(requireToolText(await tool.execute(args, context)), /^Error:/)
   await assert.rejects(tool.execute({ script: 'echo no', shell: 'invalid' }, context), ToolNoEffectError)
@@ -83,8 +83,9 @@ test('ExecTool remote rejects unsupported execution modes and malformed inputs b
   tools.register(tool)
   const sessionTools = new SessionTools(tools, process.cwd())
   sessionTools.setExecutionScope('call', [])
-  assert.match(requireToolText(await tool.execute({ script: 'echo no' }, { ...context, tools: sessionTools })), /remote workdirs/)
   assert.equal(requests.length, 0)
+  assert.equal(requireToolText(await tool.execute({ script: 'echo no' }, { ...context, tools: sessionTools })), '(no output, exit code 0)')
+  assert.equal((requests[0].args as { lifetime?: string }).lifetime, undefined)
 })
 
 test('remote helper never treats a missing or nonzero terminal receipt as success', async () => {
@@ -114,7 +115,7 @@ test('remote helper never treats a missing or nonzero terminal receipt as succes
   await assert.rejects(() => executeRemoteShell({ ...target, signal: controller.signal }, { script: 'echo no' }, 1000), { name: 'AbortError' })
 })
 
-test('real Tools and SessionTools dispatch remote exec in session/task modes but reject call mode', async () => {
+test('real Tools and SessionTools dispatch remote exec in session/task modes and bounded foreground call mode', async () => {
   const { tool, context, requests } = fixture()
   const registry = new Tools(process.cwd())
   registry.register(tool)
@@ -128,9 +129,10 @@ test('real Tools and SessionTools dispatch remote exec in session/task modes but
   assert.equal(requests.length, 3)
   const tools = new SessionTools(registry, process.cwd())
   tools.setExecutionScope('call', [])
-  assert.match(requireToolText(await registry.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools })), /remote workdirs/)
-  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools })), /remote workdirs/)
-  assert.equal(requests.length, 3)
+  assert.equal(requireToolText(await registry.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools })), '(no output, exit code 0)')
+  assert.equal(requireToolText(await tools.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools })), '(no output, exit code 0)')
+  assert.equal(requests.length, 5)
+  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', timeout_ms: 0 }, { ...context, tools })), /background execution is forbidden/)
 })
 
 test('only correlated normal remote process failures carry completion evidence', async () => {
@@ -182,7 +184,7 @@ test('explicit Child selection routes exec independently of committed session cw
   assert.equal(await tool.execute({ folder: 'child-folder', script: 'pwd', cwd: 'nested' }, local), '(no output, exit code 0)')
   assert.equal(requests.length, 1)
   assert.equal(requests[0]?.nodeId, 'child')
-  assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested' })
+  assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', lifetime: 'until-exit' })
   assert.match(requireToolText(await tool.execute({ folder: 'child-folder', shell: 'node', script: '1' }, local)), /not supported on remote/)
   assert.equal(requests.length, 1)
   assert.equal(local.remoteWorkdir, undefined)
@@ -198,4 +200,14 @@ test('recovering a saved local target never falls through into a new local proce
   await assert.rejects(tool.execute({ nodeId: 'local', capabilityId: 'local-project-v1:original', script: 'old command' }, local), ToolOutcomeUnknownError)
   await assert.rejects(tool.execute({ script: 'old command', shell: 'node' }, local), ToolOutcomeUnknownError)
   assert.equal(attempts, 0)
+})
+
+test('remote session default and 200000ms are wait windows, not process deadlines', async () => {
+  const { tool, context, requests } = fixture()
+  for (const timeout_ms of [undefined, 200000]) {
+    assert.equal(await tool.execute({ script: 'pwd', timeout_ms }, context), '(no output, exit code 0)')
+    const request = requests.at(-1)!
+    assert.equal(Date.parse(request.deadlineAt) - Date.parse(request.createdAt), 120000)
+    assert.equal((request.args as { lifetime: string }).lifetime, 'until-exit')
+  }
 })

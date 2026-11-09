@@ -14,7 +14,7 @@ import {
 import type { ManagedShell } from './processes/shells.ts'
 
 export const WORKDIR_PROCESS_EXECUTE_OPERATION = 'workdir.process.execute'
-export const MAX_REMOTE_SHELL_TIMEOUT_MS = 120_000
+export const REMOTE_SHELL_ADMISSION_TIMEOUT_MS = 120_000
 export const MAX_REMOTE_SHELL_INPUT_BYTES = 32 * 1024
 
 export interface WorkdirProcessArgs {
@@ -22,13 +22,16 @@ export interface WorkdirProcessArgs {
   cwd?: string
   shell?: ManagedShell
   args?: string[]
+  /** Internal negotiated lifecycle; deadlineAt is admission-only in this mode. */
+  lifetime?: 'until-exit'
 }
 
 export function parseWorkdirProcessArgs(value: unknown): WorkdirProcessArgs {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidArgs()
   const args = value as Record<string, unknown>
   if (
-    Object.keys(args).some(key => !['script', 'cwd', 'shell', 'args'].includes(key)) ||
+    Object.keys(args).some(key => !['script', 'cwd', 'shell', 'args', 'lifetime'].includes(key)) ||
+    (args.lifetime !== undefined && args.lifetime !== 'until-exit') ||
     typeof args.script !== 'string' || !args.script.trim() || args.script.includes('\0') ||
     (args.shell !== undefined && !['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh'].includes(String(args.shell))) ||
     (args.args !== undefined && (!Array.isArray(args.args) ||
@@ -83,6 +86,7 @@ export class CapabilityShell implements LocalProcessOperationHandler {
       await localExecSafegitEnv({}), join(tmpdir(), 'shadow-exec'),
     )
     signal.throwIfAborted()
-    return { ...args, cwd, env }
+    const { lifetime: _lifetime, ...processArgs } = args
+    return { ...processArgs, cwd, env }
   }
 }

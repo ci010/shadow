@@ -49,16 +49,47 @@ a Main Folder or copy a Child display path to delegate. Worker OS commands use t
 same remote executor; review/retry preserve the worker binding. `cancel` and
 `continuation` are also Main control-plane operations and remain usable from a
 Child-bound session, subject to the same Project and execution ownership checks.
-These controls do not imply remote background-process support.
+Remote OS `exec` uses the same wait-window semantics as local OS `exec`:
+`timeout_ms=0` transfers immediately to a `bg:` execution; a positive integer
+waits that many milliseconds and transfers if still running; omission waits
+120000 ms. Values through 2147483647 are accepted, including 200000. Expiring
+this window does **not** kill the Child process. `v:bg/<executionId>` exposes
+live output and final failure/output, and the existing BackgroundTaskManager
+provides ownership checks, completion events, `continuation`, and `cancel`.
+After transfer the task is detached from turn abort. Before transfer, abort
+requests remote cancellation. Cancel is acknowledged only after a correlated
+terminal cleanup receipt; an unavailable Child is not proof of cleanup.
 
-Remote blocking leaf calls are rejected before creating a worker: the call
-foreground cleanup contract is not yet implemented for Child commands. Use an
-asynchronous task for delegated remote execution. Remote `exec` still requires a
-positive integer timeout of at most 120000 ms, terminates the Child command on
-timeout, and does not support `timeout_ms=0` or inline Node/tool bridging. This is
-not full local/remote parity; persistent remote processes, reconnectable output
-and foreground cancellation need their own lifecycle implementation and device
-acceptance tests. No unsupported route falls back to Main.
+This requires advertised `shell.untilExit=true`. Only durable workdir shell
+execute/reconcile operations accept the internal `lifetime: until-exit` argument;
+other capabilities are not widened. The request's 120s deadline remains an
+**admission** bound, not a process runtime bound. Child's independent supervisor
+has no runtime timer in this negotiated mode. Old Children fail closed rather
+than accepting a command that they would kill after 120s; upgrade both peers.
+
+The OS exec tool also enforces leaf-call foreground rules: default/max 120s,
+strictly positive timeout, no background registration, deadline/abort stops the
+owned Child tree, and unconfirmed cleanup is unknown/blocked rather than success.
+This does not lift separate remote leaf-worker creation restrictions elsewhere
+in orchestration. Inline `shell=node`/tool bridging is still unsupported remotely.
+No unsupported route falls back to Main.
+
+Remote limits remain explicit: combined output is capped at 128 KiB and exceeding
+it stops the command with a failure; backend/guardian loss stops its owned tree.
+A transport disconnect reports unknown outcome, not automatic restart. Background
+registrations are runtime-owned, not reconnectable persistent jobs. For an
+already-returned `bg:` handle, disconnect is represented by BTM's `failed` status
+but output explicitly says **OUTCOME UNKNOWN**, possibly still running, and do
+not rerun. That handle has no reconnect/reconcile tool. Inspect the Child's
+original journal and partial effects; original-call reconciliation is currently
+an internal `executeRemoteShell(... recovering: true)` / `workdir.process.reconcile`
+route, not a user-facing background recovery tool. A still-pending synchronous
+tool can use the existing Continue recovery path; an exec that already returned
+a bg ID cannot. Durable shell records prevent that internal reconciliation from
+rerunning commands. Bounded
+per-command output and admission tombstones are retained for recovery, not expired
+into permission to rerun. Windows supervisor changes require Windows device
+acceptance testing as well as macOS/Linux tests.
 
 ## Small internal contracts
 
