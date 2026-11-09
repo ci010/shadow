@@ -3,7 +3,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
-import type { spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
+// Exercise the SDK job loop independently of Windows staging. The staging
+// helper has separate synthetic filesystem tests; never invoke real WSL here.
+const nativeFixtureDriver = () => spawnManagedDriver({ requestTimeoutMs: 2000, launch: ((command: any, args: any, options: any) =>
+  spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("process.platform !== 'win32'", 'true') : arg), options)) as typeof spawn })
 import { ManagedLayerFS, ManagedRuntimeError, spawnManagedDriver } from './managed.ts'
 import { layerfsName } from './bridge.ts'
 import { ToolOutcomeUnknownError } from '../../tools/tool.ts'
@@ -22,12 +26,12 @@ test('real helper diagnoses an import without queueing health behind it, and ret
       export const LayerFSRuntime = { open: async () => {
         let reads=0, started;
         return {worker:{start:async()=>{}}, status:async()=>{await writeFile(${JSON.stringify(join(dir, 'health-count'))},String(++reads));return {worker:{state:'running',answering:true},docker:{level:'ok'}}},
-          project:{start_init:async(_name,_source,{timeout})=>{if(timeout!==1000)throw Error('wrong budget'); started=Date.now(); return {id:'safe-job'}},
+          project:{start_init:async(_name,_source,{timeout})=>{if(timeout!==1000)throw Error('wrong budget'); if(_source!==${JSON.stringify(dir)})throw Error('native source was redirected'); started=Date.now(); return {id:'safe-job'}},
             get_init:async()=>Date.now()-started<350 ? {step:'scan',scanned:{entries:7,files:4,bytes:100,secret:'NEVER_RETURN'},error:{message:'NEVER_RETURN'}}
               : {step:'failed',error:{code:'Failed',message:'InitFailure { binding_key: [1,2], cursor_key: PRIVATE_KEY, error: Project(Deadline) }'}}}, close:async()=>{}};
       }};
     `)
-    const driver = spawnManagedDriver({ requestTimeoutMs: 2000 })
+    const driver = nativeFixtureDriver()
     try {
       await driver.request('open', { runtimeModule: sdk, settings: {}, project: 'fixture' }, signal())
       const scanning = Promise.withResolvers<void>()
@@ -86,7 +90,7 @@ test('read-only diagnostics recognize legacy SDK Deadline without exposing paths
       code: 'Failed', message: 'InitFailure { binding_key: PRIVATE_KEY, error: Project(Deadline) }' }) + '\n')
     const service = new ManagedLayerFS('one', home, () => { throw Error('diagnostics must not start a helper') }, 'win32')
     const status = await service.importStatus(signal())
-    assert.equal(status.observation, 'retained_sdk_failure'); assert.equal(status.code, 'ImportDeadline'); assert.equal(status.retryAllowed, false)
+    assert.equal(status.observation, 'retained_sdk_failure'); assert.ok('code' in status); assert.equal(status.code, 'ImportDeadline'); assert.equal(status.retryAllowed, false)
     assert.doesNotMatch(JSON.stringify(status), /PRIVATE_|binding_key/)
     await service.close()
   })
@@ -97,7 +101,7 @@ for (const missing of [false, true]) test(`lost import observation stays unknown
     const sdk = join(dir, 'runtime.mjs')
     await writeFile(sdk, `export const LayerFSRuntime={open:async()=>({worker:{start:async()=>{}},status:async()=>({worker:{state:'running',answering:true},docker:{level:'ok'}}),
       project:{start_init:async()=>({id:'job'}),get_init:async()=>{${missing ? 'return null' : "throw Object.assign(Error('LOST_PRIVATE_DIAGNOSTIC'),{code:'Unknown'})"}}},close:async()=>{}})}`)
-    const driver = spawnManagedDriver({ requestTimeoutMs: 2000 })
+    const driver = nativeFixtureDriver()
     try {
       await driver.request('open', { runtimeModule: sdk, settings: {}, project: 'fixture' }, signal())
       await assert.rejects(driver.request('create', { source: dir }, signal()), ToolOutcomeUnknownError)
@@ -137,4 +141,25 @@ test('valid managed heartbeats outlive the former SDK-budget-plus-15-minute cuto
     await assert.rejects(result, (error: unknown) => error instanceof ManagedRuntimeError && error.code === 'ImportDeadline')
     assert.equal(sends, 1)
   } finally { await driver.close() }
+})
+
+for (const stage of ['success', 'failed', 'unknown', 'invalid-receipt'] as const) test(`Windows staging ${stage} gates Init and never replays`, async () => {
+  await temporary(async dir => {
+    const sdk = join(dir, 'stage-runtime.mjs'), marker = join(dir, 'init-started')
+    const destination = '/var/tmp/shadow-layerfs-stage-' + 'a'.repeat(32) + '-' + 'b'.repeat(32) + '/source'
+    const expected = '\\\\wsl.localhost\\Fixture' + destination.replaceAll('/', '\\')
+    await writeFile(sdk, `import {writeFile} from 'node:fs/promises'; export const LayerFSRuntime={open:async()=>({worker:{start:async()=>{}},status:async()=>({worker:{state:'running',answering:true},docker:{level:'ok'}}),project:{start_init:async(_name,source)=>{if(source!==${JSON.stringify(expected)})throw Error('wrong source');await writeFile(${JSON.stringify(marker)},'started');return {id:'job'}},get_init:async()=>({step:'done'})},close:async()=>{}})}`)
+    const fake = `async function fakeExec(command,args,options){
+      if(command!=='wsl.exe'||args[0]!=='--distribution'||args[1]!=='Fixture'||args[2]!=='--exec'||args[3]!=='/trusted/node'||args.at(-1)!=='whole_tree'||args.at(-3)!=='C:\\\\reviewed'||options.timeout!==615000)throw Error('wrong fixed launch');
+      ${stage === 'failed' || stage === 'unknown' ? "throw Error('private copy result unavailable')" : `return {stdout:${JSON.stringify(JSON.stringify({ destination: stage === 'invalid-receipt' ? '/private/other-source' : destination }))}};`}
+    }\n`
+    const driver = spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? fake + arg.replace("process.platform !== 'win32'", 'false').replace('await promisify(execFile)', 'await fakeExec') : arg), options)) as typeof spawn })
+    try {
+      await driver.request('open', { runtimeModule: sdk, project: 'fixture', settings: { wsl: { home: '/var/lib/shadow-layerfs/' + 'a'.repeat(32), distribution: 'Fixture', node: '/trusted/node' } } }, signal())
+      const attempt = driver.request('create', { source: 'C:\\reviewed', importPolicy: 'whole_tree' }, signal())
+      if (stage === 'success') { await attempt; assert.equal(await readFile(marker, 'utf8'), 'started') }
+      else { await assert.rejects(attempt, ToolOutcomeUnknownError); await assert.rejects(readFile(marker), { code: 'ENOENT' }); const status: any = await driver.request('import_status', {}, signal()); assert.equal(status.stage, 'unknown') }
+      await assert.rejects(driver.request('create', { source: 'C:\\reviewed' }, signal()), ManagedRuntimeError)
+    } finally { await driver.close() }
+  })
 })

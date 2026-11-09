@@ -247,7 +247,7 @@ test('credential-related code, tests, docs and assets warn without bypassing exp
   })
 })
 
-test('code-looking files do not exempt credential directories', async () => {
+test('credential modules warn, private hidden credential directories still block', async () => {
   await fixture(async root => {
     for (const name of ['credentials', '.secrets', '.ssh', 'service-account', '.aws']) {
       await mkdir(join(root, name))
@@ -255,8 +255,8 @@ test('code-looking files do not exempt credential directories', async () => {
     }
     const result = await new LayerFSImportReview().preview(root, owner, signal())
     assert.equal(result.status, 'blocked')
-    assert.equal(result.blockers.length, 5)
-    assert.deepEqual(result.warnings, [])
+    assert.equal(result.blockers.length, 3)
+    assert.equal(result.warnings.length, 4)
     assert.equal(result.warningsTruncated, false)
   })
 })
@@ -284,5 +284,49 @@ test('exact credential plaintext/export names block without reclassifying explan
     assert.equal(result.reviewToken, undefined)
     assert.equal(result.blockers.length, blocked.length)
     assert.deepEqual(result.warnings, [])
+  })
+})
+
+
+test('whole_tree explicitly reviews VCS, dependencies and build data; policy is token-bound', async () => {
+  await fixture(async root => {
+    for (const dir of ['.git/objects', 'node_modules/package', 'build', 'src/credentials']) {
+      await mkdir(join(root, dir), { recursive: true })
+      await writeFile(join(root, dir, 'module.ts'), 'synthetic code')
+    }
+    const review = new LayerFSImportReview()
+    assert.equal((await review.preview(root, owner, signal())).status, 'blocked')
+    const result = await review.preview(root, owner, signal(), 'whole_tree')
+    assert.equal(result.status, 'review_required')
+    assert.equal(result.policy, 'whole_tree')
+    assert.equal(result.scope, 'entire_source_tree_no_ignores')
+    assert.equal(result.summary.files, 4)
+    assert.equal(result.summary.complete, true)
+    assert.ok(result.warnings.some(w => w.path === '.git'))
+    assert.ok(result.warnings.some(w => w.path === 'node_modules'))
+    await assert.rejects(review.consume(result.reviewToken, root, owner, true, signal(), 'curated'), ToolNoEffectError)
+    await assert.rejects(review.consume(result.reviewToken, root, owner, true, signal(), 'invented'), ToolNoEffectError)
+    await review.consume(result.reviewToken, root, owner, true, signal(), 'whole_tree')
+    const changed = await review.preview(root, owner, signal(), 'whole_tree')
+    await writeFile(join(root, 'node_modules/package/module.ts'), 'changed metadata')
+    await assert.rejects(review.consume(changed.reviewToken, root, owner, true, signal(), 'whole_tree'), ToolNoEffectError)
+  })
+})
+
+test('whole_tree does not exempt secrets or symlinks inside included directories', async () => {
+  await fixture(async root => {
+    for (const dir of ['.git', 'node_modules/package', 'src/credentials']) {
+      await mkdir(join(root, dir), { recursive: true })
+      for (const file of ['.env', 'private.key', 'credentials.json']) await writeFile(join(root, dir, file), 'synthetic')
+    }
+    await writeFile(join(root, 'src/credentials/account.json'), 'synthetic')
+    await mkdir(join(root, '.shadow'))
+    await symlink(join(root, 'src'), join(root, 'node_modules/link'), process.platform === 'win32' ? 'junction' : 'dir')
+    const result = await new LayerFSImportReview().preview(root, owner, signal(), 'whole_tree')
+    assert.equal(result.status, 'blocked')
+    assert.equal(result.reviewToken, undefined)
+    for (const path of ['.git/.env', 'node_modules/package/private.key', 'src/credentials/account.json', '.shadow', 'node_modules/link']) {
+      assert.ok(result.blockers.some(b => b.path === path), path)
+    }
   })
 })

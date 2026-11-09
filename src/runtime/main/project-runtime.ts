@@ -14,6 +14,7 @@ import { BotWakes } from '../../bots/wake.ts'
 import { WorkDispatcher } from '../../cron/work-dispatch.ts'
 import { DerivedWorkspaces } from '../../folders/derived-workspace.ts'
 import { WorkspaceCreateTool } from '../../tools/workspace-create.ts'
+import { WorkspaceRegisterTool } from '../../tools/workspace-register.ts'
 import { prepareWorktree, isolationGit } from '../../cron/work-isolation.ts'
 import { WORK_DISPATCH_DEFAULT_KEY, type WorkDispatchConfig } from '../../cron/work-dispatch-contract.ts'
 import { WORK_DISPATCH_AUTOMATION } from '../../cron/defaults.ts'
@@ -1201,6 +1202,7 @@ export async function createProjectRuntime(
     validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
   })
   importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor))
+  importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
   const eventProviders = new EventProviderRuntime(
     workspace, capabilityBroker, (id, input) => deliverInput(id, input),

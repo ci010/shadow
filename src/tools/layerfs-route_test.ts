@@ -23,9 +23,12 @@ test('ordinary tool execute entrypoints: Project isolation, bounded text/overwri
  try {
   const sdkModule = join(dir, 'sdk.mjs'), config = join(dir, 'config.json')
   await mkdir(join(dir, 'sub'))
+  // This SDK fixture executes only the generated command, not host login profiles.
+  // Git Bash -lc can spend the 2-second exec budget in unrelated profile startup.
+  // Keep the separate 50ms UNKNOWN assertion below; do not relax production deadlines.
   await writeFile(sdkModule, `import {execFile} from 'node:child_process';
    export const LayerFS={open:async()=>({workspace:{exec:async(ws,command,message,sinks)=>new Promise(resolve=>{
-    const child=execFile(${JSON.stringify(shell.command)},['-lc',command],{cwd:${JSON.stringify(dir)},encoding:'buffer'},(error)=>resolve({exitCode:error?.code??0}));
+    const child=execFile(${JSON.stringify(shell.command)},['-c',command],{cwd:${JSON.stringify(dir)},encoding:'buffer'},(error)=>resolve({exitCode:error?.code??0}));
     child.stdout.pipe(sinks.stdout); child.stderr.pipe(sinks.stderr);
    })},close:async()=>{}})};`)
   await writeFile(config, JSON.stringify({projects:{one:{sdkModule,env:{LAYERFS_HOME:dir,LAYERFS_STORE_PATH:join(dir,'store'),LAYERFS_WORKER_ENDPOINT:'fake-worker'}}}}))

@@ -112,6 +112,23 @@ license to repeat the old import.
 
 ### Planned separate baseline preparation
 
+If no separate destination Workspace is registered, import
+`v:tools/workspace_register` and invoke `workspace_register` with the explicitly
+user-authorized absolute local destination `path` and `mode:"create_empty"`.
+This creates one empty directory under an existing parent, or reuses an empty
+one, then registers it without switching the session. For an existing directory
+whose contents the user has authorized, use `mode:"existing"`. No UI registration
+step or internal-record editing is needed. Owner local sessions only; never use a
+remote display path. Foreign ownership and linked ancestors fail closed. On
+registration failure, outputs are retained; retry the same path/mode after fixing
+the cause, never delete them merely to retry.
+
+Use the returned `workspaceId` as `destinationWorkspace` in `baseline_plan` below.
+Then answer its exact approvalRequest, call `baseline_prepare`, and wait for its
+background result. Review and `import_preview` the returned baseline Workspace
+before `create`. Registration authorizes neither copying nor import, and does not
+replace the exact LayerFS bootstrap or baseline-review approvals.
+
 `baseline_plan {workspace,destinationWorkspace}` performs only metadata/Git
 inventory reads; copying requires its own exact approvalRequest to be answered. Both selectors
 must resolve through the owning Project's local workspace route (source read,
@@ -125,9 +142,10 @@ After human approval use `baseline_prepare` with the same selectors, plan,
 its result. It creates a unique exclusive directory in the destination workspace's
 `.layerfs-baselines` and registers it only after successful copying/revalidation.
 The original checkout and Git index are not edited. Known credential artifacts,
-VCS/dependency trees and linked/unsafe paths cannot be copied through this path.
-Names of code/docs/assets discussing secrets produce warnings rather than blanket
-refusal. Unknown embedded secrets remain possible: review contents and then run
+VCS/dependency/build trees and linked/unsafe paths cannot be copied through this path.
+This fixed curated scope is not a full clone. Credential-named source modules are
+retained with warnings; non-code data inside those directories remains excluded.
+Use `importPolicy:"whole_tree"` on a separately reviewed tree to include dependencies. Unknown embedded secrets remain possible: review contents and then run
 `import_preview` on the returned workspace before `create`.
 
 Plans are source/owner-bound, single-use and expire after 15 minutes. Traversal,
@@ -287,11 +305,17 @@ as `v:skills/layerfs/setup.md` without a source checkout.
 
 `create` recursively imports **all** files, including dotfiles, ignored and
 untracked files. There are no import ignore rules or content credential scanner.
-`import_preview` adds an enforced metadata/name preflight: `.git`, `.venv`,
-`node_modules`, symlinks, common credential names and unreadable/unbounded trees
-are blocked. Counts and findings are bounded; blocked subtrees are not traversed.
-Review tokens last 15 minutes and are consumed once after a matching metadata
-rescan. A successful preview is not proof of no embedded secrets and cannot
+`import_preview` adds an enforced metadata/name preflight. `importPolicy:"curated"`
+(default) rejects VCS/dependency/build entries as out of scope, not secrets.
+`importPolicy:"whole_tree"` includes `.git`, `.venv`, `node_modules` and build data
+and traverses them recursively with warnings; it does not bypass credential checks.
+Both policies block symlinks, private runtime/credential artifacts and unreadable or
+unbounded trees. Source directories such as `src/credentials` warn and are traversed;
+code/docs/assets are reviewable, while nested non-code data, `.env` and keys remain
+protected. Counts/findings are bounded; no incomplete or blocked scan permits import.
+Neither policy silently excludes files that Init will read. Review tokens bind source,
+session and policy, last 15 minutes and are consumed once after a matching metadata
+rescan. Repeat the exact `importPolicy` on create; a different scope needs new review. A successful preview is not proof of no embedded secrets and cannot
 eliminate races in a mutable source tree. Use a separate, content-reviewed,
 credential-free registered baseline and preserve the original source.
 Do not treat `.gitignore` as a security boundary or import auth files for a test.

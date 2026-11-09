@@ -86,9 +86,18 @@ inconsistent namespace pointers do not fall back to legacy; stop for inspection.
 
 To prepare a baseline without hand-editing or stripping the checkout, call
 `baseline_plan {workspace:"source-selector",destinationWorkspace:"separate-target"}`.
+If the separate local destination is not registered, import
+`v:tools/workspace_register` and use `mode:"create_empty"` with the user-authorized
+absolute destination path (existing parent required); use `mode:"existing"` only
+for an authorized existing directory. No UI step or session switch is needed.
+Pass its returned `workspaceId` as `destinationWorkspace`. Registration does not
+replace baseline/bootstrap/import approvals; see [setup.md](setup.md).
 Both must be registered local workspaces; destination must authorize writes and
 not overlap the source. It plans selected **Git-tracked working-tree** files,
-excluding VCS/dependencies/known credential artifacts and all untracked files.
+excluding VCS/dependency/build trees, known credential artifacts and all untracked
+files. This is a fixed curated scope, not a full clone. Credential-named source
+modules are retained with warnings; non-code data inside those directories is excluded.
+Use `importPolicy:"whole_tree"` on a separately reviewed tree to include dependencies.
 Review its bounded exclusions/warnings/counts. Ask its exact approvalRequest; after
 approval call `baseline_prepare` with the same selectors, plan, approval reference
 and `approved:true`. Wait for its background event. It creates an exclusive new
@@ -99,14 +108,18 @@ review or an import; use the returned workspace for `import_preview` next.
 
 For >1 GiB repositories with concurrent agents, import a stable baseline once:
 - Run `layerfs {action:"import_preview", workspace:"registered-source-workspace-id"}`
-  first. It reads names/metadata only and blocks dependency/VCS trees, symlinks and
-  credential artifacts. Names such as `credentials.svg` or `secret-redaction.ts`
-  are review warnings, not evidence that the files contain secrets. Use a
-  **separate curated baseline**; never delete from
+  first. `importPolicy:"curated"` (default) rejects dependency/VCS/build entries as
+  outside its scope, not secrets. To include them, specify `importPolicy:"whole_tree"`
+  on both preview and create: all entries are recursively reviewed, with no ignores.
+  Both policies block symlinks and credential/private-runtime artifacts. Source
+  directories such as `src/credentials` warn and are traversed; code is reviewable,
+  but nested non-code data, `.env` and keys remain protected. Names are not a content
+  scanner. If blocked, use a **separate curated baseline**; never delete from
   the original checkout to satisfy preview. It is not a content/secret scanner.
 - After human content review, call `layerfs {action:"create", workspace:"same-selector",
   sourceReview:"returned-reviewToken", sourceReviewed:true}`. The token is single-use,
-  session/source-bound, expires after 15 minutes, and requires unchanged metadata.
+  session/source/policy-bound, expires after 15 minutes, and requires unchanged metadata.
+  Repeat the exact preview `importPolicy`; changing scope needs a new preview.
   Freeze the source during import; metadata review is not an immutable snapshot.
   The selector resolves through Shadow's authorized local workspace route, not a path.
   Managed imports return a `bg:` execution ID: **wait for completion**, do not poll or
@@ -168,3 +181,25 @@ daemon work may continue. Never retry automatically. Same-workspace overlap is
 refused; wait for its receipt. Old unprefixed IDs work only in the dedicated tool.
 Search/use_project/host cwd do not support these IDs. Setup and boundaries:
 `v:skills/layerfs/setup.md`; full contract in the repository's `docs/layerfs.md`.
+
+### Managed Windows import staging
+
+`create` on a reviewed Windows drive-letter source now stages the entire approved
+scope to an exclusive private Linux ext4 directory before upstream Init. This
+avoids DrvFS read-open ctime changes; upstream Changed checks are not weakened.
+`whole_tree` still includes all entries and never exempts credentials. The fixed
+helper uses the approved Node binary and the distro's default user (possibly
+root); failure to access it blocks, with no direct-DrvFS fallback. Managed UNC
+sources currently fail closed; operator/native routes are unchanged.
+Budget extra Linux disk for a complete copy plus Store, two source reads and up
+to ten minutes cooperative staging (100k entries, depth 128, 16 GiB), separately
+from `importTimeoutMs`. The launcher watchdog is not proof of helper termination.
+Copy stability checks are not an immutable snapshot or protection from same-user
+mutation/path races. All staging attempts are retained under namespace-keyed
+`/var/tmp` envelopes. Cancel means observation stopped, not rollback. Failed or
+unknown staging/Init stays blocked until the approved quarantine workflow; never
+retry automatically or remove resources to bypass it.
+`import_status.refusal`, when available, contains only a recognized native
+reason and safe source-relative path. Upstream jobs lose structured detail;
+unknown message shapes and unsafe paths are deliberately omitted. No real Init
+or production integration success follows from synthetic tests.
