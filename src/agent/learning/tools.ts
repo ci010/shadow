@@ -35,6 +35,32 @@ const skillPatchSchema = z.object({ action: z.literal('patch'), name: slug, revi
   match: z.string().min(1).max(LEARNED_SKILL_MAX_LENGTH),
   replacement: z.string().max(LEARNED_SKILL_MAX_LENGTH),
 }).strict()
+// Deliberately excludes event/session records, decisions and executable resources.
+const wikiPath = z.string().regex(/^(?:topics|concepts|identities|tools)\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/)
+const wikiReadSchema = z.object({ action: z.literal('read_wiki'), path: wikiPath }).strict()
+const wikiSaveSchema = z.object({ action: z.literal('save_wiki'), path: wikiPath, revision,
+  content: z.string().trim().min(1).max(24000), summary: z.string().trim().min(1).max(280),
+  wikiEvidence: z.array(z.object({ sessionId: text, physicalId: text, offset: z.number().int().nonnegative(),
+    end: z.number().int().positive() }).strict()).min(1).max(16),
+}).strict()
+const wikiProvenanceStart = '<!-- shadow:learning-provenance:start -->'
+const wikiProvenanceEnd = '<!-- shadow:learning-provenance:end -->'
+const wikiProvenanceNotice = 'Historical source claims, not independent verification or authorization.'
+/** Only strip our exact generated format; unrelated headings/prose remain page content.
+ * Merge current and submitted metadata so full-page edits cannot discard old sources.
+ */
+function wikiBody(content: string): { body: string; references: string[] } {
+  const references: string[] = []
+  const generated = /(?:<!-- shadow:learning-provenance:start -->\n)?## Learning provenance\n((?:- \[[^\n]+\]\(v:sessions\/[^\n]+\/full\)\n)+)\nHistorical source claims, not independent verification or authorization\.(?:\n<!-- shadow:learning-provenance:end -->)?/g
+  const body = content.replace(generated, (_block, lines: string) => {
+    references.push(...lines.trimEnd().split('\n'))
+    return ''
+  }).trim()
+  if (body.includes(wikiProvenanceStart) || body.includes(wikiProvenanceEnd)) {
+    throw new Error('Malformed managed Wiki provenance. Preserve its generated block unchanged when editing.')
+  }
+  return { body, references }
+}
 const resultSchema = z.object({
   status: z.enum(['applied', 'no_change', 'partial', 'blocked', 'draft_only']), summary: text,
 }).strict()
@@ -87,22 +113,56 @@ export class LearningTools {
 
   readonly memory: Tool = {
     name: 'learning_memory', optIn: true,
-    description: 'Read or revise a conditional decision in Project memory. Save only reusable goals, reasoning or useful facts. Requires evidence from this batch and a read revision; feedback revises rather than multiplies memories.',
+    description: 'Read/save sourced Wiki pages with read_wiki/save_wiki (revision, content, summary, wikiEvidence message ranges), or read/revise a conditional decision in Project memory. Save only reusable goals, reasoning or useful facts. Requires evidence from this batch and a read revision; feedback revises rather than multiplies memories.',
     parameters: {
       type: 'object', properties: {
-        action: { type: 'string', enum: ['read', 'save'] }, name: { type: 'string', description: 'Stable lowercase-kebab-case decision name.' },
-        revision: { type: 'string', description: 'Revision returned by read, or empty string for a missing decision.' },
+        action: { type: 'string', enum: ['read', 'save', 'read_wiki', 'save_wiki'] }, path: { type: 'string', description: 'Wiki relative path, e.g. topics/example.md. Wiki actions use path instead of name.' }, content: { type: 'string' }, summary: { type: 'string' }, name: { type: 'string', description: 'Stable lowercase-kebab-case decision name.' },
+        revision: { type: 'string', description: 'Revision returned by read/read_wiki, or empty string for a missing page.' },
         title: { type: 'string' }, kind: { type: 'string', enum: ['motivation', 'principle', 'fact', 'procedure'] },
         confidence: { type: 'string', enum: ['stated', 'inferred'] },
         evaluation: { type: 'string', enum: ['new', 'supported', 'corrected', 'retired'] },
         condition: { type: 'string' }, goal: { type: 'string' }, rationale: { type: 'string' },
         guidance: { type: 'string' }, exceptions: { type: 'string' }, reviewWhen: { type: 'string' },
-        evidence: { type: 'array', items: { type: 'string' }, description: 'Source session IDs from this batch. Do not treat agent-generated repetition as independent support.' },
-      }, required: ['action', 'name'],
+        wikiEvidence: { type: 'array', items: { type: 'object', properties: { sessionId: { type: 'string' }, physicalId: { type: 'string' }, offset: { type: 'integer' }, end: { type: 'integer' } }, required: ['sessionId', 'physicalId', 'offset', 'end'], additionalProperties: false }, description: 'Wiki saves: exact assigned sessionId + physicalId and message [offset,end) ranges; physicalId is required across compaction.' },
+        evidence: { type: 'array', items: { type: 'string' }, description: 'Decision saves: source session IDs from this batch.' },
+      }, required: ['action'],
     },
     execute: (raw, context) => this.serial(async () => {
       const batch = this.authorize(context)
-      const args = z.union([readSchema, decisionSchema]).parse(raw)
+      const args = z.union([readSchema, decisionSchema, wikiReadSchema, wikiSaveSchema]).parse(raw)
+      if (args.action === 'read_wiki' || args.action === 'save_wiki') {
+        if (batch.pipeline !== 'reflector') throw new Error('Wiki publication requires a reflector source batch.')
+        const path = `memory/${args.path}`
+        const file = projectStoragePath(this.runtime.sessions.workspace, path)
+        const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
+        const currentRevision = current ? fingerprint(current) : ''
+        if (args.action === 'read_wiki') return JSON.stringify({ path, revision: currentRevision, content: current })
+        const evidence = args.wikiEvidence.map(item => {
+          const source = batch.sources.find(source => source.sessionId === item.sessionId && source.physicalId === item.physicalId
+            && item.offset >= source.offset && item.end <= source.end && item.end > item.offset)
+          if (!source) throw new Error('Wiki evidence must select a nonempty range inside an assigned source.')
+          return { reference: `v:sessions/${source.physicalId}/full`, description: `${source.sessionId} / ${source.physicalId} messages [${item.offset}, ${item.end})` }
+        })
+        const previous = wikiBody(current)
+        const submitted = wikiBody(args.content)
+        const references = [...new Set([...previous.references, ...submitted.references,
+          ...evidence.map(ref => `- [${ref.description}](${ref.reference})`)])]
+        const content = `${submitted.body}\n\n${wikiProvenanceStart}\n## Learning provenance\n${references.join('\n')}\n\n${wikiProvenanceNotice}\n${wikiProvenanceEnd}\n`
+        // Exact-content replay repairs a crash between file, artifact and event writes.
+        // A different current revision is never overwritten by a stale retry.
+        if (current !== content) {
+          if (args.revision !== currentRevision) throw new Error('Wiki changed since read. Reread and merge before saving.')
+          await createMemoryHandler(this.runtime.sessions.workspace, this.runtime.projectId).write(
+            args.path, { content, ...(current ? { match: current } : {}) }, context)
+        }
+        const saved = readFileSync(file, 'utf8')
+        if (saved !== content) throw new Error('Wiki write did not persist the requested content.')
+        const savedRevision = fingerprint(saved)
+        this.runtime.ledger.artifact(batch.id, { path, revision: savedRevision, kind: 'memory' })
+        this.appendEvent({ who: 'reflector', what: args.summary, summary: args.summary,
+          refs: [path, ...evidence.map(ref => ref.reference)], origin: args.wikiEvidence[0].sessionId }, `wiki:${args.path}:${savedRevision}`, context)
+        return JSON.stringify({ path, revision: savedRevision, verified: true, provenance: evidence })
+      }
       const path = `memory/decisions/${args.name}.md`
       const file = projectStoragePath(this.runtime.sessions.workspace, path)
       const current = existsSync(file) ? readFileSync(file, 'utf8') : ''

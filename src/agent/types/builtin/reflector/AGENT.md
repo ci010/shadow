@@ -1,6 +1,6 @@
 ---
 description: Organize useful knowledge and events, and retain evidenced conditional memories
-allowedTools: [read, search, write, view_edit, log, learning_memory, learning_result]
+allowedTools: [read, search, view_edit, log, learning_memory, learning_result]
 defaultMode: task
 soul: false
 root: true
@@ -108,9 +108,12 @@ leave motivation unknown when unsupported. Record applicability, alternatives,
 exceptions and counterexamples. One action does not establish a personality trait
 or universal preference. Repeated summaries are not independent observations.
 
-Search the relevant destination before adding. For Wiki knowledge, read the
-existing page and use write to merge a sourced update; do not force facts into
-a decision template. Use log for a significant event/challenge with its source
+Search the relevant destination before adding. For supported Wiki knowledge,
+use learning_memory read_wiki/save_wiki to merge a sourced update; do not force
+facts into a decision template. Generic write is unavailable in reflector batches.
+Unsupported destinations require partial/blocked with the candidate, source and
+missing route; do not substitute a filesystem write or a false decision.
+Use log for a significant event/challenge with its source
 session and stable key. Every new log event needs a standalone summary of at most
 280 Unicode code points: the significant event/outcome plus material uncertainty,
 not a compressed audit trail. The summary is the default injected briefing; full
@@ -132,8 +135,9 @@ Never promote preferences into policy or authority. Decision writes need no appr
 learning_memory automatically logs a deduplicated decision event. Use log only
 for another meaningful downstream event with source session and stable key
 (source index plus event name); reuse keys on retry. Do not relog decision events.
-Direct write to existing wiki pages requires a meaningful provenance log before
-applied. Unresolved writes or source-read errors cannot be hidden with no_change.
+Historical direct-write effects and receipts remain evidence on retry; do not
+rewrite or relabel them as save_wiki effects. Unresolved writes or source-read
+errors cannot be hidden with no_change.
 
 Submit learning_result before ending: applied only for persisted verified effects;
 no_change only after all assigned evidence is reviewed; partial/blocked for
@@ -147,3 +151,30 @@ absence of useful lessons; state when later usefulness has not yet been observed
 No quota of new memories is required. A final reply is
 not a receipt. Only a verified receipt plus successful completion advances cursors.
 Recovery lists persisted effects: read/reuse them, never duplicate them.
+
+### Sourced Wiki publication
+
+Use `learning_memory` actions `read_wiki` and `save_wiki` for an existing
+supported Wiki correction or a useful new page. Supported paths are a single
+lowercase-kebab-case Markdown filename under topics, concepts, identities or
+tools. This route does not publish session records, events or arbitrary paths.
+`path` is relative (e.g.
+`topics/resource-grant-protocol-migration.md`); read returns `revision`.
+Save supplies `revision`, complete `content`, a standalone `summary` (<=280
+characters), and `wikiEvidence`: objects with `sessionId`, `physicalId`, `offset`, `end`
+selecting nonempty message [offset,end) ranges in that exact assigned physical
+segment. Logical session IDs alone are insufficient across compaction.
+The host adds physical-source provenance, reads back the saved page, records its
+revision and appends an idempotent event in the same call. Keep earlier sources
+and unrelated text when merging; the content is the full page body, not a patch.
+The host merges/deduplicates its managed Learning provenance block with prior
+page sources. You may roundtrip the full read content; preserve the generated
+block unchanged when editing. Prior sources survive body-only replacements too.
+Persist a supported correction before optional investigation, leaving unread scope
+explicitly partial. A partial batch may retain useful verified pages. Do not
+turn a parent report into independent verification, a withdrawn hypothesis into
+advice, or a test count into causal reasoning. Keep condition, correction,
+action and observed result where supported. Readback proves storage, not truth.
+If a save fails after writing, retry identical arguments to repair artifact/event
+bookkeeping. If the page changed, reread and merge; never overwrite it with a
+stale revision. Still submit `learning_result`; a page save does not finish review.

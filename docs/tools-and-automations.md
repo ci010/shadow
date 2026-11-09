@@ -90,6 +90,45 @@ a decision. Retired decisions are retained as historical evidence but must not
 guide new actions. Source identities are checked against the assigned batch;
 the model still owns the semantic interpretation.
 
+Reflector batches must use `learning_memory` actions `read_wiki`/`save_wiki` for
+`topics/`, `concepts/`, `identities/` and `tools/` Markdown pages (lowercase kebab
+filenames). A save takes the read revision, full body (up to 24,000 UTF-16 code
+units), a brief summary, and `wikiEvidence` entries `{sessionId, physicalId, offset, end}`
+selecting exact assigned physical-segment message ranges (missing/wrong physical
+IDs are rejected, including overlapping ranges across compaction). Its managed
+provenance block merges and deduplicates exact prior source references from the
+current page and submitted full content, so reread/edit/save does not accumulate
+sections or drop earlier sources. It also recognizes the earlier generated
+heading/notice format; unrelated prose is preserved. It adds physical-source/range provenance,
+uses the existing memory writer (including alias and permission checks), reads
+back the page, records its hash and appends a deduplicated event. Thus a supported
+Wiki candidate no longer needs separate write/readback/log model turns. This
+neither increases the execution budget nor removes the receipt-only finish turn.
+The host-selected reflector allowlist excludes generic `write`, even if a role
+override or legacy tool registration advertises it. General sessions and the
+encapsulator's draft-writing scope are unchanged. Unsupported Wiki destinations
+require Partial/Blocked naming the candidate, source and missing route; do not
+force them into decisions or bypass the route through filesystem paths. Historical
+direct-write effects/receipts are still audited and reused, not migrated or
+relabeled. This closes a publication bypass, not the separate problem of a model
+omitting an eligible event candidate on every retry; no automatic candidate
+extraction, durable unsaved-intent journal or skill-size recovery is added here.
+
+This is recoverable ordered persistence, **not an atomic multi-file transaction**:
+a failure may leave the page or artifact written. Identical replay repairs missing
+bookkeeping without duplicating events, including after recreating the tool
+instance. Different stale content is rejected; existing pages use exact-match
+replacement through the normal writer. This is optimistic revision checking,
+not a global lock against arbitrary external writers. Later verification rejects
+a changed/rolled-back artifact. An unresolved save error still blocks Applied or
+No change. Partial preserves effects without claiming unread evidence reviewed.
+The host verifies ranges belong to the batch and bytes persisted, not that those
+ranges support the prose, were understood, or that a useful candidate was chosen.
+Human/model quality review must check attribution, explicit correction/action/
+result, applicability and omissions. No heuristic infers truth from keywords or
+forces a new memory; duplicate/no-change controls remain valid. Existing live
+pages are not retroactively repaired by deploying this code.
+
 In that local Project workflow, `learned_skill` writes lesson-only `SKILL.md` packages to the actual shared
 Project skill space, using revision checks and the existing registry. It does
 not grant executable tools, override bundled skills, install agents or make an

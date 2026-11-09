@@ -741,6 +741,134 @@ test('direct save uses last work call, rejects oversized and stale drafts withou
   assert.equal(f.runtime.ledger.batch(batch.id).artifacts.length, 1)
 }))
 
+test('Wiki publication combines precise source ranges, host readback and recoverable provenance without closing unread scope', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const batch = f.runtime.ledger.create('reflector', [{ sessionId: 'web:source', physicalId: 'source-physical', segmentIndex: 0, offset: 0, end: 5 }], [])
+    f.runtime.ledger.bind(batch.id, 'cron:wiki')
+    f.records.set('cron:wiki', { sessionId: 'cron:wiki', segmentIndex: 0, projectId: 'a' })
+    const context = f.context('cron:wiki')
+    const draft = { action: 'save_wiki', path: 'topics/diagnostic-correction.md', revision: '',
+      content: '# Diagnostic correction\n\nParent report: detach hypothesis withdrawn; minimal window/UiSelect harness fix retained assertions. Reported 10 pass/1 baseline-conflict failure, not independently verified. Applies to this harness only; revalidate on changed reproduction.',
+      summary: 'Parent withdrew detach hypothesis and reported a narrower harness correction; independent acceptance remains unknown.',
+      wikiEvidence: [{ sessionId: 'web:source', physicalId: 'source-physical', offset: 2, end: 4 }] }
+    await assert.rejects(f.tools.memory.execute({ ...draft, wikiEvidence: [{ sessionId: 'web:source', physicalId: 'source-physical', offset: 2, end: 6 }] }, context), /inside an assigned source/)
+    const originalArtifact = f.runtime.ledger.artifact.bind(f.runtime.ledger)
+    f.runtime.ledger.artifact = () => { throw new Error('injected journal failure after page write') }
+    await assert.rejects(f.tools.memory.execute(draft, context), /injected journal failure/)
+    const file = projectStoragePath(workspace, 'memory/topics/diagnostic-correction.md')
+    const persisted = await readFile(file, 'utf8')
+    assert.match(persisted, /source-physical messages \[2, 4\)/)
+    assert.match(persisted, /not independently verified/)
+    f.runtime.ledger.artifact = originalArtifact
+    const originalEvent = f.tools.appendEvent.bind(f.tools)
+    f.tools.appendEvent = () => { throw new Error('injected event failure') }
+    await assert.rejects(f.tools.memory.execute(draft, context), /injected event failure/)
+    f.tools.appendEvent = originalEvent
+    const recovered = new LearningTools(f.runtime)
+    const receipt = JSON.parse(String(await recovered.memory.execute(draft, context)))
+    assert.equal(receipt.verified, true)
+    await recovered.memory.execute(draft, context)
+    const savedBatch = f.runtime.ledger.batchFor(context.sessionId)!
+    assert.equal(savedBatch.artifacts.length, 1)
+    assert.equal(savedBatch.events.length, 1)
+    assert.equal(savedBatch.proposal, undefined, 'a page save does not claim complete review or advance the cursor')
+    await f.runtime.verify(savedBatch, false)
+    await assert.rejects(recovered.result.execute({ status: 'no_change', summary: 'Duplicate' }, context), /persisted effects/)
+    await writeFile(file, persisted + '\nConcurrent useful content\n')
+    await assert.rejects(recovered.memory.execute(draft, context), /changed since read/)
+    await assert.rejects(f.runtime.verify(savedBatch, false), /changed after writing/)
+    assert.match(await readFile(file, 'utf8'), /Concurrent useful content/)
+    const latest = JSON.parse(String(await recovered.memory.execute({ action: 'read_wiki', path: draft.path }, context)))
+    await recovered.memory.execute({ ...draft, revision: latest.revision, content: draft.content + '\n\nConcurrent useful content' }, context)
+    await f.runtime.verify(f.runtime.ledger.batchFor(context.sessionId)!, false)
+    await recovered.result.execute({ status: 'partial', summary: 'Correction persisted and host verified. Messages [0,2) and [4,5) remain unread; no acceptance established.' }, context)
+    assert.equal(f.runtime.ledger.batchFor(context.sessionId)!.proposal!.status, 'partial')
+  })
+})
+
+test('Wiki save failures remain receipt blockers until a same-page save succeeds; permissions and path boundaries remain unchanged', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const batch = f.runtime.ledger.create('reflector', [{ sessionId: 'web:source', physicalId: 'source', segmentIndex: 0, offset: 0, end: 5 }], [])
+    f.runtime.ledger.bind(batch.id, 'cron:audit')
+    f.records.set('cron:audit', { sessionId: 'cron:audit', segmentIndex: 0, projectId: 'a' })
+    const context = f.context('cron:audit')
+    const draft = { action: 'save_wiki', path: 'topics/trust-boundary.md', revision: '', content: '# Boundary\nParent-reported limitation; not a reset procedure.', summary: 'Retain the parent-reported identity deletion limitation.', wikiEvidence: [{ sessionId: 'web:source', physicalId: 'source', offset: 1, end: 3 }] }
+    await assert.rejects(f.tools.memory.execute(draft, { ...context, projectId: 'foreign' }), /owning Project/)
+    await assert.rejects(f.tools.memory.execute(draft, { ...context, remoteWorkdir: {} } as ExecutionContext), /owning Project/)
+    for (const path of ['events/test.md', 'sessions/test.md', '../topics/test.md', 'decisions/test.md']) {
+      await assert.rejects(f.tools.memory.execute({ ...draft, path }, context))
+    }
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: '', tool_calls: [{ id: 'save', type: 'function', function: { name: 'learning_memory', arguments: JSON.stringify(draft) } }] },
+      { role: 'tool', tool_call_id: 'save', content: 'Error: injected persistence failure' },
+    ]
+    f.sessions.getHistory = async () => ({ messages, total: messages.length })
+    await assert.rejects(f.tools.result.execute({ status: 'no_change', summary: 'No useful change' }, context), /injected persistence failure/)
+    await f.tools.memory.execute(draft, context)
+    await assert.rejects(f.tools.result.execute({ status: 'applied', summary: 'Saved' }, context), /injected persistence failure/)
+    messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'retry', type: 'function', function: { name: 'learning_memory', arguments: JSON.stringify(draft) } }] },
+      { role: 'tool', tool_call_id: 'retry', content: JSON.stringify({ verified: true }) })
+    await f.tools.result.execute({ status: 'applied', summary: 'Source-scoped limitation saved and verified; no deployment claim.' }, context)
+    assert.equal(f.runtime.ledger.batchFor(context.sessionId)!.proposal!.status, 'applied')
+  })
+})
+
+test('Wiki reread/edit/save merges managed provenance once and requires exact physical segments', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const sources = ['physical-first', 'physical-second'].map((physicalId, segmentIndex) => ({
+      sessionId: 'web:source', physicalId, segmentIndex, offset: 0, end: 5,
+    }))
+    const batch = f.runtime.ledger.create('reflector', sources, [])
+    f.runtime.ledger.bind(batch.id, 'cron:segments')
+    const context = f.context('cron:segments')
+    const draft = { action: 'save_wiki', path: 'topics/segment-evidence.md', revision: '',
+      content: '# Scoped evidence\nA reported correction.', summary: 'Retain the scoped correction.',
+      wikiEvidence: [{ sessionId: 'web:source', physicalId: 'physical-second', offset: 1, end: 3 }] }
+    await assert.rejects(f.tools.memory.execute({ ...draft, wikiEvidence: [{ sessionId: 'web:source', offset: 1, end: 3 }] }, context))
+    await assert.rejects(f.tools.memory.execute({ ...draft, wikiEvidence: [{ ...draft.wikiEvidence[0], physicalId: 'unassigned-segment' }] }, context), /inside an assigned source/)
+    await f.tools.memory.execute(draft, context)
+    const read = async () => JSON.parse(String(await f.tools.memory.execute({ action: 'read_wiki', path: draft.path }, context)))
+    let page = await read()
+    assert.match(page.content, /physical-second messages \[1, 3\)/)
+    assert.doesNotMatch(page.content, /physical-first/)
+    // Normal full-content roundtrip, with a second segment at identical logical offsets.
+    await f.tools.memory.execute({ ...draft, revision: page.revision,
+      content: page.content.replace('A reported correction.', 'A reported correction with its condition.'),
+      wikiEvidence: [{ ...draft.wikiEvidence[0], physicalId: 'physical-first' }] }, context)
+    for (let i = 0; i < 3; i++) {
+      page = await read()
+      await f.tools.memory.execute({ ...draft, revision: page.revision,
+        content: page.content.replace('Scoped evidence', `Scoped evidence ${i}`) }, context)
+    }
+    page = await read()
+    assert.equal(page.content.match(/## Learning provenance/g)?.length, 1)
+    assert.equal(page.content.match(/<!-- shadow:learning-provenance:start -->/g)?.length, 1)
+    assert.equal(page.content.match(/physical-first messages/g)?.length, 1)
+    assert.equal(page.content.match(/physical-second messages/g)?.length, 1)
+    assert.match(page.content, /correction with its condition/)
+    // Upgrade the previous unmarked generated format without duplicating metadata.
+    const file = projectStoragePath(workspace, `memory/${draft.path}`)
+    await writeFile(file, page.content.replace('<!-- shadow:learning-provenance:start -->\n', '')
+      .replace('\n<!-- shadow:learning-provenance:end -->', ''))
+    page = await read()
+    await f.tools.memory.execute({ ...draft, revision: page.revision, content: page.content }, context)
+    page = await read()
+    assert.equal(page.content.match(/## Learning provenance/g)?.length, 1)
+    assert.equal(page.content.match(/physical-first messages/g)?.length, 1)
+    assert.equal(page.content.match(/physical-second messages/g)?.length, 1)
+    // Even a body-only replacement retains the previous exact source references.
+    await f.tools.memory.execute({ ...draft, revision: page.revision, content: '# Body only\nStill scoped.' }, context)
+    page = await read()
+    assert.equal(page.content.match(/physical-first messages/g)?.length, 1)
+    assert.equal(page.content.match(/physical-second messages/g)?.length, 1)
+    assert.equal(page.content.match(/## Learning provenance/g)?.length, 1)
+  })
+})
+
+
 test('exact lesson corrections preserve unrelated evidence and all save boundaries', async () => withTempWorkspace(async workspace => {
   const skills = new SkillsManager(workspace)
   const f = fixture(workspace, 0, skills)
