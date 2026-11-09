@@ -122,3 +122,17 @@ test('decision references are bounded, distinct and copied without accepting a r
   assert.equal(parsed.origin?.physicalId, 'root-0')
   assert.deepEqual(parsed.recipient, request.recipient)
 })
+
+
+test('independent decision classification is validated and survives persisted request parsing', () => {
+  for (const independent of [true, false]) {
+    assert.equal(parseYieldQuestion({ ...question, independent }).independent, independent)
+    assert.equal(parseYieldRequest({ ...request, independent }, 'root').independent, independent)
+  }
+  assert.equal(parseYieldRequest(request, 'root').independent, undefined)
+  for (const independent of [null, 1, 'true', {}]) {
+    assert.throws(() => parseYieldQuestion({ ...question, independent }), /boolean/)
+  }
+  assert.throws(() => parseYieldQuestion({ ...question, independent: true,
+    sources: [{ sessionId: 'child', physicalId: 'segment', requestId: 'child-request' }] }), /cannot also link sources/)
+})

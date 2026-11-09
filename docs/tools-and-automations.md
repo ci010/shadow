@@ -898,6 +898,35 @@ root outcome. Cancellation of an execution remains a separate native operation.
 
 ### Questions at the right abstraction level
 
+Child `ask` notifications schedule their actual parent, rather than only adding
+history: reusable parents wake from idle/sleep, restart a provider-phase turn,
+or consume attention after running tools reach a safe boundary. Ordinary input
+and decisions use the same notification route. Coordinator-generated questions
+can also enter an already running task parent's safe-boundary context; arbitrary
+child messages cannot use that admission. Current tasks can create only leaf
+calls (which cannot ask), so task-parent questions mainly cover persisted older
+delegation topologies, not permission to create new nested tasks.
+
+When a parent has live child decisions, a new decision `ask` must either cite a
+relevant live direct child in `sources: [{sessionId, physicalId, requestId}]` or
+explicitly set `independent: true` without sources for an unrelated question.
+Ambiguous requests fail before journaling or publishing a human question and
+return usable child references. Historical, wrong-segment or foreign-child
+references alone do not satisfy this check. `ask(action: "context")` exposes the
+waiting child requests and the rule. The independent classification survives
+persisted request parsing; old records without it remain valid.
+
+A linked escalation that is deferred (including an unanswered human timeout) or
+returned for investigation resumes only its still-waiting linked direct children
+with `approved: false` and no selected option/default. The human answer is not
+automatically translated into a child option; parents still use `reply` for real
+answers. Unlinked siblings, independent questions, normal parent finals and
+human questions still awaiting an answer do not settle child requests. Input
+questions remain plain information, never authorization. Existing already-hung
+requests are not migrated, answered or cancelled by this change; their stored
+parent remains responsible for recovery. No provider/tool interruption can
+force a blocked tool to reach a safe boundary.
+
 `ask` accepts an originating `workKey` and an ancestor `decisionKey` for both
 input and decision questions. The host resolves and persists their causal path;
 agents do not supply a fabricated tree. With one unambiguous assignment/focus,

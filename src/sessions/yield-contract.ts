@@ -17,6 +17,7 @@ export interface YieldPolicy {
 }
 
 export interface YieldQuestion {
+  independent?: boolean
   workContext?: WorkDecisionContext
   workProposal?: WorkDecision
   question: string
@@ -180,6 +181,8 @@ export function parseYieldQuestion(value: unknown): YieldQuestion {
     || typeof value.defaultOption !== 'string' || !value.options.includes(value.defaultOption)) {
     throw new TypeError('Yield requires a question, two or three distinct non-empty options, and a defaultOption matching one option.')
   }
+  if (value.independent !== undefined && typeof value.independent !== 'boolean') throw new TypeError('independent must be a boolean.')
+  if (value.independent === true && value.sources !== undefined) throw new TypeError('An independent decision cannot also link sources.')
   let sources: YieldReference[] | undefined
   if (value.sources !== undefined) {
     if (!Array.isArray(value.sources) || value.sources.length < 1 || value.sources.length > 3) {
@@ -191,6 +194,7 @@ export function parseYieldQuestion(value: unknown): YieldQuestion {
   return { question: value.question, options: value.options.length === 2
     ? [value.options[0], value.options[1]] : [value.options[0], value.options[1], value.options[2]], defaultOption: value.defaultOption,
     ...(sources ? { sources } : {}),
+    ...(value.independent !== undefined ? { independent: value.independent } : {}),
     ...(value.workProposal === undefined ? {} : { workProposal: workDecisionSchema.parse(value.workProposal) }),
     ...(value.workContext === undefined ? {} : { workContext: workDecisionContextSchema.parse(value.workContext) }),
     ...(value.brief !== undefined ? { brief: parseDecisionBrief(value.brief) } : {}),

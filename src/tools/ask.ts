@@ -22,7 +22,8 @@ const parameters = {
     question: { type: 'string', description: 'A clear question for missing input or a consequential decision.' },
     options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2, uniqueItems: true, description: 'Decision only: two distinct non-empty suggested choices. The UI automatically provides a third, custom-response entry; do not generate an Other or free-text option.' },
     default_option: { type: 'string', description: 'Decision only: exactly one of options; not human authorization. An unanswered human request is deferred without approval.' },
-    sources: { type: 'array', minItems: 1, maxItems: 3, description: 'Decision only: optional existing references. Copy an answer receipt’s reference, or sessionId, origin.physicalId and id (as requestId) from a received request. Links provide context, not permission or proof of causation.',
+    independent: { type: 'boolean', description: 'Decision only: explicitly unrelated to waiting child decisions. Otherwise cite the live child in sources when escalating. Cannot combine with sources.' },
+    sources: { type: 'array', minItems: 1, maxItems: 3, description: 'Decision only: optional existing references. Copy an answer receipt’s reference, or sessionId, origin.physicalId and id (as requestId) from a received request. Links provide context, not permission. Citing a live direct child links its escalation: deferral/investigation resumes that child without approval. When a child waits, cite it or mark the question independent.',
       items: { type: 'object', properties: {
         sessionId: { type: 'string' }, physicalId: { type: 'string' }, requestId: { type: 'string' },
       }, required: ['sessionId', 'physicalId', 'requestId'], additionalProperties: false } },
@@ -74,7 +75,7 @@ export class AskTool implements Tool<ToolResult> {
       }
     }
     if (action !== 'ask' || args.kind !== 'decision'
-      || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'brief', 'reconsiders', 'workKey', 'decisionKey'].includes(key))) {
+      || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'independent', 'brief', 'reconsiders', 'workKey', 'decisionKey'].includes(key))) {
       throw new YieldError('invalid_request', 'Use ask(kind=input, question), ask(kind=decision, question, options, default_option), context or invalidate. Brief is optional. Answer requests with reply.')
     }
     if (ctx.channel === 'a2a') throw new YieldError('forbidden', 'An A2A caller is not a local human decision authority. Ask for ordinary input or report the authorization blocker.')
@@ -82,7 +83,7 @@ export class AskTool implements Tool<ToolResult> {
     let question
     try {
       question = parseYieldQuestion({ question: args.question, options: args.options, defaultOption: args.default_option,
-        sources: args.sources, brief: args.brief, reconsiders: args.reconsiders, workContext })
+        sources: args.sources, independent: args.independent, brief: args.brief, reconsiders: args.reconsiders, workContext })
     } catch (error) {
       throw new YieldError('invalid_request', error instanceof Error ? error.message : String(error))
     }

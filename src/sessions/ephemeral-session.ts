@@ -55,6 +55,15 @@ export class EphemeralSession extends BaseSession {
     }
   }
 
+  /** Coordinator-only attention from a waiting child, not a new task assignment.
+   * Drain at the next tool-safe boundary, and prevent an unconsumed final. */
+  dispatchParentQuestion(input: SessionInput, _llm: LlmRuntimeConfig): void {
+    if (!this.accepting || !this.running || this.state.mode !== 'task' || input.kind !== 'message') {
+      throw new Error('The task parent is no longer available to answer its child.')
+    }
+    this.corrections.push(input)
+  }
+
   dispatch(input: SessionInput, llm: LlmRuntimeConfig): void {
     if (!this.accepting) throw new Error(`Session ${this.id} is stopped`)
     if (input.kind === 'control' && input.command.type !== 'retry') {

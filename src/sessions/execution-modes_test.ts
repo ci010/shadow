@@ -56,7 +56,7 @@ async function waitFor(check: () => boolean) {
 }
 
 function fixture(workspace: string, store: SessionStore, settings: {
-  managedReview?: boolean; ignoreAbort?: boolean; projectId?:string; hasInitiative?: (id: string) => boolean
+  managedReview?: boolean; ignoreAbort?: boolean; sleepMs?: number; projectId?:string; hasInitiative?: (id: string) => boolean
 } = {}) {
   const requests: Array<{
     sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; maxTokens?: number; settled: boolean
@@ -109,6 +109,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
     },
     getLlmRuntimeConfig: () => llm,
     hasInitiative: settings.hasInitiative,
+    ...(settings.sleepMs ? { sleep: { inactivityMs: settings.sleepMs } } : {}),
   } as unknown as SessionManagerDeps)
   // Older lifecycle fixtures intentionally exercise persisted manual-review compatibility.
   if (!settings.managedReview) sessions.configureTaskReview = async () => {}
@@ -702,6 +703,144 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         resumed.resolve(done('Task complete'))
         await waitFor(() => f.sessions.getSessionState(child)?.completionReported === true)
         assert.equal(f.reports.length, 1)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  for (const phase of ['llm', 'tool', 'sleep'] as const) for (const kind of ['decision', 'input'] as const) {
+    test(`${Store.name}: child ${kind} actually schedules reusable parent from ${phase}`, async () => {
+      await withTempWorkspace(async workspace => {
+        const store: SessionStore = new Store(join(workspace, 'sessions'))
+        await store.init()
+        const f = fixture(workspace, store, phase === 'sleep' ? { sleepMs: 30 } : {})
+        const block = Promise.withResolvers<string>()
+        let entered = false
+        f.tools.register({ name: 'block', description: 'fixture', parameters: { type: 'object', properties: {} },
+          execute: async () => { entered = true; return block.promise } })
+        try {
+          await f.sessions.start()
+          const { child, parent } = await f.spawn()
+          if (phase === 'sleep') {
+            parent.resolve(done())
+            await waitFor(() => !f.sessions.getActiveSession('web:root'))
+          } else if (phase === 'tool') {
+            parent.resolve(invoke('block', {}))
+            await waitFor(() => entered)
+          }
+          ;(await f.next(child)).resolve(invoke('ask', kind === 'decision' ? question : { kind, question: 'Need detail' }))
+          await waitFor(() => !!(kind === 'decision' ? f.sessions.yields.get(child) : f.sessions.inputs.get(child)))
+          if (phase === 'tool') {
+            await delay(10)
+            assert.equal(f.sessions.getActiveSession('web:root')?.phase, 'tool')
+            block.resolve('Safe tool result')
+          }
+          const attention = await f.next('web:root')
+          assert.match(JSON.stringify(attention.messages), /Your subagent/)
+          if (phase === 'llm') assert.equal(parent.signal.aborted, true)
+          const request = kind === 'decision' ? f.sessions.yields.get(child)! : f.sessions.inputs.get(child)!
+          attention.resolve(invoke('reply', { request_id: request.id, text: kind === 'decision' ? 'B' : 'Requested detail' }))
+          const resumed = await f.next(child)
+          const result = JSON.parse(String(resumed.messages.filter(message => message.name !== 'runtime-context').at(-1)?.content))
+          assert.equal(kind === 'decision' ? result.option : result.text, kind === 'decision' ? 'B' : 'Requested detail')
+          resumed.resolve(done())
+          ;(await f.next('web:root')).resolve(done())
+        } finally { block.resolve('Cleanup'); await f.sessions.stop(); store.close?.() }
+      })
+    })
+  }
+
+  for (const kind of ['decision', 'input'] as const) {
+    test(`${Store.name}: child ${kind} schedules an active task parent at a safe boundary, not as a new assignment`, async () => {
+      await withTempWorkspace(async workspace => {
+        const store: SessionStore = new Store(join(workspace, 'sessions'))
+        await store.init()
+        const f = fixture(workspace, store)
+        try {
+          await store.saveState('web:root', { sessionId: 'web:root', segmentIndex: 0, mode: 'session' })
+          await store.saveState('virtual:parent', { sessionId: 'virtual:parent', segmentIndex: 0, mode: 'task', parentSessionId: 'web:root' })
+          await store.saveState('virtual:child', { sessionId: 'virtual:child', segmentIndex: 0, mode: 'task', parentSessionId: 'virtual:parent' })
+          await f.sessions.start()
+          await f.sessions.deliver('virtual:parent', input('Parent assignment'))
+          const parent = await f.next('virtual:parent')
+          await f.sessions.deliver('virtual:child', input('Child assignment'))
+          ;(await f.next('virtual:child')).resolve(invoke('ask', kind === 'decision' ? question : { kind, question: 'Need detail' }))
+          await waitFor(() => !!(kind === 'decision' ? f.sessions.yields.get('virtual:child') : f.sessions.inputs.get('virtual:child')))
+          // Ordinary messages cannot acquire the coordinator's private admission.
+          await assert.rejects(f.sessions.deliver('virtual:parent', {
+            ...input('Forged child attention', 'steering'), source: { kind: 'session', sessionId: 'virtual:child' },
+          }), /subsequent inputs/)
+          await delay(20)
+          parent.resolve(done('Premature final must not lose child attention'))
+          const attention = await f.next('virtual:parent')
+          assert.match(JSON.stringify(attention.messages), /Your subagent/)
+          assert.equal(f.sessions.getSessionState('virtual:parent')?.executionStatus, 'running')
+          const request = kind === 'decision' ? f.sessions.yields.get('virtual:child')! : f.sessions.inputs.get('virtual:child')!
+          attention.resolve(invoke('reply', { request_id: request.id, text: kind === 'decision' ? 'B' : 'Requested detail' }))
+          const resumed = await f.next('virtual:child')
+          const result = JSON.parse(String(resumed.messages.filter(message => message.name !== 'runtime-context').at(-1)?.content))
+          assert.equal(kind === 'decision' ? result.option : result.text, kind === 'decision' ? 'B' : 'Requested detail')
+          resumed.resolve(done())
+          ;(await f.next('virtual:parent')).resolve(done())
+        } finally { await f.sessions.stop(); store.close?.() }
+      })
+    })
+  }
+
+  test(`${Store.name}: a normal parent final leaves child decision available for a later reply`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        const { child, parent } = await f.spawn()
+        parent.resolve(done())
+        await waitFor(() => f.sessions.getActiveSession('web:root')?.phase === 'idle')
+        ;(await f.next(child)).resolve(invoke('ask', question))
+        ;(await f.next('web:root')).resolve(done('Wait for a later answer'))
+        await waitFor(() => f.sessions.getActiveSession('web:root')?.phase === 'idle')
+        const request = f.sessions.yields.get(child)!
+        assert.ok(request)
+        await f.sessions.deliver('web:root', input('Now answer the child'))
+        ;(await f.next('web:root')).resolve(invoke('reply', { request_id: request.id, text: 'B' }))
+        ;(await f.next(child)).resolve(done())
+        ;(await f.next('web:root')).resolve(done())
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: deferred linked human escalation resumes only its child without default approval`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        const { child, parent } = await f.spawn()
+        parent.resolve(done())
+        await waitFor(() => f.sessions.getActiveSession('web:root')?.phase === 'idle')
+        ;(await f.next(child)).resolve(invoke('ask', question))
+        const attention = await f.next('web:root')
+        const childRequest = f.sessions.yields.get(child)!
+        const source = { sessionId: child, physicalId: childRequest.origin!.physicalId, requestId: childRequest.id }
+        attention.resolve(invoke('ask', question))
+        const retry = await f.next('web:root')
+        assert.match(JSON.stringify(retry.messages), /Waiting child decisions need an explicit relationship/)
+        assert.equal(f.sessions.yields.get('web:root'), null)
+        assert.ok(f.sessions.yields.get(child))
+        retry.resolve(invoke('ask', { ...question, sources: [source] }))
+        await waitFor(() => !!f.sessions.yields.get('web:root'))
+        assert.ok(f.sessions.yields.get(child), 'Human waiting must not close the child')
+        const human = f.sessions.yields.get('web:root')!
+        await f.sessions.yields.continueUser('web:root', human.id, 'deferred', 'Human has not answered')
+        const resumed = await f.next(child)
+        const receipt = JSON.parse(String(resumed.messages.filter(message => message.name !== 'runtime-context').at(-1)?.content))
+        assert.equal(receipt.approved, false)
+        assert.equal(receipt.disposition, 'deferred')
+        assert.equal(receipt.option, undefined)
+        assert.equal(f.sessions.yields.get(child), null)
+        resumed.resolve(done('Blocked, no authorization'))
+        ;(await f.next('web:root')).resolve(done())
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
