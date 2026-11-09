@@ -1,3 +1,4 @@
+import { parseAttachmentReferences, escapeReferenceXml } from '../../src/utils/attachment-references.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
@@ -195,12 +196,9 @@ test('source metadata follows replacement, repeat drag and upload; removal drops
   const uploaded = await uploadChatAttachments('http://main', 'chat', repeated, new AbortController().signal,
     async () => Response.json({ path: 'uploads/123-image-marked.png' }))
   assert.deepEqual(uploaded[0]?.source, source)
-  assert.equal(composeImageReferenceMessage('Fix the marked area.', uploaded),
-    `Fix the marked area.\n\nAttachment references:\n- ${imageAttachmentReference(uploaded[0]!)}\n  Uploaded file: \"uploads/123-image-marked.png\"\n  Media item: 1 of 1 (message attachment order).\n\nImage references (source metadata):\n`
-    + '- Attached image: "uploads/123-image-marked.png"\n'
-    + `  Original file: ${JSON.stringify(source.path)}\n`
-    + '  Version: marked copy; original file unchanged.\n'
-    + '  Media item: 1 of 1 (message attachment order).')
+  const serialized = composeImageReferenceMessage('Fix the marked area.', uploaded)
+  const refs = parseAttachmentReferences(serialized.slice(serialized.indexOf('<attachment-references')))
+  assert.deepEqual(refs, [{ path: 'uploads/123-image-marked.png', name: 'image-marked.png', kind: 'image', reference: imageAttachmentReference(uploaded[0]!), source: source.path, modified: true }])
   const removed = updateImageAttachment(repeated, 'stable-image', null, options)
   assert.equal(composeImageReferenceMessage('No image', await uploadChatAttachments('http://main', 'chat', removed, new AbortController().signal)), 'No image')
 })
@@ -214,17 +212,15 @@ test('same-named images remain paired with their exact upload and source paths; 
     { key: 'paste', path: 'uploads/clipboard.png', file: new File(['clipboard'], 'clipboard.png'), kind: 'image' as const },
   ]
   const content = composeImageReferenceMessage('', attachments)
-  assert.ok(content.includes('Attached image: "uploads/first.png"\n  Original file: "/folder-a/images/image.png"\n  Version: marked copy; original file unchanged.'))
-  assert.ok(content.includes('Attached image: "uploads/second.png"\n  Original file: "/folder-b/images/image.png"\n  Version: original image (unmarked).'))
-  assert.ok(content.includes('Uploaded file: \"uploads/clipboard.png\"'))
-  assert.ok(!content.includes('Original file: \"uploads/clipboard.png\"'))
-  const mixed = composeImageReferenceMessage('', [attachments[2]!, attachments[0]!, attachments[1]!])
-  assert.ok(mixed.includes('Media item: 2 of 3 (message attachment order).'))
-  assert.ok(mixed.includes('Media item: 3 of 3 (message attachment order).'))
-  assert.ok(mixed.includes('Media item: 1 of 3'))
-  assert.ok(composeImageReferenceMessage('Pasted image', [attachments[2]!]).startsWith('Pasted image\n\nAttachment references:'))
+  const refs = parseAttachmentReferences(content)!
+  assert.deepEqual(refs.map(ref => ref.path), attachments.map(item => item.path))
+  assert.deepEqual(refs.map(ref => ref.source), ['/folder-a/images/image.png', '/folder-b/images/image.png', undefined])
+  assert.deepEqual(refs.map(ref => ref.modified), [true, false, undefined])
+  const mixed = parseAttachmentReferences(composeImageReferenceMessage('', [attachments[2]!, attachments[0]!, attachments[1]!]))!
+  assert.deepEqual(mixed.map(ref => ref.path), [attachments[2]!.path, attachments[0]!.path, attachments[1]!.path])
+  assert.ok(composeImageReferenceMessage('Pasted image', [attachments[2]!]).startsWith('Pasted image\n\n<attachment-references'))
   const unusual = { ...attachments[0]!, source: { path: '/folder/"quoted"\nname.png', modified: true } }
-  assert.ok(composeImageReferenceMessage('', [unusual]).includes(JSON.stringify(unusual.source.path)))
+  assert.equal(parseAttachmentReferences(composeImageReferenceMessage('', [unusual]))![0]!.source, unusual.source.path)
 })
 
 test('chat attachments upload as multipart form data and return backend media paths', async () => {
@@ -351,8 +347,8 @@ test('inline references retain exact upload pairing across deletion, duplicate n
       return Response.json({ path: `uploads/${await file.text()}.png` })
     })
   const body = composeImageReferenceMessage(insertion.text, uploaded)
-  assert.ok(body.includes(`- ${third}\n  Uploaded file: "uploads/c.png"\n  Media item: 2 of 2`))
-  assert.ok(body.includes(`- ${first}\n  Uploaded file: "uploads/a.png"\n  Media item: 1 of 2`))
+  assert.ok(body.includes(`index="2" path="uploads/c.png" name="${escapeReferenceXml(files[2]!.name)}" reference="${escapeReferenceXml(third)}"`))
+  assert.ok(body.includes(`index="1" path="uploads/a.png" name="${escapeReferenceXml(files[0]!.name)}" reference="${escapeReferenceXml(first)}"`))
   assert.ok(!body.includes('uploads/b.png'))
   const edited = replaceDraftImageAttachment(remaining, pending[2]!.key, new File(['edit'], 'marked.png', { type: 'image/png' }), { createObjectUrl: () => 'blob:edit', revokeObjectUrl: () => {} })
   assert.equal(imageAttachmentReference(edited[1]!), third)

@@ -79,6 +79,12 @@ async function main() {
       await delay(60)
       assert.equal(await run('document.documentElement.scrollWidth <= innerWidth'), true)
     }
+    await run(`window.fixture.text.value=window.fixture.workReference('p','work:one','Work <title>')`)
+    await delay(50)
+    assert.equal(await run(`document.querySelector('.composer-reference-source').textContent`), 'Work <title>')
+    assert.equal(await run(`document.querySelector('.composer-reference-source').getAttribute('href')`), '/projects/p/dashboard?work=work%3Aone')
+    assert.equal(await run(`!!document.querySelector('.composer-reference .i-lucide-list-checks')`), true)
+    assert.equal(await run(`!!document.querySelector('.reference-composer title')`), false)
     await run('window.fixture.text.value=window.initialReferenceText');
     await delay(50);
     if (process.env.TOOL_DIFF_SCREENSHOTS) {

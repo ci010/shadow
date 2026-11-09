@@ -47,7 +47,7 @@ function paint() {
       h(HoverInfo, { text: label }, { default: ({ triggerProps }: { triggerProps: object }) => h(item.href ? 'a' : 'button', {
         ...triggerProps, ...(item.href ? { href: item.href, target: '_blank', rel: 'noopener' } : { type: 'button', onClick: () => emit('preview', item.key!) }),
         class: 'composer-reference-source', 'aria-label': label, tabindex: props.disabled ? -1 : 0,
-      }, [h('span', { class: item.kind === 'image' ? 'i-lucide-image' : 'i-lucide-messages-square', 'aria-hidden': 'true' }), item.label]) }),
+      }, [h('span', { class: item.kind === 'image' ? 'i-lucide-image' : item.kind === 'work' ? 'i-lucide-list-checks' : 'i-lucide-messages-square', 'aria-hidden': 'true' }), item.label]) }),
       h(HoverInfo, { text: t('Remove {value1}', { value1: item.label }) }, { default: ({ triggerProps }: { triggerProps: object }) => h('button', {
         ...triggerProps, type: 'button', disabled: props.disabled, 'aria-label': t('Remove {value1}', { value1: item.label }),
         onClick: () => { if (!props.disabled) { remember(); replace(item.start, item.end, '') } },

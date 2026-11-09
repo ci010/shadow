@@ -1,3 +1,4 @@
+import { serializeAttachmentReferences } from '../../src/utils/attachment-references.ts'
 import { t } from './i18n.ts'
 import type { ImageSource } from './image-context.ts'
 import { apiUrl } from './api-url.ts'
@@ -89,22 +90,14 @@ export function namePastedChatImages(files: readonly File[], createId: () => str
     : file)
 }
 
+/** Future sends remain raw text; media admission and ordering are unchanged. */
 export function composeImageReferenceMessage(content: string, attachments: readonly UploadedChatAttachment[]): string {
-  const lines = attachments.flatMap((attachment, index) => {
-    const source = attachment.source
-    if (!source) return []
-    return [`- Attached image: ${JSON.stringify(attachment.path)}\n`
-      + `  Original file: ${JSON.stringify(source.path)}\n`
-      + `  Version: ${source.modified ? 'marked copy; original file unchanged.' : 'original image (unmarked).'}\n`
-      + `  Media item: ${index + 1} of ${attachments.length} (message attachment order).`]
-  })
-  const references = attachments.flatMap((attachment, index) => attachment.kind === 'image'
-    ? [`- ${imageAttachmentReference(attachment)}\n  Uploaded file: ${JSON.stringify(attachment.path)}\n  Media item: ${index + 1} of ${attachments.length} (message attachment order).`]
-    : [])
-  return [content,
-    references.length ? `Attachment references:\n${references.join('\n')}` : '',
-    lines.length ? `Image references (source metadata):\n${lines.join('\n')}` : '',
-  ].filter(Boolean).join('\n\n')
+  const block = serializeAttachmentReferences(attachments.map(attachment => ({
+    path: attachment.path, name: attachment.file.name, kind: attachment.kind,
+    ...(attachment.kind === 'image' ? { reference: imageAttachmentReference(attachment) } : {}),
+    ...(attachment.source ? { source: attachment.source.path, modified: attachment.source.modified } : {}),
+  })))
+  return [content, block].filter(Boolean).join('\n\n')
 }
 
 const IMAGE_EXTENSIONS = new Set([

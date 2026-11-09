@@ -27,9 +27,10 @@ test('reference composer editing and chips work in Chromium', {
 import {ref,onMounted} from 'vue';
 import ReferenceComposer from '/src/components/ReferenceComposer.vue';
 import {insertSessionReference} from '/src/session-references.ts';
+import {workReference} from '/src/content-references.ts';
 const text=ref(insertSessionReference('see @ and ',{start:4,end:5},{sessionId:'web:other',title:'Other <chat>'},'p').text+'IMAGE');
 const images=[{reference:'IMAGE',key:'image-key',label:'picture.png'}];const input=ref();const preview=ref('');const keys=[];
-onMounted(()=>{window.fixture={input,text,preview,keys,insertSessionReference}});
+onMounted(()=>{window.fixture={input,text,preview,keys,insertSessionReference,workReference}});
 </script>`
   const server=await createServer({configFile:false,root:resolve(root,'app'),logLevel:'error',cacheDir:resolve(directory,'vite-cache'),optimizeDeps:{noDiscovery:true,include:[]},plugins:[vue(),UnoCSS({configFile:resolve(root,'app/unocss.config.ts')}),{
   name:'activity-fixture',resolveId:id=>id==='/activity-entry.ts'?'\0activity-entry':id==='/activity-fixture.vue'?resolve(root,'app/activity-fixture.vue').replaceAll('\\', '/'):undefined,load:id=>id==='\0activity-entry'?`import 'uno.css';import '/src/styles.css';import {createApp} from 'vue';import Fixture from '/activity-fixture.vue';createApp(Fixture).mount('#app');`:id===resolve(root,'app/activity-fixture.vue').replaceAll('\\', '/')?fixture:undefined,

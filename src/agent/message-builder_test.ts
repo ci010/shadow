@@ -211,3 +211,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert.deepEqual(restored.map(record => ({ content: record.content, name: record.name })), messages.map(message => ({ content: message.content, name: message.name })))
   })
 }
+
+// New UI references are ordinary user text; they do not grant backend media access.
+test('attachment XML reaches the model unchanged and never admits its paths as media', async () => {
+  const { serializeAttachmentReferences } = await import('../utils/attachment-references.ts')
+  const content = 'Inspect this\n\n' + serializeAttachmentReferences([
+    { path: 'C:/not-admitted/private.png', kind: 'image', name: '<unsafe>.png' },
+    { path: 'uploads/safe.txt', kind: 'file' },
+  ])
+  const input = channelMessageInput({ channel: 'web', chatId: 'fixture', messageId: 'reference-fixture', senderId: 'admin', content, timestamp: '2026-09-11T00:00:00.000Z', media: ['uploads/safe.txt'] })
+  assert.equal(input.kind, 'message')
+  if (input.kind !== 'message') return
+  const built = await buildUserChatMessage(input, '.', '.')
+  assert(Array.isArray(built.content))
+  assert.deepEqual(built.content.slice(1), [
+    { type: 'text', text: content },
+    { type: 'text', text: '[file: uploads/safe.txt]' },
+  ])
+})

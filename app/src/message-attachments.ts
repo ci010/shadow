@@ -1,3 +1,4 @@
+import { parseAttachmentReferences } from '../../src/utils/attachment-references.ts'
 import { t } from './i18n.ts'
 import { parseMediaFromContent } from '../../src/utils/media-parse.ts'
 import { conversationFilePath } from './conversation-file-link.ts'
@@ -47,15 +48,41 @@ export function attachmentKind(path: string): AttachmentKind {
 
 /** Keep literal code examples intact; file markers outside code represent message attachments. */
 export function messageAttachments(content: string, media: readonly string[] = []): { text: string; paths: string[] } {
-  const parsed = parseMediaFromContent(content)
-  const paths = new Set([...media, ...(parsed.media ?? [])])
+  // Shield XML-looking references from the legacy MEDIA/[file:] grammars too.
+  // Attribute text (including a forged path or code example) is never media input.
+  let placeholder = '\u0000attachment-reference:'
+  while (content.includes(placeholder)) placeholder += ':'
+  const xmlBlocks: string[] = []
+  const shielded = content.replace(/<attachment-references\b[^>]*>[\s\S]*?(?:<\/attachment-references>|$)/g, block => {
+    xmlBlocks.push(block)
+    return `${placeholder}${xmlBlocks.length - 1}\u0000`
+  })
+  const parsed = parseMediaFromContent(shielded)
+  const attachmentOrder = [...media, ...(parsed.media ?? [])]
+  const paths = new Set(attachmentOrder)
   const text = parsed.text.replace(
     /(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\1[^\n]*(?=\n|$)|$)|(`+)[^\n]*?\2|\[file:\s*([^\]\r\n]+)\]/g,
     (match, _fence: string | undefined, _ticks: string | undefined, file: string | undefined) => {
       if (!file?.trim()) return match
+      if (!paths.has(file.trim())) attachmentOrder.push(file.trim())
       paths.add(file.trim())
       return ''
     },
   ).trim()
-  return { text, paths: [...paths] }
+  // XML is display metadata only: it can never add a path or initiate a fetch.
+  // History images may be encoded data URLs rather than their upload paths.
+  const restored = xmlBlocks.reduce((value, block, index) => value.replace(`${placeholder}${index}\u0000`, () => block), text)
+  const projected = restored.replace(
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\1[^\n]*(?=\n|$)|$)|(`+)[^\n]*?\2|^<attachment-references version="1">\n[\s\S]*?\n<\/attachment-references>(?=\n|$)/gm,
+    (block, fence: string | undefined, ticks: string | undefined) => {
+      if (fence || ticks) return block
+      const refs = parseAttachmentReferences(block)
+      if (!refs || refs.length !== attachmentOrder.length) return block
+      const images = attachmentOrder.filter(path => attachmentKind(path) === 'image')
+      if (refs.filter(ref => ref.kind === 'image').length !== images.length) return block
+      if (refs.some(ref => ref.kind !== 'image' && !paths.has(ref.path))) return block
+      return ''
+    },
+  ).trim()
+  return { text: projected, paths: [...paths] }
 }

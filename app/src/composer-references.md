@@ -6,7 +6,11 @@ by ChatTab, quote insertion, slash completion and session completion. Offsets ar
 UTF-16 offsets in the serialized draft, including the full hidden reference text.
 No message, upload, queue, retry or draft-storage schema changes are involved.
 
-- Session completion's existing Markdown reference renders as an atomic chip with
+- Work and Session references use canonical Markdown links parsed by
+  `content-references.ts`. Work's Discuss actions insert the existing dashboard
+  route with its `work` query; Session completion retains the existing chat route
+  and virtual-path context hint. Both render as atomic chips. Session completion's
+  reference retains
   its escaped title decoded as text (never HTML). The source link uses ChatTab's
   existing same-project conversation navigation; modified clicks retain link behavior.
 - The attachment toolbar's **Insert image reference** action renders an image chip
@@ -23,8 +27,13 @@ No message, upload, queue, retry or draft-storage schema changes are involved.
 
 ## Deliberate limits
 
-Only the canonical session-reference serialization and references to currently
-pending images become chips. Ordinary links/code remain plain text. A stale image
+Only canonical Work/Session app links and references to currently pending images
+become chips. Ordinary links and fenced/inline code containing app links remain
+plain text. Reference routes are not filesystem launch URLs. ChatTab's shared
+link handler routes Work links to the existing dashboard and retains Session's
+existing conversation selection behavior. Modified clicks retain anchor behavior.
+There is no canonical message-permalink route in this implementation; message
+references are not synthesized. A stale image
 reference without its attachment remains readable protocol text: attachments are
 not rehydrated from localStorage and this UI does not invent an upload or source.
 Images are compact labelled chips with a preview action, not inline full-size
@@ -56,3 +65,60 @@ not patch Vue state or ship to the app. Dedicated answer/discussion textareas an
 synthetic non-ChatTab textarea fixtures remain unchanged. The original
 `composer-rendered_test.ts` uses the real editor and retains its queue, custom
 question, attachment-failure recovery and mobile assertions.
+
+## Future attachment text
+
+New Web sends append an escaped `<attachment-references version="1">` block
+instead of the old Attachment references / Uploaded file / Media item prose.
+`src/utils/attachment-references.ts` defines this deliberately small text format;
+`composeImageReferenceMessage` supplies image and file names, exact uploaded paths,
+stable image-reference tokens, one-based media order and optional original/marked
+source metadata. XML escaping includes quotes, angle brackets and newlines.
+The user's draft and model input remain text. This is not a storage AST.
+
+The block is display metadata, not media authorization. The backend still admits
+only the separately supplied `media` array through its existing image/file
+pipeline (`src/agent/message-builder.ts`); it never reads paths found in XML.
+History images remain the admitted image parts and non-image history retains the
+existing `[file: ...]` annotation. No backend/storage conversion is necessary.
+`messageAttachments` shields XML-looking blocks from legacy MEDIA/file-marker
+parsing and removes a canonical block only when existing media supports its
+attachment count/kinds and file paths. It never adds an XML path to previews.
+The existing MessageAttachments component renders admitted images/files, retaining
+its session-aware asset resolution, file preview and authorized download behavior.
+Missing, malformed or unsupported metadata stays text; code examples stay code.
+Repeated identical history image data can share the existing deduplicated preview.
+
+Old prose, MEDIA markers and file annotations keep their existing compatibility.
+No stored history is rewritten. Retry already resends the original text/media
+without appending another reference block. New references are not reconstructed
+from stale drafts. This change is scoped to the Web composer, not a rewrite of
+external channel attachment protocols.
+
+Additional focused checks: `content-references_test.ts`, `chat-attachments_test.ts`,
+`message-attachments_test.ts`, `project-coordination_test.ts`, the rendered
+conversation-file-link fixture, and `src/agent/message-builder_test.ts`.
+
+### Rendered producer-to-preview integration
+
+`pnpm exec node --import tsx --test app/src/content-references-rendered_test.ts`
+launches an isolated Electron/Vite fixture with synthetic files and a disposable
+profile. It calls the actual Web attachment producer, renders its output with
+`messageAttachments`, `MarkdownContent` and `MessageAttachments`, and opens the
+real ImageViewer and FilePreviewModal. A second row uses real backend-built
+history parts (encoded image plus file annotation), projected using ChatTab's
+actual history helpers. Both rows must hide the XML metadata while retaining
+working image and file previews.
+
+The fixture executes ChatTab's extracted Markdown renderer/sanitizer and link
+handler unchanged against real DOM anchors and a Vue memory router. Work and
+Session clicks must reach their existing route shapes and update a destination
+readout. This verifies route dispatch, not the full dashboard/session data load.
+Fenced XML remains visible code; forged XML and hostile escaped attributes must
+create no attachment, outbound fetch, raw file navigation or script execution.
+All media API requests are checked against the two admitted synthetic paths.
+
+Only the unused rich-file SDK leaf is replaced with a throwing test module, so
+PDF/Office infrastructure is neither loaded nor claimed covered. The actual
+image, Markdown, file-modal and attachment components and their resource/fetch
+code are not mocked. No production backend or profile is used.
