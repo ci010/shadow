@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
-import type { spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { ManagedLayerFS, ManagedRuntimeError, spawnManagedDriver, managedLayerFS, closeManagedLayerFS, type Deployment, type ManagedDriver, type LayerFSInstallation } from './managed.ts'
 import { LayerFSTool } from '../../tools/layerfs.ts'
 import { ReadTool } from '../../tools/read.ts'
@@ -157,7 +157,7 @@ test('real managed IPC helper runs the public runtime contract against synthetic
     `)
     await writeFile(join(dir, 'api', 'agent', 'src', 'index.js'), `export const LayerFS={open:async()=>({project:{list_branches:async()=>({volume:process.env.LAYERFS_VOLUME,home:process.env.LAYERFS_HOME})},workspace:{exec:async(ws,command,message,sinks)=>{await new Promise(r=>sinks.stdout.write('managed-route\\n',r));return {code:0}}},close:async()=>{}})}`)
     const home = join(dir, 'home')
-    const service = managedLayerFS('one', home, () => new ManagedLayerFS('one', home, undefined, 'win32'))
+    const service = managedLayerFS('one', home, () => new ManagedLayerFS('one', home, () => spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("process.platform !== 'win32'", 'true') : arg), options)) as typeof spawn }), 'win32'))
     const tool = new LayerFSTool('one', home), context = owner(dir)
     try {
       const connected = await service.setup(installation, signal())

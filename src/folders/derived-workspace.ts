@@ -103,14 +103,20 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           const baseCommit = await isolationGit(root, ['rev-parse', '--verify', `${ref}^{commit}`], signal)
-          const token = randomUUID()
+          // Flat UUID names avoid prefix collisions with user branches such as `shadow`.
+          const refs = (await isolationGit(root, ['for-each-ref', '--format=%(refname)', 'refs/heads/'], signal)).split('\n')
+          let token = randomUUID()
+          for (let attempt = 0; refs.some(ref => ref === `refs/heads/shadow-derived-${token}` || ref.startsWith(`refs/heads/shadow-derived-${token}/`)); attempt++) {
+            if (attempt >= 4) throw new Error('Unable to allocate an independent branch name.')
+            token = randomUUID()
+          }
           const path = join(dirname(root), `${request.name ?? basename(root)}-worktree-${token}`)
           const description = `${request.description ? request.description + '\n' : ''}Git worktree from ${root} (${ref})${request.workKey ? `; Work ${request.workKey}` : ''}`
-          receipt = { backend: 'git-worktree', projectId: this.options.projectId, sourceId: source.id, sourcePath: root, commonDir, commonIdentity, path, branch: `shadow/derived-${token}`, baseBranch: ref, baseCommit, description, ...(request.workKey ? { workKey: request.workKey } : {}) }
+          receipt = { backend: 'git-worktree', projectId: this.options.projectId, sourceId: source.id, sourcePath: root, commonDir, commonIdentity, path, branch: `shadow-derived-${token}`, baseBranch: ref, baseCommit, description, ...(request.workKey ? { workKey: request.workKey } : {}) }
           await persist(receipt, 'planned')
         }
         if (receipt.backend !== 'git-worktree' || typeof receipt.path !== 'string' || dirname(receipt.path) !== dirname(root) ||
-          typeof receipt.branch !== 'string' || !/^shadow\/derived-[0-9a-f-]{36}$/.test(receipt.branch) ||
+          typeof receipt.branch !== 'string' || !/^shadow(?:\/|-)derived-[0-9a-f-]{36}$/.test(receipt.branch) ||
           typeof receipt.baseCommit !== 'string' || !/^[0-9a-f]{40,64}$/.test(receipt.baseCommit) || receipt.baseBranch !== ref ||
           typeof receipt.description !== 'string' || receipt.workKey !== request.workKey ||
           !['planned', 'checkout-complete', 'registered'].includes(phase ?? '') ||

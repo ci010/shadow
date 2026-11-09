@@ -64,21 +64,21 @@ test('real synthetic Git inventory copies working-tree tracked files only, warni
   })
 })
 
-test('injected inventory excludes VCS/dependencies/credential dirs even if leaf looks like code', async () => {
+test('curated inventory excludes VCS/dependencies/private directories while retaining credential modules', async () => {
   await fixture(async (source, target) => {
     const paths = ['.git/config', '.hg/data', '.svn/file', 'vendor/code.ts', 'node_modules/x/index.ts', '.venv/lib.py', 'credentials/code.ts', '.aws/code.ts', '.ssh/code.ts', '.env.local', 'key.pem', 'secret-store.json', 'credentials.svg', 'secrets.md']
     for (const path of paths) await put(source, path)
     const baseline = new LayerFSBaseline(target, { inventory: async () => paths, maxFindings: 1 })
     const plan = await baseline.plan(source, owner, signal())
-    assert.equal(plan.summary.files, 2)
-    assert.equal(plan.summary.excludedEntries, 12)
+    assert.equal(plan.summary.files, 3)
+    assert.equal(plan.summary.excludedEntries, 11)
     assert.equal(plan.exclusions.length, 1)
     assert.equal(plan.exclusionsTruncated, true)
     assert.equal(plan.warnings.length, 1)
     assert.equal(plan.warningsTruncated, true)
     assert.ok(!JSON.stringify(plan).includes(source))
     const ready = await baseline.prepare(plan.plan, source, owner, signal())
-    assert.deepEqual((await readdir(ready.path)).sort(), ['credentials.svg', 'secrets.md'])
+    assert.deepEqual((await readdir(ready.path)).sort(), ['credentials', 'credentials.svg', 'secrets.md'])
   })
 })
 
@@ -208,14 +208,25 @@ test('Git inventory disables repository fsmonitor and ignores inherited Git conf
     await put(source, 'a.ts')
     git(source, ['add', '--', 'a.ts'])
     git(source, ['config', 'core.fsmonitor', 'a-command-that-must-never-run'])
-    const old = process.env.GIT_CONFIG_COUNT
-    process.env.GIT_CONFIG_COUNT = 'invalid-inherited-injection'
+    // Real Git regression: Git for Windows must use its /dev/null spelling,
+    // while inherited global/system config and command injection stay disabled.
+    const poison = join(source, 'untracked-poison.config')
+    await writeFile(poison, '[invalid config syntax')
+    const overrides = { GIT_CONFIG_COUNT: 'invalid-inherited-injection', GIT_CONFIG_GLOBAL: poison, GIT_CONFIG_SYSTEM: poison }
+    const old = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]))
+    Object.assign(process.env, overrides)
     try {
-      const plan = await new LayerFSBaseline(target).plan(source, owner, signal())
+      const baseline = new LayerFSBaseline(target)
+      const plan = await baseline.plan(source, owner, signal())
       assert.equal(plan.summary.files, 1)
+      const prepared = await baseline.prepare(plan.plan, source, owner, signal())
+      assert.equal(await readFile(join(prepared.path, 'a.ts'), 'utf8'), 'synthetic')
+      await absent(join(prepared.path, 'untracked-poison.config'))
     } finally {
-      if (old === undefined) delete process.env.GIT_CONFIG_COUNT
-      else process.env.GIT_CONFIG_COUNT = old
+      for (const [key, value] of Object.entries(old)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
     }
   })
 })
@@ -356,5 +367,22 @@ test('plan expiry after valid admission does not invalidate a stable completed b
     assert.equal(await readFile(join(ready.path, 'a.ts'), 'utf8'), 'synthetic')
     assert.equal(await readFile(join(source, 'a.ts'), 'utf8'), 'synthetic')
     await assert.rejects(baseline.prepare(plan.plan, source, owner, signal()), /fresh/)
+  })
+})
+
+
+test('curated baseline retains credential source modules but excludes nested secret data', async () => {
+  await fixture(async (source, target) => {
+    const paths = ['src/credentials/index.ts', 'src/credentials/provider/auth.ts', 'src/credentials/account.json', 'src/credentials/.env', 'src/credentials/private.key']
+    for (const path of paths) await put(source, path)
+    const baseline = new LayerFSBaseline(target, { inventory: async () => paths })
+    const plan = await baseline.plan(source, owner, signal())
+    assert.equal(plan.summary.files, 2)
+    assert.equal(plan.summary.excludedEntries, 3)
+    assert.equal(plan.warnings.length, 2)
+    const result = await baseline.prepare(plan.plan, source, owner, signal())
+    assert.equal(await readFile(join(result.path, paths[0]), 'utf8'), 'synthetic')
+    assert.equal(await readFile(join(result.path, paths[1]), 'utf8'), 'synthetic')
+    await absent(join(result.path, paths[2]))
   })
 })

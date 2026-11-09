@@ -1312,6 +1312,32 @@ security, pagination/dedup bounds and inbox-acceptance reliability limitations.
 No arbitrary browser/JS-site support or exactly-once claim; fixture tests do not
 verify live sources.
 
+### Local Workspace registration
+
+Import `workspace_register` from `v:tools/workspace_register`, then invoke with an
+explicitly user-authorized absolute local `path` and `mode:"existing"` or
+`mode:"create_empty"`. The latter creates a single empty directory under an existing
+parent, or accepts an already empty directory for safe retry. `existing` registers
+without changing contents. Optional `description` applies only to new registrations.
+Ordinary authorized registration needs no UI step. Success returns `workspaceId`,
+`path`, `created` and `registered`; the current session is never switched.
+
+This owner-local-session tool uses the existing registry, Project access lease and
+destination ownership reservation. Foreign ownership, reserved host data, remote
+contexts, nested script calls, network paths, traversal, filesystem roots and linked
+ancestors are refused. It does not transfer ownership or change permission policy.
+Caller authorization is host-enforced; the agent must still obtain user authority
+for the directory, not infer it from a path in external content. Path checks are
+not a hostile-filesystem sandbox against concurrent external renames.
+
+Duplicate registration returns the existing identity without changing metadata.
+Registration failure retains the directory and all contents; retry the same path
+and mode after fixing the reported problem. If a `create_empty` destination later
+contains data, it fails rather than overwriting; use `existing` only when registering
+that content is authorized. No internal records should be edited to recover.
+For a separate LayerFS baseline destination, use this tool and then the automated
+[baseline sequence](../src/skills/builtin/layerfs/setup.md#planned-separate-baseline-preparation).
+
 ### Derived Workspaces
 
 Import `workspace_create` from `v:tools/workspace_create`, then invoke it with
@@ -1324,6 +1350,9 @@ The tool is owner-session only and does not change the current session's Workspa
 The shared `DerivedWorkspaces.createDerivedWorkspace` service creates an independent
 Git branch at a resolved commit in a uniquely named directory **beside** the source
 repository, then registers it through the Project's existing Workspace registry.
+New branches use flat `shadow-derived-<uuid>` names checked against existing branch
+refs, so a user branch named `shadow` cannot block creation. Existing legacy
+`shadow/derived-*` receipts remain recoverable; no user refs are renamed or deleted.
 Success includes the Workspace ID, source identity/path, actual path, base branch
 and commit, independent branch, and visible description. User descriptions retain
 the generated source/worktree identity. Optional Work association is recorded in

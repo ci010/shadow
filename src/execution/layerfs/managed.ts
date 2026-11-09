@@ -12,6 +12,7 @@ import { projectDataPaths } from '../../utils/data-paths.ts'
 import { ToolNoEffectError, ToolOutcomeUnknownError } from '../../tools/tool.ts'
 import { layerfsName, type LayerConfig } from './bridge.ts'
 import { managedRunner } from './managed-runner.ts'
+import { importRefusal } from './import-diagnostic.ts'
 import { IMPORT_TIMEOUT, importTimeoutMs } from './import-timeout.ts'
 
 const absoluteHost = z.string().min(1).refine(isAbsolute)
@@ -39,6 +40,7 @@ export interface Deployment {
 const countsSchema = z.object({ entries: z.number().int().nonnegative().safe().optional(), files: z.number().int().nonnegative().safe().optional(), bytes: z.number().int().nonnegative().safe().optional() }).strict()
 export const importProgressSchema = z.object({ stage: z.enum(['not_started', 'preparing', 'scan', 'volume', 'import', 'done', 'failed', 'unknown']),
   startedAt: z.number().nonnegative().optional(), endedAt: z.number().nonnegative().optional(), elapsedMs: z.number().nonnegative().optional(), jobId: z.string().min(1).max(128).optional(),
+  refusal: z.object({ reason: z.enum(['Changed', 'Mtime', 'NotDirectory', 'Mode']), path: z.string().min(1).max(240).regex(/^[A-Za-z0-9_./ @()+-]+$/).refine(p => !p.startsWith('/') && !p.split('/').some(s => s === '..' || !s)), mode: z.string().regex(/^[0-7]{4}$/).optional() }).strict().optional(),
   scanned: countsSchema.optional(), totals: countsSchema.optional(), imported: countsSchema.optional(), code: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/).optional() }).strict()
 export type ImportProgress = z.infer<typeof importProgressSchema>
 const runtimeStatusSchema = z.object({ worker: z.enum(['running', 'unknown']), answering: z.boolean(), docker: z.enum(['ok', 'down', 'unknown']), ready: z.boolean(), sandboxVerified: z.literal(false),
@@ -342,7 +344,8 @@ export class ManagedLayerFS {
         if (value?.project?.name !== this.namespace.project) continue
         const code = /Project\(Deadline\)/.test(String(value.message ?? '')) ? 'ImportDeadline'
           : typeof value.code === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.code) ? value.code : 'Unknown'
-        return { observation: 'retained_sdk_failure', stage: 'failed', code, liveUnavailable, retryAllowed: false, next: 'import_recovery_plan',
+        const refusal = importRefusal(value, value.project.source)
+        return { observation: 'retained_sdk_failure', stage: 'failed', code, ...(refusal ? { refusal } : {}), liveUnavailable, retryAllowed: false, next: 'import_recovery_plan',
           message: 'The SDK recorded a failed import. Its resources remain unreconciled; no cleanup or replay was performed.' }
       }
       return { observation: 'unavailable', stage: 'unknown', liveUnavailable, retryAllowed: false }
@@ -435,7 +438,7 @@ export class ManagedLayerFS {
     const status = runtimeStatusSchema.parse(value)
     if (!status.ready || !status.answering || status.docker !== 'ok') throw new ToolNoEffectError('LayerFS worker or Docker is not ready. Inspect runtime_status; no source import or sandbox operation was dispatched.')
   }
-  async create(source: string, signal: AbortSignal, timeoutMs: number = IMPORT_TIMEOUT.defaultMs, expectedNamespace?: string) {
+  async create(source: string, signal: AbortSignal, timeoutMs: number = IMPORT_TIMEOUT.defaultMs, expectedNamespace?: string, importPolicy: 'curated' | 'whole_tree' = 'curated') {
     signal.throwIfAborted()
     await this.loadNamespace()
     this.requireNamespace(expectedNamespace)
@@ -454,7 +457,7 @@ export class ManagedLayerFS {
       if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no import was dispatched.')
       writePrivateFile(journal, JSON.stringify(progress))
       admitted = true
-      operation = this.driver!.request('create', { source, timeoutMs }, signal, value => {
+      operation = this.driver!.request('create', { source, timeoutMs, importPolicy }, signal, value => {
         const previousStage = progress.stage
         progress = importProgressSchema.parse(value)
         if (previousStage !== progress.stage || Date.now() - lastWrite >= 5000) {

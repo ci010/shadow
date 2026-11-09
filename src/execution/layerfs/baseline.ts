@@ -2,14 +2,13 @@ import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
 import { access, lstat, mkdir, open, type FileHandle } from 'node:fs/promises'
-import { devNull } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { classifyLayerFSName } from './import-review.ts'
 
 const TTL = 15 * 60_000
 const PLAN_BUDGET_MS = 120_000
 const PREPARE_BUDGET_MS = 15 * 60_000
-const GUIDANCE = 'Only selected Git-tracked WORKING-TREE regular files are copied, not committed versions. Untracked files are excluded. Exclusions are name-based, not a secret scanner or credential-free certification; human content review is required. Metadata checks cannot eliminate filesystem races or detect every content change (Windows read-induced change time and all access times are excluded). Plans expire after 15 minutes; expiry is checked after pre-copy revalidation and before destination creation. Planning and pre-copy metadata revalidation each have a 120-second runtime limit. Once admitted, preparation has a separate runtime limit of up to 15 minutes; plan expiry does not interrupt an admitted copy. Do not mutate the source or destination during preparation. Failed/partial destinations are retained, never returned as ready. The original source is never edited or cleaned.'
+const GUIDANCE = 'Only selected Git-tracked WORKING-TREE regular files are copied, not committed versions. Untracked files are excluded. This fixed curated scope also excludes VCS/dependency/build trees and known private artifacts; credential-named source modules are retained with warnings, while nested non-code data remains excluded. To include VCS/dependencies, review a separate stable registered tree with importPolicy whole_tree instead; baseline preparation is not a full checkout clone. Exclusions are name-based, not a secret scanner or credential-free certification; human content review is required. Metadata checks cannot eliminate filesystem races or detect every content change (Windows read-induced change time and all access times are excluded). Plans expire after 15 minutes; expiry is checked after pre-copy revalidation and before destination creation. Planning and pre-copy metadata revalidation each have a 120-second runtime limit. Once admitted, preparation has a separate runtime limit of up to 15 minutes; plan expiry does not interrupt an admitted copy. Do not mutate the source or destination during preparation. Failed/partial destinations are retained, never returned as ready. The original source is never edited or cleaned.'
 export interface LayerFSBaselineFinding { path: string; reason: string }
 export interface LayerFSBaselinePlan {
   plan: string
@@ -109,7 +108,9 @@ async function gitInventory(source: string, signal: AbortSignal): Promise<readon
   for (const [key, value] of Object.entries(process.env)) {
     if (['path', 'systemroot', 'windir', 'temp', 'tmp', 'lang', 'lc_all'].includes(key.toLowerCase())) env[key] = value
   }
-  const gitNull = process.platform === 'win32' ? 'NUL' : devNull
+  // These paths are interpreted by Git, not Node. Git for Windows recognizes
+  // /dev/null; native NUL can fail its config-file validation (Invalid argument).
+  const gitNull = '/dev/null'
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_SYSTEM: gitNull, GIT_CONFIG_GLOBAL: gitNull,
     GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_ATTR_NOSYSTEM: '1', GIT_LITERAL_PATHSPECS: '1' })
   return await new Promise((accept, reject) => {
@@ -297,10 +298,12 @@ export class LayerFSBaseline {
       budget.check()
       const parts = path.split('/')
       let blocker: string | undefined, warning: string | undefined
+      let credentialAncestor = classifyLayerFSName(basename(source), true).warning === 'credential_related_name_requires_content_review'
       for (let i = 0; i < parts.length; i++) {
-        const classification = classifyLayerFSName(parts[i], i < parts.length - 1)
+        const classification = classifyLayerFSName(parts[i], i < parts.length - 1, 'curated', credentialAncestor)
         blocker ??= classification.blocker
         warning ??= classification.warning
+        credentialAncestor ||= classification.warning === 'credential_related_name_requires_content_review'
       }
       if (blocker) {
         excludedEntries++

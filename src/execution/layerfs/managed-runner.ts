@@ -1,4 +1,6 @@
 import { IMPORT_TIMEOUT } from './import-timeout.ts'
+import { importStageScript } from './import-stage.ts'
+import { importRefusal } from './import-diagnostic.ts'
 
 // A separate process owns the upstream singleton and the WSL worker for one Project.
 // This uses the pinned 73d974d public Runtime API, never a shell installer or sweep.
@@ -6,6 +8,22 @@ export const managedRunner = String.raw`
 import { pathToFileURL } from 'node:url';
 import { join, posix } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const stageScript = ${JSON.stringify(importStageScript)};
+const refusal = ${importRefusal.toString()};
+async function stageSource(source, policy) {
+ if (process.platform !== 'win32') return source;
+ const s = deployment.settings;
+ const namespace = /^\/var\/lib\/shadow-layerfs\/([a-f0-9]{32})$/.exec(s.wsl.home)?.[1];
+ if (!namespace || !/^[A-Za-z]:[\\/]/.test(source)) fail('StageRefused');
+ const { stdout } = await promisify(execFile)('wsl.exe', ['--distribution', s.wsl.distribution,
+  '--exec', s.wsl.node, '--input-type=module', '-e', stageScript, source, namespace, policy ?? 'curated'],
+  { windowsHide: true, timeout: 615000, maxBuffer: 4096 });
+ const result = JSON.parse(stdout);
+ if (!result || typeof result !== 'object' || Object.keys(result).length !== 1 || typeof result.destination !== 'string' || !new RegExp('^/var/tmp/shadow-layerfs-stage-' + namespace + '-[a-f0-9]{32}/source$').test(result.destination)) fail('StageRefused');
+ return '\\\\wsl.localhost\\' + s.wsl.distribution + result.destination.replaceAll('/', '\\');
+}
 const importTimeout = ${JSON.stringify(IMPORT_TIMEOUT)};
 let runtime, deployment, importState, healthQuery;
 let queue = Promise.resolve(), queued = 0;
@@ -42,7 +60,8 @@ async function execute(action, input, progress) {
   const heartbeat = setInterval(report, importTimeout.heartbeatMs);
   let terminalFailure = false;
   try {
-   const job = await runtime.project.start_init(deployment.project, input.source, { timeout });
+   const source = await stageSource(input.source, input.importPolicy);
+   const job = await runtime.project.start_init(deployment.project, source, { timeout });
    if (typeof job?.id !== 'string' || !job.id || job.id.length > 128) fail('Unknown');
    importState.jobId = job.id;
    for (;;) {
@@ -51,7 +70,7 @@ async function execute(action, input, progress) {
     const stage = ['scan', 'volume', 'import', 'done', 'failed'].includes(state.step) ? state.step : 'unknown';
     importState = { ...importState, stage, scanned: counts(state.scanned), totals: counts(state.totals), imported: counts(state.imported) };
     if (state.step === 'done' || state.step === 'failed') importState.endedAt = Date.now();
-    if (state.step === 'failed') { terminalFailure = true; importState.code = safeCode(state.error); report(); fail(importState.code); }
+    if (state.step === 'failed') { terminalFailure = true; const diagnostic = refusal(state.error, source); if (diagnostic) importState.refusal = diagnostic; importState.code = safeCode(state.error); report(); fail(importState.code); }
     report();
     if (state.step === 'done') return { kind: 'Initialized', project: deployment.project };
     await pause(250);

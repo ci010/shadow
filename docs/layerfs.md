@@ -131,14 +131,24 @@ with the existing `filesystem.read` operation. This authorizes selecting the sou
 workspace, not a new remote grant. Init recursively reads the entire selected tree,
 including dotfiles and untracked files: use a curated credential-free source. This
 adapter does not implement ignore rules or a content credential scanner.
-`import_preview` now enforces a metadata/name preflight before `create`: it blocks
-VCS/dependency trees, symlinks, known credential/config/private-key artifacts,
-unreadable entries and unbounded scans. Credential-related code/test/docs/assets
-names (such as `credentials.svg` and `secret-redaction.ts`) are bounded content-review
-warnings, not proof that those files contain secrets. The owner must review a separate curated baseline and pass the
-returned single-use `sourceReview` plus `sourceReviewed:true`. Tokens bind the
-session and resolved source, expire in 15 minutes, and require a matching metadata
-rescan. A preview is not a secret-free certification or immutable snapshot; the
+`import_preview` enforces a metadata/name preflight before `create` with an explicit
+`importPolicy`: `curated` (default) rejects VCS/dependency/build entries as outside
+its scope, not as secrets; `whole_tree` includes and recursively reviews those
+entries, with warnings. Neither policy filters the source: any blocked or incomplete
+scan refuses import, because upstream Init reads the entire tree with no ignores.
+Use `whole_tree` on both preview and create to include `.git`, `node_modules`, etc.
+Git history, configuration and dependencies require human content review too.
+Both policies block symlinks, private runtime/credential/key artifacts (including
+`.shadow`, `.ssh`, `.env` and key material), unreadable entries and unbounded scans.
+Credential-related source directories such as `src/credentials` warn and are
+traversed, not skipped. Code/docs/assets inside can be reviewed; non-code data inside
+those directories remains blocked, as do explicit credential artifacts anywhere.
+Names are not a content scanner. Review a separate curated baseline if the original
+contains blocked artifacts; never silently omit files from preview then import them.
+The owner must pass the single-use `sourceReview` plus `sourceReviewed:true` after
+content review. Tokens bind session, resolved source and policy, expire in 15 minutes,
+and require a matching metadata rescan. Repeat the preview policy on create;
+changing it (including omitting `whole_tree`) requires a new preview. A preview is not a secret-free certification or immutable snapshot; the
 original checkout must not be deleted/modified merely to make preview pass.
 Remote targets fail without fallback. SDK home ownership checks remain upstream.
 
@@ -259,6 +269,51 @@ runtime creates a labeled plain local Docker volume and retains its own Project
 record. `import_status` reports allowlisted stage, job ID, counts and failure code,
 including safe classification of older retained SDK `Project(Deadline)` records.
 Raw native diagnostics may contain catalog keys and are never returned by this path.
+For the pinned native `project.init refused <path>: <reason>` message only,
+status can additionally project `refusal` with an allowlisted reason and bounded
+source-relative ASCII path (and four octal digits for Mode). Upstream `jobs.js`
+drops structured detail; unrecognized messages, cleanup suffixes, out-of-source
+paths and unsafe names deliberately yield no refusal detail. This is not a
+promise that every native failure remains diagnosable.
+
+### Windows import staging
+
+Managed Windows drive-letter sources are copied before `start_init` into an
+exclusive mode-0700 Linux ext4 envelope under `/var/tmp`, keyed to the managed
+namespace plus a fresh random suffix. The original source is not edited. The
+Windows Runtime scans its same-distribution `\\\\wsl.localhost` UNC path; the
+existing native worker translates that path and imports Linux-native files.
+This avoids the observed DrvFS read-open ctime change without modifying upstream
+FileStamp/Changed checks or the sealed installation. Managed UNC/non-drive source
+imports currently fail closed; explicit operator/native routes are unchanged.
+
+The fixed helper runs the approved Node executable as the distribution's default
+user (which may be root), never a model-selected command or shell. That user must
+be able to execute this Node binary and read the reviewed source. An inaccessible
+binary, non-ext4 staging location or failed/unknown copy blocks Init, with no
+fallback to reading DrvFS. It copies every approved entry under the exact consumed
+review source and policy, including `whole_tree` dependencies/VCS/build data;
+credential-name rules remain enforced. Links, special files, hardlinked regular
+files and unsupported permission bits are refused. Per-file identity/size/mtime
+checks and a second whole-tree content-hash pass detect instability; only atime
+and ctime are excluded from these staging comparisons. The existing review guard
+is unchanged. This remains a mutable-source check, not an immutable snapshot or
+an adversarial filesystem sandbox: same-user/root mutation and path races are
+not eliminated. File contents are unchanged; copied timestamps use Node's
+available precision, and portable permission bits are preserved inside the
+private envelope.
+
+Allow additional Linux disk space for a full copy plus the Store (no automatic
+staging deletion), two full source reads, and up to ten minutes of cooperative
+staging work before the separate SDK Init budget. Staging is capped at 100,000
+entries including root, depth 128 and 16 GiB regular-file bytes. A 615-second
+launcher watchdog bounds observation, not proof of Linux helper termination.
+Cancellation stops observation; copy/native work may continue. Successful,
+partial and unknown attempts are retained, never silently reused/replayed.
+The namespace-keyed staging envelopes remain operator-inspectable in `/var/tmp`;
+failed/unknown imports still require the existing approved quarantine workflow,
+which does not delete these envelopes. These changes have synthetic test coverage;
+real managed Init and Windows/WSL end-to-end operation are not claimed verified.
 
 `importTimeoutMs` is the single import budget (default 300000 ms, range
 1000–1800000), validated by one shared policy and passed unchanged to the SDK in
@@ -361,12 +416,23 @@ directory stays retained and unselected. Do not clear locks/pointers/history or 
 a generation; an ambiguous state requires operator inspection. The tests cover
 pointer loss, stale requests, shutdown and preserved original bytes.
 
+A missing separate local destination can be created and registered by the owner
+agent through `workspace_register {path,mode:"create_empty"}` (absolute user-authorized
+path, existing parent), without a UI registration step or session switch. Use
+`mode:"existing"` for an explicitly authorized existing directory. Registration
+uses Project ownership checks; failures retain outputs. Its returned `workspaceId`
+is the `destinationWorkspace` selector. This does not bypass any baseline,
+bootstrap or import approval; see the [automated sequence](../src/skills/builtin/layerfs/setup.md#planned-separate-baseline-preparation).
+
 `baseline_plan {workspace,destinationWorkspace}` performs metadata and fixed,
 bounded `git ls-files --cached -z` inventory through authorized registered local
 source-read and destination-write routes. Git hooks/fsmonitor and inherited Git
 configuration are disabled for this inventory. The plan selects tracked working-tree
 regular files (not committed versions), excludes untracked files, VCS/dependency
-trees and known credential artifacts, and reports bounded exclusions/warnings/counts.
+and build trees and known credential artifacts, and reports bounded exclusions/warnings/counts.
+This fixed curated scope is not a full clone. Source modules under `src/credentials`
+are retained with warnings; nested non-code data remains excluded. To include VCS or
+dependencies, use `importPolicy:"whole_tree"` on a separately content-reviewed tree.
 Source and destination must not overlap. It performs no copying or registration.
 
 After its exact human approval, `baseline_prepare` runs as owner-session background
