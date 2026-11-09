@@ -1075,7 +1075,7 @@ export async function createProjectRuntime(
 
   vfs.mount(
     'v:tools',
-    'tool sources and individual indexed/active contracts; no service connections',
+    'concrete tool-name contracts; @sources__ holds initialization metadata; discovery never connects services',
     (name, context) => importTool.readVirtual(name, context),
     (context, options) => importTool.virtualEntries(context, options),
   )

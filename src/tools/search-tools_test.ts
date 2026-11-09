@@ -9,6 +9,8 @@ import { VirtualFs } from '../vfs/virtual-fs.ts'
 import type { ExecutionContext } from './context.ts'
 import { ImportTool, type LoadableEntry } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
+import { registerCronTools } from './cron.ts'
+import type { CronService } from '../cron/service.ts'
 import { ReadTool } from './read.ts'
 import { SearchTool } from './search.ts'
 import { Tools, SessionTools } from './registry.ts'
@@ -56,7 +58,7 @@ test('VFS searches names, descriptions and full schemas; read returns exact cont
   const f = await setup(t)
   assert.equal(await f.search({ handler: 'glob', path: 'v:tools/mail', query: '*__*' }), 'v:tools/mail/mail__SearchMessages')
   for (const query of ['subject', '"query"', '"maximum": 10']) {
-    assert.match(await f.search({ query }), /v:tools\/mail\/mail__SearchMessages/)
+    assert.match(await f.search({ query }), /v:tools\/mail__SearchMessages/)
   }
   assert.deepEqual(JSON.parse(await f.read()).parameters, schema)
   assert.equal(JSON.parse(await f.read()).name, 'mail__SearchMessages')
@@ -120,10 +122,10 @@ test('uninitialized factories stay deferred, static contracts work, and warnings
     ['group', { contracts: [tool], factory: async () => { factories++; return tool } }],
     ['deferred', { factory: async () => { factories++; return tool } }],
   ]))
-  assert.match(await f.search({ query: 'Static capability' }), /v:tools\/group\/fixture/)
+  assert.match(await f.search({ query: 'Static capability' }), /v:tools\/fixture/)
   const missing = await f.search({ query: 'never matches' })
   assert.match(missing, /No matches found/)
-  assert.match(missing, /Warning: v:tools\/deferred:.*does not initialize/)
+  assert.match(missing, /Warning: v:tools\/@sources__\/deferred:.*does not initialize/)
   assert.match(await f.search({ handler: 'grep', path: 'v:tools/deferred/unknown', query: 'never' }), /Warning:/)
   assert.equal(factories, 0)
   assert.equal(f.connect.mock.callCount(), 0)
@@ -132,7 +134,7 @@ test('uninitialized factories stay deferred, static contracts work, and warnings
 test('missing or malformed MCP indexes report incomplete coverage without fallback connections', async t => {
   const f = await setup(t)
   await f.importer.updateMcpServers([config, { name: 'missing', transport: 'stdio', command: 'never' }])
-  assert.match(await f.search({ query: 'no matches' }), /Warning: v:tools\/missing:.*not indexed/)
+  assert.match(await f.search({ query: 'no matches' }), /Warning: v:tools\/@sources__\/missing:.*not indexed/)
   t.mock.method(f.index, 'read', async () => { throw new Error('Malformed tool index') })
   assert.match(await f.search({ handler: 'grep', path: 'v:tools/mail', query: 'nothing' }), /Warning:.*Malformed tool index/)
   assert.equal(f.connect.mock.callCount(), 0)
@@ -205,4 +207,130 @@ test('configuration changes and invalid schema references still fail before exec
   assert.match(await f.search({}), /not indexed/)
   assert.equal(await f.invoke({ query: 'new' }), 'success')
   assert.equal(f.call.mock.callCount(), 2)
+})
+
+
+test('flattened factories resolve exact names, deduplicate aliases, and share lazy initialization', async t => {
+  let initialized = 0
+  let executed = 0
+  const first: Tool = { name: 'first', description: 'First operation', parameters: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] }, execute: async () => { executed++; return 'first result' } }
+  const second: Tool = { ...first, name: 'second', execute: async () => { executed++; return 'second result' } }
+  const f = await setup(t, new Map<string, LoadableEntry>([
+    ['bundle', { contracts: [first, second], factory: async () => { initialized++; return [first, second] } }],
+    ['first', first],
+  ]))
+  const entries = await f.importer.virtualEntries(f.context)
+  assert.deepEqual(entries.filter(entry => !entry.name.startsWith('mail')).map(entry => entry.name).sort(), ['first', 'second'])
+  assert.equal(JSON.parse(await f.read('v:tools/second')).name, 'second')
+  assert.equal(initialized, 0)
+  const invoke = (args: Record<string, unknown>) => f.tools.execute('invoke_tool', { name: 'second', args }, f.context)
+  const results = await Promise.all([invoke({ value: 'a' }), invoke({ value: 'b' })])
+  assert.deepEqual(results, ['second result', 'second result'])
+  assert.equal(initialized, 1)
+  assert.equal(executed, 2)
+  assert.equal(f.tools.hasDynamic('first'), true)
+  assert.match(requireToolText(await invoke({})), /invalid arguments/)
+  assert.equal(executed, 2)
+  await f.tools.resetDynamicAndWait()
+  assert.equal(await invoke({ value: 'again' }), 'second result')
+  assert.equal(initialized, 2)
+  assert.equal(f.connect.mock.callCount(), 0)
+})
+
+test('unknown MCP and opaque factory sources have explicit initialization separate from tool execution', async t => {
+  let initialized = 0
+  const tool: Tool = { name: 'opaque_action', description: 'Opaque operation', parameters: { type: 'object', properties: {} }, execute: async () => 'opaque result' }
+  const f = await setup(t, new Map<string, LoadableEntry>([['opaque', { factory: async () => { initialized++; return tool } }]]))
+  await f.importer.updateMcpServers([{ name: 'unknown', transport: 'stdio', command: 'synthetic-never-run' }])
+  const metadata = JSON.parse(await f.read('v:tools/@sources__/unknown'))
+  assert.deepEqual(metadata.initialize, { source: 'unknown', args: {} })
+  assert.equal(metadata.kind, 'source')
+  assert.equal(f.connect.mock.callCount(), 0)
+  const invoke = (args: Record<string, unknown>) => f.tools.execute('invoke_tool', args, f.context)
+  assert.match(requireToolText(await invoke({ source: 'unknown', name: 'unknown', args: {} })), /omit name/)
+  assert.match(requireToolText(await invoke({ source: 'unknown', args: { query: 'x' } })), /requires args/)
+  assert.equal(f.connect.mock.callCount(), 0)
+  assert.match(requireToolText(await invoke(metadata.initialize)), /no tool executed/)
+  assert.equal(f.connect.mock.callCount(), 1)
+  assert.equal(f.call.mock.callCount(), 0)
+  assert.equal(JSON.parse(await f.read('v:tools/unknown__SearchMessages')).name, 'unknown__SearchMessages')
+  assert.equal(await invoke({ name: 'unknown__SearchMessages', args: { query: 'x' } }), 'success')
+  assert.match(requireToolText(await invoke({ source: 'opaque', args: {} })), /no tool executed/)
+  assert.equal(initialized, 1)
+  assert.equal(JSON.parse(await f.read('v:tools/opaque_action')).name, 'opaque_action')
+  assert.equal(await invoke({ name: 'opaque_action', args: {} }), 'opaque result')
+  // Legacy preload sources remain accepted; initialization never runs business tools.
+  assert.match(await f.importer.importSource({ source: 'v:tools/opaque' }, f.tools), /opaque_action/)
+  assert.match(requireToolText(await invoke({ name: 'unknown', args: {} })), /no tool executed/)
+  assert.equal(f.call.mock.callCount(), 1)
+})
+
+test('a factory with a same-name contract reads as a tool and blocked names stay hidden', async t => {
+  const tool: Tool = { name: 'same', description: 'Same-name operation', parameters: { type: 'object', properties: {} }, execute: async () => 'same result' }
+  const f = await setup(t, new Map<string, LoadableEntry>([['same', { contracts: [tool], factory: async () => tool }]]))
+  assert.equal(JSON.parse(await f.read('v:tools/same')).name, 'same')
+  assert.equal(await f.tools.execute('invoke_tool', { name: 'same', args: {} }, f.context), 'same result')
+  const restricted = new SessionTools(f.base, f.home, undefined, ['same'])
+  assert.equal(await f.search({ query: 'Same-name' }, { ...f.context, tools: restricted }), 'No matches found')
+  assert.match(requireToolText(await restricted.execute('invoke_tool', { name: 'same', args: {} }, { ...f.context, tools: restricted })), /could not be imported/)
+})
+
+
+test('concrete reads isolate owners and source metadata cannot shadow a tool or MCP named sources', async t => {
+  const tool: Tool = { name: 'sources', description: 'Sources operation', parameters: { type: 'object', properties: {} }, execute: async () => 'result' }
+  const f = await setup(t, new Map<string, LoadableEntry>([['sources', tool]]))
+  const readIndex = t.mock.method(f.index, 'read', async () => { throw new Error('Unrelated index must not be read') })
+  assert.equal(JSON.parse(await f.read('v:tools/sources')).name, 'sources')
+  assert.equal(readIndex.mock.callCount(), 0)
+  assert.match(await f.read('v:tools/@sources__/mail'), /Unrelated index/)
+  readIndex.mock.restore()
+  await f.importer.updateMcpServers([{ ...config, name: 'sources' }])
+  await f.index.store({ ...config, name: 'sources' }, advertised)
+  assert.equal(JSON.parse(await f.read('v:tools/sources/sources__SearchMessages')).name, 'sources__SearchMessages')
+  assert.equal(JSON.parse(await f.read('v:tools/sources__SearchMessages')).name, 'sources__SearchMessages')
+  assert.equal(f.connect.mock.callCount(), 0)
+})
+
+
+test('root reads list only name/description entries; opaque sources stay in the source directory', async t => {
+  let initialized = 0
+  const plain: Tool = { name: 'plain', description: 'Plain tool', parameters: { type: 'object', properties: { secretSchemaField: { type: 'string' } } }, execute: async () => 'unused' }
+  const f = await setup(t, new Map<string, LoadableEntry>([
+    ['plain', plain],
+    ['layerfs', { factory: async () => { initialized++; return plain } }],
+    ['chrome-devtools', { config: { name: 'chrome-devtools', transport: 'stdio', command: 'never-run' } }],
+  ]))
+  registerCronTools(f.importer, {} as CronService, {} as Parameters<typeof registerCronTools>[2], () => true)
+  const root = await f.read('v:tools')
+  const entries = root.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line))
+  assert.deepEqual(entries.map(entry => entry.name).sort(), ['cron_add', 'cron_list', 'cron_remove', 'mail__SearchMessages', 'plain'])
+  assert(entries.every(entry => Object.keys(entry).sort().join(',') === 'description,name'))
+  assert.doesNotMatch(root, /"parameters"|"properties"|"kind"|"tools"|secretSchemaField|layerfs|chrome-devtools/)
+  assert.match(root, /v:tools\/@sources__/)
+  const listMode = requireToolText(await f.tools.execute('read', { path: 'v:tools', flag: 'l' }, f.context))
+  assert.doesNotMatch(listMode, /"parameters"|secretSchemaField/)
+  assert.doesNotMatch(f.importer.readCatalog('', f.tools), /"parameters"|secretSchemaField|"kind"/)
+  assert.deepEqual(JSON.parse(await f.read('v:tools/plain')).parameters, plain.parameters)
+  assert.deepEqual(JSON.parse(await f.read('v:tools/mail__SearchMessages')).parameters, schema)
+  assert.match(await f.search({ path: 'v:tools/plain', query: 'secretSchemaField' }), /v:tools\/plain/)
+  assert.match(await f.search({ query: 'secretSchemaField' }), /v:tools\/plain/)
+  assert.match(await f.search({ handler: 'glob', path: 'v:tools/@sources__', query: '*' }), /@sources__\/layerfs/)
+  const sources = await f.read('v:tools/@sources__')
+  assert.match(sources, /layerfs/)
+  assert.match(sources, /chrome-devtools/)
+  assert.doesNotMatch(sources, /"parameters"|secretSchemaField/)
+  assert.deepEqual(JSON.parse(await f.read('v:tools/@sources__/layerfs')).initialize, { source: 'layerfs', args: {} })
+  // Legacy source-scoped metadata remains schema-free; exact children keep contracts.
+  assert.doesNotMatch(await f.read('v:tools/cron'), /"parameters"/)
+  assert.equal(JSON.parse(await f.read('v:tools/cron/cron_add')).name, 'cron_add')
+  assert.equal(initialized, 0)
+  assert.equal(f.connect.mock.callCount(), 0)
+  assert.equal(f.list.mock.callCount(), 0)
+  assert.equal(f.call.mock.callCount(), 0)
+  assert.deepEqual(f.tools.activeDynamicTools(), [])
+  f.tools.registerDynamic({ ...plain, name: 'imported_sibling' })
+  const activeRoot = await f.read('v:tools')
+  assert.match(activeRoot, /"name":"imported_sibling"/)
+  assert.doesNotMatch(activeRoot, /"parameters"|secretSchemaField/)
+  assert.deepEqual(JSON.parse(await f.read('v:tools/imported_sibling')).parameters, plain.parameters)
 })

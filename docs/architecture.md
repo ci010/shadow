@@ -1806,10 +1806,13 @@ Read's one-based text ranges apply to virtual and URL text as well as files;
 local session line ranges use that same complete-history search view, while
 unpaged reads retain the recent-message default.
 
-`v:tools/<name>` identifies a virtual catalog source for the internal lazy
-loader, not an ordinary filesystem directory. Models
-select it through `search({ handler: "grep", path: "v:tools/<name>", query })` or invoke a known
-tool ID. The Project-bound `v:memory` write handler maps wiki Markdown writes
+`v:tools/<encoded-tool-name>` identifies a concrete tool contract, not an
+ordinary filesystem directory. Models search `v:tools` and invoke the contract's
+exact tool name; factories and MCP connections may initialize sibling tools.
+Source metadata is separate under `v:tools/@sources__`; explicit
+`invoke_tool({source, args: {}})` initializes an unknown source and returns
+contracts without executing a tool. Discovery never initializes sources. Legacy
+source-scoped paths remain compatible aliases, not duplicate root entries. The Project-bound `v:memory` write handler maps wiki Markdown writes
 to Home's memory directory and reuses the filesystem writer and its write-history
 recording. Existing tool filtering and local/non-call restrictions still apply.
 This entry point rejects session records, event logs, internal state, traversal
@@ -1918,7 +1921,7 @@ validates the declared schema and executes the source in the shared child.
 Declarations persist only in `SKILL.md`; there is no Project persistence of
 skill-tool registrations. New sessions and sleep/reset require another exact
 skill read. Source files remain in their original locations.
-After activation, `read({path: "v:tools/<alias>/<alias>"})`
+After activation, `read({path: "v:tools/<alias>"})`
 reads schema metadata without executing source. Skill search never activates
 tools. Registration captures a whole-package content fingerprint and executable
 text. Imports and pre/post execution checks reject changed instructions,
