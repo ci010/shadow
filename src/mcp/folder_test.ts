@@ -35,9 +35,9 @@ test('folder declarations: search is offline; lazy invocation and A/B isolation'
   const context = { tools, signal: new AbortController().signal, folderId: 'a', cwd: join(home, 'a') } as ExecutionContext
   const entries = await importer.virtualEntries(context)
   assert.equal(connect.mock.callCount(), 0)
-  assert.match(entries.find(entry => entry.name.startsWith('folder-'))!.content, /not indexed/)
+  assert.match(entries.find(entry => entry.name.startsWith('@sources__/folder-'))!.content, /not indexed/)
   assert.ok(!JSON.stringify(entries).includes('private-value'))
-  const name = entries.find(entry => entry.name.startsWith('folder-'))!.name
+  const name = entries.find(entry => entry.name.startsWith('@sources__/folder-'))!.name.slice('@sources__/'.length)
   assert.match(toolResultText(await invoke.execute({ name, args: { unexpected: true } }, context)), /requires args/ )
   assert.equal(connect.mock.callCount(), 0)
   const contracts = toolResultText(await invoke.execute({ name, args: {} }, context))
@@ -58,8 +58,8 @@ test('folder declarations: search is offline; lazy invocation and A/B isolation'
   assert.ok(!tools.hasDynamic(name + '__ping'), 'switch hook removes names immediately')
   assert.equal(disconnect.mock.callCount(), 0, 'switch preserves borrowed connections')
   const b = await importer.virtualEntries({ ...context, folderId: 'b', cwd: join(home, 'b') })
-  assert.ok(!b.some(entry => entry.name === name))
-  assert.ok(b.some(entry => entry.name === 'same'))
+  assert.ok(!b.some(entry => entry.name === `@sources__/${name}` || entry.name === `${name}__ping`))
+  assert.ok(b.some(entry => entry.name === 'same__ping'))
   assert.ok(child.hasDynamic(`${name}__ping`))
   assert.equal(toolResultText(await invoke.execute({ name: name + '__ping', args: {} }, { ...context, tools: child })), 'called:' + name)
   await importer.importForInvocation(`${name}__ping`, child, context.signal, context.cwd, 'a')
@@ -68,7 +68,7 @@ test('folder declarations: search is offline; lazy invocation and A/B isolation'
   const current = { ...context, folderId: 'b', cwd: join(home, 'b') }
   assert.match(toolResultText(await invoke.execute({ name: name + '__ping', args: {} }, current)), /Error:/)
   assert.equal(toolResultText(await invoke.execute({ name: 'same__ping', args: {} }, current)), 'called:same')
-  const next = b.find(entry => entry.name.startsWith('folder-'))!.name
+  const next = b.find(entry => entry.name.startsWith('@sources__/folder-'))!.name.slice('@sources__/'.length)
   await invoke.execute({ name: next, args: {} }, current)
   assert.equal(cwds.at(-1), join(home, 'b'))
   assert.equal(toolResultText(await invoke.execute({ name: next + '__ping', args: {} }, current)), 'called:' + next)

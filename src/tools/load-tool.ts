@@ -200,7 +200,7 @@ export class ImportTool implements Tool {
   readonly supportsRemoteWorkdir = true
   readonly description = 'Import a tool or MCP server into the current session. ' +
     'Source: v:tools/<name> for registered tools (including SKILL.md declarations), or .json for MCP config files. ' +
-    'Read v:tools for available sources. Returns current tool contracts before execution. Active until sleep or configuration changes.'
+    'Read v:tools for name/description entries, v:tools/<tool-name> for a full contract, or v:tools/@sources__ for initialization sources. Returns current tool contracts before execution. Active until sleep or configuration changes.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -446,7 +446,11 @@ export class ImportTool implements Tool {
     return typeof target === 'string' ? target : target.tools
   }
 
-  isBuiltinName(name: string): boolean { return this.builtins.has(name) }
+  isBuiltinName(name: string): boolean {
+    return this.builtins.has(name) || [...this.builtins.values()].some(entry =>
+      isFactoryLoadable(entry) ? entry.contracts?.some(tool => tool.name === name)
+        : !isMcpLoadable(entry) && !isScriptLoadable(entry) && entry.name === name)
+  }
 
   registerBuiltin(name: string, entry: LoadableEntry): void {
     if (this.configured.has(name) || [...this.sessions].some(tools => this.skillTools.get(tools)?.has(name))) {
@@ -520,7 +524,7 @@ export class ImportTool implements Tool {
           throw new Error(`Skill tool "${name}" is not available for this agent type`)
         }
         const previous = current.get(name)
-        if (context.tools.has(name) || this.loadable.has(name) || name === 'import_tool' || name === 'install_tool' ||
+        if (context.tools.has(name) || this.loadable.has(name) || this.isBuiltinName(name) || name === 'import_tool' || name === 'install_tool' ||
           (previous && (previous.script.skill !== skill.meta.name || previous.folderScope?.folderId !== skill.folderScope?.folderId)) ||
           (!previous && context.tools.hasDynamic(name))) {
           throw new Error(`Skill tool "${name}" conflicts with an existing tool; choose another frontmatter alias`)
@@ -581,6 +585,25 @@ export class ImportTool implements Tool {
   }
 
   catalogEntries(tools: SessionTools): Array<{ name: string; content: string }> {
+    const entries = new Map<string, { name: string; content: string }>()
+    for (const summary of this.sourceCatalogEntries(tools)) {
+      const entry = this.catalogFor(tools).get(summary.name)!
+      const contracts = isFactoryLoadable(entry) ? entry.contracts ?? []
+        : isMcpLoadable(entry) ? [] : [isScriptLoadable(entry) ? { name: summary.name, ...entry.script } : entry]
+      if (!contracts.length) {
+        const name = `@sources__/${summary.name}`
+        entries.set(name, { name, content: JSON.stringify({ ...JSON.parse(summary.content), kind: 'source', initialize: { source: summary.name, args: {} } }) })
+      }
+      for (const tool of contracts) {
+        if (!tools.canUseDynamic(tool.name)) continue
+        entries.set(tool.name, { name: tool.name, content: JSON.stringify({ ...JSON.parse(summary.content),
+          name: tool.name, description: tool.description, parameters: tool.parameters }) })
+      }
+    }
+    return [...entries.values()]
+  }
+
+  private sourceCatalogEntries(tools: SessionTools): Array<{ name: string; content: string }> {
     if ((!tools.has('read') && !tools.has('import_tool') && !tools.has('search')) || !tools.has('invoke_tool')) return []
     return [...this.catalogFor(tools)].map(([name, entry]) => ({
       name,
@@ -598,20 +621,103 @@ export class ImportTool implements Tool {
 
   readCatalog(name: string, tools: SessionTools): string {
     const entries = this.catalogEntries(tools)
-    if (!name) return entries.length ? entries.map(entry => entry.content).join('\n')
-      : 'No dynamic tool sources are available for this agent.'
+    if (!name) return this.toolEntryList(entries)
     return entries.find(entry => entry.name === name)?.content ?? `Error: unknown or unavailable source "${name}".`
+  }
+
+  /** Lists are lightweight entries, not a bulk contract export. Search keeps full content. */
+  private toolEntryList(entries: Array<{ name: string; content: string }>): string {
+    const summaries = entries.filter(entry => !entry.name.startsWith('@sources__/')).map(entry => {
+      const { name, description } = JSON.parse(entry.content)
+      return JSON.stringify({ name, description })
+    })
+    return [
+      'Tool entries (name and description). Read v:tools/<tool-name> for the full contract.',
+      'Initialization sources (including sources without known tools): v:tools/@sources__. Discovery does not initialize them.',
+      ...summaries,
+      ...(summaries.length ? [] : ['No dynamic tool entries are available for this agent.']),
+    ].join('\n')
   }
 
   async readVirtual(path: string, context: ExecutionContext): Promise<string> {
     const entries = await this.virtualEntries(context, { subpath: path })
-    if (!path) return entries.filter(entry => !entry.name.includes('/')).map(entry => entry.content).join('\n') || 'No dynamic tool sources are available for this agent.'
+    if (!path) return this.toolEntryList(entries)
+    if (path === '@sources__') return entries.map(entry => entry.content).join('\n') || 'No dynamic sources are available for this agent.'
     const entry = entries.find(entry => entry.name === path)
     if (!entry) throw new Error('Unknown or unavailable tool metadata path. Search with handler "glob" and path "v:tools" for current paths.')
     return entry.content
   }
 
+  /** Canonical discovery is tool-name based; old source paths are read-only aliases. */
   async virtualEntries(context: ExecutionContext, options?: VirtualListOptions): Promise<VirtualEntry[]> {
+    if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
+    const path = options?.subpath ?? ''
+    const sourcePath = path === '@sources__' || path.startsWith('@sources__/')
+    const selected = path.split('/')[0]
+    const catalog = this.catalogFor(context.tools)
+    // Preserve stored Skill/browser documentation links and source-scoped searches.
+    const selectedEntry = catalog.get(selected)
+    const exactTool = selectedEntry && (isFactoryLoadable(selectedEntry)
+      ? selectedEntry.contracts?.some(tool => tool.name === selected) || context.tools.hasDynamic(selected)
+      : !isMcpLoadable(selectedEntry))
+    if (!sourcePath && selectedEntry &&
+      (path.includes('/') || !exactTool)) {
+      return this.sourceEntries(context, options)
+    }
+    // A concrete contract read must not scan unrelated MCP indexes.
+    let owners: Set<string> | undefined
+    if (sourcePath && path !== '@sources__') owners = new Set([path.slice('@sources__/'.length)])
+    else if (!sourcePath && path) {
+      let toolName: string
+      try { toolName = decodeURIComponent(selected) } catch { return [] }
+      owners = new Set([...catalog].filter(([key, owner]) => isFactoryLoadable(owner)
+        ? owner.contracts?.some(tool => tool.name === toolName) || key === toolName
+        : isMcpLoadable(owner) ? toolName.startsWith(`${owner.config.name}__`)
+        : isScriptLoadable(owner) ? key === toolName : owner.name === toolName).map(([key]) => key))
+    }
+    const raw = await this.sourceEntries(context, { ...options, subpath: undefined }, owners)
+    const flattened = new Map<string, VirtualEntry>()
+    for (const entry of raw) {
+      const metadata = JSON.parse(entry.content)
+      if (metadata.name) {
+        if (sourcePath) continue
+        const name = `${encodeURIComponent(metadata.name)}${metadata.instance ? `/${metadata.instance}` : ''}`
+        if (path && name !== path && !name.startsWith(`${path}/`)) continue
+        flattened.set(name, { ...entry, name, content: options?.content === false ? '' : entry.content })
+      } else if (sourcePath || entry.warning) {
+        const owner = catalog.get(entry.name)
+        if (sourcePath && owner && !isMcpLoadable(owner) && !isFactoryLoadable(owner)) continue
+        const name = `@sources__/${entry.name}`
+        if (sourcePath && path !== '@sources__' && path !== name) continue
+        if (!sourcePath && path) continue
+        flattened.set(name, { ...entry, name, content: JSON.stringify({
+          ...metadata, kind: 'source',
+          initialize: { source: entry.name, args: {} },
+          tools: metadata.tools?.map((value: string) => {
+            const child = raw.find(candidate => `${VIRTUAL_TOOLS_PREFIX}${candidate.name}` === value)
+            if (!child) return value
+            const tool = JSON.parse(child.content)
+            return `${VIRTUAL_TOOLS_PREFIX}${encodeURIComponent(tool.name)}${tool.instance ? `/${tool.instance}` : ''}`
+          }),
+        }, null, 2) })
+      }
+    }
+    // JSON-config imports and factory siblings may not have a catalog key.
+    if (!sourcePath && !context.remoteWorkdir) for (const tool of context.tools.activeDynamicTools()) {
+      const name = encodeURIComponent(tool.name)
+      const hasOwner = [...catalog].some(([key, owner]) => isFactoryLoadable(owner)
+        ? owner.contracts?.some(contract => contract.name === tool.name)
+        : isMcpLoadable(owner) ? tool.name.startsWith(`${owner.config.name}__`)
+        : isScriptLoadable(owner) ? key === tool.name : owner.name === tool.name)
+      if (hasOwner || flattened.has(name) || (path && path !== name)) continue
+      flattened.set(name, { name, content: options?.content === false ? '' : JSON.stringify({
+        name: tool.name, description: tool.description, parameters: tool.parameters,
+      }, null, 2) })
+    }
+    return [...flattened.values()]
+  }
+
+  private async sourceEntries(context: ExecutionContext, options?: VirtualListOptions, owners?: Set<string>): Promise<VirtualEntry[]> {
     if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const requester = context.tools
     const signal = AbortSignal.any([context.signal, requester.dynamicSignal, requester.ownerSignal])
@@ -621,9 +727,9 @@ export class ImportTool implements Tool {
     }
     const selected = options?.subpath?.split('/')[0]
     const entries: VirtualEntry[] = []
-    const metadata = this.catalogEntries(requester)
+    const metadata = this.sourceCatalogEntries(requester)
     for (const [name, entry] of this.catalogFor(requester)) {
-      if (selected && name !== selected) continue
+      if ((selected && name !== selected) || (owners && !owners.has(name))) continue
       signal.throwIfAborted()
       const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
       const children: VirtualEntry[] = []
@@ -633,9 +739,11 @@ export class ImportTool implements Tool {
         const path = `${name}/${instance ? `${instance}/` : ''}${encodeURIComponent(tool.name)}`
         children.push({
           name: path,
-          content: options?.content === false ? '' : JSON.stringify({
-            name: tool.name, source, instance, indexedAt, description: tool.description, parameters: tool.parameters,
-            ...(tool.readOnlyPolicy ? { readOnlyPolicy: { ...tool.readOnlyPolicy, readOnly: tool.readOnlyPolicy.readOnly ?? null } } : {}),
+          content: JSON.stringify({
+            name: tool.name, source, instance,
+            ...(options?.content === false ? {} : { indexedAt, description: tool.description, parameters: tool.parameters,
+              ...(tool.readOnlyPolicy ? { readOnlyPolicy: { ...tool.readOnlyPolicy, readOnly: tool.readOnlyPolicy.readOnly ?? null } } : {}),
+            }),
           }, null, 2),
         })
       }
@@ -661,7 +769,7 @@ export class ImportTool implements Tool {
                   if (chromeToolAllowed(entry.config, info) && (!entry.toolFilter || entry.toolFilter.has(info.name))) add(mcpToolContract(entry.config, info), undefined, indexed.indexedAt)
                 }
               } else {
-                warning = entry.folderSource ? `Tool metadata is not indexed. Call invoke_tool({name: ${JSON.stringify(name)}, args: {}}) to start the configured service and return contracts without executing a tool; then invoke_tool with a returned exact tool name. Search never connects services.` : 'Tool metadata is not indexed. Read v:skills/mcp-config for indexing, or initialize built-in browser sources with browser_setup. Search never connects services.'
+                warning = `Tool metadata is not indexed. Call invoke_tool({source: ${JSON.stringify(name)}, args: {}}) to initialize the configured service and return contracts without executing a tool; then invoke_tool with a returned exact tool name. Search never connects services.`
               }
             }
           } else if (isFactoryLoadable(entry)) {
@@ -812,18 +920,18 @@ export class ImportTool implements Tool {
   }
 
   /** Explicit source initialization returns contracts, never executes an MCP tool. */
-  async initializeSource(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string | undefined> {
+  async initializeSource(name: string, args: Record<string, unknown>, context: ExecutionContext, explicit = false): Promise<string | undefined> {
     if (context.remoteWorkdir) return undefined
     await this.prepareFolder(context.tools, context.folderId)
     const entry = this.catalogFor(context.tools).get(name)
-    if (!entry || !isMcpLoadable(entry)) return undefined
-    if (Object.keys(args).length) return 'Error: MCP source initialization requires args: {}; invoke a returned exact tool name to execute a tool.'
+    if (!entry || (!isMcpLoadable(entry) && !(explicit && isFactoryLoadable(entry)))) return undefined
+    if (Object.keys(args).length) return 'Error: source initialization requires args: {}; invoke a returned exact tool name to execute a tool.'
     if (!context.tools.canUseDynamic(name)) return 'Error: MCP source is unavailable for this agent type.'
     const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}${name}`, context)
     if (denied) return denied
     const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
     const result = await this.withImports(context.tools, signal, () => this.loadByName(name, context.tools, [], { signal, cwd: context.cwd }))
-    return typeof result === 'string' ? result : `Initialized MCP source ${name}; no tool executed.\n${toolInvocationContract(result)}`
+    return typeof result === 'string' ? result : `Initialized ${isMcpLoadable(entry) ? 'MCP ' : ''}source ${name}; no tool executed.\n${toolInvocationContract(result)}`
   }
 
   /** Import the catalog entry that owns a dynamic tool name, when determinable. */
@@ -844,13 +952,20 @@ export class ImportTool implements Tool {
     if (sessionTools.hasDynamic(toolName)) return undefined
     const activeSignal = signal ? AbortSignal.any([signal, sessionTools.dynamicSignal]) : sessionTools.dynamicSignal
     const load = (name: string) => this.withImports(sessionTools, activeSignal, async () => {
+      if (sessionTools.hasDynamic(toolName)) return undefined
       const result = await this.loadByName(name, sessionTools, [], { signal: activeSignal, cwd })
       return typeof result === 'string' ? result : undefined
     })
 
-    if (this.catalogFor(sessionTools).has(toolName)) {
+    const catalog = this.catalogFor(sessionTools)
+    if (catalog.has(toolName)) {
       return await load(toolName)
     }
+    const owners = [...catalog].filter(([, entry]) =>
+      isFactoryLoadable(entry) ? entry.contracts?.some(tool => tool.name === toolName)
+        : !isMcpLoadable(entry) && !isScriptLoadable(entry) && entry.name === toolName)
+    if (owners.length > 1) return `Error: ambiguous dynamic tool "${toolName}"; multiple sources advertise this name.`
+    if (owners.length === 1) return await load(owners[0][0])
 
     const separator = toolName.indexOf('__')
     if (separator <= 0) return undefined
@@ -875,8 +990,16 @@ export class ImportTool implements Tool {
     extraArgs: string[],
     options: ImportOptions,
   ): Promise<Tool[] | string> {
-    const entry = this.catalogFor(tools).get(name)
+    const catalog = this.catalogFor(tools)
+    const entry = catalog.get(name)
     if (!entry) {
+      const owners = [...catalog].filter(([, candidate]) => isFactoryLoadable(candidate)
+        ? candidate.contracts?.some(tool => tool.name === name)
+        : isMcpLoadable(candidate)
+          ? name.startsWith(`${candidate.config.name}__`) && (!candidate.toolFilter || candidate.toolFilter.has(name.slice(candidate.config.name.length + 2)))
+          : !isScriptLoadable(candidate) && candidate.name === name)
+      if (owners.length === 1) return this.loadByName(owners[0][0], tools, extraArgs, options)
+      if (owners.length > 1) return `Error: ambiguous dynamic tool "${name}"; multiple sources advertise this name.`
       const available = [...this.loadable.keys()]
       const hint = available.length > 0
         ? ` Available: ${available.join(', ')}`
@@ -1154,7 +1277,7 @@ export class ImportTool implements Tool {
       return `Error loading "${name}": ${err instanceof Error ? err.message : String(err)
         }`
     }
-    const tools = Array.isArray(result) ? result : [result]
+    const tools = (Array.isArray(result) ? result : [result]).filter(tool => sessionTools.canUseDynamic(tool.name))
     options.signal.throwIfAborted()
     for (const t of tools) {
       sessionTools.registerDynamic(t)

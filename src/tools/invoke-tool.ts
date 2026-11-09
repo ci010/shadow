@@ -3,7 +3,7 @@ import type { SessionTools } from './registry.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 
 export interface DynamicToolImporter {
-  initializeSource?(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string | undefined>
+  initializeSource?(name: string, args: Record<string, unknown>, context: ExecutionContext, explicit?: boolean): Promise<string | undefined>
   canInvokeFromRemote?(toolName: string): boolean
   resolveInvocationTools?(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string
   importForInvocation(
@@ -22,13 +22,17 @@ export class InvokeTool implements Tool<ToolResult> {
   readonly name = 'invoke_tool'
   readonly supportsRemoteWorkdir = true
   readonly description =
-    'Execute an exact tool name, loading it lazily. To initialize an MCP source without executing its tools, pass its source name with args: {} and use the returned contracts. Validates arguments against the current schema; invalid arguments return the contract without execution.'
+    'Execute an exact tool name from v:tools, loading it lazily (shared initialization may register sibling tools). To discover tools of an uninitialized source, omit name and pass source with args: {}; this initializes only, without executing a tool. Read v:tools/@sources__ for source metadata. Validates the live schema; invalid arguments return the contract without execution.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       name: {
         type: 'string',
-        description: 'Name of the active session tool to execute.',
+        description: 'Exact tool name to execute, active or lazily loadable. Mutually exclusive with source.',
+      },
+      source: {
+        type: 'string',
+        description: 'Explicit source initialization only; use args: {} and omit name. Returns tool contracts without executing them.',
       },
       args: {
         type: 'object',
@@ -36,7 +40,7 @@ export class InvokeTool implements Tool<ToolResult> {
       },
       instance: { type: 'string', description: 'Session browser instance ID from browser_setup or discovery. Required for chrome-devtools tools when multiple instances are open; never a business-tool argument.' },
     },
-    required: ['name', 'args'],
+    required: ['args'],
   }
 
   constructor(private importer?: DynamicToolImporter) {}
@@ -45,8 +49,19 @@ export class InvokeTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    if (args.source !== undefined) {
+      if (typeof args.source !== 'string' || !args.source.trim() || args.name !== undefined || args.instance !== undefined) {
+        return 'Error: source must be a nonempty source name; omit name and instance for initialization.'
+      }
+      if (!args.args || typeof args.args !== 'object' || Array.isArray(args.args) || Object.keys(args.args).length) {
+        return 'Error: source initialization requires args: {}.'
+      }
+      if (context.remoteWorkdir) return 'Error: source initialization is unavailable for remote workdirs.'
+      return await this.importer?.initializeSource?.(args.source, args.args as Record<string, unknown>, context, true)
+        ?? 'Error: unknown or unavailable source; read v:tools/@sources__ for initialization metadata.'
+    }
     const name = typeof args.name === 'string' ? args.name : ''
-    if (!name) return 'Error: name is required'
+    if (!name) return 'Error: name is required (or use source with args: {} for initialization)'
     if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {
       return 'Error: remote workdirs support only the built-in Project-Home session tool through invoke_tool.'
     }
@@ -87,6 +102,6 @@ export class InvokeTool implements Tool<ToolResult> {
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
-    return `Invoke ${String(args.name ?? '')}`
+    return args.source !== undefined ? `Initialize ${String(args.source)}` : `Invoke ${String(args.name ?? '')}`
   }
 }

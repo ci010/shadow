@@ -494,9 +494,46 @@ tool. Search does not activate a skill or run a tool.
 
 ```js
 search({ handler: "grep", path: "v:skills", query: "CSV" })
-search({ handler: "glob", path: "v:tools/cron", query: "**" })
-read({ path: "v:tools/cron/cron_add" })
+search({ handler: "glob", path: "v:tools", query: "cron_*" })
+read({ path: "v:tools/cron_add" })
+invoke_tool({ name: "cron_add", args: { /* current contract */ } })
 ```
+
+`v:tools/<encoded-tool-name>` is the canonical contract path for builtins,
+factory contracts, Skill declarations and indexed/active MCP tools. Root discovery
+lists each concrete name once, not both a group and its tools. `read("v:tools")`
+returns lightweight entries containing only `name` and `description`, plus a link
+to the separate source directory; it does not bulk-expand parameter schemas.
+Exact contract reads still include the complete schema and metadata. Virtual grep
+continues searching full contracts (including schema fields), not just summaries;
+glob returns paths. Legacy source reads list child paths without embedding schemas.
+Invocation uses
+the exact unencoded `name` in that contract. Loading one tool may initialize its
+shared factory/MCP connection and register siblings; it does not execute them.
+Browser contracts additionally use `/<instance>` when applicable; pass the
+returned instance to `invoke_tool`.
+
+Source/connection metadata is separate at `v:tools/@sources__` (the marker cannot
+be an MCP server name, and its `@` is encoded in concrete tool paths). For a source
+whose tools are not yet indexed (or an opaque factory without static contracts),
+there is no placeholder tool entry in the root read. Discover it under
+`v:tools/@sources__`; root search also retains source-path warnings for incomplete
+coverage. Source metadata includes an explicit initialization recipe:
+
+```js
+read({ path: "v:tools/@sources__/my-server" })
+invoke_tool({ source: "my-server", args: {} }) // initialize and return contracts only
+invoke_tool({ name: "my-server__actual_tool", args: { /* live contract */ } })
+```
+
+Discovery never initializes a factory, connects MCP or launches a browser.
+Unknown opaque factories can also be explicitly initialized with `source`.
+`source` is mutually exclusive with `name`/`instance` and requires empty args.
+Browser startup still requires explicit `browser_setup` binding. Old source-scoped
+metadata links (`v:tools/<source>/<tool-name>`), `cron`/`events` preload groups,
+MCP configuration names, Skill tool declarations and preload maps remain accepted.
+The old MCP-source-as-`name` initialization call remains a compatibility alias;
+new callers should use `source` to avoid treating a connection as a tool.
 
 Virtual `handler: "grep"` searches use JavaScript regular expressions; `handler: "glob"` searches
 match paths. Results are paginated with `limit` and `offset`. Unknown mounts
@@ -980,7 +1017,7 @@ advertises `annotations.readOnlyHint: true`. Shadow uses this precedence:
 2. The server's hint only when that server has `trustReadOnlyHints: true`.
 3. Unknown otherwise; normal tool and capability checks apply.
 
-Read an indexed tool's `v:tools/<server>/<tool-id>` metadata to inspect
+Read an indexed tool's `v:tools/<tool-id>` metadata to inspect
 `readOnlyPolicy`: `readOnly` is `true`, `false`, or `null` (unknown), `source`
 explains the decision, and `fingerprint` identifies the reviewed contract.
 For example, these optional fields belong inside one approved server entry:
@@ -1081,7 +1118,7 @@ Task/call execution and agent tool restrictions still apply to lazy invocation.
 
 ## Scheduled conversations
 
-Discover `cron_add`, `cron_list`, and `cron_remove` under `v:tools/cron`;
+Discover `cron_add`, `cron_list`, and `cron_remove` by exact name under `v:tools`;
 read the selected contract, then call it via `invoke_tool`. `cron_add` takes
 `schedule` and `task` and offers two contexts:
 

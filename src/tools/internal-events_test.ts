@@ -30,6 +30,14 @@ test('events discovery retains lazy internal subscriptions and provider tool onl
   const context = { projectId: 'project', sessionId: 'owner', inputSource: 'user', signal: new AbortController().signal, tools } as ExecutionContext
   try {
     assert.deepEqual(base.getDefinitions().map(def => def.function.name), ['read', 'invoke_tool'])
+    const flat = await importer.virtualEntries(context)
+    assert.deepEqual(flat.map(entry => entry.name).sort(), ['event_provider', 'event_subscribe'])
+    const root = await importer.readVirtual('', context)
+    const entries = root.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line))
+    assert.deepEqual(entries.map(entry => entry.name).sort(), ['event_provider', 'event_subscribe'])
+    assert(entries.every(entry => Object.keys(entry).sort().join(',') === 'description,name'))
+    assert.doesNotMatch(root, /"parameters"|"properties"/)
+    assert.equal(JSON.parse(await importer.readVirtual('event_subscribe', context)).name, 'event_subscribe')
     const catalog = await importer.virtualEntries(context, { subpath: 'events' })
     assert.deepEqual(catalog.map(entry => entry.name).sort(), ['events', 'events/event_provider', 'events/event_subscribe'])
     assert.equal(tools.hasDynamic('event_provider'), false)
