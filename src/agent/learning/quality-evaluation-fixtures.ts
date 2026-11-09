@@ -30,6 +30,24 @@ export const qualityCases = [
     expected: { action: 'partial', destination: 'receipt', attribution: 'unpersisted-candidate', rationale: 'finish-boundary' },
     forbidden: ['applied', 'no-change', 'publish-success', 'persisted-event'],
   },
+  {
+    id: 'bot-later-report-provenance', source: 'v:sessions/~f22ac76dbbbd2547/overview:210-271',
+    evidence: 'BOT parent later reports integration and focused tests. Earlier Wiki only cites the initial requirement. Save the attributed update with its later physical source range, readback and event; no deployment or human acceptance established.',
+    expected: { action: 'merge', destination: 'existing-knowledge', attribution: 'peer-report', rationale: 'later-scoped-evidence' },
+    forbidden: ['deployed', 'independently-verified', 'human-accepted'],
+  },
+  {
+    id: 'deleted-identity-trust-boundary', source: 'v:sessions/~f0280ffec70f2d30/c/95.1',
+    evidence: 'Parent reports existing identity directory with absent/corrupt index fails closed; deleting the entire directory removes local baseline evidence and cannot distinguish legacy storage. Wiki omits this limitation. Not a supported reset or tamper-proof ledger; test counts are parent reported.',
+    expected: { action: 'merge', destination: 'existing-knowledge', attribution: 'parent-report', rationale: 'narrow-trust-boundary' },
+    forbidden: ['supported-reset', 'tamper-proof', 'tests-independently-verified'],
+  },
+  {
+    id: 'withdrawn-detach-hypothesis', source: 'v:sessions/~f0280ffec70f2d30/c/280.1',
+    evidence: 'Parent withdrew unsupported detach changes, accepted minimal window/UiSelect harness fixes without weakening assertions, and reported 10 pass/1 baseline-conflict failure in 779ms. Retain correction/action/result, not only the counts; no user acceptance or universal diagnostic rule.',
+    expected: { action: 'retain', destination: 'event', attribution: 'parent-report', rationale: 'reasoning-correction' },
+    forbidden: ['detach-fix-proven', 'all-tests-pass', 'user-accepted', 'universal-rule'],
+  },
 ] as const
 
 export interface QualityAnnotation {
