@@ -15,10 +15,8 @@ import { IdentityManager } from '../src/agent/identity.ts'
 import { ChannelManager } from '../src/channels/manager.ts'
 import { ConfigSchema } from '../src/config/schema.ts'
 import { BackgroundTaskManager } from '../src/agent/background-task.ts'
-import { CapabilityBroker } from '../src/execution/grants.ts'
 import { DEFAULT_COPILOT_MODEL } from '../src/config/defaults.ts'
 import { EventService } from '../src/events/service.ts'
-import { PollingSources } from '../src/events/polling-sources.ts'
 import { ProcessManager } from '../src/execution/processes/manager.ts'
 import { defaultManagedShell } from '../src/execution/processes/shells.ts'
 import { CopilotProviderV2 } from '../src/providers/copilot-v2.ts'
@@ -41,7 +39,7 @@ import { ExecTool } from '../src/tools/shell.ts'
 import { CommandHandlerManager } from '../src/tools/shell-commands/command-handler.ts'
 import { ImportTool } from '../src/tools/load-tool.ts'
 import { InvokeTool } from '../src/tools/invoke-tool.ts'
-import { registerEventTools } from '../src/tools/event-source.ts'
+import { registerInternalEventTools } from '../src/tools/internal-events.ts'
 import { ContinuationTool } from '../src/tools/background.ts'
 import { CancelTool } from '../src/tools/cancel.ts'
 import { AskTool } from '../src/tools/ask.ts'
@@ -80,8 +78,6 @@ export function eventWaitStrategies(calls: ObservedToolCall[], tasks: Array<{ ki
     }
     if (call.name === 'event_subscribe' && call.args?.action === 'subscribe' &&
       call.result?.startsWith('Subscribed ')) strategies.add('event-subscribe')
-    if (call.name === 'event_source' && call.args?.action === 'create' &&
-      call.result?.startsWith('Created event source ')) strategies.add('polling-event-source')
     if (call.name === 'cron_add') strategies.add('cron')
     if (call.name === 'subagent') strategies.add('subagent')
     if (call.name === 'github_actions' && call.finishedAt && !call.result?.startsWith('Error') &&
@@ -176,7 +172,6 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
   let modelCalls = 0
   let runError: string | undefined
   let sessions: SessionManager | undefined
-  let sources: PollingSources | undefined
   let cron: CronService | undefined
   let store: JsonlSessionStore | SqliteSessionStore | undefined
   let handoff: HandoffManager | undefined
@@ -256,23 +251,7 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
       defaultExecShell: defaultManagedShell(),
     })
     const manager = sessions
-    const canAuthor = (id: string) => manager.getSessionState(id)?.mode === 'session'
-    const broker = new CapabilityBroker({
-      projectId, directory: join(workspace, '.receipts'),
-      resolveSecret: async () => undefined,
-      canDeliver: canAuthor, deliver: (id, input) => manager.deliver(id, input),
-      request: async (url, init) => {
-        if (options.external?.request) return options.external.request(url, init)
-        const parsed = new URL(String(url))
-        const allowed = parsed.origin === 'https://api.github.com' &&
-          [ACTIONS_RUN_PATH, SECOND_RUN_PATH].includes(parsed.pathname) ||
-          parsed.origin === 'https://actions-fixture.example' && parsed.pathname === LIVE_LOG_PATH
-        if (!allowed || (init?.method ?? 'GET') !== 'GET') throw new Error('Only synthetic run and live-log read routes are available')
-        return fetch(fixture.origin + parsed.pathname + parsed.search, init)
-      },
-    })
-    sources = new PollingSources(workspace, events, broker, canAuthor, () => false)
-    registerEventTools(importer, events, sources, canAuthor)
+    registerInternalEventTools(importer, events)
     cron = new CronService(workspace, 'UTC', scope)
     const dispatcher = new CronDispatcher(manager, async (job, targetSessionId, signal) => {
       signal.throwIfAborted()
@@ -307,7 +286,7 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
         list: (ctx, options) => importer.virtualEntries(ctx, options),
       }],
       ['v:skills', 'skill bodies and category listings', createSkillsHandler(skills, (skill, ctx) => importer.registerSkillTools(skill, ctx))],
-      ['v:events', 'event subscriptions and registered sources', createEventsHandler(events)],
+      ['v:events/internal', 'internal event subscriptions and registered sources', createEventsHandler(events)],
       ['v:bg', 'owned executions and output', createBgTasksHandler(background, manager)],
       ['v:agents', 'available local roles', createAgentsHandler(agentTypes)],
     ] satisfies Array<[string, string, { read: import('../src/vfs/virtual-fs.ts').VirtualFsHandler; list: import('../src/vfs/virtual-fs.ts').VirtualFsListHandler }]>) {
@@ -320,7 +299,6 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
     })
     bus.on('session.input.accepted', fact => inputs.push({ at: new Date().toISOString(), source: fact.input.source }))
     await events.start()
-    sources.start()
     await cron.start()
     await manager.start()
     await manager.buildSession(sessionId, undefined, { mode: 'session', agentType: 'general', sessionKind: 'topic' })
@@ -387,7 +365,6 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
   } finally {
     clearTimeout(timer)
     controller.abort()
-    await sources?.stop()
     await cron?.stop()
     await sessions?.stop()
     await background.stop()
@@ -419,7 +396,6 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
           'type' in source ? [source.type] : []
       }),
       subscriptions: events.list(sessionId),
-      pollingSources: sources?.list(sessionId),
       waitingSamples: waitingSamples.length,
       idleWaitingSamples: waitingSamples.filter(sample => !sample.processing).length,
     }

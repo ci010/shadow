@@ -27,6 +27,16 @@ Unknown effort metadata is not evidence of support. Curated guidance is a starti
 heuristic, not a benchmark, cost/latency ranking or guarantee of task quality.
 
 
+## Automatic Work dispatch
+
+The standard `default:work-dispatch-v1` automation performs a program-only scan
+(default `every 60s`) and calls no model when there is no eligible Work. Configure
+its one registered local repository Workspace before enabling it. Claims are
+atomic, executors use isolated real Git worktrees, and blocked/failed executions
+retain their assignee and recovery context. See [Automatic Work dispatch](work-auto-dispatch.md)
+for the authorized configuration/recovery API, capacity and isolation guarantees,
+normal waiting versus failure, and unverified live GitHub/remote boundaries.
+
 ## Learning outcomes and recovery
 
 Learning aims to improve future decisions, not accumulate a transcript-shaped
@@ -79,6 +89,45 @@ there is no new approval step. Repeated evidence can support, correct or retire
 a decision. Retired decisions are retained as historical evidence but must not
 guide new actions. Source identities are checked against the assigned batch;
 the model still owns the semantic interpretation.
+
+Reflector batches must use `learning_memory` actions `read_wiki`/`save_wiki` for
+`topics/`, `concepts/`, `identities/` and `tools/` Markdown pages (lowercase kebab
+filenames). A save takes the read revision, full body (up to 24,000 UTF-16 code
+units), a brief summary, and `wikiEvidence` entries `{sessionId, physicalId, offset, end}`
+selecting exact assigned physical-segment message ranges (missing/wrong physical
+IDs are rejected, including overlapping ranges across compaction). Its managed
+provenance block merges and deduplicates exact prior source references from the
+current page and submitted full content, so reread/edit/save does not accumulate
+sections or drop earlier sources. It also recognizes the earlier generated
+heading/notice format; unrelated prose is preserved. It adds physical-source/range provenance,
+uses the existing memory writer (including alias and permission checks), reads
+back the page, records its hash and appends a deduplicated event. Thus a supported
+Wiki candidate no longer needs separate write/readback/log model turns. This
+neither increases the execution budget nor removes the receipt-only finish turn.
+The host-selected reflector allowlist excludes generic `write`, even if a role
+override or legacy tool registration advertises it. General sessions and the
+encapsulator's draft-writing scope are unchanged. Unsupported Wiki destinations
+require Partial/Blocked naming the candidate, source and missing route; do not
+force them into decisions or bypass the route through filesystem paths. Historical
+direct-write effects/receipts are still audited and reused, not migrated or
+relabeled. This closes a publication bypass, not the separate problem of a model
+omitting an eligible event candidate on every retry; no automatic candidate
+extraction, durable unsaved-intent journal or skill-size recovery is added here.
+
+This is recoverable ordered persistence, **not an atomic multi-file transaction**:
+a failure may leave the page or artifact written. Identical replay repairs missing
+bookkeeping without duplicating events, including after recreating the tool
+instance. Different stale content is rejected; existing pages use exact-match
+replacement through the normal writer. This is optimistic revision checking,
+not a global lock against arbitrary external writers. Later verification rejects
+a changed/rolled-back artifact. An unresolved save error still blocks Applied or
+No change. Partial preserves effects without claiming unread evidence reviewed.
+The host verifies ranges belong to the batch and bytes persisted, not that those
+ranges support the prose, were understood, or that a useful candidate was chosen.
+Human/model quality review must check attribution, explicit correction/action/
+result, applicability and omissions. No heuristic infers truth from keywords or
+forces a new memory; duplicate/no-change controls remain valid. Existing live
+pages are not retroactively repaired by deploying this code.
 
 In that local Project workflow, `learned_skill` writes lesson-only `SKILL.md` packages to the actual shared
 Project skill space, using revision checks and the existing registry. It does
@@ -993,7 +1042,9 @@ its module exports `async function run(args)`. Later invocations validate the
 declared arguments. Reread after editing a skill to refresh its declarations;
 search or bundled-resource reads alone do not activate them.
 
-Project Skill edits use the scoped `skill_read` and `skill_save` tools. Read an
+Project Skill edits use `read` on `v:skills/.raw/<name>` and the scoped
+`skill_save` tool. Raw reads do not activate tools; append a relative resource
+path to inspect a file, and use normal line-based offset/limit for paging. Read an
 existing skill before saving so revision checks protect concurrent changes;
 built-ins are read-only. Saving does not grant tool permissions or publish a
 restricted conversation agent. Script execution is **not an OS sandbox**. See
@@ -1238,34 +1289,55 @@ oldest related briefings before oldest own briefings, with an explicit omission
 notice; a budget too small for even the notice returns no block. No topic
 aggregation, retrospective migration or additional LLM summarization is involved.
 
-### Simple HTTP polling definitions
+## Programmable EventSourceProviders
 
-`event_source create` accepts either advanced `code` or `simple_json` (never
-both), with the same `grant_json`, source ID and interval. Prefer `simple_json`
-for endpoints whose complete state fits in one response. It describes an exact
-GET request, property-segment extraction paths, an event type and optional
-content mapping. `items` records stable IDs, silently baselines the first poll,
-and emits newly observed matching entries; `snapshot` canonicalizes a selected
-JSON value and emits on fingerprint changes. Infrastructure persists the
-checkpoint and deduplication state. The original code interface is unchanged.
+The lazy `event_provider` tool handles external sources; internal bus subscriptions use `event_subscribe`.
+Author a local manifest/restricted module and reload for REST JSON APIs, cursor
+feeds or public HTML/text acquisition. Read `v:events/providers/<id>` for the complete consumer contract; explicitly use
+`v:events/authoring/providers/<id>/revisions/<version>` for
+revision manifests, code, schemas and examples; `instances` and `subscriptions`
+expose Project-wide configuration, processors and sanitized status. Generated views
+are read-only. Internal bus views live at `v:events/internal/`. Provider discover/inspect/share
+actions are removed. Project instances capture narrow
+authorized origin/routes/methods/query/body/optional credential bindings that code
+reload cannot expand. Public sources need no secret. Exact demands deduplicate
+across eligible local Project sessions; each subscription has an isolated processor/outbox.
+Snapshot and bounded-retention delta modes commit checkpoints with fanout jobs.
+The built-in `github-issues@1` owns its fixed GraphQL query, batching and read-only
+body schema, using the same standard HTTP call API and host-injected PAT. The
+broker only enforces protocol-neutral origin/routes/schemas and host-bound route
+`effect:"read"` acquisition assertions; ordinary writes retain mutation receipts. See [EventSourceProviders](event-source-providers.md)
+for complete REST/HTML authoring examples, virtual views/reload/create/subscribe,
+security, pagination/dedup bounds and inbox-acceptance reliability limitations.
+No arbitrary browser/JS-site support or exactly-once claim; fixture tests do not
+verify live sources.
 
-Simple mode requires `completeResponse:true`; this is an explicit assertion
-based on API semantics, not an automatic completeness check. Paginated,
-truncated, rolling-window and bounded-history endpoints require advanced code
-with explicit cursor handling. Unknown pagination options are rejected. Items
-mode rejects response length at or above its declared `maxItems` (at most 100),
-duplicate/missing IDs, and growth beyond 1000 lifetime IDs rather than silently
-forgetting entries. Snapshot mode compares the complete selected value (or
-`fingerprintPath`); it is not an immutable event feed. See the bundled
-`event-sources` skill for exact schema, examples and limitations.
+### Derived Workspaces
 
-Storage is Project-scoped, not repository-scoped: `projectPaths(DataDir,id).home`
-is `<DataDir>/projects/<id>` and the `.events` logical storage entry maps to
-`state/events`. Thus definitions/checkpoints live at
-`<Project Home>/state/events/polling-sources.json`, subscriptions at
-`<Project Home>/state/events/subscriptions.json`, and source descriptors at
-`<Project Home>/state/events/sources.json`. Source definitions persist the owner,
-code or simple mapping, hash, cadence, grant (credential references only),
-checkpoint, enabled flag and recent delivered IDs. Timers, in-flight work and
-last-run diagnostics are not persisted. External data remains untrusted;
-neither simple mode nor a polling event expands authorization or requires Work.
+Import `workspace_create` from `v:tools/workspace_create`, then invoke it with
+`source` (a registered Workspace selector in the current Project) and `branch`
+(a local branch or existing remote-tracking ref). Optional fields are `description`,
+`workKey`, `name` (safe directory prefix) and `idempotencyKey`. Reuse the same key
+and parameters after an interrupted creation; conflicting requests fail closed.
+The tool is owner-session only and does not change the current session's Workspace.
+
+The shared `DerivedWorkspaces.createDerivedWorkspace` service creates an independent
+Git branch at a resolved commit in a uniquely named directory **beside** the source
+repository, then registers it through the Project's existing Workspace registry.
+Success includes the Workspace ID, source identity/path, actual path, base branch
+and commit, independent branch, and visible description. User descriptions retain
+the generated source/worktree identity. Optional Work association is recorded in
+the creation receipt and description; it neither claims Work nor changes assignees.
+No dirty files are copied, no source checkout/reset occurs, and no fetch/pull runs.
+Remote execution and LayerFS are not implemented by this backend.
+
+Automatic Work admission calls the same service and binds the returned Workspace
+to its executor. Old Project-Home `work-executions` worktrees remain in place and
+retain their original identity-verification recovery path. New worktrees use the
+beside layout. Failed registration retains both the worktree and creation record
+for retry, rather than deleting user resources. Concurrent host instances fail
+closed on a SQLite OS-backed admission lock, released automatically when the host
+exits. Journals are atomically published with synced file contents. Partial failures
+report a recovery idempotency key even when none was supplied. An interrupted Git
+checkout with unknown completion is retained for inspection and never registered
+as a completed creation; no retry resets or deletes it.

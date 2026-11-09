@@ -91,6 +91,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
     resolve: (name: string) => ({
       name, description: '', prompt: '', source: 'builtin',
       root: name === 'sub',
+      ...(['reflector', 'encapsulator', 'soul-reflector'].includes(name) ? { allowedTools: ['search', 'learning_result', ...(name === 'encapsulator' ? ['learned_skill'] : [])] } : {}),
       defaultMode: name === 'leaf' ? 'call' : name === 'verify' ? 'task' : 'session',
       ...(name === 'limited' ? { allowedTools: ['subagent', 'ask', 'reply', 'message', 'read'] } : {}),
     }),
@@ -1891,4 +1892,98 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const status of ['no_change', 'partial', 'blocked'] as const) test(`${Store.name}: bounded learning reserves final inference and completes on verified receipt (${status})`, async () => withTempWorkspace(async workspace => {
+    const { LearningRuntime } = await import('../agent/learning/pipelines.ts')
+    const { LearningTools } = await import('../agent/learning/tools.ts')
+    const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
+    const f = fixture(workspace, store, { projectId: 'fixture' })
+    const runtime = new LearningRuntime(f.sessions, 'fixture')
+    const tools = new LearningTools(runtime)
+    f.tools.register(tools.result)
+    f.tools.register({ name: 'search', description: 'Synthetic bounded lookup', parameters: { type: 'object', properties: {} }, execute: async () => 'No additional evidence' })
+    // An event-free pending batch isolates finish mechanics from source selection.
+    const batch = runtime.ledger.create('reflector', [], [])
+    try {
+      await f.sessions.start()
+      const accepted = Promise.withResolvers<string>()
+      const run = runtime.run('reflector', new AbortController().signal, undefined, accepted.resolve)
+      const id = await accepted.promise
+      for (let i = 0; i < 5; i++) (await f.next(id)).resolve(invoke('search', {}))
+      const last = await f.next(id)
+      assert.deepEqual(last.names, ['learning_result'])
+      assert.match(JSON.stringify(last.messages), /Host finish boundary/)
+      const settlement = status === 'no_change' ? run.then(result => assert.equal(result, id)) : assert.rejects(run, new RegExp(status))
+      last.resolve(invoke('learning_result', { status, summary: 'No assigned evidence or effects in this fixture; partial/blocked must remain unfinished.' }))
+      await settlement
+      assert.equal(f.requests.filter(r => r.sessionId === id).length, 6)
+      assert.equal((await f.sessions.getExecutionResult(id))?.status, 'completed')
+      assert.equal(runtime.ledger.batch(batch.id).state, status === 'no_change' ? 'done' : 'pending')
+      assert.equal(runtime.ledger.outcome(id)?.status, status)
+    } finally { await f.sessions.stop(); await store.close?.() }
+  }))
+
+  test(`${Store.name}: invalid final learning receipt fails without acknowledgement`, async () => withTempWorkspace(async workspace => {
+    const { LearningRuntime } = await import('../agent/learning/pipelines.ts')
+    const { LearningTools } = await import('../agent/learning/tools.ts')
+    const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
+    const f = fixture(workspace, store, { projectId: 'fixture' })
+    const runtime = new LearningRuntime(f.sessions, 'fixture')
+    f.tools.register(new LearningTools(runtime).result)
+    const batch = runtime.ledger.create('soulReflector', [], [])
+    try {
+      await f.sessions.start()
+      const accepted = Promise.withResolvers<string>()
+      const run = runtime.run('soulReflector', new AbortController().signal, undefined, accepted.resolve)
+      const rejection = assert.rejects(run, /iterations|budget/)
+      const id = await accepted.promise
+      // Invalid applied (no effects) must not be mistaken for successful submission.
+      for (let i = 0; i < 4; i++) (await f.next(id)).resolve(invoke('learning_result', { status: 'applied', summary: 'Invalid fixture receipt' }))
+      await rejection
+      assert.equal((await f.sessions.getExecutionResult(id))?.status, 'failed')
+      assert.notEqual(runtime.ledger.batch(batch.id).state, 'done')
+      assert.notEqual(runtime.ledger.outcome(id)?.status, 'applied')
+    } finally { await f.sessions.stop(); await store.close?.() }
+  }))
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: last learning work inference saves real lesson before reserved receipt`, async () => withTempWorkspace(async workspace => {
+    const { LearningRuntime } = await import('../agent/learning/pipelines.ts')
+    const { LearningTools } = await import('../agent/learning/tools.ts')
+    const { SkillsManager } = await import('../skills/loader.ts')
+    const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
+    const f = fixture(workspace, store, { projectId: 'fixture' })
+    const skills = new SkillsManager(workspace)
+    const runtime = new LearningRuntime(f.sessions, 'fixture', skills)
+    const tools = new LearningTools(runtime)
+    f.tools.register(tools.skill); f.tools.register(tools.result)
+    f.tools.register({ name: 'search', description: 'Synthetic evidence', parameters: { type: 'object', properties: {} }, execute: async () => 'Reviewed fixture evidence' })
+    const batch = runtime.ledger.create('encapsulator', [], [])
+    const name = 'last-work-inference'
+    const content = `---\nname: ${name}\ndescription: Separate test evidence from deployment evidence\n---\nExperimental fixture. Passing tests do not prove deployment. Check loaded build independently. Source: synthetic fixture. Counterexample: verified loaded build. Revalidate after deployment.\n`
+    try {
+      await f.sessions.start()
+      const accepted = Promise.withResolvers<string>()
+      const run = runtime.run('encapsulator', new AbortController().signal, undefined, accepted.resolve)
+      const id = await accepted.promise
+      // Six evidence requests leave precisely the seventh work inference and eighth receipt.
+      for (let i = 0; i < 6; i++) (await f.next(id)).resolve(invoke('search', {}))
+      const work = await f.next(id)
+      assert(work.names.includes('learned_skill'))
+      work.resolve(invoke('learned_skill', { action: 'save', name, revision: '', content }))
+      const finish = await f.next(id)
+      assert.deepEqual(finish.names, ['learning_result'])
+      assert.equal(runtime.skillStore!.read(name).files['SKILL.md'].toString(), content.trim())
+      assert(skills.getSkillDirectory(name))
+      assert.equal(runtime.ledger.batch(batch.id).artifacts.length, 1)
+      finish.resolve(invoke('learning_result', { status: 'applied', summary: 'Saved a synthetic diagnostic lesson before finish, not a deployment claim.' }))
+      assert.equal(await run, id)
+      assert.equal(f.requests.filter(r => r.sessionId === id).length, 8)
+      assert.equal(runtime.ledger.batch(batch.id).state, 'done')
+      assert.equal(runtime.ledger.outcome(id)?.artifacts, 1)
+    } finally { await f.sessions.stop(); await store.close?.() }
+  }))
 }

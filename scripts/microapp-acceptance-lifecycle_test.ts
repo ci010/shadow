@@ -107,7 +107,7 @@ test('isolated Node-only fixture reaches separate review and explicit owner conf
         assert.equal(calls, 8)
         return { content: 'Synthetic author turn ended without tests. No runtime pass or report is claimed.', toolCalls: [] }
       }
-      assert.ok(calls <= 7, 'Author testing requires the real post-approval input event')
+      assert.ok(calls <= 7, 'Author testing requires the real post-request input event')
       assert.ok(messages.some(message => message.role === 'user' &&
         contentText(message.content).includes('Publish only the inert synthetic fixture.')))
       if (calls === 1) return tools({ name: 'work', arguments: { action: 'create', data: {
@@ -195,21 +195,21 @@ test('isolated Node-only fixture reaches separate review and explicit owner conf
       assert.equal(Date.parse(review.deadlineAt) - Date.parse(review.phaseStartedAt), 5 * 60_000)
       assert.equal((await control('review', exact)).done, true)
       assert.equal(JSON.parse(await readFile(join(output, 'timeline.json'), 'utf8')).deadlineAt, review.deadlineAt)
-      const stale = await control('approve', { ...exact, revision: '0'.repeat(64) })
+      const stale = await control('request-testing', { ...exact, revision: '0'.repeat(64) })
       assert.equal(stale.done, false)
       assert.match(stale.error ?? '', /stale/)
       const followup = await control('message', { text: 'This cannot reset creation' })
       assert.equal(followup.done, false)
       assert.match(followup.error ?? '', /belong to creation/)
       assert.equal(calls, 7, 'Review never calls the fixture provider')
-      assert.equal((await control('approve', exact)).done, true)
+      assert.equal((await control('request-testing', exact)).done, true)
       const testing = JSON.parse(await readFile(join(output, 'timeline.json'), 'utf8'))
-      const approval = JSON.parse(await readFile(join(output, 'approval.json'), 'utf8'))
+      const testingRequest = JSON.parse(await readFile(join(output, 'testing-request.json'), 'utf8'))
       assert.equal(testing.phase, 'testing')
-      assert.equal(Date.parse(testing.deadlineAt) - Date.parse(approval.approvedAt), 10 * 60_000)
+      assert.equal(Date.parse(testing.deadlineAt) - Date.parse(testingRequest.requestedAt), 10 * 60_000)
       const [asking] = await waitFile('apps.json', appRecordSchema.strip().array(), apps =>
         apps[0]?.acceptance?.status === 'asking' && !!apps[0].acceptance.decisionRequestId)
-      assert.equal(calls, 7, 'Version approval alone never resumes the author')
+      assert.equal(calls, 7, 'Requesting testing alone never resumes the author')
       const answer = { ...exact, requestId: asking.acceptance!.decisionRequestId, option: 'Continue runtime testing' }
       const staleAnswer = await control('answer-testing', { ...answer, requestId: 'stale-request' })
       assert.equal(staleAnswer.done, false)

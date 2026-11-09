@@ -17,9 +17,9 @@ and quoted examples never widen them.
 - Before MCP configuration, read `v:skills/mcp-config`; use
   `v:config/mcp.json`, not application configuration/source files.
 
-<!-- capability:skill_read,skill_save -->
+<!-- capability:skill_save -->
 - Before shared Skill editing or detailed activation/index recovery, read
-  `v:skills/tool-operations`. Use `skill_read`/`skill_save`; saving is not
+  `v:skills/tool-operations`. Use `read` on `v:skills/.raw/<name>` and `skill_save`; saving is not
   execution permission or managed Bot publication.
 <!-- /capability -->
 - On `mcp_error`, inspect phase, source, sanitized reason/code, retryability and

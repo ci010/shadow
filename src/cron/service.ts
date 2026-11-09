@@ -1,5 +1,8 @@
 import { Cron } from 'croner'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { WORK_DISPATCH_ID, workDispatchConfigSchema, type WorkDispatchConfig } from './work-dispatch-contract.ts'
+import { BotWakeSchema, type BotWake } from '../bots/host-contract.ts'
+import { mkdir } from 'node:fs/promises'
+import { writePrivateFile } from '../utils/private-file.ts'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import type { CronContextMode } from './contracts.ts'
@@ -16,6 +19,10 @@ import {
 const JOBS_FILE = '.cron/jobs.json'
 
 export interface CronJobDef {
+  /** Trusted program action, dispatched before any agent/model path. */
+  program?: WorkDispatchConfig
+  /** Host-created binding-scoped Bot wake. Never dispatched as a generic cron event. */
+  botWake?: BotWake
   /** Host-configured tool/budget ceiling for fresh agent executions. */
   executionLimits?: { allowedTools: string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }
   name?: string
@@ -55,6 +62,17 @@ function isCronJob(value: unknown): value is CronJob {
   if ('target' in value && value.target !== undefined && !isCronEventTarget(value.target)) return false
   if ('event' in value && value.event !== undefined && !isCronEventPayload(value.event)) return false
   const v = value as Record<string, unknown>
+  if (v.program !== undefined) {
+    const parsed = workDispatchConfigSchema.safeParse(v.program)
+    if (!parsed.success || v.id !== WORK_DISPATCH_ID || v.session !== 'fresh' || v.source !== 'cron'
+      || v.botWake !== undefined || v.executionLimits !== undefined || v.target !== undefined || v.event !== undefined
+      || v.enabled !== false && !parsed.data.folderId) return false
+    v.program = parsed.data
+  }
+  if (v.botWake !== undefined) {
+    const parsed = BotWakeSchema.safeParse(v.botWake)
+    if (!parsed.success || v.session !== 'existing' || !isCronEventTarget(v.target) || v.target.sessionId !== parsed.data.sessionId || v.schedule !== `every ${parsed.data.intervalMinutes}m`) return false
+  }
   if (v.executionLimits !== undefined) {
     const limits = v.executionLimits as CronJobDef['executionLimits']
     if (!limits || typeof limits !== 'object' || !Array.isArray(limits.allowedTools) ||
@@ -319,6 +337,7 @@ export class CronService {
     const job = this.jobs.get(id)
     if (!job) return false
     if (typeof enabled !== 'boolean') throw new TypeError('Enabled must be a boolean')
+    if (enabled && job.program && !job.program.folderId) throw new TypeError('Configure a registered Workspace before enabling automatic Work.')
     if ((job.enabled !== false) === enabled) return true
     job.enabled = enabled
     this.scheduledJobs.get(id)?.stop()
@@ -328,6 +347,24 @@ export class CronService {
     this.onChanged?.('inventory')
     return true
   }
+
+  /** Same persistence/timer lifecycle as ordinary jobs; only host API can configure programs. */
+  async configureProgram(id: string, program: WorkDispatchConfig, schedule?: string): Promise<void> {
+    const prior = this.jobs.get(id)
+    if (!prior?.program) throw new TypeError('Unknown program automation')
+    const next = { ...prior, program, ...(schedule ? { schedule } : {}) }
+    if (!isCronJob(next)) throw new TypeError('Invalid program automation')
+    const validation = new Cron(this.normalizeSchedule(next.schedule), { paused: true, timezone: this.timezone })
+    validation.stop()
+    this.jobs.set(id, next)
+    this.scheduledJobs.get(id)?.stop()
+    this.scheduledJobs.delete(id)
+    this.scheduleCron(next)
+    await this.saveJobs()
+    this.onChanged?.('inventory')
+  }
+
+  isRunning(id: string): boolean { return this.executing.has(id) }
 
   listJobs(): CronJob[] {
     return structuredClone([...this.jobs.values(), ...[...this.managed.values()].map(m => m.job)])
@@ -458,7 +495,7 @@ export class CronService {
       jobs: Array.from(this.jobs.values()) }, null, 2)
     const pending = this.persistenceTail.then(async () => {
       await mkdir(workspacePath(this.workspace, '.cron'), { recursive: true })
-      await writeFile(this.jobsPath, contents)
+      writePrivateFile(this.jobsPath, contents)
     })
     this.persistenceTail = pending.then(
       () => { this.persistenceError = undefined },

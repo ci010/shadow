@@ -14,6 +14,7 @@ import { Tools, SessionTools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { pngFixture } from '../testing/image.ts'
+import { imageFromDataUrlForModel } from '../utils/image-input.ts'
 import { toolResultText, transientToolResult } from '../tools/tool.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -115,13 +116,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(result.tool_call_id, 'read-image')
       const image = result.content.find(part => part.type === 'image_url')
       assert(image?.type === 'image_url')
-      assert.equal(image.image_url.url, `data:image/png;base64,${bytes.toString('base64')}`)
+      const originalUrl = `data:image/png;base64,${bytes.toString('base64')}`
+      const expectedModelCopy = await imageFromDataUrlForModel(originalUrl)
+      assert(image.image_url.url === expectedModelCopy.image_url.url, 'The model copy follows the shared image policy')
       const live = outputs.find(message => message.event === 'tool_result')
       assert(live?.media?.length === 1)
       assert(!JSON.stringify(live).includes('base64,'), 'Live events must not overflow the bounded realtime queue')
       assert.deepEqual(await readFile(live.media[0]), bytes)
       assert.match(live.content, /Image snapshots/)
-      assert(!inputs[1].some(message => message.role === 'user' && Array.isArray(message.content)), 'Do not impersonate a human in durable context')
+      assert(!inputs[1].some(message => message.role === 'user' && Array.isArray(message.content)
+        && message.content.some(part => part.type === 'image_url')), 'Tool images must not impersonate a human in durable context')
 
       store.close?.()
       store = new Store(join(home, '.sessions'))
@@ -150,7 +154,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await writeFile(path, pngFixture(2, 2))
       const reread = await sessionTools.execute('read', { path: live.media[0] }, context)
       assert(typeof reread !== 'string', toolResultText(reread))
-      assert.equal(reread.content.find(part => part.type === 'image_url')?.image_url.url, image.image_url.url)
+      assert(reread.content.find(part => part.type === 'image_url')?.image_url.url === originalUrl,
+        'Reading a saved snapshot returns original pixels/bytes; session admission selects the model copy')
       assert(!toolResultText(reread).includes('already in context'))
     } finally { store.close?.() }
   }))

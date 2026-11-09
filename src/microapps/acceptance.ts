@@ -11,9 +11,9 @@ const CONTINUE = 'Continue runtime testing'
 const PAUSE = 'Not now; I will test it myself'
 export function appTestQuestion(record: AppRecord): YieldQuestion {
   return {
-    question: `Let the author of "${record.manifest.name}" continue testing approved revision ${record.revision}? ` +
+    question: `Let the author of "${record.manifest.name}" continue testing published revision ${record.revision}? ` +
       'This uses agent calls and may use the app model allowance. No reply within 60 seconds defers testing without approval. ' +
-      'This does not approve new versions or additional device access.',
+      'This does not authorize additional device access.',
     options: [CONTINUE, PAUSE], defaultOption: CONTINUE,
   }
 }
@@ -71,7 +71,7 @@ export class AppAcceptanceFlow {
 
   create(record: AppRecord): AppAcceptance | undefined {
     if (!this.host) return undefined
-    return { id: randomUUID(), revision: record.revision, approvalAt: record.approval!.at, status: 'asking', sequence: 0, observations: [],
+    return { id: randomUUID(), revision: record.revision, status: 'asking', sequence: 0, observations: [],
       ...(record.work?.length ? { work: structuredClone(record.work) } : {}) }
   }
   start(id: string) {
@@ -81,7 +81,7 @@ export class AppAcceptanceFlow {
     const controller = new AbortController()
     const done = Promise.resolve().then(() => this.decide(record, acceptance.id, controller.signal)).catch(error => {
       const current = this.store.get(id)
-      if (current.acceptance?.id !== acceptance.id || !current.approval) return
+      if (current.acceptance?.id !== acceptance.id) return
       const cancelled = current.acceptance.status === 'asking' && error instanceof Error && error.name === 'AbortError'
       current.acceptance.status = controller.signal.aborted ? 'interrupted' : cancelled ? 'paused' : 'failed'
       current.acceptance.error = controller.signal.aborted
@@ -97,9 +97,8 @@ export class AppAcceptanceFlow {
   }
   private current(id: string, acceptanceId: string) {
     const record = this.store.get(id)
-    if (record.acceptance?.id !== acceptanceId || record.acceptance.revision !== record.revision ||
-      record.approval?.revision !== record.revision || record.approval.at !== record.acceptance.approvalAt) {
-      throw new MicroAppError('acceptance_changed', 'The exact app approval or testing request changed. Reload Apps.', 409)
+    if (record.acceptance?.id !== acceptanceId || record.acceptance.revision !== record.revision) {
+      throw new MicroAppError('acceptance_changed', 'The exact app revision or testing request changed. Reload Apps.', 409)
     }
     return record
   }
@@ -150,7 +149,7 @@ export class AppAcceptanceFlow {
   async retry(id: string, revision: string) {
     if (!this.host || this.stopped) throw new MicroAppError('acceptance_unavailable', 'Author testing is unavailable', 409)
     const record = this.store.get(id)
-    if (record.revision !== revision || record.approval?.revision !== revision) throw new MicroAppError('approval_required', 'Review the current revision first', 403)
+    if (record.revision !== revision) throw new MicroAppError('revision_changed', 'Reload the current revision', 403)
     if (this.pending.has(id) || ['asking', 'dispatching', 'notified', 'running', 'testing'].includes(record.acceptance?.status ?? '')) {
       throw new MicroAppError('acceptance_busy', 'An author testing request is already active', 409)
     }
@@ -161,10 +160,10 @@ export class AppAcceptanceFlow {
   authorize(id: string, revision: string, sessionId: string) {
     const record = this.store.get(id), acceptance = record.acceptance
     if (this.stopped || record.createdBy !== sessionId) throw new MicroAppError('not_app_author', 'Only the original author session can test this app', 403)
-    if (!acceptance || record.revision !== revision) throw new MicroAppError('acceptance_required', 'The owner must review this revision and choose runtime testing in Apps', 403)
+    if (!acceptance || record.revision !== revision) throw new MicroAppError('acceptance_required', 'The owner must choose runtime testing in Apps', 403)
     this.current(id, acceptance.id)
     if (!acceptance.decision || !['dispatching', 'notified', 'running', 'testing'].includes(acceptance.status)) {
-      throw new MicroAppError('acceptance_required', `Author testing is ${acceptance.status}; a timeout cannot replace version approval`, 403)
+      throw new MicroAppError('acceptance_required', `Author testing is ${acceptance.status}; a timeout cannot grant testing permission`, 403)
     }
     return acceptance.id
   }
@@ -188,7 +187,7 @@ export class AppAcceptanceFlow {
     const record = this.store.list().find(record => record.createdBy === fact.sessionId &&
       record.acceptance?.id === (fact.source.kind === 'event' ? fact.source.eventId : undefined) &&
       fact.inputId === `microapp-test:${record.acceptance?.id}`)
-    if (!record?.acceptance || record.approval?.revision !== record.revision) return
+    if (!record?.acceptance) return
     const acceptance = record.acceptance
     if (!acceptance.decision || !['dispatching', 'notified', 'running', 'testing', 'reported'].includes(acceptance.status)) return
     if (acceptance.authorTurn && acceptance.authorTurn.id !== fact.turnId) return

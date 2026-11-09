@@ -47,13 +47,12 @@ const post = (origin: string, path: string, token: string, body: unknown) => fet
   method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 })
 
-test('publication checks distinguish current source from shipped files without changing approval or running code', async () => withTempWorkspace(async home => {
+test('publication checks distinguish current source from shipped files without changing model pin or running code', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   try {
     await writeFile(join(f.directory, 'old.txt'), 'old')
     const manifest = { ...f.manifest, files: ['index.html', 'old.txt'] }
     const app = await f.service.publish(f.directory, manifest, 'web:author', AbortSignal.timeout(5000))
-    await f.service.approve(app.id, app.revision)
     const before = f.service.get(app.id)
     const check = (candidate = manifest) => f.service.checkPublication(app.id, app.revision, f.directory, candidate, AbortSignal.timeout(5000))
     const same = await check()
@@ -68,13 +67,12 @@ test('publication checks distinguish current source from shipped files without c
     assert.equal(changed.publicationCheck.matchesPublished, false)
     assert.equal(changed.publicationCheck.manifestChanged, true)
     assert.deepEqual(changed.publicationCheck.files, { added: ['helper.txt'], modified: ['index.html'], removed: ['old.txt'] })
-    assert.deepEqual(f.service.get(app.id), before, 'Inspection must not publish, clear approval or create a run')
+    assert.deepEqual(f.service.get(app.id), before, 'Inspection must not publish, reset usage or create a run')
     assert.equal(f.calls.length, 0)
     const updated = await f.service.publish(f.directory, candidate, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
     assert.equal(updated.revision, changed.publicationCheck.candidateRevision)
-    assert.equal(updated.approval, undefined)
+    assert.equal(updated.model, undefined)
     assert.equal((await f.service.checkPublication(app.id, updated.revision, f.directory, candidate, AbortSignal.timeout(5000))).publicationCheck.matchesPublished, true)
-    await assert.rejects(f.service.start(app.id), /approve/)
   } finally { await f.service.shutdown() }
 }))
 
@@ -142,7 +140,6 @@ test('packaged dependency failures can be diagnosed, republished, reviewed and r
     const app = await f.service.publish(f.directory, manifest, 'web:author', AbortSignal.timeout(5000))
     const same = await f.service.checkPublication(app.id, app.revision, f.directory, manifest, AbortSignal.timeout(5000))
     assert.equal(same.publicationCheck.matchesPublished, true, 'Matching listed files cannot certify unlisted dependencies')
-    await f.service.approve(app.id, app.revision)
     await assert.rejects(f.service.start(app.id), /missing or unloadable dependency/)
     assert.match(f.service.get(app.id).lastRun!.error!, /published file list/)
     assert.equal(f.service.get(app.id).status, 'failed')
@@ -153,9 +150,7 @@ test('packaged dependency failures can be diagnosed, republished, reviewed and r
     assert.deepEqual(draft.publicationCheck.files.added, ['helper.mjs'])
     const fixed = await f.service.publish(f.directory, complete, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
     assert.equal(fixed.revision, draft.publicationCheck.candidateRevision)
-    assert.equal(fixed.status, 'awaiting_approval')
-    await assert.rejects(f.service.start(app.id), /approve/)
-    await f.service.approve(app.id, fixed.revision)
+    assert.equal(fixed.status, 'stopped')
     const first = await f.connect(app.id)
     assert.equal(await (await post(first.origin, '/backend/health', first.token, {})).text(), 'packaged ready')
     const runId = f.service.get(app.id).lastRun!.id
@@ -170,14 +165,13 @@ test('packaged dependency failures can be diagnosed, republished, reviewed and r
   } finally { await restored?.shutdown(); await f.service.shutdown() }
 }))
 
-test('cleanup failures remain visible and retryable without losing approval or permitting a new run', async t => withTempWorkspace(async home => {
+test('cleanup failures remain visible and retryable without losing model pin or permitting a new run', async t => withTempWorkspace(async home => {
   const f = await fixture(home)
   const original = fs.promises.rm
   let failed = false
   let restore: (() => void) | undefined
   try {
     const app = await f.publish()
-    await f.service.approve(app.id, app.revision)
     await f.connect(app.id)
     const record = f.service.get(app.id)
     const runPath = join(f.service.store.root, app.id, 'runs', record.lastRun!.id)
@@ -196,10 +190,9 @@ test('cleanup failures remain visible and retryable without losing approval or p
     const pending = f.service.get(app.id)
     assert.equal(pending.status, 'failed')
     assert.equal(pending.cleanupPending, true)
-    assert.deepEqual(pending.approval, record.approval)
+    assert.deepEqual(pending.model, record.model)
     assert.equal(pending.calls, record.calls)
     await assert.rejects(f.service.open(app.id), /Retry Stop/)
-    await assert.rejects(f.service.approve(app.id, app.revision), /Stop the app/)
     await Promise.all([f.service.stop(app.id), f.service.stop(app.id)])
     assert.equal(f.service.get(app.id).cleanupPending, false)
     assert.equal(f.service.get(app.id).status, 'stopped')
@@ -218,7 +211,6 @@ test('failed startup cleanup reports a failed retained run and remains retryable
   let restore: (() => void) | undefined
   try {
     const app = await f.publish()
-    await f.service.approve(app.id, app.revision)
     t.mock.method(f.service.store, 'bundle', async () => { throw new Error('Synthetic bundle failure') }, { times: 1 })
     const remove = t.mock.method(fs.promises, 'rm', async () => { throw new Error('Synthetic cleanup failure') })
     restore = () => { remove.mock.restore(); syncBuiltinESMExports() }
@@ -243,8 +235,6 @@ test('app state persists independently of browser origins and requires scoped ac
   const f = await fixture(home)
   try {
     const app = await f.publish(), other = await f.publish()
-    await f.service.approve(app.id, app.revision)
-    await f.service.approve(other.id, other.revision)
     const first = await f.connect(app.id), second = await f.connect(other.id)
     const get = (origin: string, token: string) => fetch(origin + '/_shadow/state', { headers: { Authorization: `Bearer ${token}` } })
     const put = (token: string, body: unknown) => fetch(first.origin + '/_shadow/state', {
@@ -277,7 +267,7 @@ test('app state persists independently of browser origins and requires scoped ac
       assert.deepEqual(restored.store.loadState(app.id), { version: 2, values })
       await writeFile(join(f.directory, 'index.html'), '<title>New revision</title>')
       const changed = await restored.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
-      assert.equal(changed.approval, undefined)
+      assert.equal(changed.model, undefined)
       assert.deepEqual(restored.store.loadState(app.id), { version: 2, values })
     } finally { await restored.shutdown() }
   } finally { await f.service.shutdown() }
@@ -287,7 +277,6 @@ test('invalid persistent app state is reported rather than silently reset or ove
   const f = await fixture(home)
   try {
     const app = await f.publish()
-    await f.service.approve(app.id, app.revision)
     const { origin, token } = await f.connect(app.id)
     const path = join(f.service.store.root, app.id, 'state.json')
     for (const corrupt of ['{broken', '{"version":-1,"values":{}}', 'x'.repeat(65537)]) {
@@ -301,19 +290,18 @@ test('invalid persistent app state is reported rather than silently reset or ove
   } finally { await f.service.shutdown() }
 }))
 
-test('reviewed PNG branding has a bounded owner-only endpoint and changes invalidate approval', async () => withTempWorkspace(async home => {
+test('reviewed PNG branding has a bounded owner-only endpoint and changes create a ready-to-open revision', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQiT74HwAEJwJAst2PdAAAAABJRU5ErkJggg==', 'base64')
   try {
     const legacy = await f.publish()
-    await f.service.approve(legacy.id, legacy.revision)
     const same = await f.service.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), legacy.id, legacy.revision)
     assert.equal(same.revision, legacy.revision)
-    assert.ok(same.approval)
+    assert.equal(same.status, 'stopped')
     await writeFile(join(f.directory, 'icon.png'), png)
     const manifest = { ...f.manifest, icon: 'icon.png', files: ['index.html', 'icon.png'] }
     const branded = await f.service.publish(f.directory, manifest, 'web:author', AbortSignal.timeout(5000), legacy.id, legacy.revision)
-    assert.equal(branded.approval, undefined)
+    assert.equal(branded.model, undefined)
     assert.notEqual(branded.revision, legacy.revision)
     const host = new Hono()
     microAppsPlugin(f.service, req => req.headers.get('x-owner') === 'yes')(host)
@@ -327,11 +315,10 @@ test('reviewed PNG branding has a bounded owner-only endpoint and changes invali
     const metadata = await (await host.request(`/api/microapps/${branded.id}/status`, { headers: { 'x-owner': 'yes' } })).json()
     assert.equal(metadata.files, undefined)
     assert.equal(metadata.manifest.icon, 'icon.png')
-    await f.service.approve(branded.id, branded.revision)
     await writeFile(join(f.directory, 'next.png'), png)
     const changed = await f.service.publish(f.directory, { ...manifest, icon: 'next.png', files: ['index.html', 'icon.png', 'next.png'] },
       'web:author', AbortSignal.timeout(5000), branded.id, branded.revision)
-    assert.equal(changed.approval, undefined)
+    assert.equal(changed.model, undefined)
     await assert.rejects(f.service.publish(f.directory, { ...manifest, icon: 'missing.png' }, 'author', AbortSignal.timeout(5000)), /Icon must be in files/)
     await assert.rejects(f.service.publish(f.directory, { ...manifest, icon: 'icon.svg' }, 'author', AbortSignal.timeout(5000)), /PNG/)
     const oversized = Buffer.from(png); oversized.writeUInt32BE(513, 16)
@@ -348,14 +335,11 @@ test('ephemeral ports must also be accepted by browser and Node Fetch', async ()
   await assert.rejects(fetch('http://127.0.0.1:6000'), error => error instanceof TypeError && error.cause instanceof Error && error.cause.message === 'bad port')
 })
 
-test('immutable publication and approval survive restart without replaying processes or resetting call allowance', async () => withTempWorkspace(async home => {
+test('immutable publication and usage survive restart without replaying processes or resetting call allowance', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   try {
     const app = await f.publish()
-    assert.equal(app.status, 'awaiting_approval')
-    await assert.rejects(f.service.start(app.id), /approve/)
-    await assert.rejects(f.service.approve(app.id, '0'.repeat(64)), /current app revision/)
-    await f.service.approve(app.id, app.revision)
+    assert.equal(app.status, 'stopped')
     const { origin, token, ticket } = await f.connect(app.id)
     assert.equal((await fetch(origin)).status, 200)
     assert.equal((await fetch(origin)).headers.get('x-content-type-options'), 'nosniff')
@@ -388,8 +372,6 @@ test('scoped credentials cannot cross apps, origins, host routes, model grants o
   const f = await fixture(home)
   try {
     const a = await f.publish(), b = await f.publish()
-    await f.service.approve(a.id, a.revision)
-    await f.service.approve(b.id, b.revision)
     const first = await f.connect(a.id), second = await f.connect(b.id)
     const input = { messages: [{ role: 'user', content: 'Hello' }] }
     assert.equal((await post(second.origin, '/_shadow/generate', first.token, input)).status, 401)
@@ -403,27 +385,25 @@ test('scoped credentials cannot cross apps, origins, host routes, model grants o
       assert.equal((await post(first.origin, '/_shadow/generate', first.token, { ...input, ...extra })).status, 400)
     }
     assert.equal(f.calls.length, 0)
-    await f.service.revoke(a.id)
+    await f.service.cancelTesting(a.id)
     await assert.rejects(fetch(first.origin))
-    await assert.rejects(f.service.open(a.id), /approve/)
+    await f.service.open(a.id)
+    assert.equal(f.service.get(a.id).status, 'running')
     assert.equal((await post(second.origin, '/_shadow/generate', second.token, input)).status, 200)
   } finally { await f.service.shutdown() }
 }))
 
-test('changed code requires review again; tampered snapshots and concurrent control never use old approval', async () => withTempWorkspace(async home => {
+test('changed code is ready to open; tampered snapshots and concurrent control remain rejected', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   try {
     const app = await f.publish()
-    await f.service.approve(app.id, app.revision)
     const unchanged = await f.service.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
-    assert.ok(unchanged.approval)
+    assert.equal(unchanged.status, 'stopped')
     await writeFile(join(f.directory, 'index.html'), '<title>Changed app</title>')
     await assert.rejects(f.service.publish(f.directory, f.manifest, 'web:other', AbortSignal.timeout(5000), app.id, app.revision), /original author/)
     const changed = await f.service.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
     assert.notEqual(changed.revision, app.revision)
-    assert.equal(changed.approval, undefined)
-    await assert.rejects(f.service.start(app.id), /approve/)
-    await f.service.approve(app.id, changed.revision)
+    assert.equal(changed.model, undefined)
     const path = join(f.service.store.root, app.id, `${changed.revision}.json`)
     const bundle = JSON.parse(await readFile(path, 'utf8'))
     bundle.files['index.html'] = Buffer.from('tampered').toString('base64')
@@ -450,7 +430,6 @@ test('backend readiness, proxy, private environment and persistent data use the 
     await writeFile(join(f.directory, 'server.mjs'), server)
     const app = await f.service.publish(f.directory, { ...f.manifest, files: ['index.html', 'server.mjs'],
       backend: { runtime: 'node', entry: 'server.mjs' } }, 'web:author', AbortSignal.timeout(5000))
-    await f.service.approve(app.id, app.revision)
     const before = process.env.SHADOW_TEST_PRIVATE_SECRET
     process.env.SHADOW_TEST_PRIVATE_SECRET = 'synthetic-must-not-inherit'
     let first: Awaited<ReturnType<typeof f.connect>>
@@ -491,7 +470,6 @@ test('backend proxy preserves application headers and binary bodies without forw
     `)
     const app = await f.service.publish(f.directory, { ...f.manifest, files: ['index.html', 'server.mjs'],
       backend: { runtime: 'node', entry: 'server.mjs' } }, 'web:author', AbortSignal.timeout(5000))
-    await f.service.approve(app.id, app.revision)
     const { origin, token } = await f.connect(app.id)
     const body = Buffer.from([82, 73, 70, 70, 0, 255, 128, 10])
     const response = await fetch(origin + '/backend/recognize?mode=file', {
@@ -541,7 +519,6 @@ test('no model grant denies inference and synchronous provider failures release 
   const f = await fixture(home)
   try {
     const noLlm = await f.service.publish(f.directory, { ...f.manifest, llm: undefined }, 'web:author', AbortSignal.timeout(5000))
-    await f.service.approve(noLlm.id, noLlm.revision)
     const first = await f.connect(noLlm.id)
     assert.equal((await fetch(first.origin + '/_shadow/state', {
       method: 'PUT', headers: { Authorization: `Bearer ${first.token}`, 'Content-Type': 'application/json' },
@@ -551,7 +528,6 @@ test('no model grant denies inference and synchronous provider failures release 
     assert.equal((await post(first.origin, '/_shadow/generate', first.token, input)).status, 403)
     f.provider.chat = () => { throw new Error('Synthetic synchronous provider failure') }
     const app = await f.publish()
-    await f.service.approve(app.id, app.revision)
     const second = await f.connect(app.id)
     assert.equal((await post(second.origin, '/_shadow/generate', second.token, input)).status, 502)
     assert.equal((await post(second.origin, '/_shadow/generate', second.token, input)).status, 502)
@@ -559,16 +535,12 @@ test('no model grant denies inference and synchronous provider failures release 
   } finally { await f.service.shutdown() }
 }))
 
-test('interrupted startup is reported after restore, stale approvals are serialized and missing files never leave registered apps', async () => withTempWorkspace(async home => {
+test('interrupted startup is reported after restore, runs remain explicit and missing files never leave registered apps', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   try {
     await assert.rejects(f.service.publish(f.directory, { ...f.manifest, files: ['index.html', 'missing.txt'] }, 'web:author', AbortSignal.timeout(5000)), /ENOENT/)
     assert.deepEqual(await readdir(f.service.store.root), [])
     const app = await f.publish()
-    const approval = f.service.approve(app.id, app.revision)
-    await assert.rejects(f.service.start(app.id), /progress/)
-    await assert.rejects(f.service.revoke(app.id), /progress/)
-    await approval
     const saved = f.service.store.get(app.id)
     saved.lastRun = { id: app.id, status: 'running' }
     f.service.store.save(saved)
@@ -588,7 +560,7 @@ test('review includes auxiliary script source and another Project cannot see or 
     const app = await f.service.publish(f.directory, { ...f.manifest, files: ['index.html', 'helper.ps1'] }, 'web:author', AbortSignal.timeout(5000))
     assert.equal((await f.service.review(app.id)).files.find(file => file.path === 'helper.ps1')!.text, 'Write-Output "review this script"')
     assert.deepEqual(other.service.list(), [])
-    await assert.rejects(other.service.approve(app.id, app.revision), /not found in this Project/)
+    await assert.rejects(other.service.start(app.id), /not found in this Project/)
   } finally { await f.service.shutdown(); await other.service.shutdown() }
 }))
 
@@ -598,11 +570,10 @@ test('failed startup is visible, releases the server and permits a corrected pub
     await writeFile(join(f.directory, 'server.mjs'), 'process.exit(2)')
     const app = await f.service.publish(f.directory, { ...f.manifest, files: ['index.html', 'server.mjs'],
       backend: { runtime: 'node', entry: 'server.mjs' } }, 'web:author', AbortSignal.timeout(5000))
-    await f.service.approve(app.id, app.revision)
     await assert.rejects(f.service.start(app.id), /exited before/)
     assert.equal(f.service.get(app.id).status, 'failed')
     const fixed = await f.service.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
-    assert.equal(fixed.status, 'awaiting_approval')
+    assert.equal(fixed.status, 'stopped')
   } finally { await f.service.shutdown() }
 }))
 
@@ -616,7 +587,6 @@ test('model failures count against allowance and stop aborts in-flight calls wit
       throw new Error('Unreachable')
     }
     const app = await f.publish()
-    await f.service.approve(app.id, app.revision)
     const { origin, token } = await f.connect(app.id)
     const request = post(origin, '/_shadow/generate', token, { messages: [{ role: 'user', content: 'Hello' }] }).catch(() => undefined)
     await entered.promise
@@ -627,7 +597,7 @@ test('model failures count against allowance and stop aborts in-flight calls wit
   } finally { await f.service.shutdown() }
 }))
 
-test('agent publication and owner approval use different authenticated surfaces', async () => withTempWorkspace(async home => {
+test('agent publication and owner controls use different authenticated surfaces', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   const host = new Hono()
   microAppsPlugin(f.service, request => request.headers.get('x-owner') === 'yes')(host)
@@ -638,12 +608,12 @@ test('agent publication and owner approval use different authenticated surfaces'
     const capabilities = JSON.parse(await tool.execute({ action: 'capabilities' }, context))
     assert.equal(tool.readonly({ action: 'capabilities' }), true)
     assert.equal(capabilities.storage.state.persistent, true)
-    assert.equal(capabilities.approval.agentMayApprove, false)
+    assert.equal(capabilities.execution.ownerApprovalRequired, false)
     await assert.rejects(tool.execute({ action: 'capabilities' }, { ...context, projectId: 'other' }), /owning local Project/)
     await writeFile(join(f.directory, 'shadow-app.json'), JSON.stringify(f.manifest))
     const app = JSON.parse(await tool.execute({ action: 'publish', directory: 'source' }, context))
     assert.equal(app.manifest, undefined)
-    assert.equal(app.approval, null)
+    assert.equal(app.model, null)
     assert.equal(app.name, f.manifest.name)
     assert.deepEqual(app.llm, f.manifest.llm)
     assert.deepEqual(JSON.parse(await tool.execute(app.detail, context)), f.service.get(app.id))
@@ -652,7 +622,7 @@ test('agent publication and owner approval use different authenticated surfaces'
     assert.equal(JSON.parse(await tool.execute(check, context)).publicationCheck.matchesPublished, true)
     assert.deepEqual(JSON.parse(await tool.execute(check, context)).publicationCheck,
       (await f.service.checkPublication(app.id, app.revision, f.directory, f.manifest, context.signal)).publicationCheck)
-    assert.equal(f.service.get(app.id).status, 'awaiting_approval')
+    assert.equal(f.service.get(app.id).status, 'stopped')
     await assert.rejects(tool.execute({ ...check, revision: undefined }, context))
     await assert.rejects(tool.execute(check, { ...context, projectId: 'other' }), /owning local Project/)
     await assert.rejects(tool.execute({ ...check, directory: '..' }, { ...context, cwd: f.directory }), /effective local workdir/)
@@ -665,7 +635,7 @@ test('agent publication and owner approval use different authenticated surfaces'
     const approved = await host.request(`/api/microapps/${app.id}/approve`, {
       method: 'POST', headers: { 'x-owner': 'yes' }, body: JSON.stringify({ revision: app.revision, confirm: true }),
     })
-    assert.equal(approved.status, 200)
+    assert.equal(approved.status, 400)
     await tool.execute({ action: 'start', id: app.id }, context)
     assert.equal(f.service.get(app.id).status, 'running')
     assert.equal('token' in f.service.get(app.id), false)
@@ -678,7 +648,7 @@ test('agent publication and owner approval use different authenticated surfaces'
   } finally { await f.service.shutdown() }
 }))
 
-test('compact Micro App receipts preserve approval, failures and exact scope refs without duplicating evidence', async () => withTempWorkspace(async home => {
+test('compact Micro App receipts preserve model pin, failures and exact scope refs without duplicating evidence', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   try {
     const app = await f.publish()
@@ -686,12 +656,12 @@ test('compact Micro App receipts preserve approval, failures and exact scope ref
       `${index}: Verify startup, state, recovery and repeat-use behavior. `.repeat(8)) }]
     const record = { ...app, manifest: { ...app.manifest, description: 'Detailed app description. '.repeat(12) },
       work, lastRun: { id: app.id, status: 'failed' as const, error: 'Backend dependency missing' },
-      approval: { revision: app.revision, at: new Date().toISOString(), model: 'fixture' },
-      acceptance: { id: app.id, revision: app.revision, approvalAt: new Date().toISOString(),
+      model: 'fixture',
+      acceptance: { id: app.id, revision: app.revision,
         status: 'blocked' as const, sequence: 3, observations: [], work, error: 'Device use not approved' } }
     const before = structuredClone(record), receipt = microAppReceipt(record)
     assert.ok(JSON.stringify(receipt).length < JSON.stringify(record).length * 0.4, 'Representative receipt shrinks by at least 60%')
-    assert.deepEqual(receipt.approval, record.approval)
+    assert.deepEqual(receipt.model, record.model)
     assert.equal(receipt.lastRun?.error, 'Backend dependency missing')
     assert.equal(receipt.acceptanceSummary?.error, 'Device use not approved')
     assert.equal(receipt.acceptanceSummary?.status, 'blocked')
@@ -700,4 +670,58 @@ test('compact Micro App receipts preserve approval, failures and exact scope ref
     assert.deepEqual(record, before)
     assert.deepEqual(f.service.get(app.id), app, 'Projection does not update storage or grant access')
   } finally { await f.service.shutdown() }
+}))
+
+
+test('legacy approval migration preserves usage, model and state without auto-start or budget renewal', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  const app = await f.publish()
+  await f.service.shutdown()
+  const path = join(f.service.store.root, app.id, 'record.json')
+  const legacy = JSON.parse(await readFile(path, 'utf8'))
+  legacy.approval = { revision: app.revision, at: new Date().toISOString(), model: 'legacy-model' }
+  legacy.calls = 1
+  legacy.acceptance = { id: app.id, revision: app.revision, approvalAt: legacy.approval.at,
+    status: 'asking', sequence: 0, observations: [] }
+  await writeFile(path, JSON.stringify(legacy))
+  f.service.store.saveState(app.id, { version: 0, values: { draft: 'retained' } })
+  const restored = new MicroApps('p', home, () => f.provider, () => 'new-default')
+  await restored.init()
+  try {
+    assert.equal(restored.get(app.id).status, 'stopped')
+    assert.equal(restored.get(app.id).acceptance?.status, 'interrupted')
+    assert.equal(restored.get(app.id).model, 'legacy-model')
+    assert.equal(restored.get(app.id).calls, 1)
+    assert.equal('approval' in JSON.parse(await readFile(path, 'utf8')), false)
+    assert.equal(restored.store.loadState(app.id).values.draft, 'retained')
+    await restored.open(app.id, app.revision)
+    assert.equal(restored.get(app.id).model, 'legacy-model')
+    assert.equal(restored.get(app.id).calls, 1)
+  } finally { await restored.shutdown() }
+}))
+
+test('old unapproved publications and changed revisions open directly; unchanged publish never replenishes allowance', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  const app = await f.publish()
+  await f.service.shutdown()
+  const restored = new MicroApps('p', home, () => f.provider, () => 'fixture')
+  await restored.init()
+  try {
+    assert.equal(restored.get(app.id).status, 'stopped')
+    await restored.open(app.id, app.revision)
+    const record = restored.store.get(app.id)
+    record.calls = 2
+    restored.store.save(record)
+    await restored.stop(app.id)
+    const unchanged = await restored.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
+    assert.equal(unchanged.calls, 2)
+    assert.equal(unchanged.model, 'fixture')
+    await writeFile(join(f.directory, 'index.html'), '<title>New revision</title>')
+    const changed = await restored.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
+    assert.equal(changed.calls, 0)
+    assert.equal(changed.status, 'stopped')
+    await assert.rejects(restored.open(app.id, app.revision), /version changed/)
+    await restored.open(app.id, changed.revision)
+    assert.equal(restored.get(app.id).status, 'running')
+  } finally { await restored.shutdown() }
 }))

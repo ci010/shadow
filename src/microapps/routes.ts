@@ -22,9 +22,9 @@ export function microAppsPlugin(service: MicroApps, authorize: (request: Request
       const bytes = await service.icon(c.req.param('id'), revisionId.parse(c.req.query('revision')))
       return new Response(Uint8Array.from(bytes), { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } })
     })
-    app.post('/api/microapps/:id/approve', async c => {
-      const input = z.object({ revision: revisionId, confirm: z.literal(true), model: z.string().trim().min(1).max(256).optional() }).strict().parse(await appJson(c.req.raw))
-      return c.json(await service.approve(c.req.param('id'), input.revision, input.model))
+    app.post('/api/microapps/:id/cancel-testing', async c => {
+      z.object({}).strict().parse(await appJson(c.req.raw))
+      return c.json(await service.cancelTesting(c.req.param('id')))
     })
     app.post('/api/microapps/:id/test', async c => {
       const input = z.object({ revision: revisionId }).strict().parse(await appJson(c.req.raw))
@@ -43,7 +43,7 @@ export function microAppsPlugin(service: MicroApps, authorize: (request: Request
     })
     app.post('/api/microapps/:id/:action', async c => {
       z.object({}).strict().parse(await appJson(c.req.raw))
-      const action = z.enum(['start', 'stop', 'revoke']).parse(c.req.param('action'))
+      const action = z.enum(['start', 'stop']).parse(c.req.param('action'))
       return c.json(await service[action](c.req.param('id')))
     })
     host.route('/', app)

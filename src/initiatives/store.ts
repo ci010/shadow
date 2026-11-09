@@ -124,7 +124,13 @@ export class InitiativeStore {
       .map(row => workObservationSchema.parse(JSON.parse(String(row.data)))), undefined, true)
   }
 
-  saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string, eventDetails?: unknown): void {
+  /** The eligibility check and sequence CAS are in the same SQLite write transaction. */
+  claimAutomaticWork(record: WorkRecord, expectedSequence: number): void {
+    if (!record.automaticExecution || record.workflow?.assignee !== record.automaticExecution.sessionId) throw new WorkConflict('Invalid automatic assignee.')
+    this.saveWork(record, expectedSequence, record.automaticExecution.sessionId, 'automatic_claim', undefined, true)
+  }
+
+  saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string, eventDetails?: unknown, automaticClaim = false): void {
     const parsed = workRecordSchema.parse(record)
     if (parsed.key !== workKey(parsed.subject) || parsed.sequence !== expectedSequence + 1) throw new WorkConflict('Invalid work contract identity or sequence.')
     this.#transaction(actor, () => {
@@ -139,6 +145,12 @@ export class InitiativeStore {
       if (!prior && this.#all('SELECT id FROM work_contracts').length >= MAX_TABLE_ROWS) throw new WorkConflict('Work contract limit exceeded.')
       const records = this.#all('SELECT data FROM work_contracts')
         .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))).filter(item => item.key !== parsed.key)
+      if (automaticClaim) {
+        const previous = prior ? workRecordSchema.parse(JSON.parse(String(prior.data))) : undefined
+        if (!previous || !automaticWorkEligible(previous, [...records, previous])) throw new WorkConflict('Work is no longer claimable.')
+        if (parsed.workflow?.assignmentRevision !== previous.workflow!.assignmentRevision + 1) throw new WorkConflict('Invalid automatic assignment revision.')
+        this.#assignmentTarget(parsed.workflow.assignee)
+      }
       records.push(parsed)
       this.#validateWorkGraph(records)
       if (prior) this.#write('UPDATE work_contracts SET sequence=?, data=? WHERE id=?', [parsed.sequence, JSON.stringify(parsed), parsed.key])
@@ -158,6 +170,14 @@ export class InitiativeStore {
     })
   }
 
+
+  #assignmentTarget(sessionId: unknown): void {
+    if (sessionId === null) return
+    if (typeof sessionId !== 'string' || !sessionId.trim() || Buffer.byteLength(sessionId) > 256 || /[\x00-\x1f]/.test(sessionId)) throw new Error('Invalid actor/session ID')
+    if (this.#options.isSessionKnown && !this.#options.isSessionKnown(sessionId)) {
+      throw new Error('Owner/assignee target session is not known in this Project')
+    }
+  }
 
   #validateWorkGraph(records: WorkRecord[]): void {
     const byKey = new Map(records.map(record => [record.key, record]))
@@ -378,4 +398,29 @@ export class InitiativeStore {
     return this.#all(`SELECT * FROM ${table} WHERE id=?`, [id])[0]
   }
 
+}
+
+/** Shared dependency/ancestor preflight; blocked assignees are never a re-entry pool. */
+export function automaticWorkEligible(record: WorkRecord, records: readonly WorkRecord[]): boolean {
+  const flow = record.workflow
+  if (!flow || flow.assignee !== null || ['done', 'cancelled'].includes(flow.status) || record.paused || record.transition?.status === 'pending') return false
+  const byKey = new Map(records.map(item => [item.key, item]))
+  const seen = new Set<string>()
+  let current: WorkRecord | undefined = record
+  while (current) {
+    if (seen.has(current.key) || current.paused || current.transition?.status === 'pending'
+      || current.workflow && ['done', 'cancelled'].includes(current.workflow.status)
+      || !workDependenciesSatisfied(current, records)) return false
+    seen.add(current.key)
+    const parent: string | undefined = current.workflow?.parentKey
+    if (parent && !byKey.has(parent)) return false
+    current = parent ? byKey.get(parent) : undefined
+  }
+  return true
+}
+
+/** The same dependency outcome rule is used for automatic admission and Work completion. */
+export function workDependenciesSatisfied(record: WorkRecord, records: readonly WorkRecord[]): boolean {
+  const byKey = new Map(records.map(item => [item.key, item]))
+  return !record.workflow?.dependencies.some(key => byKey.get(key)?.workflow?.status !== 'done')
 }

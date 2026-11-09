@@ -1,3 +1,5 @@
+import { assertServiceOutput } from '../bots/service-output.ts'
+import { type ChannelSource } from './passive-contract.ts'
 import { markIngressFailure } from './ingress-diagnostic.ts'
 import { lifecycleErrorDetail } from './lifecycle-diagnostic.ts'
 import { IntegrationError } from './integration-store.ts'
@@ -43,6 +45,7 @@ export interface ChannelManagerOptions {
   realtime?: RealtimePublisher
   serviceDiscovery?: ServiceDiscoveryStore
   serviceAssigned?: (address: ChannelAddress) => boolean
+  serviceGeneration?: (address: ChannelAddress) => string | undefined
   messageStream?: ChannelMessageStream
   discordIntegration?: DiscordIntegration
   /** External observation subscriptions share the same router as ordinary platform input. */
@@ -421,6 +424,42 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
+    if (bot?.purpose === 'service' && scope) channel.setPassiveCollector?.(async message => {
+      const verify = this.options!.instanceStore.accessGuard(bot.id), guard = channel.connectionGuard?.()
+      const assertLive = () => {
+        verify(); guard?.()
+        const current = this.options!.instanceStore.get(bot.id)
+        if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key) || !current.enabled || current.purpose !== 'service' || message.channel !== current.platform || !channel.isAllowed(message.senderId)) throw new ChannelAdmissionError('Passive source unavailable', 403)
+      }
+      assertLive()
+      // Freeze whether this received event was assigned before any asynchronous persistence/inspection.
+      const discordAssignment = bot.platform === 'discord' ? this.options?.discordIntegration?.snapshotInputAssignment(bot.id) : undefined
+      const arrivalAddress = { ...scope, conversationId: message.chatId }
+      const generation = this.options?.serviceGeneration?.(arrivalAddress)
+      let assigned = bot.platform !== 'discord' && !!this.options?.serviceAssigned?.(arrivalAddress)
+      let assertAssignment = () => { if (!assigned || this.options?.serviceGeneration?.(arrivalAddress) !== generation || !this.options?.serviceAssigned?.(arrivalAddress)) throw new ChannelAdmissionError('Arrival assignment changed; retained in inbox only', 403) }
+      let source: ChannelSource = { version: 1, projectId: scope.projectId, botInstanceId: bot.id, platform: bot.platform as ChannelSource['platform'], conversationId: message.chatId,
+        kind: message.passiveParentId ? 'thread' : message.isGroup === false ? 'direct' : message.chatId.startsWith('channel:') ? 'channel' : 'group',
+        ...(message.passiveParentId ? { parentId: message.passiveParentId } : {}),
+        ...(message.chatName ? { name: message.chatName.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
+      if (bot.platform === 'discord') {
+        if (!(channel instanceof DiscordChannel)) throw new ChannelAdmissionError('Discord source verification unavailable', 403)
+        const inspection = await channel.inspectPassiveConversation(message.chatId, message.senderId, new AbortController().signal)
+        assertLive()
+        const location = inspection.location
+        const snapshot = discordAssignment?.(location)
+        assigned = !!snapshot?.assigned
+        assertAssignment = () => { if (!snapshot) throw new ChannelAdmissionError('Arrival assignment unavailable', 403); snapshot.assertCurrent() }
+        // Same live platform visibility and public-thread boundaries; no binding/participant authority is inferred.
+        if (!inspection.canView || ![0, 1, 5, 10, 11].includes(location.type) || location.id !== message.chatId) throw new ChannelAdmissionError('Passive Discord visibility denied', 403)
+        source = { ...source, kind: location.type === 1 ? 'direct' : location.parentId ? 'thread' : 'channel', botUserId: inspection.botUserId,
+          ...(location.parentId ? { parentId: location.parentId } : {}), ...(location.guildId ? { guildId: location.guildId } : {}), ...(location.recipientId ? { recipientId: location.recipientId } : {}),
+          ...(location.name ? { name: location.name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
+      }
+      const receipt = await this.sessionManager.recordPassiveChannel(source, message, assertLive)
+      if (!assigned && message.isGroup === true && (bot.platform === 'qq' || bot.platform === 'feishu')) this.options?.serviceDiscovery?.observe({ botInstanceId: bot.id, platform: bot.platform, conversationId: message.chatId, ...(source.name ? { name: source.name } : {}) }, { id: message.messageId, sender: message.senderId, text: message.content, state: 'not_enabled' })
+      return { eligible: assigned && receipt.disposition !== 'filtered', assertCurrent: () => { assertLive(); assertAssignment() } }
+    })
     if (bot && bot.purpose !== 'legacy' && scope) {
       if (!channel.setReceivePolicy && this.options?.routeInputPolicy) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
       channel.setReceivePolicy?.(async (message, runPolicy) => {
@@ -477,6 +516,7 @@ export class ChannelManager {
         admit: (input, signal) => integration.prepareIngress(bot.id, input, signal),
         classifyObservation: (proof,data,signal) => integration.classifyObservation(bot.id,proof,data,signal),
         observationScopes: data => integration.observationScopes(bot.id, data),
+        observationRevision: scopeId => integration.observationRevision(bot.id, scopeId),
         runObservationPolicy: async (scopeId, runPolicy) => {
           const verify = this.options!.instanceStore.accessGuard(bot.id), guard = channel.connectionGuard?.()
           const run = async () => {
@@ -681,6 +721,38 @@ export class ChannelManager {
       if (!this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:botId,platform:bot.platform,conversationId:conversation}) &&
         !(parent && this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:botId,platform:bot.platform,conversationId:parent}))) throw new Error('Explicit service assignment required')
     }
+  }
+
+  /** Strict receipt-returning SDK adapter. The caller supplies only the host-bound
+   * original address, never a model-selected destination. Discord keeps its
+   * existing inspected REST adapter. No message is placed on the outbound bus. */
+  async sendBotText(address: ChannelAddress, content: string, signal: AbortSignal): Promise<{ id: string }> {
+    signal.throwIfAborted()
+    if (!this.options || this.closing || address.projectId !== this.projectId || !['qq', 'feishu'].includes(address.platform)) throw new Error('Explicit BOT send Project/platform is unavailable.')
+    if (typeof content !== 'string' || !content.trim() || content.length > 2000) throw new Error('Explicit BOT text must contain 1–2000 characters.')
+    const key = this.resolveKey(address.platform, address)
+    const bot = key ? this.options.instanceStore.get(key) : undefined
+    if (!bot || bot.projectId !== this.projectId || bot.purpose !== 'service' || bot.platform !== address.platform) throw new Error('Explicit BOT send requires the original service connection.')
+    this.assertStreamAccess(bot.id, address.conversationId)
+    const channel = this.availableByKey(bot.id)
+    if (!(address.platform === 'qq' && channel instanceof QQChannel || address.platform === 'feishu' && channel instanceof FeishuChannel)) throw new Error('The original BOT connection must be connected.')
+    const verify = channel.connectionGuard()
+    const guard = () => {
+      signal.throwIfAborted(); verify()
+      this.assertStreamAccess(bot.id, address.conversationId)
+      if (this.closing || this.availableByKey(bot.id) !== channel) throw new Error('The original BOT connection changed.')
+    }
+    const result = await channel.withDeliveryGuard(async () => guard(), () => channel.withConnection(async () => {
+      guard()
+      const id = channel instanceof FeishuChannel
+        ? await channel.sendExplicitText(address.conversationId, content, signal, guard)
+        : await channel.sendExplicitText(address.conversationId, content, signal)
+      guard()
+      if (typeof id !== 'string' || !id) throw new Error('The platform did not return a valid message receipt.')
+      return { id }
+    })).catch(error => { guard(); throw error })
+    guard()
+    return result
   }
 
   async trustedDiscordRequest(botId: string, path: string, init: RequestInit): Promise<unknown> {
@@ -1127,12 +1199,22 @@ export class ChannelManager {
     const integration = msg.channel === 'discord' && (!msg.channelAddress || this.options?.instanceStore.get(msg.channelAddress.botInstanceId).purpose !== 'personal') ? this.options?.discordIntegration : undefined
     const guard = () => integration!.assertDelivery(msg, this.dispatchController?.signal ?? new AbortController().signal)
     if (integration) await guard()
+    const service = msg.channelAddress && this.options?.instanceStore.get(msg.channelAddress.botInstanceId).purpose === 'service' && msg.channel !== 'discord'
+    const serviceGuard = () => {
+      if (!service) return
+      const current = msg.channelAddress && this.options?.instanceStore.get(msg.channelAddress.botInstanceId)
+      if (!current?.enabled || current.purpose !== 'service' || current.platform !== msg.channel || !msg.channelAddress || !this.options?.serviceAssigned?.(msg.channelAddress)) throw new YieldError('unavailable', 'Service assignment is no longer active')
+      assertServiceOutput(msg)
+    }
+    serviceGuard()
     const run = async () => {
+      serviceGuard()
       if (msg.yieldRequest) await this.deliverDecision(msg)
       else if (channel.withConnection) await channel.withConnection(() => channel.onMessage(msg))
       else await channel.onMessage(msg)
     }
     if (integration && channel.withDeliveryGuard) await channel.withDeliveryGuard(guard, run)
+    else if (service && channel.withDeliveryGuard) await channel.withDeliveryGuard(async () => serviceGuard(), run)
     else await run()
     verify?.()
   }

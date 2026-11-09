@@ -518,3 +518,22 @@ test('connect cannot claim readiness when the actual page contract or adapter is
   assert.equal(JSON.parse(String(await f.setup(ctx, { action: 'list' }))).instances[0].ready, false)
   assert.equal(f.call.mock.callCount(), 0)
 }))
+
+
+test('provider browser capabilities require exact owner-held ready managed binding and expire on reset', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), owner = f.session(), peer = f.session()
+  t.mock.method(SharedChrome.prototype, 'ensure', async () => 'ws://127.0.0.1:9555/devtools/browser/shared')
+  const args = { action: 'managed', browser: 'chrome', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
+  const receipt = JSON.parse(String(await f.setup(owner, args)))
+  const binding = { instance: receipt.instance, targetId: 'target-fixture' }
+  assert.throws(() => f.importer.bindProviderBrowser(owner, binding), /authorization unavailable/)
+  await f.setup(owner, { action: 'connect', instance: receipt.instance })
+  const access = f.importer.bindProviderBrowser(owner, binding)
+  access.assertCurrent()
+  assert.throws(() => f.importer.bindProviderBrowser(peer, binding), /managed browser instance/)
+  assert.throws(() => f.importer.bindProviderBrowser({ ...owner, tools: owner.tools.createIsolated() }, binding), /managed browser instance|owning authorized/)
+  const attached = JSON.parse(String(await f.setup(peer, { action: 'attach', endpoint: 'http://127.0.0.1:9555' })))
+  assert.throws(() => f.importer.bindProviderBrowser(peer, { instance: attached.instance, targetId: 'target-fixture' }), /managed browser instance/)
+  await owner.tools.resetDynamicAndWait()
+  assert.throws(() => access.assertCurrent())
+}))

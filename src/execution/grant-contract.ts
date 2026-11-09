@@ -6,8 +6,11 @@ export const JsonSchema = z.record(z.unknown())
 const route = z.object({
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
   path: z.string().min(1).max(1024).regex(/^\/[^?#\\]*$/),
+  // Host-bound acquisition assertion, never accepted from a capability call.
+  effect: z.literal('read').optional(),
   bodySchema: JsonSchema.optional(),
-}).strict()
+  querySchema: JsonSchema.optional(),
+}).strict().refine(value => !value.effect || value.method === 'POST', 'Read acquisition assertions are only supported for POST routes.')
 
 export const CapabilityGrantSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -21,10 +24,6 @@ export const CapabilityGrantSchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({
     id: ResourceName, kind: z.literal('inbox'), sessionId: identifier,
-  }).strict(),
-  z.object({
-    id: ResourceName, kind: z.literal('proposal-inbox'), inbox: ResourceName,
-    disclosurePolicy: z.object({ kind: z.literal('public-github-issue-proposal'), repository: z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/) }).strict(),
   }).strict(),
 ])
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>

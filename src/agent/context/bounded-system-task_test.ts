@@ -15,7 +15,7 @@ for (const name of ['work-organizer']) test(`${name} uses only its actual bounde
   assert.deepEqual(result.sections.map(section => section.name), ['bounded-system-task'])
   assert.match(result.systemPrompt, /untrusted data/)
   assert.match(result.systemPrompt, /acceptance/)
-  assert.doesNotMatch(result.systemPrompt, /PowerShell|Platform|Working directory|### Shell|Tool discovery|skill_read|microphone|Delegation Parent/)
+  assert.doesNotMatch(result.systemPrompt, /PowerShell|Platform|Working directory|### Shell|Tool discovery|v:skills\/\.raw\/|microphone|Delegation Parent/)
   assert.match(result.systemPrompt, /organization_finish/)
   // Name alone must not shrink a tool-capable/ordinary session's context.
   const ordinary = new ContextBuilder('.')

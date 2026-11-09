@@ -60,3 +60,14 @@ test('bounded/invalid/unreadable bodies preserve status and retry metadata; cont
   assert.equal(error.status, 503)
   assert(await httpFailure(new Response('{"error":{"code":"context_length_exceeded"}}', { status: 400 }), 'test', 'model') instanceof TokenLimitExceededError)
 })
+
+test('408 preserves only allowlisted code and structured request metadata', async () => {
+  const stats = { bodyBytes: 2_000_000, wireBodyBytes: 1_048_576, contentEncoding: 'identity' as const, imageCount: 2, imageBase64Bytes: 1_900_000 }
+  const error = await httpFailure(Response.json({ error: { code: 'user_request_timeout', message: 'private upstream payload' } }, { status: 408 }), 'copilot', 'synthetic', undefined, stats)
+  assert(error instanceof ProviderHttpError)
+  assert.equal(error.provider, 'copilot')
+  assert.strictEqual(error.requestStats, stats)
+  assert.equal(error.code, 'user_request_timeout')
+  assert.equal(error.rejectedRequest, true)
+  assert.doesNotMatch(error.message, /private upstream/)
+})

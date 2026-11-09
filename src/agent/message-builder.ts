@@ -3,7 +3,7 @@ import type { ChannelMessageMetadata } from '../bus/events.ts'
 import { inputSender, type EventInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import type { ChatMessage, ContentPart } from '../providers/provider.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
-import { imageFromDataUrlForModel, isImagePath, readImage } from '../utils/image-input.ts'
+import { imageFromDataUrl, isImagePath, readImage } from '../utils/image-input.ts'
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -155,9 +155,11 @@ export async function buildUserChatMessage(
  * Build `ContentPart[]` entries for media attachments.
  *
  * - HTTPS/HTTP URLs → passed through as `image_url` parts.
- * - `data:...` URIs → passed through directly.
+ * - `data:...` URIs → validated without choosing a model encoding.
  * - Local file paths → read and base64-encoded into a data URI.
  * - Non-image media items → appended as text annotations.
+ *
+ * Image optimization is centralized on new session-message admission.
  */
 export async function buildMediaParts(
   media: string[],
@@ -179,7 +181,7 @@ export async function buildMediaParts(
       src.startsWith('data:') || src.startsWith('http://') ||
       src.startsWith('https://')
     ) {
-      parts.push(src.startsWith('data:') ? await imageFromDataUrlForModel(src, signal)
+      parts.push(src.startsWith('data:') ? imageFromDataUrl(src)
         : { type: 'image_url', image_url: { url: src, detail: 'auto' } })
       continue
     }
@@ -188,7 +190,7 @@ export async function buildMediaParts(
     const resolvedSrc = isAbsolute(src)
       ? src
       : resolveAgentPath(workspace, cwd, src)
-    parts.push((await readImage(resolvedSrc, signal, { optimizeForModel: true })).part)
+    parts.push((await readImage(resolvedSrc, signal)).part)
   }
 
   return parts

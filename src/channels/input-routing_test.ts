@@ -35,8 +35,8 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   const binding = { platform: 'discord', id: bindingId, botInstanceId: bot.id, botUserId: '900', target: { kind: 'channel', guildId: '100', channelId: observation ? '299' : '201' }, enabled: true,
     trigger: 'mention', participants: { everyone: false, userIds: observation ? [] : ['500'], roleIds: [] }, tools: [], readDomains: [], inheritThreads: false, manage: false,
     ...(observation ? { observation: { enabled: true, guildId: '100', channelIds: ['201', '202'], audienceChannelId: '299', processor: observationPolicy } } : processor ? { processor: policy } : {}) }
-  const deploy = async (subscriptions?: unknown[]) => {
-    const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nSupport', 'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings: [binding], ...(subscriptions ? { subscriptions } : {}) }) })
+  const deploy = async (subscriptions?: unknown[], prompt = 'Support') => {
+    const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\n' + prompt, 'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings: [binding], ...(subscriptions ? { subscriptions } : {}) }) })
     await deployments.deploy({ id: 'support', source: { folderId: 'fixture', directory: '' }, ...frozen, expectedRevision: deployments.read('support')?.deployment.revision })
   }
   await deploy()
@@ -52,7 +52,7 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   const integration = new DiscordIntegration({ projectId, workspace, store, bots, memory, baseTools: new Tools(workspace),
     classifier: new InputClassifier(() => provider, join(workspace, 'classifier.json')) })
   const sessionInputs: SessionInput[] = []
-  const sessions = { getSessionState: () => null, invalidateChannelContexts: () => {}, listSessions: () => [],
+  const sessions = { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }), getSessionState: () => null, invalidateChannelContexts: () => {}, listSessions: () => [],
     deliver: async (sessionId: string, input: SessionInput) => { trace.push('wake:observation'); sessionInputs.push(input); return { status: 'accepted', sessionId, inputId: input.id } } } as unknown as SessionManager
   integration.attach(sessions, {
     directory: async () => { throw new Error('unused') }, inspectTarget: async () => ({ botUserId: '900', roleIds: [] }),
@@ -66,6 +66,7 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   } })
   const bus = new Bus(), adapter = new DiscordChannel(bus, { token: 'synthetic', workspace, reactionEmoji: '' })
   Object.assign(adapter, { botUserId: '900' })
+  t.mock.method(adapter, 'inspectPassiveConversation', async (chatId: string, senderId: string) => ({ botUserId: '900', location: { id: chatId, name: chatId, type: 0, guildId: '100', guildName: 'guild', parentId: null, parentName: null, recipientId: null }, actor: { id: senderId, name: senderId, roleIds: [] }, canView: true, canSend: true, canReadHistory: true }))
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions, inputs.receive, {
     projectId, instanceStore: bots, factory: () => adapter, discordIntegration: integration,
     routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { trace.push('handler:ordinary'); await run(configuration) }),
@@ -80,7 +81,7 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   const trigger = adapter['shouldRespond'].bind(adapter)
   adapter['shouldRespond'] = data => { trace.push('trigger'); return trigger(data) }
   let id = 0
-  return { trace, sessionInputs, deploy, blockRouter: () => { routerOpen = false }, openRouter: () => { routerOpen = true },
+  return { trace, sessionInputs, deploy, adapter, integration, blockRouter: () => { routerOpen = false }, openRouter: () => { routerOpen = true },
     retryPolicy: async () => { assert.ok(retryScope); await retryScope(async () => { trace.push('stored-rule') }, new AbortController().signal) },
     send: () => adapter['handleDispatch']('MESSAGE_CREATE', { id: String(++id), channel_id: '201', guild_id: '100', author: { id: '500', bot: false }, content: '<@900> hello', mentions: [{ id: '900' }], attachments: [] }),
     stop: async () => { await manager.stopAll(); integration.stop(); bus.stopAll(); await agents.stopWatching() } }
@@ -107,7 +108,7 @@ for (const processor of [false, true]) test(`real Discord ingress selects BOT be
       }
       f.trace.length = 0
       await f.deploy([])
-      await assert.rejects(f.send(), /disabled|assigned/)
+      await f.send() // Receipt continues, but unsubscribed service sources never run business policy.
       assert.equal(f.trace.some(step => step.startsWith('processor') || step === 'trigger' || step.startsWith('wake')), false)
     } finally { await f.stop() }
   })
@@ -132,7 +133,7 @@ test('real observation ingress selects BOT before receive rules, processor and c
       f.openRouter()
       f.trace.length = 0
       await f.deploy([])
-      await assert.rejects(f.send(), /disabled|assigned/)
+      await f.send() // Receipt continues, but unsubscribed service sources never run business policy.
       assert.equal(f.trace.some(step => step.includes('processor') || step === 'classifier' || step === 'observation-receive' || step.startsWith('wake')), false)
     } finally { await f.stop() }
   })
@@ -161,7 +162,7 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
       assert.equal(message.channelAddress?.botInstanceId, connection.id)
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
-    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, {} as SessionManager, inputs.receive, {
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, inputs.receive, {
       projectId, instanceStore: bots, serviceAssigned: directory.serviceAssigned,
       routeInputPolicy: (message, run) => inputs.policy(message, async configuration => {
         assert.ok(configuration?.platform === 'qq' && Object.isFrozen(configuration))
@@ -189,5 +190,38 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
       assert.ok('triggerMode' in saved)
       assert.equal(saved.triggerMode, connectionTrigger, 'Compatibility configuration is not rewritten or used as Service policy')
     } finally { await manager.stopAll(); bus.stopAll() }
+  })
+})
+
+
+test('Discord observation scopes cannot reopen ordinary processing for an unassigned or duplicate arrival', async t => {
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(t, workspace, true, false)
+    let ordinaryAdmissions = 0
+    try {
+      f.adapter.setPassiveCollector(async () => {
+        // Represents a received-before-assignment or already-recorded arrival.
+        // Even if live ordinary admission becomes available while observation awaits,
+        // this arrival is ineligible for ordinary processing.
+        t.mock.method(f.integration, 'prepareIngress', async () => { ordinaryAdmissions++; throw new Error('ordinary admission must not be revisited') })
+        return false
+      })
+      await f.send()
+      assert.equal(f.sessionInputs.length, 1, 'Existing explicit observation policy remains functional')
+      assert.equal(ordinaryAdmissions, 0)
+      assert.equal(f.trace.some(step => step === 'trigger' || step === 'wake:ordinary'), false)
+    } finally { await f.stop() }
+  })
+})
+
+
+test('same-ID observation policy replacement during capture cannot classify an earlier arrival under the new revision', async t => {
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(t, workspace, true, false)
+    try {
+      f.adapter.setPassiveCollector(async () => { await f.deploy(undefined, 'New observation deployment'); return false })
+      await assert.rejects(f.send(), /Observation assignment changed since arrival/)
+      assert.equal(f.trace.some(step => step === 'classifier' || step === 'observation-receive' || step.startsWith('wake')), false)
+    } finally { await f.stop() }
   })
 })

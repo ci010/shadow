@@ -1,4 +1,4 @@
-import { ProviderHttpError, TokenLimitExceededError } from './provider.ts'
+import { type ProviderRequestStats, ProviderHttpError, TokenLimitExceededError } from './provider.ts'
 
 // Arbitrary upstream strings can contain credentials, even when alphanumeric.
 const safeCodes = new Set([
@@ -8,7 +8,7 @@ const safeCodes = new Set([
   'permission_error', 'forbidden', 'access_denied', 'insufficient_scope',
   'model_not_found', 'model_not_supported', 'unsupported_model', 'invalid_request_error',
   'insufficient_quota', 'rate_limit_exceeded', 'rate_limit_error', 'overloaded_error',
-  'max_output_tokens', 'content_filter',
+  'user_request_timeout', 'max_output_tokens', 'content_filter',
   'server_error', 'api_error', 'billing_error', 'content_policy_violation',
   'model_max_prompt_tokens_exceeded', 'context_length_exceeded', 'context_window_exceeded',
   'max_prompt_tokens_exceeded', 'input_token_limit_exceeded',
@@ -38,7 +38,7 @@ export function providerRequestId(headers: Headers): string | undefined {
  * Logs use the existing backend console sink, not the public session/UI error.
  */
 export async function httpFailure(response: Response, provider: string, model: string,
-  signal?: AbortSignal): Promise<ProviderHttpError | TokenLimitExceededError> {
+  signal?: AbortSignal, requestStats?: ProviderRequestStats): Promise<ProviderHttpError | TokenLimitExceededError> {
   let code: string | undefined
   const reader = response.body?.getReader()
   if (reader) {
@@ -74,6 +74,6 @@ export async function httpFailure(response: Response, provider: string, model: s
   const message = `Provider rejected request (HTTP ${response.status})`
   if (code && contextCodes.has(code)) return new TokenLimitExceededError(message)
   return new ProviderHttpError(response.status, message, code, {
-    retryAfter: response.headers.get('retry-after'), rejectedRequest: true,
+    retryAfter: response.headers.get('retry-after'), rejectedRequest: true, provider, requestStats,
   })
 }

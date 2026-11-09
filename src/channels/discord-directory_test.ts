@@ -359,3 +359,30 @@ test('uncertain approval completion asks the human to inspect applied and recove
   assert.match(messages[0]!, /could not be confirmed/)
   assert.match(messages[0]!, /applied or recovery state/)
 })
+
+
+test('passive Discord collection verifies public-thread ancestry and live visibility without sender Agent authority', async t => {
+  const f = fixture(), adapter = new DiscordChannel(new Bus(), { token: 'synthetic' })
+  t.after(() => adapter.stop())
+  const captured: Array<{ id: string; parent: string | null }> = []
+  adapter.setPassiveCollector(async message => {
+    const proof = await inspectDiscordConversation(f.api, message.chatId, message.senderId, signal(), true)
+    if (!proof.canView) throw new Error('Passive visibility denied')
+    captured.push({ id: proof.location.id, parent: proof.location.parentId })
+    return false
+  })
+  adapter.setReceiver(async () => { assert.fail('Unassigned inbox must never invoke a Session') })
+  const send = (id: string) => dispatch(adapter, 'MESSAGE_CREATE', { id: '400', channel_id: id, guild_id: '100', author: { id: '500' }, content: 'Delivered text', attachments: [{ url: 'https://cdn.invalid/ignored' }] })
+  await send('301'); await send('201')
+  assert.deepEqual(captured, [{ id: '301', parent: '201' }, { id: '201', parent: null }])
+  f.values.set('/channels/302', channel('302', { type: 12, parent_id: '201' }))
+  await assert.rejects(send('302'), /private threads/)
+  f.values.set('/guilds/100/roles', [{ id: '100', name: '@everyone', permissions: '0' }, { id: '700', name: 'Support', permissions: '0' }])
+  await assert.rejects(send('201'), /visibility denied/)
+  assert.equal(captured.length, 2)
+  assert.ok(f.calls.every(path => !path.includes('/messages')), 'Metadata inspection never reads back or downloads message history')
+  f.values.set('/guilds/100/roles', [{ id: '100', name: '@everyone', permissions: '0' }, { id: '700', name: 'Support', permissions }])
+  f.values.set('/guilds/100/members/500', { user: { id: '500', username: 'other-bot', bot: true }, roles: ['700'] })
+  await assert.rejects(inspectDiscordConversation(f.api, '201', '500', signal()), /membership/)
+  assert.equal((await inspectDiscordConversation(f.api, '201', '500', signal(), true)).canView, true, 'Read-only capture does not promote a Bot account to ordinary Agent participant authority')
+})

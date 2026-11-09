@@ -431,8 +431,8 @@ test('compiled worker runs without tsx on plain Node and Electron RUN_AS_NODE', 
       import { executeScript } from './compiled/src/script-runtime/runtime.js';
       const signal = new AbortController().signal;
       const restricted = await executeScript({
-        code: "import path from 'node:path'; import call from '@shadow/lookup'; export const run = () => call({value: path.basename('/a/b')})",
-        args: {}, signal, entry: 'run', policy: {kind: 'restricted', imports: ['node:path', '@shadow/lookup']},
+        code: "import path from 'node:path'; import call from '@shadow/lookup'; import {parseHtml} from '@shadow/html'; export const run = () => call({value: path.basename(parseHtml('<b>/a/b</b>').querySelector('b').textContent)})",
+        args: {}, signal, entry: 'run', policy: {kind: 'restricted', imports: ['node:path', '@shadow/lookup', '@shadow/html']},
         callModule: async (_name, input) => input.value
       });
       const host = await executeScript({

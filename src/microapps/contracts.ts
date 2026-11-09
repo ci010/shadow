@@ -16,9 +16,9 @@ export const appStateSchema = z.object({
 export type AppState = z.infer<typeof appStateSchema>
 export const microAppCapabilities = {
   version: 1,
-  approval: { execution: 'owner-approved-revision', agentMayApprove: false },
-  acceptance: { afterApproval: 'ask-local-owner', timeoutMs: 60_000, default: 'defer-without-approval',
-    scope: 'approved-revision-only', open: 'author-owned-browser', reports: 'agent-assessment-with-host-observations',
+  execution: { publication: 'ready-to-open', ownerApprovalRequired: false },
+  acceptance: { onRequest: 'ask-local-owner', timeoutMs: 60_000, default: 'defer-without-approval',
+    scope: 'published-revision-only', open: 'author-owned-browser', reports: 'agent-assessment-with-host-observations',
     categories: ['startup', 'state', 'recovery', 'reopen'], deviceAuthorization: 'unchanged',
     requirements: 'published-work-acceptance-snapshot; report each criterion, including blocked/not_tested',
     evidence: 'action:evidence resolves own recorded tool IDs and exact excerpts into canonical report references',
@@ -137,7 +137,7 @@ export const appTestReportSchema = z.object({
 })
 export type AppTestReport = z.infer<typeof appTestReportSchema>
 export const appAcceptanceSchema = z.object({
-  id: z.string().uuid(), revision: revisionId, approvalAt: z.string().datetime(),
+  id: z.string().uuid(), revision: revisionId,
   status: z.enum(['asking', 'paused', 'dispatching', 'notified', 'running', 'testing', 'blocked', 'incomplete', 'failed', 'interrupted', 'reported']),
   authorTurn: z.object({
     id: z.string().min(1), startedAt: z.string().datetime(), finishedAt: z.string().datetime().optional(),
@@ -157,7 +157,7 @@ export type AppObservation = z.infer<typeof appObservationSchema>
 export const appRecordSchema = z.object({
   version: z.literal(1), id: appId, revision: revisionId, manifest: appManifestSchema,
   createdBy: z.string().min(1), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
-  approval: z.object({ revision: revisionId, at: z.string().datetime(), model: z.string().min(1).optional() }).strict().optional(),
+  model: z.string().min(1).optional(),
   calls: z.number().int().nonnegative().default(0),
   work: z.array(appWorkScopeSchema).max(20).optional(),
   acceptance: appAcceptanceSchema.optional(),

@@ -7,6 +7,7 @@ import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
 import type { Hono } from 'hono'
 import { channelAddressFromSessionId } from '../bus/events.ts'
+import { discordChannelNavigation } from '../channels/discord-navigation.ts'
 import { delegationOwner } from './execution-scope.ts'
 import { parseSessionName, SessionNameError } from './session-name.ts'
 import type { SessionManager } from './session-manager.ts'
@@ -352,6 +353,7 @@ export function sessionsApiPlugin(
           // The renderer prioritizes name over title, so bound both preview fields.
           name: graphTitle(session.name),
           automation: graphAutomation(automation),
+          discordChannel: state && sessions.projectId ? discordChannelNavigation(state, sessions.projectId) : undefined,
           completed: state?.completed ?? false,
           hasCron: cronTargets.has(session.sessionId),
           hasBackgroundTasks: backgroundOwners.has(session.sessionId),

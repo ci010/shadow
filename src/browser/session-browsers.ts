@@ -15,6 +15,8 @@ export interface BrowserInstance {
   /** A successful explicit connect/list_pages probe, not just MCP initialization. */
   ready: boolean
   adapterReady?: boolean
+  /** Approved managed endpoint only; never supplied by provider configuration. */
+  providerEndpoint?: string
   importArgs?: string[]
   fileRoot?: string
 }

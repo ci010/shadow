@@ -100,7 +100,7 @@ export class MicroApps {
   list() { return this.store.list().map(record => this.view(record)) }
   get(id: string) { return this.view(this.store.get(id)) }
   private view(record: AppRecord) {
-    return { ...record, status: !record.approval ? 'awaiting_approval' : record.lastRun?.status ?? 'stopped',
+    return { ...record, status: record.lastRun?.status ?? 'stopped',
       acceptanceAvailable: this.acceptance.available,
       cleanupPending: this.runs.get(record.id)?.controller.signal.aborted ?? false,
       uiPath: `/projects/${encodeURIComponent(this.projectId)}/chat/${record.createdBy.startsWith('web:') ? encodeURIComponent(record.createdBy) : ''}?microApp=${record.id}` }
@@ -149,7 +149,7 @@ export class MicroApps {
         modified: Object.keys(candidate.files).filter(name => Object.hasOwn(published.files, name) && candidate.files[name] !== published.files[name]),
         removed: Object.keys(published.files).filter(name => !Object.hasOwn(candidate.files, name)),
       },
-      notice: 'This compares the listed source bytes with the published revision. It does not run code, resolve unlisted dependencies, approve access, or verify app behavior. Unpublished changes are not delivered fixes.',
+      notice: 'This compares the listed source bytes with the published revision. It does not run code, resolve unlisted dependencies, start an app, or verify app behavior. Unpublished changes are not delivered fixes.',
     } }
   }
   async icon(id: string, revision: string) {
@@ -159,36 +159,13 @@ export class MicroApps {
     if (!bytes) throw new MicroAppError('icon_not_found', 'This app uses the default Shadow icon', 404)
     return bytes
   }
-  async approve(id: string, revision: string, model?: string) {
-    this.assertAvailable()
-    const record = this.store.get(id)
-    if (this.publishing.has(id) || this.runs.has(id)) throw new MicroAppError('app_busy', 'Stop the app before changing approval', 409)
-    if (record.revision !== revision) throw new MicroAppError('revision_changed', 'Review the current app revision before approval', 409)
-    this.publishing.add(id)
-    try {
-      await this.store.bundle(record)
-      this.assertAvailable()
-      const chosen = record.manifest.llm ? model ?? this.defaultModel() : undefined
-      if (record.manifest.llm && !chosen?.trim()) throw new MicroAppError('model_required', 'Choose a model before approving LLM access')
-      if (this.store.get(id).revision !== revision || this.runs.has(id)) throw new MicroAppError('revision_changed', 'App changed during review', 409)
-      await this.acceptance.cancel(id)
-      this.assertAvailable()
-      record.approval = { revision, at: new Date().toISOString(), ...(chosen ? { model: chosen } : {}) }
-      record.calls = 0
-      record.acceptance = this.acceptance.create(record)
-      this.store.save(record)
-      this.acceptance.start(id)
-      return this.get(id)
-    } finally { this.publishing.delete(id) }
-  }
-  async revoke(id: string) {
+  async cancelTesting(id: string) {
     if (this.publishing.has(id)) throw new MicroAppError('app_busy', 'Publication is in progress', 409)
     this.publishing.add(id)
     try {
       await this.acceptance.cancel(id)
       await this.stop(id)
       const record = this.store.get(id)
-      delete record.approval
       if (record.acceptance) record.acceptance.status = 'paused'
       this.store.save(record)
       return this.get(id)
@@ -198,11 +175,17 @@ export class MicroApps {
     this.assertAvailable()
     if (this.publishing.has(id)) throw new MicroAppError('app_busy', 'Publication is in progress', 409)
     const record = this.store.get(id)
-    if (record.approval?.revision !== record.revision) throw new MicroAppError('approval_required', 'Review and approve this app in Shadow Apps before running it', 403)
     let run = this.runs.get(id)
     if (run?.stop) throw new MicroAppError('app_stopping', 'Wait for this app to stop before reopening', 409)
     if (run?.controller.signal.aborted) throw new MicroAppError('cleanup_pending', 'The previous app run has not finished stopping. Retry Stop in Shadow Apps before reopening.', 409)
     if (!run) {
+      // Pin the Project model for this publication on first use; restarts never reset usage.
+      if (record.manifest.llm && !record.model) {
+        const model = this.defaultModel().trim()
+        if (!model) throw new MicroAppError('model_required', 'Configure a Project model before opening this app')
+        record.model = model
+        this.store.save(record)
+      }
       const runId = randomUUID()
       run = { id: runId, token: randomBytes(32).toString('base64url'), controller: new AbortController(),
         acceptanceId,
@@ -305,7 +288,7 @@ export class MicroApps {
   async open(id: string, expectedRevision?: string) {
     const checkRevision = () => {
       if (expectedRevision && this.store.get(id).revision !== expectedRevision)
-        throw new MicroAppError('app_revision_changed', 'App version changed. Review it again before opening.', 409)
+        throw new MicroAppError('app_revision_changed', 'App version changed. Reload it before opening.', 409)
     }
     checkRevision()
     await this.start(id)
@@ -323,8 +306,8 @@ export class MicroApps {
   /** Paired-device transport only: target is selected from this service, never a caller URL. */
   async relay(id: string, input: { revision: string; runId: string; path: string; method: string; token?: string; contentType?: string; body?: string }, signal: AbortSignal) {
     const record = this.store.get(id), run = this.runs.get(id)
-    if (record.revision !== input.revision || record.approval?.revision !== input.revision)
-      throw new MicroAppError('approval_required', 'Review the current app version first', 403)
+    if (record.revision !== input.revision)
+      throw new MicroAppError('revision_changed', 'Reload the current app version', 409)
     if (!run || run.id !== input.runId || !run.origin || run.controller.signal.aborted)
       throw new MicroAppError('app_stopped', 'Reopen this app from Shadow', 409)
     const target = new URL(input.path, run.origin)
@@ -435,7 +418,7 @@ export class MicroApps {
     app.use('/_shadow/state', authorize)
     app.get('/_shadow/status', c => {
       const record = this.store.get(id)
-      return c.json({ id, revision: record.revision, runId: run.id, name: record.manifest.name, model: record.approval?.model,
+      return c.json({ id, revision: record.revision, runId: run.id, name: record.manifest.name, model: record.model,
         calls: record.calls, maxCalls: record.manifest.llm?.maxCalls ?? 0, backend: !!record.manifest.backend,
         capabilities: microAppCapabilities })
     })
@@ -454,10 +437,10 @@ export class MicroApps {
     app.post('/_shadow/generate', async c => {
       const input = generationSchema.parse(await appJson(c.req.raw))
       const record = this.store.get(id), grant = record.manifest.llm
-      if (!grant || !record.approval?.model) throw new MicroAppError('llm_not_granted', 'This app has no model authorization', 403)
+      if (!grant || !record.model) throw new MicroAppError('llm_not_granted', 'This app has no model authorization', 403)
       run.controller.signal.throwIfAborted()
-      const model = record.approval.model
-      if (record.calls >= grant.maxCalls) throw new MicroAppError('llm_budget_exhausted', 'App call budget exhausted. The owner must review and renew its authorization.', 429)
+      const model = record.model
+      if (record.calls >= grant.maxCalls) throw new MicroAppError('llm_budget_exhausted', 'App call budget exhausted for this publication.', 429)
       if (run.activeCalls >= 2) throw new MicroAppError('llm_busy', 'At most two model requests can run at once', 429)
       record.calls++
       this.store.save(record)

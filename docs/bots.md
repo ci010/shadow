@@ -211,6 +211,15 @@ are deduplicated by input ID within the current context epoch. Channel-stream co
 remains separate and is not itself Session history; unbound or unauthorized messages
 cannot use this archive path.
 
+This describes **BOT execution history**, not passive transport receipt. Enabled
+service connections also record separate read-only channel inbox sessions before
+subscription/trigger selection, without invoking an Agent, tools or replies.
+Those inboxes can be referenced in owner Web chat to prepare exact source-file
+binding edits, but references grant no authority and old inbox history is never
+automatically replayed. Changed deployments use activation generations so a
+reactivated or newly assigned BOT starts a fresh execution context. See
+[Connections, passive inboxes and chat assignment](bot-settings.md).
+
 Migration is read-time and non-destructive: omitting `subscriptions` retains the
 same legacy binding subscriptions (including enabled/disabled state and all
 existing restrictions); explicit `[]` receives **nothing**, even with enabled
@@ -303,7 +312,15 @@ execution remain restricted as described below.
 
 Feishu uses the same service binding shape with `platform: "feishu"` and its own
 connection/conversation IDs. Omitted `allowFrom` inherits channel admission; `[]`
-admits nobody. `readFolders` names registered Folders, never arbitrary paths.
+admits nobody. `readFolders` contains exact registered Folder IDs, never arbitrary
+paths or display-name aliases. The service agent's conversation context maps only
+these authorized IDs to registered display names and `folder:<id>/` path prefixes;
+it does not expose host paths. Built-in `read` returns JSON with `source`
+(`folderId`, `folderName`, `relativePath`) and `content` (text or directory listing).
+Built-in `search` returns the same `source` alongside `matches` and `hasMore`;
+match line numbers refer to content, not the provenance metadata. Display names
+are untrusted labels, not instructions or authorization. Unavailable resources
+still fail rather than falling back to another folder.
 
 ## Author and confirm
 
@@ -416,6 +433,20 @@ exposed only by each binding's explicit `tools` list. No global custom-tool regi
 or separate provider loop is created: existing SessionManager/policy execution owns
 the conversation.
 
+The model-facing conversation tail separates execution rules, an authorized
+repository index (display name plus exact `folder:<id>/` prefix), read/search
+guidance, and compact binding provenance. Names are untrusted labels, never path
+aliases. Read directories first and use returned relative paths; after a failed
+path, return to the last confirmed parent listing rather than guessing. Search is
+case-insensitive literal matching within one specified file or directory listing,
+not recursive repository search. Host filesystem paths are not included.
+
+The tail does not serialize binding parameters, grant URLs/routes, module allowlists
+or tool imports. Models learn capabilities from the exposed tool contracts; those
+implementation details remain in host configuration and execution authorization,
+not model instructions. Binding provenance contains only Project/session/revision,
+Agent name, BOT instance and conversation identity.
+
 The common guest context is deliberately capability-backed:
 
 - `ctx.services.call(name, input)`: a named HTTP/inbox grant, declared in the tool's
@@ -491,9 +522,10 @@ Pending approvals do not automatically resume or authorize a BOT. There is no
 Change/check/scenario/run/profile subsystem behind a renamed tool.
 
 The historical Project Home `authoring/` directory is **not removed or renamed**.
-Credentials (`credentials.json`), grant idempotency (hashed JSON receipts and `.broker-lock.sqlite`) and proposal
-inboxes (`proposal-inboxes/`) retain their exact paths and schemas so credentials
-remain usable and external mutations are not replayed after a path change.
+Credentials (`credentials.json`) and grant idempotency (hashed JSON receipts and
+`.broker-lock.sqlite`) retain their paths so credentials remain usable and external
+mutations are not replayed after a path change. Historical proposal inbox data
+(`proposal-inboxes/`) is preserved byte-for-byte but no longer loaded or executed.
 Resources, Changes, probes, publication requests and old check evidence are not
 loaded or rewritten. Malformed retired files do not become startup dependencies.
 No user data was inspected to perform this source cleanup, and no irreversible
@@ -513,49 +545,147 @@ live installation onto the new model or disable its existing BOTs without a sepa
 operator decision. Generic shared Skill editing and restricted script tests remain independent; the
 old resource authoring product is no longer available.
 
-### Public issue proposal inboxes
+### Unified Work intake (proposal pipeline retired)
 
-A reviewed `proposal-inbox` grant declares
-`{ id: 'xmcl-coordinator', kind: 'proposal-inbox', inbox: 'issue-triage',
-   disclosurePolicy: { kind: 'public-github-issue-proposal', repository: 'owner/repo' } }`.
-This is a distinct grant, not the raw session-target `inbox` service. Proposal grants
-cannot contain session IDs. Tool input is strictly `issueNumber`, `suggestedPriority`
-(`triage|normal|urgent`) and `category` (`bug|feature|investigation`), never raw prose,
-logs, history, target, admin identity or dispatch instructions. The host anonymously
-verifies the fixed public GitHub issue; PRs and mismatched identities fail closed.
-Only fixed repository/issue/URL and untrusted enum hints cross the boundary.
+The dedicated `proposal-inbox` grant, public-issue verification/forwarding pipeline,
+logical inbox resolver, coordinator creation and `/api/proposal-inboxes/:name`
+endpoints are removed. Old grants fail validation; they are **not** translated into
+Work authority. Historical `authoring/proposal-inboxes/` and broker receipts remain
+untouched and inert. An owner must explicitly review/publish a changed package to
+approve the new SDK capabilities. The owner proposal preview can subtract a strictly
+recognized legacy proposal grant for comparison only: it discloses the removed
+inactive grant and each newly requested host capability. This audit baseline never
+rewrites or executes the active package. Malformed legacy grants/other invalid
+fields still fail closed. No automatic migration or deployment occurs.
+Generic fixed-session `inbox` grants are unchanged and are not Work intake.
 
-On the first valid proposal, the Project-local logical inbox registry durably records
-a create intent, then uses ordinary TopicService/SessionManager creation without an
-initial input. Conservative host instructions are in an actual host-setup history
-record, not just metadata. It persists the binding, then admits the proposal as a
-queued untrusted session input. There is no setup inference, startup scan, second
-SessionManager or guest-controlled target creation. Restart reuses the same logical
-session ID (normal physical handoffs remain supported). A genuinely missing/deleted
-bound session is replaced on a subsequent new proposal. Ownership/policy/hash,
-Project, durable mode and folder access are checked; inaccessible/foreign/task targets
-fail closed rather than triggering replacement. Busy/running targets and delivery
-errors never trigger replacement.
+Service packages can declare `hostCapabilities: ["work", "wake", "messages", "watermark", "send"]`
+in `bot.json`; omit any unneeded capability. Omission grants none; Personal BOTs
+cannot use these capabilities. Each approved custom tool can call the following
+host-backed SDK methods. These do not import modules, expose credentials, allow
+arbitrary destinations or authorize local session management:
 
-The host registry and broker use dedicated SQLite OS-lock files (not session or
-Project databases), atomic fsynced JSON records and process-local serialization.
-Process death releases the lock. A persisted create intent reuses its creation UUID
-and TopicService request hash after a crash. Uncertain delivery receipts pin the
-original target and input UUID before admission; retries to a deleted target fail
-closed, never replay onto a replacement. Already admitted proposals return their
-original receipt even if the target is subsequently deleted. Changed hints with the
-same issue key conflict. Keys are per binding/grant, not global deduplication:
-coordinator policy must deduplicate repository + issue across bots. Admission does
-not imply acceptance, dispatch, available capacity, permission or completion.
+- `ctx.work.call({ action: "create", idempotencyKey, title, definition: { objective,
+  acceptance: [], boundaries: [] } })` creates a **normal Project Work record** with
+  `pending`, `manager=null`, `assignee=null`. No session is created, selected,
+  assigned, focused or messaged by Bot intake itself. An explicitly configured and
+  enabled automatic Work dispatch may subsequently claim eligible unassigned Work
+  and start an isolated executor; see [automatic Work dispatch](work-auto-dispatch.md).
+- `ctx.work.call({ action: "query", key?, offset?, limit? })` reads only Work created
+  by this Project/Bot/binding source. The projection contains the original submitted
+  definition, coarse progress and recent source supplements, not private owner
+  notes, modified definitions, executors, sessions or local tool evidence.
+- `ctx.work.call({ action: "append", key, idempotencyKey, content })` adds untrusted
+  source context only. It cannot change definition, authorization, assignment or
+  status, even after an owner assigns the Work elsewhere. Owner-managed Work
+  history retains source provenance. Supplementing someone else's Work fails.
 
-Authenticated owner controls in the current Project:
-- `GET /api/proposal-inboxes/:name`: binding/status, no creation or inference.
-- `PATCH /api/proposal-inboxes/:name` with `{ enabled: false }` stops subsequent
-  admissions and automatic recovery. For a never-used inbox include the reviewed
-  `repository`; this reserves only a disabled create intent, not a session.
-- `{ enabled: true }` resumes lazy resolution, not immediate creation.
+Host provenance records Project, Bot, binding/source key, deployment revision,
+session and source input, never a group-supplied owner identity. The source key
+includes the actual original connection/conversation, not only a stable Discord
+binding UUID: retargeting a binding cannot expose the previous group's intake. Work intake does not treat group
+messages as owner authorization. Creation/supplement retry keys are durable per
+source; changed content with an existing key conflicts. Default limits are 1,000
+Works per source and 100 supplements per Work. Query pages contain at most 50 items
+and roughly 256 KB. Definition evidence/manager/assignee/workspace/session fields
+are not accepted as intake arguments.
 
-Deleting a session alone is not the stop control. Disable the logical inbox to stop
-it. The obsolete manual proposal-coordinator setup endpoint is removed. New code
-requires ordinary authorized backend activation and exact-version review/publication
-of changed package grants; editing source is not activation or deployment.
+### Self-scheduled, silent BOT wakes
+
+An owner-approved tool can call:
+
+```ts
+export default defineTool({
+  async execute(_args, ctx) {
+    return ctx.wake.call({ action: 'set', intervalMinutes: 5 })
+  }
+})
+```
+
+`inspect` reports the binding's schedule; `stop` removes it. `set` accepts 1–10,080
+whole minutes. Repeating the same settings is idempotent. One schedule per original
+binding/session uses the existing Project CronService `.cron/jobs.json` inventory,
+not an event-provider instance, new scheduler or queue. Restart reloads that
+inventory. Each tick targets only the existing bound durable session through its
+normal admission queue, with a stable per-slot input ID. It creates no sessions.
+Deployment revision, enabled/subscribed binding and saved session binding are
+checked before dispatch. Invalid/stale jobs fail closed rather than silently
+following a replacement deployment; a tool under the new deployment must `set`
+again. A stopped schedule does not revoke a turn already admitted; use ordinary
+session cancellation to stop that turn. Disabling/redeploying the binding revokes
+subsequent tool callbacks through normal live policy checks.
+
+Wake turns run inference but **never route model text, tool chatter, provider
+errors or cancellation responses into platform outbound messages**. This is a
+Session output boundary, not just a prompt instruction, and applies even when the
+model ignores the silence instruction. History and tool results are still stored.
+Ordinary subsequent user turns keep their existing response behavior. Discord wake
+admission additionally requires an opaque host proof; forging an event's type or
+source is insufficient. A queued proof is not recovered across process restart:
+that wake fails closed; the next scheduled tick retries source processing without
+advancing its watermark.
+
+### Incremental processing and explicit original-conversation send
+
+For group-message increments, approve `messages` separately and use
+`ctx.messages.call({ action: 'read', limit: 50, attempt: 'unique-attempt' })`.
+The host pins connection, original conversation, consumer and deployment namespace;
+no destination, children, baseline or consumer overrides are accepted. It reads only
+that binding's actually-received events from the existing `ChannelMessageStream`.
+Pages shrink to stay below the script JSON byte limit. Edits/deletes/late arrivals
+use local append positions, not platform timestamps. There is no new message queue
+or collector, and this API does not repair offline platform gaps (especially on
+QQ/Feishu without history adapters).
+
+Read never acknowledges. It replays the same unfinished fixed range after failure
+or restart, despite newly received events. After successful processing use
+`ctx.messages.call({ action: 'ack', batch: page.batch.id, attempt })`; after an
+interruption use `retry` with the recorded attempt and an `error`, then read/claim
+with a fresh attempt. No callback after cancellation may ack. Capacity is 1,000
+retained batches and 64 attempts per batch; expired source retention fails explicitly,
+never silently skips. Apply stable Work/send keys per source event when replaying.
+This permission reads one already-authorized source; `watermark` alone remains
+bookkeeping only and grants no message access. No unassigned Work is picked up as
+part of either API.
+
+`ctx.watermark.call` reuses the existing watermark service with `inspect`, `prepare`,
+`claim`, `ack`, `retry` and its `source/from/to/id/attempt/error` fields. The consumer
+is fixed by the host; do **not** pass `consumer`. Its namespace isolates Project,
+Bot, binding, session and deployment revision. Up to 32 sources, 1,000 retained
+batches and 64 attempts per batch are supported before host recovery/archival is
+required. Bot source names are at most 128 characters; cursors/errors 256 and
+attempt IDs 64. `inspect` projects cursors and unfinished batches with their latest
+attempt, not the ever-growing completed-batch archive. Source cursors remain
+opaque; source read permissions are separate. No event-provider private state is
+used. Restarting the same deployment preserves progress; a changed deployment gets
+a fresh namespace rather than silently inheriting old processing authority.
+
+Inspect and resume unfinished batches before preparing a new range. Claim with a
+fresh attempt ID, process the fixed source range, and ack only after successful
+processing (and a send receipt if sending is part of processing). Admission, reads,
+failure, cancellation and repeated wakes never implicitly ack. After an interrupted
+running attempt, inspect its recorded attempt and explicitly `retry` it before a
+new claim. Retried tool calls must use stable Work/send keys. Watermarks do not
+provide exactly-once remote delivery or authorize sending.
+
+`ctx.send.call({ content, idempotencyKey })` is the explicit send operation inside
+an approved authored tool. Only the invoking binding's original conversation is
+allowed; destination/connection/session overrides are rejected. The live package,
+binding, connection and platform access are checked again. Discord uses its
+inspected REST adapter with mentions disabled. QQ supports original group/C2C
+proactive text sends without fabricating a passive `msg_id`; QQ guild destinations
+are explicitly unsupported. Push-preference, quota, permission or reply-window
+failures are surfaced without format fallback or automatic retry. Feishu uses a
+strict create/known-original-thread reply path, refreshing group posting permission
+before sending; restricted-posting groups are conservatively rejected rather than
+assuming moderator rights. Feishu API failures/missing message IDs are not swallowed
+or downgraded into another send. Content is limited to 2,000 characters, and the
+existing channel-send ledger stores bounded receipts. Same-key/same-content repeats return the receipt;
+changed content conflicts. Uncertain writes are not automatically resent: reconcile
+on platform rather than trying another key. An SDK callback receipt means the
+platform call returned successfully, not that anyone accepted the Work.
+
+These host operations are reached through explicit approved custom tools; adding
+`hostCapabilities` alone does not silently add model tools. Package source changes
+still require the existing exact-version owner review/publication flow. Source
+implementation and unit tests are not live platform end-to-end acceptance.

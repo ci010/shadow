@@ -30,9 +30,14 @@ export interface VirtualListOptions {
  * Handler for a virtual filesystem mount point.
  * Receives the subpath (portion after the mount prefix) and the execution context.
  */
+export interface VirtualReadOptions {
+  offset?: number
+}
+
 export type VirtualFsHandler = (
   subpath: string,
   context: ExecutionContext,
+  options?: VirtualReadOptions,
 ) => Promise<string> | string
 
 /**
@@ -107,6 +112,7 @@ export class VirtualFs {
   resolve(
     relativePath: string,
     context: ExecutionContext,
+    options?: VirtualReadOptions,
   ): Promise<string> | null {
     if (context.memoryAccess) throw new Error('Channel memory leases cannot access the Project virtual filesystem. Use the scoped conversation tools.')
     const { prefix, subpath } = this.parse(relativePath)
@@ -116,7 +122,7 @@ export class VirtualFs {
       return null
     }
 
-    const result = mount.read(subpath, context)
+    const result = mount.read(subpath, context, options)
     return result instanceof Promise ? result : Promise.resolve(result)
   }
 

@@ -160,6 +160,7 @@ export class DiscordIntegration implements ConversationPolicies {
     for (const close of this.invalidations) close()
     this.invalidate(new Set(this.controllers.keys()))
     this.admissions.clear()
+    this.botWakeAdmissions.clear()
     this.observationAdmissions.clear()
     this.locations.clear()
   }
@@ -167,6 +168,7 @@ export class DiscordIntegration implements ConversationPolicies {
   invalidateBot(botId: string): void {
     this.connectionRevisions.set(botId, (this.connectionRevisions.get(botId) ?? 0) + 1)
     for (const [key, entry] of this.admissions) if (entry.botId === botId) this.admissions.delete(key)
+    for (const [key, entry] of this.botWakeAdmissions) if (entry.botId === botId) this.botWakeAdmissions.delete(key)
     this.invalidate(new Set(this.options.store.bindings().filter(binding => binding.botInstanceId === botId).map(binding => binding.id)))
   }
 
@@ -206,14 +208,35 @@ export class DiscordIntegration implements ConversationPolicies {
   }
 
   private binding(botId: string, location: DiscordLocation): DiscordBinding | undefined {
+    if (![0, 1, 5, 10, 11].includes(location.type)) return undefined
     const bindings = this.options.store.bindings().filter(binding => binding.botInstanceId === botId)
     const direct = bindings.find(binding => binding.target.kind === 'dm'
       ? location.type === 1 && binding.target.userId === location.recipientId
       : binding.target.channelId === location.id && binding.target.guildId === location.guildId)
     if (direct) return direct
-    if (![10, 11, 12].includes(location.type) || !location.parentId) return undefined
+    if (![10, 11].includes(location.type) || !location.parentId) return undefined
     return bindings.find(binding => binding.target.kind === 'channel' && binding.target.channelId === location.parentId &&
       binding.target.guildId === location.guildId && binding.inheritThreads)
+  }
+
+  /** Arrival-time selection only. Live ingress and output must still revalidate all permissions. */
+  snapshotInputAssignment(botId: string): (location: DiscordLocation) => { assigned: boolean; assertCurrent: () => void } {
+    const bot = this.options.bots.get(botId)
+    const bindings = this.closed || !bot.enabled || bot.purpose !== 'service' ? [] : structuredClone(this.options.store.bindings().filter(binding => binding.botInstanceId === botId && binding.enabled))
+    return location => {
+      const captured = [0, 1, 5, 10, 11].includes(location.type) ? bindings.find(binding => binding.target.kind === 'dm'
+        ? location.type === 1 && binding.target.userId === location.recipientId
+        : binding.target.guildId === location.guildId && (binding.target.channelId === location.id || !!location.parentId && binding.inheritThreads && binding.target.channelId === location.parentId)) : undefined
+      return { assigned: !!captured, assertCurrent: () => {
+        const current = captured && this.options.store.bindings().find(binding => binding.id === captured.id && binding.enabled)
+        if (!captured || !current || JSON.stringify(current) !== JSON.stringify(captured)) throw new Error('Arrival assignment changed; retained in inbox only')
+      } }
+    }
+  }
+
+  observationRevision(botId: string, scopeId: string): string | undefined {
+    const binding = this.options.store.bindings().find(binding => binding.id === scopeId && binding.botInstanceId === botId && binding.enabled && binding.observation?.enabled)
+    return binding ? createHash('sha256').update(JSON.stringify(binding)).digest('hex') : undefined
   }
 
   /** Scope-only trusted Web collection gate; sender/platform permissions still use prepareIngress. */
@@ -310,10 +333,25 @@ export class DiscordIntegration implements ConversationPolicies {
       ...(binding.processor ? { processor: binding.processor, processorRevision: policy.revision } : {}) }
   }
 
+  private readonly botWakeAdmissions = new Map<string, { sessionId: string; revision: string; hash: string; botId: string; connectionRevision: number }>()
+  /** Trusted host-only admission. No tool or gateway exposes this method. */
+  admitBotWake(sessionId: string, input: SessionInput): void {
+    const policy = this.resolve(sessionId)
+    if (!policy || input.source.kind !== 'event' || input.source.source !== 'bot-wake' || input.source.type !== 'bot-wake' || this.botWakeAdmissions.size >= 4096) throw new Error('BOT wake admission unavailable.')
+    const botId = this.resolved(policy).binding.botInstanceId
+    this.botWakeAdmissions.set(input.id, { sessionId, revision: policy.revision, hash: fingerprint(input), botId, connectionRevision: this.connectionRevisions.get(botId) ?? 0 })
+  }
+  discardBotWake(id: string): void { this.botWakeAdmissions.delete(id) }
+  private isBotWake(sessionId: string, input: SessionInput, revision: string): boolean {
+    const proof = this.botWakeAdmissions.get(input.id)
+    return !!proof && proof.sessionId === sessionId && proof.revision === revision && proof.connectionRevision === (this.connectionRevisions.get(proof.botId) ?? 0) && proof.hash === fingerprint(input)
+  }
+
   authorize(sessionId: string, input: SessionInput): void {
     if (!this.managed(sessionId)) return
     const policy = this.resolve(sessionId)!
     if (input.kind === 'control' && input.command.type === 'cancel') return
+    if (this.isBotWake(sessionId, input, policy.revision)) return
     if (sessionId.startsWith('discord-observation:')) {
       const proof = this.observationAdmissions.get(input.id)
       if (input.kind !== 'message' || input.source.kind !== 'event' || input.source.source !== 'discord-observation' ||
@@ -493,6 +531,7 @@ export class DiscordIntegration implements ConversationPolicies {
     const service = !!this.serviceBinding(sessionId)
     let senderId = ''
     let admissionId: string | undefined
+    let botWake = false
     const controller = new AbortController()
     const controllers = this.controllers.get(binding.id) ?? new Set<AbortController>()
     const assertCurrent = () => {
@@ -507,7 +546,9 @@ export class DiscordIntegration implements ConversationPolicies {
       if (!senderId || !this.transport) throw new IntegrationError('verified_input_required', 'A verified platform sender is required.', 403)
       const result = await this.transport.inspect(binding.botInstanceId, policy.binding.conversationId, senderId,
         AbortSignal.any([signal, controller.signal]))
-      this.allowed(binding, result)
+      if (botWake) {
+        if (result.botUserId !== binding.botUserId || !result.canView || !result.canSend) throw new IntegrationError('channel_access_denied', 'BOT wake platform permission is unavailable.', 403)
+      } else this.allowed(binding, result)
       assertCurrent()
       if (state?.channelBoundary) state.channelBoundary.sources = this.options.memory.sources(access)
     }
@@ -518,7 +559,9 @@ export class DiscordIntegration implements ConversationPolicies {
       begin: async (input, signal) => {
         controllers.add(controller); this.controllers.set(binding.id, controllers)
         this.authorize(sessionId, input)
-        if (service) { senderId = binding.botUserId; admissionId = input.id }
+        botWake = this.isBotWake(sessionId, input, policy.revision)
+        if (botWake) { senderId = binding.botUserId; admissionId = input.id }
+        else if (service) { senderId = binding.botUserId; admissionId = input.id }
         else if (child) senderId = child.senderId
         else {
           if (input.source.kind !== 'user') throw new IntegrationError('verified_input_required', 'A verified platform sender is required.', 403)
@@ -543,7 +586,7 @@ export class DiscordIntegration implements ConversationPolicies {
         return { ...message, media: profile.execution === 'restricted' ? undefined : message.media,
           boundary: { access: outputAccess, revision: policy.revision, senderId } }
       },
-      finish: () => { if (admissionId) { if (service) this.observationAdmissions.delete(admissionId); else this.admissions.delete(admissionId) }; admissionId = undefined },
+      finish: () => { if (admissionId) { this.botWakeAdmissions.delete(admissionId); if (service) this.observationAdmissions.delete(admissionId); else this.admissions.delete(admissionId) }; admissionId = undefined },
       rememberSummary: content => {
         assertCurrent()
         this.options.memory.save(access, { title: 'Conversation continuity summary', content, expectedVersion: '', kind: 'summary' })

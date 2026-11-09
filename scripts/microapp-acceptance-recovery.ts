@@ -170,7 +170,7 @@ export async function exportAcceptanceRecovery(home: string, output: string, pub
           changedFiles: [...new Set([...Object.keys(bundles.get(record.id)!.files), ...sourceFiles])]
             .filter(path => bundles.get(record.id)!.files[path] !== files[prefix + path]?.base64),
           acceptanceStatus: record.acceptance?.status ?? 'not_requested',
-          requirement: 'Unpublished source and host observations do not imply approval or passed acceptance',
+          requirement: 'Unpublished source and host observations do not imply passed acceptance',
         })),
       }
     })

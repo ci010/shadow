@@ -120,7 +120,7 @@ export async function openaiChat(params: {
       })
       phase = 'response'
 
-      if (!res.ok) throw await httpFailure(res, params.providerName ?? 'LLM', params.model, params.signal)
+      if (!res.ok) throw await httpFailure(res, params.providerName ?? 'LLM', params.model, params.signal, prepared.stats)
 
       const json = (await res.json()) as any
 

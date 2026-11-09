@@ -1,4 +1,5 @@
 import { ZodError } from 'zod'
+import { BotHostScopeSchema, type BotHostScope, type BotHostCapability } from './host-contract.ts'
 import { feishuHistoryArguments, feishuMessageArguments, type ChannelOperationRequest, type ChannelOperationContext } from '../channels/operations.ts'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, lstatSync, unlinkSync } from 'node:fs'
@@ -24,6 +25,18 @@ const uuid = (id: string) => { const h = digest(['bot', id]); return `${h.slice(
 export class DirectoryBots {
   constructor(readonly deployments: BotDeployments, private broker?: CapabilityBroker) {}
   setBroker(broker: CapabilityBroker): void { this.broker = broker }
+  private hostOperation?: (scope: BotHostScope, operation: BotHostCapability, input: Record<string, unknown>, context: ExecutionContext) => Promise<unknown>
+  setHostOperations(call: NonNullable<DirectoryBots['hostOperation']>): void { this.hostOperation = call }
+  /** Persisted wake identities grant nothing: every dispatch/callback revalidates the live package and binding. */
+  assertHostScope(scope: BotHostScope, operation: BotHostCapability): void {
+    BotHostScopeSchema.parse(scope)
+    if (scope.projectId !== this.deployments.projectId || scope.address.projectId !== scope.projectId) throw new Error('BOT Project mismatch.')
+    const current = this.definitions().find(({ bot }) => bot.id === scope.botId)
+    if (!current || current.deployment.revision !== scope.revision || !current.bot.hostCapabilities?.includes(operation)) throw new Error('BOT host capability is unavailable or deployment changed.')
+    const binding = current.bot.bindings.find(binding => (binding.platform === 'discord' ? binding.id : conversationBindingKey(binding)) === scope.bindingKey)
+    if (!binding || !binding.enabled || !bindingSubscribed(current.bot, binding) || binding.platform !== scope.address.platform || binding.botInstanceId !== scope.address.botInstanceId) throw new Error('BOT binding is unavailable.')
+    if (binding.platform !== 'discord' && binding.conversationId !== scope.address.conversationId) throw new Error('BOT conversation mismatch.')
+  }
   private channelOperation?: (request:ChannelOperationRequest,context:ChannelOperationContext)=>Promise<unknown>
   setChannelOperations(call:(request:ChannelOperationRequest,context:ChannelOperationContext)=>Promise<unknown>):void {this.channelOperation=call}
   private readonly invalidDeployments = new Map<string, { revision: string; reason: string }>()
@@ -101,7 +114,7 @@ export class DirectoryBots {
       // Receive configuration belongs to the BOT handler, not Session tool grants.
       const { tools, trigger: _trigger, ...data } = binding
       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding), skills: [], agent: agentName(bot.id) }, agent,
+      return [{ generation: deployment.generation, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding), skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
@@ -121,7 +134,7 @@ export class DirectoryBots {
         version:deployment.revision,publishedAt:new Date(0).toISOString() })
       for (const binding of selected) {
         const {platform: _platform,...data} = binding
-        bindings.push({...data,enabled:data.enabled && bindingSubscribed(bot,binding),agentId:id,epochRevision:parseInt(deployment.revision.slice(0,12),16)})
+        bindings.push({...data,enabled:data.enabled && bindingSubscribed(bot,binding),agentId:id,epochRevision:parseInt((deployment.generation ? digest(deployment.generation) : deployment.revision).slice(0,12),16)})
       }
     }
     if (new Set(bindings.map(binding => binding.id)).size !== bindings.length || new Set(bindings.map(binding => JSON.stringify([binding.botInstanceId,binding.target]))).size !== bindings.length) throw new Error('Discord conversation is owned by multiple BOT deployments.')
@@ -177,6 +190,19 @@ export class DirectoryBots {
     }
     const result = await executeBotTool({files:current.files,tool:name,args,signal:context.signal,allowedTools,
       authorize:async(_request,signal) => {check();await authorize?.(signal);check()},callModule:services,services,storage,
+      host: async (operation, input, signal) => {
+        check()
+        const address = context.channelAddress
+        const binding = bot.bindings.find(binding => binding.platform === 'discord' ? binding.id === bindingId : address && conversationBindingKey(binding) === conversationBindingKey(address))
+        if (!binding || !address || !this.hostOperation) throw new Error('BOT host operation unavailable.')
+        const scope = BotHostScopeSchema.parse({ projectId: this.deployments.projectId, botId, revision,
+          bindingKey: binding.platform === 'discord' ? binding.id : conversationBindingKey(binding), sessionId: context.sessionId, address })
+        this.assertHostScope(scope, operation)
+        await authorize?.(signal)
+        const result = await this.hostOperation(scope, operation, input, { ...context, signal })
+        check(); this.assertHostScope(scope, operation)
+        return result
+      },
       channel:async (operation,input) => {
         check()
         if (!allowedTools.includes(operation) || bot.tools.some(tool => tool.name === operation)) throw new Error('Channel operation is not exposed on this binding.')

@@ -88,7 +88,7 @@ All four met the enforced deadline, launched run 2 once and processed its URL on
 | Exploratory / cold | Background Node script: blocking run watch, then 200 ms log/status polling; continuation and completion callback | 6 | 83 / 40 | 202 ms |
 | Exploratory / existing source | Foreground Node script: blocking run watch, then 250 ms log/status polling | 4 | 67 / 32 | 146 ms |
 
-None read the event-source catalog or called `event_subscribe` / `event_source`.
+None read the event-source catalog or called the then-available subscription/producer tools.
 The existing producer therefore did not participate. In the background trial,
 the only accepted completion event was `background-task-complete`, which is
 automatic background execution delivery, not an explicitly installed subscription.

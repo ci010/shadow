@@ -1,3 +1,4 @@
+import { stampServiceOutput } from '../bots/service-output.ts'
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
@@ -81,7 +82,8 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
   })
   const channelInvalidations: string[] = []
   let promptInvalidations = 0
-  const sessions: Pick<SessionManager, 'yields' | 'getActiveSession' | 'invalidateSystemPrompts' | 'retireIdleConversationContexts'> = {
+  const sessions: Pick<SessionManager, 'yields' | 'getActiveSession' | 'invalidateSystemPrompts' | 'retireIdleConversationContexts' | 'recordPassiveChannel'> = {
+    recordPassiveChannel: async (_source, message) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }),
     retireIdleConversationContexts: async () => {}, yields, getActiveSession: () => undefined,
     invalidateSystemPrompts: () => { promptInvalidations++ },
   }
@@ -108,10 +110,10 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
   const address = (bot: BotInstance, chat = 'same-chat-id'): ChannelAddress => ({
     projectId, botInstanceId: bot.id, platform: bot.platform, conversationId: chat,
   })
-  const outbound = (bot: BotInstance): OutboundMessage => ({
+  const outbound = (bot: BotInstance): OutboundMessage => stampServiceOutput({
     channel: platform, chatId: 'same-chat-id', channelAddress: address(bot),
     event: 'response', content: bot.displayName, media: ['uploads/same-file.png'], done: true,
-  })
+  }, () => {})
   return { bus, store, instances, discovery, received, receivedScopes, created, manager, app, address, outbound, yields,
     channelInvalidations, promptInvalidations: () => promptInvalidations }
 }
@@ -127,7 +129,7 @@ test('QQ connection trigger compatibility values persist but do not configure Se
   assert.equal(new BotInstanceStore({ projectId: 'A', path }).status(all.id).config.triggerMode, 'all')
   assert.throws(() => store.update(all.id, { config: { triggerMode: 'invalid' } }), /invalid_channel_config/)
   const received: InboundMessage[] = []
-  const manager = new ChannelManager(ConfigSchema.parse({}), new Bus(), {} as SessionManager, async message => {
+  const manager = new ChannelManager(ConfigSchema.parse({}), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, async message => {
     received.push(message)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
   }, { projectId: 'A', instanceStore: store, serviceAssigned: () => true })
@@ -670,7 +672,7 @@ test('service bot inference failures remain observable but are not delivered to 
   await f.manager.deliver(failure)
   assert.deepEqual(observed, [failure])
   assert.equal(f.created.flatMap(channel => channel.sent).length, 0)
-  await f.manager.deliver({ ...failure, inferenceError: undefined, content: 'Normal response' })
+  await f.manager.deliver(stampServiceOutput({ ...failure, inferenceError: undefined, content: 'Normal response' }, () => {}))
   assert.equal(f.created.flatMap(channel => channel.sent).length, 1)
 })
 
@@ -707,7 +709,7 @@ test('directory-deployed QQ service assignment gates real ingress independently 
   t.mock.method(directoryBots, 'inputListeners', () => { order.push('select'); return select() })
   const inputs = channelInputFixture({ projectId, bots: store, directory: directoryBots,
     receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
-  const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), new Bus(), {} as SessionManager,
+  const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager,
     inputs.receive,
     { projectId, instanceStore: store, serviceAssigned: directoryBots.serviceAssigned, serviceDiscovery: discovery,
       routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
@@ -730,13 +732,13 @@ test('directory-deployed QQ service assignment gates real ingress independently 
   assert.ok(order.indexOf('handler') < order.indexOf('trigger'))
   assert.ok(order.indexOf('trigger') < order.indexOf('session'))
   await incoming(bot.id, 'bound', false)
-  assert.deepEqual(received.map(message => message.silent), [false])
+  assert.deepEqual(received.map(message => message.silent), [false, true])
   const policySteps = order.length
   await incoming(bot.id, 'other')
   await incoming(bot.id, 'disabled')
   await incoming(other.id, 'bound')
   assert.equal(order.length, policySteps, 'Unsubscribed groups do not execute the trigger policy')
-  assert.equal(received.length, 1)
+  assert.equal(received.length, 2)
   assert.equal(existsSync(join(root, 'authoring', 'resources.json')), false)
 })
 

@@ -1,3 +1,4 @@
+import type { PassiveChannelMessage, PassiveAdmission, PassiveArrival } from './passive-contract.ts'
 import { markIngressFailure } from './ingress-diagnostic.ts'
 import type { StreamInput } from './message-stream.ts'
 import type { GroupObservation } from './service-discovery.ts'
@@ -70,6 +71,7 @@ export interface BaseChannel {
   setGroupPreflight?(handler: (chatId: string, name?: string, message?: GroupObservation) => boolean): void
   /** Configure explicit message admission before starting the channel. */
   setStreamCollector?(collector: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>): void
+  setPassiveCollector?(collector: (message: PassiveChannelMessage) => Promise<PassiveAdmission>): void
   setReceiver(receiver: ReceiveChannelMessage): void
   /** Platform strategies are lazy: host listener selection precedes execution. */
   setReceivePolicy?(receiver: ReceiveChannelPolicy, mode?: 'service' | 'personal'): void
@@ -117,6 +119,18 @@ export abstract class AbstractChannel implements BaseChannel {
     try { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
     catch (error) { markIngressFailure(error, 'stream'); throw error }
   }
+  private passiveCollector?: (message: PassiveChannelMessage) => Promise<PassiveAdmission>
+  setPassiveCollector(collector: (message: PassiveChannelMessage) => Promise<PassiveAdmission>): void { this.passiveCollector = collector }
+  protected get hasPassiveCollector(): boolean { return !!this.passiveCollector }
+  /** Before trigger selection/downloads. Installed only on explicit service connections. */
+  protected async collectPassive(input: Omit<PassiveChannelMessage, 'channel' | 'timestamp'> & { timestamp?: string }): Promise<PassiveArrival | undefined> {
+    if (!this.passiveCollector) return undefined
+    this.assertConnection()
+    const admission = await this.passiveCollector({ ...input, channel: this.name, timestamp: input.timestamp ?? new Date().toISOString(), channelAddress: this.address(input.chatId) })
+    this.assertConnection()
+    return typeof admission === 'boolean' ? { eligible: admission, assertCurrent: () => { if (!admission) throw new ChannelAdmissionError('Passive arrival is not assigned', 403) } } : admission
+  }
+  private inputContext = new AsyncLocalStorage<(() => void) | undefined>()
   private inputPolicy?: ReceiveChannelPolicy
   private inputPolicyMode: 'service' | 'personal' = 'service'
   setReceivePolicy(receiver: ReceiveChannelPolicy, mode: 'service' | 'personal' = 'service'): void {
@@ -127,14 +141,17 @@ export abstract class AbstractChannel implements BaseChannel {
    * Session handler starts the strategy; only standalone adapters run it locally. */
   protected async runReceivePolicy(input: Pick<InboundMessage, 'senderId' | 'chatId' | 'messageId' | 'content'> & Partial<InboundMessage>, runPolicy: RunChannelPolicy): Promise<void> {
     this.assertConnection()
-    const message: InboundMessage = { ...input, channel: this.name, timestamp: input.timestamp ?? new Date().toISOString(),
+    const channelInputGuard = input.channelInputGuard
+    channelInputGuard?.()
+    const message: InboundMessage = { ...input, channelInputGuard, channel: this.name, timestamp: input.timestamp ?? new Date().toISOString(),
       ...(this.address(input.chatId) ? { channelAddress: this.address(input.chatId) } : {}) }
     if (this.inputPolicy) await this.inputPolicy(message, async configuration => {
       if (this.inputPolicyMode === 'service' && (!configuration || configuration.platform !== this.name ||
         ((configuration.platform === 'qq' || configuration.platform === 'feishu') && !['mention', 'all'].includes(configuration.trigger))))
         throw new ChannelAdmissionError('Selected BOT receive configuration required', 403)
       if (this.inputPolicyMode === 'personal' && configuration !== undefined) throw new ChannelAdmissionError('Personal policy cannot use Service configuration', 403)
-      await runPolicy(configuration)
+      channelInputGuard?.()
+      await this.inputContext.run(channelInputGuard, () => runPolicy(configuration))
     })
     else await runPolicy()
   }
@@ -410,8 +427,10 @@ export abstract class AbstractChannel implements BaseChannel {
 
     this.chatActiveMessage.delete(chatId)
 
+    const channelInputGuard = this.inputContext.getStore()
+    channelInputGuard?.()
     const msg: InboundMessage = {
-      ...fields,
+      ...fields, channelInputGuard,
       ...(this.botScope ? { channelAddress: this.address(chatId) } : {}),
       channel: this.name,
       messageId,

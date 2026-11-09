@@ -151,18 +151,17 @@ test('mechanism classification uses executed tools and actual foreground duratio
   const at = '2026-10-03T00:00:00.000Z'
   const finishedAt = '2026-10-03T00:01:00.000Z'
   assert.deepEqual(eventWaitStrategies([
-    { at, name: 'invoke_tool', args: { name: 'event_source', args: { action: 'create' } }, result: 'Created event source custom:test' },
     { at, name: 'event_subscribe', args: { action: 'subscribe' }, result: 'Subscribed web:test' },
     { at, finishedAt, name: 'exec', args: { command: 'watch' } },
-  ], [{ kind: 'process' }]), ['polling-event-source', 'event-subscribe', 'foreground-exec', 'foreground-exec-wait', 'background-exec'])
+  ], [{ kind: 'process' }]), ['event-subscribe', 'foreground-exec', 'foreground-exec-wait', 'background-exec'])
   assert.deepEqual(eventWaitStrategies([{ at, name: 'exec', args: { script: 'I will subscribe later' } }], []), [])
   assert.deepEqual(eventWaitStrategies([{ at, name: 'event_subscribe', args: { action: 'subscribe' }, result: 'Error: denied' }], []), [])
   assert.deepEqual(eventWaitStrategies([
     { at, finishedAt, name: 'invoke_tool', args: { name: 'github_actions', args: { action: 'watch', run_id: 1 } }, result: '{"conclusion":"success"}' },
     { at, finishedAt, name: 'github_actions', args: { action: 'watch_signal' }, result: '{"signal":{}}' },
   ], []), ['github-actions-run-watch', 'github-actions-signal-watch'])
-  assert.deepEqual(eventWaitStrategies([{ at, name: 'invoke_tool', args: { name: 'event_source', args: null } }], []), ['invalid-invocation-arguments'])
+  assert.deepEqual(eventWaitStrategies([{ at, name: 'invoke_tool', args: { name: 'event_provider', args: null } }], []), ['invalid-invocation-arguments'])
   assert.deepEqual(eventWaitStrategies([{ at, finishedAt: at, name: 'exec', args: {},
     result: 'Execution ID: bg:1234' }], [{ kind: 'process' }]), ['background-exec'])
-  assert.doesNotMatch(eventWaitPrompt('http://127.0.0.1:1234'), /event_subscribe|event_source|blocking|background/)
+  assert.doesNotMatch(eventWaitPrompt('http://127.0.0.1:1234'), /event_subscribe|event_provider|blocking|background/)
 })

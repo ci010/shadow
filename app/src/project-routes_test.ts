@@ -5,6 +5,7 @@ import * as VueRouter from 'vue-router'
 import ts from 'typescript'
 import { hostBase, projectBase } from './api-url.ts'
 import { liveProjectId } from './composables/useLiveClient.ts'
+import { microAppNavigation } from './microapp-navigation.ts'
 
 function applicationRouter(protocol: 'http:' | 'file:'): VueRouter.Router {
   const source = readFileSync(new URL('./router.ts', import.meta.url), 'utf8').replace('import.meta.env.MODE', JSON.stringify('web'))
@@ -15,6 +16,7 @@ function applicationRouter(protocol: 'http:' | 'file:'): VueRouter.Router {
   new Function('require', 'module', 'exports', 'location', outputText)(
     (id: string) => {
       if (id.endsWith('.vue')) return {}
+      if (id === './microapp-navigation.ts') return { microAppNavigation }
       assert.equal(id, 'vue-router')
       return {
         ...VueRouter,
@@ -45,6 +47,7 @@ for (const protocol of ['http:', 'file:'] as const) {
       '/projects/owner%20one/chat/web%3Achat-same?automation=daily&child=task%3Aone#message-2',
       '/projects/other/chat/web%3Achat-same',
       '/projects/owner%20one/settings/bots',
+      '/projects/owner%20one/settings/connections',
       '/projects/owner%20one/chat/web%3Achat-same?panel=knowledge&entry=memory%2Ftopics%2Fexample.md',
       '/projects/owner%20one/settings/agents?agent=reviewer&channel=web',
       '/projects/owner%20one/logs',

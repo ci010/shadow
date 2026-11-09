@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { imageFromBytes, imageFromDataUrlForModel, readImage, MAX_IMAGE_BYTES } from './image-input.ts'
 import { buildMediaParts } from '../agent/message-builder.ts'
+import { MIN_OPTIMIZE_IMAGE_BYTES } from './image-optimization.ts'
 
 function chunk(type: string, data: Uint8Array): Buffer {
   const payload = Buffer.concat([Buffer.from(type), data])
@@ -61,7 +62,28 @@ test('eligible PNG above 16 million pixels is converted within the existing inpu
   assert.ok(part.image_url.url.length < url(source).length)
 })
 
-test('small PNG and non-PNG remain unchanged', async () => {
+test('8 KiB threshold includes small screenshots and has an exact binary-byte boundary', async () => {
+  assert.equal(MIN_OPTIMIZE_IMAGE_BYTES, 8 * 1024)
+  const screenshot = png(64, 64)
+  assert(screenshot.length > MIN_OPTIMIZE_IMAGE_BYTES && screenshot.length < 256 * 1024)
+  const optimized = await imageFromDataUrlForModel(url(screenshot))
+  assert.match(optimized.image_url.url, /^data:image\/webp/)
+  const converted = imageFromBytes(Buffer.from(optimized.image_url.url.split(',')[1], 'base64'))
+  assert.equal(converted.width, 64); assert.equal(converted.height, 64)
+  assert(Buffer.from(optimized.image_url.url.split(',')[1], 'base64').length < screenshot.length)
+  const tiny = png(8, 8, true)
+  for (const size of [MIN_OPTIMIZE_IMAGE_BYTES - 1, MIN_OPTIMIZE_IMAGE_BYTES]) {
+    const metadata = Buffer.alloc(size - tiny.length - 12, 97)
+    metadata.write('Comment\0')
+    const source = Buffer.concat([tiny.subarray(0, 33), chunk('tEXt', metadata), tiny.subarray(33)])
+    assert.equal(source.length, size)
+    const result = await imageFromDataUrlForModel(url(source))
+    if (size < MIN_OPTIMIZE_IMAGE_BYTES) assert.equal(result.image_url.url, url(source))
+    else assert.match(result.image_url.url, /^data:image\/webp/)
+  }
+})
+
+test('tiny PNG and non-PNG remain unchanged', async () => {
   const small = url(png(8, 8))
   assert.equal((await imageFromDataUrlForModel(small)).image_url.url, small)
   const gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
@@ -93,7 +115,7 @@ test('abort before and during worker conversion propagates, releases worker slot
   assert.match((await imageFromDataUrlForModel(url(large))).image_url.url, /^data:image\/webp/)
 })
 
-test('local read/user ingress optimizes only model copy; validation and original file stay PNG', async () => {
+test('explicit optimization preserves source files; user ingress defers to the session guard', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'shadow-image-'))
   const path = join(dir, 'source.png')
   try {
@@ -101,9 +123,10 @@ test('local read/user ingress optimizes only model copy; validation and original
     assert.equal((await readImage(path)).mime, 'image/png')
     assert.equal((await readImage(path, undefined, { optimizeForModel: true })).mime, 'image/webp')
     const parts = await buildMediaParts([path, url(large)], dir, dir)
+    // Ingress validates only. The session's new-message guard owns optimization.
     for (const part of parts) {
       assert.equal(part.type, 'image_url')
-      if (part.type === 'image_url') assert.match(part.image_url.url, /^data:image\/webp/)
+      if (part.type === 'image_url') assert.match(part.image_url.url, /^data:image\/png/)
     }
     assert.deepEqual(await readFile(path), large)
   } finally { await rm(dir, { recursive: true, force: true }) }
@@ -118,10 +141,21 @@ test('animated, high-bit-depth and color/orientation-sensitive PNGs are preserve
   assert.equal((await imageFromDataUrlForModel(url(deep))).image_url.url, url(deep))
 })
 
-test('busy codec skips a concurrent image rather than queueing more decoded pixel allocations', async () => {
-  const first = imageFromDataUrlForModel(url(large))
-  assert.equal((await imageFromDataUrlForModel(url(large))).image_url.url, url(large))
-  assert.match((await first).image_url.url, /^data:image\/webp/)
+test('busy codec queues concurrent images with one decoded allocation at a time', async () => {
+  const results = await Promise.all([imageFromDataUrlForModel(url(large)), imageFromDataUrlForModel(url(large))])
+  for (const result of results) assert.match(result.image_url.url, /^data:image\/webp/)
+  assert.equal(results[0].image_url.url, results[1].image_url.url)
+})
+
+test('cancelling a queued image does not cancel the active image or block later images', async () => {
+  const active = imageFromDataUrlForModel(url(large))
+  const controller = new AbortController()
+  const queued = imageFromDataUrlForModel(url(large), controller.signal)
+  const reason = new Error('Cancel only the queued image')
+  controller.abort(reason)
+  await assert.rejects(queued, error => error === reason)
+  assert.match((await active).image_url.url, /^data:image\/webp/)
+  assert.match((await imageFromDataUrlForModel(url(large))).image_url.url, /^data:image\/webp/)
 })
 
 test('incompressible RGBA input is never replaced by larger model bytes', async () => {
