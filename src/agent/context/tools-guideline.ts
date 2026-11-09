@@ -12,7 +12,7 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode !== 'call' && allows('work')) {
     sections.push(`### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.`)
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.`)
   }
 
   if (allows('sql')) {

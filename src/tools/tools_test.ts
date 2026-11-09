@@ -17,7 +17,10 @@ import { ContinuationTool } from './background.ts'
 import { LogTool } from './log.ts'
 import { MessageTool } from './message.ts'
 import { SessionTool } from './session.ts'
-import { WorkTool } from './work.ts'
+import { createWorkTools } from './work-operations.ts'
+import { WORK_TOOL_NAMES } from './work-names.ts'
+import type { ExecutionContext } from './context.ts'
+import { requireToolText } from './tool.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
 import type { TopicService } from '../sessions/topics.ts'
 import { SubagentTool } from './subagent.ts'
@@ -67,7 +70,7 @@ const stub = <T>(): T => ({} as unknown as T)
  * Build a base tool registry mirroring the always-on tools registered in
  * `src/runtime/main/project-runtime.ts`, in the same registration order.
  */
-function buildBaseTools(): Tools {
+function buildBaseTools(loadable = new Map<string, LoadableEntry>()): Tools {
   const bus = new Bus()
   const deliver = async (sessionId: string, input: { id: string }) => ({
     status: 'accepted' as const, sessionId, inputId: input.id,
@@ -92,8 +95,8 @@ function buildBaseTools(): Tools {
       backgroundTasks,
     ),
   )
-  const importer = new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE)
-  tools.register(new WorkTool(stub<WorkAlignment>()))
+  const importer = new ImportTool(loadable, WORKSPACE)
+  for (const tool of createWorkTools(stub<WorkAlignment>())) importer.registerBuiltin(tool.name, tool)
   tools.register(new SearchTool(WORKSPACE))
   tools.register(new InvokeTool(importer))
   tools.register(new ContinuationTool(backgroundTasks, stub<SessionManager>()))
@@ -135,6 +138,42 @@ test('an explicit empty tool allowlist denies base and dynamically imported tool
   assert.deepEqual(tools.snapshot().getDefinitions(), [])
 })
 
+test('Work-enabled restrictive roles use the actual lazy catalog without the legacy base tool', async () => {
+  const catalog = new Map<string, LoadableEntry>()
+  const base = buildBaseTools(catalog)
+  assert.deepEqual([...catalog.keys()], [...WORK_TOOL_NAMES])
+  assert.equal(catalog.has('work'), false)
+  assert.equal(base.get('work'), undefined)
+  assert(!base.getDefinitions().some(def => def.function.name === 'work'))
+  const roles = (await getBuiltinAgentTypes()).filter(role => role.allowedTools?.includes('work'))
+  assert.deepEqual(roles.map(role => role.name).sort(), ['explore', 'plan', 'verify'])
+  for (const role of roles) {
+    const tools = new SessionTools(base, WORKSPACE, role.allowedTools, role.blockedTools)
+    try {
+      assert(tools.has('invoke_tool'), `${role.name} needs the Work gateway`)
+      assert.equal(tools.has('work'), false)
+      assert(!tools.getDefinitions().some(def => def.function.name === 'work'))
+      assert.equal(tools.canUseDynamic('unrelated_dynamic'), false)
+      assert.match(requireToolText(await tools.execute('work', {}, { tools } as ExecutionContext)), /unknown tool/)
+      for (const name of WORK_TOOL_NAMES) {
+        assert(tools.canUseDynamic(name), `${role.name} must retain ${name}`)
+        // Invalid legacy arguments reach live schema validation, never the stubbed
+        // WorkAlignment. This exercises the real fixture importer and gateway.
+        const result = await tools.execute('invoke_tool', { name, args: { action: 'retired' } }, {
+          tools, sessionId: 'fixture', signal: new AbortController().signal,
+        } as ExecutionContext)
+        assert.match(requireToolText(result), /invalid arguments/)
+        assert(tools.hasDynamic(name))
+        assert(!tools.getDefinitions().some(def => def.function.name === name), 'Lazy writes must not enter the base surface')
+      }
+      for (const mode of ['task', 'call'] as const) {
+        tools.setExecutionScope(mode, [])
+        for (const name of WORK_TOOL_NAMES) assert.equal(tools.canUseDynamic(name), false)
+      }
+    } finally { await tools.resetDynamicAndWait() }
+  }
+})
+
 test('tools — tool surface per agent type', async (t) => {
   // For each built-in agent type, apply its allow/block policy (plus opt-in
   // hiding) and pin the resulting reachable tool names. Sorted by name so the
@@ -165,7 +204,7 @@ test('scoped tool descriptions match the modes advertised to the model', () => {
     const modes = allowedSubagentModes(mode, parent)
     tools.setExecutionScope(mode, modes)
     const definitions = tools.getDefinitions()
-    assert.equal(definitions.some(def => def.function.name === 'session'), mode === 'session')
+    assert.equal(definitions.some(def => def.function.name === 'session'), mode !== 'call')
     const subagent = definitions.find(def => def.function.name === 'subagent')?.function
     if (!modes.length) {
       assert.equal(subagent, undefined)

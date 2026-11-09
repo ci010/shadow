@@ -50,16 +50,12 @@ export async function projectWorkOverview(sessions: SessionManager, github: Reco
         blockedReason: record.workflow?.blockedReason ?? null,
         parentKey: record.workflow?.parentKey ?? null, dependencies: record.workflow?.dependencies ?? [],
         manager: authority.manager, assignee: authority.executor, paused: record.paused,
-        adopted: record.adoption?.revision === record.revision && record.adoption.sessionId === authority.executor,
-        proposals: record.proposals?.filter(proposal => proposal.status === 'pending' && proposal.baseRevision === record.revision
-          && proposal.assignmentRevision === record.workflow?.assignmentRevision).length ?? 0,
-        interpretationReview: !!record.answerReview, changedAt: record.changedAt,
+        changedAt: record.changedAt,
         objective: record.definition.objective, origin: record.origin, userQuote: record.requestSource?.quote,
         notes: record.notes, result: record.workflow?.result, contextChanged: alignment.contextChanged(record),
         github: github[record.key],
         observation: record.observation,
-        decisionInfluences: record.proposals?.filter(proposal => proposal.status === 'applied' && proposal.appliedRevision && proposal.request)
-          .map(proposal => ({ reason: proposal.reason, baseRevision: proposal.baseRevision, appliedRevision: proposal.appliedRevision!, request: proposal.request! })),
+
       }
     }),
     sessions: states.map(state => {

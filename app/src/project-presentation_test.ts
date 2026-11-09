@@ -6,7 +6,7 @@ import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 import { projectTopics, projectFocusGroups } from './project-topic-history.ts'
 
 test('semantic voice cards replace execution hierarchy, preserve discussed option and render disclosure regions', () => {
-  const item = { key: 'topic:web:chat-voice', title: 'Local ASR', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, adopted: false, proposals: 0, interpretationReview: false, changedAt: '2026-10-11T00:00:00Z' }
+  const item = { key: 'topic:web:chat-voice', title: 'Local ASR', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-11T00:00:00Z' }
   const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'delegate', title: 'Inspect ASR flags', parentKey: item.key, assignee: 'sub-worker' }], sessions: [{ sessionId: 'web:chat-voice', title: 'Voice', assignable: true }, { sessionId: 'sub-worker', title: 'ASR helper', assignable: false, parentSessionId: 'web:chat-voice' }], requests: [], effects: [], focus: { origin: 'model_interpretation', inferredAt: '2026-10-11T00:00:00Z', inputCount: 1, omittedCount: 0, sources: [{ key: item.key, sequence: 1 }], evidence: voiceEvidence, result: { groups: voiceGroups } } })
   const graph = overviewGraph(data)
   assert.equal(graph.nodes.length, 3)
@@ -31,7 +31,7 @@ test('semantic voice cards replace execution hierarchy, preserve discussed optio
 
 
 test('saved abstract hierarchy is sole ownership truth; bounded leftovers stay behind one unorganized root', () => {
-  const item = { key: 'topic:web:chat-voice', title: 'Voice', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, adopted: false, proposals: 0, interpretationReview: false, changedAt: '2026-10-11T00:00:00Z' }
+  const item = { key: 'topic:web:chat-voice', title: 'Voice', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-11T00:00:00Z' }
   const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'older', title: 'Older unorganized topic', changedAt: '2026-09-01T00:00:00Z' }], sessions: [], requests: [], effects: [], focus: { origin: 'model_interpretation', inferredAt: '2026-10-12T00:00:00Z', inputCount: 1, omittedCount: 1, sources: [{ key: item.key, sequence: 1 }], evidence: voiceEvidence, result: { groups: voiceGroups, hierarchy: [{ id: 'experience', title: 'Improve local experience', purpose: 'Inferred purpose', groupIndexes: [] }, { id: 'voice', title: 'Voice interaction', purpose: 'Voice subgroup', parentId: 'experience', groupIndexes: [0] }] } } })
   const graph = overviewGraph(data)
   assert.deepEqual(overviewLayout(graph, new Set()).nodes.map(node => node.id), ['organized-hierarchy:experience', 'organized:unclassified'])

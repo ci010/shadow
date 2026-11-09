@@ -137,7 +137,7 @@ test('owner-scoped cleanup does not mutate shared Work notes in any state', asyn
       const alignment = new WorkAlignment(store, {
         state: id => [owner.sessionId, peer.sessionId].includes(id) ? { sessionId: id, mode: 'session', segmentIndex: 0 } : undefined,
         evidence: async () => { throw new Error('No acceptance evidence is provided by this fixture') },
-        changed: async () => {}, fresh: async () => {}, successor: async () => undefined,
+        changed: async () => {},
       })
       const actor = { kind: 'session' as const, sessionId: owner.sessionId }
       try {
@@ -147,14 +147,12 @@ test('owner-scoped cleanup does not mutate shared Work notes in any state', asyn
           title: 'Browser acceptance', reason: 'Synthetic request',
           definition: { objective: 'Inspect then release the owned browser', acceptance: ['Owner review remains required'], boundaries: ['No extra authority'], evidence: [] },
         }) as WorkRecord
-        await alignment.execute(actor, 'adopt', record.key, record.revision,
-          { understanding: 'Inspect then clean up', stop: [], retain: [], next: ['Inspect browser'] })
         owner.workStamps = alignment.snapshot(owner.sessionId)
         const current = alignment.get(record.key)
         if (state === 'blocked' || state === 'cancelled') {
-          await alignment.execute(actor, 'progress', record.key, record.revision, {
-            expectedSequence: current.sequence, status: state,
-            ...(state === 'blocked' ? { blockedReason: 'Waiting for exact owner approval', blockedScope: 'work' } : {}),
+          await alignment.editNote(actor, record.key, current.sequence, {
+            status: state,
+            ...(state === 'blocked' ? { blockedReason: 'Waiting for exact owner approval' } : {}),
           })
         } else if (state === 'unknown') {
           store.startWorkEffect('uncertain-browser-operation', owner.sessionId, 'fixture_write', owner.workStamps)
@@ -162,7 +160,7 @@ test('owner-scoped cleanup does not mutate shared Work notes in any state', asyn
         } else {
           store.saveWork({
             ...current, sequence: current.sequence + 1,
-            ...(state === 'paused' ? { paused: true } : state === 'stale' ? { adoption: undefined }
+            ...(state === 'paused' ? { paused: true } : state === 'stale' ? { revision: current.revision + 1 }
               : { workflow: { ...current.workflow!, status: 'done' } }),
           }, current.sequence, owner.sessionId, 'fixture')
         }

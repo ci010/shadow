@@ -7,9 +7,17 @@ metadata:
 
 # Shared work
 
-Use `work` directly. `action: "context"` returns current notes and goal paths;
-add `data: {includeSchema: true}` only when help is needed. `list` discovers
-Project work; `tree` with a root key shows its related notes and progress.
+Read `v:works/overview`, `v:works/index` (20 receipts/page; follow next),
+`v:works/context` (associated keys), then the encoded key path returned by the
+index for current definition, notes and ancestor path. Append /definition,
+/notes or /path for focused reads. `v:works/schema` provides field help.
+Use search at `v:works` for bounded discovery; heed incomplete-search warnings.
+
+Writes are dynamic tools. Read `v:tools/work_create`, `v:tools/work_update`,
+`v:tools/work_assign`, `v:tools/work_review` or
+`v:tools/work_link`; source and callable names coincide. Invoke, for example:
+`invoke_tool({name:"work_update",args:{key:"work:...",version:2,notes:{summary:"Result"},status:"done"}})`.
+There is no action/data wrapper or base work tool.
 
 Execution and questions require no work item. Reuse or create a note when a
 shared outcome benefits from a durable place to think. Start with a title and
@@ -27,7 +35,7 @@ One Session can handle several work items. Work survives a change of Session.
 
 ## Assignment and execution
 
-Use `work assign` with key and current version. Only the note's coordinator or
+Use `work_assign` with key and current version. Only the note's coordinator or
 the human changes its assignment. Idle, missing and stopped sessions never
 release work automatically. Assignment changes neither stop ongoing operations
 nor authorize a new executor to replay uncertain effects.
@@ -39,9 +47,9 @@ not an execution fence. Completion is a reported outcome, not human acceptance.
 
 Parents maintain goal structure and causal links. Workers update their local
 summary, plan, next step and artifact links when something meaningfully changes.
-`work update` takes key, current version and only changed fields in data.
+`work_update` takes key, current version and only changed top-level fields.
 Optional notes.html is an isolated read-only exhibit, not executable UI.
-`work select` changes focus, not permissions or filesystem isolation.
+Current Work is inferred only from the unique unfinished assignment, never from management or links. No explicit Work selection tool exists.
 No adopt, checkpoint, policy, progress or settle protocol is required.
 
 ## Review and completion
@@ -49,7 +57,7 @@ No adopt, checkpoint, policy, progress or settle protocol is required.
 Ordinary updates refresh the Project canvas without waking agents. For a material
 changed premise, dependency, scope, decision or blocker, set notes.attention with
 kind and summary. The coordinator reads the branch, checks the parent impact and
-records `work review` with a conclusion. Do not duplicate this by messaging or
+records `work_review` with a conclusion. Do not duplicate this by messaging or
 periodic status reports. An ancestor change leaves descendants explicitly not yet
 reassessed; changing a note does not silently clear that state.
 
@@ -65,7 +73,7 @@ approach is still needed. Read the recorded assessment; retire or replace an
 obsolete plan rather than asking the user how to satisfy it. This is not a gate
 on investigation or already-authorized independent work.
 
-Report completion with `work update`, data.status=done and notes.summary.
+Report completion with `work_update`, status=done and notes.summary.
 Children finishing does not prove root acceptance. Execution activity, reported
 progress and user acceptance remain distinct. Work status does not roll back or
 terminate processes; inspect real outcomes before retrying uncertain operations.

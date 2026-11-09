@@ -1,3 +1,4 @@
+import { parseStoredWorkStamps } from '../initiatives/work-contract.ts'
 import { physicalSessionId } from './session-identity.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { parseYieldDecisionRecord, parseYieldReview, parseDecisionInvalidation, type DecisionInvalidation, type YieldDecisionRecord, type YieldRequest, type YieldReview, type YieldReference } from './yield-contract.ts'
@@ -57,7 +58,12 @@ export class YieldRecords {
       if (!value || typeof value !== 'object' || !('version' in value) || value.version !== 1) {
         throw new TypeError('Unsupported decision record version.')
       }
-      const record = parseYieldDecisionRecord(value)
+      // JSONL and SQLite share this boundary. Do not normalize Work proposals into asks.
+      const stored = value as { request?: Record<string, unknown> }
+      const compatible = stored.request?.workStamps === undefined ? value : {
+        ...value, request: { ...stored.request, workStamps: parseStoredWorkStamps(stored.request.workStamps) },
+      }
+      const record = parseYieldDecisionRecord(compatible)
       if (record.request.sessionId !== sessionId || record.request.origin?.physicalId !== selected) {
         throw new TypeError('Decision record origin does not match its log.')
       }
@@ -268,9 +274,6 @@ export class YieldRecords {
   }
 
   async replace(previous: YieldRequest, next: YieldRequest): Promise<void> {
-    if (previous.workProposal || next.workProposal) {
-      throw new YieldError('conflict', 'A work proposal cannot be rewritten as a different question. Return for investigation and create a new work proposal instead.')
-    }
     if (!previous.origin || next.origin?.physicalId !== previous.origin.physicalId
       || next.supersedes?.requestId !== previous.id || next.sessionId !== previous.sessionId) {
       throw new TypeError('A replacement must retain the original decision owner and segment.')

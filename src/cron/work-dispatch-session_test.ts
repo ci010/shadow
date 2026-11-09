@@ -79,7 +79,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     } as unknown as SessionManagerDeps)
     const initiatives = new InitiativeStore(home, { isSessionKnown: id => !!manager.getSessionState(id) })
     const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), evidence: async () => {},
-      changed: (record, previous) => manager.notifyWorkChange(record, previous), fresh: async () => {}, successor: async () => undefined })
+      changed: (record, previous) => manager.notifyWorkChange(record, previous), })
     manager.alignment = alignment
     const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source', inferenceRequests: 2, toolCalls: 2 })
     const dispatcher = new WorkDispatcher({ projectId: 'fixture', store: initiatives, sessions: manager,

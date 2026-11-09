@@ -138,7 +138,8 @@ import { PlanWriteTool } from '../../tools/plan-write.ts'
 import { ProcessManager } from '../../execution/processes/manager.ts'
 import { InitiativeStore } from '../../initiatives/store.ts'
 import { WorkAlignment } from '../../sessions/work-alignment.ts'
-import { WorkTool } from '../../tools/work.ts'
+import { createWorkTools } from '../../tools/work-operations.ts'
+import { createWorksHandler } from '../../vfs/works.ts'
 import { projectWorkPlugin } from '../../projects/work-routes.ts'
 import { GitHubStore } from '../../projects/github/store.ts'
 import { GitHubClient } from '../../projects/github/client.ts'
@@ -872,51 +873,10 @@ export async function createProjectRuntime(
   initiatives.recoverWorkEffects()
   const alignment: WorkAlignment = new WorkAlignment(initiatives, {
     state: id => sessions.getSessionState(id),
-    setPolicy: (id, policy, validate) => sessions.setWorkPolicy(id, policy, validate),
     evidence: source => sessions.validateWorkEvidence(source),
-    resolveEvidence: (id, sources, signal) => sessions.resolveToolEvidence(id, sources, signal),
     changed: async (record, previous) => {
       realtime.invalidateSessions()
       await sessions.notifyWorkChange(record, previous)
-    },
-    fresh: (id, record) => sessions.requestWorkContext(id, record),
-    successor: async (id, record) => {
-      const source = sessions.getSessionState(id)
-      if (!source || source.mode !== 'session' || sessions.isManagedConversation(id)) throw new Error('Only ordinary durable sessions can prepare a successor.')
-      const createSuccessor = async () => {
-        const current = alignment.get(record.key)
-        if (current.transition?.id !== record.transition!.id) throw new Error('Successor transition was superseded.')
-        if (initiatives.workEffects().some(effect => effect.sessionId === id)) throw new Error('Unresolved effects prevent successor creation.')
-        const successorId = `web:chat-${record.transition!.id}`
-        const existing = sessions.getSessionState(successorId)
-        const policy = alignment.policy(id)
-        if (existing) {
-          if (existing.createdBySessionId !== id || existing.workPolicy?.mode !== 'required'
-            || !existing.workPolicy.keys.includes(record.key)) throw new Error('Successor identity has a different Work binding.')
-          return successorId
-        }
-        await sessions.buildSession(successorId, undefined, {
-          topic: `Realigned: ${source.topic ?? source.name ?? 'work'}`.slice(0, 120),
-          focus: `Prepared to receive ${record.key}; no assignment or permission has transferred.`,
-          folderId: source.folderId, agentType: source.agentType ?? 'general', initiativeId: source.initiativeId,
-          workdir: source.workdir, mode: 'session', parentSessionId: null, createdBySessionId: id,
-          workPolicy: { mode: 'required', keys: [record.key],
-            controllerSessionId: policy.mode === 'required' ? policy.controllerSessionId : id },
-        })
-        realtime.invalidateSessions()
-        return successorId
-      }
-      const active = sessions.getActiveSession(id)
-      if (active) {
-        if (!('requestRealignment' in active)) throw new Error('Temporary executions cannot hand off a durable context.')
-        active.requestRealignment(async () => {
-          const successor = await createSuccessor()
-          alignment.finishTransition(record.key, record.transition!.id, successor)
-          realtime.invalidateSessions()
-        })
-        return undefined
-      }
-      return createSuccessor()
     },
   })
   sessions.alignment = alignment
@@ -1005,7 +965,9 @@ export async function createProjectRuntime(
   })
   cleanup.push(() => github.stop())
   tools.setWorkGuard(alignment)
-  tools.register(new WorkTool(alignment))
+  for (const tool of createWorkTools(alignment)) importTool.registerBuiltin(tool.name, tool)
+  const worksVfs = createWorksHandler(alignment)
+  vfs.mount('v:works', 'read-only current Project Work; bounded index/context and encoded key goal/notes/ancestor paths; read v:works/overview', worksVfs.read, worksVfs.list)
   const conventions = new ProjectConventions(workspace, () => initiatives.workRecords())
   cleanup.push(() => conventions.close())
   tools.register(new SqlTool(conventions, project.id, (source, context) => sessions.validateConventionSource(source, context),
@@ -1791,8 +1753,6 @@ export async function createProjectRuntime(
   // Recover sessions interrupted by the previous process exit.
   const ready = Promise.all([startAgent, startCron]).then(async () => {
     channelIntegrations.restoreAgents()
-    await alignment.recoverDecisions(async reference => (await sessions.getYieldRecords(reference.sessionId, reference.physicalId))
-      .find(record => record.request.id === reference.requestId))
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
     await learningRuntime.recover()
     learning.start()

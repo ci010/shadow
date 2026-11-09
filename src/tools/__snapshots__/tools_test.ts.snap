@@ -4,13 +4,30 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "read",
-      "description": "Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. Text supports offset/limit, including URLs and virtual text. Session line ranges use the same view as grep; omit ranges for recent messages. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.",
+      "description": "Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. Text supports offset/limit, including URLs and virtual text. Local session paths default to /overview, which includes bounded collaboration previews and links exact /c/<message>.<call> details via short physical references (legacy /calls/<id> paths still work); /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.",
       "parameters": {
         "type": "object",
         "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+          },
           "path": {
             "type": "string",
             "description": "File path, directory path, or URL (http/https)"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "utf-8",
+              "shift_jis",
+              "gb18030",
+              "utf-16le",
+              "utf-16be",
+              "windows-1252"
+            ],
+            "description": "Local text files only. Default auto: BOM or strict UTF-8. Specify gb18030, shift_jis, etc. to retry legacy text; never rewrites files."
           },
           "offset": {
             "type": "number",
@@ -39,6 +56,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
       "parameters": {
         "type": "object",
         "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+          },
           "path": {
             "type": "string",
             "description": "File path"
@@ -49,7 +70,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "match": {
             "type": "string",
-            "description": "Exact text to find for edit mode"
+            "description": "Exact text to find (LF/CRLF equivalent). Must be nonempty and unique unless flag g is set. No fuzzy matching; edits preserve existing line endings and BOM."
           },
           "flag": {
             "type": "string",
@@ -75,13 +96,13 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "plan_write",
-      "description": "Write or edit a planning document in .plans/. Shared task status belongs in Work items, not a second checklist.",
+      "description": "Write or edit a planning document in Project Home/state/plans/. Shared task status belongs in Work items, not a second checklist.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "File path relative to .plans/ (e.g. \\"my-plan.md\\"). Subdirectories allowed."
+            "description": "File path relative to Project Home/state/plans/ (e.g. \\"my-plan.md\\"). Subdirectories allowed."
           },
           "content": {
             "type": "string",
@@ -128,6 +149,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
       "parameters": {
         "type": "object",
         "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+          },
           "script": {
             "type": "string",
             "description": "Script to run. For OS shells this is the command string; for \`shell=node\` this is inline TypeScript source. Preserve failures: do not append exit 0 or || true to hide an error. When chaining native commands in PowerShell, check $LASTEXITCODE after each one and propagate failures."
@@ -145,7 +170,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "cwd": {
             "type": "string",
-            "description": "Working directory (defaults to workspace root)"
+            "description": "Working directory (defaults to the committed session cwd)"
           },
           "timeout_ms": {
             "type": "number",
@@ -161,59 +186,31 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
   {
     "type": "function",
     "function": {
-      "name": "work",
-      "description": "Shared work notes and Project goal map, never a prerequisite for tools. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string",
-            "enum": [
-              "context",
-              "list",
-              "tree",
-              "create",
-              "update",
-              "assign",
-              "review",
-              "select"
-            ]
-          },
-          "key": {
-            "type": "string",
-            "description": "Stable work key."
-          },
-          "version": {
-            "type": "integer",
-            "description": "Current note version for update, assign or review; returned by reads and writes."
-          },
-          "data": {
-            "type": "object",
-            "description": "Only action-specific fields. context data.includeSchema=true returns help."
-          }
-        },
-        "required": [
-          "action"
-        ],
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
       "name": "search",
       "description": "Search names with glob, content with grep, or the web. Virtual searches return read paths without activating skills, connecting services or launching browsers.",
       "parameters": {
         "type": "object",
         "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+          },
           "query": {
             "type": "string",
             "description": "Glob pattern, regex or web keywords. Use ** to list virtual entries."
           },
-          "space": {
+          "handler": {
             "type": "string",
-            "description": "grep or glob with path below; web:[domain] for web search. Legacy grep:[file-glob], grep:v:<folder>[/path] and glob:[path] also work."
+            "enum": [
+              "grep",
+              "glob",
+              "web"
+            ],
+            "description": "Search implementation: grep (content), glob (names), or web. Bare names only; put file/virtual scope in path and web scope in domain."
+          },
+          "domain": {
+            "type": "string",
+            "description": "web only: restrict results to a DNS domain, e.g. github.com. No URL, path or site: prefix."
           },
           "path": {
             "type": "string",
@@ -233,7 +230,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           }
         },
         "required": [
-          "space",
+          "handler",
           "query"
         ],
         "additionalProperties": false
@@ -244,13 +241,17 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "invoke_tool",
-      "description": "Execute an exact tool name, loading it lazily. Validates arguments against the current schema; invalid arguments return the contract without execution.",
+      "description": "Execute an exact tool name from v:tools, loading it lazily (shared initialization may register sibling tools). To discover tools of an uninitialized source, omit name and pass source with args: {}; this initializes only, without executing a tool. Read v:tools/@sources__ for source metadata. Validates the live schema; invalid arguments return the contract without execution.",
       "parameters": {
         "type": "object",
         "properties": {
           "name": {
             "type": "string",
-            "description": "Name of the active session tool to execute."
+            "description": "Exact tool name to execute, active or lazily loadable. Mutually exclusive with source."
+          },
+          "source": {
+            "type": "string",
+            "description": "Explicit source initialization only; use args: {} and omit name. Returns tool contracts without executing them."
           },
           "args": {
             "type": "object",
@@ -262,7 +263,6 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           }
         },
         "required": [
-          "name",
           "args"
         ]
       }
@@ -305,6 +305,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Actor (person, agent, system). A separate wiki page is not required."
           },
+          "summary": {
+            "type": "string",
+            "description": "Short standalone event briefing (1–280 Unicode code points); include outcome and important uncertainty, not learning audit. Required for new reflector events."
+          },
           "what": {
             "type": "string",
             "description": "Action or event description. Be concise."
@@ -345,7 +349,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "session",
-      "description": "Create or name durable peer conversations and register folders. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.",
+      "description": "Create durable peer conversations and register folders. Read/write v:session/self.json for your own metadata/completion. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -357,17 +361,21 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
               "register_folder"
             ]
           },
-          "title": {
+          "topic": {
             "type": "string",
-            "description": "Required for create/update: session name, max 120 characters."
+            "description": "Required for create/update: stable overarching conversation topic, max 120 characters."
+          },
+          "focus": {
+            "type": "string",
+            "description": "Optional current step, max 4000 characters. Display falls back to topic when empty."
           },
           "description": {
             "type": "string",
-            "description": "Optional short discovery description for create/update, or folder contents description for register_folder. Not instructions or permission."
+            "description": "Folder contents description for register_folder only. Not instructions or permission."
           },
           "sessionId": {
             "type": "string",
-            "description": "Update only: this session or an ordinary conversation managed by the coordinator."
+            "description": "Update only: this session."
           },
           "requestId": {
             "type": "string",
@@ -375,11 +383,26 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "folderId": {
             "type": "string",
-            "description": "Create only: registered Project folder ID. Omit for a discussion-only session; never a path."
+            "description": "Create only: current Project folder shortName, name-ID selector or full UUID. Uses the registered folder and its node. Omit for a discussion-only session; never a path."
           },
           "agentType": {
             "type": "string",
             "description": "Create only: agent template name, default general."
+          },
+          "model": {
+            "type": "string",
+            "description": "Create only: optional exact model ID from v:models; omission preserves agent/Project defaults."
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Create only: optional reasoning effort supported by the selected model; omission preserves agent/Project defaults."
           },
           "workRoot": {
             "type": "string",
@@ -393,9 +416,13 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "object",
             "description": "Create only: {key:string}, an unassigned note coordinated by this session. Link responsibility and contextual questions before kickoff; no adoption protocol."
           },
+          "nodeId": {
+            "type": "string",
+            "description": "register_folder only: explicit runtime inventory device identity (Main or Child). Required from remote sessions; never inferred from a display path."
+          },
           "path": {
             "type": "string",
-            "description": "register_folder only: absolute existing directory on Main. This does not move data or change this chat workdir."
+            "description": "register_folder only: absolute existing directory on Main when nodeId is omitted; otherwise an opaque directory path on the explicitly selected device. This does not move data or change this chat workdir."
           }
         },
         "required": [
@@ -409,7 +436,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "message",
-      "description": "Send to a peer session in this Project when it needs to act differently. Requests queue without interrupting active work. Prefer one shared work note for findings and progress; do not also message the same status. Routine progress/acknowledgements archive by default. attention marks changes needing a response. Goal/rationale changes belong in work, not prose-only redirection. A receipt is admission, not completion, permission or assignment transfer.",
+      "description": "Send concise actionable context to an agent in this Project: sessionId + content normally suffice. Relevant context enters its next safe step, without interrupting tools. Your running task accepts corrections to its existing assignment, not another task. Use delivery=queue for subsequent work. Routine progress/acknowledgements archive. Admission is not application or ownership transfer; wait for completion or confirmed cancellation before taking over its files.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -417,13 +444,18 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Message text to send."
           },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "next-step",
+              "queue",
+              "silent"
+            ],
+            "description": "Default next-step: context for current work. queue: a later request after the turn. silent: FYI archive only. Running tasks only accept next-step from their actual parent."
+          },
           "sessionId": {
             "type": "string",
             "description": "Target session ID from discovery or a prior receipt, including remote:<id> for an owned A2A conversation. Must not be the current session."
-          },
-          "silent": {
-            "type": "boolean",
-            "description": "False queues a response without interrupting active work; true only archives. Defaults to true for routine progress/acknowledgements, false otherwise. Archival does not update active context or wake a recipient. Never use true for required materials, corrections, questions or instructions."
           },
           "intent": {
             "type": "string",
@@ -454,6 +486,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           "itemId": {
             "type": "string",
             "description": "Optional existing work item in workRoot; context only."
+          },
+          "work": {
+            "type": "object",
+            "description": "Explicit assignment kickoff: {key, assignmentRevision}. Current manager to current assignee only. One durable admission per assignment; unconfirmed attempts are not replayed."
           }
         },
         "required": [
@@ -529,13 +565,17 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "default_option": {
             "type": "string",
-            "description": "Decision only: exactly one of options, used only if the configured timeout expires."
+            "description": "Decision only: exactly one of options; not human authorization. An unanswered human request is deferred without approval."
+          },
+          "independent": {
+            "type": "boolean",
+            "description": "Decision only: explicitly unrelated to waiting child decisions. Otherwise cite the live child in sources when escalating. Cannot combine with sources."
           },
           "sources": {
             "type": "array",
             "minItems": 1,
             "maxItems": 3,
-            "description": "Decision only: optional existing references. Copy an answer receipt’s reference, or sessionId, origin.physicalId and id (as requestId) from a received request. Links provide context, not permission or proof of causation.",
+            "description": "Decision only: optional existing references. Copy an answer receipt’s reference, or sessionId, origin.physicalId and id (as requestId) from a received request. Links provide context, not permission. Citing a live direct child links its escalation: deferral/investigation resumes that child without approval. When a child waits, cite it or mark the question independent.",
             "items": {
               "type": "object",
               "properties": {
@@ -611,7 +651,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "subagent",
-      "description": "Create a temporary asynchronous task, or invoke a blocking bounded leaf call. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.",
+      "description": "Create an asynchronous reviewable local task, or invoke a blocking bounded leaf call. Declare review at creation: parent (default) or an independently managed agent. Structured verdicts automatically rerun requested changes in the same worker history; only PASS delivers success. Remote A2A tasks remain legacy one-shot and do not support this review lifecycle. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -621,15 +661,34 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
               "task",
               "call"
             ],
-            "description": "Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Omission defaults to task in a long-lived session; tasks must explicitly choose call."
+            "description": "Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Remote workdirs support task only; call is rejected before creation because remote exec has no foreground lifecycle. Omission defaults to task in a long-lived session; tasks must explicitly choose call."
           },
           "task": {
             "type": "string",
             "description": "Initial work. Required for task/call."
           },
+          "model": {
+            "type": "string",
+            "description": "Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings."
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Task only: optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings."
+          },
+          "title": {
+            "type": "string",
+            "description": "Task only: parent-owned display title, max 120 characters. Supply title and description explicitly; legacy omission derives a title from description. Ignored for call."
+          },
           "description": {
             "type": "string",
-            "description": "Short description of the sub-agent session's purpose."
+            "description": "Parent-owned task discovery description (max 4000 characters); the task child cannot change title or description. Call purpose is unchanged."
           },
           "workRoot": {
             "type": "string",
@@ -639,9 +698,41 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Agent role. Defaults to \\"general\\"; explicit call mode inherits the caller role when omitted. Discover local roles and configured a2a:<agent> targets with read(\\"v:agents\\"). Remote targets support task mode only and inherit no local resources."
           },
+          "review": {
+            "type": "object",
+            "description": "Local task review policy. Omission defaults to parent review; agent creates an independent reviewer automatically. PASS alone delivers success; changes rerun the original worker. Calls and A2A do not accept review.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "parent",
+                  "agent"
+                ],
+                "default": "parent"
+              },
+              "agent_type": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Agent review only: configured local reviewer role; defaults to verify."
+              },
+              "max_rounds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "default": 3,
+                "description": "Maximum submissions including the first. Use max_rounds, not maxRounds."
+              },
+              "criteria": {
+                "type": "string",
+                "maxLength": 16000,
+                "default": ""
+              }
+            },
+            "additionalProperties": false
+          },
           "report_to": {
             "type": "string",
-            "description": "Session ID to route the final task result to instead of this session. Format: \\"channel:chatId\\". Enables agent chains (e.g., coder → verifier)."
+            "description": "Session ID to route the final task result to instead of this session. Format: \\"channel:chatId\\". Routing only: this does not grant reviewer or close authority."
           },
           "preload_tools": {
             "type": "object",
@@ -692,13 +783,14 @@ read
 write
 view_edit
 search
+invoke_tool
 `;
 
 exports[`tools — tool surface per agent type > explore 1`] = `
 read
 exec
-work
 search
+invoke_tool
 ask
 reply
 `;
@@ -708,7 +800,6 @@ read
 write
 view_edit
 exec
-work
 search
 invoke_tool
 continuation
@@ -726,7 +817,6 @@ read
 write
 view_edit
 exec
-work
 search
 invoke_tool
 continuation
@@ -739,19 +829,17 @@ subagent
 sql
 `;
 
-
 exports[`tools — tool surface per agent type > plan 1`] = `
 read
 plan_write
-work
 search
+invoke_tool
 ask
 reply
 `;
 
 exports[`tools — tool surface per agent type > reflector 1`] = `
 read
-write
 view_edit
 search
 log
@@ -767,7 +855,6 @@ read
 write
 view_edit
 exec
-work
 search
 invoke_tool
 continuation
@@ -783,8 +870,12 @@ sql
 exports[`tools — tool surface per agent type > verify 1`] = `
 read
 exec
-work
 search
+invoke_tool
 ask
 reply
+`;
+
+exports[`tools — tool surface per agent type > work-organizer 1`] = `
+
 `;

@@ -1,3 +1,4 @@
+import { isWorkTool } from './work-names.ts'
 import { discoverFolderMcp, type FolderMcpSource } from '../mcp/folder.ts'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { LOCAL_EXECUTOR_DISABLED } from '../execution/coordinator-policy.ts'
@@ -915,7 +916,7 @@ export class ImportTool implements Tool {
 
   canInvokeFromRemote(toolName: string): boolean {
     const entry = this.loadable.get(toolName)
-    return toolName === 'session' && entry !== undefined && entry === this.builtins.get(toolName) &&
+    return (toolName === 'session' || isWorkTool(toolName)) && entry !== undefined && entry === this.builtins.get(toolName) &&
       !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
   }
 

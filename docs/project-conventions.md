@@ -7,7 +7,7 @@ Each fact has one current owner:
 | Stable personal preferences | The identified user's profile under Project memory; remember sources, distinguish observations from explicit statements, and correct superseded preferences |
 | Project-wide practices | `project_conventions`, exposed through the `sql` tool |
 | Temporary conversation presentation instructions | Session context and its continuation summary, not a separate convention store |
-| Task goals, acceptance criteria, boundaries, assignment and progress | Work items, changed through `work` actions |
+| Task goals, acceptance criteria, boundaries, assignment and progress | Work items, read via `v:works`, changed through typed dynamic `work_*` tools |
 | Why a consequential choice was made and who answered | The persistent `ask` decision record; its result updates the appropriate owner above |
 
 A decision is an interaction and an audit record, not another scope of
@@ -134,7 +134,7 @@ does not guarantee every preference has already been captured.
 Work remains optional. Neither a note nor its delivery receipt authorizes an
 operation, starts an execution, cancels the previous owner, or completes Work.
 
-`work create` accepts optional `data.idempotencyKey` (1–200 trimmed characters).
+dynamic `work_create` accepts optional `idempotencyKey` (1–200 trimmed characters).
 The owning Project database and creator scope the key. Session creators use their
 session identity; the existing authenticated-human actor is a single `user`
 namespace. Parsed/defaulted request fields are fingerprinted: identical retries
@@ -146,7 +146,7 @@ do not republish notifications or repeat focus changes. This is not a notificati
 outbox: a crash or failure can leave notification/focus follow-up incomplete.
 
 Responsibility and delivery are still separate operations. `assign` receipts and
-`work context` expose `assignmentRevision`. For an existing ordinary peer, send
+the exact encoded key view under `v:works/keys/` expose `assignmentRevision`. For an existing ordinary peer, send
 its initial assignment message with:
 
 ```json
@@ -167,7 +167,7 @@ same mechanism after binding responsibility, without a second wakeup.
 
 The existing Work audit store reserves an `assignment_delivery` event before
 calling normal Session delivery, then records `accepted` with its input ID after
-a matching, non-filtered receipt. `work context` returns the current assignment's
+a matching, non-filtered receipt. the exact encoded key view under `v:works/keys/` returns the current assignment's
 `assignmentDelivery` (`null`, `unconfirmed`, or `accepted`); old revisions remain
 in audit history. These events do not increment the note or assignment revision.
 A late receipt updates only the old revision. The sender envelope includes Work

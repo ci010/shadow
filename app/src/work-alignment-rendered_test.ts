@@ -219,7 +219,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
             const summary = (key: string, title: string, status = 'pending', assignee: string | null = null) => ({
               key, title, status, assignee, revision: 1, sequence: 1, parentKey: null, dependencies: [],
               manager: 'web:chat-admin', blockedReason: status === 'blocked' ? 'Waiting for the release decision' : null,
-              paused: false, adopted: false, proposals: 0, interpretationReview: false, changedAt: at,
+              paused: false, changedAt: at,
             })
             const note = (item: typeof record) => ({ ...summary(item.key, item.workflow!.title, item.workflow!.status, item.workflow!.assignee),
               parentKey: item.workflow!.parentKey ?? null, dependencies: item.workflow!.dependencies, revision: item.revision, sequence: item.sequence,

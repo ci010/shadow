@@ -98,8 +98,6 @@ async function fixture(workspace: string, store: SessionStore) {
   const alignment = new WorkAlignment(initiatives, {
     state: target => sessions.getSessionState(target), evidence: source => sessions.validateWorkEvidence(source),
     changed: async (record, previous) => { if (notifications) await sessions.notifyWorkChange(record, previous) },
-    fresh: (target, record) => sessions.requestWorkContext(target, record),
-    successor: async () => { throw new Error('Successor is not used by this fixture.') },
   })
   sessions.alignment = alignment
   tools.setWorkGuard(alignment)
@@ -162,13 +160,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const work = await f.note({ assignee: null, idempotencyKey: 'durable-kickoff' })
       const topics = new TopicService({ projectId, sessions: f.sessions, folders,
         listStates: async () => Object.values(await store.listAllStates()), resolveAgent: () => ({ defaultMode: 'session' }), changed: () => {} })
-      const request = { requestId: crypto.randomUUID(), title: 'Peer', work: { key: work.key }, initialMessage: 'First task' }
+      const request = { requestId: crypto.randomUUID(), topic: 'Peer', work: { key: work.key }, initialMessage: 'First task' }
       const peer = await topics.create(request, id)
       await f.finish(peer.sessionId)
       const assigned = f.alignment.get(work.key)
       const first = f.initiatives.assignmentDelivery(work.key, assigned.workflow!.assignmentRevision)!
       assert.equal(first.status, 'accepted')
       assert.equal((await topics.create(request, id)).initialMessageStatus, 'not_replayed')
+      await f.alignment.editNote(actor(peer.sessionId), work.key, f.alignment.get(work.key).sequence, { status: 'done', notes: { summary: 'First task complete' } })
       const next = await f.note({ assignee: peer.sessionId })
       const message = new MessageTool(new Bus(), (target, source) => f.sessions.canReceiveSessionMessage(target, source),
         () => undefined, () => [], (target, input) => f.sessions.deliver(target, input), undefined, undefined, undefined, undefined, f.alignment)
@@ -193,7 +192,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(reopened.assignmentDelivery(next.key, next.workflow!.assignmentRevision)?.status, 'accepted')
         const recoveredAlignment = new WorkAlignment(reopened, {
           state: target => f.sessions.getSessionState(target), evidence: async () => {}, changed: async () => {},
-          fresh: async () => {}, successor: async () => undefined,
         })
         const recovered = await recoveredAlignment.deliverAssignment(id, peer.sessionId, args.work, {
           id: crypto.randomUUID(), kind: 'message', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: id },
@@ -218,7 +216,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.finish()
       assert.deepEqual(f.initiatives.workRecords(), [])
       const note = await f.note()
-      await f.sessions.setWorkPolicy(id, { mode: 'required', controllerSessionId: id, keys: [note.key] }, () => {})
+      f.sessions.getSessionState(id)!.workPolicy = { mode: 'required', controllerSessionId: id, keys: [note.key] }
+      await store.saveState(id, f.sessions.getSessionState(id)!)
       const blocked = await f.alignment.editNote(actor(), note.key, note.sequence, { status: 'blocked', blockedReason: 'An optional grader is unavailable' })
       await f.send('Continue independent authorized work, then update the current note.')
       await waitFor(() => f.calls.length === 4)
@@ -234,7 +233,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.finish()
       assert.deepEqual(f.initiatives.workEffects(), [])
       assert.equal(f.initiatives.workHistory(note.key).some(event => event.kind === 'tool_result'), false)
-      assert.equal(f.alignment.get(note.key).adoption, undefined)
+      assert.equal('adoption' in f.alignment.get(note.key), false)
       assert.equal((await f.post({ action: 'policy', data: { mode: 'required' } })).status, 400)
       const restored = new InitiativeStore(workspace)
       try { assert.equal(restored.workRecords()[0].notes?.summary, 'Token measurements collected') }
@@ -253,7 +252,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         resolveAgent: () => ({ defaultMode: 'session' }), changed: () => {},
       })
       f.enableNotifications()
-      const request = { requestId: crypto.randomUUID(), title: 'Metrics worker', work: { key: work.key }, initialMessage: 'Collect the measurements.' }
+      const request = { requestId: crypto.randomUUID(), topic: 'Metrics worker', work: { key: work.key }, initialMessage: 'Collect the measurements.' }
       const peer = await topics.create(request, id)
       await waitFor(() => f.calls.length === 1)
       assert.equal(f.alignment.get(work.key).workflow?.assignee, peer.sessionId)
@@ -277,7 +276,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.deepEqual(f.alignment.context('virtual:metrics-task').records.map(record => record.key), [work.key])
       assert.equal((await f.overview()).sessions.find(session => session.sessionId === 'virtual:metrics-task')?.activity, 'pending')
       const restored = new InitiativeStore(workspace)
-      try { assert.equal(restored.workFocus('virtual:metrics-call'), work.key) }
+      try { assert.equal(restored.executionBinding('virtual:metrics-call'), work.key) }
       finally { restored.close() }
     } finally { await f.close(); store.close?.() }
   }))
@@ -286,8 +285,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
     try {
       await f.sessions.prepareCommandSession(id)
-      const goal = await f.note()
-      const approach = await f.note({ title: 'Evaluate release candidates', parentKey: goal.key,
+      const goal = await f.note({ assignee: null })
+      const approach = await f.note({ title: 'Evaluate release candidates', assignee: null, parentKey: goal.key,
         notes: { kind: 'approach', relation }, definition: { objective: 'Compare evaluation results' } })
       const grader = await f.note({ title: 'Build a grader', parentKey: approach.key,
         notes: { kind: 'task', relation: { kind: 'assumption', reason: 'Scored evaluation is assumed to be necessary' } },

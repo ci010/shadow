@@ -5,17 +5,16 @@ import { overviewGraph, overviewLayout } from './project-overview-graph.ts'
 import { organizationDiagnostic, organizationErrorMessage } from './organization-error.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 import type { YieldDecisionRecord } from '../../src/sessions/yield-contract.ts'
-const item = { key: 'root', title: 'Release', revision: 2, sequence: 2, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, adopted: false, proposals: 0, interpretationReview: false, changedAt: '2026-10-10T00:00:00Z', notes: { kind: 'goal', summary: 'Reported delivery' } }
-test('one graph distinguishes hierarchy, dependencies, time, references and evidenced applied influence', () => {
-  const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'plan', title: 'Approach', parentKey: 'root', dependencies: ['root'], changedAt: '2026-10-11T00:00:00Z', notes: { kind: 'approach' }, decisionInfluences: [{ reason: 'Changed acceptance after decision', baseRevision: 1, appliedRevision: 2, request: { sessionId: 's', physicalId: 'p', requestId: 'd' } }] }], sessions: [], requests: [], effects: [] })
+const item = { key: 'root', title: 'Release', revision: 2, sequence: 2, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-10T00:00:00Z', notes: { kind: 'goal', summary: 'Reported delivery' } }
+test('one graph distinguishes hierarchy, dependencies, time, references without retired proposal influence', () => {
+  const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'plan', title: 'Approach', parentKey: 'root', dependencies: ['root'], changedAt: '2026-10-11T00:00:00Z', notes: { kind: 'approach' } }], sessions: [], requests: [], effects: [] })
   const record = { request: { id: 'd', sessionId: 's', question: 'Change approach?', createdAt: '2026-10-10T12:00:00Z', origin: { physicalId: 'p' }, sources: [{ sessionId: 's', physicalId: 'p', requestId: 'old' }], reconsiders: { sessionId: 's', physicalId: 'p', requestId: 'old' } }, answer: { answeredBy: 'user', option: 'Change approach', answeredAt: '2026-10-10T13:00:00Z' } } as YieldDecisionRecord
   const graph = overviewGraph(data, [record])
-  for (const kind of ['hierarchy', 'dependency', 'precedence', 'reference', 'reconsiders', 'causal']) assert(graph.edges.some(edge => edge.kind === kind), kind)
+  for (const kind of ['hierarchy', 'dependency', 'precedence', 'reference', 'reconsiders']) assert(graph.edges.some(edge => edge.kind === kind), kind)
   assert(graph.nodes.some(node => node.kind === 'approach'))
   assert(graph.nodes.some(node => node.kind === 'result' && node.authority === 'reported'))
   assert(graph.nodes.some(node => node.kind === 'unavailable'))
-  assert.equal(graph.edges.filter(edge => edge.kind === 'causal').length, 1)
-  assert.equal(overviewGraph({ ...data, items: data.items.map(item => ({ ...item, decisionInfluences: undefined })) }, [record]).edges.filter(edge => edge.kind === 'causal').length, 0)
+  assert.equal(graph.edges.filter(edge => edge.kind === 'causal').length, 0)
   assert(graph.edges.filter(edge => edge.kind === 'precedence').every(edge => edge.evidence.includes('not causal')))
 })
 test('UI failure diagnostics retain bounded safe codes and never raw server messages', () => {

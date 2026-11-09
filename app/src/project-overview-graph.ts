@@ -60,11 +60,6 @@ export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionR
   }
   const edges: OverviewEdge[] = []
   for (const item of items) {
-    for (const influence of item.decisionInfluences ?? []) {
-      const source = influence.request
-      if (childSessions.has(source.sessionId)) continue
-      edges.push({ from: `decision:${source.sessionId}/${source.physicalId}/${source.requestId}`, to: item.key, kind: 'causal', evidence: `Applied proposal changed revision ${influence.baseRevision} → ${influence.appliedRevision}: ${influence.reason}. Persisted application, not inferred from time.` })
-    }
     if (item.parentKey) edges.push({ from: item.parentKey, to: item.key, kind: 'hierarchy', evidence: `${item.key} parentKey` })
     for (const dependency of item.dependencies) edges.push({ from: dependency, to: item.key, kind: 'dependency', evidence: `${item.key} dependencies` })
     if (item.parentKey && item.notes?.relation) edges.push({ from: item.key, to: item.parentKey, kind: 'relation', evidence: `${item.notes.relation.kind}: ${item.notes.relation.reason}` })

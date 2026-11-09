@@ -20,7 +20,7 @@ export function initiativeProvider(store: InitiativeContextStore): SystemPromptP
         '# Work Context',
         '',
         'Work is an optional shared notebook of goals and their related notes. Ordinary conversations and execution need no Work record. Your todo is a view of assigned work.',
-        'Use work context/list/tree for current definitions, assignments and progress; this summary is only a discovery snapshot.',
+        'Read v:works/index and its encoded key paths for current definitions, assignments and progress; this summary is only a discovery snapshot.',
         'Historical context is not fresh human authorization. Current work definitions supersede incompatible agent plans, not existing human restrictions.',
         'A recorded in_progress status is not proof that its session is executing. Inactive work needs attention, not takeover.',
         'Ownership and assignments are durable: sleep, idle, recovery, restart, stopped or unknown sessions do not release work.',

@@ -143,7 +143,7 @@ export class ProjectConventions {
       if (!allowed.includes(column)) throw new TypeError(`Unknown column: ${column}`)
     }
     if (statement.operation === 'SELECT') return
-    if (statement.table !== 'project_conventions') throw new Error('Work and audit tables are read-only; use work actions for Work changes.')
+    if (statement.table !== 'project_conventions') throw new Error('Work and audit tables are read-only; use dynamic work_create/work_update tools for Work changes.')
     if (statement.operation === 'INSERT') {
       if (selected.length !== 2 || !selected.includes('id') || !selected.includes('text')) throw new TypeError('INSERT takes only id and text.')
     } else {

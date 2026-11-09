@@ -528,7 +528,7 @@ test('invalidated prompts stay frozen across active turns and refresh after slee
   } finally { await f.close() }
 })
 
-test('Work context replacement retains the active system snapshot and refreshes only conversational context', async () => {
+test('Conversation context replacement retains the active system snapshot and refreshes only conversational context', async () => {
   let prompt = 'Activation snapshot'
   const f = await fixture({ manager: true, buildSystemPrompt: async () => prompt })
   try {
@@ -540,11 +540,11 @@ test('Work context replacement retains the active system snapshot and refreshes 
     await waitFor(() => active.quiescent)
     prompt = 'Configuration changed while active'
     f.manager.invalidateSystemPrompts()
-    await active.replaceWorkContext('Current Work replacement', 'fixture-transition')
+    await active.replaceConversationContext('Current conversation replacement')
     await f.manager.deliver(f.state.sessionId, input('second'))
     await waitFor(() => f.calls.length === 2)
     assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'system'), firstSystem)
-    assert(f.calls[1].messages.some(message => message.name === '__work_handoff__' && message.content === 'Current Work replacement'))
+    assert(f.calls[1].messages.some(message => message.name === '__context_handoff__' && message.content === 'Current conversation replacement'))
     assert.equal(f.preparations(), 1)
     f.calls[1].resolve(done())
     await waitFor(() => f.facts.length === 2)

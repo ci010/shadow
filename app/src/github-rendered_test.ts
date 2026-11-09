@@ -100,8 +100,7 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
               json({ items: f.works.workRecords().map(work => ({
                 key: work.key, title: work.workflow!.title, status: work.workflow!.status, assignee: work.workflow!.assignee,
                 manager: work.workflow!.manager, parentKey: work.workflow!.parentKey ?? null, dependencies: work.workflow!.dependencies,
-                revision: work.revision, sequence: work.sequence, paused: work.paused, adopted: false, proposals: 0,
-                interpretationReview: false, blockedReason: null, changedAt: work.changedAt, github: references[work.key],
+                revision: work.revision, sequence: work.sequence, paused: work.paused, blockedReason: null, changedAt: work.changedAt, github: references[work.key],
               })), sessions: [...f.states.keys()].map(sessionId => ({ sessionId, title: sessionId, assignable: true })), requests: [], effects: [] })
             } else next()
           } catch (error) { next(error) }

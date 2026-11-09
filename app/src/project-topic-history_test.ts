@@ -5,8 +5,7 @@ import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 
 test('topic history retains ended work, follows explicit links, and does not infer topics from session lineage', () => {
   const item = { key: 'root', title: 'Release', revision: 1, sequence: 1, status: 'done', parentKey: null,
-    dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, adopted: false,
-    proposals: 0, interpretationReview: false, changedAt: '2026-10-10', notes: { kind: 'goal', summary: 'Report delivered' } }
+    dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-10', notes: { kind: 'goal', summary: 'Report delivered' } }
   const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'child', parentKey: 'root', status: 'blocked' }],
     sessions: [{ sessionId: 'linked', title: 'Worker', assignable: false, workKey: 'child', activity: 'completed' },
       { sessionId: 'unlinked', title: 'Another discussion', assignable: true, parentSessionId: 'linked', lastActivityAt: '2026-10-11' }], requests: [], effects: [] })
@@ -21,8 +20,7 @@ test('topic history retains ended work, follows explicit links, and does not inf
 
 test('focus categories are display hypotheses, preserve separate topics and leave legacy topics unclassified', () => {
   const item = { key: 'a', title: 'Release evidence', revision: 1, sequence: 1, status: 'done', parentKey: null,
-    dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, adopted: false,
-    proposals: 0, interpretationReview: false, changedAt: '2026-10-11', observation: {
+    dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-11', observation: {
       sessionId: 'a', observedAt: '2026-10-11T00:00:00Z', sources: [{ id: 'request', physicalId: 'segment' }],
       focus: { category: 'Release confidence', purpose: 'Understand impact', motivation: 'May want confidence', evidence: [{ id: 'request', physicalId: 'segment' }] },
     } }
