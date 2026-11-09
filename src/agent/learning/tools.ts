@@ -30,6 +30,11 @@ const skillSchema = z.object({ action: z.literal('save'), name: slug, revision,
 }).strict()
 // Preflight accepts oversized drafts so checking is not itself a failed write.
 const skillCheckSchema = z.object({ action: z.literal('check'), name: slug, revision, content: z.string() }).strict()
+// Exact, revision-bound corrections avoid resubmitting a growing complete lesson.
+const skillPatchSchema = z.object({ action: z.literal('patch'), name: slug, revision,
+  match: z.string().min(1).max(LEARNED_SKILL_MAX_LENGTH),
+  replacement: z.string().max(LEARNED_SKILL_MAX_LENGTH),
+}).strict()
 const resultSchema = z.object({
   status: z.enum(['applied', 'no_change', 'partial', 'blocked', 'draft_only']), summary: text,
 }).strict()
@@ -136,16 +141,21 @@ export class LearningTools {
 
   readonly skill: Tool = {
     name: 'learned_skill', optIn: true,
-    description: 'Read/check/save a lesson-only Project skill with revision checking and immediate discovery. Complete replacement, not append-only: consolidate duplicates while preserving conditions, evidence and exceptions. Save validates size, package and revision and persists in one call; a separate check is optional size feedback, not a prerequisite. Max 8000 UTF-16 code units, target <=7200. Does not install code, tools, agents or admin capabilities.',
+    description: 'Read/check/save/patch a lesson-only Project skill with revision checking and immediate discovery. Use patch for a unique exact correction to an existing lesson; it runs the same final whole-lesson size/package/discovery checks as save. Correct superseded guidance first, separately from optional expansion. If correction cannot fit, save a complete reorganization preserving safety conditions and evidence; never truncate. Complete replacement, not append-only: consolidate duplicates while preserving conditions, evidence and exceptions. Save validates size, package and revision and persists in one call; a separate check is optional size feedback, not a prerequisite. Max 8000 UTF-16 code units, target <=7200. Does not install code, tools, agents or admin capabilities.',
     parameters: { type: 'object', properties: {
-      action: { type: 'string', enum: ['read', 'check', 'save'] }, name: { type: 'string' },
+      action: { type: 'string', enum: ['read', 'check', 'save', 'patch'] }, name: { type: 'string' },
+      match: { type: 'string', description: 'patch only: nonempty exact text occurring once in current SKILL.md. Read first; no fuzzy/global matching.' },
+      replacement: { type: 'string', description: 'patch only: replacement text, empty to delete. Final complete lesson must still fit 8000 UTF-16 code units. Correct superseded guidance before optional extensions.' },
       revision: { type: 'string', description: 'Read revision, or empty string for a missing skill.' },
       content: { type: 'string', description: 'Complete SKILL.md, including frontmatter. Save limit: 8000 UTF-16 code units after trim; target <=7200. check accepts oversized drafts without writing and returns size feedback.' },
     }, required: ['action', 'name'] },
     execute: (raw, context) => this.serial(async () => {
       const batch = this.authorize(context)
       if (batch.pipeline !== 'encapsulator' || !this.runtime.skillStore) throw new Error('Learned skills require the Project encapsulation runtime.')
-      const args = z.union([readSchema, skillSchema, skillCheckSchema]).parse(raw)
+      const request = z.union([readSchema, skillSchema, skillCheckSchema, skillPatchSchema]).parse(raw)
+      // Patch becomes an ordinary complete save below, with identical validation.
+      let args: z.infer<typeof readSchema> | z.infer<typeof skillSchema> | z.infer<typeof skillCheckSchema> = request.action === 'patch'
+        ? { action: 'save', name: request.name, revision: request.revision, content: '' } : request
       const store = this.runtime.skillStore
       const current = store.read(args.name)
       const currentContent = current.files['SKILL.md']?.toString() ?? ''
@@ -158,6 +168,15 @@ export class LearningTools {
           withinLimit: length > 0 && length <= LEARNED_SKILL_MAX_LENGTH,
           overBy: Math.max(0, length - LEARNED_SKILL_MAX_LENGTH), limits: skillLimits,
           message: 'Size check only, not package validation or a write. Reorganize and deduplicate, preserving triggers, conditions, exceptions, uncertainty and evidence; never truncate. Save a complete replacement with this revision. Reserve capacity for learning_result; if it cannot fit, report partial with the unsaved scope.' })
+      }
+      if (request.action === 'patch') {
+        if (!currentContent) throw new Error('Patch requires an existing lesson. Read it first or save a complete new lesson.')
+        const start = currentContent.indexOf(request.match)
+        if (start < 0 || currentContent.indexOf(request.match, start + 1) >= 0) {
+          throw new Error('Patch match must occur exactly once. Read the current lesson and use unique exact text or save a complete reorganization.')
+        }
+        args = skillSchema.parse({ action: 'save', name: request.name, revision: request.revision,
+          content: currentContent.slice(0, start) + request.replacement + currentContent.slice(start + request.match.length) })
       }
       const parsed = parseSkillFile(args.content, args.name)
       if (current.source === 'builtin' || Object.keys(current.files).some(path => path !== 'SKILL.md')
