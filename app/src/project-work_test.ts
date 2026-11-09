@@ -6,8 +6,7 @@ import { workNotesSchema } from '../../src/initiatives/work-notes.ts'
 
 const item = (key: string, extra: Partial<ProjectWorkItem> = {}): ProjectWorkItem => ({
   key, title: key, revision: 1, sequence: 1, status: 'pending', parentKey: null, dependencies: [],
-  manager: 'web:manager', assignee: null, paused: false, adopted: false, proposals: 0,
-  interpretationReview: false, changedAt: new Date().toISOString(), ...extra,
+  manager: 'web:manager', assignee: null, paused: false, changedAt: new Date().toISOString(), ...extra,
   blockedReason: extra.blockedReason ?? null,
 })
 const items = [
@@ -39,7 +38,7 @@ test('invalid wire progress fails explicitly and attention stays separate from s
   const data = { items: [
     item('review', { contextChanged: true }),
     item('clarify', { notes: workNotesSchema.parse({ attention: { kind: 'assumption', summary: 'The grader may not be necessary', version: 1, by: 'worker', at: new Date().toISOString() } }) }),
-    item('old-proposal', { proposals: 1, interpretationReview: true }),
+    item('ordinary'),
   ], sessions: [], requests: [], effects: [] }
   assert.deepEqual(workAttention(projectWorkOverviewSchema.parse(data)).map(item => item.key), ['review', 'clarify'])
   assert.equal(data.items[0].status, 'pending')

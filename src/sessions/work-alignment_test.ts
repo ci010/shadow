@@ -21,7 +21,7 @@ function fixture(home: string) {
   const changes: WorkRecord[] = []
   const alignment = new WorkAlignment(store, {
     state: id => states.get(id), evidence: async source => { assert.equal(source.sessionId, owner) },
-    changed: async record => { changes.push(record) }, fresh: async () => {}, successor: async () => undefined,
+    changed: async record => { changes.push(record) },
   })
   const base = new Tools(home), tools = new SessionTools(base, home)
   const tool = new WorkTool(alignment)
@@ -95,7 +95,7 @@ test('notes, blockers and previous required metadata never gate tools; actual to
     assert.match(requireToolText(await f.tools.execute('invoke_tool', { name: 'fixture_write', args: { text: 12 } }, f.context())), /Error|invalid/i)
     assert.equal(writes, 1)
     assert.deepEqual(f.store.workEffects(), [])
-    assert.equal(pending.adoption, undefined)
+    assert.equal('adoption' in pending, false)
   } finally { f.store.close() }
 }))
 
@@ -126,7 +126,7 @@ test('a goal correction retires obsolete decision bases, not routine progress, a
   const f = fixture(home)
   try {
     const root = await f.create({ definition: { objective: 'Prepare release metrics' } })
-    const approach = await f.create({ title: 'Evaluation', parentKey: root.key, notes: { ...childNotes, kind: 'approach' } })
+    const approach = await f.create({ title: 'Evaluation', assignee: null, parentKey: root.key, notes: { ...childNotes, kind: 'approach' } })
     let grader = await f.create({ title: 'Grader', parentKey: approach.key, assignee: worker,
       notes: { ...childNotes, relation: { kind: 'assumption', reason: 'We have not verified whether metrics require a grader' } } })
     const context = f.alignment.decisionContext(worker, grader.key, root.key)!
@@ -179,12 +179,15 @@ test('many assignments remain discoverable and repeated progress does not grow i
     }
     assert(Math.max(...lengths) - Math.min(...lengths) <= 1, 'Only the version counter grows')
     assert.equal(note.revision, 1)
-    for (let i = 1; i < 20; i++) await f.create({ title: `Assignment ${i}`, assignee: worker })
+    for (let i = 1; i < 20; i++) {
+      const other = await f.create({ title: `Assignment ${i}`, assignee: null })
+      await f.alignment.execute(actor(worker), 'link', other.key, undefined, {})
+    }
     const prompt = f.alignment.prompt(worker)
-    assert.match(prompt, /Active notes: 20; shown: 3; omitted: 17/)
+    assert.match(prompt, /Active notes: 1; shown: 1; omitted: 0/)
     assert(prompt.length < 6500)
-    assert.equal(f.alignment.context(worker).records.length, 20)
-    assert.equal(f.alignment.decisionContext(worker), undefined, 'Never invent one task when several assignments are active')
+    assert.equal(f.store.workSessionKeys(worker).length, 20)
+    assert.equal(f.alignment.decisionContext(worker)?.originKey, note.key, 'Links never replace assignment')
   } finally { f.store.close() }
 }))
 
@@ -214,15 +217,15 @@ test('stable work links survive note edits, preserve temporary execution focus, 
   const f = fixture(home)
   try {
     const first = await f.create({ title: 'First branch', assignee: worker })
-    const second = await f.create({ title: 'Second branch', assignee: worker })
-    assert.equal(f.alignment.decisionContext(worker), undefined)
+    const second = await f.create({ title: 'Second branch', assignee: null })
+    assert.equal(f.alignment.decisionContext(worker)?.originKey, first.key)
     f.states.set('virtual:task', { sessionId: 'virtual:task', segmentIndex: 0, mode: 'task', parentSessionId: worker })
     f.alignment.linkExecution('virtual:task', worker, { key: first.key })
     assert.equal(f.alignment.decisionContext('virtual:task')?.originKey, first.key)
     assert.match(f.alignment.prompt('virtual:task'), /First branch/)
     assert.doesNotMatch(f.alignment.prompt('virtual:task'), /Second branch/)
     await f.alignment.editNote(actor('virtual:task'), first.key, first.sequence, { notes: { summary: 'One bounded finding' } })
-    await assert.rejects(f.alignment.editNote(actor('virtual:task'), second.key, second.sequence, { notes: { summary: 'Cross-branch change' } }), /linked to this temporary/)
+    await assert.rejects(f.alignment.editNote(actor('virtual:task'), second.key, second.sequence, { notes: { summary: 'Cross-branch change' } }), /linked to this temporary|assigned branch/)
     const unassigned = await f.create({ title: 'Peer branch', assignee: null })
     assert.deepEqual(f.alignment.prepareDelegation(owner, { key: unassigned.key }, 'session'), { mode: 'optional' })
     await f.alignment.bindDelegation(peer, owner, { key: unassigned.key })
@@ -306,14 +309,14 @@ test('creation retry keys survive concurrency, conflict, failed publication and 
   assert.equal(a.key, b.key)
   assert.equal(f.changes.length, 1)
   await assert.rejects(f.create({ ...request, title: 'Changed' }), /conflicts/)
-  assert.notEqual((await f.create()).key, a.key)
+  assert.notEqual((await f.create({ assignee: null })).key, a.key)
   f.store.close()
   f = fixture(home)
   try {
     assert.equal((await f.create(request)).key, a.key)
     assert.equal(f.changes.length, 0)
-    const failing = new WorkAlignment(f.store, { state: id => f.states.get(id), evidence: async () => {}, changed: async () => { throw new Error('offline') }, fresh: async () => {}, successor: async () => undefined })
-    const data = { title: 'Saved', definition: { objective: 'Saved before publication' }, idempotencyKey: 'failure' }
+    const failing = new WorkAlignment(f.store, { state: id => f.states.get(id), evidence: async () => {}, changed: async () => { throw new Error('offline') }, })
+    const data = { assignee: null, title: 'Saved', definition: { objective: 'Saved before publication' }, idempotencyKey: 'failure' }
     await assert.rejects(failing.execute(actor(owner), 'create', undefined, undefined, data), /saved/)
     const retry = workRecordSchema.parse(await failing.execute(actor(owner), 'create', undefined, undefined, data))
     assert.equal(retry.sequence, 1)
@@ -371,5 +374,40 @@ test('a late acceptance is recorded only against its old assignment revision', a
     assert.equal(f.store.assignmentDelivery(record.key, nextRevision), undefined)
     assert.equal(f.alignment.get(record.key).workflow!.assignee, peer)
     assert.equal(f.alignment.get(record.key).workflow!.status, 'pending')
+  } finally { f.store.close() }
+}))
+
+test('temporary binding survives owner reassignment and cannot widen to the next assignment', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const first = await f.create()
+    f.states.set('task', { sessionId: 'task', segmentIndex: 0, mode: 'task', parentSessionId: owner })
+    f.alignment.linkExecution('task', owner, { key: first.key })
+    await f.alignment.assignNote(actor(owner), first.key, first.sequence, peer)
+    const next = await f.create({ title: 'Next branch' })
+    assert.equal(f.alignment.decisionContext('task')?.originKey, first.key)
+    assert.match(f.alignment.prompt('task'), /Token metrics/)
+    await assert.rejects(f.alignment.editNote(actor('task'), next.key, next.sequence, { notes: { summary: 'Wrong branch' } }), /linked to this temporary/)
+    await assert.rejects(f.alignment.editNote(actor('task'), first.key, f.alignment.get(first.key).sequence, { notes: { summary: 'Old branch' } }), /assigned branch/)
+  } finally { f.store.close() }
+}))
+
+test('legacy persisted temporary bindings restore without reviving durable selection', async () => withTempWorkspace(async home => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { projectStoragePath } = await import('../utils/data-paths.ts')
+  let f = fixture(home)
+  const first = await f.create()
+  await f.alignment.assignNote(actor(owner), first.key, first.sequence, peer)
+  const next = await f.create()
+  f.store.close()
+  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  for (const id of [owner, 'task', 'call']) db.prepare('INSERT INTO work_focus (session_id,work_key) VALUES (?,?)').run(id, first.key)
+  db.close()
+  f = fixture(home)
+  try {
+    f.states.set('task', { sessionId: 'task', segmentIndex: 0, mode: 'task', parentSessionId: owner })
+    f.states.set('call', { sessionId: 'call', segmentIndex: 0, mode: 'call', parentSessionId: 'task' })
+    assert.equal(f.alignment.decisionContext(owner)?.originKey, next.key)
+    for (const id of ['task', 'call']) assert.equal(f.alignment.decisionContext(id)?.originKey, first.key)
   } finally { f.store.close() }
 }))

@@ -253,3 +253,31 @@ test('record parsing rejects mismatched authority and mutually exclusive outcome
     { request: saved, closed: { at: 'invalid', reason: 'cancelled', message: '' } },
   ]) assert.throws(() => parseYieldDecisionRecord(invalid), TypeError)
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: retired Work receipts are normalized only at storage reads; historical proposals fail closed`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const state: SessionState = { sessionId: 'web:legacy', segmentIndex: 0, physicalIdVersion: 2 }
+    await store.saveState(state.sessionId, state)
+    const physicalId = physicalSessionId(state)
+    const records = new YieldRecords(store, id => id === state.sessionId ? state : undefined)
+    const current = { ...request(state.sessionId), origin: { physicalId },
+      workStamps: [{ key: 'work:fixture', revision: 1, assignmentRevision: 2 }] }
+    try {
+      await store.appendRawEvents(physicalId, [{ yield_decision: { version: 1, request: {
+        ...current, workStamps: [{ ...current.workStamps[0], adoptionId: { obsolete: true } }],
+      } } }])
+      const restored = await records.read(state.sessionId)
+      assert.deepEqual(restored[0].request, current)
+      assert.equal('adoptionId' in restored[0].request.workStamps![0], false)
+      assert.throws(() => parseYieldDecisionRecord({ request: { ...current,
+        workStamps: [{ ...current.workStamps[0], adoptionId: 'old' }] } }))
+      await store.appendRawEvents(physicalId, [{ yield_decision: { version: 1, request: {
+        ...current, id: 'legacy-proposal', workProposal: { id: 'pending-approval' },
+      } } }])
+      await assert.rejects(records.read(state.sessionId), /Retired Work proposal/)
+      await assert.rejects(records.write({ request: { ...current, workProposal: {} } } as YieldDecisionRecord), /Retired Work proposal/)
+    } finally { store.close?.() }
+  }))
+}

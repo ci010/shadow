@@ -1,13 +1,9 @@
 import { parseDecisionBrief, type DecisionBrief } from './decision-brief.ts'
 import { z } from 'zod'
 import { answerMediaSchema } from './answer-media.ts'
-import { workDecisionSchema, type WorkDecision } from '../initiatives/work-contract.ts'
+import { workStampsSchema } from '../initiatives/work-contract.ts'
+export { workStampsSchema } from '../initiatives/work-contract.ts'
 import { workDecisionContextSchema, type WorkDecisionContext } from '../initiatives/work-notes.ts'
-export const workStampsSchema = z.array(z.object({
-  key: z.string().min(1).max(600), revision: z.number().int().positive(), adoptionId: z.string().uuid().optional(),
-  assignmentRevision: z.number().int().positive().optional(),
-}).strict()).max(100)
-
 export const MAX_YIELD_TIMEOUT_MS = 2_147_483_647
 export const MAX_YIELD_CUSTOM_TEXT_LENGTH = 4000
 export const MAX_YIELD_QUESTION_LENGTH = 4000
@@ -19,7 +15,6 @@ export interface YieldPolicy {
 export interface YieldQuestion {
   independent?: boolean
   workContext?: WorkDecisionContext
-  workProposal?: WorkDecision
   question: string
   options: [string, string] | [string, string, string]
   defaultOption: string
@@ -171,6 +166,8 @@ export function parseYieldPolicy(value: unknown): YieldPolicy {
 }
 
 export function parseYieldQuestion(value: unknown): YieldQuestion {
+  // Fail closed on historical Work approvals, even settled ones. Never reinterpret as ordinary ask.
+  if (isRecord(value) && Object.hasOwn(value, 'workProposal')) throw new TypeError('Retired Work proposal decisions cannot be read, answered or applied.')
   if (isRecord(value) && typeof value.question === 'string' && value.question.length > MAX_YIELD_QUESTION_LENGTH) {
     throw new TypeError(`Yield question length ${value.question.length} exceeds the ${MAX_YIELD_QUESTION_LENGTH}-character limit. Keep the question concise and put complete supporting details in a brief or an authorized detail view.`)
   }
@@ -195,7 +192,6 @@ export function parseYieldQuestion(value: unknown): YieldQuestion {
     ? [value.options[0], value.options[1]] : [value.options[0], value.options[1], value.options[2]], defaultOption: value.defaultOption,
     ...(sources ? { sources } : {}),
     ...(value.independent !== undefined ? { independent: value.independent } : {}),
-    ...(value.workProposal === undefined ? {} : { workProposal: workDecisionSchema.parse(value.workProposal) }),
     ...(value.workContext === undefined ? {} : { workContext: workDecisionContextSchema.parse(value.workContext) }),
     ...(value.brief !== undefined ? { brief: parseDecisionBrief(value.brief) } : {}),
     ...(value.reconsiders !== undefined ? { reconsiders: parseYieldReference(value.reconsiders) } : {}) }

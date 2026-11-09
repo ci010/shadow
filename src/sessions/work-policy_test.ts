@@ -30,7 +30,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const notes = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
     const alignment = new WorkAlignment(notes, {
       state: id => states.get(id), evidence: async () => {}, changed: async () => {},
-      fresh: async () => {}, successor: async () => undefined,
     })
     try {
       const note = workRecordSchema.parse(await alignment.execute({ kind: 'session', sessionId: 'owner' }, 'create',
@@ -46,8 +45,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       }
       assert.equal((await store.getState('task'))?.parentSessionId, 'owner')
       assert.equal((await store.getState('call'))?.parentSessionId, 'task')
-      assert.equal(notes.workFocus('task'), note.key)
-      assert.equal(notes.workFocus('call'), note.key)
+      assert.equal(notes.executionBinding('task'), note.key)
+      assert.equal(notes.executionBinding('call'), note.key)
       assert.deepEqual(alignment.prepareDelegation('owner', undefined, 'session'), { mode: 'optional' })
       await assert.rejects(alignment.assignNote({ kind: 'session', sessionId: 'owner' }, note.key, 1, 'task'), /durable Session/)
     } finally { notes.close(); await store.close?.() }

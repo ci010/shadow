@@ -1412,7 +1412,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `session` | Durable peer creation/naming and Main-local folder registration; no work definition |
 | `message`, `subagent` | Authorized session messaging and temporary task/call execution |
 | `ask`, `reply` | Ordinary text input or structured decisions, authenticated recipient routing, correlated answers and configurable waiting |
-| `work` | Optional current notes, causal goal paths, assignments, reported progress and impact reviews |
+| `v:works`, dynamic `work_*` tools | Optional current notes/goal paths through VFS; typed mutations for assignment, progress and impact reviews |
 | `plan_write`, `sql`, `log` | Planning documents, guarded Project conventions/read-only current Work queries, structured knowledge logging |
 | `event_subscribe`, `event_provider` (lazy) | Subscribe to internal normalized events or manage external providers; discover via `v:tools/events` and invoke through `invoke_tool` |
 | Lazy tools | Events, cron, search/MCP/tool factories |
@@ -1422,19 +1422,35 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 [`InitiativeStore`](../src/initiatives/store.ts) opens one `initiatives.sqlite`
 per Project Home, independently of the selected JSONL/SQLite session backend.
 Current notes live in `work_contracts`, preserving keys, definitions, assignments,
-status, dependencies, audit history and effect references. `work` is the current
-mutation interface; SQL Work projections are read-only. Storage format details
+status, dependencies, audit history and effect references. Dynamic `work_*` tools
+are the current mutation interface; SQL Work projections are read-only. Storage format details
 belong to the [storage contract](../src/initiatives/README.md).
 
-Work is an optional shared notebook of goals and related notes. `work list` discovers
-Project work; `work tree` derives membership and aggregate progress. Both return
-compact paginated indexes (default 5, maximum 20); read `context` with an exact
-key for the definition. Parent/completion dependency cycles are rejected. A completed
-child does not automatically satisfy the root's acceptance. `work create`,
-`update`, `assign` and `review` provide one bounded, validated mutation interface.
-Updates use the current record sequence as `version`. Definitions have a
-separate semantic revision; ordinary progress does
-not change the goal. No second editable todo/goal store is maintained.
+Work is an optional shared notebook of goals and related notes. Read
+`v:works/overview`, then `v:works/index` for compact receipts (20 per page;
+follow `next`) or `v:works/context` for the conversation's associated keys.
+`v:works/keys/<encodeURIComponent(key)>` returns the current definition, notes,
+authority, assignment delivery and ancestor path; append `/definition`, `/notes`
+or `/path` for focused reads. Search uses the existing VFS search interface;
+broad discovery includes only the first 20 records and reports incompleteness.
+Follow index pages or narrow to an exact key. No full history or retired fields
+are exported. Parent/completion dependency cycles are rejected. A completed child
+does not automatically satisfy root acceptance.
+
+Mutations use discoverable dynamic tools `work_create`, `work_update`,
+`work_assign`, `work_review`, `work_link`. Catalog sources and
+callable names coincide (`v:tools/work_update`); invoke them through `invoke_tool`
+with typed top-level fields, never an action/opaque-data wrapper. The base `work`
+tool is no longer registered. Its internal adapter remains only for existing
+in-process consumers/tests, not as a second LLM interface. Existing role policy
+`work` entries remain capability ceilings for these operations; task/call ceilings
+still apply. An allowlist containing only `work` admits the gateway only for Work,
+not arbitrary dynamic tools. No database or persisted-record migration is needed.
+
+Updates use current record sequence as `version`; semantic revision is separate.
+Ordinary progress does not change the goal. All operations retain WorkAlignment's
+Project identity, authorization, idempotency, evidence, completion and assignment
+semantics and return short mutation receipts. No second todo/goal store is maintained.
 
 The optional `workRoot` selector takes a canonical Work key and selects that
 note and its descendants as context. It does not assign responsibility. In

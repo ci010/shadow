@@ -12,13 +12,13 @@ test('creation keys survive restart, normalize defaults, isolate creators and re
     const store = new InitiativeStore(home, { isSessionKnown: () => true })
     const alignment = new WorkAlignment(store, {
       state: sessionId => ({ sessionId, segmentIndex: 0, mode: 'session' }),
-      evidence: async () => {}, fresh: async () => {}, successor: async () => undefined,
+      evidence: async () => {},
       changed: async () => { published++; if (fail) throw new Error('delivery unavailable') },
     })
     return { store, alignment }
   }
   let f = setup()
-  const request = { idempotencyKey: 'request-1', title: ' Test ', definition: { objective: 'Outcome' } }
+  const request = { assignee: null, idempotencyKey: 'request-1', title: ' Test ', definition: { objective: 'Outcome' } }
   const create = (data = request, sessionId = 'owner') => f.alignment.execute({ kind: 'session', sessionId }, 'create', undefined, undefined, data) as Promise<WorkRecord>
   try {
     await assert.rejects(create(), /saved.*delivery failed/)
@@ -33,7 +33,7 @@ test('creation keys survive restart, normalize defaults, isolate creators and re
     assert.equal(new Set(peers.map(record => record.key)).size, 1)
     assert.equal(published, 2)
     assert.notEqual((await create(request, 'peer')).key, original.key)
-    const legacy = { title: 'Legacy', definition: { objective: 'Outcome' } }
+    const legacy = { assignee: null, title: 'Legacy', definition: { objective: 'Outcome' } }
     const a = await f.alignment.execute({ kind: 'session', sessionId: 'owner' }, 'create', undefined, undefined, legacy) as WorkRecord
     const b = await f.alignment.execute({ kind: 'session', sessionId: 'owner' }, 'create', undefined, undefined, legacy) as WorkRecord
     assert.notEqual(a.key, b.key)

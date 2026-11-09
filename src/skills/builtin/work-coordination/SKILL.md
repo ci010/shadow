@@ -7,6 +7,11 @@ metadata:
 
 # Work coordination
 
+Read/list/search via `v:works/overview` and its paginated index/key paths.
+Mutations use discoverable `v:tools/work_create`, `work_update`, `work_assign`,
+`work_review`, `work_link` through invoke_tool, with typed
+top-level fields (no action/data wrapper).
+
 Use Work when multiple owners, meaningful dependencies or durable recovery make
 an optional shared notebook useful. Ordinary requests and individual delegated
 tasks do not require a Work record.

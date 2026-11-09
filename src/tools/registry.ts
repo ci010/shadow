@@ -1,3 +1,4 @@
+import { isWorkTool } from './work-names.ts'
 import { executionTargetParameters, workspaceArguments } from './execution-target.ts'
 import { UseProjectTool } from './use-project.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
@@ -382,6 +383,7 @@ export class SessionTools extends Tools {
     if (name === 'ask' && !this.askAvailable) return false
     if (!executionModeAllowsTool(this.scope?.mode, name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
+    if (name === 'invoke_tool' && this.allowed?.has('work')) return true
     if (this.allowed) return this.allowed.has(name)
     // Opt-in tools are hidden unless explicitly in allowedTools
     const tool = this.tools.get(name) ?? this.base.get(name)
@@ -515,6 +517,9 @@ export class SessionTools extends Tools {
   private isDynamicToolAllowed(name: string): boolean {
     if (name === 'ask' && !this.askAvailable) return false
     if (!executionModeAllowsTool(this.scope?.mode, name)) return false
+    if (isWorkTool(name)) return this.allowed
+      ? this.allowed.has('work') || this.allowed.has(name)
+      : !this.blocked?.has('work') && !this.blocked?.has(name)
     if (this.allowed) return this.allowed.has('invoke_tool')
     return !this.blocked?.has(name)
   }

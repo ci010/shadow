@@ -657,9 +657,7 @@ export class SessionManager {
       if (!this.alignment.currentDecision(request)) {
         return 'The goal or reasoning path changed. Re-evaluate this question in its current context before using an earlier answer.'
       }
-    }, record => {
-      if (record.answer) this.alignment?.reviewAnswer(record.request.sessionId, record.answer.option, record.request.id, record.request.workStamps ?? [])
-    }, id => this.readSessionState(id))
+    }, undefined, id => this.readSessionState(id))
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
       userWait: id => this.userWaitPolicy(id),
@@ -676,14 +674,10 @@ export class SessionManager {
       journal: {
         open: async (request, toolCallId) => {
           const saved = await decisionRecords.open(request, toolCallId)
-          if (saved.workProposal) this.alignment?.bindDecision(saved.workProposal, {
-            sessionId: saved.sessionId, physicalId: saved.origin!.physicalId, requestId: saved.id,
-          })
           return saved
         },
         write: async record => {
           await decisionRecords.write(record)
-          await this.alignment?.settleDecision(record)
         },
         replace: (previous, next) => decisionRecords.replace(previous, next),
       },
@@ -1892,11 +1886,6 @@ ${JSON.stringify(request)}`,
         this.deps.promptCaptures,
       )
       this.sessions[sessionId] = sess
-      for (const record of this.alignment?.records(sessionId, true) ?? []) {
-        if (record.transition?.status === 'pending' && record.transition.sessionId === sessionId) {
-          await this.alignment!.resumeTransition(record)
-        }
-      }
       return sess
     }
   }
@@ -2335,26 +2324,6 @@ ${JSON.stringify(request)}`,
   }
 
   // ── Session config ─────────────────────────────────────────────────
-
-  async setWorkPolicy(sessionId: string, policy: WorkPolicy, validate: () => void): Promise<void> {
-    await this.withStateCreation(sessionId, async () => {
-      const state = this.sessionStates[sessionId]
-      if (!state || state.mode !== 'session' || this.stopped || this.deleting.has(sessionId)) throw new Error('Work policy requires an available durable session.')
-      this.assertFolderAccess(sessionId)
-      validate()
-      if (this.ownedCreations.get(sessionId)?.size || Object.values(this.sessionStates).some(child =>
-        delegationOwner(child) === sessionId && !['completed', 'failed', 'cancelled'].includes(child.executionStatus ?? 'pending'))) {
-        throw new Error('Settle owned executions before changing Work policy.')
-      }
-      const parsed = parseWorkPolicy(policy)!
-      // Tighten admission before yielding to storage; relaxation only follows durable success.
-      if (parsed.mode === 'required') state.workPolicy = parsed
-      await this.store.saveState(sessionId, { ...state, workPolicy: parsed })
-      state.workPolicy = parsed
-      this.invalidateSystemPrompts()
-      this.deps.bus.emit('session.changed', { sessionId })
-    })
-  }
 
   /** Tool entry point: the caller supplies only its runtime-bound identity, never a target. */
   async updateSelfMetadata(sessionId: string, value: unknown, expected?: string): Promise<void> {
@@ -2956,11 +2925,6 @@ ${JSON.stringify(request)}`,
 
   async notifyWorkChange(record: WorkRecord, previous?: WorkRecord): Promise<void> {
     if (!this.alignment) throw new Error('Work alignment is not configured.')
-    for (const proposal of record.proposals ?? []) {
-      if (proposal.status === 'applied' && proposal.appliedRevision === record.revision) {
-        await this.yields.completeWorkProposal(record.key, proposal.id)
-      }
-    }
     for (const sessionId of Object.keys(this.sessionStates)) {
       const input = this.inputs.get(sessionId, true)
       if (input?.workContext && !this.alignment.currentContext(input.workContext)) {
@@ -3001,7 +2965,7 @@ ${JSON.stringify(request)}`,
           kind: 'message', id: `work-note:${record.key}:${record.sequence}:${target}`, timestamp: new Date().toISOString(),
           policy: 'steering',
           source: { kind: 'event', eventId: record.key, type: 'work-note-changed', source: 'work-notebook' },
-          content: `${reason}\nRead work context for ${record.key} (version ${record.sequence}). Update the relevant note once; no acknowledgement or duplicate status message is needed. Notes do not grant permission.`,
+          content: `${reason}\nRead v:works/keys/${encodeURIComponent(record.key)} (version ${record.sequence}). Update the relevant note once; no acknowledgement or duplicate status message is needed. Notes do not grant permission.`,
         })
       }
       return
@@ -3016,8 +2980,6 @@ ${JSON.stringify(request)}`,
       if (!this.alignment.required(executor)) continue
       if (!previous?.workflow?.assignee && state.workPolicy?.mode === 'required'
         && state.topicRequestHash && state.executionStatus === 'pending' && !state.lastActivityAt) continue
-      if (record.changedBy === executor && record.adoption?.sessionId === executor
-        && record.adoption.revision === record.revision) continue
       this.assertFolderAccess(executor)
       await this.deliver(executor, {
         kind: 'message', id: `work:${record.key}:${record.sequence}`, timestamp: new Date().toISOString(), policy: 'steering',
@@ -3026,32 +2988,6 @@ ${JSON.stringify(request)}`,
           JSON.stringify({ key: record.key, revision: record.revision, assignee: authority.executor }),
       })
     }
-  }
-
-  async requestWorkContext(sessionId: string, record: WorkRecord): Promise<void> {
-    this.assertFolderAccess(sessionId)
-    this.assertHistoryWritable(sessionId)
-    const state = this.getSessionState(sessionId)
-    if (!state || state.mode !== 'session' || this.isManagedConversation(sessionId)) throw new Error('Only ordinary durable sessions support work context replacement.')
-    const active = this.sessions[sessionId]
-    if (!active) return // Persisted pending transition is applied on the next explicit admission.
-    if (!(active instanceof Session)) throw new Error('Temporary execution context cannot be replaced.')
-    active.requestRealignment(async () => {
-      const current = this.alignment?.get(record.key)
-      if (!current?.transition || current.transition.id !== record.transition?.id) throw new Error('Context transition was superseded.')
-      if (current.transition.status === 'applied') return
-      if (this.alignment!.store.workEffects().some(effect => effect.sessionId === sessionId)) throw new Error('Work effects remain unresolved; context was not replaced.')
-      const first = await this.store.readFirstRecord(physicalSessionId(state))
-      if (first?.work_transition_id !== current.transition.id) {
-        await active.replaceWorkContext(this.alignment!.handoff(current), current.transition.id)
-      }
-      this.alignment!.finishTransition(current.key, current.transition.id)
-      await this.deliver(sessionId, {
-        kind: 'message', id: `work-adopt:${current.transition.id}`, timestamp: new Date().toISOString(), policy: 'queue',
-        source: { kind: 'event', eventId: current.transition.id, type: 'work-context-ready', source: 'work-contract' },
-        content: 'Fresh work context is ready. Read the current goal and reassess old summaries and memory conclusions. Notes do not grant permission.',
-      })
-    })
   }
 
   /** Start a fresh context without summarizing, deleting history, or changing identity. */

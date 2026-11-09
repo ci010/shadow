@@ -232,7 +232,7 @@ export class WorkDispatcher {
       const receipt = await this.deps.sessions.deliver(execution.sessionId, {
         id: execution.inputId, kind: 'message', timestamp: new Date().toISOString(), policy: 'queue',
         source: { kind: 'event', eventId: execution.inputId, type: 'work-assignment', source: 'system' },
-        content: `${AUTOMATIC_WORK_GUIDANCE}\n\nAssigned Work key: ${record.key}. Read current work context. Isolated branch: ${execution.branch}.` +
+        content: `${AUTOMATIC_WORK_GUIDANCE}\n\nAssigned Work key: ${record.key}. Read v:works/keys/${encodeURIComponent(record.key)}. Isolated branch: ${execution.branch}.` +
           (record.workflow!.status === 'blocked' ? `\nExisting blocker is retained: ${record.workflow!.blockedReason}. This first assignment is for blocker clarification and publisher help, not permission to clear the blocker or execute blocked actions.` : ''),
       })
       if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.inputId !== execution.inputId || receipt.sessionId !== execution.sessionId) throw new Error('Unconfirmed Work admission')

@@ -852,13 +852,15 @@ Role, capability, channel, filesystem and dedicated owner approvals still apply.
 Historical adoption, proposal and effect records remain readable; the public
 `policy/adopt/progress/checkpoint/settle/propose` protocol is retired.
 
-The public `work` actions are `context`, `list`, `tree`, `create`, `update`,
-`assign`, `review` and `select`. `context` returns current notes and their host-built
-goal paths; schemas are opt-in with `data: {includeSchema: true}`, even for a new
-session. `list/tree` are compact paginated indexes. Writes return a small receipt,
-not a repeated definition, HTML exhibit, history or instruction manual.
+Read current notes through `v:works/index` and `v:works/context`, following
+pagination links. Read the returned encoded key path for goal, notes and the
+host-built ancestor path; `v:works/schema` is opt-in field help. Broad VFS search
+is bounded and warns when incomplete. Writes use discoverable dynamic
+`work_create`, `work_update`, `work_assign`, `work_review`,
+`work_link` tools and return short receipts, not repeated definitions or HTML.
+The base action-dispatch `work` tool is no longer published.
 
-Create a note with `data: {title, definition: {objective}, notes: {kind}}`.
+Create through `invoke_tool({name:"work_create",args:{title:"Outcome",definition:{objective:"Desired result"},notes:{kind:"goal"}}})`.
 Kinds are `goal`, `approach`, `task` and `finding`. Children also supply parentKey
 and notes.relation with a kind (`supports`, `requires` or `assumption`) and reason.
 Distinguish a chosen approach from a real prerequisite or unverified premise.
@@ -866,8 +868,8 @@ The Work tree shows a note and its descendants; it has no second editable
 goal/status store. Parent/completion-dependency cycles are rejected.
 
 Parents maintain causal structure; assigned workers maintain current
-`summary`, `plan`, `next` and `artifacts`. `update` takes key, the current note
-`version`, and only changed fields in data. Versions reject stale writes;
+`summary`, `plan`, `next` and `artifacts`. `work_update` takes key, the current note
+`version`, and only changed top-level fields. Versions reject stale writes;
 semantic goal revisions change separately from routine progress.
 Agent changes to human-set/source-backed goals need a genuine quote from the
 current authenticated user input. Metadata, peer messages and old quotes are not
@@ -877,7 +879,7 @@ Routine notes refresh the UI through the existing Project live-state channel,
 without waking agents. Use notes.attention only for a material premise, scope,
 dependency, decision or blocker requiring the coordinator to act. Pending impact
 notifications coalesce until reviewed. The coordinator reads the current branch,
-updates affected reasoning and records `review` with a conclusion. Do not echo
+updates affected reasoning and records `work_review` with a conclusion. Do not echo
 the same report by message or ask for periodic acknowledgements.
 Changed ancestors leave descendants explicitly **not yet reassessed**. Local note
 edits do not silently acknowledge that change. Review is not approval for tools.
@@ -1290,8 +1292,8 @@ this discovery metadata. Session completion ends that session's responsibility; 
 does not complete associated Work.
 
 Creating Work from a session automatically associates that conversation. Use
-`work action=link key=...` to associate an existing Work explicitly. This historical
-association persists independently of `work action=select` execution focus; linking
+`invoke_tool({name:"work_link",args:{key:"..."}})` to associate an existing Work explicitly. This historical
+association persists independently of the unique unfinished assignment; linking
 does not assign Work, change authority, select focus or set completion. Clearing or
 switching focus does not erase associations. No title-similarity matching is used.
 Associated sessions are displayed under their Work instead of duplicate top-level
@@ -1436,3 +1438,30 @@ exits. Journals are atomically published with synced file contents. Partial fail
 report a recovery idempotency key even when none was supplied. An interrupted Git
 checkout with unknown completion is retained for inspection and never registered
 as a completed creation; no retry resets or deletes it.
+
+
+### Work read and mutation interface
+
+Read `v:works/overview`, `v:works/index` (20 rows; follow `next`) and
+`v:works/context` (associated keys). Exact paths returned by indexes are
+`v:works/keys/<encodeURIComponent(key)>`; optional `/definition`, `/notes`, `/path`
+select current goal, notes or ancestor path. Search at `v:works` is bounded;
+follow warnings and narrow to a key or explicit index page. `v:works/schema` is
+field help, not an authorization grant.
+
+Catalog source and callable names match:
+- `work_create`: `{title,definition:{objective,acceptance?,boundaries?,evidence?},idempotencyKey?,parentKey?,assignee?,notes?,reason?,requestQuote?}`.
+- `work_update`: `{key,version,title?,definition?,parentKey?,dependencies?,notes?,status?,blockedReason?,requestQuote?}`; only changed fields.
+- `work_assign`: `{key,version,assignee}` (durable session ID or null).
+- `work_review`: `{key,version,conclusion}` (attention review, not task acceptance).
+- `work_link`: `{key}` (historical association only).
+
+Read `v:tools/work_update` for its exact strict schema, then
+`invoke_tool({name:"work_update",args:{key:"work:...",version:2,notes:{summary:"Result"},status:"done"}})`.
+No base `work` tool or action/data wrapper is published. Old recorded calls remain
+history, not replayable current contracts. Reads and mutations retain current
+Project, role, execution-mode and assignment/authority checks. Remote workdir
+sessions use only these built-in Project-Home Work operations, never remote files
+or a different Project database.
+
+Current Work defaults to the unique unfinished assignee record, not management or links. Pending, in_progress, blocked and paused occupy one slot; done/cancelled retain history without occupying it. Conflicting assignments are rejected transactionally with the existing key. Legacy duplicates can be completed/released without losing history, but cannot grow. Temporary task/call bindings remain explicit context, not durable assignments.

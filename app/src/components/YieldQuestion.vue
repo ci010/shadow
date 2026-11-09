@@ -8,18 +8,9 @@
       </header>
       <div class="yield-body">
         <h2 :id="`${id}-question`" class="yield-prompt selectable-text">{{ request.question }}</h2>
-        <div v-if="request.workContext || decisionRequest?.brief || decisionRequest?.workProposal || decisionRequest?.reportingSessionId" class="yield-context">
+        <div v-if="request.workContext || decisionRequest?.brief || decisionRequest?.reportingSessionId" class="yield-context">
           <WorkContextPath v-if="request.workContext" :context="request.workContext" :navigable="workNavigable" @select="emit('work', $event)" />
           <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
-          <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" :aria-label="t('Exact proposed work change')">
-            <h3>{{ t('Proposed work · v') }}{{ decisionRequest.workProposal.baseRevision }}</h3>
-            <p>{{ t('Change type:') }} {{ decisionRequest.workProposal.change }} {{ t('· New execution:') }} {{ decisionRequest.workProposal.paused ? t('paused') : t('not paused') }}</p>
-            <p>{{ decisionRequest.workProposal.definition.objective }}</p>
-            <p><strong>{{ t('Acceptance:') }}</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
-            <p><strong>{{ t('Boundaries:') }}</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || t('Not recorded; no new permission') }}</p>
-            <p>{{ decisionRequest.workProposal.reason }}</p>
-            <p class="yield-status">{{ t('One approval applies this exact saved change. A custom answer or timeout does not approve it.') }}</p>
-          </section>
           <p v-if="decisionRequest?.reportingSessionId" class="yield-status">{{ t('Reporting responsibility:') }} {{ decisionRequest.reportingSessionId }}{{ t('. Answer authority is unchanged.') }}</p>
         </div>
         <fieldset :aria-labelledby="`${id}-question`" :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">

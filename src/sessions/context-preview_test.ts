@@ -63,8 +63,6 @@ async function fixture(workspace: string, store: SessionStore) {
     state: id => sessions.getSessionState(id),
     evidence: source => sessions.validateWorkEvidence(source),
     changed: async () => {},
-    fresh: async () => { throw new Error('No Work transition expected') },
-    successor: async () => { throw new Error('No successor expected') },
   })
   sessions.alignment = alignment
   tools.setWorkGuard(alignment)

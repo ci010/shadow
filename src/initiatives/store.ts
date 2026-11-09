@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
-import { WORK_SCHEMA, WORK_COMPLETION_SCHEMA, workCompletionReadSchema, type WorkCompletion, WorkConflict, workKey, workRecordSchema, workSubjectSchema, workObservationSchema,
+import { WORK_SCHEMA, WORK_COMPLETION_SCHEMA, workCompletionReadSchema, type WorkCompletion, WorkConflict, workKey, workRecordSchema, parseStoredWorkRecord, omitRetiredStoredWorkFields, parseStoredWorkStamps, workStampsSchema, workSubjectSchema, workObservationSchema,
   type WorkSubject, type WorkAuthority, type WorkRecord, type WorkObservation } from './work-contract.ts'
 
 export type InitiativeRow = Record<string, string | number | null>
@@ -50,6 +50,7 @@ export class InitiativeStore {
       this.#db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL;')
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT; CREATE TABLE IF NOT EXISTS project_focus_summary (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_session_links (session_id TEXT NOT NULL, work_key TEXT NOT NULL, PRIMARY KEY(session_id,work_key)) STRICT;')
+      this.#db.exec('CREATE TABLE IF NOT EXISTS work_execution_bindings (session_id TEXT PRIMARY KEY, work_key TEXT NOT NULL) STRICT;')
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
@@ -70,7 +71,7 @@ export class InitiativeStore {
       this.#db.exec(WORK_COMPLETION_SCHEMA)
       const existing = new Set(this.#all('SELECT work_key FROM work_completions').map(row => row.work_key))
       for (const row of this.#all('SELECT data FROM work_contracts')) {
-        const record = workRecordSchema.parse(JSON.parse(String(row.data)))
+        const record = parseStoredWorkRecord(JSON.parse(String(row.data)))
         if (record.workflow?.status !== 'done' || existing.has(record.key)) continue
         const events = this.#all('SELECT created_at, data FROM work_contract_events WHERE work_key=?', [record.key])
         const snapshots = events.flatMap(event => {
@@ -101,7 +102,7 @@ export class InitiativeStore {
     for (const row of this.#all('SELECT * FROM work_completions ORDER BY sequence')) latest.set(String(row.work_key), row)
     const read = new Set(this.#all('SELECT completion_id FROM work_completion_reads WHERE principal=?', [principal]).map(row => row.completion_id))
     return this.#all('SELECT data FROM work_contracts').flatMap(row => {
-      const record = workRecordSchema.parse(JSON.parse(String(row.data))), completion = latest.get(record.key)
+      const record = parseStoredWorkRecord(JSON.parse(String(row.data))), completion = latest.get(record.key)
       return record.workflow?.status === 'done' && completion ? [{ key: record.key, completionId: String(completion.id),
         sequence: Number(completion.sequence), completedAt: completion.completed_at === null ? null : String(completion.completed_at), unread: !read.has(completion.id) }] : []
     })
@@ -135,7 +136,7 @@ export class InitiativeStore {
     subject = workSubjectSchema.parse(subject)
     const record = this.#transaction('', () => {
       const row = this.#one('work_contracts', workKey(subject))
-      return row ? workRecordSchema.parse(JSON.parse(String(row.data))) : undefined
+      return row ? parseStoredWorkRecord(JSON.parse(String(row.data))) : undefined
     }, undefined, true)
     if (record?.workflow) {
       const { manager, assignee, status } = record.workflow
@@ -153,7 +154,7 @@ export class InitiativeStore {
 
   workRecords(): WorkRecord[] {
     return this.#transaction('', () => this.#all('SELECT data FROM work_contracts ORDER BY id')
-      .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))), undefined, true)
+      .map(row => parseStoredWorkRecord(JSON.parse(String(row.data)))), undefined, true)
   }
 
   projectFocus(): ProjectFocusSnapshot | undefined {
@@ -202,18 +203,27 @@ export class InitiativeStore {
       if ((Number(prior?.sequence) || 0) !== expectedSequence) throw new WorkConflict('Work contract changed; reload before applying.')
       // Creation identity is immutable, including through legacy record replacement paths.
       if (prior) {
-        const original = workRecordSchema.parse(JSON.parse(String(prior.data))).creationRequest
+        const original = parseStoredWorkRecord(JSON.parse(String(prior.data))).creationRequest
         if (parsed.creationRequest && JSON.stringify(parsed.creationRequest) !== JSON.stringify(original)) throw new WorkConflict('Creation request identity is immutable.')
         parsed.creationRequest = original
       }
       if (!prior && this.#all('SELECT id FROM work_contracts').length >= MAX_TABLE_ROWS) throw new WorkConflict('Work contract limit exceeded.')
       const records = this.#all('SELECT data FROM work_contracts')
-        .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))).filter(item => item.key !== parsed.key)
+        .map(row => parseStoredWorkRecord(JSON.parse(String(row.data)))).filter(item => item.key !== parsed.key)
       if (automaticClaim) {
-        const previous = prior ? workRecordSchema.parse(JSON.parse(String(prior.data))) : undefined
+        const previous = prior ? parseStoredWorkRecord(JSON.parse(String(prior.data))) : undefined
         if (!previous || !automaticWorkEligible(previous, [...records, previous])) throw new WorkConflict('Work is no longer claimable.')
         if (parsed.workflow?.assignmentRevision !== previous.workflow!.assignmentRevision + 1) throw new WorkConflict('Invalid automatic assignment revision.')
         this.#assignmentTarget(parsed.workflow.assignee)
+      }
+      // Serialize all admission paths (including automatic claims) under BEGIN IMMEDIATE.
+      // Legacy duplicate assignments remain readable/editable, but cannot grow.
+      const previousAssignment = prior ? parseStoredWorkRecord(JSON.parse(String(prior.data))) : undefined
+      const activeAssignee = (item: WorkRecord | undefined) => item?.workflow && !['done', 'cancelled'].includes(item.workflow.status) ? item.workflow.assignee : null
+      const target = activeAssignee(parsed)
+      if (target && activeAssignee(previousAssignment) !== target) {
+        const conflicts = records.filter(item => activeAssignee(item) === target)
+        if (conflicts.length) throw new WorkConflict(`Session ${target} already has unfinished Work: ${conflicts.map(item => item.key).join(', ')}. Complete or release it before assigning another Work.`)
       }
       records.push(parsed)
       this.#validateWorkGraph(records)
@@ -223,7 +233,7 @@ export class InitiativeStore {
         this.#write('INSERT OR IGNORE INTO work_session_links (session_id,work_key) VALUES (?,?)', [sessionId, parsed.key])
       }
       const notebookEvent = parsed.notes && ['note', 'created', 'assignment', 'impact_review'].includes(kind)
-      const previous = prior ? workRecordSchema.parse(JSON.parse(String(prior.data))) : undefined
+      const previous = prior ? parseStoredWorkRecord(JSON.parse(String(prior.data))) : undefined
       if (parsed.workflow?.status === 'done' && previous?.workflow?.status !== 'done') {
         this.#write('INSERT INTO work_completions (id,work_key,sequence,completed_at) VALUES (?,?,?,?)',
           [randomUUID(), parsed.key, parsed.sequence, new Date().toISOString()])
@@ -301,7 +311,7 @@ export class InitiativeStore {
   reserveAssignmentDelivery(key: string, revision: number, manager: string, assignee: string, inputId: string, fingerprint: string) {
     return this.#transaction(manager, () => {
       const row = this.#one('work_contracts', key)
-      const work = row && workRecordSchema.parse(JSON.parse(String(row.data))).workflow
+      const work = row && parseStoredWorkRecord(JSON.parse(String(row.data))).workflow
       if (!work || work.manager !== manager || work.assignee !== assignee || work.assignmentRevision !== revision) throw new WorkConflict('Assignment delivery requires the current manager, assignee and assignmentRevision.')
       const prior = this.#assignmentDelivery(key, revision)
       if (prior) {
@@ -338,19 +348,19 @@ export class InitiativeStore {
   workHistory(key: string): { kind: string; actor: string; at: string; data: unknown }[] {
     return this.#transaction('', () => this.#all(
       'SELECT kind, actor, created_at, data FROM work_contract_events WHERE work_key=? ORDER BY created_at DESC, id DESC LIMIT 100', [key],
-    ).map(row => ({ kind: String(row.kind), actor: String(row.actor), at: String(row.created_at), data: JSON.parse(String(row.data)) })), undefined, true)
+    ).map(row => ({ kind: String(row.kind), actor: String(row.actor), at: String(row.created_at), data: omitRetiredStoredWorkFields(JSON.parse(String(row.data))) })), undefined, true)
   }
 
   workEffects(): { id: string; sessionId: string; tool: string; status: string; stamps: import('./work-contract.ts').WorkStamp[] }[] {
     return this.#transaction('', () => this.#all('SELECT * FROM work_effects').map(row => ({
       id: String(row.id), sessionId: String(row.session_id), tool: String(row.tool),
-      status: String(row.status), stamps: JSON.parse(String(row.stamps)),
+      status: String(row.status), stamps: parseStoredWorkStamps(JSON.parse(String(row.stamps))),
     })), undefined, true)
   }
 
   startWorkEffect(id: string, sessionId: string, tool: string, stamps: import('./work-contract.ts').WorkStamp[]): void {
     this.#transaction(sessionId, () => this.#insert('work_effects', {
-      id, session_id: sessionId, tool, status: 'running', stamps: JSON.stringify(stamps),
+      id, session_id: sessionId, tool, status: 'running', stamps: JSON.stringify(workStampsSchema.parse(stamps)),
     }))
   }
 
@@ -378,17 +388,25 @@ export class InitiativeStore {
     })
   }
 
+  /** Current durable scope is derived, never selected. Ambiguous legacy assignments have no default. */
   workFocus(sessionId: string): string | undefined {
+    const active = this.workRecords().filter(record => record.workflow?.assignee === sessionId && !['done', 'cancelled'].includes(record.workflow.status))
+    return active.length === 1 ? active[0].key : undefined
+  }
+
+  executionBinding(sessionId: string): string | undefined {
     return this.#transaction('', () => {
-      const value = this.#all('SELECT work_key FROM work_focus WHERE session_id=?', [sessionId])[0]?.work_key
+      // Called only for temporary execution lineage, never durable current scope.
+      const value = this.#all('SELECT work_key FROM work_execution_bindings WHERE session_id=?', [sessionId])[0]?.work_key
+        ?? this.#all('SELECT work_key FROM work_focus WHERE session_id=?', [sessionId])[0]?.work_key
       return typeof value === 'string' ? value : undefined
     }, undefined, true)
   }
 
-  setWorkFocus(sessionId: string, key?: string): void {
+  bindExecution(sessionId: string, key: string): void {
     this.#transaction(sessionId, () => {
-      this.#write('INSERT INTO work_focus (session_id,work_key) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET work_key=excluded.work_key', [sessionId, key ?? null])
-      if (key) this.#workEvent(key, sessionId, 'selected', { key })
+      if (!this.#one('work_contracts', key)) throw new WorkConflict('Work not found.')
+      this.#write('INSERT INTO work_execution_bindings (session_id,work_key) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET work_key=excluded.work_key', [sessionId, key])
     })
   }
 
@@ -404,7 +422,7 @@ export class InitiativeStore {
     return JSON.stringify({ root: view.root, progress: view.progress, items: view.items.slice(0, 20).map(record => ({
       key: record.key, title: record.workflow?.title, parentKey: record.workflow?.parentKey,
       status: record.workflow?.status, manager: record.workflow?.manager, assignee: record.workflow?.assignee, revision: record.revision,
-    })), ...(view.items.length > 20 ? { notice: 'Partial Work index. Page work tree for remaining items; read context with a key for exact definitions.' } : {}) })
+    })), ...(view.items.length > 20 ? { notice: 'Partial Work index. Read v:works/index and follow next for remaining items; use its encoded key paths for exact definitions.' } : {}) })
   }
 
   getSessionSummary(_sessionId: string): null { return null }
@@ -415,7 +433,7 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const workTables = ['work_completions', 'work_completion_reads', 'work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_session_links', 'work_observations', 'project_focus_summary']
+    const workTables = ['work_completions', 'work_completion_reads', 'work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_execution_bindings', 'work_session_links', 'work_observations', 'project_focus_summary']
     const readable = new Set(workTables)
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!
@@ -471,12 +489,12 @@ export class InitiativeStore {
 /** Shared dependency/ancestor preflight; blocked assignees are never a re-entry pool. */
 export function automaticWorkEligible(record: WorkRecord, records: readonly WorkRecord[]): boolean {
   const flow = record.workflow
-  if (!flow || flow.assignee !== null || ['done', 'cancelled'].includes(flow.status) || record.paused || record.transition?.status === 'pending') return false
+  if (!flow || flow.assignee !== null || ['done', 'cancelled'].includes(flow.status) || record.paused) return false
   const byKey = new Map(records.map(item => [item.key, item]))
   const seen = new Set<string>()
   let current: WorkRecord | undefined = record
   while (current) {
-    if (seen.has(current.key) || current.paused || current.transition?.status === 'pending'
+    if (seen.has(current.key) || current.paused
       || current.workflow && ['done', 'cancelled'].includes(current.workflow.status)
       || !workDependenciesSatisfied(current, records)) return false
     seen.add(current.key)

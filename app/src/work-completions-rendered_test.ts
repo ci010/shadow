@@ -32,7 +32,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
         const record={key:'topic:web:done',subject:{kind:'topic',sessionId:'web:done'},revision:1,sequence:2,
           definition:{objective:'Finished outcome',acceptance:[],boundaries:[],evidence:[]},origin:'human',changedBy:'human',changedAt:'2026-01-01T00:00:00Z',change:'goal',reason:'Fixture',paused:false,
           workflow:{title:'Finished outcome',manager:null,assignee:null,assignmentRevision:1,status:'done',dependencies:[],result:{summary:'Actual measured result',evidence:[]}},authority:{manager:null,executor:null,active:false},history:[]};
-        const item={key:record.key,title:'Finished outcome',revision:1,sequence:2,status:'done',parentKey:null,dependencies:[],blockedReason:null,manager:null,assignee:null,paused:false,adopted:false,proposals:0,interpretationReview:false,changedAt:record.changedAt,result:record.workflow.result};
+        const item={key:record.key,title:'Finished outcome',revision:1,sequence:2,status:'done',parentKey:null,dependencies:[],blockedReason:null,manager:null,assignee:null,paused:false,changedAt:record.changedAt,result:record.workflow.result};
         const state=reactive({value:{items:[item,{...item,key:'topic:web:active',title:'Current work',status:'in_progress',result:undefined}],sessions:[],requests:[],effects:[]},revision:1,loading:false});
         const completions=[{key:item.key,completionId:'first',sequence:2,completedAt:'2026-01-02T00:00:00Z',unread:true}];
         window.writes=[]; window.state=state; window.record=record; window.completions=completions;

@@ -63,7 +63,7 @@ export class InvokeTool implements Tool<ToolResult> {
     const name = typeof args.name === 'string' ? args.name : ''
     if (!name) return 'Error: name is required (or use source with args: {} for initialization)'
     if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {
-      return 'Error: remote workdirs support only the built-in Project-Home session tool through invoke_tool.'
+      return 'Error: remote workdirs support only built-in Project-Home session and Work tools through invoke_tool.'
     }
 
     const toolArgs = args.args

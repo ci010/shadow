@@ -5,7 +5,7 @@ import { WORK_HELP, type WorkAlignment } from '../sessions/work-alignment.ts'
 import { WorkConflict, workRecordSchema, type WorkRecord } from '../initiatives/work-contract.ts'
 
 const request = z.object({
-  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'assign', 'review', 'select', 'link']),
+  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'assign', 'review', 'link']),
   key: z.string().min(1).max(600).optional(),
   version: z.number().int().positive().optional(),
   data: z.unknown().optional(),
@@ -25,7 +25,7 @@ export class WorkTool implements Tool {
   readonly name = 'work'
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) => ['context', 'list', 'tree'].includes(String(args.action))
-  readonly description = 'Shared work notes and Project goal map, never a prerequisite for tools. create associates the current session automatically. link key associates this conversation with existing Work without changing focus or assignment; select changes execution focus, not association history. Session completion never completes Work. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'
+  readonly description = 'Shared work notes and Project goal map, never a prerequisite for tools. create associates the current session automatically. link key associates this conversation with existing Work without changing focus or assignment. Current scope is the unique unfinished assignment. Session completion never completes Work. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
       action: { type: 'string', enum: request.shape.action.options },
@@ -35,11 +35,12 @@ export class WorkTool implements Tool {
     }, required: ['action'], additionalProperties: false,
   }
 
-  constructor(private readonly alignment: WorkAlignment) {}
+  // Compatibility adapter for in-process consumers, not registered in the LLM base catalog.
+  constructor(private readonly alignment: WorkAlignment, private readonly policyName = 'work') {}
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     context.signal.throwIfAborted()
-    const denied = context.tools.executionDenial('work', args)
+    const denied = context.tools.executionDenial(this.policyName, args)
     if (denied) return denied
     const { action, key, version, data } = request.parse(args)
     const actor = { kind: 'session' as const, sessionId: context.sessionId }
@@ -62,7 +63,7 @@ export class WorkTool implements Tool {
     if (action === 'list' || action === 'tree') {
       return JSON.stringify(await this.alignment.execute(actor, action, key, undefined, data, context.signal))
     }
-    if (action === 'link' || action === 'select') {
+    if (action === 'link') {
       return JSON.stringify(await this.alignment.execute(actor, action, key,
         key ? this.alignment.get(key).revision : undefined, data, context.signal))
     }

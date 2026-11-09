@@ -853,7 +853,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const work = new InitiativeStore(workspace)
       const alignment = new WorkAlignment(work, {
         state: id => f.sessions.getSessionState(id), evidence: async () => {},
-        changed: async () => {}, fresh: async () => {}, successor: async () => undefined,
+        changed: async () => {},
       })
       f.sessions.alignment = alignment
       const admissions = t.mock.method(alignment, 'prepareDelegation')

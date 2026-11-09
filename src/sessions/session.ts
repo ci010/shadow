@@ -298,8 +298,8 @@ export class Session extends BaseSession {
     else this.inbox.unshift(event)
   }
 
-  async replaceWorkContext(prompt: string, transitionId: string): Promise<void> {
-    if (this.turn) throw new Error('Work context replacement requires a tool-safe boundary.')
+  async replaceConversationContext(prompt: string): Promise<void> {
+    if (this.turn) throw new Error('Conversation context replacement requires a tool-safe boundary.')
     const previous = physicalSessionId(this.state)
     const timestamp = new Date().toISOString()
     const next = { ...this.state, segmentIndex: this.state.segmentIndex + 1, contextResetAt: timestamp,
@@ -309,16 +309,16 @@ export class Session extends BaseSession {
     if (typeof system !== 'string') throw new Error('Cannot retain the activation system prompt.')
     await this.store.createSessionLog(target, [{
       sessionId: this.id, physicalIdVersion: next.physicalIdVersion, previous_physical_id: previous,
-      timestamp, context_reset: true, work_transition_id: transitionId, summary_context: prompt,
+      timestamp, context_reset: true, summary_context: prompt,
     }])
     try { await this.store.saveState(this.id, next) }
     catch (error) {
       try { await this.store.deleteSessionLog(target) }
-      catch (cleanup) { throw new AggregateError([error, cleanup], 'Work context publication and cleanup failed.') }
+      catch (cleanup) { throw new AggregateError([error, cleanup], 'Conversation context publication and cleanup failed.') }
       throw error
     }
     Object.assign(this.state, next)
-    this.messages = [{ role: 'system', content: system }, { role: 'user', name: '__work_handoff__', content: prompt }]
+    this.messages = [{ role: 'system', content: system }, { role: 'user', name: '__context_handoff__', content: prompt }]
     this.usage = undefined
     this.clearReadCache()
     await this.tools.resetDynamicAndWait()

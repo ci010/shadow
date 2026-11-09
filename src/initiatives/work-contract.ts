@@ -5,7 +5,6 @@ import { workNotesSchema } from './work-notes.ts'
 
 const text = z.string().trim().min(1).max(2000)
 const longText = z.string().trim().min(1).max(4000)
-const list = z.array(text).max(12)
 export const workSubjectSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('work'), id: z.string().uuid() }).strict(),
   z.object({ kind: z.literal('initiative'), initiativeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/) }).strict(),
@@ -28,20 +27,6 @@ export const workDefinitionSchema = z.object({
   })).max(8).default([]),
 }).strict()
 export type WorkDefinition = z.infer<typeof workDefinitionSchema>
-export const workAdoptionSchema = z.object({
-  understanding: text, stop: list.default([]), retain: list.default([]), next: list.min(1),
-}).strict()
-export const workInventorySchema = z.object({
-  completed: list, artifacts: list, inFlight: list, unknown: list, retired: list,
-}).strict()
-export type WorkInventory = z.infer<typeof workInventorySchema>
-export const workChangeSchema = z.object({
-  subject: workSubjectSchema, expectedRevision: z.number().int().min(0),
-  change: z.enum(['understanding', 'goal', 'authorization', 'pause']),
-  reason: text, definition: workDefinitionSchema, paused: z.boolean().default(false),
-}).strict()
-export type WorkChange = z.infer<typeof workChangeSchema>
-
 export const workProgressSchema = z.enum(['pending', 'in_progress', 'blocked', 'done', 'cancelled'])
 export const workWorkflowSchema = z.object({
   title: z.string().trim().min(1).max(160),
@@ -59,24 +44,6 @@ export const workWorkflowSchema = z.object({
   'Blocked work needs a reason; clear it when leaving blocked.')
   .refine(value => value.blockedScope === undefined || value.status === 'blocked',
     'A blocked scope requires blocked progress.')
-export const workProposalSchema = z.object({
-  id: z.string().uuid(),
-  baseRevision: z.number().int().positive(),
-  assignmentRevision: z.number().int().positive().optional(),
-  change: workChangeSchema.shape.change,
-  reason: text, definition: workDefinitionSchema, paused: z.boolean(),
-  status: z.enum(['pending', 'applied', 'rejected']),
-  appliedRevision: z.number().int().positive().optional(),
-  request: z.object({ sessionId: z.string(), physicalId: z.string(), requestId: z.string() }).strict().optional(),
-}).strict()
-export type WorkProposal = z.infer<typeof workProposalSchema>
-export const workDecisionSchema = workProposalSchema.pick({
-  id: true, baseRevision: true, assignmentRevision: true, change: true, reason: true, definition: true, paused: true,
-}).extend({ key: z.string().min(1).max(600) }).strict()
-export type WorkDecision = z.infer<typeof workDecisionSchema>
-export const WORK_APPROVE = 'Apply this work proposal'
-export const WORK_REJECT = 'Keep the current work unchanged'
-
 /** Display-only model interpretation. Never execution authority or a user quotation. */
 export const workFocusInferenceSchema = z.object({
   category: z.string().trim().min(1).max(120),
@@ -107,26 +74,11 @@ export const workRecordSchema = z.object({
   definition: workDefinitionSchema,
   origin: z.enum(['human', 'agent_interpretation']),
   changedBy: z.string().min(1), changedAt: z.string().datetime(),
-  change: workChangeSchema.shape.change, reason: text, paused: z.boolean(),
+  change: z.enum(['understanding', 'goal', 'authorization', 'pause']), reason: text, paused: z.boolean(),
   /** Immutable creation request identity; scoped by the owning Project database. */
   creationRequest: z.object({ creator: z.string().min(1), key: z.string().min(1).max(200), fingerprint: z.string().length(64) }).strict().optional(),
   requestSource: decisionEvidenceSchema.extend({ kind: z.literal('user') }).optional(),
-  adoption: workAdoptionSchema.extend({
-    id: z.string().uuid(), sessionId: z.string().min(1), revision: z.number().int().positive(),
-  }).strict().optional(),
-  checkpoint: workInventorySchema.extend({
-    sessionId: z.string().min(1), revision: z.number().int().positive(),
-  }).strict().optional(),
-  transition: z.object({
-    id: z.string().uuid(), strategy: z.enum(['fresh', 'successor']),
-    sessionId: z.string().min(1), revision: z.number().int().positive(),
-    status: z.enum(['pending', 'applied']), successorId: z.string().optional(),
-  }).strict().optional(),
-  answerReview: z.object({ requestId: z.string().min(1), text: longText }).strict().optional(),
-  handoffFrom: z.object({ key: z.string().min(1), sessionId: z.string().min(1) }).strict().optional(),
-  successors: z.array(z.object({ sessionId: z.string().min(1), fromSessionId: z.string().min(1) }).strict()).max(100).optional(),
   workflow: workWorkflowSchema.optional(),
-  proposals: z.array(workProposalSchema).max(100).optional(),
   notes: workNotesSchema.optional(),
   observation: z.object({
     sessionId: z.string().min(1).max(512),
@@ -142,8 +94,36 @@ export const workRecordSchema = z.object({
     }
   }).optional(),
 }).strict()
+/** Storage-only compatibility: discard only named retired fields, validate everything else strictly.
+ * Do not use for current writes or wire input. Historical proposals confer no authority.
+ */
+export function parseStoredWorkRecord(value: unknown): WorkRecord {
+  return workRecordSchema.parse(omitRetiredStoredWorkFields(value))
+}
+
+/** Work audit payloads may be partial snapshots; omit only the same top-level retired keys. */
+export function omitRetiredStoredWorkFields(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const { adoption: _adoption, checkpoint: _checkpoint, transition: _transition,
+    answerReview: _answerReview, handoffFrom: _handoffFrom, successors: _successors,
+    proposals: _proposals, ...current } = value as Record<string, unknown>
+  return current
+}
 export type WorkRecord = z.infer<typeof workRecordSchema>
-export interface WorkStamp { key: string; revision: number; adoptionId?: string; assignmentRevision?: number }
+export interface WorkStamp { key: string; revision: number; assignmentRevision?: number }
+export const workStampsSchema = z.array(z.object({
+  key: z.string().min(1).max(600), revision: z.number().int().positive(),
+  assignmentRevision: z.number().int().positive().optional(),
+}).strict()).max(100)
+
+/** Historical effect/decision receipts only; current input remains strict. */
+export function parseStoredWorkStamps(value: unknown): WorkStamp[] {
+  return workStampsSchema.parse(Array.isArray(value) ? value.map(stamp => {
+    if (!stamp || typeof stamp !== 'object' || Array.isArray(stamp)) return stamp
+    const { adoptionId: _adoptionId, ...current } = stamp as Record<string, unknown>
+    return current
+  }) : value)
+}
 export interface WorkAuthority { manager: string | null; executor: string | null; active: boolean }
 export function workKey(subject: WorkSubject): string {
   if (subject.kind === 'work') return `work:${subject.id}`
