@@ -35,7 +35,7 @@ const batchSchema = z.object({
   inputEvents: z.array(eventSchema), events: z.array(eventSchema), artifacts: z.array(artifactSchema),
   attempts: z.array(z.string()), state: z.enum(['pending', 'running', 'done']),
   excluded: z.string().optional(),
-  retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative() }).optional(),
+  retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative(), paused: z.string().optional() }).optional(),
   proposal: outcomeSchema.optional(), evaluated: z.array(z.string()), error: z.string().optional(),
 }).strict()
 export type LearningBatch = z.infer<typeof batchSchema>
@@ -111,7 +111,7 @@ export class LearningLedger {
   }
   pending(pipeline: Pipeline, dueOnly = false): LearningBatch | undefined {
     return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded
-      && (!dueOnly || batch.state === 'running' || (batch.retry?.notBefore ?? 0) <= Date.now()))
+      && (!dueOnly || batch.state === 'running' || ((batch.retry?.attempts ?? 0) < 3 && (batch.retry?.notBefore ?? 0) <= Date.now())))
       .sort((a, b) => (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
   }
   /** Selection frontier reserves failed work without acknowledging it. */
@@ -122,7 +122,7 @@ export class LearningLedger {
   defer(id: string, retryable: boolean): void {
     const batch = this.required(id)
     const attempts = (batch.retry?.attempts ?? 0) + 1
-    batch.retry = { attempts, notBefore: Date.now() + (retryable
+    batch.retry = { attempts, ...(attempts >= 3 ? { paused: 'Automatic retry limit reached after three deferrals; evidence and effects retained. Manual /learn may retry.' } : {}), notBefore: Date.now() + (retryable
       ? Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6)) : 3_600_000) }
     this.save()
   }
@@ -145,11 +145,18 @@ export class LearningLedger {
   outcome(sessionId: string): LearningOutcome | undefined { return structuredClone(this.state.outcomes[sessionId]) }
   retry(pipeline: Pipeline): LearningRetry { return structuredClone(this.state.retries[pipeline] ?? { attempts: 0 }) }
   setRetry(pipeline: Pipeline, retry: LearningRetry): void { this.state.retries[pipeline] = retrySchema.parse(retry); this.save() }
-  eventsFor(pipeline: 'encapsulator' | 'soulReflector'): LearningEvent[] {
+  eventsFor(pipeline: 'encapsulator' | 'soulReflector', retained: LearningEvent[] = []): LearningEvent[] {
     const consumed = new Set([...this.state.consumed[pipeline], ...this.state.batches
       .filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded).flatMap(batch => batch.inputEvents.map(event => event.id))])
-    return structuredClone(this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
-      .flatMap(batch => batch.events).filter(event => !consumed.has(event.id)).slice(0, 40))
+    const candidates = [...this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
+      .flatMap(batch => batch.events), ...retained.filter(event => !this.state.batches.some(batch =>
+        batch.events.some(known => known.id === event.id)))]
+    const seen = new Set(consumed)
+    return structuredClone(candidates.filter(event => {
+      if (seen.has(event.id)) return false
+      seen.add(event.id)
+      return true
+    }).slice(0, pipeline === 'encapsulator' ? 8 : 40))
   }
   create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningEvent[]): LearningBatch {
     const batch = batchSchema.parse({ id: randomUUID(), createdAt: new Date().toISOString(), pipeline, sources, inputEvents,

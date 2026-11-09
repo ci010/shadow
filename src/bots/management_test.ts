@@ -513,3 +513,31 @@ test('deployment confirmation uses only Chinese system text and exact Chinese ap
   assert.equal(result.activeUnchanged, true)
   assert.equal(f.deployments.read('support'), undefined)
 })
+
+test('retired proposal grant repair is audit-only and new host SDK authority requires explicit owner confirmation', async t => {
+  const f = fixture(t)
+  const old = files(), legacy = JSON.parse(old['bot.json'])
+  legacy.hostCapabilities = ['work', 'wake', 'messages', 'watermark', 'send']
+  legacy.bindings[0].grants = [{ id: 'coordinator', kind: 'proposal-inbox', inbox: 'triage', disclosurePolicy: { kind: 'public-github-issue-proposal', repository: 'owner/repo' } }]
+  old['bot.json'] = JSON.stringify(legacy)
+  const frozen = f.deployments.freeze(old)
+  await f.deployments.deploy({ id: 'support', source: { folderId: 'folder', directory: '' }, ...frozen })
+  assert.equal(f.runtime.definition('support'), undefined, 'owner-preview baseline is never a runtime compatibility reader')
+  const candidate = files(), config = JSON.parse(candidate['bot.json'])
+  config.hostCapabilities = ['work', 'wake', 'messages', 'watermark', 'send']
+  candidate['bot.json'] = JSON.stringify(config)
+  for (const [path, content] of Object.entries(candidate)) writeFileSync(join(f.source, path), content)
+  f.onAsk(() => {
+    const facts = [...f.options.pending.values()][0] as any
+    assert.deepEqual(facts.hostCapabilities, ['work', 'wake', 'messages', 'watermark', 'send'])
+    assert.deepEqual(facts.repair.removedProposalGrants, [{ bindingIndex: 0, id: 'coordinator', inbox: 'triage', repository: 'owner/repo' }])
+    assert(facts.removedPermissions.some((value: string) => value.includes('Retired proposal-inbox')))
+    for (const operation of config.hostCapabilities) assert(facts.addedPermissions.some((value: string) => value.includes(`host capability ${operation}`)))
+    return '取消'
+  })
+  assert.equal(JSON.parse(await f.propose(frozen.revision) as string).status, 'cancelled')
+  assert.deepEqual(f.deployments.read('support')!.files, frozen.files, 'audit baseline never rewrites historical deployment bytes')
+  f.onAsk(() => '部署')
+  assert.equal(JSON.parse(await f.propose(frozen.revision) as string).status, 'deployed')
+  assert.deepEqual(f.runtime.definition('support')!.hostCapabilities, config.hostCapabilities)
+})

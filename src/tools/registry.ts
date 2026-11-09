@@ -24,7 +24,7 @@ const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['use_project', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'sql', 'skill_read'])
+const EXEMPT_TOOLS = new Set(['use_project', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'sql'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
@@ -310,9 +310,25 @@ export class Tools {
  */
 export class SessionTools extends Tools {
   inferenceRequestLimit?: number
-  private trustedLimits?: { allowedTools: readonly string[]; toolCalls: number; argumentBytes: number }
+  private trustedLimits?: { allowedTools?: readonly string[]; toolCalls: number; argumentBytes: number }
+  private reservedReceipt?: string
+  reserveReceipt(name: string): void {
+    if (!this.trustedLimits?.allowedTools?.includes(name)) throw new Error('Receipt is outside trusted limits')
+    this.reservedReceipt = name
+  }
+  private receiptOnly?: string
+  /** Host loop may narrow a bounded task at its final inference boundary. */
+  restrictToReceipt(name: string): void {
+    if (!this.trustedLimits?.allowedTools?.includes(name)) throw new Error('Receipt is outside trusted limits')
+    this.receiptOnly = name
+  }
   private trustedCalls = 0
   private trustedBytes = 0
+  /** Apply host ceilings without widening or replacing the role's tool permissions. */
+  setTrustedBudgets(limits: { inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
+    this.trustedLimits = { toolCalls: limits.toolCalls, argumentBytes: limits.argumentBytes }
+    this.inferenceRequestLimit = limits.inferenceRequests
+  }
   setTrustedLimits(limits: { allowedTools: readonly string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
     this.trustedLimits = { ...limits, allowedTools: [...limits.allowedTools] }
     this.inferenceRequestLimit = limits.inferenceRequests
@@ -324,6 +340,9 @@ export class SessionTools extends Tools {
     if (!channelSupportsAsk(channel, sessionId)) this.askAvailable = false
   }
 
+  /** Host-only live output stamp; never populated by serialized configuration. */
+  assertSnapshot?: () => void
+  stampOutput?: (message: import('../bus/events.ts').OutboundMessage) => import('../bus/events.ts').OutboundMessage
   boundary?: import('../sessions/runtime-boundary.ts').RuntimeBoundary
   override getWorkGuard(): WorkToolGuard | undefined { return super.getWorkGuard() ?? this.base.getWorkGuard() }
   private borrowedOwner?: SessionTools
@@ -544,8 +563,9 @@ export class SessionTools extends Tools {
   }
 
   executionDenial(name: string, args: Record<string, unknown>): string | undefined {
-    if (this.trustedLimits && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
-    if (this.trustedLimits && name === 'import_tool' &&
+    if (this.receiptOnly && name !== this.receiptOnly) return this.rejectExecution('Only the learning receipt is allowed at this finish boundary.')
+    if (this.trustedLimits?.allowedTools && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
+    if (this.trustedLimits?.allowedTools && name === 'import_tool' &&
       (typeof args.source !== 'string' || !args.source.startsWith('v:tools/') ||
         !this.trustedLimits.allowedTools.includes(args.source.slice('v:tools/'.length)) ||
         args.args !== undefined || args.server !== undefined)) {
@@ -662,6 +682,7 @@ export class SessionTools extends Tools {
   }
 
   override getDefinitions(): ToolDefinition[] {
+    this.assertSnapshot?.()
     this.boundary?.assertCurrent()
     const scope = this.scope
     return this.base.getDefinitions().filter((d) =>
@@ -713,6 +734,17 @@ export class SessionTools extends Tools {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    if (this.reservedReceipt && this.trustedLimits) {
+      const denial = this.executionDenial(name, args)
+      if (denial) return denial
+      const bytes = Buffer.byteLength(JSON.stringify(args), 'utf8')
+      const reserve = name === this.reservedReceipt ? 0 : 1
+      const byteReserve = reserve ? Math.min(8000, Math.floor(this.trustedLimits.argumentBytes / 4)) : 0
+      if (this.trustedCalls + 1 > this.trustedLimits.toolCalls - reserve
+        || this.trustedBytes + bytes > this.trustedLimits.argumentBytes - byteReserve) {
+        return this.rejectExecution('Learning work budget exhausted; submit learning_result using remaining receipt capacity.')
+      }
+    }
     if (this.trustedLimits) {
       this.trustedCalls++
       this.trustedBytes += Buffer.byteLength(JSON.stringify(args), "utf8")

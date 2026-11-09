@@ -1,8 +1,8 @@
 # Exact-version runtime testing
 
-After exact-version owner approval, Shadow asks the local owner whether you
+From Apps, the owner can request author testing. Shadow asks whether you
 should continue runtime testing. An unanswered 60-second confirmation defers
-without approval; wait for explicit owner continuation. This never approves
+without approval; wait for explicit owner continuation. This never grants author testing of
 another revision or additional device access. On the
 `microapp.testing.ready` event, read `get` and current Work, then use `test` with
 that exact revision for an isolated browser handle. Exercise the real UI/SDK;

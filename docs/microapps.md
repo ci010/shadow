@@ -3,11 +3,12 @@
 Micro Apps are reusable Web tools owned by a Project, not temporary conversation
 cards or another agent loop. Open the Project workbench's **Apps** workspace.
 Ask the agent to build a tool, then **Refresh** Apps to see its publication.
-Review the exact source, local backend behavior and model allowance before
-approving. Approval does not immediately start the app. The runtime asks whether
-its author should continue testing; an unanswered 60-second confirmation does not
-grant continuation. Choose **Not now** to test it yourself with **Open window** on
-Electron or **Open app** in a Web browser.
+Published apps, including changed revisions, can be opened immediately with
+**Open window** on Electron or **Open app** in a Web browser. There is no separate
+owner approval step. Publication alone does not run code. Source, backend behavior
+and model limits remain inspectable in **Review details**. **Ask author to test
+this version** separately asks whether the author may continue runtime testing;
+an unanswered 60-second confirmation never grants that continuation.
 
 The initial framework supports static HTML/CSS/JavaScript and an optional local
 Node.js or Python HTTP backend. It does not provide a UI DSL, dependency
@@ -18,13 +19,13 @@ mobile/LAN app hosting, or browser microphone/device permission broker.
 
 A ready Electron Child uses its own authenticated loopback control endpoint,
 then the existing paired-device MainDeviceUi challenge/proof channel for app
-catalog, exact-revision approval, open and stop. It does not start a second local
+catalog, revision-bound open and stop. It does not start a second local
 Main. The app backend and persistent state remain on the connected Main; this
 is not remote-workdir app publication or public LAN app hosting.
 
 Main's isolated loopback app URL is not usable on another machine. Child replaces
 it with a separate ephemeral loopback origin for that app run. Requests relay
-only to the selected Project/app, exact approved revision and current run ID;
+only to the selected Project/app, exact published revision and current run ID;
 the caller cannot supply a target host or port. Each request obtains fresh device
 proof. Only app-specific one-use tickets and app tokens reach the app renderer;
 Main/Child control credentials never do. Requests from another Origin are rejected.
@@ -47,7 +48,7 @@ A saturated request queue returns 429; oversized app input returns 413 before
 forwarding. HTTP header/request receipt timeouts are 15/30 seconds. Listeners
 close on stop/shutdown or run expiry (at most eight hours). These are additional
 Child limits, not inherited Main listener quotas. The existing MainDeviceUi
-128 active requests and 600 challenges/minute limits, exact-revision approval,
+128 active requests and 600 challenges/minute limits, exact-revision checks,
 32 outstanding tickets/run and two concurrent model calls/app remain in force.
 Main relay also bounds decoded request/response bodies to 16 MiB; this does not
 introduce a new global cap on owner-started Main app runtimes.
@@ -70,10 +71,9 @@ discover through failed attempts.
 
 Ordinary preferences use the existing `ask(kind: "input")` path; consequential
 decisions follow the existing decision contract. An answer, a recommended default
-or A2A caller input never substitutes for exact-version app owner review or
-separate protected-action authorization. Safe discovery does not grant device
+or A2A caller input never substitutes for separate protected-action authorization. Safe discovery does not grant device
 access. There is no setup wizard or minimum interview question count; the
-post-review testing confirmation is separate from execution approval.
+author-testing confirmation is separate from direct owner opening.
 
 The agent should preserve earlier answers and requested behavior across feedback,
 build an end-to-end candidate, explain what remains unverified and update the same
@@ -88,19 +88,19 @@ protected actions still require their dedicated approval path.
 
 ## Author runtime acceptance
 
-After approval, the existing owner question card offers **Continue runtime
+When the owner requests author testing, the existing question card offers **Continue runtime
 testing** or **Not now; I will test it myself**. The question is local to the
 Project owner, even for an A2A or child author; it is not sent to a remote caller,
 parent agent or channel. Its answer is recorded through the existing JSONL/SQLite
 decision journal. The 60-second deadline defers unanswered confirmations without
 approval; only explicit **Continue runtime testing** permits author testing of the
-already approved revision. It never approves code, new device access or Work
+published revision. It never approves code, new device access or Work
 changes. Cancellation and custom replies also pause testing. Cancelling this host
 confirmation does not cancel unrelated conversation work.
 
 Continuing queues a runtime event to the original author through SessionManager.
 `micro_app test` requires an explicit owner-held browser_setup binding and opens
-the approved app in a new page there, returning the binding and pageId rather than
+the published app in a new page there, returning the binding and pageId rather than
 a launch ticket. It never launches a browser; multiple bindings require reducing
 to one unambiguous choice before this handoff. Normal browser tools,
 role and exact-version owner checks remain in force. Work notes are not an
@@ -130,7 +130,7 @@ explicitly separate, and device/translation quality must not be inferred from
 fixture providers. Apps shows the report as the **author's assessment**, not a
 blanket host-certified pass.
 
-`micro_app evidence` accepts the approved app ID, exact revision and 1-12
+`micro_app evidence` accepts the published app ID, exact revision and 1-12
 `sources:[{id,quote}]` entries identifying recorded tool calls and exact result
 excerpts. It returns canonical `{sessionId,physicalId,kind:"tool",id,quote}`
 references for copying into reports. Lookup is read-only, limited to the
@@ -178,10 +178,10 @@ cancellation followed by a completion of that same kind. Starting a run or
 reading its state does not substitute for its SDK connection. These requirements
 do not certify dependency readiness, device isolation or business correctness.
 
-Testing requests and reports bind both revision and approval. Updating code or
-revoking authorization prevents further author test entry. Previous records stay
+Testing requests and reports bind revision and testing-request identity. Updating
+code or cancelling author testing prevents further author test entry. Previous records stay
 in `.microapps/<app-id>/acceptance-<request-id>.json`; new publications do not
-inherit them. Old approvals do not silently acquire testing permission.
+inherit them. Existing apps do not silently acquire author-testing permission.
 Restarted confirmations and uncertain notifications do not automatically replay:
 inspect prior effects, stop the app, and use **Ask to run tests again**. This asks
 again without resetting the model allowance. Missing/deleted/one-shot authors,
@@ -190,9 +190,8 @@ existing pending decisions and notification failures remain explicit blockers.
 ## Native windows and branding
 
 Published message links with `?microApp=<id>` route from the author conversation
-to the Project Apps review. Pending versions show the source and exact-version
-approval controls without executing the app. On Electron, an already-approved
-linked version opens its native window (or focuses the existing one); Web keeps
+to Project Apps. On Electron, the linked publication opens its native window
+(or focuses the existing one) without a separate approval; Web keeps
 the embedded presentation and its **Open app** action.
 
 Electron opens each Project/app pair in its own framed BrowserWindow, not an
@@ -213,13 +212,13 @@ to brand the app list and native window. Use a PNG up to 512 x 512 pixels and
 revision. Older apps remain valid and use Shadow's default icon. On macOS the
 shared Shadow Dock identity remains; per-app window icons are platform-dependent.
 
-On Windows, approved apps appear in Shadow's taskbar right-click **Tasks** menu,
+On Windows, published apps appear in Shadow's taskbar right-click **Tasks** menu,
 labeled with the app name and Project ID. Entries and cached ICO assets survive
 exit. They contain only stable identifiers and trusted desktop/profile paths,
 never launch tickets or credentials. A task starts Shadow when needed, or uses
-the existing instance, rechecks the current approval and obtains fresh access.
-Revoked or deleted apps are removed during the next catalog refresh and stale
-tasks cannot bypass approval. Development profiles have separate taskbar IDs.
+the existing instance, rechecks the current revision and obtains fresh access.
+Deleted apps are removed during the next catalog refresh and stale
+tasks cannot bypass Project authentication or revision checks. Development profiles have separate taskbar IDs.
 Windows policy or user settings can prevent task-menu publication; such failures
 are reported in desktop logs. This is not a separately packaged executable per app.
 Task profile arguments take precedence over environment defaults. Service-attached
@@ -229,19 +228,19 @@ desktops retain their connection descriptor rather than launching a replacement 
 
 - The author publishes an explicit file list from its effective local workdir.
   Publishing saves a content-addressed snapshot, not a pointer to mutable code.
-  Changed code invalidates approval. Updating requires the current revision and
+  Changed code creates a ready-to-open revision and invalidates prior author testing. Updating requires the current revision and
   the original author session; owner lifecycle controls do not depend on that
   session remaining active.
 - Project owner HTTP authorization, not an agent tool or A2A caller identity,
-  permits review, approve, open, stop and revoke. Model access is opt-in and
-  fixed to the owner-selected model at approval.
+  permits inspect, open, stop and author-testing controls. Model access is declared
+  by the manifest and pinned to the Project model on first open of each publication.
+  The manifest bounds calls and output tokens; failed attempts consume allowance.
 - Closing an Electron app window stops that app's runtime. Closing a Web
   embedded page alone does not stop its backend. **Stop** cancels model requests,
   terminates the owned backend process tree and removes the run directory.
-  **Revoke access and stop** also removes approval.
 - If cleanup fails, the app is marked failed with its cleanup phase, not stopped.
   **Retry cleanup** resumes the remaining cleanup without restarting Main,
-  renewing model allowance or silently reopening the app. Open/approval remain
+  renewing model allowance or silently reopening the app. Open and publication remain
   blocked until the retained run is removed. This also applies to failed startup:
   the runtime retains ownership of a spawned backend before its health check
   succeeds, so a failed initial termination cannot leave an untracked process.
@@ -249,12 +248,22 @@ desktops retain their connection descriptor rather than launching a replacement 
   Cleanup waits up to five seconds for the owned close/output-drain receipt.
   A verified close is retained with a warning; unresolved exit or pipes remain
   failures with the original termination error, not a fabricated stopped state.
-- App snapshots, approval, used-call count and data survive Shadow restarts.
+- App snapshots, pinned model, used-call count and data survive Shadow restarts.
   Processes do not automatically restart. An unclean prior run is shown as
   **Interrupted**, not successful or rolled back.
 - Reopening creates a one-use ticket valid for 60 seconds. App access lasts at
   most eight hours per run; stop/reopen to renew runtime access. That does not
-  reset the model allowance. Renewing allowance requires another owner approval.
+  reset the model allowance. A changed publication starts a new allowance; an
+  unchanged publish preserves usage. There is no approval/renewal endpoint.
+
+Existing records migrate when the Project runtime loads: the old `approval` field
+is removed, a matching legacy model selection is retained as the model pin, and
+calls, snapshots and persistent data are preserved. Previously unapproved or
+revoked publications become ready to open under the new product policy. Missing
+model pins resolve from the Project default on first open. No app process or
+owner testing continuation auto-resumes. Old testing timestamps no longer grant
+execution permission; testing still binds the revision and request ID. This is a
+forward schema migration; older binaries cannot read the rewritten records.
 
 The page runs on a separate loopback origin, with CSP sandbox restrictions
 and, on Web, an iframe sandbox. It has no host preload/Node access or parent DOM
@@ -269,7 +278,8 @@ not contain secrets.
 
 **A backend is an ordinary host program, not an OS sandbox.** It can read files,
 spawn processes and perform network operations with the host user's privileges.
-Approval is code review, not confinement or dependency integrity verification.
+Publication is not confinement or dependency integrity verification. Opening
+local backend code runs it with normal host access; inspect external effects.
 It must authenticate its own loopback listener and must not detach descendants.
 User-approved device changes and installations remain separate decisions.
 Neither cancelling a request nor stopping an app rolls back external effects.
@@ -296,12 +306,12 @@ The read-only authoring action `micro_app({action:"check",directory,id,revision}
 compares the current manifest and its listed files with the exact published
 bundle, returning a candidate hash and added/modified/removed file names. It
 uses the same file validation as publication and refuses stale or concurrently
-changed revisions. It does not publish, grant approval, start a process, resolve
+changed revisions. It does not publish, start a process, resolve
 unlisted dependencies or verify behavior. A changed draft is not a shipped fix;
 publish and review the new revision before testing the actual app.
 
 `publish` and `check` tool replies are compact receipts: exact ID/revision,
-approval and model allowance, run/error status, versioned `workRefs`, an
+model pin and allowance, run/error status, versioned `workRefs`, an
 `acceptanceSummary`, and the full source comparison for `check`. `reportSaved`
 only says a report exists, not that its checks passed. Use the returned `detail`
 (`get`) for the full manifest, acceptance criteria, observations and report
@@ -359,10 +369,10 @@ not a guaranteed secure erase or orphan-process recovery mechanism.
 
 The SDK exports `loadState(signal?)` and `saveState(values, version, signal?)`.
 They use authenticated `GET`/`PUT /_shadow/state` and need neither a backend nor an
-LLM grant (the app still needs execution approval). The JSON response is
+LLM grant (opening starts the runtime directly). The JSON response is
 `{version,values}`; a new/legacy app starts at version 0 with an empty object.
 State is limited to 64 KiB including its envelope, scoped to Project/app, and
-preserved across runs, restarts and approved code revisions. Writes require the
+preserved across runs, restarts and published code revisions. Writes require the
 last read version and atomically replace the file. A stale write fails with
 `app_state_conflict` (409); callers must reload and reconcile rather than retry
 blindly. Invalid stored state is reported and is not overwritten or reset.
@@ -372,8 +382,7 @@ SDK `request()` resolves to a Response only on success. HTTP failures throw
 `AppRequestError` exposing `status` and `code`; malformed/non-JSON error bodies
 still produce an explicit HTTP failure rather than a JSON parsing error.
 
-Authoring can use clearly labeled, capability-free static previews before
-approval. Mock layout evidence is not permission to run a backend, call a model,
+Authoring can use clearly labeled, capability-free static previews. Mock layout evidence is not permission to run a backend, call a model,
 or access devices, and is not a substitute for native/runtime acceptance. Large
 dependencies must be reconstructible without the author workspace; an external
 author seed directory is not a deployable resource.
@@ -394,7 +403,7 @@ long technical specification the user must supply.
 It directly calls the configured provider with no tools. It does not expose
 provider credentials, private provider state or unrestricted model selection.
 Requests are non-streaming, limited to 64000 input characters, two concurrent
-calls, the approved output cap and the persistent attempt allowance. Failed
+calls, the manifest output cap and the persistent attempt allowance. Failed
 provider attempts count; provider-internal transport retries are not separate
 app attempts. The model timeout is 120 seconds. Backend proxy transfers are
 limited to 16 MiB and 180 seconds.
@@ -464,7 +473,7 @@ not a completed app revision.
 including UTF-8 BOMs, unfinished manifests, unlisted source files and differences
 from published versions. `work-details.json` retains last-observed full Work
 records, separately from version-bound published acceptance. These are drafts
-and evidence, not new publications, approval or successful acceptance.
+and evidence, not new publications or successful acceptance.
 Recovery uses registered local session workdirs within the isolated Project;
 it does not follow links or inspect remote display paths. Hidden metadata,
 credential-named files and generated dependency/test-data directories are excluded.
@@ -497,7 +506,7 @@ Messages during working/submitted tasks are rejected by the test controller.
 `conversation.json` records each attempted input verbatim, its initial/answer/
 followup classification, the question being answered, model-call counts and the
 returned task identity/status. An attempted input is not marked accepted before
-the server acknowledges it. This ledger is separate from app approval controls.
+the server acknowledges it. This ledger is separate from app runtime and testing controls.
 
 Use fresh runtime data and an isolated source snapshot while another development
 instance is in use: separate data/ports alone do not prevent source watchers or
@@ -517,9 +526,9 @@ optional polish. The live controller reserves separate bounded phases:
 
 | Phase | Wall-time limit | Transition |
 | --- | --- | --- |
-| Creation | 30 minutes, including feedback and clarification | Explicit `review`/`approve` after the creation task ends, or the creation cutoff |
-| Owner source review | 5 minutes, with no model requests admitted | Exact-version owner `approve`; timeout never approves |
-| Author testing | 10 minutes from the first successful version approval | Includes the existing 60-second testing question, preparation and reporting |
+| Creation | 30 minutes, including feedback and clarification | Explicit `review`/`request-testing` after the creation task ends, or the creation cutoff |
+| Owner source review | 5 minutes, with no model requests admitted | Exact-version `request-testing`; timeout never grants testing permission |
+| Author testing | 10 minutes from the first author-testing request | Includes the existing 60-second testing question, preparation and reporting |
 
 The absolute maximum is 45 minutes; early handoff does not wait out unused
 creation time. At the creation cutoff, in-flight model requests are aborted and
@@ -534,7 +543,7 @@ Requests in progress receive the phase deadline signal.
 `timeline.json` and `progress.json.timeline` expose the phase, its deadline and
 the absolute ceiling. `progress.json.deadlineAt` is the **current phase** deadline,
 not always the final shutdown time. Repeat reviews do not extend review; later
-revision approvals, runtime restarts and testing retries do not reset the first
+revision testing requests, runtime restarts and testing retries do not reset the first
 testing deadline. New product follow-ups are accepted only during creation.
 During testing, new revisions still require independent exact-version review,
 within the remaining testing window, not another five-plus-ten-minute allowance.
@@ -572,7 +581,7 @@ new command `id`. Supported controls:
 | `snapshot` | None; exports current immutable published bundles without changing phase or granting access |
 | `review` | `appId`, exact `revision`; after the creation task ends, begins review early and saves source in `review.json` and `bundles/` |
 | `review-work` | `workKey`; saves the current note and its context in `work-review.json` |
-| `approve` | `appId`, exact reviewed `revision`; invokes the real owner API and starts the first testing window; can enter review implicitly from completed creation |
+| `request-testing` | `appId`, exact reviewed `revision`; invokes the real owner API and starts the first testing window; can enter review implicitly from completed creation |
 | `answer-testing` | `appId`, exact `revision`, current acceptance `requestId`, `option`; explicitly answers the separate owner testing question through the real owner API; stale questions are rejected |
 | `open` | `appId`; writes a one-use URL to `launch.private.json`, never to logs |
 | `restart` | None; restarts only this test's Shadow runtime, preserving this round's app |
@@ -582,9 +591,9 @@ After the final product input is handled and the creation task ends, use
 `{"id":"inspect-1","action":"review","appId":"<uuid>","revision":"<sha256>"}`
 to reserve review time before inspecting the exact source. This closes creation;
 do not send it after an intermediate delivery when more product feedback remains.
-An example approval control is
-`{"id":"review-1","action":"approve","appId":"<uuid>","revision":"<sha256>"}`.
-Approval alone does not resume the author. Read the acceptance question IDs in
+An example author-testing request is
+`{"id":"review-1","action":"request-testing","appId":"<uuid>","revision":"<sha256>"}`.
+Requesting testing alone does not resume the author. Read the acceptance question IDs in
 `apps.json`, then explicitly send `answer-testing` with the current
 `decisionRequestId` as `requestId` and the selected question option (for example,
 `Continue runtime testing`). An unanswered question defers testing, never grants
@@ -595,15 +604,14 @@ translation, WAV bytes, repeat runs and restart result. Artifacts preserve
 sanitized task/trace/source evidence; the private launch handoff is removed.
 Each subsequent round must use a new artifact directory.
 `approve-work` is retired and returns an explicit error without changing the
-note. Correct a goal in the Project canvas; use `approve` only for exact reviewed
-app-version execution. Invalid Work review fields and explicit owner API rejections write
+note. Correct a goal in the Project canvas; use `request-testing` only to ask for author testing of an exact revision. Invalid Work review fields and explicit owner API rejections write
 `control-result.json` with `done:false` and an error, without destroying the
 isolated runtime and its draft. Inspect it and submit a new command ID; the
 rejected command is never retried automatically. Network failures, malformed
 server responses and uncertain outcomes still fail the round rather than
-pretending approval succeeded or replaying a request.
-Neither an A2A message nor a note/impact review grants app execution/model
-access, changes progress automatically, or approves future app versions.
+pretending the testing request succeeded or replaying a request.
+An A2A message or note/impact review does not grant author-testing or device
+permission or change progress automatically. Published versions open directly.
 `bundles/<app-id>.json` preserves the final immutable source bundle before
 test cleanup; it is not an installed app or an execution authorization.
 

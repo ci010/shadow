@@ -1,3 +1,4 @@
+import { passiveAttachmentReferences } from './passive-contract.ts'
 import { ingressDispatchEvent, ingressErrorDetail } from './ingress-diagnostic.ts'
 /**
  * QQ Bot channel (官方机器人 / 群聊 + 单聊 + 频道).
@@ -270,14 +271,15 @@ export class QQChannel extends AbstractChannel {
    * Return a valid app access token, refreshing it if missing or near expiry.
    * Tokens are minted from AppID + AppSecret and live ~2 hours.
    */
-  private async getAccessToken(): Promise<string> {
+  private async getAccessToken(signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted()
     const now = Date.now()
     if (this.accessToken && now < this.tokenExpiresAt - 60_000) {
       return this.accessToken
     }
 
     const res = await this.request(TOKEN_URL, {
-      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]),
+      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: this.appId, clientSecret: this.secret }),
@@ -305,8 +307,9 @@ export class QQChannel extends AbstractChannel {
   }
 
   /** Build the standard authorization headers for REST calls. */
-  private async authHeaders(): Promise<Record<string, string>> {
-    const token = await this.getAccessToken()
+  private async authHeaders(signal?: AbortSignal): Promise<Record<string, string>> {
+    const token = await this.getAccessToken(signal).catch(error => { signal?.throwIfAborted(); throw error })
+    signal?.throwIfAborted()
     return {
       Authorization: `QQBot ${token}`,
       'X-Union-Appid': this.appId,
@@ -315,6 +318,19 @@ export class QQChannel extends AbstractChannel {
   }
 
   // ── Send ───────────────────────────────────────────────────────────────────
+
+  /** Strict proactive SDK send: no passive msg_id, formatting fallback or retry. */
+  async sendExplicitText(chatId: string, content: string, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted(); this.assertConnection()
+    const target = parseChatId(chatId)
+    if (!target || !['group', 'c2c'].includes(target.kind) || !/^[A-Za-z0-9_-]+$/.test(target.id)) throw new Error('Explicit QQ send supports only original group/C2C destinations.')
+    if (!content.trim() || content.length > 2000) throw new Error('Explicit QQ text must contain 1–2000 characters.')
+    const headers = await this.authHeaders(signal)
+    signal.throwIfAborted(); this.assertConnection()
+    const path = target.kind === 'group' ? `/v2/groups/${target.id}/messages` : `/v2/users/${target.id}/messages`
+    const body = this.markdown ? { msg_type: MSG_TYPE_MARKDOWN, markdown: { content } } : { msg_type: MSG_TYPE_TEXT, content }
+    return this.postMessage(path, headers, body, signal)
+  }
 
   @Span('QQChannel.send')
   async send(msg: OutboundMessage): Promise<string | null> {
@@ -413,17 +429,22 @@ export class QQChannel extends AbstractChannel {
     path: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<string> {
+    signal?.throwIfAborted()
     let res: Response
     try {
       res = await this.request(`${this.apiBase}${path}`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
+        ...(signal ? { signal } : {}),
       })
     } catch {
+      signal?.throwIfAborted()
       throw new QQDeliveryError('unknown', 'unknown')
     }
+    signal?.throwIfAborted()
     if (!res.ok) {
       throw await qqResponseError(res)
     }
@@ -889,12 +910,16 @@ export class QQChannel extends AbstractChannel {
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
     const chatName = typeof data.group_name === 'string' ? data.group_name : undefined
+    const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: true, chatName,
+      ...(typeof author?.username === 'string' ? { senderName: author.username } : {}), attachmentReferences: passiveAttachmentReferences(passive.attachments) })
+    if (arrival && !arrival.eligible) return
     // Discovery without business trigger evaluation; unassigned sources stay closed.
     if (!this.admitGroup(chatId, chatName)) {
       this.admitGroup(chatId, chatName, { id: msgId, sender: senderId, text: typeof data.content === 'string' ? data.content : '[attachment]' })
       return
     }
-    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: true }, async configuration => {
+    await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: true }, async configuration => {
     // Service receives frozen package configuration from its selected BOT. Only
     // personal/standalone adapters (no service policy) read the legacy option.
     const triggerMode = configuration?.platform === 'qq' ? configuration.trigger : this.triggerMode
@@ -929,9 +954,12 @@ export class QQChannel extends AbstractChannel {
     if (!msgId || !senderId) return
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `c2c:${senderId}`
+    const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: false, senderName: author?.username, attachmentReferences: passiveAttachmentReferences(passive.attachments) })
+    if (arrival && !arrival.eligible) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
 
-    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: false }, async () => {
+    await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: false }, async () => {
     const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
     if (!content && !media) return
 
@@ -957,11 +985,14 @@ export class QQChannel extends AbstractChannel {
     const chatId = isDirect
       ? `dms:${data.guild_id as string}`
       : `channel:${data.channel_id as string}`
+    const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: !isDirect, senderName: author?.username, attachmentReferences: passiveAttachmentReferences(passive.attachments) })
+    if (arrival && !arrival.eligible) return
     if (!isDirect && !this.admitGroup(chatId)) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
     this._lastMsgId.set(chatId, msgId)
 
-    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: !isDirect }, async () => {
+    await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: !isDirect }, async () => {
     const member = data.member as Record<string, unknown> | undefined
     const senderName = (member?.nick as string) ?? author?.username ?? senderId
     const chatName = isDirect ? senderName : await this.resolveChannelName(data.channel_id)

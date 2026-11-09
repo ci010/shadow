@@ -70,10 +70,13 @@ Prompt hints contain only bounded core/recent metadata, including learned Skills
 Search still covers the full catalog; omission is not deletion or loss of access.
 
 **Edit shared Skills:** Ordinary Project learning does not need a Change or
-publication. Discover `skill_read` / `skill_save` under `v:tools` and call through
+publication. Discover `skill_save` under `v:tools` and call through
 `invoke_tool`. No special coordination session is required.
-`skill_read({name, path?})` reads raw text without activating scripts and remembers
-the edit baseline. Use `offset`/`limit` for long resources.
+`read("v:skills/.raw/<name>")` reads the raw manifest and file listing without
+activating scripts and remembers the session edit baseline. Append a relative
+resource path (for example `v:skills/.raw/<name>/tools/run.ts`) to read that file.
+Use normal line-based `offset`/`limit` for paging. If a Skill changes between
+pages or resource reads, reread its raw root and merge before saving.
 `skill_save({name, files: {"SKILL.md": "...", "tools/example.ts": "..."}})`
 saves related files together; null deletes a resource. Read existing Skills first;
 new Skills can be created directly. Conflicts require rereading and merging.
@@ -232,6 +235,6 @@ contracts on demand rather than treating legacy configuration examples as APIs.
 
 Legacy resource Change/check/scenario/run/profile publication and source
 recovery have been retired. Old files are neither loaded nor migrated. Do not
-recreate those workflows or silently adopt old bindings. Shared `skill_read`,
+recreate those workflows or silently adopt old bindings. Shared raw Skill reads and
 `skill_save`, synthetic `agent_tool_test`, polling and restricted script execution
 are independent capabilities and remain available under their own permissions.

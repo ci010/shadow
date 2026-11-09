@@ -10,13 +10,13 @@
     <div v-else-if="!apps.length && !error" class="apps-empty">
       <h3>{{ t('A home for the tools you keep using') }}</h3>
       <p>{{ t('Ask a conversation to build an app. Review its code and permissions here, then open it whenever you need it.') }}</p>
-      <p>{{ t('Publishing does not run code or grant model access.') }}</p>
+      <p>{{ t('Publishing does not run code. Open starts the app with its declared model allowance.') }}</p>
     </div>
     <div v-else class="apps-layout" :class="{ 'has-selection': !!selected }">
       <nav class="apps-list" :aria-label="t('Saved apps')">
         <button v-for="app in apps" :key="app.id" :aria-current="selected?.id === app.id ? 'page' : undefined" @click="select(app.id)">
           <span class="app-identity"><img v-if="app.manifest.icon" :src="microAppIconUrl(apiBase, app)" alt="" @error="iconError" /><strong>{{ app.manifest.name }}</strong></span>
-          <span :class="{ 'needs-review': !app.approval }">{{ microAppStatus[app.status] }}</span>
+          <span>{{ microAppStatus[app.status] }}</span>
           <span v-if="app.manifest.llm" class="app-usage">{{ app.calls }} / {{ app.manifest.llm.maxCalls }} {{ t('model calls') }}</span>
         </button>
       </nav>
@@ -24,40 +24,34 @@
         <header class="app-heading">
           <div class="app-heading-identity"><img v-if="selected.manifest.icon" :src="microAppIconUrl(apiBase, selected)" alt="" @error="iconError" /><div><h3>{{ selected.manifest.name }}</h3><p>{{ microAppStatus[selected.status] }}</p></div></div>
           <button :disabled="busy" @click="reviewing = !reviewing">{{ reviewing ? t('Hide details') : t('Review details') }}</button>
-          <button v-if="selected.approval && canWrite" class="app-primary" :disabled="busy || selected.cleanupPending" @click="open">{{ desktopApps ? t('Open window') : t('Open app') }}</button>
+          <button v-if="canWrite" class="app-primary" :disabled="busy || selected.cleanupPending" @click="open">{{ desktopApps ? t('Open window') : t('Open app') }}</button>
           <button v-if="(selected.status === 'running' || selected.cleanupPending) && canWrite" :disabled="busy" @click="act('stop')">{{ selected.cleanupPending && selected.status === 'failed' ? t('Retry cleanup') : t('Stop') }}</button>
         </header>
         <div v-if="selected.lastRun?.error" class="apps-error" role="status">{{ selected.lastRun.error }}</div>
-        <div v-if="reviewing || !selected.approval" class="app-review">
+        <div v-if="reviewing" class="app-review">
           <p>{{ selected.manifest.description }}</p>
           <dl>
             <dt>{{ t('Local process') }}</dt><dd>{{ selected.manifest.backend ? `${selected.manifest.backend.runtime}: ${selected.manifest.backend.entry}` : t('None — browser-only app') }}</dd>
-            <dt>{{ t('Model access') }}</dt><dd>{{ selected.manifest.llm ? t('{maxCalls} attempts per approval; up to {maxOutputTokens} output tokens each', { maxCalls: selected.manifest.llm.maxCalls, maxOutputTokens: selected.manifest.llm.maxOutputTokens }) : t('None') }}</dd>
+            <dt>{{ t('Model access') }}</dt><dd>{{ selected.manifest.llm ? t('{maxCalls} attempts per publication; up to {maxOutputTokens} output tokens each', { maxCalls: selected.manifest.llm.maxCalls, maxOutputTokens: selected.manifest.llm.maxOutputTokens }) : t('None') }}</dd>
             <dt>{{ t('Used allowance') }}</dt><dd>{{ selected.calls }} {{ t('calls. Stopping or restarting does not reset usage.') }}</dd>
-            <dt>{{ t('Approved model') }}</dt><dd>{{ selected.approval?.model ?? t('Project default at approval, if requested') }}</dd>
+            <dt>{{ t('Model') }}</dt><dd>{{ selected.model ?? t('Project default on first open, if requested') }}</dd>
             <dt>{{ t('Version') }}</dt><dd><code>{{ selected.revision }}</code></dd>
           </dl>
-          <p class="app-boundary">{{ t('App pages are isolated from Shadow. A local backend has normal host file and process access — it is not an OS sandbox. Review the code and external effects before approving.') }}</p>
+          <p class="app-boundary">{{ t('App pages are isolated from Shadow. A local backend has normal host file and process access — it is not an OS sandbox. Review the code and external effects before opening.') }}</p>
           <details class="app-source">
             <summary>{{ t('Review source ·') }} {{ selected.files.length }} {{ t('files') }}</summary>
             <details v-for="file in selected.files" :key="file.path"><summary>{{ file.path }} · {{ file.bytes }} {{ t('bytes') }}</summary>
-              <pre v-if="file.text !== undefined"><code>{{ file.text }}</code></pre><p v-else>{{ t('Binary asset; inspect the source file before approval.') }}</p>
+              <pre v-if="file.text !== undefined"><code>{{ file.text }}</code></pre><p v-else>{{ t('Binary asset; inspect the source file before opening.') }}</p>
             </details>
           </details>
-          <form v-if="canWrite && !selected.cleanupPending && selected.status !== 'running' && selected.status !== 'starting'" class="app-approval" @submit.prevent="approve">
-            <label v-if="selected.manifest.llm">{{ t('Model (optional override)') }}<input v-model="model" :placeholder="t('Use Project default')" :disabled="busy" /></label>
-            <label class="app-confirm"><input v-model="confirmed" type="checkbox" :disabled="busy" />{{ t('I reviewed this version and authorize its local code and requested model allowance.') }}</label>
-            <p v-if="selected.acceptanceAvailable">{{ t('After approval, we will ask whether its author should run tests. No reply within 60 seconds defers testing without approval. Explicit continuation uses agent calls and the approved app allowance. New versions still need review.') }}</p>
-            <button class="app-primary" :disabled="busy || !confirmed">{{ selected.approval ? t('Renew authorization and reset allowance') : t('Approve this version') }}</button>
-          </form>
-          <button v-if="selected.approval && canWrite" :disabled="busy" @click="act('revoke')">{{ t('Revoke access and stop') }}</button>
-          <p v-if="!canWrite">{{ t('Project owner access is required to approve or run apps.') }}</p>
-          <button v-if="canWrite && selected.approval && selected.acceptanceAvailable && !selected.acceptance"
+          <p v-if="!canWrite">{{ t('Project owner access is required to run apps.') }}</p>
+          <button v-if="canWrite && selected.acceptanceAvailable && !selected.acceptance"
             :disabled="busy || selected.cleanupPending || selected.status === 'running' || selected.status === 'starting'" @click="requestTesting">
             {{ t('Ask author to test this version') }}
           </button>
         </div>
         <section v-if="selected.acceptance" ref="testingPanel" class="app-acceptance" :aria-label="t('Version-bound runtime testing')">
+          <button v-if="canWrite && ['asking', 'dispatching', 'notified', 'running', 'testing'].includes(selected.acceptance.status)" :disabled="busy" @click="act('cancel-testing')">{{ t('Cancel author testing and stop') }}</button>
           <h3 role="status">{{ t('Runtime testing ·') }} {{ microAppTestingStatus[selected.acceptance.status] }}</h3>
           <p>{{ t('For this exact version. Host observations record activity, not functional correctness. Results below are the author\'s assessment; fixture tests do not prove real devices or translation quality.') }}</p>
           <p v-if="selected.acceptance.decision">{{ t('Continue selected by') }} {{ selected.acceptance.decision === 'timeout' ? t('the 60-second default') : t('the owner') }}.</p>
@@ -99,7 +93,7 @@
             </p>
           </details>
           <p v-if="selected.acceptance.observationsTruncated" role="status">{{ t('Observation limit reached. Missing observations are not proof that a check passed.') }}</p>
-          <button v-if="canWrite && selected.approval && ['paused', 'blocked', 'incomplete', 'failed', 'interrupted', 'reported'].includes(selected.acceptance.status)"
+          <button v-if="canWrite && ['paused', 'blocked', 'incomplete', 'failed', 'interrupted', 'reported'].includes(selected.acceptance.status)"
             :disabled="busy || selected.cleanupPending || selected.status === 'running' || selected.status === 'starting'" @click="requestTesting">
             {{ t('Ask to run tests again') }}
           </button>
@@ -108,11 +102,11 @@
           <div class="app-frame-tools"><span>{{ t('Isolated app page') }}</span><button @click="frameUrl = ''">{{ t('Close page') }}</button></div>
           <iframe :src="frameUrl" :title="selected.manifest.name" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" referrerpolicy="no-referrer" />
         </div>
-        <p v-else-if="selected.approval && desktopApps" class="apps-empty" role="status">
+        <p v-else-if="desktopApps" class="apps-empty" role="status">
           {{ openedNatively ? t('Opened in its own window. You can return to your work here.') : t('This app opens in its own desktop window, not inside the workbench.') }}
-          {{ t('Closing that window stops the app. Its saved data and authorization remain.') }}
+          {{ t('Closing that window stops the app. Its saved data and usage remain.') }}
         </p>
-        <p v-else-if="selected.approval" class="apps-empty">{{ t('Open the app to use it. Closing its page does not stop its backend; use Stop when finished.') }}</p>
+        <p v-else class="apps-empty">{{ t('Open the app to use it. Closing its page does not stop its backend; use Stop when finished.') }}</p>
       </main>
       <p v-else class="apps-empty">{{ t('Select an app to review or open it.') }}</p>
     </div>
@@ -130,7 +124,7 @@ defineEmits<{ compose: [text: string] }>()
 const route = useRoute(), router = useRouter()
 const desktopApps = window.shadowDesktop?.microApps
 const apps = ref<MicroAppView[]>([]), selected = ref<MicroAppReview>()
-const loading = ref(false), mutating = ref(false), error = ref(''), confirmed = ref(false), model = ref('')
+const loading = ref(false), mutating = ref(false), error = ref('')
 const frameUrl = ref(''), reviewing = ref(true)
 const openedNatively = ref(false)
 const testingPanel = ref<HTMLElement>()
@@ -153,7 +147,7 @@ async function loadSelection(id: string, signal?: AbortSignal) {
   const value = microAppReview.parse(await microAppRequest(props.apiBase, `/${encodeURIComponent(id)}`, undefined, signal))
   if (signal?.aborted) return
   if (selected.value?.id !== id || selected.value.revision !== value.revision) {
-    frameUrl.value = ''; confirmed.value = false; model.value = ''; reviewing.value = true; openedNatively.value = false
+    frameUrl.value = ''; reviewing.value = true; openedNatively.value = false
   }
   if (value.status !== 'running') { frameUrl.value = ''; openedNatively.value = false }
   selected.value = value
@@ -175,8 +169,8 @@ async function refresh() {
   if (selected.value?.id === id && launchSelection !== id) {
     launchSelection = id
     // This is only a UI affordance: Main still fetches fresh authorization and
-    // the service enforces exact-version approval before launching any code.
-    if (desktopApps && props.canWrite && selected.value.approval?.revision === selected.value.revision && !selected.value.cleanupPending) await open()
+    // the service enforces app identity and revision before launching code.
+    if (desktopApps && props.canWrite && !selected.value.cleanupPending) await open()
   }
 }
 async function select(id: string) { await router.replace({ query: { ...route.query, microApp: id } }) }
@@ -186,7 +180,7 @@ async function mutation(operation: (id: string) => Promise<void>) {
   const id = selected.value.id
   try {
     await operation(id)
-    confirmed.value = false
+
     await refresh()
     await desktopApps?.refresh()
   } catch (cause) {
@@ -196,21 +190,13 @@ async function mutation(operation: (id: string) => Promise<void>) {
   }
   finally { mutating.value = false }
 }
-function approve() {
-  if (!confirmed.value || !selected.value) return
-  const revision = selected.value.revision
-  return mutation(async id => {
-    await microAppRequest(props.apiBase, `/${id}/approve`, { revision, confirm: true, ...(model.value.trim() ? { model: model.value.trim() } : {}) })
-    reviewing.value = false
-  })
-}
 async function revealTestingQuestion(request: { id: string } | null) {
   if (!request || !props.active || !props.canWrite || request.id !== selected.value?.acceptance?.decisionRequestId) return
   await nextTick()
   testingPanel.value?.scrollIntoView({ block: 'start' })
   testingPanel.value?.querySelector<HTMLInputElement>('input[type=radio]')?.focus({ preventScroll: true })
 }
-function act(action: 'stop' | 'revoke') {
+function act(action: 'stop' | 'cancel-testing') {
   frameUrl.value = ''
   return mutation(async id => { await microAppRequest(props.apiBase, `/${id}/${action}`, {}) })
 }
@@ -278,7 +264,6 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .app-heading-identity > div { min-width: 0; }
 .apps-list span { font-size: 12px; color: var(--c-text-secondary); }
 .apps-list [aria-current] { background: var(--c-selection-bg); border-color: var(--c-selection-border); }
-.apps-list .needs-review { color: var(--c-warn); }
 .app-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; }
 .app-review { padding: 18px; font-size: 13px; }
 .app-acceptance { padding: 18px; border-top: 1px solid var(--c-border); font-size: 13px; overflow-wrap: anywhere; }
@@ -295,10 +280,6 @@ code { font-size: 12px; }
 .app-source { margin: 18px 0; }
 summary { cursor: pointer; padding: 8px 0; overflow-wrap: anywhere; }
 pre { max-height: 300px; padding: 12px; overflow: auto; background: var(--c-bg-muted); white-space: pre; }
-.app-approval { display: grid; gap: 14px; margin: 18px 0; max-width: 70ch; }
-.app-approval label { display: grid; gap: 6px; }
-.app-approval input:not([type=checkbox]) { padding: 8px; color: var(--c-text); background: var(--c-bg-input); border: 1px solid var(--c-control-border); }
-.app-approval .app-confirm { display: flex; align-items: flex-start; line-height: 1.5; }
 .app-confirm input { flex: 0 0 auto; margin-top: 4px; }
 .apps-empty { padding: 32px 20px; color: var(--c-text-secondary); font-size: 13px; }
 .apps-empty h3 { color: var(--c-text); margin-bottom: 12px; }
@@ -315,6 +296,5 @@ iframe { flex: 1; width: 100%; min-height: 400px; border: 0; background: white; 
   .app-detail { overflow: visible; }
   dl { grid-template-columns: 1fr; gap: 4px; }
   dd { margin-bottom: 10px; }
-  .app-approval input:not([type=checkbox]) { font-size: 16px; }
 }
 </style>

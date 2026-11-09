@@ -1,0 +1,16 @@
+{
+  "baseCommit": "35d36575c1eb4d23d4b54534a7030d855db890e7",
+  "patchedUpstream": true,
+  "optIn": {
+    "LAYERFS_DAEMON_HOST": "docker-bridge"
+  },
+  "bundlePath": "/Users/honx/Workspaces/shadow/.tmp/layerfs-mac-restart-20261105/resources/upstream-e27abd337afe/artifacts/build-linux-07e57fd0bb9e49788422ba378299ef9c",
+  "bundleId": "build-linux-07e57fd0bb9e49788422ba378299ef9c",
+  "sha256": {
+    "patch": "7ea49cc5741ce7a1b68691936ca3ce81b1631e32b9508f393346098fdd7d6796",
+    "harness": "bd6f07362d3c102e4fa738e5fe426c985b37e2bfbf4f9fdaafa62061abca377b",
+    "daemon": "23fa35b31f1b614d6bbf60d7010acb4efd6e67473e6fd560f909abc8d2ea0490",
+    "addon": "01f40493b64c9cf22aa97563fd1322a92e3172585567dab6f6cc5d1a87264c1e",
+    "manifest": "96f70ad39b571436cb67ea70bc7e22f4039397fd187bec568f1470f7e02a24c4"
+  }
+}

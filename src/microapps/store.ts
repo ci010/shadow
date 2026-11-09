@@ -49,7 +49,13 @@ export class MicroAppStore {
     await mkdir(this.root, { recursive: true })
     for (const name of await readdir(this.root)) {
       if (!appId.safeParse(name).success) continue
-      const record = appRecordSchema.parse(JSON.parse(await readFile(join(this.root, name, 'record.json'), 'utf8')))
+      const legacy = JSON.parse(await readFile(join(this.root, name, 'record.json'), 'utf8'))
+      // Migrate old execution approvals, preserving model pin, usage and app data.
+      // No process or author testing is resumed by migration.
+      if (legacy.approval?.revision === legacy.revision && !legacy.model) legacy.model = legacy.approval.model
+      delete legacy.approval
+      if (legacy.acceptance) delete legacy.acceptance.approvalAt
+      const record = appRecordSchema.parse(legacy)
       if (record.id !== name) throw new Error('Micro App record identity mismatch')
       if (record.lastRun && ['starting', 'running'].includes(record.lastRun.status)) {
         record.lastRun = { ...record.lastRun, status: 'interrupted', error: 'The previous runtime ended. Review any external effects before starting again.' }
@@ -70,8 +76,7 @@ export class MicroAppStore {
   }
   save(record: AppRecord) {
     const parsed = appRecordSchema.parse(record)
-    if (parsed.acceptance && (parsed.acceptance.revision !== parsed.revision ||
-      parsed.approval && parsed.acceptance.approvalAt !== parsed.approval.at)) throw new Error('Micro App acceptance identity mismatch')
+    if (parsed.acceptance && parsed.acceptance.revision !== parsed.revision) throw new Error('Micro App acceptance identity mismatch')
     if (parsed.acceptance) writePrivateFile(join(this.root, parsed.id, `acceptance-${parsed.acceptance.id}.json`), JSON.stringify(parsed.acceptance))
     writePrivateFile(join(this.root, parsed.id, 'record.json'), JSON.stringify(parsed))
     this.records.set(parsed.id, parsed)

@@ -50,7 +50,7 @@ test('recovery preserves unpublished source bytes, BOM and publication differenc
   const restored = new MicroAppStore(home)
   await restored.init()
   assert.equal(restored.get(f.publication.id).revision, f.publication.revision)
-  assert.equal(restored.get(f.publication.id).approval, undefined)
+  assert.equal(restored.get(f.publication.id).model, undefined)
 }))
 
 test('source recovery refuses injected runtime credentials and retains the original source', async () => withTempWorkspace(async home => {

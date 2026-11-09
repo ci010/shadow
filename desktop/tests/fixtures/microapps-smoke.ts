@@ -33,15 +33,10 @@ async function main() {
   const result = (text: string) => wait(() => frame().executeJavaScript(`document.querySelector('output')?.textContent===${JSON.stringify(text)}`), text)
   try {
     await window.loadURL(new URL('__microapps', process.env.MICROAPPS_SMOKE_URL).href)
-    await wait(() => execute('!!document.querySelector("textarea")'), 'Coordinator draft')
-    await wait(() => execute('document.querySelector(".project-dashboard-shell").classList.contains("has-coordinator") && document.body.innerText.includes("No work items yet")'), 'Dashboard ready')
-    await click('Apps')
     await wait(() => execute('!!document.querySelector(".apps-list button")'), 'Saved app')
     await execute('document.querySelector(".apps-list button").click()')
-    await wait(() => execute('!!document.querySelector(".app-confirm input") && !document.querySelector(".app-confirm input").disabled'), 'Review ready')
-    await execute('document.querySelector("[aria-label=\\"Close coordinator panel\\"]").click()')
-    await wait(() => execute('!!document.querySelector(".app-confirm input")'), 'Review details')
-    assert.equal(await execute(`${button('Approve this version')}.disabled`), true)
+    await wait(() => execute('!!document.querySelector(".app-heading")'), 'Review ready')
+    await wait(() => execute('!!document.querySelector(".app-heading")'), 'Review details')
     for (const width of [1440, 390]) {
       window.setContentSize(width, 900)
       for (const dark of [false, true]) {
@@ -54,9 +49,8 @@ async function main() {
       }
     }
     window.setContentSize(1440, 900)
-    await wait(() => execute('!document.querySelector(".app-confirm input").disabled'), 'Review ready after resize')
-    await execute('document.querySelector(".app-confirm input").click()')
-    await click('Approve this version')
+    await wait(() => execute('!!document.querySelector(".app-heading")'), 'Review ready after resize')
+    await click('Ask author to test this version')
     await wait(() => execute('!!document.querySelector(".app-acceptance .yield-question")'), 'Owner testing question')
     assert.equal(await execute('document.querySelector(".app-acceptance").textContent.includes("60 seconds")'), true)
     for (const width of [1440, 390]) {
@@ -108,7 +102,7 @@ async function main() {
     await frame().executeJavaScript('document.querySelector("#run").click()')
     await result('Result 2')
     await frame().executeJavaScript('document.querySelector("#run").click()')
-    await result('App call budget exhausted. The owner must review and renew its authorization.')
+    await result('App call budget exhausted for this publication.')
     await click('Close page')
     await click('Open app')
     await wait(() => execute('!!document.querySelector("iframe")'), 'Reopened page')
@@ -121,13 +115,9 @@ async function main() {
     await click('Retry cleanup')
     await wait(() => execute('document.querySelector(".app-detail").textContent.includes("Stopped")'), 'Cleanup recovered')
     await click('Review details')
-    await click('Revoke access and stop')
-    await wait(() => execute('document.querySelector(".app-detail").textContent.includes("Needs review")'), 'Revoked grant')
     await execute('window.setAdmin(false)')
     await delay(50)
     assert.equal(await execute('!!document.querySelector(".app-confirm")'), false)
-    await click('Back to work')
-    assert.equal(await execute('document.querySelector("textarea").value'), 'Preserved draft')
     console.log('MICROAPPS_SMOKE_OK')
   } finally { window.destroy() }
 }

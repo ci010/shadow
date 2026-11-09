@@ -103,6 +103,70 @@ bytes, not context tokens or server-side decoded-body limits; it is not a
 guarantee against all HTTP 408 errors. See the [live transport probe](copilot-transport-probe-20261105.md)
 for the tested route and prompt-cache observations.
 
+## Image-heavy Copilot HTTP 408 recovery
+
+Transport gzip does not guarantee that a large upload will avoid a gateway timeout.
+For **explicitly rejected HTTP 408** responses from Copilot, the provider now
+uses a bounded recovery policy when the final request contains at least one
+image and its encoded wire body is **at least 1 MiB**:
+
+1. Retry the identical prepared body silently at most twice (up to three 408
+   attempts), with approximately 1s / 2s backoff and jitter. Retries append no
+   chat messages and do not re-execute completed tools. A 61-second timeout can therefore
+   take roughly three minutes before this retry stage finishes.
+2. If retries are exhausted, a normal durable session may compact once even
+   below its token-window threshold or with token-triggered auto-handoff off.
+   This deliberately replaces the cached prefix. It shares the one-per-turn
+   context-recovery limit with token/HTTP 413 recovery.
+3. Retry using the compacted context. A subsequent unrecoverable failure ends
+   the turn; it cannot start another timeout compaction in that turn. If that
+   new request is still image-heavy, its transport retry limit still applies.
+
+This policy does not classify every 408 as a proven request-size error. Small
+requests, imageless requests, other providers, unconfirmed errors and interrupted
+or partial responses do not enter it. Existing 429/preconnection retry budgets
+are unchanged; a mixed transport operation is capped at eight total attempts.
+Only the two bounded 408 waits are independent of the existing 120-second
+elapsed-time check, so minute-long 408s do not accidentally prevent the third try.
+Retries may consume additional quota; a rejection does not supply billable usage.
+
+Compaction is not added to ephemeral tasks, reviewers, leaf calls or hard-bounded
+executions that have no supported compaction lifecycle. They can receive the
+provider's safe retry behavior, then report exhaustion/unsupported recovery
+rather than silently acquire a new model budget or change task lineage.
+Cancellation propagates through backoff, snapshotting and summary inference.
+
+### Recovery telemetry
+
+All fields contain counts/sizes only, never image payloads or credentials:
+
+- `llm.request.image_count`, `llm.request.image_base64_bytes`: image blocks and
+  encoded payload bytes in actual protocol content, excluding text/tool-argument
+  strings that merely resemble image JSON.
+- `llm.request.http_attempts`: transport operation attempts, including the final
+  success; this is not a claim that the server executed or billed each attempt.
+- `llm.request.timeout_attempts`: qualifying rejected 408 count.
+- `llm.request.timeout_retries`: 408 retry count.
+- `llm.request.timeout_retry_exhausted`: numeric 0/1.
+- `llm.request.timeout_success`: numeric 0/1 for same-request timeout-retry
+  recovery, not for ordinary requests with no 408 or later compacted requests.
+- Timeout/retry/recovery span events contain attempt counts, per-attempt
+  durations, backoff and body/image sizes.
+
+Durable `provider_recovery` events link the source physical segment and record
+`retry-exhausted`, `compact-completed`, `recovered`, `post-compact-failed`,
+`compact-failed`, `compact-unsupported` or `recovery-limit-reached`. They are
+host diagnostics, not appended model instructions. Compare their message counts
+and the next `agent.chat` body's size to inspect the actual reduction.
+
+Before timeout compaction, up to 64 recent durable inline image occurrences are
+saved as immutable session-private snapshots. The summary contains references,
+not image bytes, so the agent can reread only relevant images instead of uploading
+all of them again. Counts of saved/failed/omitted images are recorded in
+`provider_recovery_images`; old malformed or oversized records do not block text
+recovery. Original history is retained. Private transient images keep their
+existing non-retention policy and are not silently saved by this mechanism.
+
 ## Inspect prompts during development
 
 `GET /projects/<id>/api/sessions/<encoded-session-id>/context` returns the

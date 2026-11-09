@@ -213,7 +213,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       })
     })
   }
-  test(`${Store.name}: approved app confirmation resumes the same author through an event, never a forged user turn`, async () => {
+  test(`${Store.name}: app testing confirmation resumes the same author through an event, never a forged user turn`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -240,7 +240,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await writeFile(join(source, 'index.html'), '<title>Fixture</title>')
         const app = await apps.publish(source, { version: 1, name: 'Fixture', description: 'Synthetic app',
           entry: 'index.html', files: ['index.html'] }, 'web:author', AbortSignal.timeout(5000))
-        await apps.approve(app.id, app.revision)
+        await apps.requestTesting(app.id, app.revision)
         await waitFor(() => !!f.sessions.yields.get('web:author'))
         assert.equal(f.calls.length, 0, 'No author inference before the testing choice')
         const request = f.sessions.yields.get('web:author')!

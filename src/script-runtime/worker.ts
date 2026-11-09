@@ -1,4 +1,17 @@
 import vm from 'node:vm'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+
+async function htmlModuleSource(): Promise<string> {
+  if (!import.meta.url.endsWith('.ts')) return readFile(new URL('./html-module.bundle.js', import.meta.url), 'utf8')
+  const { build } = await import('esbuild')
+  const result = await build({
+    entryPoints: [fileURLToPath(new URL('./html-module.ts', import.meta.url))],
+    inject: [fileURLToPath(new URL('./html-base64.ts', import.meta.url))],
+    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2024',
+  })
+  return result.outputFiles[0].text
+}
 import { stripTypeScriptTypes } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { types } from 'node:util'
@@ -86,7 +99,7 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     })();
   }`, context) as (finish: (value: unknown, failure: boolean) => void) =>
     (run: unknown, args: unknown) => void
-  const modules = new Map<string, Promise<vm.SyntheticModule>>()
+  const modules = new Map<string, Promise<vm.SyntheticModule | vm.SourceTextModule>>()
   const loads = new Map<vm.Module, Promise<void>>()
   const call = async (name: string, input: unknown = {}, inference = false, raw = false): Promise<unknown> => {
     if (failed || completed) throw new Error('Execution ended.')
@@ -133,7 +146,7 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     Object.assign(globalThis, globals)
   }
   const identifier = pathToFileURL(packet.filename).href
-  const resolveModule = async (specifier: string): Promise<vm.SyntheticModule> => {
+  const resolveModule = async (specifier: string): Promise<vm.SyntheticModule | vm.SourceTextModule> => {
     if ((!host || specifier.startsWith('@shadow/')) && !allowed.has(specifier)) {
       fail('import_denied')
       throw new Error('Import denied.')
@@ -141,6 +154,9 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     let existing = modules.get(specifier)
     if (!existing) {
       existing = (async () => {
+        if (specifier === '@shadow/html') {
+          return new vm.SourceTextModule(await htmlModuleSource(), { context, identifier: specifier })
+        }
         if (specifier.startsWith('@shadow/')) {
           // Public adapters, promises, errors and JSON results must all belong
           // to the guest realm. A guest arrow returning a host Promise is not

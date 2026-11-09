@@ -44,7 +44,7 @@ test('real QQ group discovery stops before attachment downloads, receiver and pa
   t.mock.method(channel as never, 'downloadAttachments' as never, (() => { assert.fail('No attachment storage for discovery') }) as never)
   const adapter = channel as unknown as { onGroupMessage(data: Record<string, unknown>, mentioned: boolean): Promise<void> }
   await adapter.onGroupMessage({ id: 'm1', group_openid: 'group1', group_name: 'Available name', author: { member_openid: 'user1' }, content: 'not persisted', attachments: [{}] }, true)
-  assert.deepEqual(observations, ['group:group1:Available name'])
+  assert.deepEqual(observations, ['group:group1:Available name', 'group:group1:Available name'])
 })
 
 test('observed messages are deduplicated, independently copied, bounded, expiring and migrated from metadata-only records', t => {

@@ -1,3 +1,4 @@
+import { passiveAttachmentReferences, type PassiveArrival } from './passive-contract.ts'
 import { ingressDispatchEvent, ingressErrorDetail, markIngressFailure } from './ingress-diagnostic.ts'
 import type { DiscordHistoryScope, DiscordObservationProof } from './integration-contract.ts'
 import { InputProcessor, awaitInputSignal } from '../events/input-processor.ts'
@@ -192,6 +193,10 @@ export class DiscordChannel extends AbstractChannel {
 
   inspectConversation(chatId: string, senderId: string, signal: AbortSignal) {
     return inspectDiscordConversation((path, init) => this.api(path, init), chatId, senderId, signal)
+  }
+
+  inspectPassiveConversation(chatId: string, senderId: string, signal: AbortSignal) {
+    return inspectDiscordConversation((path, init) => this.api(path, init), chatId, senderId, signal, true)
   }
 
   members(guildId: string, query: string, signal: AbortSignal) {
@@ -1175,13 +1180,23 @@ export class DiscordChannel extends AbstractChannel {
       const isBot = !!(author as Record<string, unknown>).bot
       if (author.id === this.botUserId || isBot && !this.integration) return
 
+      const observedScopes = processedRevision === undefined ? this.integration?.observationScopes?.(data) : undefined
+      const observationRevisions = new Map(observedScopes?.map(id => [id, this.integration?.observationRevision?.(id)]))
+      let arrival: PassiveArrival | undefined
+      if (processedRevision === undefined && this.isAllowed(author.id)) arrival = await this.collectPassive({ senderId: author.id, chatId: String(data.channel_id), messageId: String(data.id), platformMessageId: String(data.id), content: typeof data.content === 'string' ? data.content : '', isGroup: !!data.guild_id,
+        senderName: author.username, attachmentReferences: passiveAttachmentReferences(data.attachments) })
+      const ordinaryArrival = arrival?.eligible ?? true
+      if (!ordinaryArrival && !observedScopes?.length) return
       let observed = false
       if (processedRevision === undefined && this.integration?.observe) {
         const signal = AbortSignal.any([this.controller.signal,AbortSignal.timeout(2000)])
         const integration = this.integration
         const receiveScope = async (scopeId?: string) => {
           const runPolicy = async () => {
+            const assertArrival = () => { if (scopeId && integration.observationRevision && integration.observationRevision(scopeId) !== observationRevisions.get(scopeId)) throw new Error('Observation assignment changed since arrival') }
+            assertArrival()
             const proofs = await awaitInputSignal(integration.observe!(data,signal,scopeId),signal)
+            assertArrival()
             for (const proof of proofs) {
               if (author.id === proof.botUserId || isBot && !proof.policy.includeBots) continue
               observed = true
@@ -1196,10 +1211,11 @@ export class DiscordChannel extends AbstractChannel {
           if (scopeId !== undefined) await this.runObservationPolicy(scopeId, runPolicy)
           else await runPolicy() // Standalone adapters without the production source router.
         }
-        const scopes = integration.observationScopes?.(data)
+        const scopes = observedScopes
         if (scopes) { for (const scopeId of scopes) await receiveScope(scopeId) }
         else await receiveScope()
       }
+      if (!ordinaryArrival) return
       const content = data.content as string
       const guildId = data.guild_id as string | undefined
 
@@ -1224,7 +1240,7 @@ export class DiscordChannel extends AbstractChannel {
       if (observed && this.integration && !admission) return
       let retainedAdmission = true
       try {
-      await this.runReceivePolicy({ senderId: author.id, chatId: String(data.channel_id), messageId: String(data.id), content,
+      await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId: author.id, chatId: String(data.channel_id), messageId: String(data.id), content,
         isGroup: !!guildId, channelAdmissionId: admission?.admissionId, channelLocation: admission?.location }, async () => {
       const state = await wait(Promise.resolve(this.sessionManager?.getSessionState(sessionId)))
       preparationSignal.throwIfAborted()

@@ -1,3 +1,6 @@
+import { validateServiceAssignments } from '../../bots/assignment-validation.ts'
+import { publishBotChange } from '../../bots/publication.ts'
+import { parseChannelSource } from '../../channels/passive-contract.ts'
 import { observeSessionInvalidations } from './session-realtime.ts'
 import { learningInterval, updateLearningInterval, updateLearningEnabled } from '../../cron/learning-controls.ts'
 import { InputRouter } from '../../input/router.ts'
@@ -5,9 +8,20 @@ import { createBotsHandler } from '../../vfs/bots.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
 import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
 import { handleBotInput } from '../../bots/input.ts'
-import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
 import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
+import { BotWakes } from '../../bots/wake.ts'
+import { WorkDispatcher } from '../../cron/work-dispatch.ts'
+import { DerivedWorkspaces } from '../../folders/derived-workspace.ts'
+import { WorkspaceCreateTool } from '../../tools/workspace-create.ts'
+import { prepareWorktree, isolationGit } from '../../cron/work-isolation.ts'
+import { WORK_DISPATCH_DEFAULT_KEY, type WorkDispatchConfig } from '../../cron/work-dispatch-contract.ts'
+import { WORK_DISPATCH_AUTOMATION } from '../../cron/defaults.ts'
+import { BotWork, botWorkScope } from '../../bots/work.ts'
+import { BotWatermark } from '../../bots/watermark.ts'
+import type { BotHostScope } from '../../bots/host-contract.ts'
+import { BotSend } from '../../bots/send.ts'
+import { BotMessages } from '../../bots/messages.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService } from '../../bots/runtime.ts'
 import { isOwnerSession } from '../../sessions/owner-policy.ts'
@@ -102,10 +116,10 @@ import { ContinuationTool } from '../../tools/background.ts'
 import { CommandHandlerManager } from '../../tools/shell-commands/command-handler.ts'
 import { createUserLinkCommandHandler } from '../../tools/shell-commands/userlink.ts'
 import { registerCronTools } from '../../tools/cron.ts'
-import { SkillEditing, SkillReadTool, SkillSaveTool } from '../../tools/skill-edit.ts'
+import { SkillEditing, SkillSaveTool } from '../../tools/skill-edit.ts'
 import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
-import { registerEventTools } from '../../tools/event-source.ts'
+import { registerInternalEventTools } from '../../tools/internal-events.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
 import { ViewEditTool } from '../../tools/view-edit.ts'
 import type { LoadableEntry } from '../../tools/load-tool.ts'
@@ -146,6 +160,7 @@ import {
   createSkillsHandler,
 } from '../../vfs/mounts.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
+import { createProviderEventsHandler } from '../../events/providers/vfs.ts'
 import { createModelsHandler } from '../../vfs/models.ts'
 import { createAgentsHandler } from '../../vfs/agents.ts'
 
@@ -167,7 +182,8 @@ import { ProjectActions } from '../../projects/actions.ts'
 import { projectActionsPlugin } from '../../projects/action-routes.ts'
 import { ProjectActionTool } from '../../tools/project-action.ts'
 import { EventService } from '../../events/service.ts'
-import { PollingSources } from '../../events/polling-sources.ts'
+import { EventProviderRuntime } from '../../events/providers/runtime.ts'
+import { EventProviderTool } from '../../tools/event-provider.ts'
 import { watchAutomationSessions } from '../../cron/notifications.ts'
 import { CronService } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
@@ -600,8 +616,6 @@ export async function createProjectRuntime(
     resolveSecret: async ref => agentCredentials.resolve(ref),
     deliver: (id, input) => deliverInput(id, input),
     canDeliver: canDeliverAuthoredMessage,
-    resolveProposalInbox: (name, repository, pinned) => proposalInboxes.resolve(name, repository, pinned),
-    admitProposalInbox: (name, repository, target, deliver) => proposalInboxes.admit(name, repository, target, deliver),
   })
   directoryBots.setBroker(capabilityBroker)
   const botPolicies = new DirectoryBotService({
@@ -851,7 +865,6 @@ export async function createProjectRuntime(
     resolveAgent: name => agentTypes.resolve(name),
     changed: id => { realtime.invalidateSessions(id); if (id) organizationTopicChanged?.(id) },
   })
-  const proposalInboxes = new ProposalInboxes({ projectId: project.id, directory: resolve(capabilityStateDirectory, 'proposal-inboxes'), topics, sessions })
   importTool.registerBuiltin('session', new SessionTool(topics))
   tools.register(new TaskTool(sessions))
   importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
@@ -1111,13 +1124,16 @@ export async function createProjectRuntime(
   const bgVfs = createBgTasksHandler(backgroundTasks, sessions, a2a.sessions)
   vfs.mount('v:bg', 'owned executions: background work, local task/call, and remote A2A status and output', bgVfs.read, bgVfs.list)
 
+  const skillEditing = new SkillEditing({
+    projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: id => canAuthor(id),
+  })
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
     const state = sessions.getSessionState(ctx.sessionId)
     if (!state?.folderId) return undefined
     const location = resolveSessionLocations(workspace, state, undefined, workdirLookup).workdir
     if (!location.available) throw new Error('Selected folder skill scope is unavailable')
     return location.locality === 'local' ? { folderId: state.folderId, path: location.path } : undefined
-  })
+  }, (path, context, continuation) => skillEditing.readRaw(path, context, continuation))
   vfs.mount(
     'v:skills',
     'read skill bodies and category listings',
@@ -1139,14 +1155,6 @@ export async function createProjectRuntime(
     memoryVfs.read,
     memoryVfs.list,
     memoryVfs.write,
-  )
-
-  const eventsVfs = createEventsHandler(events)
-  vfs.mount(
-    'v:events',
-    "list this session's event subscriptions",
-    eventsVfs.read,
-    eventsVfs.list,
   )
 
   // ── Create agent loop ──────────────────────────────────────────────
@@ -1189,13 +1197,30 @@ export async function createProjectRuntime(
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
+  const derivedWorkspaces = new DerivedWorkspaces({ projectId: project.id, directory: resolve(workspace, 'derived-workspaces'), folders: folderRegistry,
+    validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
+  })
+  importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
-  const pollingSources = new PollingSources(
-    workspace, events, capabilityBroker,
+  const eventProviders = new EventProviderRuntime(
+    workspace, capabilityBroker, (id, input) => deliverInput(id, input),
     id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
     ref => agentCredentials.names().includes(ref),
   )
-  cleanup.push(() => pollingSources.stop())
+  cleanup.push(() => eventProviders.stop())
+  const eventsVfs = createProviderEventsHandler(eventProviders, project.id, createEventsHandler(events))
+  vfs.mount(
+    'v:events',
+    'read Project provider revisions, instances and subscriptions; internal session events',
+    eventsVfs.read,
+    eventsVfs.list,
+    undefined,
+    eventsVfs.directory,
+  )
+  const eventProviderTool = new EventProviderTool(eventProviders, project.id, {
+    contexts: (context, instance) => importTool.providerBrowserContexts(context, instance),
+    bind: (context, binding) => importTool.bindProviderBrowser(context, binding),
+  })
   const learningRuntime = new LearningRuntime(sessions, project.id, skills)
   const discordLearning = new DiscordLearning({
     projectId: project.id, directory: resolve(integrationDirectory, 'learning'), runtime: discordIntegration,
@@ -1204,10 +1229,7 @@ export async function createProjectRuntime(
   const learningTools = new LearningTools(learningRuntime)
   for (const tool of [learningTools.memory, learningTools.skill, learningTools.soul, learningTools.result]) tools.register(tool)
   tools.register(new LogTool(workspace, (entry, key, context) => learningTools.appendEvent(entry, key, context)))
-  const skillEditing = new SkillEditing({
-    projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: canAuthor,
-  })
-  for (const tool of [new SkillReadTool(skillEditing), new SkillSaveTool(skillEditing)]) {
+  for (const tool of [new SkillSaveTool(skillEditing)]) {
     tools.register(tool)
     importTool.registerBuiltin(tool.name, tool)
   }
@@ -1237,6 +1259,57 @@ export async function createProjectRuntime(
 
   // ── Cron service ──────────────────────────────────────────────────
   const cronService = new CronService(workspace, config.cron.timezone)
+  let workDispatchReady = false
+  const validateWorkTarget = async (settings: WorkDispatchConfig, signal: AbortSignal) => {
+    if (!settings.folderId) throw new Error('Select a registered local repository Workspace first.')
+    const folder = await folderRegistry.requireExecutionAvailable(settings.folderId, signal)
+    if (folder.kind === 'remote') throw new Error('Remote automatic Work isolation is not supported; no Main fallback is allowed.')
+    const root = await isolationGit(folder.path, ['rev-parse', '--show-toplevel'], signal)
+    if (resolve(root) !== resolve(folder.path)) throw new Error('Select the repository root Workspace, not a subdirectory.')
+  }
+  const workDispatcher = new WorkDispatcher({ projectId: project.id, store: initiatives, sessions,
+    validateTarget: validateWorkTarget,
+    prepare: async (settings, sessionId, signal) => {
+      await validateWorkTarget(settings, signal)
+      const folder = await folderRegistry.requireExecutionAvailable(settings.folderId!, signal)
+      if (folder.kind === 'remote') throw new Error('Remote isolation unavailable')
+      const retained = await derivedWorkspaces.retained(`automation:${sessionId}`)
+      const branch = retained?.baseBranch ?? await isolationGit(folder.path, ['symbolic-ref', 'HEAD'], signal)
+      const prepared = await derivedWorkspaces.createDerivedWorkspace({ source: folder.id, branch, idempotencyKey: `automation:${sessionId}` }, signal)
+      return { path: prepared.path, branch: prepared.branch, folderId: prepared.workspaceId }
+    },
+    verify: async (settings, sessionId, execution, signal) => {
+      await validateWorkTarget(settings, signal)
+      const source = await folderRegistry.requireExecutionAvailable(settings.folderId!, signal)
+      if (source.kind === 'remote') throw new Error('Remote isolation unavailable')
+      const isolated = await folderRegistry.requireExecutionAvailable(execution.folderId!, signal)
+      if (isolated.kind === 'remote') throw new Error('Isolated executor cannot use a remote display path')
+      const retained = await derivedWorkspaces.retained(`automation:${sessionId}`)
+      if (retained) {
+        if (retained.sourceId !== source.id || retained.sourcePath !== source.path || retained.workspaceId !== isolated.id) throw new Error('Derived Workspace/source receipt mismatch')
+        await derivedWorkspaces.verify(retained, signal)
+      }
+      const verified = retained ?? await prepareWorktree(workspace, project.id, source.path, sessionId, signal, true)
+      if (resolve(isolated.path) !== resolve(verified.path) || execution.path !== verified.path || execution.branch !== verified.branch) throw new Error('Isolated Workspace/branch receipt mismatch')
+    },
+    changed: async (record, previous) => { realtime.invalidateSessions(); await sessions.notifyWorkChange(record, previous) },
+  })
+  const workFinished = bus.on('session.turn.finished', scope.bind(fact => workDispatcher.finished(fact)))
+  cleanup.push(() => { bus.off(workFinished) })
+  const assertBotWake = (scope: BotHostScope) => {
+    directoryBots.assertHostScope(scope, 'wake')
+    channels.assertStreamAccess(scope.address.botInstanceId, scope.address.conversationId)
+    const state = sessions.getSessionState(scope.sessionId)
+    if (!state || state.mode !== 'session') throw new Error('BOT wake requires an existing durable binding session.')
+    if (scope.address.platform === 'discord') {
+      if (state.channelBoundary?.bindingId !== scope.bindingKey || state.channelBoundary.conversationId !== scope.address.conversationId || state.channelBoundary.botInstanceId !== scope.address.botInstanceId) throw new Error('BOT wake binding context changed.')
+    } else if (channelSessionId(scope.address) !== scope.sessionId) throw new Error('BOT wake session mismatch.')
+  }
+  const botWakes = new BotWakes(cronService, async (id, input) => {
+    if (input.replyTo?.channelAddress?.platform === 'discord') discordIntegration.admitBotWake(id, input)
+    try { return await deliverInput(id, input) }
+    catch (error) { discordIntegration.discardBotWake(input.id); throw error }
+  }, assertBotWake)
   const knowledgeSchedule = scheduleKnowledgeMaintenance(cronService, knowledgeMaintenance)
   cleanup.push(() => knowledgeSchedule.stop())
   const retirement = new SessionRetirement({
@@ -1280,7 +1353,11 @@ export async function createProjectRuntime(
       },
     })
   }, sessionId => realtime.invalidateSessions(sessionId))
-  cronService.setHandler(async (job, signal) => { await cronDispatcher.dispatch(job, signal) })
+  cronService.setHandler(async (job, signal) => {
+    if (job.program) { if (workDispatchReady) await workDispatcher.dispatch(job, signal); return }
+    if (job.botWake) { await botWakes.dispatch(job, signal); return }
+    await cronDispatcher.dispatch(job, signal)
+  })
   cronService.setOnChanged(reason => {
     if (reason === 'inventory') realtime.invalidateSessions()
     realtime.invalidateResource?.('automations')
@@ -1333,12 +1410,13 @@ export async function createProjectRuntime(
       await configStore.update(raw => ({ ...raw, organization: { ...(raw.organization as object),
         enabled } }))
     },
-  }, automationProfiles)
+  }, automationProfiles, { validate: validateWorkTarget, running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
+    resume: (key, version, signal, acknowledgeToolReplay) => workDispatcher.resume(key, version, signal, acknowledgeToolReplay) })
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
   registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
-  registerEventTools(importTool, events, pollingSources, canAuthor)
+  registerInternalEventTools(importTool, events, [eventProviderTool])
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
   cronService.setOnJobRemoved((jobId) => {
@@ -1404,6 +1482,7 @@ export async function createProjectRuntime(
     routeObservation: async (connection, bindingId, runPolicy) => requirePolicyReceipt(await inputs.route(observationEnvelope(botStore, connection, bindingId, runPolicy))),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     serviceAssigned: directoryBots.serviceAssigned,
+    serviceGeneration: address => { const policy = directoryBots.resolve(address); return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined },
   })
   const botChatSetup = new BotChatSetup(project.id, () => realtime.invalidateResource?.('interactions'))
   cleanup.push(() => botChatSetup.stop())
@@ -1456,9 +1535,42 @@ export async function createProjectRuntime(
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
   directoryBots.setChannelOperations((request,context)=>channels.executeOperation(request,context))
+  const botWork = new BotWork(initiatives, project.id)
+  const botMessages = new BotMessages(workspace, project.id, scope => {
+    directoryBots.assertHostScope(scope, 'messages')
+    channels.assertStreamAccess(scope.address.botInstanceId, scope.address.conversationId)
+  })
+  const botSend = new BotSend(workspace, project.id, {
+    assertCurrent: scope => directoryBots.assertHostScope(scope, 'send'),
+    assertConnection: (connection, conversation) => channels.assertStreamAccess(connection, conversation),
+    send: channelStreamDeps.send,
+    sendBotText: (address, content, signal) => channels.sendBotText(address, content, signal),
+  })
+  const botWatermark = new BotWatermark(workspace, project.id)
+  directoryBots.setHostOperations(async (scope, operation, input, context) => {
+    context.signal.throwIfAborted()
+    directoryBots.assertHostScope(scope, operation)
+    channels.assertStreamAccess(scope.address.botInstanceId, scope.address.conversationId)
+    if (context.sessionId !== scope.sessionId || context.projectId !== project.id) throw new Error('BOT host scope mismatch.')
+    if (operation === 'wake') return botWakes.execute(scope, input, context.signal)
+    if (operation === 'work') return botWork.execute(botWorkScope(scope, context.messageId), input)
+    if (operation === 'watermark') return botWatermark.execute(scope, input, context)
+    if (operation === 'messages') return botMessages.execute(scope, input, context)
+    return botSend.execute(scope, input, context)
+  })
   const botPackageOptions = {
     projectId:project.id,deployments:botDeployments,runtime:directoryBots,folders:folderRegistry,
     ask:tools.get('ask')!,canAuthor,inventory:botInventory,pending:new Map<string,unknown>(),
+    channelSource: (sessionId: string) => {
+      const state = sessions.getSessionState(sessionId)
+      if (!state || state.projectId !== project.id) throw new Error('Channel session must belong to this Project')
+      const source = parseChannelSource(state.channelSource, sessionId, project.id)
+      if (!source) throw new Error('Reference a passive channel inbox session')
+      botStore.assertAccess(source.botInstanceId)
+      const connection = botStore.get(source.botInstanceId)
+      if (connection.purpose !== 'service' || connection.platform !== source.platform) throw new Error('Channel source connection is no longer a matching service connection')
+      return source
+    },
     validate:async (files:Record<string,string>,signal:AbortSignal) => {
       const bot = parseBot(files)
       if (bot.mode === 'service' && (bot.model !== undefined || bot.reasoningEffort !== undefined)) {
@@ -1478,25 +1590,16 @@ export async function createProjectRuntime(
       await channelIntegrations.validateBotDeployment(candidate.agents,candidate.bindings,signal)
       const other = directoryBots.definitions().filter(item => item.bot.id !== bot.id)
       directoryBots.discord([...other,{bot,files,deployment:{id:bot.id,revision:botDeployments.freeze(files).revision,source:{folderId:'validation',directory:''},mode:'bounded'}}])
-      const keys = new Set<string>()
-      for (const binding of [...other.flatMap(item=>item.bot.bindings),...bot.bindings]) {
-        if (binding.platform === 'discord') continue
-        const connection = botStore.get(binding.botInstanceId)
-        if (connection.platform !== binding.platform || connection.purpose !== 'service') throw new Error('BOT bindings require a matching service connection/platform.')
-        const key = JSON.stringify([binding.botInstanceId,binding.platform,binding.conversationId])
-        if(keys.has(key))throw new Error('Conversation already belongs to another BOT.')
-        keys.add(key)
-        for(const id of binding.readFolders) await folderRegistry.requireAvailable(id)
-      }
+      await validateServiceAssignments(project.id, botStore, bot, other.map(item => item.bot), id => folderRegistry.requireAvailable(id))
     },
     publish:async <T>(id:string,change:()=>Promise<T>,candidate?:BotDefinition):Promise<T> => {
       const definitions = directoryBots.definitions().filter(item=>item.bot.id===id)
       const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
       const bindings = definitions.flatMap(item=>item.bot.bindings)
       const beforeRevision = botDeployments.read(id)?.deployment.revision
-      const result = await botPolicies.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
+      const result = await publishBotChange(sessions, botPolicies, sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
         ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
-        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId}))) },async () => {
+        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId,...(botStore.get(binding.botInstanceId).legacySessionId ? {legacySessionId:true} : {})})), personalConnections.length > 0, async () => {
         channelIntegrations.setBotPublication(true)
         try{return await change()}finally{channelIntegrations.setBotPublication(false)}
       })
@@ -1572,7 +1675,7 @@ export async function createProjectRuntime(
       authorize: dependencies.authorize,
       assertAccess: id => sessions.assertFolderAccess(id),
     }),
-    topicsPlugin(topics, dependencies.authorize, proposalInboxes),
+    topicsPlugin(topics, dependencies.authorize),
     sessionsApiPlugin(sessions, { backgroundTasks, cron: cronService, authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => organizationController.status(), (signal,mode) => organizationController.organize(signal,mode)),
     githubPlugin(github, dependencies.authorize),
@@ -1642,7 +1745,7 @@ export async function createProjectRuntime(
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
       () => knowledgeMaintenance.stop(),
-      () => pollingSources.stop(),
+      () => eventProviders.stop(),
       () => github.stop(),
       () => cronService.stop(),
       () => stopLearning,
@@ -1695,7 +1798,12 @@ export async function createProjectRuntime(
   })
   await ready
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
-  pollingSources.start()
+  await cronService.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
+  await workDispatcher.recover()
+  workDispatchReady = true
+  const workJob = cronService.listJobs().find(job => job.program && job.enabled !== false)
+  if (workJob) await cronService.runNow(workJob.id)
+  eventProviders.start()
   events.registerManagedSource({ source: 'github', kind: 'custom', description: 'Explicit Project GitHub resource subscriptions' })
   github.start()
   a2a.validate()

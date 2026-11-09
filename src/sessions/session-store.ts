@@ -107,6 +107,12 @@ export interface ArchivedStateQuery {
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
 export interface SessionState {
+  /** Current non-Discord execution activation; changes start a fresh model context. */
+  serviceGeneration?: string
+  /** Passive source evidence; never a BOT binding or an execution grant. */
+  channelSource?: import('../channels/passive-contract.ts').ChannelSource
+  /** Host-created durable isolated Work executor, persisted by both stores. */
+  automaticWork?: import('../cron/work-dispatch-contract.ts').AutomaticWorkSession
   /** Human input admission time, independent of assistant/event activity. Legacy unknown is protected. */
   lastUserMessageAt?: string
   /** Recoverable retirement only: logs and directories remain intact. */

@@ -1,5 +1,10 @@
 # LayerFS macOS / OrbStack live test — partial failure
 
+Later restart retest: [macOS repair evidence](layerfs-e2e-macos-restart-20261105.md).
+The failures below remain historical facts. The earlier search missed official
+#500 after the Rust path relocation; the statement below is corrected accordingly.
+The later passing build is explicitly patched upstream, not this release tag.
+
 Date: 2026-11-05. Final inventory: 06:16 UTC. This is a real upstream SDK,
 Linux native addon, Store, FUSE and Docker test through actual Shadow tool classes.
 **It is not a full passing macOS E2E qualification.** No synthetic SDK supplied
@@ -156,9 +161,12 @@ Mac readiness/teardown fix. Mac API 1.56 already accepts tag's fixed 1.54.
 create `2146783582ddd566585f352e60e56b33bd07923d`,
 unmount `ca1d959a651ff1a955344c8b025d968d1091d12b`,
 fuser lifecycle `24119306b2f36591628afc12506567938488412b`.
-These files only relocated. No official relevant later fix was identified in the
-checked path history. Parent accepted ending this run rather than rebuilding an
-unrelated fix or repeatedly creating new Projects until one passes.
+These files only relocated between the two pins compared. **Correction from the
+restart investigation:** searching only those historical paths missed official
+`35d36575c1eb4d23d4b54534a7030d855db890e7` (#500), which fixes stalled normal
+unmount under the newer `engine/crates/` paths. The original decision to end this
+run was based on that incomplete search; it is not evidence that no official
+teardown fix exists. API negotiation alone is still unrelated to the two failures.
 
 ## Final resources and next steps
 
@@ -178,8 +186,11 @@ unrelated fix or repeatedly creating new Projects until one passes.
 - Source, sealed bundle, archives, caches and evidence retained. No transfer or
   native build process remains active. No production SHADOW_LAYERFS_CONFIG set.
 
-Minimum follow-up: upstream needs a source-backed OrbStack startup/port-readiness
-solution and investigation of FUSE Join custody before stable Mac qualification.
+Original follow-up requirement: a source-backed OrbStack transport solution and
+investigation of FUSE Join custody were needed before stable Mac qualification.
+The [restart retest](layerfs-e2e-macos-restart-20261105.md) now records the official
+#500 teardown fix plus an explicit patched-upstream bridge route and bounded
+passing results. It does not activate production or repair the retained resources.
 Do not add unproven sleeps/retries or widen loopback publication. Supporting an
 explicit existing sandbox in Shadow's mount API could avoid unnecessary Create,
 but is a proposed integration change, not a fix delivered here, and would not

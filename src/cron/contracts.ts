@@ -20,6 +20,10 @@ export interface AutomationSessionRef {
   legacy?: boolean
 }
 export interface AutomationSummary {
+  /** Program actions have no model inference on idle scans. */
+  program?: import('./work-dispatch-contract.ts').WorkDispatchConfig
+  running?: boolean
+  configurationError?: string
   intervalMs?: number
   id: string
   name: string

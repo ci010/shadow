@@ -44,7 +44,6 @@ export interface NativeMicroApp {
   revision: string
   name: string
   icon: boolean
-  approved: boolean
   status: string
 }
 
@@ -54,12 +53,11 @@ export function parseNativeMicroApp(value: unknown): NativeMicroApp {
     || !isRecord(value.manifest) || typeof value.manifest.name !== 'string'
     || !value.manifest.name.trim() || value.manifest.name.length > 100
     || (value.manifest.icon !== undefined && (typeof value.manifest.icon !== 'string' || !value.manifest.icon.toLowerCase().endsWith('.png')))
-    || typeof value.status !== 'string' || !['awaiting_approval', 'starting', 'running', 'stopped', 'failed', 'interrupted'].includes(value.status)
-    || (value.approval !== undefined && (!isRecord(value.approval) || value.approval.revision !== value.revision))) {
+    || typeof value.status !== 'string' || !['starting', 'running', 'stopped', 'failed', 'interrupted'].includes(value.status)) {
     throw new TypeError('Invalid Micro App catalog response')
   }
   return { id: value.id.toLowerCase(), revision: value.revision, name: value.manifest.name,
-    icon: value.manifest.icon !== undefined, approved: value.approval !== undefined, status: value.status }
+    icon: value.manifest.icon !== undefined, status: value.status }
 }
 
 export function parseMicroAppLaunch(value: unknown): string {

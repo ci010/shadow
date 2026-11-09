@@ -60,7 +60,7 @@ async function fixture(home: string, work: AppWorkScope[] = [],
   const host = new Hono()
   microAppsPlugin(service, request => request.headers.get('x-owner') === 'yes')(host)
   const approve = async () => {
-    await service.approve(app.id, service.get(app.id).revision)
+    await service.requestTesting(app.id, service.get(app.id).revision)
     await wait(() => !!yields.get('web:author'))
   }
   const answer = async (index: number) => {
@@ -91,7 +91,7 @@ test('approval asks the owner; only explicit continue permits author testing', a
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = await fixture(home)
   try {
-    await assert.rejects(f.service.openTest(f.app.id, f.app.revision, 'web:author', new AbortController().signal), /review/)
+    await assert.rejects(f.service.openTest(f.app.id, f.app.revision, 'web:author', new AbortController().signal), /choose/)
     await f.approve()
     assert.equal(f.yields.get('web:author')!.ownerOnly, true)
     assert.match(f.yields.get('web:author')!.question, /defers testing without approval/)
@@ -105,13 +105,13 @@ test('approval asks the owner; only explicit continue permits author testing', a
     assert.equal(f.service.get(f.app.id).acceptance!.decision, 'user')
     assert.ok(f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'))
     assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:peer'), /author/)
-    assert.throws(() => f.service.acceptance.authorize(f.app.id, '0'.repeat(64), 'web:author'), /review/)
+    assert.throws(() => f.service.acceptance.authorize(f.app.id, '0'.repeat(64), 'web:author'), /choose/)
     const denied = await f.host.request(`/api/microapps/${f.app.id}/test`, {
       method: 'POST', body: JSON.stringify({ revision: f.app.revision }), headers: { 'Content-Type': 'application/json' },
     })
     assert.equal(denied.status, 401)
-    await f.service.revoke(f.app.id)
-    assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'), /approval/)
+    await f.service.cancelTesting(f.app.id)
+    assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'), /testing|request|paused/)
   } finally { await f.service.shutdown() }
 }))
 
@@ -137,7 +137,7 @@ test('pause, custom response, cancellation and revocation never become timeout p
         if (choice === 'pause') await f.answer(1)
         else if (choice === 'custom') await f.yields.answerUserText('web:author', question.id, question.defaultOption)
         else if (choice === 'cancel') await f.yields.cancelUser('web:author', question.id)
-        else await f.service.revoke(f.app.id)
+        else await f.service.cancelTesting(f.app.id)
         await wait(() => f.service.get(f.app.id).acceptance!.status === 'paused')
         assert.equal(f.notifications.length, 0)
         assert.equal(f.service.get(f.app.id).lastRun, undefined)
@@ -155,11 +155,11 @@ test('notification failures and restart require an explicit retry, without renew
     assert.equal(f.service.get(f.app.id).acceptance!.status, 'failed')
     const record = f.service.store.get(f.app.id)
     record.calls = 3; f.service.store.save(record)
-    const approval = record.approval
+    const approval = record.model
     f.failNotification(false)
     await f.service.requestTesting(f.app.id, f.app.revision)
     await wait(() => !!f.yields.get('web:author'))
-    assert.deepEqual(f.service.get(f.app.id).approval, approval)
+    assert.deepEqual(f.service.get(f.app.id).model, approval)
     assert.equal(f.service.get(f.app.id).calls, 3)
     await f.answer(0)
     assert.equal(f.notifications.length, 1)
@@ -216,7 +216,7 @@ test('live SDK observations support version-bound reports, not fixture or self-d
     assert.equal(archive.report.result.checks.length, 4)
     await writeFile(join(f.directory, 'index.html'), '<title>Changed revision</title>')
     const update = await f.service.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), f.app.id, f.app.revision)
-    assert.equal(update.approval, undefined)
+    assert.equal(update.model, undefined)
     assert.equal(update.acceptance, undefined)
     assert.equal(JSON.parse(await readFile(join(f.service.store.root, f.app.id, `acceptance-${acceptance.id}.json`), 'utf8')).revision, f.app.revision)
   } finally { await f.service.shutdown() }
@@ -343,7 +343,7 @@ test('evidence lookup propagates failures and rechecks cancellation, approval an
       const f = await fixture(home, [], undefined, failure === 'unavailable' ? undefined : async () => {
         if (failure === 'io') throw ioFailure
         if (failure === 'abort') controller.abort()
-        if (failure === 'revoke') await f.service.revoke(f.app.id)
+        if (failure === 'revoke') await f.service.cancelTesting(f.app.id)
         if (failure === 'replace') {
           const record = f.service.store.get(f.app.id)
           record.acceptance = f.service.acceptance.create(record)
@@ -357,7 +357,7 @@ test('evidence lookup propagates failures and rechecks cancellation, approval an
         await assert.rejects(f.service.acceptance.evidence(f.app.id, f.app.revision, source.sessionId,
           [{ id: source.id, quote: source.quote }], controller.signal), error => {
           if (failure === 'io') assert.equal(error, ioFailure)
-          else assert.match(String(error), failure === 'abort' ? /AbortError/ : failure === 'revoke' ? /approval/
+          else assert.match(String(error), failure === 'abort' ? /AbortError/ : failure === 'revoke' ? /testing|request|paused/
             : failure === 'replace' ? /Testing request changed/ : /lookup is unavailable/)
           return true
         })
@@ -490,7 +490,7 @@ test('unknown and previous-request observations are rejected together, not silen
     const oldId = f.service.get(f.app.id).acceptance!.id
     f.service.acceptance.observe(f.app.id, oldId, randomUUID(), 'sdk_connected')
     const oldObservationId = f.service.get(f.app.id).acceptance!.observations[0].id
-    await f.service.revoke(f.app.id)
+    await f.service.cancelTesting(f.app.id)
     await f.approve(); await f.answer(0)
     const checks = untestedChecks()
     checks[0].observations = [oldObservationId]
@@ -552,7 +552,7 @@ test('valid observation hints cannot bypass tool evidence, aborts, approval chan
       const f = await fixture(home, [], async () => {
         if (failure === 'evidence') throw new Error('Recorded excerpt does not match')
         if (failure === 'aborted') controller.abort()
-        if (failure === 'revoked') await f.service.revoke(f.app.id)
+        if (failure === 'revoked') await f.service.cancelTesting(f.app.id)
         if (failure === 'replaced') {
           const record = f.service.store.get(f.app.id)
           record.acceptance = f.service.acceptance.create(record)
@@ -569,7 +569,7 @@ test('valid observation hints cannot bypass tool evidence, aborts, approval chan
         checks[0] = { ...checks[0], result: 'passed', basis: 'runtime', observations, evidence: [source] }
         await assert.rejects(f.service.acceptance.report(f.app.id, f.app.revision, 'web:author', { checks }, controller.signal),
           failure === 'evidence' ? /excerpt does not match/ : failure === 'aborted' ? { name: 'AbortError' }
-            : failure === 'revoked' ? /approval/ : /Testing request changed/)
+            : failure === 'revoked' ? /testing|request|paused/ : /Testing request changed/)
         assert.equal(f.service.get(f.app.id).acceptance?.report, undefined)
       } finally { await f.service.shutdown() }
     }))

@@ -9,7 +9,7 @@ function fixture() {
   return { timeline, at: (time: number) => { now = time } }
 }
 
-test('late publication retains separate review and full post-approval testing windows', () => {
+test('late publication retains separate review and full post-request testing windows', () => {
   const { timeline, at } = fixture()
   assert.equal(timeline.snapshot().remainingMs, 30 * 60_000)
   assert.equal(timeline.modelError(), undefined)
@@ -20,7 +20,7 @@ test('late publication retains separate review and full post-approval testing wi
   assert.equal(timeline.snapshot().remainingMs, 5 * 60_000)
   assert.equal(timeline.modelError(), 'live_test_review_in_progress')
   at(34 * 60_000)
-  timeline.approved(new Date(34 * 60_000).toISOString())
+  timeline.testingRequested(new Date(34 * 60_000).toISOString())
   assert.equal(timeline.snapshot().phase, 'testing')
   assert.equal(timeline.snapshot().remainingMs, 10 * 60_000)
   at(35 * 60_000)
@@ -39,16 +39,16 @@ test('early handoff and repeated controls cannot extend phase deadlines or the 4
   at(12 * 60_000)
   timeline.review()
   assert.equal(timeline.snapshot().deadlineAt, review.deadlineAt)
-  timeline.approved(new Date(12 * 60_000).toISOString())
+  timeline.testingRequested(new Date(12 * 60_000).toISOString())
   const testing = timeline.snapshot()
   at(15 * 60_000)
-  timeline.approved(new Date(15 * 60_000).toISOString())
+  timeline.testingRequested(new Date(15 * 60_000).toISOString())
   assert.equal(timeline.snapshot().deadlineAt, testing.deadlineAt)
   assert.equal(timeline.snapshot().remainingMs, 7 * 60_000)
   assert.throws(() => timeline.review(), /already started/)
   assert.equal(timeline.hardDeadline, 45 * 60_000)
   at(22 * 60_000)
-  assert.throws(() => timeline.approved(new Date(22 * 60_000).toISOString()), /deadline exhausted/)
+  assert.throws(() => timeline.testingRequested(new Date(22 * 60_000).toISOString()), /deadline exhausted/)
 })
 
 test('slow polling, stale approvals and timeouts never manufacture more review or testing time', () => {
@@ -57,13 +57,13 @@ test('slow polling, stale approvals and timeouts never manufacture more review o
   timeline.review()
   assert.equal(timeline.snapshot().remainingMs, 4 * 60_000)
   for (const time of [0, 29 * 60_000, 32 * 60_000]) {
-    assert.throws(() => timeline.approved(new Date(time).toISOString()), /active review window/)
+    assert.throws(() => timeline.testingRequested(new Date(time).toISOString()), /active review window/)
   }
-  assert.throws(() => timeline.approved('invalid'), /active review window/)
+  assert.throws(() => timeline.testingRequested('invalid'), /active review window/)
   assert.equal(timeline.snapshot().phase, 'review')
   at(35 * 60_000)
   assert.throws(() => timeline.review(), /deadline exhausted/)
-  assert.throws(() => timeline.approved(new Date(35 * 60_000).toISOString()), /active review window/)
+  assert.throws(() => timeline.testingRequested(new Date(35 * 60_000).toISOString()), /active review window/)
   assert.equal(timeline.modelError(), 'live_test_review_deadline_exhausted')
   const expired = fixture()
   expired.at(36 * 60_000)
@@ -79,7 +79,7 @@ test('proxy phase denials are non-retryable and approval does not reset the shar
   assert.deepEqual(acceptanceRequestRejection(timeline, 99, 100), { error: 'live_test_creation_deadline_exhausted', status: 403 })
   timeline.review()
   assert.deepEqual(acceptanceRequestRejection(timeline, 99, 100), { error: 'live_test_review_in_progress', status: 403 })
-  timeline.approved(new Date(ACCEPTANCE_PHASE_MS.creation).toISOString())
+  timeline.testingRequested(new Date(ACCEPTANCE_PHASE_MS.creation).toISOString())
   assert.equal(acceptanceRequestRejection(timeline, 99, 100), undefined)
   assert.deepEqual(acceptanceRequestRejection(timeline, 100, 100), { error: 'live_test_call_budget_exhausted', status: 429 })
 })
@@ -96,7 +96,7 @@ test('review forbids inference and phase transitions abort rather than replay in
   timeline.review()
   await rejected
   await assert.rejects(timeline.model(async () => { requests++ }), /review_in_progress/)
-  timeline.approved(new Date(100).toISOString())
+  timeline.testingRequested(new Date(100).toISOString())
   assert.equal(await timeline.model(async () => { requests++; return 'author result' }), 'author result')
   assert.equal(requests, 2)
 })

@@ -120,7 +120,7 @@ export function projectGroupConversations(sessions: import('./folders-sidebar.ts
     if (seen.has(key)) continue
     seen.add(key)
     const existing = result.find(s => group.sessionId === s.sessionId || s.channelAddress?.projectId === projectId && s.channelAddress.botInstanceId === group.botInstanceId && s.channelAddress.platform === group.platform && s.channelAddress.conversationId === group.conversationId)
-    if (existing) { existing.groupObservation = group; existing.channelAddress = { projectId, botInstanceId: group.botInstanceId, platform: group.platform, conversationId: group.conversationId };  existing.label = group.name?.trim() || (existing.title?.trim() ? existing.label : groupDisplayName(group)); continue }
+    if (existing) { existing.groupObservation = group; existing.channelAddress = { projectId, botInstanceId: group.botInstanceId, platform: group.platform, conversationId: group.conversationId };  if (!existing.channelSource) existing.label = group.name?.trim() || (existing.title?.trim() ? existing.label : groupDisplayName(group)); continue }
     result.push({ sessionId: observedGroupId(group), projectId, channelAddress: { projectId, botInstanceId: group.botInstanceId, platform: group.platform, conversationId: group.conversationId }, label: groupDisplayName(group), isDirectChat: false, isCurrent: false, parentSessionId: null, depth: 0, groupObservation: group })
   }
   return result

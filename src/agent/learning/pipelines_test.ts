@@ -156,7 +156,9 @@ test('decision writes preserve conditions, uncertainty and evidence; downstream 
     assert.equal(events.length, 1)
     f.onRun(async id => {
       const batch = f.runtime.ledger.batchFor(id)!
-      assert.deepEqual(batch.inputEvents, events)
+      assert.deepEqual(batch.inputEvents.slice(0, events.length), events)
+      assert.equal(batch.inputEvents.length, 2)
+      assert.equal(batch.inputEvents[1].origin, 'v:memory/decisions/readable-outcomes.md')
       assert.match(learningTask(batch), new RegExp(events[0].id))
       await f.tools.result.execute({ status: 'no_change', summary: 'Decision is sufficient; no separate skill justified.' }, f.context(id))
     })
@@ -539,4 +541,371 @@ test('new reflector events require bounded briefings; persisted briefings surviv
   const reloaded = new LearningLedger(workspace, 'a')
   assert.equal(reloaded.eventsFor('encapsulator')[0].summary, '😀'.repeat(280))
   assert.equal(reloaded.eventsFor('encapsulator')[0].what, 'Full observed details')
+}))
+
+test('Wiki-only unresolved challenge can produce an experimental discoverable skill and verified receipt', async () => withTempWorkspace(async workspace => {
+  await mkdir(join(workspace, 'memory/topics'), { recursive: true })
+  await writeFile(join(workspace, 'memory/topics/delivery.md'), '# Delivery challenge\nBuild passed but recipient still reports missing file. Separate status, loaded build and actual recipient delivery; cause unknown.')
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  f.onRun(async id => {
+    const batch = f.runtime.ledger.batchFor(id)!
+    assert.equal(batch.inputEvents.length, 1)
+    assert.equal(batch.inputEvents[0].origin, 'v:memory/topics/delivery.md')
+    const task = learningTask(batch)
+    assert.match(task, /Narrow experimental skills need not have prior cross-event success/)
+    const content = '---\nname: delivery-evidence-separation\ndescription: Diagnose disagreement between passing builds and missing recipient files\n---\n# Experimental diagnostic workflow\nSource: v:memory/topics/delivery.md (fixture). Outcome remains unresolved.\nWhen delivery is disputed, separately check status projection, loaded build and actual recipient receipt. Passing tests do not establish delivery. Do not retry sends without authorization. Revalidate after a real recipient outcome; retire if these distinctions do not help.\nExample: passing build plus missing file requires recipient evidence. Counterexample: a verified recipient receipt already settles that attempt, not every future delivery.\n'
+    const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name: 'delivery-evidence-separation' }, f.context(id)))
+    await f.tools.skill.execute({ action: 'save', name: 'delivery-evidence-separation', revision: baseline.revision, content }, f.context(id))
+    await f.tools.result.execute({ status: 'applied', summary: 'Installed a narrow experimental diagnostic lesson, not a delivery fix or script tool.' }, f.context(id))
+  })
+  const id = await f.runtime.run('encapsulator', signal())
+  assert.equal(f.runtime.ledger.outcome(String(id))?.artifacts, 1)
+  assert(skills.getSkillDirectory('delivery-evidence-separation'))
+  assert.equal(await f.runtime.run('encapsulator', signal()), false)
+}))
+
+test('host audit recovers rejected physical ID against exact event ref across attempts, not real I/O errors', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const correct = 'v:sessions/web_chat-example-v2-f83865aca7a-0/overview'
+  const wrong = 'v:sessions/web_chat-example-v2-f838aca7a-0/overview'
+  const batch = f.runtime.ledger.create('encapsulator', [], [{ id: 'typo', path: 'memory/events/day.jsonl', origin: 'web:example', when: 'then', who: 'reflector', what: 'Challenge', refs: [correct] }])
+  f.runtime.ledger.bind(batch.id, 'cron:old')
+  f.runtime.ledger.interrupt(batch.id, 'retry')
+  f.runtime.ledger.bind(batch.id, 'cron:new')
+  for (const id of ['cron:old', 'cron:new']) f.records.set(id, { sessionId: id, segmentIndex: 0, projectId: 'a' })
+  let error = 'Error: Physical history does not belong to this Project session'
+  const exchange = (path: string, text: string): ChatMessage[] => [
+    { role: 'assistant', content: '', tool_calls: [{ id: 'read', type: 'function', function: { name: 'read', arguments: JSON.stringify({ path, offset: 1, limit: 100 }) } }] },
+    { role: 'tool', content: text, tool_call_id: 'read' },
+  ]
+  t.mock.method(f.sessions, 'getHistory', async (id: string) => {
+    const messages = id === 'cron:old' ? exchange(wrong, error) : exchange(correct, 'complete overview')
+    return { messages, total: messages.length }
+  })
+  await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+  error = 'Error: filesystem denied'
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /filesystem denied/)
+}))
+
+
+test('lesson maintenance preflights size, consolidates a full replacement and verifies real edit-store receipt', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const name = 'bounded-maintenance'
+  const header = `---\nname: ${name}\ndescription: Consolidate diagnostic lessons without losing conditions\n---\n`
+  const constraints = 'Trigger: conflicting delivery evidence. Never retry a send without authorization. Unknown cause remains unknown. Exception: recipient receipt settles only that attempt. Revalidate after a recipient outcome. Source: fixture 2026-11-06.\n'
+  const original = header + constraints + 'Repeated explanation. '.repeat(330)
+  assert(original.length <= 8000)
+  await f.runtime.skillStore!.save(name, { 'SKILL.md': original }, null, false, signal())
+  f.runtime.ledger.create('encapsulator', [], [])
+  f.onRun(async id => {
+    const ctx = f.context(id)
+    const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, ctx))
+    assert.equal(baseline.limits.maxLength, 8000)
+    assert.equal(baseline.limits.lengthUnit, 'UTF-16 code units')
+    assert.equal(baseline.contentLength, original.length)
+    const oversized = original + 'New repeated explanation. '.repeat(80)
+    const checked = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: oversized }, ctx))
+    assert.equal(checked.withinLimit, false)
+    assert.equal(checked.overBy, oversized.trim().length - 8000)
+    assert.equal(checked.saved, false)
+    assert.equal(f.runtime.skillStore!.read(name).revision, baseline.revision)
+    assert.equal(f.runtime.ledger.batchFor(id)!.artifacts.length, 0)
+    for (const [content, withinLimit, length] of [['😀'.repeat(4000), true, 8000], ['😀'.repeat(4001), false, 8002], ['  ', false, 0]] as const) {
+      const boundary = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content }, ctx))
+      assert.equal(boundary.withinLimit, withinLimit)
+      assert.equal(boundary.contentLength, length)
+    }
+    await assert.rejects(f.tools.skill.execute({ action: 'save', name, revision: baseline.revision, content: oversized }, ctx), /8000/)
+    const consolidated = header + constraints + 'Steps: separate reported tests, active backend build and actual recipient evidence. A passing test is not delivery. Example: missing recipient evidence leaves delivery unknown; counterexample: verified receipt.\n'
+    const check = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: consolidated }, ctx))
+    assert.equal(check.withinLimit, true)
+    await f.tools.skill.execute({ action: 'save', name, revision: baseline.revision, content: consolidated }, ctx)
+    assert.equal(f.runtime.skillStore!.read(name).files['SKILL.md'].toString(), consolidated.trim())
+    assert(skills.getSkillDirectory(name))
+    await assert.rejects(f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: consolidated }, ctx), /changed since read/)
+    await f.tools.result.execute({ status: 'applied', summary: 'Consolidated repeated wording, preserving all scoped conditions. Synthetic fixture only.' }, ctx)
+  })
+  const id = await f.runtime.run('encapsulator', signal())
+  assert.equal(f.runtime.ledger.outcome(String(id))?.status, 'applied')
+  assert.equal(f.runtime.ledger.outcome(String(id))?.artifacts, 1)
+}))
+
+test('encapsulation prompts expose bounded maintenance and useful small experiments without publication', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const task = learningTask(f.runtime.ledger.create('encapsulator', [], []))
+  assert.match(task, /A separate check is optional size feedback, not a prerequisite/)
+  assert.match(task, /eighth is receipt-only/)
+  assert.match(task, /finish the first supported save by the seventh request/)
+  assert.match(task, /8000 UTF-16 code units/)
+  assert.match(task, /preserving conditions, exceptions, uncertainty and evidence/)
+  assert.match(task, /proven high frequency is not required/)
+  const role = await readFile(new URL('../types/builtin/encapsulator/AGENT.md', import.meta.url), 'utf8')
+  assert.match(role, /one concrete\ncostly or error-prone step/)
+  assert.match(role, /NOT an installed tool/)
+  assert.match(role, /one focused\nconsolidation/)
+}))
+
+
+test('oversize failed skill save is recovered by same-name successful replacement, not size check alone', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace, 0, new SkillsManager(workspace))
+  const batch = f.runtime.ledger.create('encapsulator', [], [])
+  f.runtime.ledger.bind(batch.id, 'cron:old')
+  f.runtime.ledger.interrupt(batch.id, 'oversize write')
+  f.runtime.ledger.bind(batch.id, 'cron:new')
+  for (const id of ['cron:old', 'cron:new']) f.records.set(id, { sessionId: id, segmentIndex: 0, projectId: 'a' })
+  let action = 'check'
+  let name = 'same-lesson'
+  let failed = false
+  let oldError = ''
+  try { await f.tools.skill.execute({ action: 'save', name, revision: '', content: 'x'.repeat(8001) }, f.context('cron:new')) }
+  catch (error) { oldError = `Error executing learned_skill: ${(error as Error).message}` }
+  assert.match(oldError, /too_big/)
+  t.mock.method(f.sessions, 'getHistory', async (id: string) => {
+    const old = id === 'cron:old'
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: '', tool_calls: [{ id: 'skill', type: 'function', function: { name: 'learned_skill', arguments: JSON.stringify({ action: old ? 'save' : action, name: old ? 'same-lesson' : name }) } }] },
+      { role: 'tool', content: old ? oldError : failed ? 'Error executing learned_skill: Patch match must occur exactly once.' : '{"status":"discoverable"}', tool_call_id: 'skill' },
+    ]
+    return { messages, total: messages.length }
+  })
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /too_big/)
+  action = 'read'
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /\[learned_skill:same-lesson\].*Error executing learned_skill/)
+  action = 'save'
+  name = 'different-lesson'
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /too_big/)
+  name = 'same-lesson'
+  await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+  action = 'patch'
+  failed = true
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /exactly once/)
+  failed = false
+  await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+}))
+
+
+test('legacy ten-deferral pending batch without paused text stays parked after recover; manual selection preserves attempts', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace, 0)
+  const batch = f.runtime.ledger.create('encapsulator', [], [])
+  for (let i = 0; i < 10; i++) {
+    f.runtime.ledger.bind(batch.id, `cron:legacy-${i}`)
+    f.runtime.ledger.interrupt(batch.id, 'retained rejected history reference')
+    f.runtime.ledger.defer(batch.id, true)
+  }
+  const path = projectStoragePath(workspace, '.learning', 'state.v1.json')
+  const state = JSON.parse(await readFile(path, 'utf8'))
+  delete state.batches[0].retry.paused
+  state.batches[0].retry.notBefore = 0
+  await writeFile(path, JSON.stringify(state)) // Disposable legacy fixture, never production state.
+  const restarted = new LearningRuntime(f.sessions, 'a')
+  await restarted.recover()
+  assert.equal(restarted.ledger.pending('encapsulator', true), undefined)
+  assert.equal(restarted.ledger.select('encapsulator', [], []), undefined)
+  assert.equal(restarted.ledger.select('encapsulator', [], [], true)?.id, batch.id)
+  assert.equal(restarted.ledger.batch(batch.id).retry!.attempts, 10)
+  assert.equal(restarted.ledger.batch(batch.id).attempts.length, 10)
+  assert.equal(restarted.ledger.batch(batch.id).state, 'pending')
+}))
+
+test('direct save uses last work call, rejects oversized and stale drafts without effects, preserves receipt reserve', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const batch = f.runtime.ledger.create('encapsulator', [], [])
+  f.runtime.ledger.bind(batch.id, 'cron:bounded')
+  f.records.set('cron:bounded', { sessionId: 'cron:bounded', segmentIndex: 0, projectId: 'a' })
+  const ctx = f.context('cron:bounded')
+  const base = new Tools(workspace)
+  base.register(f.tools.skill); base.register(f.tools.result)
+  ctx.tools = new SessionTools(base, workspace, ['learned_skill', 'learning_result'])
+  ctx.tools.setTrustedLimits({ allowedTools: ['learned_skill', 'learning_result'], inferenceRequests: 8, toolCalls: 4, argumentBytes: 48000 })
+  ctx.tools.reserveReceipt('learning_result')
+  const name = 'direct-bounded-save'
+  const content = `---\nname: ${name}\ndescription: Check evidence before claiming success\n---\nExperimental fixture. Preserve uncertainty and authorization boundaries. Source: synthetic 2026-11-07. Revalidate after observed outcome.`
+  const original = await f.runtime.skillStore!.save(name, { 'SKILL.md': content }, null, false, signal())
+  assert.match(String(await ctx.tools.execute('learned_skill', { action: 'save', name, revision: original.revision, content: 'x'.repeat(8001) }, ctx)), /8000/)
+  assert.match(String(await ctx.tools.execute('learned_skill', { action: 'save', name, revision: '', content }, ctx)), /changed since read/)
+  assert.equal(f.runtime.ledger.batch(batch.id).artifacts.length, 0)
+  assert.equal(f.runtime.skillStore!.read(name).revision, original.revision)
+  const replacement = content + '\nCounterexample: a receipt proves that attempt only.'
+  const saved = JSON.parse(String(await ctx.tools.execute('learned_skill', { action: 'save', name, revision: original.revision, content: replacement }, ctx)))
+  assert.equal(saved.status, 'discoverable')
+  assert.equal(f.runtime.skillStore!.read(name).files['SKILL.md'].toString(), replacement)
+  assert(skills.getSkillDirectory(name))
+  assert.match(String(await ctx.tools.execute('learned_skill', { action: 'read', name }, ctx)), /receipt capacity/)
+  ctx.tools.restrictToReceipt('learning_result')
+  const receipt = await ctx.tools.execute('learning_result', { status: 'partial', summary: 'Retained one real fixture effect; failed drafts remain unresolved.' }, ctx)
+  assert.doesNotMatch(String(receipt), /^Error:/)
+  assert.equal(f.runtime.ledger.batch(batch.id).proposal?.status, 'partial', String(receipt))
+  assert.equal(f.runtime.ledger.batch(batch.id).artifacts.length, 1)
+}))
+
+test('Wiki publication combines precise source ranges, host readback and recoverable provenance without closing unread scope', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const batch = f.runtime.ledger.create('reflector', [{ sessionId: 'web:source', physicalId: 'source-physical', segmentIndex: 0, offset: 0, end: 5 }], [])
+    f.runtime.ledger.bind(batch.id, 'cron:wiki')
+    f.records.set('cron:wiki', { sessionId: 'cron:wiki', segmentIndex: 0, projectId: 'a' })
+    const context = f.context('cron:wiki')
+    const draft = { action: 'save_wiki', path: 'topics/diagnostic-correction.md', revision: '',
+      content: '# Diagnostic correction\n\nParent report: detach hypothesis withdrawn; minimal window/UiSelect harness fix retained assertions. Reported 10 pass/1 baseline-conflict failure, not independently verified. Applies to this harness only; revalidate on changed reproduction.',
+      summary: 'Parent withdrew detach hypothesis and reported a narrower harness correction; independent acceptance remains unknown.',
+      wikiEvidence: [{ sessionId: 'web:source', physicalId: 'source-physical', offset: 2, end: 4 }] }
+    await assert.rejects(f.tools.memory.execute({ ...draft, wikiEvidence: [{ sessionId: 'web:source', physicalId: 'source-physical', offset: 2, end: 6 }] }, context), /inside an assigned source/)
+    const originalArtifact = f.runtime.ledger.artifact.bind(f.runtime.ledger)
+    f.runtime.ledger.artifact = () => { throw new Error('injected journal failure after page write') }
+    await assert.rejects(f.tools.memory.execute(draft, context), /injected journal failure/)
+    const file = projectStoragePath(workspace, 'memory/topics/diagnostic-correction.md')
+    const persisted = await readFile(file, 'utf8')
+    assert.match(persisted, /source-physical messages \[2, 4\)/)
+    assert.match(persisted, /not independently verified/)
+    f.runtime.ledger.artifact = originalArtifact
+    const originalEvent = f.tools.appendEvent.bind(f.tools)
+    f.tools.appendEvent = () => { throw new Error('injected event failure') }
+    await assert.rejects(f.tools.memory.execute(draft, context), /injected event failure/)
+    f.tools.appendEvent = originalEvent
+    const recovered = new LearningTools(f.runtime)
+    const receipt = JSON.parse(String(await recovered.memory.execute(draft, context)))
+    assert.equal(receipt.verified, true)
+    await recovered.memory.execute(draft, context)
+    const savedBatch = f.runtime.ledger.batchFor(context.sessionId)!
+    assert.equal(savedBatch.artifacts.length, 1)
+    assert.equal(savedBatch.events.length, 1)
+    assert.equal(savedBatch.proposal, undefined, 'a page save does not claim complete review or advance the cursor')
+    await f.runtime.verify(savedBatch, false)
+    await assert.rejects(recovered.result.execute({ status: 'no_change', summary: 'Duplicate' }, context), /persisted effects/)
+    await writeFile(file, persisted + '\nConcurrent useful content\n')
+    await assert.rejects(recovered.memory.execute(draft, context), /changed since read/)
+    await assert.rejects(f.runtime.verify(savedBatch, false), /changed after writing/)
+    assert.match(await readFile(file, 'utf8'), /Concurrent useful content/)
+    const latest = JSON.parse(String(await recovered.memory.execute({ action: 'read_wiki', path: draft.path }, context)))
+    await recovered.memory.execute({ ...draft, revision: latest.revision, content: draft.content + '\n\nConcurrent useful content' }, context)
+    await f.runtime.verify(f.runtime.ledger.batchFor(context.sessionId)!, false)
+    await recovered.result.execute({ status: 'partial', summary: 'Correction persisted and host verified. Messages [0,2) and [4,5) remain unread; no acceptance established.' }, context)
+    assert.equal(f.runtime.ledger.batchFor(context.sessionId)!.proposal!.status, 'partial')
+  })
+})
+
+test('Wiki save failures remain receipt blockers until a same-page save succeeds; permissions and path boundaries remain unchanged', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const batch = f.runtime.ledger.create('reflector', [{ sessionId: 'web:source', physicalId: 'source', segmentIndex: 0, offset: 0, end: 5 }], [])
+    f.runtime.ledger.bind(batch.id, 'cron:audit')
+    f.records.set('cron:audit', { sessionId: 'cron:audit', segmentIndex: 0, projectId: 'a' })
+    const context = f.context('cron:audit')
+    const draft = { action: 'save_wiki', path: 'topics/trust-boundary.md', revision: '', content: '# Boundary\nParent-reported limitation; not a reset procedure.', summary: 'Retain the parent-reported identity deletion limitation.', wikiEvidence: [{ sessionId: 'web:source', physicalId: 'source', offset: 1, end: 3 }] }
+    await assert.rejects(f.tools.memory.execute(draft, { ...context, projectId: 'foreign' }), /owning Project/)
+    await assert.rejects(f.tools.memory.execute(draft, { ...context, remoteWorkdir: {} } as ExecutionContext), /owning Project/)
+    for (const path of ['events/test.md', 'sessions/test.md', '../topics/test.md', 'decisions/test.md']) {
+      await assert.rejects(f.tools.memory.execute({ ...draft, path }, context))
+    }
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: '', tool_calls: [{ id: 'save', type: 'function', function: { name: 'learning_memory', arguments: JSON.stringify(draft) } }] },
+      { role: 'tool', tool_call_id: 'save', content: 'Error: injected persistence failure' },
+    ]
+    f.sessions.getHistory = async () => ({ messages, total: messages.length })
+    await assert.rejects(f.tools.result.execute({ status: 'no_change', summary: 'No useful change' }, context), /injected persistence failure/)
+    await f.tools.memory.execute(draft, context)
+    await assert.rejects(f.tools.result.execute({ status: 'applied', summary: 'Saved' }, context), /injected persistence failure/)
+    messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'retry', type: 'function', function: { name: 'learning_memory', arguments: JSON.stringify(draft) } }] },
+      { role: 'tool', tool_call_id: 'retry', content: JSON.stringify({ verified: true }) })
+    await f.tools.result.execute({ status: 'applied', summary: 'Source-scoped limitation saved and verified; no deployment claim.' }, context)
+    assert.equal(f.runtime.ledger.batchFor(context.sessionId)!.proposal!.status, 'applied')
+  })
+})
+
+test('Wiki reread/edit/save merges managed provenance once and requires exact physical segments', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const sources = ['physical-first', 'physical-second'].map((physicalId, segmentIndex) => ({
+      sessionId: 'web:source', physicalId, segmentIndex, offset: 0, end: 5,
+    }))
+    const batch = f.runtime.ledger.create('reflector', sources, [])
+    f.runtime.ledger.bind(batch.id, 'cron:segments')
+    const context = f.context('cron:segments')
+    const draft = { action: 'save_wiki', path: 'topics/segment-evidence.md', revision: '',
+      content: '# Scoped evidence\nA reported correction.', summary: 'Retain the scoped correction.',
+      wikiEvidence: [{ sessionId: 'web:source', physicalId: 'physical-second', offset: 1, end: 3 }] }
+    await assert.rejects(f.tools.memory.execute({ ...draft, wikiEvidence: [{ sessionId: 'web:source', offset: 1, end: 3 }] }, context))
+    await assert.rejects(f.tools.memory.execute({ ...draft, wikiEvidence: [{ ...draft.wikiEvidence[0], physicalId: 'unassigned-segment' }] }, context), /inside an assigned source/)
+    await f.tools.memory.execute(draft, context)
+    const read = async () => JSON.parse(String(await f.tools.memory.execute({ action: 'read_wiki', path: draft.path }, context)))
+    let page = await read()
+    assert.match(page.content, /physical-second messages \[1, 3\)/)
+    assert.doesNotMatch(page.content, /physical-first/)
+    // Normal full-content roundtrip, with a second segment at identical logical offsets.
+    await f.tools.memory.execute({ ...draft, revision: page.revision,
+      content: page.content.replace('A reported correction.', 'A reported correction with its condition.'),
+      wikiEvidence: [{ ...draft.wikiEvidence[0], physicalId: 'physical-first' }] }, context)
+    for (let i = 0; i < 3; i++) {
+      page = await read()
+      await f.tools.memory.execute({ ...draft, revision: page.revision,
+        content: page.content.replace('Scoped evidence', `Scoped evidence ${i}`) }, context)
+    }
+    page = await read()
+    assert.equal(page.content.match(/## Learning provenance/g)?.length, 1)
+    assert.equal(page.content.match(/<!-- shadow:learning-provenance:start -->/g)?.length, 1)
+    assert.equal(page.content.match(/physical-first messages/g)?.length, 1)
+    assert.equal(page.content.match(/physical-second messages/g)?.length, 1)
+    assert.match(page.content, /correction with its condition/)
+    // Upgrade the previous unmarked generated format without duplicating metadata.
+    const file = projectStoragePath(workspace, `memory/${draft.path}`)
+    await writeFile(file, page.content.replace('<!-- shadow:learning-provenance:start -->\n', '')
+      .replace('\n<!-- shadow:learning-provenance:end -->', ''))
+    page = await read()
+    await f.tools.memory.execute({ ...draft, revision: page.revision, content: page.content }, context)
+    page = await read()
+    assert.equal(page.content.match(/## Learning provenance/g)?.length, 1)
+    assert.equal(page.content.match(/physical-first messages/g)?.length, 1)
+    assert.equal(page.content.match(/physical-second messages/g)?.length, 1)
+    // Even a body-only replacement retains the previous exact source references.
+    await f.tools.memory.execute({ ...draft, revision: page.revision, content: '# Body only\nStill scoped.' }, context)
+    page = await read()
+    assert.equal(page.content.match(/physical-first messages/g)?.length, 1)
+    assert.equal(page.content.match(/physical-second messages/g)?.length, 1)
+    assert.equal(page.content.match(/## Learning provenance/g)?.length, 1)
+  })
+})
+
+
+test('exact lesson corrections preserve unrelated evidence and all save boundaries', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const name = 'targeted-correction'
+  const original = `---\nname: ${name}\ndescription: Test scoped maintenance\n---\nRequire obsolete entity.\nNever widen authorization.\nSource: fixture.\nRepeated repeated\n` + 'Evidence. '.repeat(760)
+  await f.runtime.skillStore!.save(name, { 'SKILL.md': original }, null, false, signal())
+  f.runtime.ledger.create('encapsulator', [], [])
+  f.onRun(async id => {
+    const ctx = f.context(id)
+    const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, ctx))
+    const patch = { action: 'patch', name, revision: baseline.revision, match: 'Require obsolete entity.', replacement: 'Use current policy.' }
+    for (const [change, error] of [
+      [{ match: 'not present' }, /exactly once/], [{ match: 'Evidence.' }, /exactly once/],
+      [{ match: '' }, /at least 1/], [{ revision: '' }, /changed since read/],
+      [{ replacement: 'x'.repeat(8000) }, /8000/],
+      [{ match: `name: ${name}`, replacement: 'name: wrong-name' }, /standalone lesson/],
+      [{ match: 'description: Test scoped maintenance', replacement: 'description: Test scoped maintenance\nadmin: true' }, /standalone lesson/],
+    ] as const) {
+      await assert.rejects(f.tools.skill.execute({ ...patch, ...change }, ctx), error)
+      assert.equal(f.runtime.skillStore!.read(name).revision, baseline.revision)
+      assert.equal(f.runtime.ledger.batchFor(id)!.artifacts.length, 0)
+    }
+    await f.tools.skill.execute(patch, ctx)
+    const saved = f.runtime.skillStore!.read(name)
+    assert.equal(saved.files['SKILL.md'].toString(), original.replace(patch.match, patch.replacement).trim())
+    assert(skills.getSkillDirectory(name))
+    await assert.rejects(f.tools.skill.execute(patch, ctx), /changed since read/)
+    await f.tools.skill.execute({ ...patch, revision: saved.revision, match: 'Repeated repeated\n', replacement: '' }, ctx)
+    assert(!f.runtime.skillStore!.read(name).files['SKILL.md'].toString().includes('Repeated repeated'))
+    const beforePeer = f.runtime.skillStore!.read(name)
+    const peerContent = beforePeer.files['SKILL.md'].toString() + '\nPeer evidence retained.'
+    await f.runtime.skillStore!.save(name, { 'SKILL.md': peerContent }, beforePeer.revision, false, signal())
+    await assert.rejects(f.tools.skill.execute({ ...patch, revision: beforePeer.revision, match: 'Use current policy.', replacement: 'Use adopted policy.' }, ctx), /changed since read/)
+    const refreshed = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, ctx))
+    await f.tools.skill.execute({ ...patch, revision: refreshed.revision, match: 'Use current policy.', replacement: 'Use adopted policy.' }, ctx)
+    assert.match(f.runtime.skillStore!.read(name).files['SKILL.md'].toString(), /Peer evidence retained/)
+    await f.tools.result.execute({ status: 'applied', summary: 'Corrected obsolete fixture requirement, retained evidence and safety; optional expansion deferred.' }, ctx)
+  })
+  await f.runtime.run('encapsulator', signal())
 }))

@@ -235,18 +235,40 @@ export class TokenLimitExceededError extends Error {
   }
 }
 
+export interface ProviderRequestStats {
+  bodyBytes: number
+  wireBodyBytes: number
+  contentEncoding: 'gzip' | 'identity'
+  imageCount: number
+  imageBase64Bytes: number
+}
+
 export class ProviderHttpError extends Error {
+  readonly provider?: string
+  readonly requestStats?: ProviderRequestStats
+  timeoutAttempts?: number
+  timeoutRetryExhausted?: boolean
   readonly retryAfter?: string | null
   readonly rejectedRequest: boolean
   constructor(readonly status: number, message: string, readonly code?: string,
-    metadata?: { retryAfter?: string | null; rejectedRequest?: boolean }) {
+    metadata?: { retryAfter?: string | null; rejectedRequest?: boolean; provider?: string; requestStats?: ProviderRequestStats }) {
     super(message)
     this.name = 'ProviderHttpError'
+    this.provider = metadata?.provider
+    this.requestStats = metadata?.requestStats
     this.retryAfter = metadata?.retryAfter
     // Only adapters observing a non-success HTTP response may authorize replay.
     this.rejectedRequest = metadata?.rejectedRequest === true
   }
 
+}
+
+/** Only definitively rejected large Copilot image requests authorize timeout replay. */
+export function isImageRequestTimeout(error: unknown): error is ProviderHttpError {
+  return error instanceof ProviderHttpError && error.status === 408
+    && error.rejectedRequest === true && error.provider === 'copilot'
+    && (error.requestStats?.imageCount ?? 0) > 0
+    && (error.requestStats?.wireBodyBytes ?? 0) >= 1024 * 1024
 }
 
 /** Request-size rejections can be recovered by compacting session context.

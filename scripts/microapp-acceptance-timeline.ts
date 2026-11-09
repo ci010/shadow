@@ -40,14 +40,14 @@ export class AcceptanceTimeline {
     }
     if (this.now() >= this.deadline) throw new Error('Review deadline exhausted')
   }
-  approved(approvedAt: string) {
+  testingRequested(requestedAt: string) {
     if (this.phase === 'testing') {
       if (this.now() >= this.deadline) throw new Error('Author testing deadline exhausted')
       return
     }
-    const at = Date.parse(approvedAt)
+    const at = Date.parse(requestedAt)
     if (this.phase !== 'review' || !Number.isFinite(at) || at < this.startedAt || at >= this.deadline || at > this.now()) {
-      throw new Error('Approval was not recorded within the active review window')
+      throw new Error('Testing request was not recorded within the active review window')
     }
     this.change('testing', at)
     if (this.now() >= this.deadline) throw new Error('Author testing deadline exhausted')

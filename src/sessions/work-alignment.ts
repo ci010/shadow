@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { AUTOMATIC_WORK_GUIDANCE } from '../cron/work-dispatch-contract.ts'
 
 import { z } from 'zod'
-import type { InitiativeStore } from '../initiatives/store.ts'
+import { workDependenciesSatisfied, type InitiativeStore } from '../initiatives/store.ts'
 import { WorkConflict, workAdoptionSchema, workChangeSchema, workDefinitionSchema, workInventorySchema, workKey,
   workProgressSchema, workDecisionSchema, WORK_APPROVE,
   type WorkActor, type WorkRecord, type WorkStamp, type WorkDecision } from '../initiatives/work-contract.ts'
@@ -260,7 +261,7 @@ export class WorkAlignment implements WorkToolGuard {
       }
     })
     const content = JSON.stringify(payload)
-    return '# Shared work notes\nNotes orient work, never gate tools or grant permission. Update meaningful changes once, without adoption or echoing. This bounded index omits detail; read work context by key for the full goal path and constraints. Reassess stale branches rather than repeating an obsolete premise.\n' +
+    return (this.deps.state(sessionId)?.automaticWork ? '# Automatic Work execution\n' + AUTOMATIC_WORK_GUIDANCE + '\n' : '') + '# Shared work notes\nNotes orient work, never gate tools or grant permission. Update meaningful changes once, without adoption or echoing. This bounded index omits detail; read work context by key for the full goal path and constraints. Reassess stale branches rather than repeating an obsolete premise.\n' +
       `Active notes: ${all.length}; shown: ${records.length}; omitted: ${all.length - records.length}. Use work context to discover your other notes; select a key or set ask workKey when assignments are ambiguous.\n` +
       (content.length <= 6000 ? content : JSON.stringify(records.map(record => ({
         key: record.key, version: record.sequence, title: record.workflow?.title,
@@ -797,7 +798,7 @@ export class WorkAlignment implements WorkToolGuard {
           signal?.throwIfAborted()
           await this.deps.evidence(source)
         }
-        if (request.status === 'done' && (workflow.dependencies.some(key => this.get(key).workflow?.status !== 'done')
+        if (request.status === 'done' && (!workDependenciesSatisfied(record, this.store.workRecords())
           || this.store.workRecords().some(item => item.workflow?.parentKey === key && !['done', 'cancelled'].includes(item.workflow.status))
           || this.store.workEffects().some(effect => effect.stamps.some(stamp => stamp.key === key)))) {
           throw new WorkConflict('Dependencies, child work and unresolved effects must be settled before completion.')

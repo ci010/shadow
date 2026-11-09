@@ -436,24 +436,25 @@ test('directory Feishu ingress routes after native mention policy; unsubscribed 
     const admit = f.channel['admitGroup'].bind(f.channel)
     f.channel['admitGroup'] = (chatId, name, message) => { if (message?.triggerEligible !== undefined) order.push('trigger'); return admit(chatId, name, message) }
     const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
-    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), {} as SessionManager, inputs.receive,
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, inputs.receive,
       { projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
         routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
     try {
       await manager.init()
-      await f.incoming() // Unmentioned message: accepted by transport, no Session entry.
+      await f.incoming() // Existing assigned mention policy keeps silent history, never an inference turn.
+      assert.equal(received[0]?.silent, true)
       assert.ok(order.indexOf('select') < order.indexOf('handler'))
       assert.ok(order.indexOf('handler') < order.indexOf('trigger'))
       const policySteps = order.length
       await f.incoming({ chat_id: 'oc_unbound', mentions: [{ id: { open_id: 'ou_bot' } }] })
       assert.equal(order.length, policySteps, 'Unsubscribed group never evaluates trigger policy')
       await f.incoming({ mentions: [{ id: { open_id: 'ou_bot' } }] }, 'ou_stranger')
-      assert.equal(received.length, 0)
-      await f.incoming({ message_id: 'om_native', mentions: [{ id: { open_id: 'ou_bot' } }] })
       assert.equal(received.length, 1)
-      assert.equal(received[0]?.platformMessageId, 'om_native')
-      assert.equal(received[0]?.channelAddress?.botInstanceId, bot.id)
-      assert.equal(received[0]?.chatId, 'oc_group')
+      await f.incoming({ message_id: 'om_native', mentions: [{ id: { open_id: 'ou_bot' } }] })
+      assert.equal(received.length, 2)
+      assert.equal(received[1]?.platformMessageId, 'om_native')
+      assert.equal(received[1]?.channelAddress?.botInstanceId, bot.id)
+      assert.equal(received[1]?.chatId, 'oc_group')
     } finally { await manager.stopAll() }
   })
 })
@@ -482,7 +483,7 @@ test('two directory Feishu BOTs on one connection own independent mention/all re
       delivered.push(message.chatId); assert.equal(message.channelAddress?.botInstanceId, connection.id)
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
-    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), {} as SessionManager, inputs.receive, {
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, inputs.receive, {
       projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
       routeInputPolicy: (message, run) => inputs.policy(message, async configuration => {
         assert.ok(configuration?.platform === 'feishu' && Object.isFrozen(configuration))
@@ -493,10 +494,25 @@ test('two directory Feishu BOTs on one connection own independent mention/all re
     try {
       await manager.init()
       await f.incoming({ chat_id: 'oc_mention' }); await f.incoming({ chat_id: 'oc_all' })
-      assert.deepEqual(delivered, ['oc_all'])
+      assert.deepEqual(delivered, ['oc_mention', 'oc_all'])
       assert.deepEqual(configured, ['oc_mention:mention', 'oc_all:all'])
       await f.incoming({ chat_id: 'oc_mention', mentions: [{ id: { open_id: 'ou_bot' } }] })
-      assert.deepEqual(delivered, ['oc_all', 'oc_mention'])
+      assert.deepEqual(delivered, ['oc_mention', 'oc_all', 'oc_mention'])
     } finally { await manager.stopAll() }
   })
+})
+
+
+test('service passive collector keeps newly observed Feishu topics separate before assignment and downloads nothing', async t => {
+  const f = await fixture(t)
+  const captured: import('./passive-contract.ts').PassiveChannelMessage[] = []
+  f.channel.setPassiveCollector(async message => { captured.push(message); return false })
+  await f.incoming({ chat_id: 'oc_group', root_id: 'om_first', thread_id: 'omt_first', message_type: 'image', content: '{"image_key":"platform-image"}' })
+  await f.incoming({ chat_id: 'oc_group', root_id: 'om_second', thread_id: 'omt_second', content: '{"text":"another topic"}' })
+  assert.deepEqual(captured.map(message => [message.chatId, message.passiveParentId]), [['om_first', 'oc_group'], ['om_second', 'oc_group']])
+  assert.equal(captured[0]?.attachmentReferences?.[0]?.id, 'platform-image')
+  assert.equal(f.received.length, 0)
+  assert.equal(f.requests.length, 0, 'No reaction, attachment download or reply before assignment')
+  await f.incoming({ chat_id: 'oc_other', root_id: 'om_first', thread_id: 'omt_first' })
+  assert.equal(captured.length, 2, 'The same root cannot be reassigned to another outer group by a later event')
 })

@@ -37,6 +37,8 @@ export interface ChannelMessageMetadata {
 
 /** Shared inbound metadata and agent execution context. */
 export interface MessageContext {
+  /** In-process arrival lease. Never deserialized or persisted as authority. */
+  channelInputGuard?: () => void
   /** Opaque, in-memory admission from the platform adapter; never grants authority when deserialized. */
   channelAdmissionId?: string
   channelLocation?: import('../channels/integration-contract.ts').DiscordLocation

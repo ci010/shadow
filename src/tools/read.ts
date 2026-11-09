@@ -279,7 +279,7 @@ export class ReadTool implements Tool<ToolResult> {
           }
           return page
         }
-        const result = this.virtualFs.resolve(rel, context)
+        const result = this.virtualFs.resolve(rel, context, { offset: args.offset as number | undefined })
         if (result != null) {
           if (args.encoding !== undefined) throw new Error('read encoding is not supported for virtual paths.')
           const content = await result
@@ -317,7 +317,7 @@ export class ReadTool implements Tool<ToolResult> {
       if (args.offset !== undefined || args.limit !== undefined || flags) {
         throw new Error('Images do not support line paging or flags. Read the image without offset, limit or flag.')
       }
-      const image = await readImage(resolved, context.signal, { optimizeForModel: true })
+      const image = await readImage(resolved, context.signal)
       return { content: [
         { type: 'text', text: `Image from ${JSON.stringify(resolved)} (${image.mime}, ${image.width} x ${image.height}).` },
         image.part,

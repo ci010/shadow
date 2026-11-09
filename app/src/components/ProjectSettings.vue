@@ -30,7 +30,7 @@
           <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">{{ t('App model defaults') }}</RouterLink>
         </section>
         <div v-if="section === 'agents'" class="settings-agents"><AgentsTab :api-base="apiBase" /></div>
-        <ChannelsView v-if="botsOpened" v-show="section === 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="section === 'bots' && route.name === 'project-settings' && route.params.projectId === projectId"
+        <ChannelsView v-if="botsOpened" v-show="section === 'bots' || section === 'connections'" :section="section === 'connections' ? 'connections' : 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="(section === 'bots' || section === 'connections') && route.name === 'project-settings' && route.params.projectId === projectId"
           :review-bot-id="typeof route.query.discordBot === 'string' ? route.query.discordBot : undefined"
           :requested-review-id="typeof route.query.discordReview === 'string' ? route.query.discordReview : undefined" />
       </div>
@@ -58,12 +58,12 @@ defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
 const available = computed(() => installation.value.mode !== 'child' || installation.value.mainWorkspace === true || installation.value.mainConnection === 'connected')
-const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'bots', get label() { return t('Bots') } }]
+const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'connections', get label() { return t('Connections') } }, { id: 'bots', get label() { return t('Bots') } }]
 const section = computed(() => typeof route.params.section === 'string' ? route.params.section : 'general')
 const botsOpened = ref(false)
 const modelsOpened = ref(false)
 watch(section, value => { if (value === 'models') modelsOpened.value = true }, { immediate: true })
-watch(section, value => { if (value === 'bots') botsOpened.value = true }, { immediate: true })
+watch(section, value => { if (value === 'bots' || value === 'connections') botsOpened.value = true }, { immediate: true })
 const project = ref<ProjectRecord>()
 const config = ref<ProjectConfig>()
 const name = ref('')

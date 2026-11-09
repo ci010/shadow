@@ -1,0 +1,232 @@
+diff --git a/engine/crates/layerfs-api/src/sandbox/create.rs b/engine/crates/layerfs-api/src/sandbox/create.rs
+index 2146783..72400ad 100644
+--- a/engine/crates/layerfs-api/src/sandbox/create.rs
++++ b/engine/crates/layerfs-api/src/sandbox/create.rs
+@@ -50,7 +50,7 @@ pub fn connect_address(
+     endpoint: std::net::SocketAddr,
+     host: Option<&str>,
+ ) -> io::Result<std::net::SocketAddr> {
+-    let Some(host) = host else {
++    let Some(host) = host.filter(|host| *host != "docker-bridge") else {
+         return Ok(endpoint);
+     };
+     std::net::ToSocketAddrs::to_socket_addrs(&(host, endpoint.port()))?
+@@ -346,7 +346,7 @@ pub(crate) fn create(
+             .wait_listener(request.startup_wait)
+             .map_err(SandboxCause::Listener)?;
+         phase = SandboxPhase::Endpoint;
+-        let endpoint = owner.endpoint().map_err(SandboxCause::Runtime)?;
++        let endpoint = owner.endpoint_for(request.connect_host.as_deref()).map_err(SandboxCause::Runtime)?;
+         phase = SandboxPhase::Connect;
+         let address =
+             connect_address(endpoint, request.connect_host.as_deref()).map_err(SandboxCause::Io)?;
+diff --git a/engine/crates/layerfs-node/src/discovery.rs b/engine/crates/layerfs-node/src/discovery.rs
+index c0e058d..e864a56 100644
+--- a/engine/crates/layerfs-node/src/discovery.rs
++++ b/engine/crates/layerfs-node/src/discovery.rs
+@@ -456,7 +456,7 @@ pub(crate) fn reopen(args: &SdkValue) -> Result<Arc<SandboxState>> {
+         }
+     })?;
+     let dial = crate::pool::Dial {
+-        endpoint: runtime.endpoint().map_err(failed)?,
++        endpoint: runtime.endpoint_for(crate::pool::daemon_host(args).as_deref()).map_err(failed)?,
+         host: crate::pool::daemon_host(args),
+         secret: bytes(&value, "secret")?,
+         peer: bytes(&value, "peer")?,
+diff --git a/engine/crates/layerfs-node/src/sandbox.rs b/engine/crates/layerfs-node/src/sandbox.rs
+index edf2388..be4b2f9 100644
+--- a/engine/crates/layerfs-node/src/sandbox.rs
++++ b/engine/crates/layerfs-node/src/sandbox.rs
+@@ -232,7 +232,7 @@ fn start_claimed(
+     let instance = owner.startup.instance;
+     let (runtime, control, identity) = split(owner);
+     let dial = crate::pool::Dial {
+-        endpoint: runtime.endpoint().map_err(failed)?,
++        endpoint: runtime.endpoint_for(crate::pool::daemon_host(args).as_deref()).map_err(failed)?,
+         host: crate::pool::daemon_host(args),
+         secret: controller.private,
+         peer: daemon.public,
+diff --git a/engine/crates/layerfs-sandbox/src/backend/docker/endpoint.rs b/engine/crates/layerfs-sandbox/src/backend/docker/endpoint.rs
+index 0d207f1..24b5e4f 100644
+--- a/engine/crates/layerfs-sandbox/src/backend/docker/endpoint.rs
++++ b/engine/crates/layerfs-sandbox/src/backend/docker/endpoint.rs
+@@ -58,6 +58,17 @@ impl Sandbox {
+     /// Observes one exact running container and its single expected loopback port mapping.
+     /// Neither port allocation nor Running is filesystem Ready.
+     pub fn endpoint(&self) -> Result<SocketAddr, Box<WireFailure>> {
++        self.observed_endpoint(false)
++    }
++
++    /// Explicit same-Engine default-bridge route. Never accepts a caller IP;
++    /// the exact managed container, labels, topology and loopback mapping are
++    /// validated in the same inspection as its unique bridge address.
++    pub fn endpoint_for(&self, host: Option<&str>) -> Result<SocketAddr, Box<WireFailure>> {
++        self.observed_endpoint(host == Some("docker-bridge"))
++    }
++
++    fn observed_endpoint(&self, direct: bool) -> Result<SocketAddr, Box<WireFailure>> {
+         if !self.started || self.stop_attempted || self.delete_attempted {
+             return Err(self.invalid("running endpoint admission"));
+         }
+@@ -80,6 +91,7 @@ impl Sandbox {
+             let mut topology = true;
+             let mut running = None;
+             let mut endpoint = None;
++            let mut bridge = None;
+             let mut j = Json::new(&mut r.body);
+             j.object(|j, key| {
+                 if key.equals("Id") {
+@@ -97,7 +109,7 @@ impl Sandbox {
+                     topology &= super::topology::config(j, &self.request.labels)?;
+                 } else if key.equals("HostConfig") {
+                     once(&mut fields, 32)?;
+-                    topology &= super::topology::host(j)?;
++                    topology &= super::topology::host(j, direct.then_some(self.request.port))?;
+                 } else if key.equals("Mounts") {
+                     once(&mut fields, 64)?;
+                     topology &= super::topology::mounts(j, &self.request)?;
+@@ -202,6 +214,31 @@ impl Sandbox {
+                                 }
+                                 Ok(())
+                             })?;
++                        } else if direct && key.equals("Networks") {
++                            once(&mut bits, 2)?;
++                            let mut count = 0;
++                            j.object(|j, network| {
++                                count += 1;
++                                if count != 1 || !network.equals("bridge") {
++                                    return Err(RuntimeError::Protocol("unique default bridge"));
++                                }
++                                let mut seen = 0;
++                                j.object(|j, key| {
++                                    if key.equals("IPAddress") {
++                                        once(&mut seen, 1)?;
++                                        let value = j.string(true)?;
++                                        let ip = value.text().parse::<Ipv4Addr>().map_err(|_| RuntimeError::Protocol("bridge IPv4"))?;
++                                        if value.overflow || !ip.is_private() || ip.is_loopback() || ip.is_unspecified() {
++                                            return Err(RuntimeError::Protocol("private bridge IPv4"));
++                                        }
++                                        bridge = Some(SocketAddr::new(IpAddr::V4(ip), self.request.port));
++                                    } else { j.skip(4)?; }
++                                    Ok(())
++                                })?;
++                                if seen != 1 { return Err(RuntimeError::Protocol("bridge address missing")); }
++                                Ok(())
++                            })?;
++                            if count != 1 { return Err(RuntimeError::Protocol("unique default bridge")); }
+                         } else {
+                             j.skip(2)?;
+                         }
+@@ -233,7 +270,10 @@ impl Sandbox {
+                     "exact running container observation",
+                 ));
+             }
+-            endpoint.ok_or(RuntimeError::Protocol("missing daemon endpoint"))
++            let published = endpoint.ok_or(RuntimeError::Protocol("missing daemon endpoint"))?;
++            if direct {
++                bridge.ok_or(RuntimeError::Protocol("missing default bridge endpoint"))
++            } else { Ok(published) }
+         })();
+         result.map_err(|e| {
+             let mut f = self.selected(r.fail(e, None));
+diff --git a/engine/crates/layerfs-sandbox/src/backend/docker/topology.rs b/engine/crates/layerfs-sandbox/src/backend/docker/topology.rs
+index 9ee9ae6..fb0c9ab 100644
+--- a/engine/crates/layerfs-sandbox/src/backend/docker/topology.rs
++++ b/engine/crates/layerfs-sandbox/src/backend/docker/topology.rs
+@@ -63,11 +63,44 @@ pub(super) fn config<R: Read>(
+     })?;
+     Ok(bits == 15 && valid && labelled)
+ }
+-pub(super) fn host<R: Read>(j: &mut Json<R>) -> Result<bool, RuntimeError> {
++pub(super) fn host<R: Read>(j: &mut Json<R>, direct_port: Option<u16>) -> Result<bool, RuntimeError> {
+     let mut bits = 0;
+     let mut valid = true;
++    let mut direct_bits = 0;
+     j.object(|j, key| {
+-        if key.equals("Privileged") {
++        if direct_port.is_some() && key.equals("NetworkMode") {
++            once(&mut direct_bits, 1)?;
++            valid &= j.string_equals("bridge")?;
++        } else if let Some(port) = direct_port.filter(|_| key.equals("PortBindings")) {
++            once(&mut direct_bits, 2)?;
++            let mut count = 0;
++            j.object(|j, key| {
++                count += 1;
++                if count != 1 || !key.equals(&format!("{port}/tcp")) {
++                    return Err(RuntimeError::Protocol("single daemon port binding"));
++                }
++                let mut bindings = 0;
++                j.array(|j| {
++                    bindings += 1;
++                    let mut bits = 0;
++                    j.object(|j, key| {
++                        if key.equals("HostIp") {
++                            once(&mut bits, 1)?;
++                            valid &= j.string_equals("127.0.0.1")?;
++                        } else if key.equals("HostPort") {
++                            once(&mut bits, 2)?;
++                            valid &= j.string_equals("")?;
++                        } else { j.skip(4)?; }
++                        Ok(())
++                    })?;
++                    valid &= bits == 3;
++                    Ok(())
++                })?;
++                valid &= bindings == 1;
++                Ok(())
++            })?;
++            valid &= count == 1;
++        } else if key.equals("Privileged") {
+             once(&mut bits, 1)?;
+             valid &= !j.boolean()?;
+         } else if key.equals("SecurityOpt") {
+@@ -117,7 +150,7 @@ pub(super) fn host<R: Read>(j: &mut Json<R>) -> Result<bool, RuntimeError> {
+         }
+         Ok(())
+     })?;
+-    Ok(bits == 127 && valid)
++    Ok(bits == 127 && valid && (direct_port.is_none() || direct_bits == 3))
+ }
+ /// Exactly the one FUSE character device, under its own path.
+ fn fuse_device<R: Read>(j: &mut Json<R>) -> Result<bool, RuntimeError> {
+diff --git a/engine/crates/layerfs-sandbox/tests/container_labels.rs b/engine/crates/layerfs-sandbox/tests/container_labels.rs
+index 5f7b7f6..0625eda 100644
+--- a/engine/crates/layerfs-sandbox/tests/container_labels.rs
++++ b/engine/crates/layerfs-sandbox/tests/container_labels.rs
+@@ -152,3 +152,36 @@ fn bad_labels_are_refused_before_any_engine_request() {
+         assert!(peer.finish().is_empty(), "{labels:?}");
+     }
+ }
++
++#[test]
++fn direct_bridge_is_explicit_and_fail_closed_on_the_exact_inspection() {
++    use layerfs_sandbox::{backend::docker::Sandbox, ContainerId};
++    let good = r#"{"bridge":{"IPAddress":"172.17.0.2"}}"#;
++    for (networks, labels, host, accepted) in [
++        (good, ALL, "127.0.0.1", true),
++        ("{}", ALL, "127.0.0.1", false),
++        (r#"{"other":{"IPAddress":"172.17.0.2"}}"#, ALL, "127.0.0.1", false),
++        (r#"{"bridge":{"IPAddress":"172.17.0.2"},"other":{"IPAddress":"172.18.0.2"}}"#, ALL, "127.0.0.1", false),
++        (r#"{"bridge":{"IPAddress":"127.0.0.1"}}"#, ALL, "127.0.0.1", false),
++        (r#"{"bridge":{"IPAddress":"8.8.8.8"}}"#, ALL, "127.0.0.1", false),
++        (r#"{"bridge":{"IPAddress":""}}"#, ALL, "127.0.0.1", false),
++        (r#"{"bridge":{"IPAddress":"172.17.0.2","IPAddress":"172.17.0.3"}}"#, ALL, "127.0.0.1", false),
++        (good, r#"{"layerfs.role":"sandbox","layerfs.project":"foreign","layerfs.sandbox":"2"}"#, "127.0.0.1", false),
++        (good, ALL, "0.0.0.0", false),
++    ] {
++        let original = inspection(labels, &[STORE]);
++        let response = String::from_utf8(original).unwrap();
++        let (_, body) = response.split_once("\r\n\r\n").unwrap();
++        let body = body.replace(r#""HostConfig":{"#,
++            r#""HostConfig":{"NetworkMode":"bridge","PortBindings":{"30421/tcp":[{"HostIp":"127.0.0.1","HostPort":""}]},"#)
++            .replace(r#""NetworkSettings":{"#,
++            &format!(r#""NetworkSettings":{{"Networks":{networks},"#))
++            .replace(r#""HostIp":"127.0.0.1""#, &format!(r#""HostIp":"{host}""#));
++        let (docker, peer) = Peer::new(vec![inspection(ALL, &[STORE]), fixed(200, body.as_bytes())], 8192);
++        let sandbox = Sandbox::reopen(docker, ContainerId::parse(CID).unwrap(), request(&LABELS)).unwrap();
++        let result = sandbox.endpoint_for(Some("docker-bridge"));
++        assert_eq!(result.is_ok(), accepted, "{networks} {labels} {host}: {result:?}");
++        if let Ok(endpoint) = result { assert_eq!(endpoint.to_string(), "172.17.0.2:30421"); }
++        assert_eq!(peer.finish().len(), 2);
++    }
++}

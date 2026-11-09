@@ -17,7 +17,7 @@ import { ImportTool } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
 import { ReadTool } from './read.ts'
 import { SessionTools, Tools } from './registry.ts'
-import { SkillEditing, SkillReadTool, SkillSaveTool } from './skill-edit.ts'
+import { SkillEditing, SkillSaveTool } from './skill-edit.ts'
 
 const manifest = (body: string) => `---\nname: learned\nlearnedAt: 2026-01-01\n---\n${body}`
 
@@ -31,8 +31,8 @@ function setup(home: string) {
   const evalBridge = new EvalBridgeRuntime({ projectId: 'p', scope: createProjectScope('p') })
   const importer = new ImportTool(new Map(), home, undefined, name => skills.getSkillDirectory(name))
   const vfs = new VirtualFs()
-  vfs.mount('v:skills', 'Skills', createSkillsHandler(skills, (skill, context) => importer.registerSkillTools(skill, context)).read)
-  for (const tool of [new SkillReadTool(editing), new SkillSaveTool(editing)]) {
+  vfs.mount('v:skills', 'Skills', createSkillsHandler(skills, (skill, context) => importer.registerSkillTools(skill, context), undefined, (path, context, continuation) => editing.readRaw(path, context, continuation)).read)
+  for (const tool of [new SkillSaveTool(editing)]) {
     base.register(tool)
     importer.registerBuiltin(tool.name, tool)
   }
@@ -58,13 +58,14 @@ test('ordinary Skills save directly; hidden baselines detect other sessions and 
     assert.equal(saved.status, 'saved')
     assert.equal('revision' in saved, false)
     assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('B') } })), /Read the existing Skill/)
-    const read = JSON.parse(requireToolText(await f.invoke(b, 'skill_read', { name: 'learned' })))
-    assert.equal(read.content, manifest('First'))
-    assert.equal('revision' in read, false)
+    const read = requireToolText(await b.tools.execute('read', { path: 'v:skills/.raw/learned' }, b))
+    assert(read.endsWith(manifest('First')))
+    assert(!read.includes('"revision":'))
+    assert.equal(f.base.has('skill_read'), false)
     assert.match(requireToolText(await f.invoke(a, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Second') } })), /"saved"/)
     assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale') } })), /conflict|changed|stale/i)
     assert.equal(f.skills.getSkill('learned')?.body, 'Second')
-    await f.invoke(b, 'skill_read', { name: 'learned' })
+    await b.tools.execute('read', { path: 'v:skills/.raw/learned' }, b)
     await writeFile(projectStoragePath(home, 'skills', 'learned', 'SKILL.md'), manifest('External'))
     assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale again') } })), /conflict|changed|stale/i)
     assert.equal(await readFile(projectStoragePath(home, 'skills', 'learned', 'SKILL.md'), 'utf8'), manifest('External'))
@@ -82,9 +83,11 @@ test('administrator can edit tool-bearing Skills without activating or executing
     assert.match(requireToolText(await f.invoke(administrator, 'skill_save', {
       name: 'learned', files: { 'SKILL.md': text, 'tools/run.ts': 'export function run() { return "fixture" }' },
     })), /"saved"/)
-    const raw = JSON.parse(requireToolText(await f.invoke(administrator, 'skill_read', { name: 'learned' })))
-    assert.equal(raw.content, text)
-    assert.deepEqual(raw.files, ['SKILL.md', 'tools/run.ts'])
+    const raw = requireToolText(await administrator.tools.execute('read', { path: 'v:skills/.raw/learned' }, administrator))
+    assert(raw.endsWith(text))
+    assert.match(raw, /tools\/run.ts/)
+    const resource = requireToolText(await administrator.tools.execute('read', { path: 'v:skills/.raw/learned/tools/run.ts' }, administrator))
+    assert(resource.endsWith('export function run() { return "fixture" }'))
     assert.equal(administrator.tools.has('invoke_tool'), true)
     assert.equal(administrator.tools.has('write'), false)
     assert(!administrator.tools.activeDynamicTools().some(tool => tool.name === 'learned_tool'))
@@ -101,6 +104,12 @@ test('editing rejects project, role, remote, temporary, malformed and aborted re
     const f = setup(home)
     const current = f.context('web:topic')
     const args = { name: 'learned', files: { 'SKILL.md': manifest('Fixture') } }
+    for (const denied of [
+      { ...current, projectId: 'other' },
+      { ...current, sessionId: 'managed:bot' },
+    ]) {
+      assert.match(requireToolText(await denied.tools.execute('read', { path: 'v:skills/.raw/learned' }, denied)), /durable local/)
+    }
     await assert.rejects(f.editing.save(args, { ...current, projectId: 'other' }), /durable local/)
     await assert.rejects(f.editing.save(args, { ...current, sessionId: 'managed:bot' }), /durable local/)
     await assert.rejects(f.editing.save(args, {
@@ -132,13 +141,15 @@ test('raw Skill reads paginate and missing baselines cannot overwrite a newly cr
     assert.equal(missing.source, 'missing')
     await f.editing.save({ name: 'learned', files: { 'SKILL.md': manifest('X'.repeat(9000)) } }, b)
     await assert.rejects(f.editing.save({ name: 'learned', files: { 'SKILL.md': manifest('A') } }, a), /conflict|changed|stale/i)
-    const first = JSON.parse(f.editing.read({ name: 'learned', limit: 10 }, a))
-    const second = JSON.parse(f.editing.read({ name: 'learned', offset: first.nextOffset, limit: 10 }, a))
-    assert.equal(first.content + second.content, manifest('X'.repeat(9000)).slice(0, 20))
+    const full = requireToolText(await a.tools.execute('read', { path: 'v:skills/.raw/learned' }, a))
+    assert(full.endsWith(manifest('X'.repeat(9000))))
+    const first = requireToolText(await a.tools.execute('read', { path: 'v:skills/.raw/learned', offset: 1, limit: 3 }, a))
+    const second = requireToolText(await a.tools.execute('read', { path: 'v:skills/.raw/learned', offset: 4, limit: 3 }, a))
+    assert(first.includes('learned'))
+    assert.notEqual(first, second)
     assert.throws(() => f.editing.read({ name: 'learned', path: '../outside' }, a), /does not exist/)
-    assert.throws(() => f.editing.read({ name: 'learned', offset: 10000 }, a), /Offset exceeds/)
     await f.editing.save({ name: 'learned', files: { 'SKILL.md': manifest('Updated') } }, b)
-    assert.throws(() => f.editing.read({ name: 'learned', offset: first.nextOffset }, a), /changed between reads/)
+    assert.match(requireToolText(await a.tools.execute('read', { path: 'v:skills/.raw/learned', offset: 4 }, a)), /changed between reads/)
     f.editing.read({ name: 'learned' }, a)
     a.tools.resetDynamic()
     await assert.rejects(f.editing.save({ name: 'learned', files: { 'SKILL.md': manifest('After sleep') } }, a), /Read the existing Skill/)

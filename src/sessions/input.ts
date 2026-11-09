@@ -127,6 +127,7 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
     throw new TypeError('A retry cannot be silent or queued')
   }
   const sender: MessageContext = {
+    channelInputGuard: message.channelInputGuard,
     channelAdmissionId: message.channelAdmissionId,
     channelLocation: message.channelLocation,
     ...(message.channelAddress ? { channelAddress: message.channelAddress } : {}),

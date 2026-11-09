@@ -18,6 +18,8 @@ export interface CapabilityInvocationContext {
   revision: string
   signal: AbortSignal
   assertCurrent: () => void
+  /** Host-only browser route, never supplied by guest input. Must drain cancellation. */
+  browserRequest?: typeof fetch
   onHttpProgress?: (event: { stage: 'request' } | { stage: 'response'; status: number }) => void
 }
 
@@ -346,8 +348,6 @@ interface BrokerOptions {
   resolveSecret: (ref: string) => Promise<string | undefined>
   deliver: (sessionId: string, input: DeliverInputPayload) => Promise<unknown>
   canDeliver: (sessionId: string) => boolean
-  resolveProposalInbox?: (name: string, repository: string, pinnedTarget?: string) => Promise<string>
-  admitProposalInbox?: (name: string, repository: string, target: string, deliver: () => Promise<unknown>) => Promise<unknown>
   /** Trusted host/test transport only. Production defaults to DNS-pinned node:https. */
   request?: typeof fetch
 }
@@ -377,7 +377,6 @@ export class CapabilityBroker {
     try { serialized = canonical(input) } catch { fail('invalid_input', 'Capability input must be finite, acyclic JSON.') }
     if (Buffer.byteLength(serialized) > MAX_BYTES) fail('invalid_input', 'Capability input is too large.')
     input = JSON.parse(serialized) as Record<string, unknown>
-    if (grant.kind === 'proposal-inbox') return this.publicIssueProposal(grant, input, context)
     if (grant.kind === 'inbox') return this.inbox(grant, input, context)
     return this.http(grant, input, context)
   }
@@ -397,7 +396,7 @@ export class CapabilityBroker {
       checkpoint(context)
       return this.keyed(grant, idempotencyKey, payload, context, action)
     }
-    const operation = this.withRecord(key, hash, grant.kind === 'proposal-inbox' ? 'inbox' : grant.kind, context, action)
+    const operation = this.withRecord(key, hash, grant.kind, context, action)
     inflight.set(filename, operation)
     try { return await operation } finally { if (inflight.get(filename) === operation) inflight.delete(filename) }
   }
@@ -486,37 +485,11 @@ export class CapabilityBroker {
     }
   }
 
-  /** No guest prose/history crosses this boundary. Only public issue identity and bounded triage hints. */
-  private async publicIssueProposal(grant: Extract<CapabilityGrant, { kind: 'proposal-inbox' }>, raw: Record<string, unknown>, context: CapabilityInvocationContext): Promise<unknown> {
-    const repository = grant.disclosurePolicy!.repository
-    const parsed = z.object({
-      issueNumber: z.number().int().min(1).max(2147483647),
-      suggestedPriority: z.enum(['triage', 'normal', 'urgent']),
-      category: z.enum(['bug', 'feature', 'investigation']),
-    }).strict().safeParse(raw)
-    if (!parsed.success) fail('invalid_input', 'Only bounded public issue proposal fields are allowed.')
-    checkpoint(context)
-    const input = parsed.data
-    // Deliberately anonymous: successful lookup cannot rely on private-repository credentials.
-    const response = await this.http({ id: 'public-issue-verification', kind: 'http', origin: 'https://api.github.com',
-      routes: [{ method: 'GET', path: `/repos/${repository}/issues/*` }] },
-    { method: 'GET', path: `/repos/${repository}/issues/${input.issueNumber}` }, context) as HttpResult
-    const issue = response.body as Record<string, unknown> | null
-    const url = `https://github.com/${repository}/issues/${input.issueNumber}`
-    if (!issue || issue.number !== input.issueNumber || issue.html_url !== url || issue.pull_request) fail('invalid_public_issue', 'Public issue verification failed.')
-    // Do not forward title/body/comments: even public text can contain secrets or instructions.
-    return this.inbox(grant, {
-      content: JSON.stringify({ type: 'public-issue-handling-proposal', repository,
-        ...input, url, hintsAreUntrusted: true }),
-      reference: url, idempotencyKey: `public-issue-proposal:${input.issueNumber}`,
-    }, context)
-  }
-
-  private async inbox(grant: Extract<CapabilityGrant, { kind: 'inbox' | 'proposal-inbox' }>, raw: Record<string, unknown>, context: CapabilityInvocationContext): Promise<unknown> {
+  private async inbox(grant: Extract<CapabilityGrant, { kind: 'inbox' }>, raw: Record<string, unknown>, context: CapabilityInvocationContext): Promise<unknown> {
     const parsed = inboxInput.safeParse(raw)
     if (!parsed.success) fail('invalid_input', 'Invalid inbox input.')
     const input = parsed.data
-    let target = grant.kind === 'inbox' ? grant.sessionId : undefined
+    const target = grant.sessionId
     const check = () => {
       checkpoint(context)
       if (target && (target === context.sessionId || !this.options.canDeliver(target))) {
@@ -527,12 +500,6 @@ export class CapabilityBroker {
     return this.keyed(grant, input.idempotencyKey, [context.sessionId, input], context, async (record, save) => {
       check()
       await save(record)
-      if (grant.kind === 'proposal-inbox') {
-        if (!this.options.resolveProposalInbox) fail('invalid_target', 'Logical inbox resolver is unavailable.')
-        target = await this.options.resolveProposalInbox(grant.inbox, grant.disclosurePolicy.repository, record.envelope?.targetSessionId)
-        record = { ...record, envelope: { ...record.envelope!, targetSessionId: target } }
-        await save(record)
-      }
       check()
       const provenance = record.envelope!
       const payload: DeliverInputPayload = {
@@ -546,10 +513,7 @@ export class CapabilityBroker {
       }
       const deliver = () => { check(); return this.options.deliver(target!, payload) }
       try {
-        if (grant.kind === 'proposal-inbox') {
-          if (!this.options.admitProposalInbox) fail('invalid_target', 'Logical inbox admission guard is unavailable.')
-          await abortable(this.options.admitProposalInbox(grant.inbox, grant.disclosurePolicy.repository, target!, deliver), context.signal)
-        } else await abortable(deliver(), context.signal)
+        await abortable(deliver(), context.signal)
       } catch {
         fail('delivery_retryable', 'Inbox admission failed or is uncertain; repeat the same key to retry with the same input ID.')
       }
@@ -570,8 +534,12 @@ export class CapabilityBroker {
     const match = routes.find(value => value.route.method === input.method && value.segments.length === segments.length &&
       value.segments.every((segment, index) => segment === '*' ? !!segments[index] : segment === segments[index]))
     if (!match) fail('route_denied', 'HTTP method and path are not granted.')
+    if (match.route.querySchema) validateJsonSchema(match.route.querySchema, input.query ?? {})
     if (input.method === 'GET' && Object.hasOwn(raw, 'body')) fail('invalid_input', 'GET requests must not contain a body.')
-    if (input.method !== 'GET' && !input.idempotencyKey) fail('invalid_input', 'HTTP mutations require a stable idempotencyKey.')
+    // Only the trusted host binding may assert read-only acquisition. Guest input
+    // cannot opt out of mutation receipts; schemas still constrain read POSTs.
+    const readAcquisition = match.route.effect === 'read'
+    if (input.method !== 'GET' && !readAcquisition && !input.idempotencyKey) fail('invalid_input', 'HTTP mutations require a stable idempotencyKey.')
     if (match.route.bodySchema) {
       validateJsonSchema(match.route.bodySchema, input.body)
     }
@@ -581,6 +549,7 @@ export class CapabilityBroker {
     const headers: Record<string, string> = { accept: 'application/json', 'user-agent': 'Shadow' }
     const body = Object.hasOwn(raw, 'body') ? canonical(input.body) : undefined
     if (body !== undefined) headers['content-type'] = 'application/json'
+    if (context.browserRequest && grant.credential) fail('browser_policy', 'Browser cookie auth cannot be combined with credential injection.')
     let secret: string | undefined
     if (grant.credential) {
       if (/^(host|connection|content-length|transfer-encoding|cookie|set-cookie|proxy-.*|sec-.*|origin|referer|upgrade|trailer|te)$/i.test(grant.credential.header) ||
@@ -603,7 +572,7 @@ export class CapabilityBroker {
         fail('network_error', 'HTTP capability transport failed.')
       }
     }
-    if (input.method === 'GET' && !input.idempotencyKey) return perform()
+    if (readAcquisition || (input.method === 'GET' && !input.idempotencyKey)) return perform()
     return this.keyed(grant, input.idempotencyKey!, raw, context, async (record, save) => {
       // Existence, not an in-memory flag, distinguishes a crashed pending write
       // from a new operation. No automatic retry is safe for such mutations.
@@ -629,6 +598,9 @@ export class CapabilityBroker {
         // Persist if still authorized; otherwise the pending record itself is
         // the fail-closed uncertain receipt on the next execution.
         try { await save({ ...record, state: 'uncertain' }) } catch { /* Pending already forbids mutation replay. */ }
+        // Receipt uncertainty and host browser cleanup uncertainty are separate.
+        // Keep no-replay protection, but do not hide an unconfirmed drain from lifecycle.
+        if (error instanceof CapabilityError && error.code === 'browser_cleanup_unconfirmed') throw error
         fail('uncertain_outcome', 'HTTP write outcome is uncertain; do not blindly repeat it or use a new key.')
       }
     })
@@ -644,13 +616,14 @@ export class CapabilityBroker {
       if (signal.aborted) fail('timeout', 'HTTP capability timed out.')
     }
     check()
-    if (this.options.request) {
-      // An injected transport is trusted host code, never guest configurable.
-      // It must honor the same DNS policy if used outside synthetic tests.
+    if (context.browserRequest || this.options.request) {
+      // Both routes are trusted host code; browser cancellation must drain its controller.
       context.onHttpProgress?.({ stage: 'request' })
-      const response = await abortable(this.options.request(url, {
-        method, headers, body, signal, redirect: 'error', credentials: 'omit',
-      }), signal)
+      const request = context.browserRequest ?? this.options.request!
+      const pending = request(url, {
+        method, headers, body, signal, redirect: 'error', credentials: context.browserRequest ? 'include' : 'omit',
+      })
+      const response = context.browserRequest ? await pending : await abortable(pending, signal)
       context.onHttpProgress?.({ stage: 'response', status: response.status })
       check()
       if (response.redirected || (response.url && new URL(response.url).origin !== url.origin)) {

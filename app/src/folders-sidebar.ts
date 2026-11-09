@@ -1,3 +1,4 @@
+import { parseChannelSource, type ChannelSource } from '../../src/channels/passive-contract.ts'
 import { t } from './i18n.ts'
 import { sessionActivity } from './session-activity.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
@@ -14,6 +15,7 @@ export const FOLDER_ACTIONS = [
 ] as const
 
 export interface SidebarSession {
+  channelSource?: ChannelSource
   groupObservation?: import('./service-groups.ts').ServiceGroup
   automation?: AutomationSessionRef
   sessionId: string
@@ -137,8 +139,9 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.parentToolCallId !== undefined && (typeof session.parentToolCallId !== 'string' || !session.parentToolCallId))
       || (session.focus !== undefined && typeof session.focus !== 'string')
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
+    const channelSource = parseChannelSource(session.channelSource, session.sessionId, projectId ?? session.projectId as string | undefined)
     let channelAddress: ChannelAddress | undefined
-    try { channelAddress = channelAddressFromSessionId(session.sessionId) }
+    try { channelAddress = channelSource ?? channelAddressFromSessionId(session.sessionId) }
     catch { throw invalid() }
     if (channelAddress && (projectId !== undefined && channelAddress.projectId !== projectId
       || session.projectId !== undefined && channelAddress.projectId !== session.projectId)) throw invalid()
@@ -161,10 +164,12 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
     if (defaults != null && (!isRecord(defaults) || typeof defaults.model !== 'string' || !defaults.model.trim()
       || (defaults.thinking !== undefined && (!isRecord(defaults.thinking) || (defaults.thinking.type !== 'enabled' && defaults.thinking.type !== 'disabled')))
       || (defaults.reasoningEffort !== undefined && !isReasoningEffort(defaults.reasoningEffort)))) throw invalid()
+    const displayTitle = channelSource ? t('{name} · passive inbox', { name: channelSource.name ?? sessionDisplayTitle(session, topic) }) : sessionDisplayTitle(session, topic)
     return {
       sessionId: session.sessionId,
       projectId: session.projectId as string | undefined,
       channelAddress,
+      channelSource,
       inferenceDefaults: isRecord(defaults) && typeof defaults.model === 'string' ? {
         model: defaults.model,
         ...(typeof defaults.contextWindow === "number" ? { contextWindow: defaults.contextWindow } : {}),
@@ -176,8 +181,8 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       focus: session.focus as string | undefined,
       createdBySessionId: session.createdBySessionId as string | undefined,
       automation,
-      title: sessionDisplayTitle(session, topic),
-      label: sessionDisplayTitle(session, topic),
+      title: displayTitle,
+      label: displayTitle,
       lastActivityAt: typeof session.lastActivityAt === 'string' && Number.isFinite(Date.parse(session.lastActivityAt)) ? session.lastActivityAt : undefined,
       description: session.description as string | undefined,
       folderId: session.folderId as string | undefined,

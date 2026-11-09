@@ -311,7 +311,7 @@ The Agent type browser separates definition browsing from runtime inspection. A 
 
 Desktop conversation rows form a centered column of `calc(100cqw - 112px)` with a (0.5rem) gap. Bubbles and message actions are content-fitting with a maximum of (80%); user bubbles align right, assistant/action rows align left. The shared `--conversation-item-max-width` caps assistant, system, compaction, tool, execution, and action rows. Some structural rows, including execution cards, request full available width **within** that cap; do not force every row to have identical intrinsic width.
 
-Compacted-history navigation, unlinked execution traces, and the conversation summary share that same capped rail. Use transparent secondary navigation, (12px) disclosure labels, (40px) minimum rows, and (44px) touch targets on coarse pointers. Expanded execution lists and summary Markdown share a one-pixel neutral guide; execution titles wrap in quiet full-width rows rather than filled primary buttons. Summaries remain collapsed and render Markdown only when opened, with no nested vertical scroller. Work title, goal, scope, and non-goals live in the session-title details popover (or mobile sheet), not in a second heading row; Project coordination guidance follows the same rule.
+Compacted-history navigation, unlinked execution traces, and the conversation summary share that same capped rail. Use transparent secondary navigation, (12px) disclosure labels, (40px) minimum rows, and (44px) touch targets on coarse pointers. Expanded execution lists use a one-pixel neutral guide; execution titles wrap in quiet full-width rows rather than filled primary buttons. Summaries use the same square action surface and one-pixel chat border as event cards, with a leading history icon, a trailing disclosure chevron and 12px header/body padding instead of an inset vertical guide. They remain collapsed and render Markdown only when opened, with no nested vertical scroller. Work title, goal, scope, and non-goals live in the session-title details popover (or mobile sheet), not in a second heading row; Project coordination guidance follows the same rule.
 
 Work realignment events keep their agent-facing instructions and JSON in the shared tool payload renderer, mounted only when expanded: (12px) monospace, secondary text on a muted surface, token-based corners, and wrapping identifiers. Event metadata uses the same chevron disclosure as other trace details, not the browser's default marker. Preserve event content and behavior; these are read-only records, not adoption controls.
 
@@ -460,8 +460,8 @@ floats inside the conversation pane above the measured composer allowance, with
 space reserved for the history rail. Use shared HoverInfo and a localized accessible
 label, not a visible text banner. Load older messages is a quiet centered text
 action; a reached window limit is separate muted explanatory text, not a disabled
-button. Segment History disclosures use neutral text navigation and do not expose
-raw physical IDs as reading content.
+button. Targeted history navigation does not expose raw physical IDs as reading
+content.
 The first version loads one segment per request, stops manual/lazy loading after
 eight older segments or 2,000 loaded messages, and does not virtualize messages
 within a segment. A single fetched segment may exceed that soft message limit;
