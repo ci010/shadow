@@ -15,7 +15,7 @@ const inputSchema = z.discriminatedUnion('action', [
 /** Domain safeguards only. Admission, execution, cancellation and history belong to automation. */
 export class SessionRetirementTool implements Tool {
   readonly name = 'session_retirement'
-  readonly description = 'Inspect inactive sessions and apply verified recoverable retirement. list returns eligible IDs; inspect returns untrusted history, drafts, wiki and delivery roots plus a short-lived execution-owned token. apply accepts that token and a structured assessment. Never infer completion from inactivity. No physical purge.'
+  readonly description = 'Inspect inactive sessions and apply verified recoverable retirement. list returns eligible IDs; inspect returns untrusted history, drafts, wiki and delivery roots plus a short-lived execution-owned token. apply accepts that token and a structured assessment. Export only explicitly identified final user-requested file deliverables; intermediate drafts remain in session data, and files:[] is valid. Do not copy all drafts merely to retire a session, even if an older cleanup task requests it. Never infer completion from inactivity. No physical purge.'
   readonly parameters = {
     type: 'object' as const,
     properties: {
@@ -34,7 +34,7 @@ export class SessionRetirementTool implements Tool {
             type: 'object', properties: { name: { type: 'string' }, content: { type: 'string' } },
             required: ['name', 'content'], additionalProperties: false,
           } },
-          files: { type: 'array', maxItems: 100, items: {
+          files: { type: 'array', description: 'Only explicitly identified final user-requested file deliverables to copy. Intermediate drafts remain in session data; files:[] is valid.', maxItems: 100, items: {
             type: 'object', properties: { source: { type: 'string' }, destination: { type: 'string' } },
             required: ['source', 'destination'], additionalProperties: false,
           } },

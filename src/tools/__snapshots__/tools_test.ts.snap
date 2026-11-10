@@ -349,7 +349,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "session",
-      "description": "Create durable peer conversations and register folders. Read/write v:session/self.json for your own metadata/completion. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.",
+      "description": "Create durable peer conversations and register folders. Read/write v:sessions/self.json for your own metadata/completion. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.",
       "parameters": {
         "type": "object",
         "properties": {

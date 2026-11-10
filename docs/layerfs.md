@@ -546,7 +546,7 @@ List/history/diff use pages of 100, with optional nonnegative `offset`.
 ## Safety and integration limits
 
 - LayerFS IDs are not host workspace registrations. Ordinary read/write/exec accept
-  the mount ID in `workspace`; use_project, search and child cwd do not. Never
+  the mount ID in `workspace`; workspace_use, search and child cwd do not. Never
   register `/workspaces/1` as a host Folder or pass it as a host cwd. There is no
   host export, automatic source merge-back, or remote route. Old unprefixed opaque
   IDs remain supported by the dedicated layerfs tool only, never guessed by ordinary tools.

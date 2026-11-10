@@ -68,4 +68,4 @@ recovery needs justify a shared goal map, read `v:skills/work-coordination`.
 Optional `work:{key}` on creation binds an existing unassigned note coordinated
 by the creator before kickoff; use the live tool contract for requirements.
 
-For your own metadata and completion, prefer `v:session/self.json` (`topic`, `focus`, `completed`). Set topic after understanding the first request; change only focus during subtask/debug phases. Change topic only for a real overall topic shift. Empty focus displays the topic.
+For your own metadata and completion, prefer `v:sessions/self.json` (`topic`, `focus`, `completed`). Set topic after understanding the first request; change only focus during subtask/debug phases. Change topic only for a real overall topic shift. Empty focus displays the topic.

@@ -1,3 +1,4 @@
+import { listRemoteFolderSkillResources } from '../skills/remote-folder.ts'
 import { discoverFolderSkills, folderSkillsSummary, readFolderSkillResource, type FolderSkillScope } from '../skills/folder.ts'
 import { delegationOwner } from '../sessions/execution-scope.ts'
 import type { ChatMessage } from '../providers/provider.ts'
@@ -291,20 +292,25 @@ export function createSkillsHandler(
     if (!subpath) {
       const names = skills.availableSkills(context.admin).map(skill => skill.meta.name)
       const scope = folderScope?.(context)
-      const folderIndex = scope ? folderSkillsSummary(await discoverFolderSkills(scope, context.admin), scope) : ''
+      const folderIndex = scope ? folderSkillsSummary(await discoverFolderSkills(scope, context.admin, context), scope) : ''
       return [names.map(n => `- ${n}`).join('\n') || 'No Project/global skills loaded.', folderIndex].filter(Boolean).join('\n\n')
     }
 
     if (subpath === 'folder' || subpath.startsWith('folder/')) {
       const scope = folderScope?.(context)
-      if (!scope) return 'No selected local folder skill scope.'
-      const scoped = await discoverFolderSkills(scope, context.admin)
+      if (!scope) return 'No selected folder skill scope.'
+      const scoped = await discoverFolderSkills(scope, context.admin, context)
       const scopedPath = subpath.replace(/\/+$/, '')
       if (scopedPath === 'folder') return folderSkillsSummary(scoped, scope)
       const [name, ...parts] = scopedPath.slice('folder/'.length).split('/')
       const skill = scoped.find(skill => skill.meta.name === name)
       if (!skill) return `Unknown selected-folder skill: ${name}`
-      if (parts.length) return readFolderSkillResource(skill, parts.join('/'))
+      if (parts.length) return readFolderSkillResource(skill, parts.join('/'), context)
+      if (scope.workdir) {
+        const warning = skill.meta.toolsError || Object.keys(skill.meta.tools ?? {}).length
+          ? '\n\nRemote skill tool execution is unavailable: declarations are not registered or executed on Main.' : ''
+        return `Selected-folder skill source: ${JSON.stringify(skill.dirPath)}; scope: ${JSON.stringify(scope)}\n\n${skill.body}${warning}`
+      }
       if (skill.meta.toolsError) throw new Error(skill.meta.toolsError)
       if (Object.keys(skill.meta.tools ?? {}).length && !registerTools) throw new Error('Skill tool registration is not configured')
       const registered = await registerTools?.(skill, context) ?? []
@@ -363,14 +369,14 @@ export function createSkillsHandler(
     const entries = []
     const subpath = options?.subpath
     const scope = folderScope?.(context)
-    if (scope) for (const skill of await discoverFolderSkills(scope, context.admin)) {
+    if (scope) for (const skill of await discoverFolderSkills(scope, context.admin, context)) {
       const name = `folder/${skill.meta.name}`
       if (subpath && name !== subpath && !name.startsWith(`${subpath}/`) && !subpath.startsWith(`${name}/`)) continue
       entries.push({ name, content: options?.content === false ? '' : skill.body, warning: skill.meta.toolsError })
-      for (const resource of await walkResourceFiles(skill.dirPath, context.signal)) {
+      for (const resource of await (skill.folderScope.workdir ? listRemoteFolderSkillResources(skill, context) : walkResourceFiles(skill.dirPath, context.signal))) {
         const path = `${name}/${resource}`
         if (subpath && path !== subpath && !path.startsWith(`${subpath}/`)) continue
-        entries.push({ name: path, content: options?.content === false ? '' : await readFolderSkillResource(skill, resource) })
+        entries.push({ name: path, content: options?.content === false ? '' : await readFolderSkillResource(skill, resource, context) })
       }
     }
     for (const skill of skills.availableSkills(context.admin)) {

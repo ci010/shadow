@@ -54,7 +54,7 @@ test('folder declarations: search is offline; lazy invocation and A/B isolation'
   await registry.init()
   const target = await registry.register(join(home, 'b'))
   const switcher = new UseProjectTool({ projectId: 'fixture', folders: registry, switched: ctx => importer.clearFolderMcpTools(ctx.tools) })
-  await switcher.execute({ folder: target.id }, { ...context, projectId: 'fixture', toolCallName: 'use_project', switchProjectFolder: async () => 'committed' })
+  await switcher.execute({ folder: target.id }, { ...context, projectId: 'fixture', toolCallName: 'workspace_use', switchProjectFolder: async () => 'committed' })
   assert.ok(!tools.hasDynamic(name + '__ping'), 'switch hook removes names immediately')
   assert.equal(disconnect.mock.callCount(), 0, 'switch preserves borrowed connections')
   const b = await importer.virtualEntries({ ...context, folderId: 'b', cwd: join(home, 'b') })

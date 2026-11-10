@@ -20,11 +20,13 @@ name-ID selector, then the full folder UUID. Each candidate is checked with the
 same `selectFolder` resolver used by selection; short UUID prefix collisions or
 names resembling another selector cannot silently select the wrong folder.
 Use the listed selector with per-call `read`/`write`/`exec`/`search` `workspace`,
-`use_project(workspace)`, or `session.create(folderId)`.
+`workspace_use(workspace)`, or `session.create(folderId)`.
 The registered folder determines the node; there is no independent node override.
-`use_project` changes an existing session's folder context, not its node, and does
-not currently implement remote-folder switching. Creating a session still applies
-its own locality, availability and authorization checks.
+`workspace_use` changes an existing session's folder context and execution target
+together, including local-to-remote and remote-to-local/remote transitions. It
+reads remote root instructions through the target executor before committing;
+failed availability, authorization or preparation retains the previous context.
+Creating a session still applies its own locality, availability and authorization checks.
 
 ## Registration descriptions
 

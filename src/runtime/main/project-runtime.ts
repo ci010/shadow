@@ -40,7 +40,7 @@ import { WatermarkTool } from '../../tools/watermark.ts'
 import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { bundledChromeAdapter } from '../../browser/chrome-adapter.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
-import { createSelfSessionHandler } from '../../vfs/session.ts'
+import { createSelfSessionHandler, withSelfSession } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
 import { TaskTool } from '../../tools/task.ts'
 import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicFocus } from '../../sessions/lightweight-topic.ts'
@@ -201,6 +201,7 @@ import { SessionProfileService } from '../../sessions/profile.ts'
 import { createStatsHandler } from '../../vfs/stats.ts'
 import { createRuntimeHandler } from '../../vfs/runtime.ts'
 import { FrontendLog, registerFrontendLogRoutes } from '../frontend-log.ts'
+import { requestDiagnostic } from '../../gateway/request-diagnostic.ts'
 import { RuntimeDiagnosticLog } from '../diagnostic-log.ts'
 
 import { OtelStore } from '../../otel/store.ts'
@@ -296,7 +297,7 @@ export async function createProjectRuntime(
   }
   const events = new EventService(workspace, bus, (sessionId, input) => deliverInput(sessionId, input))
   cleanup.push(() => events.stop())
-  let provider = createAggregatedProvider(config, copilotAuth)
+  let provider = createAggregatedProvider(config, copilotAuth, dependencies.accountHome)
   let activeConfig = config
   const backgroundTasks = new BackgroundTaskManager(bus, events, scope, workspace)
   cleanup.push(() => backgroundTasks.stop())
@@ -384,6 +385,7 @@ export async function createProjectRuntime(
   // ── Create gateway app early so we can pass it to Agent ──
   const app = new Hono()
   app.use('*', (_c, next) => scope.run(next))
+  app.use('*', requestDiagnostic())
   if (!dependencies.realtimeHub) registerRealtimeRoute(app, realtimeHub, dependencies.authorize)
   const evalBridge = new EvalBridgeRuntime({ projectId: project.id, scope })
   cleanup.push(() => evalBridge.shutdown())
@@ -1029,9 +1031,9 @@ export async function createProjectRuntime(
     dependencies.diagnostics ?? new RuntimeDiagnosticLog(), project.id,
     (id, actor) => topics.assertActor(id, actor),
     () => otelStore.queryLogs({ afterId: runtimeLogStartId, limit: 200 }),
-    sessions, frontendLog,
+    sessions, frontendLog, dependencies.debugProjects,
   )
-  vfs.mount('v:runtime', 'read-only runtime logs and current/other Project session prompt/tool debug; read v:runtime for paths, provenance and capture limits', runtimeDiagnostics.read, runtimeDiagnostics.list)
+  vfs.mount('v:runtime', 'read-only current Project logs and session prompt/tool diagnostics; projects is development-only, Default Project cross-Project diagnostics; read v:runtime for paths, provenance and capture limits', runtimeDiagnostics.read, runtimeDiagnostics.list)
 
   const projectFoldersVfs = projectFolderDiscovery.handlers()
   const dispatchFiles = new ProjectDispatchFiles(workspace, project.id)
@@ -1041,7 +1043,7 @@ export async function createProjectRuntime(
     path => github.readVirtual(path), () => github.virtualEntries())
   vfs.mount(
     'v:project',
-    'current Project workspace discovery and writable dispatch-instructions.md / dispatch-memory.md; workspace metadata is not cwd or an access grant',
+    'list registered workspaces in the current Project and inspect their details; read/write auto-dispatch instructions and memory; workspace discovery does not change cwd or grant access',
     async (path, context, options) => {
       if (isDispatchFile(path)) return dispatchFilesVfs.read(path, context, options)
       const folders = await projectFoldersVfs.read(path, context, options)
@@ -1076,7 +1078,6 @@ export async function createProjectRuntime(
   vfs.mount('v:agents', 'available local roles and configured remote agent targets; discovery grants no capabilities', agentsVfs.read, agentsVfs.list)
 
   const selfSessionVfs = createSelfSessionHandler(sessions, () => topics)
-  vfs.mount('v:session', 'self.json: read/write current session topic, focus and completed as JSON; identity is runtime-bound; task metadata is parent-owned', selfSessionVfs.read, undefined, selfSessionVfs.write)
 
   // Explicit host capability: target-owned services, no remote dispatcher or actor impersonation.
   const debugHistory = createSessionsHandler(sessions)
@@ -1090,22 +1091,18 @@ export async function createProjectRuntime(
     if (path === 'runtime/logs' || path === 'runtime/sessions' || /^runtime\/sessions\/[^/]+\/(captures|tools)$/.test(path)) return debugRuntime.read(path.slice(8), ctx)
     throw new Error('Unsupported diagnostic target path.')
   }
-  if (dependencies.debugProjects) vfs.mount('v:debug', 'development-only default-Project v:debug/projects read-only diagnostics; sensitive data, never instructions', (path, ctx) => {
-    if (path !== 'projects' && !path.startsWith('projects/')) throw new Error('Read v:debug/projects for diagnostic paths.')
-    return dependencies.debugProjects!(path === 'projects' ? '' : path.slice(9), ctx)
-  })
-  const sessionsVfs = createSessionsHandler(sessions, () => topics, a2a.sessions)
+  const sessionsVfs = withSelfSession(createSessionsHandler(sessions, () => topics, a2a.sessions), selfSessionVfs)
   vfs.mount(
     'v:sessions',
-    'conversation histories and owned remote execution views; <session-id>/brief holds Project topic metadata',
+    'inspect conversation histories and summaries, including owned remote conversations; self.json is read/write current-session metadata (topic, focus, completed); other views are read-only',
     sessionsVfs.read,
     sessionsVfs.list,
-    undefined,
+    sessionsVfs.write,
     sessionsVfs.directory,
   )
 
   const bgVfs = createBgTasksHandler(backgroundTasks, sessions, a2a.sessions)
-  vfs.mount('v:bg', 'owned executions: background work, local task/call, and remote A2A status and output', bgVfs.read, bgVfs.list)
+  vfs.mount('v:bg', 'inspect status/output of owned executions: background commands, delegated tasks/calls and remote A2A runs', bgVfs.read, bgVfs.list)
 
   const skillEditing = new SkillEditing({
     projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: id => canAuthor(id),
@@ -1115,7 +1112,9 @@ export async function createProjectRuntime(
     if (!state?.folderId) return undefined
     const location = resolveSessionLocations(workspace, state, undefined, workdirLookup).workdir
     if (!location.available) throw new Error('Selected folder skill scope is unavailable')
-    return location.locality === 'local' ? { folderId: state.folderId, path: location.path } : undefined
+    return location.locality === 'local'
+      ? { folderId: state.folderId, path: location.path }
+      : { folderId: state.folderId, path: location.workdir.displayPathSnapshot ?? '', workdir: { nodeId: location.workdir.nodeId, workdirId: location.workdir.workdirId } }
   }, (path, context, continuation) => skillEditing.readRaw(path, context, continuation))
   vfs.mount(
     'v:skills',
@@ -1473,7 +1472,7 @@ export async function createProjectRuntime(
       if (!isDeepStrictEqual(newConfig.a2a, activeConfig.a2a)) {
         throw new Error('A2A configuration changes require a Project backend restart; edit the Project configuration while stopped.')
       }
-      const newProvider = createAggregatedProvider(newConfig, copilotAuth)
+      const newProvider = createAggregatedProvider(newConfig, copilotAuth, dependencies.accountHome)
       const newQuickModel = newConfig.agent.quickModel
       const newLlm = createLlmRuntimeConfig(newConfig)
       try {

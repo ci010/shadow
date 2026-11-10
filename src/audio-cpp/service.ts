@@ -1,3 +1,4 @@
+import { localToolRoot, discoverLocalToolBinary } from '../utils/local-tool-paths.ts'
 import { openCliStream } from './cli-stream.ts'
 import { AudioCppInstaller, setupSchema, type SetupRequest, type ArtifactDownloader } from './install.ts'
 import { RemoteAudio, remoteSchema, type RemoteConfig } from './remote.ts'
@@ -117,11 +118,12 @@ export class AudioCppService {
     private readonly run: typeof runAudioCpp = runAudioCpp,
     downloader?: ArtifactDownloader,
     private readonly remote = new RemoteAudio(),
+    installRoot = localToolRoot('audio.cpp'),
   ) {
     this.configPath = workspacePath(workspace, '.audio-cpp.json')
     this.tempPath = workspacePath(workspace, '.tmp')
-    this.root = workspacePath(workspace, '.audio-cpp')
-    this.installer = new AudioCppInstaller(this.root, downloader)
+    this.root = installRoot
+    this.installer = new AudioCppInstaller(this.root, downloader, workspacePath(workspace, '.audio-cpp'))
   }
 
   async read(): Promise<AudioConfig> {
@@ -148,7 +150,7 @@ export class AudioCppService {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
       }
     }
-    return undefined
+    return discoverLocalToolBinary(this.root, executable)
   }
 
   async status() {

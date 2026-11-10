@@ -79,7 +79,7 @@ export class ProjectFolderDiscovery {
       }
       groups.get(key)!.folders.push(folder)
     }
-    const lines = [`# ${markdownText(project.name)}`, '', 'Selectors: use_project(workspace) or session.create(folderId); the registered workspace determines node. use_project does not switch nodes. Details: v:project/workspaces/<uuid>.']
+    const lines = [`# ${markdownText(project.name)}`, '', 'Selectors: workspace_use(workspace) or session.create(folderId); the registered workspace determines node. workspace_use does not switch nodes. Details: v:project/workspaces/<uuid>.']
     if (!folders.length) lines.push('', 'No registered workspaces.')
     for (const group of groups.values()) {
       lines.push('', `## ${markdownText(group.label)}`)

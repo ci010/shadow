@@ -158,7 +158,7 @@ manual retry; daemon commands may continue. Never automatically resend a mutatio
 
 These IDs are **not registered host workspaces**. Ordinary read/write/exec accept
 new `layerfs:` mount IDs explicitly in `workspace`; the dedicated LayerFS tool
-also accepts them. Search/use_project do not. `/workspaces/1` is a container path,
+also accepts them. Search/workspace_use do not. `/workspaces/1` is a container path,
 never a local Folder. Give each agent its mount ID and require explicit workspace
 routing; subagent cwd is not changed.
 Remote Shadow executors are refused, with no Main fallback. Commands can access
@@ -179,7 +179,7 @@ bash, relative cwd, positive timeout_ms up to 300000 (default 120000); no args,
 node, background or leaf calls. Timeout is UNKNOWN, not a background handle;
 daemon work may continue. Never retry automatically. Same-workspace overlap is
 refused; wait for its receipt. Old unprefixed IDs work only in the dedicated tool.
-Search/use_project/host cwd do not support these IDs. Setup and boundaries:
+Search/workspace_use/host cwd do not support these IDs. Setup and boundaries:
 `v:skills/layerfs/setup.md`; full contract in the repository's `docs/layerfs.md`.
 
 ### Managed Windows import staging

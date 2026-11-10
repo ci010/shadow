@@ -891,3 +891,25 @@ test('logout clears current profile host credentials and model cache only', asyn
   assert.deepEqual(personal.readModelsCache()?.models, [{ id: 'personal-model' }])
   for (const [name, value] of retained) assert.equal(f.auth.files.get(name), value)
 })
+
+test('normalized custom endpoint type saves and edits while preserving display name and generic factory semantics', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o' } })
+  for (const model of ['test-model', 'edited-model']) {
+    const response = await f.app.request('/api/provider/setup', {
+      method: 'POST', body: JSON.stringify({ provider: 'account-nvidia', type: 'nvidia', name: 'Nvidia', model, baseUrl: 'http://localhost:1234/v1' }),
+    })
+    assert.equal(response.status, 200)
+    const status = await response.json()
+    assert.equal(status.ready, true)
+    assert.equal(status.name, 'Nvidia')
+    assert.equal(status.type, 'nvidia')
+    assert.equal(f.active().providers['account-nvidia'].type, 'nvidia')
+    assert.equal(f.active().providers['account-nvidia'].name, 'Nvidia')
+    assert.equal(createProvider(model, f.active(), 'account-nvidia').constructor.name, 'OpenAICompatibleProvider')
+  }
+  // Keep the backend identifier contract strict: normalization belongs to the form.
+  const invalid = await f.app.request('/api/provider/setup', {
+    method: 'POST', body: JSON.stringify({ provider: 'another-account', type: 'Nvidia', name: 'Nvidia', model: 'test-model', baseUrl: 'http://localhost:1234/v1' }),
+  })
+  assert.equal(invalid.status, 400)
+})

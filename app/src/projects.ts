@@ -1,4 +1,5 @@
 import { t } from './i18n.ts'
+import { diagnosticEndpoint, diagnosticId, DIAGNOSTIC_ID_HEADER } from '../../src/runtime/api-request-diagnostic.ts'
 import { apiUrl, projectBase, sessionKey, type SessionRef } from './api-url.ts'
 import { isRecord, type SidebarSession } from './folders-sidebar.ts'
 import { parseSessionSummary } from './session-summary-snapshot.ts'
@@ -40,6 +41,11 @@ export function parseProjects(value: unknown): ProjectRecord[] {
 
 async function projectResponse<T>(base: string, path: string, init: RequestInit | undefined, request: typeof fetch,
   consume: (response: Response) => Promise<T>, conditional = false): Promise<T> {
+  const start = performance.now()
+  let headersMs: number | undefined
+  let status: number | undefined
+  let id: string | undefined
+  let stage: 'fetch' | 'headers' | 'consume' = 'fetch'
   const timeout = AbortSignal.timeout(15_000)
   const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout
   try {
@@ -49,14 +55,30 @@ async function projectResponse<T>(base: string, path: string, init: RequestInit 
       ...init, headers,
       signal,
     })
+    stage = 'headers'
+    headersMs = Math.max(0, Math.round(performance.now() - start))
+    status = response.status
+    id = diagnosticId(response.headers.get(DIAGNOSTIC_ID_HEADER))
     if (!response.ok && !(conditional && response.status === 304)) {
       const detail = response.status === 409 ? t('The resource conflicts with an existing project or folder.')
         : response.status === 401 || response.status === 403 ? t('Main did not authorize this request.')
         : t('Main could not complete this request (HTTP {status}).', { status: response.status })
       throw new Error(t('{detail} Check Main and retry.', { detail: detail }))
     }
+    stage = 'consume'
     return await consume(response)
   } catch (error) {
+    // Fixed labels/numbers only. Existing development console collector forwards
+    // this best-effort; do not clone/intercept response streams or retain payloads.
+    const endpoint = diagnosticEndpoint(path.split(/[?#]/, 1)[0]!)
+    const deadlineFailure = timeout.aborted && signal.reason === timeout.reason
+      && (error === timeout.reason || (error instanceof Error && error.name === 'AbortError'))
+    const cause = init?.signal?.aborted ? 'caller-cancelled'
+      : deadlineFailure ? 'deadline'
+      : status !== undefined && status >= 400 ? 'http' : 'network-or-decode'
+    if (endpoint && cause !== 'caller-cancelled') {
+      try { console.warn(`API project failure ${JSON.stringify({ endpoint, id, status, stage, cause, headersMs, elapsedMs: Math.max(0, Math.round(performance.now() - start)) })}`) } catch { /* diagnostic only */ }
+    }
     // Fetch and body readers can report AbortError instead of the timeout reason.
     // Only translate cancellation caused by our deadline, not caller cancellation
     // or an unrelated network/JSON/HTTP failure that happens near the deadline.

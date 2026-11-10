@@ -1,3 +1,4 @@
+import { localToolRoot, discoverLocalToolBinary } from '../utils/local-tool-paths.ts'
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises'
@@ -230,7 +231,7 @@ export class DiffusionCppService {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
       }
     }
-    return undefined
+    return discoverLocalToolBinary(localToolRoot('stable-diffusion.cpp'), executable)
   }
 
   async status() {

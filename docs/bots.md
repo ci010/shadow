@@ -605,7 +605,7 @@ export default defineTool({
 `inspect` reports the binding's schedule; `stop` removes it. `set` accepts 1–10,080
 whole minutes. Repeating the same settings is idempotent. One schedule per original
 binding/session uses the existing Project CronService `.cron/jobs.json` inventory,
-not an signal-provider instance, new scheduler or queue. Restart reloads that
+not a signal-provider instance, new scheduler or queue. Restart reloads that
 inventory. Each tick targets only the existing bound durable session through its
 normal admission queue, with a stable per-slot input ID. It creates no sessions.
 Deployment revision, enabled/subscribed binding and saved session binding are

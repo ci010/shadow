@@ -123,7 +123,7 @@ test('committed folder changes drive sidebar selection and file workbench withou
   assert.match(sidebar, /props.sessions.find\(session => session.sessionId === props.activeSessionId\)\?\.folderId/)
   assert.match(chat, /:folder-id="activeSessionId \? activeSession\?\.folderId : draft.folder\?\.id"/)
   assert.match(workbench, /watch\(\(\) => \[props.contextKey, props.folderId\]/)
-  assert.doesNotMatch(sidebar + workbench, /use_project|switchProjectFolder/)
+  assert.doesNotMatch(sidebar + workbench, /workspace_use|switchProjectFolder/)
 })
 
 

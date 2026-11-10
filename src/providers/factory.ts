@@ -5,6 +5,8 @@ import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
 import { type CopilotAuthenticator } from './copilot.ts'
 import { CopilotAuthenticatorV2, CopilotProviderV2 } from './copilot-v2.ts'
+import { deepseekAccountAuth } from './deepseek-account-auth.ts'
+import { DeepSeekAccountProvider } from './deepseek-account.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { AgnesProvider } from './agnes.ts'
 import { AggregatedProvider, parseModelSpec } from './aggregated.ts'
@@ -29,6 +31,7 @@ const PROVIDER_DEFAULTS: Record<string, {
   },
   copilot: {},
   'copilot-v2': {},
+  'deepseek-account': { baseUrl: 'https://api.deepseek.com' },
   deepseek: {
     baseUrl: 'https://api.deepseek.com',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
@@ -120,7 +123,7 @@ export function detectProvider(model: string): string {
 export function resolveProviderSettings(config: Pick<Config, 'providers'>, name: string): {
   apiKey: string
   baseUrl?: string
-  authMode: 'api-key' | 'copilot' | 'none'
+  authMode: 'api-key' | 'copilot' | 'deepseek-account' | 'none'
 } {
   const configured = config.providers[name] ?? {}
   const type = providerType(config, name)
@@ -133,7 +136,7 @@ export function resolveProviderSettings(config: Pick<Config, 'providers'>, name:
     configured.baseUrl.replace(/\/+$/, '') !== defaults?.baseUrl?.replace(/\/+$/, '')
   return {
     apiKey, baseUrl,
-    authMode: isCopilotProviderType(type) ? 'copilot'
+    authMode: type === 'deepseek-account' ? 'deepseek-account' : isCopilotProviderType(type) ? 'copilot'
       : !apiKey && customEndpoint ? 'none' : 'api-key',
   }
 }
@@ -152,12 +155,18 @@ export function createProvider(
   config: Config,
   providerName?: string,
   copilotAuth?: CopilotAuthenticator,
+  accountHome = config.agent.workspace,
 ): LLMProvider {
   const name = providerName ?? detectProvider(model)
   if (providerType(config, name) === 'copilot-v1') return retiredCopilotProvider()
   if (providerName && !config.providers[name] && !PROVIDER_DEFAULTS[name]) throw new Error(`Unknown provider instance "${name}"`)
   const type = providerType(config, name)
   const { apiKey, baseUrl } = resolveProviderSettings(config, name)
+
+  if (type === 'deepseek-account') {
+    if (config.providers[name]?.apiKey || config.providers[name]?.baseUrl) throw new Error('DeepSeek Account does not accept API keys or custom endpoints')
+    return new DeepSeekAccountProvider(deepseekAccountAuth(accountHome, name))
+  }
 
   // --- Anthropic (non-OpenAI API) ---
   if (type === 'anthropic') {
@@ -201,7 +210,7 @@ export function createProvider(
  *   2. `@provider` suffixes in `config.agent.model` / `config.agent.quickModel`
  *   3. Any providers with explicit config in `config.providers`
  */
-export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAuthenticator): AggregatedProvider {
+export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAuthenticator, accountHome = config.agent.workspace): AggregatedProvider {
   const mainModel = config.agent.model
   const { model: bareModel, provider: explicitProvider } = parseModelSpec(
     mainModel,
@@ -220,7 +229,7 @@ export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAu
   // Providers with explicit config entries. Copilot authenticates via OAuth
   // (no apiKey/baseUrl), so an empty `providers.copilot: {}` entry enables it.
   for (const [name, pc] of Object.entries(config.providers)) {
-    if (providerType(config, name) === 'copilot-v1' || isCopilotProviderType(providerType(config, name)) || pc.apiKey || pc.baseUrl) names.add(name)
+    if (providerType(config, name) === 'deepseek-account' || providerType(config, name) === 'copilot-v1' || isCopilotProviderType(providerType(config, name)) || pc.apiKey || pc.baseUrl) names.add(name)
   }
 
   // Instantiate each provider
@@ -231,7 +240,7 @@ export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAu
       // Pass the provider name explicitly so non-primary providers are created
       // as the right class (the model string alone would detect the primary).
       const model = name === primaryName ? bareModel : mainModel
-      providers.set(name, createProvider(model, config, name, copilotAuth))
+      providers.set(name, createProvider(model, config, name, copilotAuth, accountHome))
     } catch (err) {
       console.warn(
         `[aggregated] Failed to create provider "${name}": ${

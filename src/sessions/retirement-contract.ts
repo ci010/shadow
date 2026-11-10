@@ -20,6 +20,7 @@ export const retirementProposalSchema = z.object({
     name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}\.md$/),
     content: z.string().min(1).max(16000),
   }).strict()).max(10).default([]),
+  /** Only explicitly identified final user-requested deliverables to copy; drafts stay in session data. Empty is valid. */
   files: z.array(z.object({
     source: z.string(),
     destination: z.string(),

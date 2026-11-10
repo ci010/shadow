@@ -251,3 +251,10 @@ test('retirement tool rejects normal sessions even if they know its name', async
     assert.match(tools.executionDenial('invoke_tool', { name: 'exec', args: {} })!, /allowlist/)
   })
 })
+
+test('cleanup policy keeps intermediates in session data and exports only identified final deliverables', () => {
+  assert.match(SESSION_CLEANUP_AUTOMATION.task!, /export only explicitly identified final user-requested file deliverables/)
+  assert.match(SESSION_CLEANUP_AUTOMATION.task!, /Intermediate files remain in session data/)
+  assert.match(SESSION_CLEANUP_AUTOMATION.task!, /files:\[\]/)
+  assert.doesNotMatch(SESSION_CLEANUP_AUTOMATION.task!, /preserve every file byte-for-byte, including intermediate outputs/)
+})

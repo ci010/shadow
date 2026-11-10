@@ -173,7 +173,9 @@ export class SessionRetirement {
     this.inspections.set(token, { assessor, sessionId, expires: Date.now() + 900_000, snapshot, drafts, selected, roots, wiki,
       release: () => signal.removeEventListener('abort', abort) })
     signal.addEventListener('abort', abort, { once: true })
-    return { token, sessionId, roots, history: snapshot.records, drafts, wiki }
+    return { token, sessionId, roots,
+      deliveryPolicy: 'Export only explicitly identified final user-requested file deliverables. Intermediate drafts remain in session data through recoverable retirement; files:[] is valid. Do not copy all drafts merely to retire a session, even if an older cleanup task requests it. Leave unresolved final deliveries untouched.',
+      history: snapshot.records, drafts, wiki }
   }
 
   private forget(token: string): void {
@@ -247,7 +249,10 @@ export class SessionRetirement {
       if (bytes.toString('utf8') !== content) throw new Error('Wiki preservation verification failed')
       knowledgeProofs.set(path, digest(bytes))
     }
-    if (proposal.files.length !== drafts.length || new Set(proposal.files.map(file => file.source)).size !== drafts.length) throw new Error('Incomplete draft delivery')
+    // Exports are only final user-requested deliverables, not the whole draft inventory.
+    // Recoverable retirement retains intermediate files in session storage.
+    if (new Set(proposal.files.map(file => file.source)).size !== proposal.files.length) throw new Error('Duplicate delivery source')
+    if (JSON.stringify(await inspectDrafts(root)) !== JSON.stringify(drafts)) throw new Error('Draft inventory changed')
     const saved: Array<{ path: string; hash: string }> = []
     const allowed = Object.values(roots)
     for (const file of proposal.files) {
