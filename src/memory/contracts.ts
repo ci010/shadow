@@ -22,6 +22,9 @@ export const MemoryDomainSchema = z.object({
   owner: z.object({ sessionId: z.string().min(1).max(1024), epoch: z.string().uuid() }).strict().optional(),
 }).strict()
 export type MemoryDomain = z.infer<typeof MemoryDomainSchema>
+// Stored 'event' means a historical memory log, not an EventService/signal-provider
+// notification. Keep it for immutable resource hashes and old scoped journals;
+// model-facing catalogs/read results use memoryLogView to expose 'log'.
 export const MemoryResourceSchema = z.object({
   id: z.string().uuid(), domainId: z.string().uuid(),
   kind: z.enum(['note', 'skill', 'summary', 'decision', 'event', 'history', 'soul-draft']).default('note'),

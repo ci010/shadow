@@ -307,11 +307,11 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "summary": {
             "type": "string",
-            "description": "Short standalone event briefing (1–280 Unicode code points); include outcome and important uncertainty, not learning audit. Required for new reflector events."
+            "description": "Short standalone log briefing (1–280 Unicode code points); include outcome and important uncertainty, not learning audit. Required for new reflector logs."
           },
           "what": {
             "type": "string",
-            "description": "Action or event description. Be concise."
+            "description": "Description of what happened. Be concise."
           },
           "why": {
             "type": "string",
@@ -319,7 +319,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "challenge": {
             "type": "string",
-            "description": "Difficulty or blocker encountered during this event. Optional."
+            "description": "Difficulty or blocker recorded in this log. Optional."
           },
           "refs": {
             "type": "array",
@@ -330,11 +330,11 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "session": {
             "type": "string",
-            "description": "The session this event belongs to (origin/provenance). Defaults to the current session."
+            "description": "The session this log belongs to (origin/provenance). Defaults to the current session."
           },
           "key": {
             "type": "string",
-            "description": "For learning batches: stable event key, reused on retries (e.g. source message index plus decision name)."
+            "description": "For learning batches: stable log key, reused on retries (e.g. source message index plus decision name)."
           }
         },
         "required": [

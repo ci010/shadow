@@ -47,7 +47,7 @@ const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const signal = () => new AbortController().signal
 const learningManifest = z.object({
   pipeline: z.enum(['reflector', 'encapsulator', 'soulReflector']),
-  requiredInputs: z.array(z.object({ id: z.string(), version: z.string(), path: z.string() })),
+  requiredInputs: z.array(z.object({ id: z.string(), version: z.string(), path: z.string(), kind: z.string() })),
   existingNames: z.array(z.object({ name: z.string(), version: z.string(), path: z.string() })),
 })
 
@@ -662,14 +662,27 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     for (const pipeline of ['reflector', 'encapsulator', 'soulReflector'] as const) {
       assert(await f.learning.run(pipeline, signal()), `${pipeline} completed`)
     }
+    const visibleKinds = new Set<string>()
     for (const request of f.requests) {
+      for (const message of request.messages.filter(message => message.role === 'tool' && message.name === 'read')) {
+        const detail = JSON.parse(String(message.content))
+        if (detail.resource) {
+          visibleKinds.add(detail.resource.kind)
+          assert.notEqual(detail.resource.kind, 'event', 'legacy storage kind is not exposed as the memory concept')
+          const stored = f.memory.ownerRead(detail.resource.id).resource
+          assert.equal(detail.resource.kind, stored.kind === 'event' ? 'log' : stored.kind)
+          assert.equal(detail.resource.version, stored.version, 'display projection preserves immutable reads')
+        }
+      }
       assert.deepEqual(request.tools, ['read', 'learning_record', 'learning_result'])
       const input = learningManifest.parse(JSON.parse(String(request.messages.find(message => message.role === 'user' && !isRuntimeContextEvent(message))!.content)))
+      assert(input.requiredInputs.every(ref => ref.kind !== 'event'))
       const domainId = f.memory.ownerRead(input.requiredInputs[0]!.id).resource.domainId
       const text = JSON.stringify(request.messages)
       assert(!text.includes(domainId === a.domainId ? 'CUSTOMER_B_LEARNING_CANARY' : 'CUSTOMER_A_LEARNING_CANARY'))
       assert(!text.includes('PRIVATE_PROJECT_CANARY') && !text.includes('PRIVATE_SOUL_CANARY') && !text.includes('GLOBAL_SOUL_MUST_NOT_CHANGE'))
     }
+    assert(visibleKinds.has('log'), 'downstream successfully reads legacy log resources through the projected catalog')
     for (const domainId of [a.domainId, b.domainId]) {
       const resources = f.memory.ownerResources().filter(resource => resource.domainId === domainId)
       for (const kind of ['history', 'decision', 'event', 'skill', 'soul-draft']) assert(resources.some(resource => resource.kind === kind), kind)

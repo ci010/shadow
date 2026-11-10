@@ -1,4 +1,4 @@
-import { validateEventSummary } from '../event-summary.ts'
+import { validateLogSummary } from '../log-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -20,19 +20,22 @@ const sourceSchema = z.object({
   offset: z.number().int().nonnegative(), end: z.number().int().nonnegative(),
 }).strict().refine(value => value.end > value.offset)
 export type LearningSource = z.infer<typeof sourceSchema>
-const eventSchema = z.object({
+const logSchema = z.object({
   id: text, path: text, origin: text, when: text, who: text, what: text,
-  summary: z.string().transform(value => validateEventSummary(value)!).optional(),
+  summary: z.string().transform(value => validateLogSummary(value)!).optional(),
   why: z.string().optional(), challenge: z.string().optional(), refs: z.array(z.string()).optional(),
 }).strict()
-export type LearningEvent = z.infer<typeof eventSchema>
+export type LearningLog = z.infer<typeof logSchema>
 const artifactSchema = z.object({
   path: text, revision: text, kind: z.enum(['memory', 'skill', 'soul']),
 }).strict()
 export type LearningArtifact = z.infer<typeof artifactSchema>
+// Compatibility boundary: events/inputEvents and outcome.events are persisted
+// journal/API keys for memory logs. Keep their spelling to preserve old retries,
+// consumption IDs and JSONL/SQLite-backed session receipts without migration.
 const batchSchema = z.object({
   id: z.string().uuid(), createdAt: z.string().datetime(), pipeline: z.enum(pipelines), sources: z.array(sourceSchema),
-  inputEvents: z.array(eventSchema), events: z.array(eventSchema), artifacts: z.array(artifactSchema),
+  inputEvents: z.array(logSchema), events: z.array(logSchema), artifacts: z.array(artifactSchema),
   attempts: z.array(z.string()), state: z.enum(['pending', 'running', 'done']),
   excluded: z.string().optional(),
   retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative(), paused: z.string().optional() }).optional(),
@@ -127,10 +130,10 @@ export class LearningLedger {
     this.save()
   }
   batch(id: string): LearningBatch { return structuredClone(this.required(id)) }
-  select(pipeline: Pipeline, sources: LearningSource[], events: LearningEvent[], manual = false): LearningBatch | undefined {
+  select(pipeline: Pipeline, sources: LearningSource[], logs: LearningLog[], manual = false): LearningBatch | undefined {
     const due = this.pending(pipeline, !manual)
-    const fresh = sources.length > 0 || events.length > 0
-    const batch = fresh && (!due || this.state.preferFresh?.[pipeline]) ? this.create(pipeline, sources, events) : due
+    const fresh = sources.length > 0 || logs.length > 0
+    const batch = fresh && (!due || this.state.preferFresh?.[pipeline]) ? this.create(pipeline, sources, logs) : due
     if (batch) {
       this.state.preferFresh ??= {}
       this.state.preferFresh[pipeline] = batch === due
@@ -145,20 +148,20 @@ export class LearningLedger {
   outcome(sessionId: string): LearningOutcome | undefined { return structuredClone(this.state.outcomes[sessionId]) }
   retry(pipeline: Pipeline): LearningRetry { return structuredClone(this.state.retries[pipeline] ?? { attempts: 0 }) }
   setRetry(pipeline: Pipeline, retry: LearningRetry): void { this.state.retries[pipeline] = retrySchema.parse(retry); this.save() }
-  eventsFor(pipeline: 'encapsulator' | 'soulReflector', retained: LearningEvent[] = []): LearningEvent[] {
+  logsFor(pipeline: 'encapsulator' | 'soulReflector', retained: LearningLog[] = []): LearningLog[] {
     const consumed = new Set([...this.state.consumed[pipeline], ...this.state.batches
-      .filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded).flatMap(batch => batch.inputEvents.map(event => event.id))])
+      .filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded).flatMap(batch => batch.inputEvents.map(log => log.id))])
     const candidates = [...this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
-      .flatMap(batch => batch.events), ...retained.filter(event => !this.state.batches.some(batch =>
-        batch.events.some(known => known.id === event.id)))]
+      .flatMap(batch => batch.events), ...retained.filter(log => !this.state.batches.some(batch =>
+        batch.events.some(known => known.id === log.id)))]
     const seen = new Set(consumed)
-    return structuredClone(candidates.filter(event => {
-      if (seen.has(event.id)) return false
-      seen.add(event.id)
+    return structuredClone(candidates.filter(log => {
+      if (seen.has(log.id)) return false
+      seen.add(log.id)
       return true
     }).slice(0, pipeline === 'encapsulator' ? 8 : 40))
   }
-  create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningEvent[]): LearningBatch {
+  create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningLog[]): LearningBatch {
     const batch = batchSchema.parse({ id: randomUUID(), createdAt: new Date().toISOString(), pipeline, sources, inputEvents,
       events: [], artifacts: [], evaluated: [], attempts: [], state: 'pending' })
     for (const source of sources) {
@@ -183,9 +186,9 @@ export class LearningLedger {
     if (evaluation && !batch.evaluated.includes(evaluation)) batch.evaluated.push(evaluation)
     this.save()
   }
-  event(id: string, event: LearningEvent): void {
+  log(id: string, log: LearningLog): void {
     const batch = this.required(id)
-    if (!batch.events.some(item => item.id === event.id)) batch.events.push(eventSchema.parse(event))
+    if (!batch.events.some(item => item.id === log.id)) batch.events.push(logSchema.parse(log))
     this.save()
   }
   propose(id: string, status: LearningOutcome['status'], summary: string): void {
@@ -204,7 +207,7 @@ export class LearningLedger {
     if (outcome.status === 'applied' || outcome.status === 'no_change') {
       if (batch.pipeline !== 'reflector') {
         this.state.consumed[batch.pipeline] = [...new Set([
-          ...this.state.consumed[batch.pipeline], ...batch.inputEvents.map(event => event.id),
+          ...this.state.consumed[batch.pipeline], ...batch.inputEvents.map(log => log.id),
         ])]
       }
       batch.state = 'done'

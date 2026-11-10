@@ -1,12 +1,12 @@
 import { mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname } from 'node:path'
 import { z } from 'zod'
-import { projectStoragePath } from '../../utils/data-paths.ts'
+import { collectionInput, definitionInput, stateInput, processorInput, providerStatePath, legacyDefinitionWire } from './legacy-compat.ts'
 import { writePrivateFile } from '../../config/store.ts'
 import { CapabilityBroker, CapabilityError, validateJsonSchema } from '../../execution/grants.ts'
 import { executeGrantedScript } from '../../script-runtime/granted-script.ts'
 import type { DeliverInput } from '../../sessions/input.ts'
-import { Collection, Definition, Drafts, Name, HttpDeclaration, validateDefinition, canonical, digest, type EventSourceProvider, type ProviderDefinition } from './contracts.ts'
+import { Collection, Definition, Drafts, Name, HttpDeclaration, validateDefinition, canonical, digest, type SignalSourceProvider, type ProviderDefinition } from './contracts.ts'
 import { githubProvider } from './github.ts'
 import type { ProviderBrowserAccess } from '../../browser/provider-fetch.ts'
 
@@ -22,14 +22,14 @@ const Origin = z.string().url().refine(value => { const url = new URL(value); re
 const Instance = z.object({ id: Name, owner: z.string(), provider: Name, purpose: z.string().min(1).max(240).optional(), version: z.number().int(), secretRef: Name.optional(), transport: ProviderTransport, origin: Origin, binding: HttpDeclaration.optional(), enabled: z.boolean(), nextAt: z.number() }).strict()
 const Subscription = z.object({ id: Name, instance: Name, owner: z.string(), demand: z.unknown(), processor: z.string().max(64000) }).strict()
 const Demand = z.object({ mode: z.enum(['snapshot', 'delta']).default('snapshot'), checkpoint: z.unknown(), seen: z.array(z.string()).max(4096), baseline: z.boolean() }).strict()
-const Job = z.object({ id: z.string(), subscription: Name, event: z.object({ id: z.string(), data: z.unknown() }), attempts: z.number(), nextAt: z.number(), drafts: Drafts.optional(), delivered: z.number(), timestamp: z.string() }).strict()
-const State = z.object({ format: z.literal(1), definitions: z.array(Definition).max(64), instances: z.array(Instance).max(32), subscriptions: z.array(Subscription).max(128), demands: z.record(Demand), jobs: z.array(Job).max(2000) }).strict()
+const Job = z.object({ id: z.string(), subscription: Name, signal: z.object({ id: z.string(), data: z.unknown() }), attempts: z.number(), nextAt: z.number(), drafts: Drafts.optional(), delivered: z.number(), timestamp: z.string() }).strict()
+const State = z.object({ format: z.literal(2), definitions: z.array(Definition).max(64), instances: z.array(Instance).max(32), subscriptions: z.array(Subscription).max(128), demands: z.record(Demand), jobs: z.array(Job).max(2000), legacyRevisions: z.record(z.string()).default({}) }).strict()
 type StateData = z.infer<typeof State>
 type InstanceData = z.infer<typeof Instance>
 
 /** Project-local, single writer runtime. Atomic snapshots separate collection, transform and inbox acceptance. */
-export class EventProviderRuntime {
-  private state: StateData = { format: 1, definitions: [], instances: [], subscriptions: [], demands: {}, jobs: [] }
+export class SignalProviderRuntime {
+  private state: StateData = { format: 2, definitions: [], instances: [], subscriptions: [], demands: {}, jobs: [], legacyRevisions: {} }
   private path: string
   private timer?: ReturnType<typeof setInterval>
   private active?: Promise<void>
@@ -51,9 +51,8 @@ export class EventProviderRuntime {
   }
   constructor(workspace: string, private broker: Pick<CapabilityBroker, 'execute'>, private deliver: DeliverInput,
     private canUse: (sessionId: string) => boolean, private hasCredential: (ref: string) => boolean) {
-    const directory = projectStoragePath(workspace, '.events')
-    mkdirSync(directory, { recursive: true, mode: 0o700 })
-    this.path = join(directory, 'providers-v1.json')
+    this.path = providerStatePath(workspace)
+    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
   }
   start(): void {
     if (!this.stopped) return
@@ -61,7 +60,10 @@ export class EventProviderRuntime {
       const stored = JSON.parse(readFileSync(this.path, 'utf8'))
       // Retire only the obsolete instance gate, not similarly named user demand data.
       if (Array.isArray(stored.instances)) for (const instance of stored.instances) delete instance.allowedSubscribers
-      this.state = State.parse(stored)
+      this.state = State.parse(stateInput(stored))
+      if (stored.format === 1) for (const definition of this.state.definitions) {
+        this.state.legacyRevisions[`${definition.id}:${definition.version}`] = digest(legacyDefinitionWire(definition))
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
@@ -93,7 +95,7 @@ export class EventProviderRuntime {
     const next = structuredClone(this.state)
     change(next)
     State.parse(next)
-    if (Buffer.byteLength(JSON.stringify(next)) > 16 * 1024 * 1024) throw new Error('Event state capacity exceeded; collection not advanced')
+    if (Buffer.byteLength(JSON.stringify(next)) > 16 * 1024 * 1024) throw new Error('Signal state capacity exceeded; collection not advanced')
     writePrivateFile(this.path, JSON.stringify(next))
     this.state = next
   }
@@ -109,7 +111,7 @@ export class EventProviderRuntime {
     validateDefinition(definition)
     for (const example of definition.examples) {
       validateJsonSchema(definition.demandSchema, example.demand)
-      validateJsonSchema(definition.eventSchema, example.event.data)
+      validateJsonSchema(definition.signalSchema, example.signal.data)
     }
   }
   private policy(definition: ProviderDefinition): z.infer<typeof HttpDeclaration> {
@@ -136,7 +138,7 @@ export class EventProviderRuntime {
   }
   publish(owner: string, raw: unknown): void {
     this.authorize(owner)
-    const definition = Definition.parse(raw)
+    const definition = Definition.parse(definitionInput(raw))
     this.validate(definition)
     if ([...builtinDefinitions, ...this.state.definitions].some(d => d.id === definition.id && d.version === definition.version)) throw new Error('Immutable provider revision already exists')
     // Publishing is project-wide discovery only, never a credential grant.
@@ -145,7 +147,7 @@ export class EventProviderRuntime {
   /** Edit code then reload: host drains the old generation, probes restricted code, and atomically repins all matching Project instances. */
   reload(owner: string, raw: unknown): Promise<void> {
     this.authorize(owner)
-    const candidateInput = Definition.omit({ version: true }).parse(raw)
+    const candidateInput = Definition.omit({ version: true }).parse(definitionInput(raw))
     const input = candidateInput
     this.validate({ ...input, version: 1 })
     const instances = this.state.instances.filter(i => i.provider === input.id)
@@ -234,7 +236,7 @@ export class EventProviderRuntime {
     if (!this.state.instances.some(i => i.id === id)) throw new Error('Instance not found')
     this.update(state => { state.instances.find(i => i.id === id)!.enabled = enabled })
   }
-  private provider(instance: InstanceData): EventSourceProvider {
+  private provider(instance: InstanceData): SignalSourceProvider {
     const definition = this.definition(instance.provider, instance.version)
     return { definition,
       normalize: demand => { const normalized = normalizers.get(definition.id)?.(demand) ?? JSON.parse(canonical(demand)); validateJsonSchema(definition.demandSchema, normalized); return normalized },
@@ -267,7 +269,7 @@ export class EventProviderRuntime {
           await Promise.allSettled([...pending])
           if (this.browserCleanupFailure) throw this.browserCleanupFailure
         }
-        return z.record(Collection).parse(output)
+        return z.record(z.preprocess(collectionInput, Collection)).parse(output)
       } }
   }
   run(): Promise<void> {
@@ -308,7 +310,7 @@ export class EventProviderRuntime {
       const grant = { ...network, id: 'fetch', kind: 'http' as const,
         ...(credential && instance.secretRef ? { credential: { ...credential, secretRef: instance.secretRef } } : {}) }
       const response = await this.broker.execute(grant, input, {
-        sessionId: this.invocationSession(instance), inputId: `provider:${instance.id}`, toolCallId: `provider:${instance.id}`, bindingKey: `provider:${instance.id}`, revision: digest(provider.definition),
+        sessionId: this.invocationSession(instance), inputId: `provider:${instance.id}`, toolCallId: `provider:${instance.id}`, bindingKey: `provider:${instance.id}`, revision: this.state.legacyRevisions[`${provider.definition.id}:${provider.definition.version}`] ?? digest(provider.definition),
         signal: AbortSignal.any([generation.signal, callSignal]), assertCurrent: () => this.current(instance, generation),
         ...(instance.transport.kind === 'browser' ? { browserRequest: this.browsers.get(instance.id)!.request } : {}),
       }) as { status: number; body: unknown }
@@ -320,15 +322,15 @@ export class EventProviderRuntime {
     this.update(state => {
       for (const [key, data] of Object.entries(output)) {
         if (Buffer.byteLength(canonical(data)) > 1024 * 1024 || Buffer.byteLength(canonical(data.checkpoint)) > 65536) throw new Error('Collection output bound exceeded')
-        for (const event of data.events) validateJsonSchema(provider.definition.eventSchema, event.data)
-        const ids = data.events.map(e => e.id)
-        if (new Set(ids).size !== ids.length) throw new Error('Duplicate event IDs')
+        for (const signal of data.signals) validateJsonSchema(provider.definition.signalSchema, signal.data)
+        const ids = data.signals.map(e => e.id)
+        if (new Set(ids).size !== ids.length) throw new Error('Duplicate signal IDs')
         const old = state.demands[key]
         if (old && old.mode !== data.mode) throw new Error('Collection semantics changed; use a new instance/stateVersion')
-        if (old?.baseline) for (const event of data.events.filter(e => !old.seen.includes(e.id))) {
+        if (old?.baseline) for (const signal of data.signals.filter(e => !old.seen.includes(e.id))) {
           for (const subscription of subscriptions.filter(s => state.subscriptions.some(live => live.id === s.id) && this.member(instance, s.owner) && digest([instance.id, s.demand]) === key)) {
-            const id = digest([instance.id, subscription.id, event.id])
-            if (!state.jobs.some(j => j.id === id)) state.jobs.push({ id, subscription: subscription.id, event, attempts: 0, nextAt: 0, delivered: 0, timestamp: new Date().toISOString() })
+            const id = digest([instance.id, subscription.id, signal.id])
+            if (!state.jobs.some(j => j.id === id)) state.jobs.push({ id, subscription: subscription.id, signal, attempts: 0, nextAt: 0, delivered: 0, timestamp: new Date().toISOString() })
           }
         }
         // Delta retains a bounded FIFO ID window across polls/restarts. Evicted IDs may replay;
@@ -355,7 +357,7 @@ export class EventProviderRuntime {
         authorized()
         let job = this.state.jobs.find(j => j.id === pending.id)!
         if (!job.drafts) {
-          const drafts = Drafts.parse(await executeGrantedScript({ code: subscription.processor, args: { event: structuredClone(job.event) }, signal: generation.signal,
+          const drafts = Drafts.parse(await executeGrantedScript({ code: subscription.processor, args: processorInput(structuredClone(job.signal)), signal: generation.signal,
             imports: ['@shadow/html'], allowedModules: ['@shadow/html'], callModule: async () => { throw new Error('Processors have no capabilities') } }))
           authorized()
           this.update(state => { state.jobs.find(j => j.id === job.id)!.drafts = drafts })
@@ -365,7 +367,7 @@ export class EventProviderRuntime {
           authorized()
           const id = digest([job.id, index])
           const receipt = await this.deliver(subscription.owner, { id, kind: 'message', timestamp: job.timestamp, policy: 'queue', content: job.drafts![index].content,
-            source: { kind: 'event', eventId: job.event.id, type: 'provider.message', source: `provider:${instance.id}` } })
+            source: { kind: 'event', eventId: job.signal.id, type: 'provider.message', source: `provider:${instance.id}` } })
           if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.sessionId !== subscription.owner || receipt.inputId !== id) throw new Error('Inbox acceptance not confirmed')
           this.accepted.set(job.id, index + 1)
           authorized()
