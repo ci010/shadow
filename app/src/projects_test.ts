@@ -325,3 +325,29 @@ test('conditional project JSON retains its validated cache after a body timeout'
   deadline = new AbortController()
   assert.equal(await reader.load(signal), cached)
 })
+
+
+test('project failure diagnostics identify consume deadline and omit private payloads', async t => {
+  const { projectJson } = await import('./projects.ts')
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal)
+  const rows: unknown[][] = []
+  t.mock.method(console, 'warn', (...args: unknown[]) => { rows.push(args) })
+  const id = '12345678-1234-4123-8123-123456789abc'
+  await assert.rejects(projectJson('http://private/projects/private', '/api/sessions/graph?secret=private', undefined, async () => {
+    const response = Response.json({ secret: 'private' }, { headers: { 'X-Shadow-Request-Id': id } })
+    response.json = async () => {
+      deadline.abort(new DOMException('private', 'TimeoutError'))
+      throw new DOMException('private', 'AbortError')
+    }
+    return response
+  }), /timed out/)
+  assert.equal(rows.length, 1)
+  const row = String(rows[0]![0])
+  assert.match(row, /"stage":"consume"/)
+  assert.match(row, /"cause":"deadline"/)
+  assert.match(row, /"status":200/)
+  assert.match(row, /"headersMs":\d+/)
+  assert.match(row, new RegExp(id))
+  assert.doesNotMatch(row, /private|secret/)
+})

@@ -51,3 +51,23 @@ test('redaction, retention, rates, clear lifecycle and read scope', () => {
   assert.doesNotMatch(JSON.stringify(prod.list(ctx)), /frontend-logs/)
   log.clear(); assert.match(log.read(), /No retained/)
 })
+
+
+test('authenticated download equals the direct runtime view, preserving safe request metadata', async () => {
+  const log = new FrontendLog('development')
+  const app = new Hono()
+  registerFrontendLogRoutes(app, log, request => request.headers.get('authorization') === 'fixture')
+  const message = 'API project failure {"endpoint":"sessions/graph","id":"12345678-1234-4123-8123-123456789abc","status":200,"stage":"consume","cause":"deadline","headersMs":418,"elapsedMs":15000}'
+  assert.equal((await post(app, { tabId: 'tab', events: [{ level: 'warn', message }] }, true, '/api/runtime/frontend-logs')).status, 200)
+  const reader = createRuntimeHandler(new RuntimeDiagnosticLog(), 'a', () => {}, undefined, undefined, log)
+  const ctx = { projectId: 'a', sessionId: 's', signal: new AbortController().signal } as ExecutionContext
+  const direct = await reader.read('frontend-logs', ctx)
+  assert.match(String(direct), /sessions\/graph/)
+  assert.doesNotMatch(String(direct), /REDACTED/)
+  const url = '/api/runtime/frontend-logs?download=1'
+  assert.equal((await app.request(url)).status, 401)
+  const download = await app.request(url, { headers: { authorization: 'fixture' } })
+  assert.match(download.headers.get('Content-Disposition')!, /attachment/)
+  assert.equal(download.headers.get('Cache-Control'), 'no-store')
+  assert.equal(await download.text(), direct)
+})

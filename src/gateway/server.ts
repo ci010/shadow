@@ -276,6 +276,7 @@ function registerGatewayRoutes(
       const exposedHeaders = (c.res.headers.get('Access-Control-Expose-Headers') ?? '')
         .split(',').map(header => header.trim()).filter(Boolean)
       if (!exposedHeaders.some(header => header.toLowerCase() === 'etag')) exposedHeaders.push('ETag')
+      if (c.res.headers.has('X-Shadow-Request-Id') && !exposedHeaders.some(header => header.toLowerCase() === 'x-shadow-request-id')) exposedHeaders.push('X-Shadow-Request-Id')
       c.header('Access-Control-Expose-Headers', exposedHeaders.join(', '))
       const vary = (c.res.headers.get('Vary') ?? '').split(',').map(value => value.trim()).filter(Boolean)
       if (!vary.includes('*') && !vary.some(value => value.toLowerCase() === 'origin')) vary.push('Origin')

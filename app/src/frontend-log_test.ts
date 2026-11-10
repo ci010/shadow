@@ -294,3 +294,49 @@ test('production-built renderer has no hooks until capability; production Main 4
   const before = gets
   fake.tick(); await settle(); assert.equal(gets, before)
 })
+
+
+test('actual project timeout warning survives console collection, authenticated ingestion and runtime direct read', async t => {
+  const { Hono } = await import('hono')
+  const { FrontendLog, registerFrontendLogRoutes } = await import('../../src/runtime/frontend-log.ts')
+  const { RuntimeDiagnosticLog } = await import('../../src/runtime/diagnostic-log.ts')
+  const { createRuntimeHandler } = await import('../../src/vfs/runtime.ts')
+  const { projectJson } = await import('./projects.ts')
+  const log = new FrontendLog('development')
+  const app = new Hono()
+  registerFrontendLogRoutes(app, log, request => request.headers.get('authorization') === 'fixture')
+  const fake = fakeWindow()
+  const stop = installFrontendLog(fake.target, async events => {
+    const response = await app.request('/api/runtime/frontend-logs', {
+      method: 'POST', headers: { authorization: 'fixture', 'content-type': 'application/json' },
+      body: JSON.stringify({ tabId: 'fixture', events }),
+    })
+    assert.equal(response.status, 200)
+  })
+  t.after(stop)
+  t.mock.method(console, 'warn', (...args: unknown[]) => fake.target.console.warn(...args))
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal)
+  const id = '12345678-1234-4123-8123-123456789abc'
+  await assert.rejects(projectJson('http://fixture/projects/a', '/api/sessions/graph?secret=private', undefined, async () => {
+    const response = Response.json({ secret: 'private' }, { headers: { 'X-Shadow-Request-Id': id } })
+    response.json = async () => {
+      deadline.abort(new DOMException('private', 'TimeoutError'))
+      throw new DOMException('private', 'AbortError')
+    }
+    return response
+  }), /timed out/)
+  fake.tick(); await settle()
+  const reader = createRuntimeHandler(new RuntimeDiagnosticLog(), 'a', () => {}, undefined, undefined, log)
+  const direct = await reader.read('frontend-logs', { projectId: 'a', sessionId: 'fixture', signal: new AbortController().signal } as any)
+  const retained = JSON.parse(String(direct))
+  const warning = JSON.parse(retained.message)[0] as string
+  assert.match(warning, new RegExp(id))
+  const metadata = JSON.parse(warning.slice('API project failure '.length))
+  assert.equal(metadata.status, 200)
+  assert.equal(metadata.stage, 'consume')
+  assert.equal(metadata.cause, 'deadline')
+  assert.equal(typeof metadata.headersMs, 'number')
+  assert.equal(typeof metadata.elapsedMs, 'number')
+  assert.doesNotMatch(String(direct), /REDACTED|private|secret/)
+})
