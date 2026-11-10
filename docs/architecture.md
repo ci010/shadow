@@ -38,7 +38,7 @@ current references from historical proposals.
 | --- | --- |
 | Personal agent | Persistent conversations, configurable models, tool-use loops, steering, subagents, and slash commands in the local backend |
 | Projects | Concurrent project runtimes with separate Homes, sessions, context, bots, learning, and diagnostics; shared provider credentials/devices, not separate OS sandboxes |
-| Context and memory | Agent prompts, identity, project context, Project conventions, file-backed memory, daily event summaries, compaction, and learning-agent pipelines |
+| Context and memory | Agent prompts, identity, project context, Project conventions, file-backed memory, daily log summaries, compaction, and learning-agent pipelines |
 | Tools | Files, text editing, search, shell processes, background continuations, messaging, plans, conventions, dynamic script tools, and MCP adapters |
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
@@ -297,7 +297,7 @@ standalone callers fall back to `agent.workspace`. Pure helpers in
     authoring/                        compatibility: credentials, grant receipts, inbox state
     bots/<botId>/                   current/, previous/, data/, history.git/; metadata outside source
     bots/runtime/discord-security/    mutable Discord security/memory state
-    memory/                          wiki, identities, events and indexes
+    memory/                          wiki, identities, logs and indexes
     state/
       sessions/                      JSONL and/or SQLite history
       initiatives.sqlite  conventions.sqlite
@@ -581,7 +581,7 @@ invalidations are coalesced; hidden idle chat panes do not render token updates
 or retain individual network connections. A hidden submitted request can retain
 its shared subscription to observe completion.
 Execution cards also observe the owning project's sessions topic and
-coalesce graph refreshes; metadata-only call-wait changes update mounted cards
+coalesce logical-summary refreshes; metadata-only call-wait changes update mounted cards
 without reloading the conversation or discarding its draft.
 
 This is not a durable token-event ledger. Replay is bounded and in memory.
@@ -591,17 +591,17 @@ the UI never re-admits a command or implicitly resumes interrupted execution.
 The host-wide `projects` topic invalidates the project catalog after committed
 creation or rename. Session phase transitions, blocking-call waits and yield
 changes publish `activity` invalidations on the owning `sessions` topic; these
-refresh only the lightweight stages snapshot, not the session graph. Committed
-session creation, metadata/configuration changes and deletion invalidate the graph.
+refresh only the lightweight stages snapshot, not the session summary. Committed
+session creation, metadata/configuration changes and deletion invalidate the summary.
 Runtime startup also resets affected subscriptions once its HTTP routes are ready.
-The renderer's `project-live-state.ts` shares one catalog per host and one graph
+The renderer's `project-live-state.ts` shares one catalog per host and one logical session summary
 and activity snapshot per Project across chat panes, sidebars and notification
 sounds. Reads start on subscription and subsequently on invalidation, explicit
 refresh or reset; reconnect recovery also refreshes these snapshots even when
 the cursor is replayable, so failed HTTP reads cannot leave them stale.
 Bursts coalesce and changes during a read get one serialized
 follow-up. Reset/disposal abort obsolete reads. There is no periodic HTTP polling
-of `projects`, `graph` or `stages`, including when a notification monitor keeps
+of `projects`, `summary` or `stages`, including when a notification monitor keeps
 the shared state alive on another page. Snapshot failures remain visible until
 retry, a new event or reset; they are not presented as empty successful state.
 Not every other resource has push hooks: Nodes still use visible-only polling,
@@ -1049,7 +1049,7 @@ background completion event. Remote foreground exec inside calls is explicitly
 unsupported; this does not change ordinary session/task execution. These lifecycle
 rules do not constitute an OS sandbox or roll back external side effects.
 
-The session graph exposes mode, role, structural parent, execution status, and the
+The session summary exposes mode, role, logical delegation/context parents, execution status, and the
 optional native `parentToolCallId`. Both JSONL and SQLite preserve this correlation
 field; older records can still be matched through their tool admission receipts.
 The UI lists legacy and ordinary durable conversations, while displaying delegated one-shot
@@ -1087,7 +1087,7 @@ override, then the built-in model registry. Unknown models default to 400,000
 tokens, giving default thresholds of 380,000 in-loop and 300,000 during sleep.
 Registered model limits and explicit overrides are unchanged.
 
-Session memory, Project conventions, file tracking, and learning events are
+Session memory, Project conventions, file tracking, and learning logs are
 separate mechanisms. A handoff is not a distributed transfer to another node.
 
 ## Context and memory
@@ -1181,19 +1181,19 @@ that should be checked into the repository.
 | Project conventions | `conventions.sqlite`; guarded `sql` writes and append-only audit; shared current prompt context |
 | Legacy conventions | `memory/sessions/<safe-id>.conventions.md`, `memory/projects/<initiative>/conventions.md`, `memory/agent.conventions.md`; preserved historical files, not injected as current rules |
 | Personal preferences | Identified user profiles under `memory/identities/`; model-driven memory/learning retains sources and corrections |
-| Daily knowledge events | `memory/events/YYYY-MM-DD.jsonl`; structured `when/who/what/why/challenge/refs/origin` material |
+| Daily knowledge logs | `memory/events/YYYY-MM-DD.jsonl`; structured `when/who/what/why/challenge/refs/origin` material |
 | Keyword/wiki index | Markdown names in `memory/decisions`, `topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
-| Learning progress and outcomes | Project `.learning/state.v1.json`; bounded source cursors, pending batches, verified receipts, event consumption and retry state; legacy `memory/.reflect-watermark.json` is imported without replay |
+| Learning progress and outcomes | Project `.learning/state.v1.json`; bounded source cursors, pending batches, verified receipts, log consumption and retry state; legacy `memory/.reflect-watermark.json` is imported without replay |
 | Personality/identity | Project-shared `SOUL.md` and identity-manager files; distinct from user authentication |
 
 Project conventions have no Session or Work scope. Work owns task
 boundaries and acceptance; temporary presentation instructions remain in the
 conversation. Decisions record the choice and its source, not a second rule
 store. See [Project conventions](project-conventions.md) for SQL access,
-human-source validation, limits and legacy handling. Today's own events are
-included eagerly; other sessions' events are relevance-gated by
+human-source validation, limits and legacy handling. Today's own logs are
+included eagerly; other sessions' logs are relevance-gated by
 Work/shared modified paths when such signals exist, and capped. With no
-Work/file signals, related events can still be included up to the cap.
+Work/file signals, related logs can still be included up to the cap.
 This is **relevance selection within a project, not a privacy boundary
 between its sessions**. Other projects have separate memory stores.
 
@@ -1209,7 +1209,7 @@ made by shell commands, MCP tools, other applications, or all descendants.
 Managed Discord execution bypasses the ordinary Project prompt providers.
 `channels/integration.ts` supplies the approved Agent/skill snapshot, bounded
 platform metadata and authorized catalog context. It excludes global SOUL,
-identity, working sets, Project event/keyword indexes, conventions and generic
+identity, working sets, Project log/keyword indexes, conventions and generic
 resource/tool discovery before provider input is built. Names, paths, counts
 and source metadata are protected along with bodies; relevance never grants
 access.
@@ -1252,7 +1252,7 @@ and managed fresh jobs on its existing `CronService`:
   still require a partial result and source repair; that batch is retried without
   pausing unrelated new evidence. Existing pending batches
   retain their original scope and effects.
-  Independently assess Wiki knowledge updates, key events/corrections/challenges,
+  Independently assess Wiki knowledge updates, key logs/corrections/challenges,
   long-term memory and downstream skill material. Valuable unresolved evidence
   need not become a mature decision before it can be logged; uncertainty and
   source references remain required. Do not build a wiki for every entity or
@@ -1260,22 +1260,22 @@ and managed fresh jobs on its existing `CronService`:
   stated/inferred interpretation, applicability, exceptions and revalidation
   triggers in `memory/decisions`. Later evidence can support, correct or retire
   a decision.
-- **Encapsulator**, default 2-hour poll: consume exact unconsumed events from
+- **Encapsulator**, default 2-hour poll: consume exact unconsumed logs from
   verified reflection batches, including earlier dates. `learned_skill` uses
   the shared Skill edit store, checks revisions and verifies immediate discovery
   of lesson-only skills. Executable packages, bundled skills and admin/core
   capabilities are not automatically installed.
 - **Soul reflector**, default 12-hour poll: conservatively review the same
-  durable events, with a separate consumption cursor. `learning_soul` requires
+  durable logs, with a separate consumption cursor. `learning_soul` requires
   two distinct source sessions and retention of the user-notification clause.
 
 `LearningRuntime` binds each batch to its actual run. The Project-local journal
 is independent of the JSONL/SQLite session-store selection; both persist the
 execution receipt used for recovery. `learning_result` proposes an explicit
 `applied`, `no_change`, `partial`, `blocked` or `draft_only` outcome. Only successful
-session completion plus verified artifacts/events and an applied/no-change
+session completion plus verified artifacts/logs and an applied/no-change
 receipt acknowledges input. Historical runs have no fabricated receipt.
-Failures retain their batch and effects; event keys are idempotent within the
+Failures retain their batch and effects; log keys are idempotent within the
 batch. No-op reflections do not start downstream model calls.
 
 Enabled Project pipelines continue scheduled fresh executions; a failed batch
@@ -1301,7 +1301,7 @@ source snapshots, independent cursors and retries. It reuses bounded
 SessionManager/BaseSession calls, not a new provider loop. Workers receive only
 exact versioned batch reads, `learning_record` and `learning_result`; no global
 memory or Discord output. New user input and revocation fence background work.
-Decision/event/skill output retains source restrictions in the Conversation
+Decision/log/skill output retains source restrictions in the Conversation
 domain. Soul reflection produces a private draft, never a global SOUL update.
 Prepared effects and idempotent atomic catalog writes permit interrupted-commit
 recovery without re-inference; conflicting edits require reconciliation.
@@ -1414,7 +1414,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `ask`, `reply` | Ordinary text input or structured decisions, authenticated recipient routing, correlated answers and configurable waiting |
 | `v:works`, dynamic `work_*` tools | Optional current notes/goal paths through VFS; typed mutations for assignment, progress and impact reviews |
 | `plan_write`, `sql`, `log` | Planning documents, guarded Project conventions/read-only current Work queries, structured knowledge logging |
-| `event_subscribe`, `event_provider` (lazy) | Subscribe to internal normalized events or manage external providers; discover via `v:tools/events` and invoke through `invoke_tool` |
+| `event_subscribe`, `signal_provider` (lazy) | Subscribe to internal normalized events or manage external providers; discover via `v:tools/events` (internal) or `v:tools/signals` (external) and invoke through `invoke_tool` |
 | Lazy tools | Events, cron, search/MCP/tool factories |
 
 ### Work coordination
@@ -1800,7 +1800,7 @@ Local append uses append mode rather than rewriting previously read contents.
 - `v:tools`: dynamic tool and MCP source discovery without starting servers or
   revealing commands, environment values, URLs, or authentication headers;
 - `v:memory`: shared file-backed knowledge;
-- `v:events`: event subscriptions.
+- `v:signals`: external signal providers, instances and subscriptions; `internal/` separately exposes runtime event subscriptions.
 - `v:github`: read-only cached GitHub snapshots for this Project's enabled
   repositories, including source timestamps and refresh errors; unpublished
   operation drafts are not exposed. External content remains data, not authority.
@@ -1831,7 +1831,7 @@ contracts without executing a tool. Discovery never initializes sources. Legacy
 source-scoped paths remain compatible aliases, not duplicate root entries. The Project-bound `v:memory` write handler maps wiki Markdown writes
 to Home's memory directory and reuses the filesystem writer and its write-history
 recording. Existing tool filtering and local/non-call restrictions still apply.
-This entry point rejects session records, event logs, internal state, traversal
+This entry point rejects session records, logs, internal state, traversal
 and linked destinations; event appends use `log`. It is not a host filesystem
 sandbox or a revision-based concurrent-edit protocol.
 
@@ -2199,12 +2199,12 @@ Three internal mechanisms must not be conflated:
    directly. `emit` awaits directed admission (or schedules the debounce window);
    independent fanout targets can partially succeed, with failures returned to the
    producer. Timer-triggered failures report correlation IDs. There is no automatic
-   retry or crash replay of this pending work. `event_subscribe` and `event_provider`
-   are registered in the on-demand `events` catalog, not the base prompt.
-   Internal subscriptions and sources are visible at `v:events/internal/`;
-   external acquisition uses EventSourceProviders, with independent persisted
-   instances, checkpoints and processor deliveries (see [provider reference](event-source-providers.md)).
-3. **Memory event log:** model-curated daily knowledge in `memory/events`, not
+   retry or crash replay of this pending work. `event_subscribe` is registered in the on-demand `events` catalog;
+   external `signal_provider` is in the separate `signals` catalog, not the base prompt.
+   Internal subscriptions and sources are visible at `v:signals/internal/`;
+   external acquisition uses SignalSourceProviders, with independent persisted
+   instances, checkpoints and processor deliveries (see [provider reference](signal-source-providers.md)).
+3. **Memory log:** model-curated daily knowledge in `memory/events`, not
    the transport log of every Bus event.
 
 `BackgroundTaskManager` keeps task records and callbacks in memory. `exec` and

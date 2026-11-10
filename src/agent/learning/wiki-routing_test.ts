@@ -58,10 +58,10 @@ test('routed correction survives interruption with attribution and exact provena
     assert.match(String(await tools.execute('learning_memory', { ...draft, wikiEvidence: [evidence] }, context)), /inside an assigned source/)
   }
   assert.equal(runtime.ledger.batch(batch.id).artifacts.length, 0)
-  const append = learning.appendEvent.bind(learning)
-  learning.appendEvent = () => { throw new Error('provenance append interrupted') }
+  const append = learning.appendLog.bind(learning)
+  learning.appendLog = () => { throw new Error('provenance append interrupted') }
   assert.match(String(await tools.execute('learning_memory', draft, context)), /provenance append interrupted/)
-  learning.appendEvent = append
+  learning.appendLog = append
   const pending = new LearningTools(new LearningRuntime(f.sessions, 'a'))
   // Exact replay is supported even with the original empty revision.
   const receipt = JSON.parse(String(await pending.memory.execute(draft, context)))

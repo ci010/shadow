@@ -275,7 +275,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   f.invalidate('b')
   await settle()
   assert.equal(f.requests.length, 4)
-  for (const request of f.requests) request.finish(request.path.endsWith('/graph') ? graph()
+  for (const request of f.requests) request.finish(request.path.endsWith('/summary') ? graph()
     : { stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: false } })
   await settle()
   const stage = (view: typeof a) => sessionActivity(view.state().inlineExecutions.entries.get(0).stage).label
@@ -284,7 +284,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   f.invalidate('a')
   await settle()
   assert.equal(f.requests.length, 6)
-  assert.match(f.requests[4].path, /^\/projects\/a\/api\/sessions\/graph$/)
+  assert.match(f.requests[4].path, /^\/projects\/a\/api\/sessions\/summary$/)
   f.requests[4].finish(graph())
   await settle()
   f.requests[5].finish({ stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: true } })
@@ -620,7 +620,7 @@ test('scratch draft status reads wait for persistence, not ID allocation or fail
   await retry
   assert.equal(state.sessionReadable, false, 'admission may precede session creation')
   await settle()
-  const graph = f.requests.find(request => request.path.endsWith('/graph'))!
+  const graph = f.requests.find(request => request.path.endsWith('/summary'))!
   assert.ok(graph)
   graph.finish({ sessions: [{ sessionId: id, mode: 'session' }], nodes: [] })
   await settle()
@@ -640,13 +640,13 @@ test('navigation selection callback ensures shared snapshots while explicit relo
   const f = fixture(t)
   const view = f.mount('a')
   await settle()
-  const graphRead = f.requests.find(request => request.path.endsWith('/graph'))!
+  const graphRead = f.requests.find(request => request.path.endsWith('/summary'))!
   const stagesRead = f.requests.find(request => request.path.endsWith('/stages'))!
   graphRead.finish(graph())
   stagesRead.finish({ stages: { [root]: 'idle', [task]: 'idle' } })
   await settle()
   const count = (suffix: string) => f.requests.filter(request => request.path.endsWith(suffix)).length
-  assert.equal(count('/graph'), 1)
+  assert.equal(count('/summary'), 1)
   assert.equal(count('/stages'), 1)
   // Exercise the real useConversationNavigation callback configured by ChatTab,
   // rather than only testing the lease's ensure API in isolation.
@@ -654,13 +654,13 @@ test('navigation selection callback ensures shared snapshots while explicit relo
   await settle()
   view.state().selectSession(task, false)
   await settle()
-  assert.equal(count('/graph'), 1, 'selection must not force a graph refresh')
+  assert.equal(count('/summary'), 1, 'selection must not force a graph refresh')
   assert.equal(count('/stages'), 1, 'initial chat reset and selection reuse activity')
   const reload = view.state().loadSessionList()
   await settle()
-  assert.equal(count('/graph'), 2, 'explicit reload retains force semantics')
+  assert.equal(count('/summary'), 2, 'explicit reload retains force semantics')
   assert.equal(count('/stages'), 2)
-  f.requests.filter(request => request.path.endsWith('/graph')).at(-1)!.finish(graph())
+  f.requests.filter(request => request.path.endsWith('/summary')).at(-1)!.finish(graph())
   f.requests.filter(request => request.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
   await reload
 })

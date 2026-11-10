@@ -547,7 +547,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.manager.getSessionState(id)?.executionStatus, 'completed')
         assert.equal(runtime.ledger.outcome(id)?.status, 'blocked')
         assert.equal(runtime.ledger.cursor(batch.sources[0]), 0)
-        assert.equal(runtime.ledger.eventsFor('encapsulator').length, 0)
+        assert.equal(runtime.ledger.logsFor('encapsulator').length, 0)
         assert.equal(await runtime.run('reflector', new AbortController().signal), false)
         assert(runtime.ledger.batch(batch.id).retry!.notBefore > Date.now())
         settings.providerError = 'Copilot 400 model_not_supported'

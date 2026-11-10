@@ -129,6 +129,63 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+// Deliberately exact keys, not prefix matching: new telemetry must be reviewed here.
+// This small structural channel never consumes the shared evidence-text budget.
+const metricCounts = [
+  'llm.request.body_bytes', 'llm.request.wire_body_bytes', 'llm.request.image_count',
+  'llm.request.image_base64_bytes', 'llm.request.http_attempts', 'llm.request.timeout_attempts',
+  'llm.request.timeout_retries', 'llm.request.timeout_retry_exhausted', 'llm.request.timeout_success',
+  'llm.input_messages', 'llm.input_tools', 'http.status_code', 'http.response.status_code',
+  'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens',
+  'promptTokens', 'completionTokens', 'totalTokens', 'inputTokens', 'outputTokens',
+  'cachedTokens', 'cacheWriteTokens', 'contextTokens', 'contextWindow',
+] as const
+const metricLabels = ['llm.provider', 'llm.model', 'model', 'provider',
+  'llm.request.content_encoding', 'error.code', 'error.type'] as const
+const usageCounts = ['promptTokens', 'completionTokens', 'totalTokens', 'inputTokens',
+  'outputTokens', 'cachedTokens', 'cacheWriteTokens'] as const
+
+function safeMetrics(attributes: Record<string, unknown>, counts: readonly string[] = metricCounts) {
+  const metrics: Record<string, string | number> = {}
+  for (const key of counts) {
+    const raw = attributes[key]
+    if (typeof raw !== 'number' && !(typeof raw === 'string' && /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) && raw.length <= 24)) continue
+    const value = Number(raw)
+    if (Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER) metrics[key] = value
+  }
+  if (counts === metricCounts) for (const key of metricLabels) {
+    const value = attributes[key]
+    // Identifiers only, never free-form messages, URLs, credentials or headers.
+    if (typeof value === 'string' && value.length <= 160 && /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(value)
+      && !value.includes('://') && !/^(?:sk-|gh[pousr]_|github_pat_)/i.test(value)) metrics[key] = value
+  }
+  return metrics
+}
+
+function spanMetrics(span: SessionTraceResponse['entries'][number]) {
+  const events = span.events.flatMap((event, index) => {
+    if (event.name === 'model.response') {
+      // Existing response usage is encoded with message text. Never export that text.
+      const message = event.attributes.message
+      if (!message || message.length > 1_000_000) return []
+      try {
+        const parsed: unknown = JSON.parse(message)
+        if (!object(parsed) || !object(parsed.usage)) return []
+        const usage = safeMetrics(parsed.usage, usageCounts)
+        return Object.keys(usage).length ? [{ index, name: event.name, metrics: usage }] : []
+      } catch { return [] }
+    }
+    if (!['llm.request.image_timeout', 'llm.request.image_timeout_retry', 'llm.request.image_timeout_recovered'].includes(event.name)) return []
+    const metrics = safeMetrics(event.attributes, ['body_bytes', 'wire_body_bytes', 'image_count',
+      'image_base64_bytes', 'http_attempts', 'attempts', 'retries', 'duration_ms', 'delay_ms'])
+    return Object.keys(metrics).length ? [{ index, name: event.name, metrics }] : []
+  })
+  return {
+    traceId: span.traceId, spanId: span.spanId,
+    metrics: safeMetrics(span.attributes), events,
+  }
+}
+
 export async function createSessionDiagnosis(
   source: DiagnosisSource,
   sessionId: string,
@@ -235,6 +292,8 @@ export async function createSessionDiagnosis(
       available: !!trace, detail: query.view === 'summary' ? 'errors-and-live' : 'all-loaded',
       observedCount: trace?.entries.length ?? 0,
       entries: spans, hasMore: trace?.hasMore ?? false, nextBeforeId: trace?.nextBeforeId,
+      // Same loaded page, including completed successes omitted from summary details.
+      spanMetrics: trace?.entries.map(spanMetrics) ?? [],
     },
     historicalContext: {
       status: captures === undefined ? 'unavailable' : 'capture-enabled',

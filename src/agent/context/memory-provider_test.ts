@@ -49,7 +49,7 @@ async function seedEvent(workspace: string, origin: string): Promise<void> {
   )
 }
 
-test('memory provider composes keywords, events and working set without a second convention authority', async () => {
+test('memory provider composes keywords, logs and working set without a second convention authority', async () => {
   await withTempWorkspace(async (workspace) => {
     const memory = new MemoryStore(workspace)
     await memory.recordModifiedFile('discord:1', 'src/a.ts', 'write')
@@ -62,7 +62,7 @@ test('memory provider composes keywords, events and working set without a second
     assert(out !== null)
 
     const iKw = out.indexOf('**Long-term keywords**')
-    const iEvents = out.indexOf('### Recent Events')
+    const iEvents = out.indexOf('### Recent Logs')
     const iWs = out.indexOf('### Working Set')
     assert(iKw >= 0 && iEvents >= 0 && iWs >= 0, 'all sections present')
     assert(iKw < iEvents, 'keywords before events')

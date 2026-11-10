@@ -131,7 +131,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
             id, name: id === 'code' ? 'A long folder name for checking truncation' : 'Operations',
             path: `C:\\synthetic\\${id}`, createdAt: '',
           })) : [] }
-          else if (path === '/api/sessions/graph') data = { sessions: work ? sessions : [], nodes: [] }
+          else if (path === '/api/sessions/summary') data = { sessions: work ? sessions : [], nodes: [] }
           else if (path === '/api/sessions/stages') data = { stages: { 'web:chat-one': 'llm', 'web:chat-two': 'waiting', 'task:one': 'llm' } }
           else if (path === '/api/channels') data = { channels: [{
             id: 'bot', projectId: 'work', platform: 'qq', displayName: 'QQ bot', label: 'QQ',

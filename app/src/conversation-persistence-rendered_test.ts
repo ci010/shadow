@@ -78,7 +78,7 @@ test('real composer and diagnosis selections survive page reload and preserve se
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html><body style="margin:0"><div id="app"></div><script type="module" src="/persistence.ts"></script></body></html>')
           } else if (path === '/fixture-reject') { rejectSend = url.searchParams.get('value') === 'true'; json({ ok: true }) }
-          else if (path.endsWith('/api/sessions/graph')) json({ sessions: ['web:chat-one', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
+          else if (path.endsWith('/api/sessions/summary')) json({ sessions: ['web:chat-one', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
           else if (path.endsWith('/api/sessions/stages')) json({ stages: {}, activeRequestIds: {}, recoveries: {} })
           else if (path.endsWith('/api/chat/session')) json({ history: [{ role: 'assistant', content: '[Preview layout](layout.html)' }], systemPrompt: 'Synthetic persisted system prompt', tools: [] })
           else if (path.endsWith('/static/layout.html')) {

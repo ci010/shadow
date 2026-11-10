@@ -71,7 +71,7 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
     const restarted = new LearningRuntime(f.sessions, 'a')
     assert.equal((await restarted.sources(signal()))[0].offset, 43)
     assert.equal(restarted.ledger.outcome('historical-run'), undefined)
-    assert.equal(restarted.ledger.eventsFor('encapsulator').length, 0)
+    assert.equal(restarted.ledger.logsFor('encapsulator').length, 0)
   })
 })
 
@@ -90,7 +90,7 @@ test('reflection guidance asks for evidence-backed behavioral learning without f
     assert.match(task, /downstream usefulness is not yet observed/)
     assert.match(task, /Use different retention thresholds/)
     assert.match(task, /Unresolved challenges can be retained/)
-    assert.match(task, /Do not apply this extra test to Wiki facts or significant events/)
+    assert.match(task, /Do not apply this extra test to Wiki facts or significant logs/)
     assert.match(task, /candidates retained or omitted/)
     assert.doesNotMatch(task, /Before retaining a candidate, answer/)
     const guideline = await readFile(new URL('../types/builtin/reflector/AGENT.md', import.meta.url), 'utf8')
@@ -118,7 +118,7 @@ test('missing, blocked and unverified receipts do not acknowledge source ranges'
     })
     await assert.rejects(f.runtime.run('reflector', signal(), undefined, undefined, undefined, true), /blocked/)
     assert.equal(f.runtime.ledger.pending('reflector')!.id, pending)
-    assert.equal(f.runtime.ledger.eventsFor('encapsulator').length, 0)
+    assert.equal(f.runtime.ledger.logsFor('encapsulator').length, 0)
   })
 })
 
@@ -136,7 +136,7 @@ test('unsupported models, endpoints and reasoning settings are nonretryable lear
   })
 })
 
-test('decision writes preserve conditions, uncertainty and evidence; downstream consumes exact durable events once', async () => {
+test('decision writes preserve conditions, uncertainty and evidence; downstream consumes exact durable logs once', async () => {
   await withTempWorkspace(async workspace => {
     const f = fixture(workspace)
     f.onRun(async id => {
@@ -152,7 +152,7 @@ test('decision writes preserve conditions, uncertainty and evidence; downstream 
     assert.match(content, /Exceptions and counterexamples/)
     assert.match(content, /web:source.*\[0, 5\)/)
     assert.equal(await f.runtime.run('reflector', signal()), false)
-    const events = f.runtime.ledger.eventsFor('encapsulator')
+    const events = f.runtime.ledger.logsFor('encapsulator')
     assert.equal(events.length, 1)
     f.onRun(async id => {
       const batch = f.runtime.ledger.batchFor(id)!
@@ -164,16 +164,16 @@ test('decision writes preserve conditions, uncertainty and evidence; downstream 
     })
     await f.runtime.run('encapsulator', signal())
     assert.equal(await f.runtime.run('encapsulator', signal()), false)
-    assert.equal(f.runtime.ledger.eventsFor('soulReflector').length, 1)
+    assert.equal(f.runtime.ledger.logsFor('soulReflector').length, 1)
   })
 })
 
-test('partial effects survive restart and stable event keys prevent duplicate logs across midnight', async t => {
+test('partial effects survive restart and stable log keys prevent duplicate logs across midnight', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-02T23:59:00Z') })
   await withTempWorkspace(async workspace => {
     const f = fixture(workspace)
     f.onRun(async id => {
-      await new LogTool(workspace, (entry, key, context) => f.tools.appendEvent(entry, key, context)).execute({
+      await new LogTool(workspace, (entry, key, context) => f.tools.appendLog(entry, key, context)).execute({
         who: 'user', summary: 'User selected contextual results.', what: 'Selected contextual results', session: 'web:source', key: 'message-3-choice',
       }, f.context(id))
       throw new Error('fetch failed')
@@ -184,13 +184,13 @@ test('partial effects survive restart and stable event keys prevent duplicate lo
     const runtime = new LearningRuntime(f.sessions, 'a')
     const tools = new LearningTools(runtime)
     f.onRun(async id => {
-      assert.match(tools.appendEvent({ who: 'user', summary: 'User selected contextual results.', what: 'Selected contextual results', origin: 'web:source' }, 'message-3-choice', f.context(id))!, /already recorded/)
+      assert.match(tools.appendLog({ who: 'user', summary: 'User selected contextual results.', what: 'Selected contextual results', origin: 'web:source' }, 'message-3-choice', f.context(id))!, /already recorded/)
       await tools.result.execute({ status: 'applied', summary: 'Recovered the persisted event.' }, f.context(id))
     })
     await runtime.run('reflector', signal(), undefined, undefined, undefined, true)
     const rows = (await readFile(join(workspace, batch.events[0].path), 'utf8')).trim().split('\n')
     assert.equal(rows.length, 1)
-    assert.equal(runtime.ledger.eventsFor('encapsulator').length, 1)
+    assert.equal(runtime.ledger.logsFor('encapsulator').length, 1)
   })
 })
 
@@ -267,7 +267,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
         await assert.rejects(f.tools.result.execute({ status: 'applied', summary: 'All done' }, ctx), /Unresolved/,
           'an earlier successful write must not hide a later failure')
         record(id, path, 'Successfully wrote file')
-        f.tools.appendEvent({ who: 'reflector', summary: 'Retained a useful note.', what: 'Retained a useful note', origin: 'web:source' }, 'outcomes', ctx)
+        f.tools.appendLog({ who: 'reflector', summary: 'Retained a useful note.', what: 'Retained a useful note', origin: 'web:source' }, 'outcomes', ctx)
         await f.tools.result.execute({ status: 'applied', summary: 'Recovered the direct write.' }, ctx)
       })
       const id = String(await f.runtime.run('reflector', signal(), undefined, undefined, undefined, true))
@@ -386,7 +386,7 @@ test('lesson skills use the real shared edit store and are immediately discovera
       await f.tools.result.execute({ status: 'applied', summary: 'Installed one lesson-only skill.' }, ctx)
     })
     await f.runtime.run('encapsulator', signal())
-    assert.equal(f.runtime.ledger.eventsFor('encapsulator').length, 0)
+    assert.equal(f.runtime.ledger.logsFor('encapsulator').length, 0)
   })
 })
 
@@ -484,7 +484,7 @@ for (const running of [false, true]) test(`excluded legacy mixed batch releases 
   const child = { ...root, sessionId: 'virtual:child', physicalId: 'child-0' }
   const old = f.runtime.ledger.create('reflector', [root, child], [])
   f.runtime.ledger.artifact(old.id, { path: 'memory/kept.md', revision: 'kept', kind: 'memory' })
-  f.runtime.ledger.event(old.id, { id: 'kept', path: 'events', origin: 'child', when: 'then', who: 'worker', what: 'retained' })
+  f.runtime.ledger.log(old.id, { id: 'kept', path: 'events', origin: 'child', when: 'then', who: 'worker', what: 'retained' })
   if (running) f.runtime.ledger.bind(old.id, 'cron:old')
   else f.runtime.ledger.defer(old.id, false)
   const runtime = new LearningRuntime(f.sessions, 'a')
@@ -527,20 +527,20 @@ test('readable-size batching preserves exact cursors and isolates atomic oversiz
   })
 })
 
-test('new reflector events require bounded briefings; persisted briefings survive restart', async () => withTempWorkspace(async workspace => {
+test('new reflector logs require bounded briefings; persisted briefings survive restart', async () => withTempWorkspace(async workspace => {
   const f = fixture(workspace, 3)
   f.onRun(async id => {
     const ctx = f.context(id)
     const entry = { who: 'user', what: 'Full observed details', origin: 'web:source' }
-    assert.throws(() => f.tools.appendEvent(entry, 'brief', ctx), /require a short summary/)
-    assert.throws(() => f.tools.appendEvent({ ...entry, summary: '😀'.repeat(281) }, 'brief', ctx), /summary/)
-    f.tools.appendEvent({ ...entry, summary: '😀'.repeat(280) }, 'brief', ctx)
+    assert.throws(() => f.tools.appendLog(entry, 'brief', ctx), /require a short summary/)
+    assert.throws(() => f.tools.appendLog({ ...entry, summary: '😀'.repeat(281) }, 'brief', ctx), /summary/)
+    f.tools.appendLog({ ...entry, summary: '😀'.repeat(280) }, 'brief', ctx)
     f.runtime.ledger.propose(f.runtime.ledger.batchFor(id)!.id, 'applied', 'Recorded event')
   })
   await f.runtime.run('reflector', signal())
   const reloaded = new LearningLedger(workspace, 'a')
-  assert.equal(reloaded.eventsFor('encapsulator')[0].summary, '😀'.repeat(280))
-  assert.equal(reloaded.eventsFor('encapsulator')[0].what, 'Full observed details')
+  assert.equal(reloaded.logsFor('encapsulator')[0].summary, '😀'.repeat(280))
+  assert.equal(reloaded.logsFor('encapsulator')[0].what, 'Full observed details')
 }))
 
 test('Wiki-only unresolved challenge can produce an experimental discoverable skill and verified receipt', async () => withTempWorkspace(async workspace => {
@@ -553,7 +553,7 @@ test('Wiki-only unresolved challenge can produce an experimental discoverable sk
     assert.equal(batch.inputEvents.length, 1)
     assert.equal(batch.inputEvents[0].origin, 'v:memory/topics/delivery.md')
     const task = learningTask(batch)
-    assert.match(task, /Narrow experimental skills need not have prior cross-event success/)
+    assert.match(task, /Narrow experimental skills need not have prior cross-log success/)
     const content = '---\nname: delivery-evidence-separation\ndescription: Diagnose disagreement between passing builds and missing recipient files\n---\n# Experimental diagnostic workflow\nSource: v:memory/topics/delivery.md (fixture). Outcome remains unresolved.\nWhen delivery is disputed, separately check status projection, loaded build and actual recipient receipt. Passing tests do not establish delivery. Do not retry sends without authorization. Revalidate after a real recipient outcome; retire if these distinctions do not help.\nExample: passing build plus missing file requires recipient evidence. Counterexample: a verified recipient receipt already settles that attempt, not every future delivery.\n'
     const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name: 'delivery-evidence-separation' }, f.context(id)))
     await f.tools.skill.execute({ action: 'save', name: 'delivery-evidence-separation', revision: baseline.revision, content }, f.context(id))
@@ -565,7 +565,7 @@ test('Wiki-only unresolved challenge can produce an experimental discoverable sk
   assert.equal(await f.runtime.run('encapsulator', signal()), false)
 }))
 
-test('host audit recovers rejected physical ID against exact event ref across attempts, not real I/O errors', async t => withTempWorkspace(async workspace => {
+test('host audit recovers rejected physical ID against exact log ref across attempts, not real I/O errors', async t => withTempWorkspace(async workspace => {
   const f = fixture(workspace)
   const correct = 'v:sessions/web_chat-example-v2-f83865aca7a-0/overview'
   const wrong = 'v:sessions/web_chat-example-v2-f838aca7a-0/overview'
@@ -761,10 +761,10 @@ test('Wiki publication combines precise source ranges, host readback and recover
     assert.match(persisted, /source-physical messages \[2, 4\)/)
     assert.match(persisted, /not independently verified/)
     f.runtime.ledger.artifact = originalArtifact
-    const originalEvent = f.tools.appendEvent.bind(f.tools)
-    f.tools.appendEvent = () => { throw new Error('injected event failure') }
+    const originalEvent = f.tools.appendLog.bind(f.tools)
+    f.tools.appendLog = () => { throw new Error('injected event failure') }
     await assert.rejects(f.tools.memory.execute(draft, context), /injected event failure/)
-    f.tools.appendEvent = originalEvent
+    f.tools.appendLog = originalEvent
     const recovered = new LearningTools(f.runtime)
     const receipt = JSON.parse(String(await recovered.memory.execute(draft, context)))
     assert.equal(receipt.verified, true)

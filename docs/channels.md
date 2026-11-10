@@ -256,7 +256,7 @@ titles, paths, counts and source metadata as well as document bodies.
 
 | Domain | Access |
 | --- | --- |
-| Project-private / uncatalogued old memory | Excluded from external Discord contexts, including SOUL, identity, working sets, Project events and keyword indexes |
+| Project-private / uncatalogued old memory | Excluded from external Discord contexts, including SOUL, identity, working sets, Project logs and keyword indexes |
 | Conversation | One Bot/conversation/current authorization epoch; notes, summaries, decisions and learned skills stay here |
 | Shared knowledge | Only explicitly granted bindings; an approved publication is a fixed copy, not a live alias to private data |
 | Agent-private | Explicitly created and granted; the same Agent name does not confer access |

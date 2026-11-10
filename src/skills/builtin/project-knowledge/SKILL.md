@@ -23,7 +23,7 @@ store, not a separate service. Its canonical tool path is `v:memory/`;
 | --- | --- | --- |
 | Wiki | `v:memory/topics/<name>.md`, `decisions/`, `concepts/`, `identities/`, `tools/`, or another knowledge Markdown path | Shared, reusable knowledge |
 | Session memory | `v:memory/sessions/` | Conversation context and observed working sets |
-| Events | `v:memory/events/` | Historical event records |
+| Logs | `v:memory/events/` | Historical log records (legacy path spelling, not external signals) |
 | Conventions and internal state | Convention resources and bookkeeping files | Not Wiki pages; use their supported interfaces |
 | Skills | `v:skills/<name>` | Reusable instruction workflows, not imported knowledge pages |
 
@@ -83,8 +83,8 @@ write({
 
 If the match is missing or ambiguous, reread instead of overwriting concurrent
 edits. Use `flag: "g"` only when all exact occurrences should change.
-The virtual writer accepts Wiki Markdown, not session records, event logs,
-JSON indexes or hidden internal state; append events through `log`.
+The virtual writer accepts Wiki Markdown, not session records, logs,
+JSON indexes or hidden internal state; append logs through `log`.
 
 Read back every created/updated page before claiming ingestion. Retain source
 paths, information dates, applicability and meaningful procedure details.
@@ -106,7 +106,7 @@ actual denials instead of reporting a missing permission from that label alone.
 Pass the source, desired shared Wiki pages under `v:memory/`, acceptance and
 source-read-only boundaries. Tell the worker to read this Skill.
 Do not forbid all "memory" writes when the target is Wiki: prohibit session
-memory and event changes while retaining the canonical Wiki path.
+memory and log changes while retaining the canonical Wiki path.
 Your own lack of `write` does not imply that a local worker lacks Wiki access.
 Do not widen permissions, install tools or modify platform source to bypass a
 genuine denial.

@@ -789,7 +789,7 @@ const { activeSessionId, selectedMode, requestSession, selectSession, inspectExe
   newDraft: () => createNewWebChat(undefined, false),
 })
 // Allocating a scratch ID is not persistence: upload/live setup and the first
-// POST can still fail before Main creates the session. Only graph discovery
+// POST can still fail before Main creates the session. Only session discovery
 // releases these reads; once discovered, later deletion remains a real error.
 const unpersistedDrafts = ref(new Set<string>())
 const sessionReadable = computed(() => !!activeSessionId.value && !unpersistedDrafts.value.has(activeSessionId.value))
@@ -1798,8 +1798,8 @@ async function loadSessionList(): Promise<void> {
   await projectLease?.refresh()
 }
 
-// Folder identity comes from the scoped session graph, never a workdir display path.
-// Drop the previous Project's metadata before a new graph arrives (IDs may repeat).
+// Folder identity comes from the scoped session summary, never a workdir display path.
+// Drop the previous Project's metadata before a new summary arrives (IDs may repeat).
 watch(() => [props.apiBase, props.projectId] as const, () => {
   allSessions.value = []
 }, { flush: 'sync' })
@@ -1815,9 +1815,9 @@ watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base,
     observedActive = observedRequest?.state.phase === 'active'
     observedSessionId = activeSessionId.value
   }, { flush: 'sync' })
-  const stopGraph = watch(() => lease.graph.state.revision, () => {
+  const stopSessions = watch(() => lease.sessions.state.revision, () => {
     workRevision.value++
-    const sessions = lease.graph.state.value
+    const sessions = lease.sessions.state.value
     if (!sessions) return
     if (!props.managed) homeCache.setSessions(base, sessions)
     const selected = sessions.find(session => session.sessionId === activeSessionId.value)
@@ -1832,14 +1832,14 @@ watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base,
   const stopActivity = watch(() => lease.activity.state.revision, () => {
     if (lease.activity.state.value) applySessionActivity(lease.activity.state.value, observedRequest, observedActive, observedSessionId)
   }, { immediate: true, flush: 'sync' })
-  const stopErrors = watch(() => [lease.graph.state.loading, lease.graph.state.error, lease.activity.state.error] as const,
-    ([loading, graphError, activityError]) => {
+  const stopErrors = watch(() => [lease.sessions.state.loading, lease.sessions.state.error, lease.activity.state.error] as const,
+    ([loading, summaryError, activityError]) => {
       sessionsLoading.value = loading
-      sessionsError.value = graphError
+      sessionsError.value = summaryError
       stageError.value = activityError
     }, { immediate: true })
   onCleanup(() => {
-    stopRead(); stopGraph(); stopActivity(); stopErrors()
+    stopRead(); stopSessions(); stopActivity(); stopErrors()
     lease.release()
     if (projectLease === lease) projectLease = undefined
   })
@@ -3226,7 +3226,7 @@ onUnmounted(() => {
 })
 
 onMounted(async () => {
-  await projectLease?.graph.read()
+  await projectLease?.sessions.read()
   if (disposed) return
   mounted = true
   if (props.embedded) {

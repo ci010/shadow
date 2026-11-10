@@ -93,7 +93,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (path === '/api/service-groups') data = { revision: 'fixture', agents: [], groups: [] }
           else if (path === '/api/channels') data = { channels: [] }
           else if (path === '/api/automations') data = { automations: [] }
-          else if (path === '/api/sessions/graph') data = { sessions: [...names].map(([sessionId, title]) => ({ sessionId, title })), nodes: [] }
+          else if (path === '/api/sessions/summary') data = { sessions: [...names].map(([sessionId, title]) => ({ sessionId, title })), nodes: [] }
           else if (path === '/api/sessions/stages') data = { stages: {} }
           else if (path === '/api/chat/session') data = { history, tools: [], systemPrompt: 'Synthetic mobile test prompt' }
           else if (path === '/api/chat/commands') data = { commands: [] }

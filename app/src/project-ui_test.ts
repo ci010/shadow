@@ -264,7 +264,7 @@ test('canonical topics take precedence over legacy names and admin fallback labe
 
 test('Project session invalidation also refreshes its folder catalog for agent-registered folders', async t => {
   let invalidate: (() => void) | undefined
-  t.mock.method(globalThis, 'fetch', async (url: URL) => Response.json(url.pathname.endsWith('/graph')
+  t.mock.method(globalThis, 'fetch', async (url: URL) => Response.json(url.pathname.endsWith('/summary')
     ? { sessions: [], nodes: [] } : { stages: {} }))
   const state = mountScript(t, 'ProjectGroup.vue', {
     apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '' },
@@ -299,7 +299,7 @@ test('bot sidebar names stay Project-scoped and late catalogs cannot replace ano
     const url = new URL(input)
     const projectId = url.pathname.split('/')[2]!
     const sessionId = `bot:${projectId}:shared:qq:dm%3Aone`
-    if (url.pathname.endsWith('/graph')) return Response.json({ sessions: [{ sessionId, projectId }], nodes: [] })
+    if (url.pathname.endsWith('/summary')) return Response.json({ sessions: [{ sessionId, projectId }], nodes: [] })
     if (url.pathname.endsWith('/stages')) return Response.json({ stages: { [sessionId]: 'tool' } })
     assert.ok(url.pathname.endsWith('/channels'))
     if (projectId === 'a') {
@@ -634,7 +634,7 @@ test('project deletion removes its mounted resources and returns to projects wit
 
 test('run ownership is canonicalized only from a known graph row and reidentified after route metadata changes', async t => {
   const association = { jobId: 'daily', name: 'Daily review', runId: 'run', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh' }
-  t.mock.method(globalThis, 'fetch', async (input: URL) => Response.json(input.pathname.endsWith('/graph')
+  t.mock.method(globalThis, 'fetch', async (input: URL) => Response.json(input.pathname.endsWith('/summary')
     ? { sessions: [{ sessionId: 'cron:run', automation: association }, { sessionId: 'web:chat-normal' }], nodes: [] }
     : { stages: {} }))
   const events: Array<[string, string | undefined]> = []
@@ -861,7 +861,7 @@ test('a failed project exposes a real retry and refreshes only its own conversat
     if (input.pathname === '/api/projects/a/status') return Response.json({ state: 'failed' })
     assert.ok(input.pathname.startsWith('/projects/a/'))
     if (!ready) return new Response('', { status: 503 })
-    return Response.json(input.pathname.endsWith('/graph')
+    return Response.json(input.pathname.endsWith('/summary')
       ? { sessions: [{ sessionId: 'web:chat-a' }], nodes: [] } : { stages: {} })
   })
   const state = mountScript(t, 'ProjectGroup.vue', {

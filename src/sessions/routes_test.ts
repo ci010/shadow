@@ -780,3 +780,41 @@ for (const endpoint of ['graph', 'stages']) test(`${endpoint} GET revalidates fr
   assert.notEqual(fresh.headers.get('ETag'), etag)
   assert.notEqual(await fresh.text(), body)
 })
+
+
+test('navigation summary omits physical nodes and arbitrary config while preserving logical metadata', async () => {
+  const states = [
+    { sessionId: 'web:root', segmentIndex: 1_000_000_000, name: 'Root', config: { model: 'chosen', contextWindow: 1234, systemPrompt: 'must not transfer' } },
+    { sessionId: 'web:fork', segmentIndex: 0, name: 'Fork', parent: { physicalId: 'web_root-12', index: 4 } },
+    { sessionId: 'task:child', segmentIndex: 0, mode: 'task', agentType: 'sub', parentSessionId: 'web:root', description: 'Child work', executionStatus: 'running' },
+  ]
+  const manager = {
+    projectId: 'a',
+    listHistorySessions: async () => states,
+    readSessionState: async (id: string) => states.find(state => state.sessionId === id),
+    getFirstUserMessage: async () => { throw new Error('Named navigation rows must not read history') },
+    getSessionInferenceDefaults: () => ({ model: 'default' }),
+    isWaitingForCall: (id: string) => id === 'web:root',
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  const app = new Hono()
+  sessionsApiPlugin(manager)(app)
+  const response = await app.request('/api/sessions/summary')
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.nodes, undefined)
+  assert.equal(body.sessions.length, 3)
+  assert.equal(body.sessions[0].config, undefined)
+  assert.deepEqual(body.sessions[0].inferenceOverrides, { model: 'chosen', contextWindow: 1234 })
+  assert.equal(JSON.stringify(body).includes('must not transfer'), false)
+  assert.equal(body.sessions[0].waitingForCall, true)
+  assert.equal(body.sessions[1].contextParentSessionId, 'web:root')
+  assert.equal(body.sessions[2].parentSessionId, 'web:root')
+  assert.equal(body.sessions[2].executionStatus, 'running')
+  assert.equal(body.sessions[2].description, 'Child work')
+  const unchanged = await app.request('/api/sessions/summary', { headers: { 'If-None-Match': response.headers.get('ETag')! } })
+  assert.equal(unchanged.status, 304)
+  // The original inventory API is deliberately not reused: it lacks enrichment.
+  const inventory = await (await app.request('/api/sessions')).json()
+  assert.equal(inventory.sessions[1].contextParentSessionId, undefined)
+})

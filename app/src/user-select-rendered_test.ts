@@ -45,7 +45,7 @@ test('content selection whitelist preserves native dragging, editing, copying an
           import ToolPayload from '/src/components/ToolPayload.vue';
           import SystemPromptCard from '/src/components/SystemPromptCard.vue';
           import IoNodes from '/src/components/io/IoNodes.vue';
-          import MemoryEventRecord from '/src/components/files/MemoryEventRecord.vue';
+          import MemoryLogRecord from '/src/components/files/MemoryLogRecord.vue';
           import SelectionMenu from '/src/components/SelectionMenu.vue';
           import CopyableId from '/src/components/CopyableId.vue';
           const content = ref();
@@ -71,7 +71,7 @@ test('content selection whitelist preserves native dragging, editing, copying an
             <article id="document" class="selectable-text"><p>Readable document body</p><pre><code>source code</code></pre></article>
             <div id="diff"><span class="select-none">123 +</span><pre><span>const value = 1</span></pre></div>
             <button id="thumbnail"><pre class="select-none">Clickable file thumbnail</pre></button>
-            <MemoryEventRecord :record="{kind:'event',start:1,end:1,event:{who:'Agent',what:'Readable memory event'},extra:[]}" />
+            <MemoryLogRecord :record="{kind:'log',start:1,end:1,log:{who:'Agent',what:'Readable memory event'},extra:[]}" />
             <IoNodes :nodes="[{id:'text',type:'text',text:'Readable generated output'},{id:'table',type:'table',rows:[['Readable table cell']]},{id:'button',type:'button',text:'Generated action'}]" :disabled="false" />
             <CopyableId value="synthetic-session-id" label="session ID" />
             <input id="input" value="Editable input" /><textarea id="textarea">Editable composer</textarea>
