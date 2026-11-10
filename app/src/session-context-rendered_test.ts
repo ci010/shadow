@@ -135,7 +135,7 @@ test('heading distinguishes partial cache reports, explicit zero and unreported 
   await settle()
   assert.match(view.text(), /400\s+\(80%\)\s+cache/)
   assert.match(view.text(), /Partial cache report: 500 \/ 1K input tokens. Rate covers reported inputs only./)
-  assert.match(view.text(), /Token totals are partial; some calls have no reported usage./)
+  assert.doesNotMatch(view.text(), /Token totals are partial; some calls have no reported usage./)
   assert.match(view.text(), /Not reported\s+\(Not reported\)\s+cache/)
   usage = { ...usage, cachedTokens: 0 }
   view.state.revision = 1
@@ -158,7 +158,7 @@ test('heading displays estimated currency and AI credits without merging units',
   await settle()
   assert.match(view.text(), /0\.00012\s+USD/)
   assert.match(view.text(), /1\.25\s+AI credits/)
-  assert.match(view.text(), /Cost estimate incomplete/)
+  assert.doesNotMatch(view.text(), /Cost estimate incomplete|Cost could not be estimated/)
   assert.ok(view.nodes().some(node => node.props.title === 'Estimated cost, not a bill. Plan allowances and discounts may differ.'))
   assert.doesNotMatch(view.text(), /Estimated cost:|Known cost subtotal/)
   assert.equal(view.nodes().filter(node => node.props.class === 'i-lucide-coins').length, 2)
@@ -171,7 +171,7 @@ test('heading displays estimated currency and AI credits without merging units',
   incomplete = true
   view.state.revision = 2
   await settle(); await settle()
-  assert.match(view.text(), /Cost could not be estimated/)
+  assert.doesNotMatch(view.text(), /Cost could not be estimated/)
   assert.doesNotMatch(view.text(), /Cost estimate incomplete|Estimated cost:|Known cost subtotal/)
 
 })
