@@ -24,9 +24,9 @@ export const SESSION_CLEANUP_AUTOMATION: CronJobDef = {
   ].join('\n'),
 }
 
-/** A program job: idle scans do not create a session or make an inference request. */
+/** Idle checks stay programmatic; each non-idle decision uses a fresh dispatcher session. */
 export const WORK_DISPATCH_AUTOMATION: CronJobDef = {
-  name: 'Work auto-dispatch', source: 'cron', session: 'fresh', agentType: 'general',
+  name: 'Work auto-dispatch', source: 'cron', session: 'fresh', agentType: 'dispatcher',
   schedule: 'every 60s', enabled: false,
-  program: { kind: 'work-dispatch', inferenceRequests: 100, toolCalls: 200, argumentBytes: 1000000 },
+  program: { kind: 'work-dispatch', maxConcurrent: 4, maxConcurrentPerDevice: 2, inferenceRequests: 100, toolCalls: 200, argumentBytes: 1000000 },
 }

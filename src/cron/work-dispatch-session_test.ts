@@ -9,7 +9,7 @@ import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
 import { WorkAlignment } from '../sessions/work-alignment.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirRefV2 } from '../sessions/locality.ts'
-import { InitiativeStore } from '../initiatives/store.ts'
+import { InitiativeStore, automaticWorkEligible } from '../initiatives/store.ts'
 import type { WorkRecord } from '../initiatives/work-contract.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import { Tools } from '../tools/registry.ts'
@@ -32,7 +32,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await store.init()
     const bus = new Bus(), tools = new Tools(home)
     let inferences = 0, executions = 0, accepted = 0
-    let raceKey: string | undefined, raceMode: 'cancelled' | 'paused' | 'abort-during-verify' | 'abort-during-context' | undefined
+    let raceKey: string | undefined, raceDependency: string | undefined, raceMode: 'cancelled' | 'paused' | 'dependency' | 'abort-during-verify' | 'abort-during-context' | undefined
     let raceController: AbortController | undefined, verificationCalls = 0
     let hold = false, holdEntered = false, identityFails = false
     tools.register({ name: 'step', description: 'Synthetic step', parameters: { type: 'object', properties: {} }, execute: async (_args, context) => {
@@ -65,6 +65,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       context: { buildSystemPrompt: async () => {
         if (raceKey && raceMode) {
           if (raceMode === 'abort-during-context') raceController!.abort(new Error('cancelled during Session preparation'))
+          else if (raceMode === 'dependency') {
+            const record = initiatives.workRecords().find(item => item.key === raceKey)!
+            initiatives.saveWork({ ...record, sequence: record.sequence + 1,
+              workflow: { ...record.workflow!, dependencies: [raceDependency!] } }, record.sequence, 'user', 'admission_dependency_race')
+          }
           else if (raceMode === 'paused' || raceMode === 'cancelled') {
             const record = initiatives.workRecords().find(item => item.key === raceKey)!
             initiatives.saveWork({ ...record, sequence: record.sequence + 1,
@@ -81,7 +86,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), evidence: async () => {},
       changed: (record, previous) => manager.notifyWorkChange(record, previous), })
     manager.alignment = alignment
-    const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source', inferenceRequests: 2, toolCalls: 2 })
+    const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source', maxConcurrent: 1, inferenceRequests: 2, toolCalls: 2 })
     const dispatcher = new WorkDispatcher({ projectId: 'fixture', store: initiatives, sessions: manager,
       validateTarget: async () => {}, prepare: async () => ({ folderId: 'isolated', path: isolated, branch: 'shadow/synthetic' }),
       verify: async (_config, _id, _execution, signal) => {
@@ -93,6 +98,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         }
       },
       changed: (record, previous) => manager.notifyWorkChange(record, previous) })
+    dispatcher.setRunner(async (round, signal) => {
+      const candidate = initiatives.workRecords().find(record => automaticWorkEligible(record, initiatives.workRecords()))
+      if (candidate) await dispatcher.dispatchWork(round, candidate.key, candidate.sequence, {}, signal)
+    })
     const subscription = bus.on('session.turn.finished', fact => dispatcher.finished(fact))
     const admissions = bus.on('session.input.accepted', () => { accepted++ })
     try {
@@ -105,15 +114,25 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         source: { kind: 'event', eventId: 'unsafe', source: 'system', type: 'test' }, content: 'Must not execute in source or session data directory' }), /prepared isolated Workspace|no longer admissible/)
       await assert.rejects(manager.bindAutomaticWorkWorkspace('work-executor:unbound', 'foreign-project-folder'), /another Project/)
       assert.equal(inferences, 0)
-      for (const action of ['cancelled', 'paused', 'abort-during-verify', 'abort-during-context'] as const) {
+      for (const action of ['cancelled', 'paused', 'dependency', 'abort-during-verify', 'abort-during-context'] as const) {
         const raced = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
           { title: `Synthetic ${action} during manager preparation`, definition: { objective: 'Do not infer after cancellation or pause' }, assignee: null }) as WorkRecord
+        if (action === 'dependency') {
+          const prerequisite = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
+            { title: 'Unfinished explicit prerequisite', definition: { objective: 'Prevent dependent inference' }, assignee: null }) as WorkRecord
+          initiatives.saveWork({ ...prerequisite, sequence: prerequisite.sequence + 1, paused: true }, prerequisite.sequence, 'user', 'fixture_paused')
+          raceDependency = prerequisite.key
+        }
         raceKey = raced.key; raceMode = action; raceController = new AbortController(); verificationCalls = 0
         await dispatcher.dispatch(job, raceController.signal)
         assert.equal(inferences, 0)
         assert.equal(accepted, 0)
         if (action === 'cancelled') assert.equal(alignment.get(raced.key).workflow?.status, 'cancelled')
         else if (action === 'paused') assert.equal(alignment.get(raced.key).paused, true)
+        else if (action === 'dependency') {
+          assert.equal(alignment.get(raced.key).workflow?.status, 'blocked')
+          assert.match(alignment.get(raced.key).workflow!.blockedReason!, /dependency/)
+        }
         else {
           assert.equal(raceController.signal.aborted, true)
           assert.equal(alignment.get(raced.key).workflow?.status, 'blocked')

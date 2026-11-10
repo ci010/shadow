@@ -3,11 +3,12 @@ import type { CancelReceiptV1, ExecutionReceiptV1, JobEventV1, ExecutionRequestV
 import { validateExecutionRequestV2 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
 import { isUnknownShellReceipt } from '../execution/shell-journal.ts'
+import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from '../execution/derived-workspace-contract.ts'
 
 /** Fixed host-owned directory operation profile; advertisements cannot widen it. */
 export const DIRECTORY_OPERATIONS = Object.freeze([
   'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
-  'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile',
+  'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile', DERIVED_WORKSPACE_OPERATION,
 ])
 
 /** Shared transport; access checks and disjoint execution/cancellation identities are Project-owned. */
@@ -46,12 +47,13 @@ export class ProjectExecutor implements Executor {
     // Async identity checks must authorize a stable admission snapshot, not a
     // mutable caller object that can change target or command while awaiting.
     const request = structuredClone(validation.value)
+    const derivedAction = request.operation === DERIVED_WORKSPACE_OPERATION ? parseDerivedWorkspaceArgs(request.args).action : undefined
     await this.assertAccess(request, signal)
     signal.throwIfAborted()
     const reconciliation = request.operation === 'workdir.process.reconcile'
     // Read-only identity and reconciliation queries cannot own a process. A
     // transport failure must not create an unresolvable durable reservation.
-    const readOnlyQuery = reconciliation || request.operation === 'workdir.identity'
+    const readOnlyQuery = reconciliation || request.operation === 'workdir.identity' || derivedAction === 'inspect' || derivedAction === 'verify'
     if (!readOnlyQuery) this.recordJob?.(request.jobId, true)
     const jobId = this.#key('job', request.jobId)
     this.#jobs.set(request.jobId, jobId)
