@@ -137,7 +137,10 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
             if (attempt >= 4) throw new Error('Unable to allocate an independent branch name.')
             token = randomUUID()
           }
-          const path = join(dirname(root), `${request.name ?? basename(root)}-worktree-${token}`)
+          // Reusing a derived Workspace as a source must not accumulate UUIDs
+          // until a directory component (or ordinary Windows checkout) overflows.
+          const prefix = request.name ?? Array.from(basename(root)).slice(0, 40).join('')
+          const path = join(dirname(root), `${prefix}-worktree-${token}`)
           const description = `${request.description ? request.description + '\n' : ''}Git worktree from ${root} (${ref})${request.workKey ? `; Work ${request.workKey}` : ''}`
           receipt = { backend: 'git-worktree', projectId: this.options.projectId, sourceId: source.id, sourcePath: root, commonDir, commonIdentity, path, branch: `shadow-derived-${token}`, baseBranch: ref, baseCommit, description, ...(request.workKey ? { workKey: request.workKey } : {}) }
           await persist(receipt, 'planned')
