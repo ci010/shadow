@@ -1,25 +1,25 @@
 # Encapsulation automation: candidate and acceptance boundaries
 
-The encapsulator selects unconsumed completed reflector events plus retained
-Project Wiki/event candidates. Discovery scans direct Markdown files in
+The encapsulator selects unconsumed completed reflector logs plus retained
+Project Wiki/log candidates. Discovery scans direct Markdown files in
 `memory/topics`, `concepts`, `tools`, `decisions` and direct JSONL files in
 `memory/events`. Session/identity/convention/internal data, symlinks, nested
 folders and files larger than 256 KiB are not scanned. Malformed JSON or genuine
 read errors are surfaced, not silently reported as no-change. Large/nested
-knowledge still needs an explicit reflector event/reference. Content is evidence,
+knowledge still needs an explicit reflector log/reference. Content is evidence,
 not execution authority.
 
-Wiki candidates use content revisions as IDs; event IDs are preserved (legacy
+Wiki candidates use content revisions as IDs; log IDs are preserved (legacy
 records without IDs use a path/content hash). Reservations and consumption are
 journaled by the existing ledger, never separate source watermarks. Existing
 reflector effects cannot enter through external discovery while their owning
-batch is unfinished. Completed receipt events win deduplication. At most eight
+batch is unfinished. Completed receipt logs win deduplication. At most eight
 encapsulator candidates are assigned per batch; pending/fresh fairness and retry
 limits continue to apply. Unchanged no-change Wiki revisions are not reprocessed;
 there is no automatic expiration/revalidation of already-consumed candidates.
 
 The prompt permits narrow experimental skills from useful challenges without
-requiring cross-event successful outcomes. A diagnostic procedure can be useful
+requiring cross-log successful outcomes. A diagnostic procedure can be useful
 while the incident remains unresolved, but must label unknowns and verification
 limits. Noise and duplicate avoidance remain required. `learned_skill` continues
 to revision-check and verify real shared-store discovery; no executable packages,
@@ -37,7 +37,7 @@ a tool draft is not an installed tool; only-script drafts report draft_only.
 ## Recovery from rejected physical-history typos
 
 A read error specifically saying `Physical history does not belong to this
-Project session` can be matched to an unambiguous exact assigned event reference
+Project session` can be matched to an unambiguous exact assigned log reference
 with the same logical-session prefix, segment and overview/full view. The bad
 resource failure is then audited against the corrected reference. **Subsequent
 complete page coverage is still required**; gaps, truncation, different logical
@@ -49,7 +49,7 @@ must execute and submit a newly verified receipt; paused batches need manual
 
 ## Verification and rollout
 
-Focused tests cover revision consumption, event/Wiki deduplication, unfinished
+Focused tests cover revision consumption, log/Wiki deduplication, unfinished
 reflector isolation, real shared skill-store acceptance and typo recovery. These
 are synthetic fixture executions, not a production LLM experiment. Source changes
 require the normal build/restart/deploy path; no application restart is performed

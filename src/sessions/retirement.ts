@@ -63,7 +63,7 @@ export async function inspectDrafts(root: string): Promise<DraftFile[]> {
   return files
 }
 
-/** Existing Project wiki, not per-session memory, event logs, or compaction. */
+/** Existing Project wiki, not per-session memory, logs, or compaction. */
 export async function inspectWiki(workspace: string): Promise<Array<{ path: string; content: string }>> {
   const root = join(workspace, 'memory')
   const pages: Array<{ path: string; content: string }> = []

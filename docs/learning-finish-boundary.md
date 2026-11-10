@@ -25,7 +25,7 @@ still verifies effects and commits the proposal only after successful execution;
 recovery uses the same proposal/completed-session rules. A partial/blocked receipt
 can complete the session execution while the learning automation remains unfinished
 and reports that outcome, retaining effects and source reservations. It does not
-advance source cursors or publish those events downstream. No automatic no_change
+advance source cursors or publish those logs downstream. No automatic no_change
 receipt is synthesized. The model must report unread/unresolved scope honestly.
 
 This does not add a proof that every assigned source line was read: existing read
@@ -39,7 +39,7 @@ success. Provider failures or invalid final receipts can still fail the run.
 
 LearningLedger stops automatically selecting an unchanged batch after three recorded
 deferrals. Existing older batches already above that threshold are also skipped.
-Fresh eligible ranges/events can still run; the capped batch stays unfinished and
+Fresh eligible ranges/logs can still run; the capped batch stays unfinished and
 reserved, so its hole is not acknowledged or silently skipped by the reviewed cursor.
 Attempts, effects, outcomes and errors remain intact. Newly capped batches persist a
 `retry.paused` explanation; older records need no journal migration. No evidence is

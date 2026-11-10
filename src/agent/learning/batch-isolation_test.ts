@@ -68,25 +68,25 @@ test('many overdue failed batches alternate with continuous fresh evidence acros
   })
 })
 
-test('downstream failed event batches reserve only their own events and do not mark them consumed', async t => {
+test('downstream failed log batches reserve only their own logs and do not mark them consumed', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
   await withTempWorkspace(async workspace => {
     const ledger = new LearningLedger(workspace, 'a')
     for (let i = 0; i < 2; i++) {
       const batch = ledger.create('reflector', [source(i, i + 1)], [])
-      ledger.event(batch.id, { id: `event:${i}`, path: 'memory/events/test.jsonl', origin: 'test', when: 'now', who: 'test', what: 'correction' })
+      ledger.log(batch.id, { id: `event:${i}`, path: 'memory/events/test.jsonl', origin: 'test', when: 'now', who: 'test', what: 'correction' })
       done(ledger, batch.id, `attempt:${i}`)
     }
-    const first = ledger.create('encapsulator', [], ledger.eventsFor('encapsulator').slice(0, 1))
+    const first = ledger.create('encapsulator', [], ledger.logsFor('encapsulator').slice(0, 1))
     ledger.defer(first.id, false)
-    assert.deepEqual(ledger.eventsFor('encapsulator').map(event => event.id), ['event:1'])
-    const second = ledger.select('encapsulator', [], ledger.eventsFor('encapsulator'))!
+    assert.deepEqual(ledger.logsFor('encapsulator').map(event => event.id), ['event:1'])
+    const second = ledger.select('encapsulator', [], ledger.logsFor('encapsulator'))!
     done(ledger, second.id, 'attempt:second')
-    assert.deepEqual(ledger.eventsFor('encapsulator'), [])
+    assert.deepEqual(ledger.logsFor('encapsulator'), [])
     t.mock.timers.tick(3_600_000)
     assert.equal(ledger.select('encapsulator', [], [])!.id, first.id)
     done(ledger, first.id, 'attempt:first')
-    assert.deepEqual(ledger.eventsFor('encapsulator'), [])
+    assert.deepEqual(ledger.logsFor('encapsulator'), [])
   })
 })
 

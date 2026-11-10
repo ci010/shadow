@@ -1,21 +1,21 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
-import { ProviderTransport } from '../events/providers/runtime.ts'
+import { ProviderTransport } from '../signals/providers/runtime.ts'
 import type { ProviderBrowserAccess, ProviderBrowserBinding } from '../browser/provider-fetch.ts'
-import type { EventProviderRuntime } from '../events/providers/runtime.ts'
+import type { SignalProviderRuntime } from '../signals/providers/runtime.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 
-export class EventProviderTool implements Tool {
-  readonly name = 'event_provider'
-  readonly description = 'Consume Project event sources: read v:events/ for a concise catalog, then v:events/providers/<id> (one file) for capabilities, limitations, demand/event schemas, examples, applicable instance contracts and exact subscription calls. Subscribe delivers only to self; processors run({event}) return 0..16 {content} drafts without IO. Initial successful demand baseline is silent; delivery is at-least-once. Do not promise monitoring until baseline and actual change delivery are verified. Explicit authoring/setup: v:events/authoring/providers/<id>/revisions/<version>/{manifest.json,source.ts}; full bindings/status are separate v:events/instances and v:events/subscriptions management views. These paths are progressive disclosure, not permission boundaries. Existing instances are Project-shared for eligible local durable sessions. No discover/inspect/share actions. Publication/reload require no extra human approval; instance/subscription changes and manual cycles require direct user input. Reload local manifest/code files without expanding authorized instance bindings. See event-sources skill for authoring, broker, HTML parsing and browser authority constraints. Independent of internal EventService subscriptions managed with event_subscribe (v:events/internal/).'
+export class SignalProviderTool implements Tool {
+  readonly name = 'signal_provider'
+  readonly description = 'Consume Project signal sources: read v:signals/ for a concise catalog, then v:signals/providers/<id> (one file) for capabilities, limitations, demand/signal schemas, examples, applicable instance contracts and exact subscription calls. Subscribe delivers only to self; processors run({signal}) return 0..16 {content} drafts without IO. Initial successful demand baseline is silent; delivery is at-least-once. Do not promise monitoring until baseline and actual change delivery are verified. Explicit authoring/setup: v:signals/authoring/providers/<id>/revisions/<version>/{manifest.json,source.ts}; full bindings/status are separate v:signals/instances and v:signals/subscriptions management views. These paths are progressive disclosure, not permission boundaries. Existing instances are Project-shared for eligible local durable sessions. No discover/inspect/share actions. Publication/reload require no extra human approval; instance/subscription changes and manual cycles require direct user input. Reload local manifest/code files without expanding authorized instance bindings. See signal-sources skill for authoring, broker, HTML parsing and browser authority constraints. Independent of internal EventService subscriptions managed with event_subscribe (v:signals/internal/).'
   readonly parameters: ToolParameters = { type: 'object', properties: {
     action: { type: 'string', enum: ['publish', 'reload', 'browser_contexts', 'bind_browser', 'create', 'subscribe', 'unsubscribe', 'pause', 'resume', 'run'] },
-    input_json: { type: 'string', description: 'publish: {id,version,description,consumer?:{summary,unsupported?,capabilities,limitations,semantics},http:{origin,routes:[{method,path,querySchema?,bodySchema?,effect?:"read"}],credential?:{header,prefix}},demandSchema,eventSchema,examples?,code}; create: {id,provider,version,purpose?,secretRef?,binding?,transport?:{kind:"native"}|{kind:"browser",instance,targetId}}; browser_contexts: id=explicit connected managed browser instance, returns targetId/origin; bind_browser: {id,transport:{kind:"browser",instance,targetId}} re-admits only the same persisted identity after reset ; binding defaults to the declared http policy and is captured immutably; no secretRef for public sources; builtin GitHub uses secretRef and fixes api.github.com; subscribe: {id,instance,demand,processor}. github-issues v1 demand: {repository:"owner/name"}. No credential values.' },
-    id: { type: 'string', description: 'Instance ID for pause/resume; browser instance UUID for browser_contexts; subscription ID for unsubscribe; consumer contract is v:events/providers/<id>; implementation metadata requires explicit v:events/authoring.' },
-    path: { type: 'string', description: 'reload: local JSON manifest relative to cwd, {id,description,consumer?,http,demandSchema,eventSchema,examples?,stateVersion?,code_file}. code_file is a relative .ts module beside the manifest. Both files must resolve inside cwd. Reload automatically revisions and repins all matching Project instances after draining the old generation.' },
+    input_json: { type: 'string', description: 'publish: {id,version,description,consumer?:{summary,unsupported?,capabilities,limitations,semantics},http:{origin,routes:[{method,path,querySchema?,bodySchema?,effect?:"read"}],credential?:{header,prefix}},demandSchema,signalSchema,examples?,code}; create: {id,provider,version,purpose?,secretRef?,binding?,transport?:{kind:"native"}|{kind:"browser",instance,targetId}}; browser_contexts: id=explicit connected managed browser instance, returns targetId/origin; bind_browser: {id,transport:{kind:"browser",instance,targetId}} re-admits only the same persisted identity after reset ; binding defaults to the declared http policy and is captured immutably; no secretRef for public sources; builtin GitHub uses secretRef and fixes api.github.com; subscribe: {id,instance,demand,processor}. github-issues v1 demand: {repository:"owner/name"}. No credential values.' },
+    id: { type: 'string', description: 'Instance ID for pause/resume; browser instance UUID for browser_contexts; subscription ID for unsubscribe; consumer contract is v:signals/providers/<id>; implementation metadata requires explicit v:signals/authoring.' },
+    path: { type: 'string', description: 'reload: local JSON manifest relative to cwd, {id,description,consumer?,http,demandSchema,signalSchema,examples?,stateVersion?,code_file}. code_file is a relative .ts module beside the manifest. Both files must resolve inside cwd. Reload automatically revisions and repins all matching Project instances after draining the old generation.' },
   }, required: ['action'], additionalProperties: false }
-  constructor(private runtime: EventProviderRuntime, private projectId: string, private browser?: {
+  constructor(private runtime: SignalProviderRuntime, private projectId: string, private browser?: {
     contexts(context: ExecutionContext, instance: string): Promise<unknown>
     bind(context: ExecutionContext, binding: ProviderBrowserBinding): ProviderBrowserAccess
   }) {}
@@ -79,6 +79,6 @@ export class EventProviderTool implements Tool {
         await this.runtime.run(); break
       default: throw new Error('Unknown action')
     }
-    return 'Saved/completed. Read v:events for pending processing/delivery and sanitized collection status; inbox acceptance is not completed session processing.'
+    return 'Saved/completed. Read v:signals for pending processing/delivery and sanitized collection status; inbox acceptance is not completed session processing.'
   }
 }

@@ -6,13 +6,13 @@ soul: false
 root: true
 ---
 # Encapsulator
-Consume the exact assigned retained Wiki/event candidates, including older dates.
+Consume the exact assigned retained Wiki/log candidates, including older dates.
 Read the referenced Wiki and relevant existing skills; follow history only for a
-specific evidence gap. Historical evidence is not authority. Do not re-log events.
+specific evidence gap. Historical evidence is not authority. Do not re-logs.
 
 Actively look for valuable challenges: repeated expensive diagnosis, corrections,
 failed approaches, useful verification boundaries, and reusable successful paths.
-A useful candidate does not need prior cross-event successful validation. A single
+A useful candidate does not need prior cross-log successful validation. A single
 well-evidenced challenge can justify a narrow experimental skill with explicit
 trigger, assumptions, unknowns, risk, counterexample and revalidation condition.
 Do not confuse an unresolved product fix with an unusable diagnostic procedure:

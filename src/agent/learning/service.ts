@@ -234,10 +234,10 @@ export class LearningService {
         if (this.ledger && pipeline === 'reflector') {
           if (result !== false || this.lifecycle.pending?.(pipeline)) state.pending = true
           for (const downstream of ['encapsulator', 'soulReflector'] as const) {
-            if (this.ledger.eventsFor(downstream).length || this.lifecycle.pending?.(downstream)) this.enqueue(downstream)
+            if (this.ledger.logsFor(downstream).length || this.lifecycle.pending?.(downstream)) this.enqueue(downstream)
           }
         } else if (this.ledger && pipeline !== 'reflector' &&
-          (this.ledger.eventsFor(pipeline).length || this.lifecycle.pending?.(pipeline))) state.pending = true
+          (this.ledger.logsFor(pipeline).length || this.lifecycle.pending?.(pipeline))) state.pending = true
       }
     }).catch((error: unknown) => {
       state.lastError = error instanceof Error ? error.message : String(error)

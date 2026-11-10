@@ -1,3 +1,4 @@
+import { memoryLogView } from '../memory/log-view.ts'
 import type { SourceResources } from './source-resources.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -633,7 +634,7 @@ export class DiscordIntegration implements ConversationPolicies {
         if (!match) throw new IntegrationError('read_scope', 'Read only the resource paths returned by v:memory or v:sessions/current.', 403)
         const result = this.options.memory.read(access, match[2])
         if (result.resource.domainId !== match[1]) throw new IntegrationError('read_scope', 'Resource is unavailable.', 403)
-        return JSON.stringify(result)
+        return JSON.stringify({ ...result, resource: memoryLogView(result.resource) })
       },
     })
     register({

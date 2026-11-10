@@ -85,7 +85,7 @@ test('knowledge requests direct every role to the Skill without inlining its man
 
 test('ordinary workspace exposes discoverable Project resources', async () => {
   const fs = new VirtualFs()
-  for (const prefix of ['v:project', 'v:sessions', 'v:memory', 'v:tools', 'v:bg', 'v:skills', 'v:config', 'v:events']) {
+  for (const prefix of ['v:project', 'v:sessions', 'v:memory', 'v:tools', 'v:bg', 'v:skills', 'v:config', 'v:signals']) {
     fs.mount(prefix, prefix === 'v:memory' ? 'read, search, and write memory' : `${prefix} resources`, () => '')
   }
   const provider = workspaceProvider(resolve('.test-data', 'ordinary-prompt'), fs)
