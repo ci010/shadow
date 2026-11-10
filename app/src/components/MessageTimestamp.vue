@@ -5,9 +5,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { messageTime } from '../message-history.ts'
+import { useMessageClock } from '../message-clock.ts'
 
 const props = defineProps<{ timestamp?: string }>()
-const time = computed(() => messageTime(props.timestamp))
+const now = useMessageClock()
+const time = computed(() => messageTime(props.timestamp, undefined, now.value))
 </script>
 
 <style scoped>

@@ -114,14 +114,15 @@ test('Yesterday spans month and year boundaries without assuming a fixed 24-hour
   assert.equal(formatMessageTime(new Date(2026, 11, 31, 23, 59).toISOString(), now, 'en-US'), 'Yesterday, 23:59')
 })
 
-test('message footers use compact local time and expose the full date and timezone', () => {
+test('message footers include relative calendar dates and expose the full date and timezone', () => {
   const timestamp = new Date(2026, 0, 3, 9, 7).toISOString()
-  const time = messageTime(timestamp, 'en-US')
+  const now = new Date(2026, 0, 3, 10)
+  const time = messageTime(timestamp, 'en-US', now)
   assert.equal(time.dateTime, timestamp)
-  assert.equal(time.label, '09:07')
+  assert.equal(time.label, 'today 09:07')
   assert.match(time.title, /2026/)
   assert.match(time.title, /Jan 3/)
-  assert.equal(messageTime(new Date(2026, 0, 3, 0, 0).toISOString(), 'en-US').label, '00:00')
+  assert.equal(messageTime(new Date(2026, 0, 3, 0, 0).toISOString(), 'en-US', now).label, 'today 00:00')
 })
 
 test('missing or invalid historical timestamps never turn into current time', () => {
@@ -196,4 +197,18 @@ test('decision navigation follows anchored revisions and the separate unloaded-h
   ])
   const markers = messageHistoryMarkers(messages, [], view.entries, view.after)
   assert.deepEqual(markers.map(marker => marker.index), [4, 0, 1, 3, 2])
+})
+
+test('footer dates use a four-calendar-day window, full years, and localized day labels', () => {
+  const now = new Date(2027, 0, 2, 0, 1)
+  const label = (year: number, month: number, day: number, locale = 'en-US') =>
+    messageTime(new Date(year, month, day, 23, 48).toISOString(), locale, now).label
+  assert.equal(label(2027, 0, 1), 'yesterday 23:48')
+  assert.equal(label(2026, 11, 31), '2 days ago 23:48')
+  assert.equal(label(2026, 11, 30), '3 days ago 23:48')
+  assert.equal(label(2026, 11, 29), 'Dec 29, 2026 23:48')
+  assert.equal(label(2027, 0, 3), 'Jan 3, 2027 23:48')
+  assert.equal(label(2027, 0, 1, 'zh-CN'), '昨天 23:48')
+  assert.equal(label(2026, 11, 31, 'zh-CN'), '2天前 23:48')
+  assert.equal(label(2026, 11, 29, 'zh-CN'), '2026年12月29日 23:48')
 })
