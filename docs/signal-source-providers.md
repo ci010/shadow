@@ -303,7 +303,7 @@ Current names are `src/signals/providers/`, `SignalProviderRuntime`,
 `SignalSourceProvider`, `SourceSignal`, `SignalRecord`, `signalSchema`,
 `Collection.signals`, `examples[].signal`, `signal_provider`, the
 `v:tools/signals` catalog, and the `signal-sources` skill. Provider consumer files
-are `v:signals/providers/<id>`. There is no active `v:signals` mount or legacy
+are `v:signals/providers/<id>`. There is no active `v:events` mount or legacy
 external-provider tool in discovery.
 
 Compatibility is isolated in `src/signals/providers/legacy-compat.ts`:
@@ -326,7 +326,7 @@ Compatibility is isolated in `src/signals/providers/legacy-compat.ts`:
   the processor invocation boundary supplies that alias alongside `signal`.
   Old manifests are accepted at publish/reload boundaries. Conflicting old and
   new schema/envelope keys are rejected instead of silently choosing one.
-- Historical `invoke_tool` calls naming `signal_provider` resolve to
+- Historical `invoke_tool` calls naming `event_provider` resolve to
   `signal_provider` before permission and argument checks. Old role tool allow/
   block names are normalized as well; an old blacklist cannot accidentally grant
   the renamed capability. Only the current tool is advertised. This does not

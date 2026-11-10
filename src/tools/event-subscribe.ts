@@ -48,9 +48,9 @@ export class EventSubscribeTool implements Tool {
   readonly name = 'event_subscribe'
   readonly description =
     'Manage event subscriptions, event sources, and emit custom events. ' +
-    'Events are signals that wake a session; declare urgency to control how they arrive ' +
+    'Internal events wake a session; declare urgency to control how they arrive ' +
     '(steering=interrupt now, next-step=next inference without aborting work, queue=after current turn, debounce=coalesce a burst, silent=record only). ' +
-    'Read v:signals for subscriptions and v:signals/internal/sources for registered sources. Discover tools:cron and use cron_add to schedule periodic events.'
+    'Read v:signals/internal for runtime subscriptions and v:signals/internal/sources for registered runtime sources; these are not external provider signals. Discover tools:cron and use cron_add to schedule periodic events.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

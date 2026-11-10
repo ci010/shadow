@@ -1209,7 +1209,7 @@ made by shell commands, MCP tools, other applications, or all descendants.
 Managed Discord execution bypasses the ordinary Project prompt providers.
 `channels/integration.ts` supplies the approved Agent/skill snapshot, bounded
 platform metadata and authorized catalog context. It excludes global SOUL,
-identity, working sets, Project log/keyword indexes, conventions and generic
+identity, working sets, Project event/keyword indexes, conventions and generic
 resource/tool discovery before provider input is built. Names, paths, counts
 and source metadata are protected along with bodies; relevance never grants
 access.
@@ -1301,7 +1301,7 @@ source snapshots, independent cursors and retries. It reuses bounded
 SessionManager/BaseSession calls, not a new provider loop. Workers receive only
 exact versioned batch reads, `learning_record` and `learning_result`; no global
 memory or Discord output. New user input and revocation fence background work.
-Decision/log/skill output retains source restrictions in the Conversation
+Decision/event/skill output retains source restrictions in the Conversation
 domain. Soul reflection produces a private draft, never a global SOUL update.
 Prepared effects and idempotent atomic catalog writes permit interrupted-commit
 recovery without re-inference; conflicting edits require reconciliation.
