@@ -103,3 +103,23 @@ The displayed hit rate divides known cache reads by covered inputs only, not all
 session inputs. Calls without any usage make token totals explicitly partial.
 Old JSONL and SQLite records need no rewrite: coverage is computed while reading
 existing usage records. Missing historical cache counts remain unknown.
+
+## Project usage activity
+
+The Project usage summary includes model and tool call rankings for Today, Past
+7 days, This month and All time, using the existing UTC calendar windows. Model
+counts use distinct `model_usage` events with recorded model names (including
+failed calls). New calls record their model name; historical records without a
+model name are not guessed from current configuration.
+
+Tool counts use persisted tool results and their original call IDs, including
+error results, without grouping by arguments. `invoke_tool` contributes to its
+requested dynamic tool name, not to the wrapper. Parallel wrappers contribute
+individual targets. Calls without persisted results are not yet counted. Raw
+source segments avoid charging inherited fork history or repeated results twice.
+The existing bounded log scan applies to these rankings too.
+
+Missing-data badges and warnings are kept in the bottom data-completeness and
+measurement disclosures, not beside the summary values or daily values. The
+bottom disclosure also contains chart-window coverage counts; unavailable values
+remain unavailable rather than being fabricated as zero.

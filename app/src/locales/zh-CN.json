@@ -1,4 +1,13 @@
 {
+  "Model counts require recorded model names; older calls without names are excluded. Tool counts use recorded results, including errors; unfinished calls without results are excluded.": "模型次数仅统计已记录模型名的调用，不包含未记录模型名的旧调用。工具次数按已记录的结果统计（含报错），不包含尚无结果的调用。",
+  "Daily known tokens.": "每日已知 token 用量。",
+  "Includes converted AI credits in USD.": "美元金额包含由 AI credits 换算的费用。",
+  "Model usage": "模型使用统计",
+  "Tool usage": "工具调用统计",
+  "Calls": "调用次数",
+  "LLM calls by model in the selected summary period.": "按所选汇总时间范围，统计各模型的 LLM 调用次数。",
+  "Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.": "按工具名汇总调用次数，不区分参数；invoke_tool 计入实际调用的动态工具名。",
+  "No recorded calls in this period.": "此时间范围内暂无调用记录。",
   "Pasted image": "粘贴图片",
   "Insert image reference": "插入图片引用",
   "Insert reference to {name}": "插入对 {name} 的引用",
