@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, lstat, realpath, open, stat } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, toNamespacedPath } from 'node:path'
 import { isolationGit } from '../cron/work-isolation.ts'
 import { selectFolder } from './identifier.ts'
 import type { FolderRegistry } from './registry.ts'
@@ -84,7 +84,9 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
         signal.throwIfAborted()
         await mkdir(this.options.directory, { recursive: true })
         // SQLite's OS lock releases on host death; no timeout-based lock stealing.
-        lock = new DatabaseSync(`${file}.lock.sqlite`)
+        // Paired Child receipt paths can exceed MAX_PATH. Node fs handles those
+        // paths, but SQLite's Windows VFS needs the native extended-length form.
+        lock = new DatabaseSync(toNamespacedPath(`${file}.lock.sqlite`))
         lock.exec('BEGIN IMMEDIATE')
         const folder = await this.options.folders.requireExecutionAvailable(source.id, signal)
         if (folder.kind === 'remote') {

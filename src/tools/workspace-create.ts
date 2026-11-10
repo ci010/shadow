@@ -4,7 +4,7 @@ import type { DerivedWorkspaceCreator, DerivedWorkspaceRequest } from '../folder
 
 export class WorkspaceCreateTool implements Tool {
   readonly name = 'workspace_create'
-  readonly description = 'Create and register a derived git-worktree Workspace in the current Project, beside a registered source repository, from a local or existing remote-tracking branch. Creates a host-generated independent branch at a fixed commit; never copies dirty files, fetches, or switches this session. Optional Work association does not claim Work. Reuse an idempotencyKey for safe retries; remote sources are unsupported.'
+  readonly description = 'Create and register a derived git-worktree Workspace in the current Project, beside a registered source repository, from a local or existing remote-tracking branch. Creates a host-generated independent branch at a fixed commit; never copies dirty files, fetches, or switches this session. Optional Work association does not claim Work. Reuse an idempotencyKey for explicit recovery. Online Child sources require advertised Git isolation support; paths are handled only by their owning device.'
   readonly parameters: ToolParameters = {
     type: 'object', additionalProperties: false, required: ['source', 'branch'], properties: {
       source: { type: 'string', description: 'Registered current-Project Workspace selector; not a path.' },

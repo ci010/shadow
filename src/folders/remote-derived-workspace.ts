@@ -92,7 +92,7 @@ export class RemoteDerivedWorkspaceBackend implements DerivedWorkspaceRemoteBack
       combined.throwIfAborted()
       if (terminal?.state !== 'completed' || terminal.reason || terminal.signal ||
         (terminal.exitCode !== undefined && terminal.exitCode !== 0)) {
-        throw new Error(`Remote derived workspace operation did not complete (${terminal?.reason?.code ?? terminal?.state ?? 'unknown'}); no local fallback or automatic retry.`)
+        throw new Error(`Remote derived workspace operation did not complete (${terminal?.reason?.code ?? terminal?.state ?? 'unknown'}, ${args.action}): ${terminal?.reason?.message?.slice(0, 1000) ?? 'No successful terminal receipt'}; no local fallback or automatic retry.`)
       }
       return JSON.parse(output)
     } catch (error) {
