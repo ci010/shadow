@@ -41,8 +41,8 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
         id: job.id, name: job.name ?? job.task ?? job.id, source: job.source ?? 'cron',
         session: 'fresh', schedule: job.schedule, task: job.task, agentType: job.agentType,
         ...(job.program ? { program: job.program, running: cron.isRunning(job.id) || programControls?.running?.() === true,
-          configurationError: !job.program.folderId ? 'Select a registered local repository Workspace before enabling or running.' : undefined,
-          notice: !job.program.folderId ? 'Configure this automation with a registered local repository Workspace before enabling or running.' : 'Program scan; idle ticks do not call a model. Work executors use isolated Git worktrees.' } : {}),
+          configurationError: !job.program.folderId ? 'Select a registered repository Workspace before enabling or running.' : undefined,
+          notice: !job.program.folderId ? 'Configure this automation with a registered repository Workspace before enabling or running.' : 'Fresh dispatcher rounds select Work, models and devices; idle ticks do not call a model. Workers use isolated local or supported Child Git worktrees.' } : {}),
         enabled: job.enabled !== false,
         editable: job.source !== 'learning' || !!learningControls,
         configuredEnabled: job.source === 'learning' ? learningControls?.preference(job.id) ?? job.enabled !== false : job.enabled !== false,
@@ -82,7 +82,9 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
       const parsed = z.object({ program: workDispatchConfigSchema, schedule: z.string().regex(/^every ([1-9][0-9]*)[smh]$/).optional() }).strict().safeParse(body)
       if (!parsed.success || !programControls) return c.json({ error: 'invalid_automation_update' }, 400)
       try {
-        await programControls.validate(parsed.data.program, c.req.raw.signal)
+        // A disabled automation may retain (or restore) its unconfigured default.
+        // Enabling and manual execution still require an available exact source.
+        if (parsed.data.program.folderId || job.enabled !== false) await programControls.validate(parsed.data.program, c.req.raw.signal)
         await cron.configureProgram(id, parsed.data.program, parsed.data.schedule)
       } catch (error) { return c.json({ error: 'invalid_work_dispatch_configuration', message: String(error) }, 400) }
       return c.json({ automation: (await summaries(true)).find(job => job.id === id) })

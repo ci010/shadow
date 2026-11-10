@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { DerivedWorkspaces } from './derived-workspace.ts'
 import { FolderRegistry } from './registry.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
@@ -72,6 +72,14 @@ test('beside worktree, fixed commit, registered descriptions, retry and source p
     const nested = await service.createDerivedWorkspace({ source: result.workspaceId, branch: 'older', idempotencyKey: 'from-worktree' }, signal)
     assert.equal(nested.commonDir, result.commonDir)
     assert.equal(dirname(nested.path), dirname(result.path))
+    let previous = nested
+    for (let generation = 0; generation < 3; generation++) {
+      const next = await service.createDerivedWorkspace({ source: previous.workspaceId, branch: 'older', idempotencyKey: `bounded-lineage-${generation}` }, signal)
+      assert(Array.from(basename(next.path)).length <= 86, 'derived source names must not grow with each scheduling generation')
+      assert.equal(next.baseCommit, first)
+      await service.verify(next, signal)
+      previous = next
+    }
     await assert.rejects(service.createDerivedWorkspace({ ...request, workKey: 'missing' }, signal))
     await assert.rejects(service.createDerivedWorkspace({ ...request, branch: 'main' }, signal), /conflict/)
     await assert.rejects(service.createDerivedWorkspace({ ...request, source }, signal))
