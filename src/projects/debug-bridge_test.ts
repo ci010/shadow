@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createProjectDebugBridge } from './debug-bridge.ts'
 import { createProjectScope, getProjectScope } from './scope.ts'
+import { createRuntimeHandler } from '../vfs/runtime.ts'
+import { RuntimeDiagnosticLog } from '../runtime/diagnostic-log.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 
@@ -59,11 +61,12 @@ test('strict read-only allowlist rejects arbitrary files, write/execute and enco
     await assert.rejects(f.source.run(() => f.read(path, context)), /path|resource/)
   }
   const vfs = new VirtualFs()
-  vfs.mount('v:debug', 'debug', (path, ctx) => f.read(path.replace(/^projects\/?/, ''), ctx))
-  assert.throws(() => vfs.write('v:debug/projects/other/sessions', { content: 'write' }, context), /read-only/)
+  const runtime = createRuntimeHandler(new RuntimeDiagnosticLog(), 'forged', () => {}, undefined, undefined, undefined, f.read)
+  vfs.mount('v:runtime', 'diagnostics', runtime.read, runtime.list)
+  assert.throws(() => vfs.write('v:runtime/projects/other/sessions', { content: 'write' }, context), /read-only/)
   assert.throws(() => vfs.resolve('v:sessions/other', context), /Unknown/)
   assert.throws(() => vfs.resolve('v:memory/other', context), /Unknown/)
-  assert.throws(() => vfs.list('v:debug/projects', context), /does not support search/)
+  assert.throws(() => vfs.list('v:runtime/projects', context), /do not support search/)
   assert.equal(f.reads.length, 0)
 })
 
@@ -75,11 +78,19 @@ test('in-flight revocation discards result', async () => {
 
 test('read entry dispatch and closed target fail without target startup', async () => {
   const f = fixture(), vfs = new VirtualFs()
-  vfs.mount('v:debug', 'debug', (path, ctx) => {
-    if (path !== 'projects' && !path.startsWith('projects/')) throw new Error('Unknown diagnostic path')
-    return f.read(path === 'projects' ? '' : path.slice(9), ctx)
-  })
-  assert.match((await f.source.run(() => vfs.resolve('v:debug/projects/other/runtime/logs', context)))!, /target data/)
+  const runtime = createRuntimeHandler(new RuntimeDiagnosticLog(), 'forged', () => {}, undefined, undefined, undefined, f.read)
+  vfs.mount('v:runtime', 'diagnostics', runtime.read, runtime.list)
+  assert.deepEqual(vfs.prefixes().map(entry => entry.prefix), ['v:runtime'])
+  const discovery = await vfs.list('v:runtime', context, { content: true })
+  assert.match(JSON.stringify(discovery), /v:runtime\/projects/)
+  assert.doesNotMatch(JSON.stringify(discovery), /target data|Other|Offline/)
+  assert.deepEqual(f.reads, [])
+  assert.throws(() => vfs.resolve('v:debug/projects', context), /Unknown/)
+  assert.match((await f.source.run(() => vfs.resolve('v:runtime/projects', context)))!, /v:runtime\/projects\/other/)
+  for (const content of [true, false]) {
+    assert.throws(() => vfs.list('v:runtime/projects/other', context, { content }), /do not support search/)
+  }
+  assert.match((await f.source.run(() => vfs.resolve('v:runtime/projects/other/runtime/logs', context)))!, /target data/)
   f.target.close()
   await assert.rejects(f.source.run(() => f.read('other/sessions', context)), /unavailable/)
   assert.equal(f.reads.length, 1)

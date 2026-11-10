@@ -42,6 +42,10 @@ installation ID also deduplicates interruption between the job and marker
 writes. Existing jobs and enabled preferences are unchanged. Already-retired
 session receipts, user timestamps, logs and restore behavior remain compatible
 in **both JSONL and SQLite**. No history migration or physical purge occurs.
+Existing persisted cleanup task text is not replaced on restart, including old
+copy-all instructions; customized jobs are not migrated. The current tool
+contract and fresh inspection guidance specify selective final-deliverable
+exports and session-data retention rather than exporting all drafts.
 
 ## Eligibility and closeout
 
@@ -77,9 +81,14 @@ in **both JSONL and SQLite**. No history migration or physical purge occurs.
   Cancellation invalidates pending inspection tokens. A restart cannot apply an
   old proposal; the next run must inspect again. Bounded evidence is returned
   intact rather than truncated into an unread output file.
-- Every inspected session-data file must be preserved byte-for-byte, including
-  intermediates. The host copies with exclusive-create semantics, verifies
-  SHA-256 hashes, and leaves originals intact. A selected local Folder is the
+- Inspect every session-data file, but export only explicitly identified final
+  user-requested file deliverables. Intermediate drafts remain in session data
+  through recoverable retirement; `files:[]` is valid when no final deliverable
+  needs copying. Unresolved or uncertain final deliveries block retirement.
+  The host checks freshness of the whole draft inventory, including unexported
+  intermediates, and rejects duplicate export sources and unsafe destinations.
+  Selected exports use exclusive-create semantics and SHA-256 verification;
+  all originals remain intact. A selected local Folder is the
   delivery destination. Otherwise destinations must be in a discovered OS
   Documents/Pictures/Videos/Music/Downloads `Shadow` folder. Desktop is never
   selected automatically. Windows uses User Shell Folders (including redirected

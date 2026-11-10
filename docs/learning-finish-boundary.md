@@ -66,3 +66,44 @@ UI status. Controller scheduling and configured intervals are unchanged.
 Deployment requires rebuilding/restarting the backend that owns learning. Editing
 source does not update an already-running process. No restart, runtime configuration,
 existing journal/memory modification or follow-up scheduling is part of this change.
+
+## Unsaved Wiki candidate recovery
+
+Reflector `learning_result` accepts optional `pendingCandidates` on unfinished
+outcomes. Each contains a supported relative Wiki `path`, short `correction`,
+next `action`, `conditions` (including uncertainty/revalidation), and exact
+assigned `sessionId`/`physicalId` message `[offset,end)` evidence. Limits are four
+unique paths, four references each, 1200 UTF-16 code units per note and 256 per
+source ID. Full drafts and unknown fields are rejected. Notes are not artifacts,
+logs, published facts, authority, or proof of source review.
+
+The Project learning journal retains these with the partial proposal, across
+completion, interruption, restart and rebinding. Omission (including an empty
+array) does not erase existing candidates. Retry tasks explicitly prioritize
+these pinned leads, rereading evidence and the current Wiki before merging a
+supported correction. No draft is replayed automatically. Resumed candidate saves
+require `read_wiki` in that attempt against the current revision; ordinary stale
+revision protection and save/readback/provenance checks still apply.
+
+Use `resolutions` with path, outcome (`published`, `duplicate`, `superseded`, or
+`unsupported`) and reason to retire an earlier candidate after a fresh Wiki read.
+Published needs a currently matching recorded artifact; other outcomes require
+the read revision still to match. The journal keeps the latest structured
+resolution; historical tool receipts preserve earlier reasons. The host checks
+structure, scope and persistence, not whether the reason or correction is true.
+Unresolved candidates prohibit `applied`/`no_change`. Resolving one does not bypass
+full assigned-source coverage or permit acknowledging unread ranges. Failed saves
+leave the candidate pending. A candidate remains pending through the existing
+three-deferral automatic pause; manual retry policy and execution ceilings are
+unchanged. Old prose-only partial receipts are not parsed or migrated into
+candidates: this mechanism only helps newly structured receipts.
+
+Deployment requires loading the updated backend. For a later bounded cron audit,
+check an actual identified-but-unsaved correction yields a structured candidate,
+then a retry includes the same physical refs and a fresh current-page read. It
+must either persist a source-grounded correction with conditions and provenance,
+explicitly explain a duplicate/superseded/unsupported disposition, or honestly
+retain it pending/paused. Verify no duplicate logs, stale overwrite, invented
+human authority, automatic draft publication or cursor advance over unread work.
+Compare the resulting page to source, not merely receipt counts; semantic benefit
+and live model compliance remain unverified by synthetic tests.

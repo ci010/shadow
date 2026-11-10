@@ -606,16 +606,20 @@ and discards in-flight results.
 
 Use `read` on:
 
-- `v:debug/projects`: allowlisted Project ID/name and availability, not configuration.
-- `v:debug/projects/<encodedProjectId>` or `/status`: metadata and availability.
-- `v:debug/projects/<encodedProjectId>/sessions`: existing session list.
-- `v:debug/projects/<encodedProjectId>/sessions/<sessionId>[/overview|/full]`: existing local history formatter (physical references also supported).
-- `v:debug/projects/<encodedProjectId>/runtime/logs`: existing bounded/redacted runtime logs.
-- `v:debug/projects/<encodedProjectId>/runtime/sessions`: session diagnostic index.
-- `v:debug/projects/<encodedProjectId>/runtime/sessions/<encodedSessionId>/captures` or `/tools`: existing retained provider-input captures; reads do not enable capture.
+- `v:runtime/projects`: allowlisted Project ID/name and availability, not configuration.
+- `v:runtime/projects/<encodedProjectId>` or `/status`: metadata and availability.
+- `v:runtime/projects/<encodedProjectId>/sessions`: existing session list.
+- `v:runtime/projects/<encodedProjectId>/sessions/<sessionId>[/overview|/full]`: existing local history formatter (physical references also supported).
+- `v:runtime/projects/<encodedProjectId>/runtime/logs`: existing bounded/redacted runtime logs.
+- `v:runtime/projects/<encodedProjectId>/runtime/sessions`: session diagnostic index.
+- `v:runtime/projects/<encodedProjectId>/runtime/sessions/<encodedSessionId>/captures` or `/tools`: existing retained provider-input captures; reads do not enable capture.
 
 The diagnostic index may mention ordinary `v:runtime` views; only the paths above
-are available across Projects. No preview reconstruction, remote conversation
+are available across Projects. `v:runtime` is the only top-level diagnostics entry;
+there is no separate `v:debug` mount. Root glob/grep discovery exposes only a static
+`projects` guide, never the cross-Project catalog or target content. Searching
+`v:runtime/projects` or its descendants is explicitly unsupported; use explicit
+reads through the authorized bridge instead. No preview reconstruction, remote conversation
 forwarding, arbitrary data/config/credential path, search, write, messaging or
 execution is exposed. Host-held runtime/scope references resolve targets without
 starting them; unknown and unavailable targets are explicitly distinguished.
@@ -688,3 +692,74 @@ business/static requests rejected by global authentication, directory escape
 rejection and lease revocation. Diagnostic output redacts lease tokens. The test
 was exercised with installed Brave (Chromium 156.0.8078.80) on macOS; other browser
 engines and a full interactive application session are separate verification.
+
+### Intermittent Project API response timeouts
+
+Project JSON helper failures now emit `API project failure` with fixed endpoint
+identity, server-generated `id` (if response headers arrived and exposed it),
+HTTP status, `fetch`/`headers`/`consume` stage, cause, `headersMs` and total `elapsedMs`.
+`consume` includes JSON decoding and conditional snapshot validation: it is not
+proof of a stalled network transfer. Caller cancellation is not reported. No
+request/response payload, query, credentials, host, Project ID or session ID is
+collected. Coverage is intentionally narrow: sessions graph/details and the
+projects/service-groups/agent-types/background-tasks endpoint families; it is not
+a general network recorder. Failures before headers arrive cannot be correlated.
+
+The Project gateway adds `X-Shadow-Request-Id` on these routes. Native HTTP
+responses log `API transport` for all allowlisted completions, **including fast
+HTTP 200 responses**, plus early close, including route-handler-ready and native
+finish/close elapsed milliseconds. This preserves the Main-side evidence when
+Main finishes quickly but a browser subsequently times out reading the response. `finish` means Node handed bytes to the OS, **not** browser receipt.
+No stream is cloned, buffered or consumed by diagnostics. Backend transport
+events (including fast successes) share a cap of 120 per minute per Project
+runtime (excess dropped). Missing correlation can therefore mean volume limits,
+not proof that Main never received or completed the request.
+Forwarded device UI
+requests without a native outgoing response cannot produce this transport event.
+
+For the assistant, in the affected Project:
+
+- `read({ path: "v:runtime" })` describes live availability and scope.
+- `read({ path: "v:runtime/frontend-logs" })` reads received renderer failures.
+- `read({ path: "v:runtime/logs" })` reads redacted backend transport events;
+  match `id` with the frontend event. This view returns only the latest 200
+  current-runtime events; older disk logs are deliberately not exposed here.
+
+**Frontend collection is development-backend-only and memory-only.** The existing
+collector must be enabled/installed; a console warning alone does not ensure
+transmission. Its 200-event ring and 120-events/minute/Project limit are shared
+with other frontend logs. Browser queues are bounded/best-effort and discarded on
+scope changes/reload/unmount. Received events survive a browser reload but not
+backend restart, Project disposal or log clear; there is no durable frontend
+history. Backend transport warnings use the existing Project console/OTel SQLite
+store (when telemetry collection is active), not a new persistence mechanism.
+They can remain on disk across restart, but the virtual view excludes preceding
+runtime generations. Store cleanup/removal and disabled collection can make logs
+unavailable; no new retention guarantee is introduced.
+
+To export the **received frontend ring**, use the affected Project in the already
+signed-in, same-origin Web UI. In browser DevTools Console run this bounded
+snippet (it derives the Project from the current page; no pasted token):
+
+```js
+const project = location.pathname.match(/^\/projects\/([^/]+)(?:\/|$)/)?.[1];
+if (!project) throw new Error('Open the affected Project page first');
+const result = await fetch(`/projects/${project}/api/runtime/frontend-logs?download=1`, { credentials: 'same-origin' });
+if (!result.ok) throw new Error(`Diagnostics unavailable: HTTP ${result.status}`);
+const href = URL.createObjectURL(await result.blob());
+const link = document.createElement('a'); link.href = href;
+link.download = 'shadow-frontend-logs.jsonl'; link.click();
+setTimeout(() => URL.revokeObjectURL(href), 1000);
+```
+
+This is a manual export, not a new UI button; it uses existing browser auth and
+returns the same redacted ring the assistant reads. A 404 usually means frontend
+collection is unavailable on that backend (not an invitation to change config).
+Cross-origin Vite/Electron/Child deployments should use assistant direct-read or
+open their authenticated same-origin Web UI; do not copy credentials into console
+or URLs. Session Diagnosis “Export for agent” is session evidence, **not** this
+frontend ring. Review exports before sharing.
+
+Activation requires an updated backend and renderer reload/rebuild as appropriate;
+this change does not restart anything, enable development mode or retrospectively
+recover an earlier incident. Capture the next occurrence before restarting.

@@ -49,7 +49,7 @@ test('switching selects folder skill discovery, resources and lazy activation wi
     base.register(new ReadTool(home, vfs)); base.register(new InvokeTool(loader)); base.register(new SearchTool(home, undefined, vfs))
     const tools = new SessionTools(base, home)
     const ctx = { projectId: 'p', evalBridge: new EvalBridgeRuntime({ projectId: 'p', scope: createProjectScope('p') }), sessionId: 'fixture', physicalSessionId: 'fixture-0', channel: 'test', chatId: 'fixture', senderId: 'test', messageId: 'test',
-      tools, signal: new AbortController().signal, toolCallName: 'use_project',
+      tools, signal: new AbortController().signal, toolCallName: 'workspace_use',
       switchProjectFolder: async prepared => { const folder = folders.get(prepared.folderId)!; selected = { folderId: folder.id, path: folder.path }; ctx.folderId = folder.id; ctx.cwd = folder.path; return prepared.content },
     } as ExecutionContext
     const switcher = new UseProjectTool({ projectId: 'p', folders, switched: ctx => loader.clearFolderSkillTools(ctx.tools) })

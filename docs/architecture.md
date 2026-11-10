@@ -1209,7 +1209,7 @@ made by shell commands, MCP tools, other applications, or all descendants.
 Managed Discord execution bypasses the ordinary Project prompt providers.
 `channels/integration.ts` supplies the approved Agent/skill snapshot, bounded
 platform metadata and authorized catalog context. It excludes global SOUL,
-identity, working sets, Project log/keyword indexes, conventions and generic
+identity, working sets, Project event/keyword indexes, conventions and generic
 resource/tool discovery before provider input is built. Names, paths, counts
 and source metadata are protected along with bodies; relevance never grants
 access.
@@ -1301,7 +1301,7 @@ source snapshots, independent cursors and retries. It reuses bounded
 SessionManager/BaseSession calls, not a new provider loop. Workers receive only
 exact versioned batch reads, `learning_record` and `learning_result`; no global
 memory or Discord output. New user input and revocation fence background work.
-Decision/log/skill output retains source restrictions in the Conversation
+Decision/event/skill output retains source restrictions in the Conversation
 domain. Soul reflection produces a private draft, never a global SOUL update.
 Prepared effects and idempotent atomic catalog writes permit interrupted-commit
 recovery without re-inference; conflicting edits require reconciliation.
@@ -3304,7 +3304,7 @@ from the host or other sessions**.
 
 ### Switching the working context
 
-The base [`use_project({workspace})`](../src/tools/use-project.ts) tool selects a
+The base [`workspace_use({workspace})`](../src/tools/use-project.ts) tool selects a
 registered Workspace **inside the current Project**, not another Project. It accepts
 a unique lowercase folder-name slug (for example `app` or `docs`), a human-readable
 `name-xxxxxxxx` selector (name slug plus eight ID characters), or its full ID.
@@ -3357,16 +3357,28 @@ old/new context, instruction provenance/scope and supersession of old defaults.
 Locality is refreshed for subsequent calls; already running processes and
 existing children retain their captured context.
 
-`v:session/self.json` exposes `topic`, `focus` and `completed`, not filesystem
+`v:sessions/self.json` exposes `topic`, `focus` and `completed`, not filesystem
 paths. An unchanged roundtrip is accepted; unknown fields are rejected. The committed
 `session.changed` notification refreshes the existing session list, sidebar
 folder selection and file workbench. Browsing alone does not mutate execution.
 
-Remote folder switching currently fails closed: remote instruction preparation
-is not implemented, even if the remote workdir is online. Existing
-remote session initialization is unchanged; remote display paths are never
-resolved on Main and there is no silent local fallback. A validation, preparation
-or state-save failure leaves the previous working context intact.
+Switching supports an initially unselected session and local-to-remote,
+remote-to-local and remote-to-remote transitions. Remote root `AGENTS.md` is read
+as a relative path through the authorized `filesystem.read` executor, bounded to
+128000 bytes. Only an explicit `file-not-found` is treated as absent; denied,
+unavailable, aborted or oversized reads fail closed. Availability and target
+identity are rechecked after preparation, before the state-store commit. Remote
+display paths are never resolved on Main and there is no silent local fallback.
+A validation, preparation or state-save failure leaves the previous working
+context intact. Remote scoped instruction skills can be discovered/read through
+`v:skills/folder`; tool-bearing scripts are not executed on Main for a remote
+workspace. Remote skill metadata is not filtered using Main's platform or
+architecture; this is documentation access, not an execution-capability claim.
+Remote instruction/skill reads require a Child supporting `filesystem.read`
+`kind: 'file'` (regular-file validation) and skill `within` containment. Older
+peers reject these fields and fail explicitly, without fallback to Main.
+Remote folder MCP discovery/execution is not enabled by switching;
+its snapshot explicitly supersedes the old folder scope without starting services.
 
 ### State inventory
 
@@ -3621,7 +3633,7 @@ skill's `references/mcp-args.md` for connection evidence and permitted flags.
 
 Local selected folders recognize explicit `.mcp.json` (`mcpServers`) and
 `.vscode/mcp.json` (`servers`, including VS Code `type: "http"`) declarations.
-`use_project` validates these before committing and appends only folder-local
+`workspace_use` validates these before committing and appends only folder-local
 source discovery. Invalid/unreadable declarations fail the switch without
 printing file values. No declaration is copied into Project configuration.
 Both files may contribute; source IDs include a folder/file hash so their

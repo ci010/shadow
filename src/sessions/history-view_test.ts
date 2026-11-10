@@ -10,7 +10,7 @@ function result(content: string): ChatMessage { return { role: 'tool', content, 
 const view = (messages: ChatMessage[], overview = true) => formatSessionHistory(messages, overview, 'physical')
 
 test('overview never expands tool payloads, including folder and self metadata', () => {
-  for (const message of [call('write', { path: 'v:session/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'SECRET' }), call('constructor', { task: 'SECRET' })]) {
+  for (const message of [call('write', { path: 'v:sessions/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'SECRET' }), call('constructor', { task: 'SECRET' })]) {
     const messages = [message, result('SECRET RESULT')]
     const text = view(messages)
     assert.doesNotMatch(text, /SECRET|private commentary/)

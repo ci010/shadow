@@ -331,3 +331,44 @@ await withTempWorkspace(async workspace => {
   } finally { await f.close() }
 })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const mode of ['zero', 'selective', 'duplicate', 'stale', 'unsafe'] as const) {
+    test(`${Store.name}: ${mode} exports retain intermediate drafts and enforce delivery gates`, async () => {
+      await withTempWorkspace(async workspace => {
+        const root = sessionWorkspacePath(workspace, id)
+        const destination = `${workspace}-delivery`
+        await mkdir(destination)
+        await mkdir(root, { recursive: true })
+        await writeFile(join(root, 'draft.txt'), 'intermediate')
+        await writeFile(join(root, 'final.txt'), 'requested final')
+        const output = join(destination, 'final.txt')
+        const f = await fixture(workspace, new Store(join(workspace, 'sessions')))
+        const service = new SessionRetirement({ sessions: f.sessions, workspace,
+          protected: () => false, folderPath: () => destination })
+        try {
+          const signal = new AbortController().signal
+          const inspected = await service.inspect(id, 'cron:fixture', signal)
+          const file = { source: 'final.txt', destination: output }
+          const files = mode === 'zero' || mode === 'stale' ? [] : mode === 'duplicate'
+            ? [file, { ...file, destination: join(destination, 'another.txt') }]
+            : mode === 'unsafe' ? [{ ...file, destination: join(destination, '..', 'escape.txt') }] : [file]
+          if (mode === 'stale') await writeFile(join(root, 'draft.txt'), 'changed intermediate')
+          const apply = service.apply(inspected.token, { ...completed, files }, 'cron:fixture', signal)
+          if (mode === 'duplicate' || mode === 'stale' || mode === 'unsafe') {
+            await assert.rejects(apply, mode === 'duplicate' ? /Duplicate delivery source/ : mode === 'stale' ? /Draft inventory changed/ : /Unsafe delivery path/)
+            assert.equal(f.state.retirement, undefined)
+            await assert.rejects(readFile(output), { code: 'ENOENT' })
+          } else {
+            assert.match(await apply, /recoverable/)
+            assert.ok(f.sessions.getSessionState(id)?.retirement)
+            if (mode === 'selective') assert.equal(await readFile(output, 'utf8'), 'requested final')
+            else await assert.rejects(readFile(output), { code: 'ENOENT' })
+          }
+          assert.equal(await readFile(join(root, 'draft.txt'), 'utf8'), mode === 'stale' ? 'changed intermediate' : 'intermediate')
+          assert.equal(await readFile(join(root, 'final.txt'), 'utf8'), 'requested final')
+        } finally { await f.close(); await rm(destination, { recursive: true }) }
+      })
+    })
+  }
+}

@@ -2357,7 +2357,7 @@ ${JSON.stringify(request)}`,
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation) throw new Error('Self metadata requires an available ordinary durable session or task')
-      if (expected !== undefined && expected !== JSON.stringify(selfSessionMetadata(state), null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
+      if (expected !== undefined && expected !== JSON.stringify(selfSessionMetadata(state), null, 2)) throw new Error('Session metadata changed during editing. Reread v:sessions/self.json and retry.')
       // Parent-owned task discovery titles adapt to a read-only self topic, never to focus.
       if (state.mode === 'task' && 'topic' in patch && patch.topic !== sessionTopic(state)) throw new Error('Task topic is adapted from its parent-owned title; preserve it unchanged or omit it.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')

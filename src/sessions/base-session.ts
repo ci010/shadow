@@ -649,13 +649,17 @@ export abstract class BaseSession {
         let writes = Promise.resolve()
         const executions = group.calls.map(async tc => {
           const fileChangePhysicalId = this.physicalSessionId
+          // Dispatch pre-rename pending calls without rewriting persisted call/result names.
+          // This is recovery-only: the old name is not registered or model-visible.
+          const executionName = executionContext.recoveringToolCall && tc.name === 'use_project'
+            ? 'workspace_use' : tc.name
           const context: ExecutionContext = {
-            ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
-            switchProjectFolder: calls.length === 1 && tc.name === 'use_project' ? async prepared => {
+            ...executionContext, toolCallId: tc.id, toolCallName: executionName,
+            switchProjectFolder: calls.length === 1 && executionName === 'workspace_use' ? async prepared => {
               signal.throwIfAborted()
               const next = { ...this.state, folderId: prepared.folderId, workdir: prepared.workdir }
               const resolved = resolveSessionLocations(this.workspace, next, undefined, this.workdirLookup).workdir
-              if (!resolved.available || resolved.locality !== 'local') throw new Error('Target folder execution unavailable; prior context retained.')
+              if (!resolved.available) throw new Error('Target folder execution unavailable; prior context retained.')
               const content = prepared.content
               // The existing state store is the commit point. Recovery replays this
               // snapshot if interrupted before the result/context event is appended.
@@ -681,7 +685,7 @@ export abstract class BaseSession {
           } else {
             try {
               result = await activeSpan('agent.tool',
-                () => this.tools.execute(tc.name, tc.arguments, context),
+                () => this.tools.execute(executionName, tc.arguments, context),
                 { attributes: { ...traceAttributes, 'tool.call_id': tc.id, 'tool.name': tc.name } },
                 span.context,
               )

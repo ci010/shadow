@@ -156,7 +156,7 @@ export class VirtualFs {
     // mounts retain their existing local-workdir requirement.
     const projectDispatchFile = prefix === 'v:project' &&
       (subpath === 'dispatch-instructions.md' || subpath === 'dispatch-memory.md')
-    if (context.remoteWorkdir && prefix !== 'v:session' && !projectDispatchFile) throw new Error('Virtual configuration writes require a local workdir.')
+    if (context.remoteWorkdir && !(prefix === 'v:sessions' && subpath === 'self.json') && !projectDispatchFile) throw new Error('Virtual configuration writes require a local workdir.')
     if (context.tools.executionMode === 'call') throw new Error('Virtual configuration writes are unavailable in call mode.')
     context.signal.throwIfAborted()
     return Promise.resolve(mount.write(subpath, request, context))

@@ -16,6 +16,11 @@ test('new sessions can discover the optional image/video skill and its reuse-fir
         'HF_HUB_CACHE', 'MODELSCOPE_CACHE', 'extra_model_paths.yaml',
         'Qwen Image 2.1', 'Qwen-Image-Edit', 'Z-Image-Turbo', 'Anima', 'MiniMax-H3',
         'modelscope download', 'WebM', 'filename_and_size_only',
+        'MOSS-Image Base / SFT', 'Shadow has no MOSS preset',
+        'Short end-to-end setup and first run', 'Resolve all four components',
+        'external tokenizer JSON', 'Verify and hand back',
+        '--tokenizer', 'Qwen3.5-9B-Q4_K_M.gguf', 'flux2_ae.safetensors',
+        'Weight licenses were not independently verified',
       ]) {
         assert.ok(body.includes(detail), `Missing model/setup guidance: ${detail}`)
       }

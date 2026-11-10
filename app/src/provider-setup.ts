@@ -11,7 +11,7 @@ export interface ProviderSetupStatus {
   type?: string
   name?: string
   model: string
-  authMode: 'api-key' | 'copilot' | 'none'
+  authMode: 'api-key' | 'copilot' | 'deepseek-account' | 'none'
   ready: boolean
   hasApiKey: boolean
   baseUrl?: string
@@ -51,6 +51,7 @@ export const providerPresets = [
 ]
 
 export function providerDisplayName(provider: string): string {
+  if (provider === 'deepseek-account') return 'DeepSeek Account'
   if (provider === 'copilot') return 'GitHub Copilot'
   if (provider === 'copilot-v2') return 'GitHub Copilot v2'
   return providerPresets.find(item => item.id === provider)?.name ?? provider
@@ -103,7 +104,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
       || (item.name !== undefined && typeof item.name !== 'string')
       || names.has(item.provider) || typeof item.selected !== 'boolean'
       || (item.selected && selected) || typeof item.hasApiKey !== 'boolean'
-      || !['api-key', 'copilot', 'none'].includes(String(item.authMode))
+      || !['api-key', 'copilot', 'deepseek-account', 'none'].includes(String(item.authMode))
       || (item.host !== undefined && (item.authMode !== 'copilot' || !isCopilotHost(item.host)))
       || (item.model !== undefined && typeof item.model !== 'string')
       || (item.baseUrl !== undefined && typeof item.baseUrl !== 'string')) {
@@ -156,7 +157,7 @@ export function parseProviderSetup(value: unknown): ProviderSetupStatus {
     || (value.type !== undefined && typeof value.type !== 'string')
     || (value.name !== undefined && typeof value.name !== 'string')
     || typeof value.ready !== 'boolean' || typeof value.hasApiKey !== 'boolean'
-    || !['api-key', 'copilot', 'none'].includes(String(value.authMode))
+    || !['api-key', 'copilot', 'deepseek-account', 'none'].includes(String(value.authMode))
     || (value.host !== undefined && (value.authMode !== 'copilot' || !isCopilotHost(value.host)))
     || (value.baseUrl !== undefined && typeof value.baseUrl !== 'string')
     || (value.reason !== undefined && typeof value.reason !== 'string')) {

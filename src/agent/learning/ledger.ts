@@ -1,3 +1,4 @@
+import { pendingCandidates, candidateResolutions } from './pending.ts'
 import { validateLogSummary } from '../log-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -37,6 +38,8 @@ const batchSchema = z.object({
   id: z.string().uuid(), createdAt: z.string().datetime(), pipeline: z.enum(pipelines), sources: z.array(sourceSchema),
   inputEvents: z.array(logSchema), events: z.array(logSchema), artifacts: z.array(artifactSchema),
   attempts: z.array(z.string()), state: z.enum(['pending', 'running', 'done']),
+  pendingCandidates: pendingCandidates.optional(),
+  candidateResolutions: candidateResolutions.optional(),
   excluded: z.string().optional(),
   retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative(), paused: z.string().optional() }).optional(),
   proposal: outcomeSchema.optional(), evaluated: z.array(z.string()), error: z.string().optional(),
@@ -191,8 +194,10 @@ export class LearningLedger {
     if (!batch.events.some(item => item.id === log.id)) batch.events.push(logSchema.parse(log))
     this.save()
   }
-  propose(id: string, status: LearningOutcome['status'], summary: string): void {
+  propose(id: string, status: LearningOutcome['status'], summary: string, candidates?: z.infer<typeof pendingCandidates>, resolutions?: z.infer<typeof candidateResolutions>): void {
     const batch = this.required(id)
+    if (resolutions !== undefined) batch.candidateResolutions = candidateResolutions.parse(resolutions)
+    if (candidates !== undefined) batch.pendingCandidates = pendingCandidates.parse(candidates)
     batch.proposal = outcomeSchema.parse({ status, summary, artifacts: batch.artifacts.length,
       events: batch.events.length, evaluated: batch.evaluated.length })
     this.save()

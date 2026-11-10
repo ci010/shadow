@@ -168,3 +168,11 @@ Regression tests use mocked HTTP and synthetic, project-local storage. They cove
 key routing, token/cache isolation, concurrent login, sign-out, rename, legacy
 compatibility, and rendered settings flows. They do not prove live GitHub/DeepSeek
 account authorization or replace real-account testing by an operator.
+
+## DeepSeek Account
+
+**DeepSeek Account** is a separate `deepseek-account` type with official browser
+PKCE authorization, instance-isolated backend grants and Messages inference.
+The original `deepseek` API-key route remains unchanged. See
+[DeepSeek Account](deepseek-account.md) for setup, storage/security, supported
+text/tool subset, mock verification and external authorization/billing boundaries.

@@ -175,7 +175,7 @@ export async function startProjectHost(
   const copilotAuth = new CopilotAuthenticatorV2()
   const computer = new ComputerService(createComputerDesktop(), { enabled: options.localExecutor !== false })
   cleanup.push(() => computer.close())
-  let provider = createAggregatedProvider(config, copilotAuth)
+  let provider = createAggregatedProvider(config, copilotAuth, hostHome)
   const mainCluster = await startup.measure('cluster', () => createMainCluster({
     authorizeInventory: authorize,
     localNodeInventory: () => mainLocalNodeInventory({
@@ -212,7 +212,7 @@ export async function startProjectHost(
     configPath: options.configPath,
     getConfig: () => activeConfig,
     onChanged: async changed => {
-      const updatedProvider = createAggregatedProvider(changed, copilotAuth)
+      const updatedProvider = createAggregatedProvider(changed, copilotAuth, hostHome)
       const previous = activeConfig
       const previousProvider = provider
       activeConfig = changed
@@ -234,7 +234,7 @@ export async function startProjectHost(
   })
   if (options.configPath) await sharedConfigStore.read()
   const diagnostics = new RuntimeDiagnosticLog()
-  const providerSetup = new ProviderSetup({ diagnostics, store: sharedConfigStore, getConfig: () => activeConfig, auth: copilotAuth })
+  const providerSetup = new ProviderSetup({ diagnostics, store: sharedConfigStore, getConfig: () => activeConfig, auth: copilotAuth, accountHome: hostHome })
   cleanup.push(() => providerSetup.dispose())
   const start = (id: string): Promise<void> => {
     if (stopping) return Promise.reject(new Error('Project host is stopping'))
@@ -264,7 +264,7 @@ export async function startProjectHost(
           debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, authorize, realtimeHub, computer,
+          mainCluster, copilotAuth, accountHome: hostHome, authorize, realtimeHub, computer,
           localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready

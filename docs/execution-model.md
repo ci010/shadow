@@ -26,8 +26,11 @@ offline, revoked or incompatible directories fail without Main fallback or devic
 substitution. Per-call selection changes neither session cwd nor scoped
 instructions nor already-admitted work.
 
-`use_project` remains the distinct ongoing working-context operation. Remote
-instruction preparation is still unsupported; this refactor does not invent it.
+`workspace_use` is the distinct ongoing working-context operation, including local
+and remote targets from an initially unselected session. Remote root `AGENTS.md`
+is read through the authorized filesystem executor before the context commits;
+display paths are never resolved on Main. Remote folder MCP discovery/execution
+and tool-bearing skill scripts are not enabled by this switch.
 Project Home, Main-local session data/uploads and the effective execution workdir
 remain separate. Explicit session-storage browsing is not an execution fallback.
 
@@ -40,6 +43,30 @@ containment checks. The model receives image content, not a Child filesystem
 reference. This does not copy files to the Child or permit Main to resolve Child
 display paths. Other local attachments and file/folder context remain unsupported
 for remote chats; use explicit supported remote file tools for Child files.
+
+## Outcome-based delivery and working files
+
+Delivery follows the user's requested outcome, not the inventory of files an
+agent generated. A PR is delivered by its verified PR URL/state, a remote change
+by verification of that change, and an installation by a working installation.
+These tasks do not call for a local report, archive or `Documents/Shadow` folder
+unless the user requests one. This is agent guidance, not a filesystem sandbox.
+
+Temporary clones (when not working in an existing repository), installer downloads,
+extracted/build trees, logs, screenshots, manifests and test evidence stay in
+session data. Do not copy the whole working tree to a user folder as a closeout
+step. Only requested final local files are promoted to a durable destination:
+explicit user destination first, otherwise the selected Workspace or, without
+one, an appropriate discovered OS user folder under `Shadow`. Do not create the
+destination until there is an actual final file to deliver. Existing user source
+and installed software remain in place.
+
+Installed applications use normal platform installation locations and authorized
+user/system scope; a shared/system installation does not bypass permission or
+elevation requirements. Reusable tools and model caches use persistent tool-data
+locations, not Documents or session scratch. Receiving an installer/portable EXE
+as a file and asking to install software are different outcomes. Resolve paths
+on the executing device and never fall back to Main for a remote operation.
 
 ## Delegation from a Child-bound session
 
@@ -238,3 +265,11 @@ workdirs, frontend Folder selection and retry-bound directory identity.
 Keep unrelated worktree edits. Device synchronization is Git-only. No commit,
 push, deployment or real Main/Child restart is part of this implementation request.
 Passing focused tests is not a full production-readiness claim.
+
+## Role previews in a Child workspace
+
+The approved Child workspace UI forwards read-only `GET`/`HEAD` requests for
+`/api/agent-types` and `/api/agent-types/:name/context` to Main, including
+Project-scoped paths. These settings previews use the existing device-proof
+and revocation checks; they do not carry a Main bearer credential. Other routes
+and mutation methods in this namespace remain blocked by the Child UI tunnel.

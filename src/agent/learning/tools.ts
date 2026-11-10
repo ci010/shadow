@@ -1,3 +1,4 @@
+import { pendingCandidates, candidateResolutions } from './pending.ts'
 import { LEARNING_RECEIPT_RECORDED } from './receipt.ts'
 import { validateLogSummary } from '../log-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
@@ -63,9 +64,14 @@ function wikiBody(content: string): { body: string; references: string[] } {
 }
 const resultSchema = z.object({
   status: z.enum(['applied', 'no_change', 'partial', 'blocked', 'draft_only']), summary: text,
+  pendingCandidates: pendingCandidates.optional(), resolutions: candidateResolutions.optional(),
 }).strict()
 
+const pendingParameter = { type: 'array', maxItems: 4, items: { type: 'object', properties: { path: { type: 'string' }, correction: { type: 'string', maxLength: 1200 }, action: { type: 'string', maxLength: 1200 }, conditions: { type: 'string', maxLength: 1200 }, evidence: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'object', properties: { sessionId: { type: 'string' }, physicalId: { type: 'string' }, offset: { type: 'integer' }, end: { type: 'integer' } }, required: ['sessionId', 'physicalId', 'offset', 'end'], additionalProperties: false } } }, required: ['path', 'correction', 'action', 'conditions', 'evidence'], additionalProperties: false }, description: 'Reflector partial/blocked/draft_only only: bounded unsaved corrections, next action, conditions and exact assigned message evidence. Not published content. Omission retains earlier candidates.' }
+const resolutionsParameter = { type: 'array', maxItems: 4, items: { type: 'object', properties: { path: { type: 'string' }, outcome: { type: 'string', enum: ['published', 'duplicate', 'superseded', 'unsupported'] }, reason: { type: 'string', maxLength: 1200 } }, required: ['path', 'outcome', 'reason'], additionalProperties: false }, description: 'Explicit disposition of earlier candidates after fresh read_wiki. published requires a verified artifact; duplicate/superseded/unsupported require reasons. Does not bypass full source review.' }
+
 export class LearningTools {
+  private readonly wikiReads = new Map<string, Map<string, string>>()
   private tail: Promise<unknown> = Promise.resolve()
   constructor(private readonly runtime: LearningRuntime) {}
   private serial<T>(action: () => Promise<T>): Promise<T> {
@@ -136,7 +142,19 @@ export class LearningTools {
         const file = projectStoragePath(this.runtime.sessions.workspace, path)
         const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
         const currentRevision = current ? fingerprint(current) : ''
-        if (args.action === 'read_wiki') return JSON.stringify({ path, revision: currentRevision, content: current })
+        if (args.action === 'read_wiki') {
+          if (batch.pendingCandidates?.some(item => item.path === args.path)) {
+            // Only retain the active attempt's at-most-four recovery reads.
+            for (const id of this.wikiReads.keys()) if (id !== context.sessionId) this.wikiReads.delete(id)
+            const reads = this.wikiReads.get(context.sessionId) ?? new Map<string, string>()
+            reads.set(args.path, currentRevision); this.wikiReads.set(context.sessionId, reads)
+          }
+          return JSON.stringify({ path, revision: currentRevision, content: current })
+        }
+        if (batch.pendingCandidates?.some(item => item.path === args.path)
+          && this.wikiReads.get(context.sessionId)?.get(args.path) !== currentRevision) {
+          throw new Error('Pending candidate requires a fresh read_wiki in this attempt; reread current page and merge or retire superseded guidance.')
+        }
         const evidence = args.wikiEvidence.map(item => {
           const source = batch.sources.find(source => source.sessionId === item.sessionId && source.physicalId === item.physicalId
             && item.offset >= source.offset && item.end <= source.end && item.end > item.offset)
@@ -255,11 +273,36 @@ export class LearningTools {
     description: 'Submit the learning outcome once all work is finished. Runtime verifies recorded artifacts/logs. no_change needs a reason and no effects. Session completion alone does not acknowledge learning.',
     parameters: { type: 'object', properties: {
       status: { type: 'string', enum: ['applied', 'no_change', 'partial', 'blocked', 'draft_only'] },
+      pendingCandidates: pendingParameter,
+      resolutions: resolutionsParameter,
       summary: { type: 'string', description: 'What changed and why, or why no durable change is justified. Include unresolved blockers.' },
     }, required: ['status', 'summary'] },
     execute: (raw, context) => this.serial(async () => {
       let batch = this.authorize(context)
       const args = resultSchema.parse(raw)
+      const pending = batch.pendingCandidates ?? []
+      if ((args.pendingCandidates || args.resolutions) && batch.pipeline !== 'reflector') throw new Error('Pending Wiki recovery is reflector-only.')
+      for (const candidate of args.pendingCandidates ?? []) {
+        for (const e of candidate.evidence) {
+          if (!batch.sources.some(s => s.sessionId === e.sessionId && s.physicalId === e.physicalId && e.offset >= s.offset && e.end <= s.end)) {
+            throw new Error('Pending evidence must be inside an exact assigned physical source range.')
+          }
+        }
+      }
+      const resolutions = args.resolutions ?? []
+      if (new Set(resolutions.map(r => r.path)).size !== resolutions.length) throw new Error('Duplicate candidate resolutions.')
+      for (const r of resolutions) {
+        if (!pending.some(p => p.path === r.path)) throw new Error('Resolution requires a retained candidate.')
+        const read = this.wikiReads.get(context.sessionId)?.get(r.path)
+        if (read === undefined) throw new Error('Candidate resolution requires fresh read_wiki in this attempt.')
+        const file = projectStoragePath(this.runtime.sessions.workspace, 'memory', r.path)
+        const current = existsSync(file) ? fingerprint(readFileSync(file, 'utf8')) : ''
+        const artifact = batch.artifacts.find(a => a.path === `memory/${r.path}` && a.revision === current)
+        if (r.outcome === 'published' ? !artifact : read !== current) throw new Error('Candidate resolution is stale or publication is unverified; reread current Wiki.')
+      }
+      const remaining = pending.filter(p => !resolutions.some(r => r.path === p.path))
+      const candidates = pendingCandidates.parse([...remaining.filter(p => !args.pendingCandidates?.some(n => n.path === p.path)), ...(args.pendingCandidates ?? [])])
+      if ((args.status === 'applied' || args.status === 'no_change') && candidates.length) throw new Error('Unresolved candidates require partial, blocked or draft_only; resolve explicitly after rereading.')
       batch = await this.runtime.inspectEffects(batch, true, args.status === 'applied' || args.status === 'no_change', context.signal)
       const effects = batch.artifacts.length + batch.events.length
       if (args.status === 'applied' && !effects) throw new Error('No verified learning effects. Use no_change, blocked or draft_only instead.')
@@ -269,7 +312,8 @@ export class LearningTools {
       }
       if (args.status === 'applied' || args.status === 'no_change') await this.runtime.verify(batch, false, context.signal)
       context.signal.throwIfAborted()
-      this.runtime.ledger.propose(batch.id, args.status, args.summary)
+      this.runtime.ledger.propose(batch.id, args.status, args.summary, candidates, resolutions)
+      this.wikiReads.delete(context.sessionId)
       return LEARNING_RECEIPT_RECORDED
     }),
   }

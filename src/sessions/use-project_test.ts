@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Bus } from '../bus/bus.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { FolderRegistry } from '../folders/registry.ts'
 import { folderIdentifier, selectFolder } from '../folders/identifier.ts'
 import { UseProjectTool } from '../tools/use-project.ts'
+import { CapabilityFilesystem } from '../execution/capability-filesystem.ts'
+import { LocalExecutor } from '../execution/local-executor.ts'
+import type { FolderRecord } from '../folders/contracts.ts'
 import { ExecTool } from '../tools/shell.ts'
 import { CommandHandlerManager } from '../tools/shell-commands/command-handler.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
@@ -24,10 +27,10 @@ import { isRuntimeContextEvent } from './runtime-context-event.ts'
 
 class SwitchingSession extends BaseSession {
   input() { return this.appendMessages({ model: 'test', temperature: 0, contextWindow: 100000 }, { role: 'user', content: 'Actual user' }) }
-  run() {
+  run(overrides: Partial<ExecutionContext> = {}) {
     const signal = new AbortController().signal
     const ctx: ExecutionContext = { projectId: 'test-project', sessionId: this.id, physicalSessionId: this.physicalSessionId,
-      channel: 'web', chatId: 'test', senderId: 'owner', messageId: 'test', tools: this.tools, signal }
+      channel: 'web', chatId: 'test', senderId: 'owner', messageId: 'test', tools: this.tools, signal, ...overrides }
     return this.runLlmLoop(ctx, { model: 'test', temperature: 0, contextWindow: 100000 }, signal)
   }
 }
@@ -74,11 +77,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const tools = new SessionTools(base, home)
       const requests: ChatMessage[][] = []
       const calls = [
-        [{ id: 'a', name: 'use_project', arguments: { folder: folderIdentifier(a.id) } }],
+        [{ id: 'a', name: 'workspace_use', arguments: { folder: folderIdentifier(a.id) } }],
         [{ id: 'read-a', name: 'read', arguments: { path: 'value.txt' } }],
-        [{ id: 'bad', name: 'use_project', arguments: { folder: 'missing' } }],
-        [{ id: 'parallel', name: 'use_project', arguments: { folder: b.id } }, { id: 'parallel-read', name: 'read', arguments: { path: 'value.txt' } }],
-        [{ id: 'b', name: 'use_project', arguments: { folder: b.id } }],
+        [{ id: 'bad', name: 'workspace_use', arguments: { folder: 'missing' } }],
+        [{ id: 'parallel', name: 'workspace_use', arguments: { folder: b.id } }, { id: 'parallel-read', name: 'read', arguments: { path: 'value.txt' } }],
+        [{ id: 'b', name: 'workspace_use', arguments: { folder: b.id } }],
         [{ id: 'read-b', name: 'read', arguments: { path: 'value.txt' } }],
         [{ id: 'exec-b', name: 'exec', arguments: { script: `"${process.execPath}" -e "console.log(process.cwd());console.log(require('fs').readFileSync('value.txt','utf8'))"`, timeout_ms: 10000 } }],
       ]
@@ -125,7 +128,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const previous = structuredClone(state)
         const original = store.saveState.bind(store)
         store.saveState = async () => { throw new Error('synthetic save failure') }
-        calls.push([], [{ id: 'failed-save', name: 'use_project', arguments: { folder: a.id } }])
+        calls.push([], [{ id: 'failed-save', name: 'workspace_use', arguments: { folder: a.id } }])
         await session.run()
         assert.match(result('failed-save'), /synthetic save failure/)
         assert.deepEqual({ ...state, lastActivityAt: undefined }, { ...previous, lastActivityAt: undefined })
@@ -149,13 +152,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   })
 }
 
-test('remote, unavailable and nested switch fail before committing', async () => {
-  const context = { projectId: 'p', toolCallName: 'use_project', signal: new AbortController().signal,
+test('remote without an authorized reader and nested switch fail before committing', async () => {
+  const context = { projectId: 'p', toolCallName: 'workspace_use', signal: new AbortController().signal,
     switchProjectFolder: async () => { throw new Error('must not commit') } } as unknown as ExecutionContext
   const remote = { path: 'C:\\DO-NOT-READ', identity: { version: 1 as const, rootId: 'a'.repeat(64), ancestorIds: [] }, id: 'remote', kind: 'remote' as const, name: 'remote', createdAt: '', projectId: 'p',
     workdir: { version: 2 as const, nodeId: 'child', workdirId: 'repo', displayPathSnapshot: 'C:\\DO-NOT-READ' } }
   const tool = new UseProjectTool({ projectId: 'p', folders: { list: () => [remote], requireAvailable: async () => remote, requireExecutionAvailable: async () => remote, acquireAccess: () => () => {} } })
-  await assert.rejects(tool.execute({ folder: 'remote' }, context), /Remote folder switching is unavailable/)
+  await assert.rejects(tool.execute({ folder: 'remote' }, context), /Remote workspace instruction reads are unavailable/)
   await assert.rejects(tool.execute({ folder: 'remote' }, { ...context, scriptInvocation: true }), /sole direct/)
   await assert.rejects(tool.execute({ folder: 'remote' }, { ...context, projectId: 'foreign' }), /mismatch/)
 })
@@ -168,7 +171,7 @@ test('unavailable folder and unreadable root instructions never reach the commit
     const folder = await folders.register(join(home, 'repo'))
     const tool = new UseProjectTool({ projectId: 'p', folders })
     let commits = 0
-    const ctx = { projectId: 'p', toolCallName: 'use_project', signal: new AbortController().signal,
+    const ctx = { projectId: 'p', toolCallName: 'workspace_use', signal: new AbortController().signal,
       switchProjectFolder: async () => { commits++; return 'committed' } } as unknown as ExecutionContext
     await mkdir(join(home, 'repo', 'AGENTS.md'))
     await assert.rejects(tool.execute({ folder: folder.id }, ctx))
@@ -179,3 +182,143 @@ test('unavailable folder and unreadable root instructions never reach the commit
     assert.equal(commits, 0)
   })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: none/local/remote switches persist opaque targets and remote instructions`, async () => {
+    await withTempWorkspace(async home => {
+      const folders = new FolderRegistry(home); await folders.init()
+      await mkdir(join(home, 'local'))
+      await writeFile(join(home, 'local', 'AGENTS.md'), 'Local policy')
+      const local = await folders.register(join(home, 'local'))
+      const remotes: FolderRecord[] = []
+      for (const name of ['remote-a', 'remote-b']) {
+        await mkdir(join(home, name))
+        await writeFile(join(home, name, 'AGENTS.md'), `Policy ${name}`)
+        remotes.push({ id: name, name, path: `Z:\\OPAQUE\\${name}`, kind: 'remote', createdAt: '', projectId: 'test-project',
+          identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
+          workdir: { version: 2, nodeId: 'child', workdirId: name } })
+      }
+      const all = [local, ...remotes]
+      const executor = new LocalExecutor(new ProcessManager(), 'child', [new CapabilityFilesystem(
+        remotes.map(folder => ({ workdirId: folder.id, rootPath: join(home, folder.id) })))], () => {})
+      const base = new Tools(home)
+      let cleared = 0
+      base.register(new UseProjectTool({ projectId: 'test-project', folders: {
+        list: () => all, acquireAccess: () => () => {},
+        requireAvailable: async id => { const folder = all.find(f => f.id === id); assert(folder); return folder },
+        requireExecutionAvailable: async id => { const folder = all.find(f => f.id === id); assert(folder); return folder },
+      }, switched: () => { cleared++ } }))
+      const tools = new SessionTools(base, home)
+      const state: SessionState = { projectId: 'test-project', sessionId: 'web:remote-switch', segmentIndex: 0, physicalIdVersion: 2, mode: 'session' }
+      const store = new Store(join(home, 'sessions')); await store.init()
+      await store.saveState(state.sessionId, state)
+      const bus = new Bus()
+      const targets = ['remote-a', local.id, 'remote-a', 'remote-b', local.id]
+      let step = 0
+      const provider: LLMProvider = { name: 'test', listModels: () => [], chat: async () => {
+        if (step) {
+          const saved = await store.getState(state.sessionId)
+          assert.equal(saved?.folderId, targets[step - 1])
+          assert.equal(saved?.workingContext, state.workingContext)
+          if (targets[step - 1]?.startsWith('remote-')) {
+            assert.equal(saved?.workdir?.nodeId, 'child')
+            assert.equal(saved?.workdir?.workdirId, targets[step - 1])
+          }
+        }
+        return { content: '', toolCalls: step < targets.length
+          ? [{ id: `switch-${step}`, name: 'workspace_use', arguments: { workspace: targets[step++] } }] : [] }
+      } }
+      const session = new SwitchingSession(home, state.sessionId, state, [], provider, tools, bus, store,
+        ref => ref.nodeId === 'child' ? { node: 'online', workdir: { online: true } } : folders.lookupWorkdir(ref) ?? { node: 'missing' }, executor)
+      try {
+        await session.run({ resolveToolTarget: async (id, operation) => {
+          assert.equal(operation, 'filesystem.read')
+          const folder = all.find(f => f.id === id); assert(folder?.kind === 'remote')
+          return { remoteWorkdir: { ...folder.workdir, executor }, fileChangeTarget: { ...folder.workdir, folderId: id } }
+        } })
+        assert.equal(cleared, targets.length, JSON.stringify(session.history.filter(m => m.role === 'tool')))
+        assert.equal(state.folderId, local.id)
+        assert.match(state.workingContext!, /Local policy/)
+        assert.equal((await store.getState(state.sessionId))?.workingContext, state.workingContext)
+        const snapshots = session.history.filter(isRuntimeContextEvent).map(m => JSON.stringify(m))
+        assert(snapshots.some(s => s.includes('Policy remote-a')))
+        assert(snapshots.some(s => s.includes('Policy remote-b')))
+        assert(snapshots.filter(s => s.includes('Policy remote-')).every(s => !s.includes('Default cwd:')), 'remote display paths are never used as a Main cwd')
+        for (let i = 0; i < targets.length; i++) assert.match(String(session.history.find(m => m.tool_call_id === `switch-${i}`)?.content), /Working context committed/)
+      } finally { store.close?.(); bus.stopAll() }
+    })
+  })
+}
+
+test('remote preparation fails closed on denied, oversized, changed or aborted targets; missing AGENTS is allowed', async () => {
+  await withTempWorkspace(async home => {
+    const folder: FolderRecord = { id: 'remote', name: 'remote', path: 'Z:\\OPAQUE', kind: 'remote', createdAt: '', projectId: 'p',
+      identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] }, workdir: { version: 2, nodeId: 'child', workdirId: 'repo' } }
+    let mode = 'missing', commits = 0, checks = 0
+    const controller = new AbortController()
+    const executor = new LocalExecutor(new ProcessManager(), 'child', [new CapabilityFilesystem([{ workdirId: 'repo', rootPath: home }])], () => {
+      if (mode === 'denied') throw new Error('Denied fixture')
+    })
+    const tool = new UseProjectTool({ projectId: 'p', folders: { list: () => [folder], acquireAccess: () => () => {},
+      requireExecutionAvailable: async () => folder,
+      requireAvailable: async () => { checks++; if (mode === 'changed' && checks > 1) return { ...folder, workdir: { ...folder.workdir, workdirId: 'other' } }; return folder },
+    } })
+    const ctx = { projectId: 'p', sessionId: 'web:fixture', toolCallName: 'workspace_use', signal: controller.signal,
+      resolveToolTarget: async () => {
+        if (mode === 'aborted') controller.abort()
+        return { remoteWorkdir: { ...folder.workdir, executor }, fileChangeTarget: { ...folder.workdir } }
+      }, switchProjectFolder: async () => { commits++; return 'committed' },
+    } as unknown as ExecutionContext
+    assert.equal(await tool.execute({ workspace: folder.id }, ctx), 'committed')
+    assert.equal(commits, 1)
+    mode = 'denied'; await assert.rejects(tool.execute({ workspace: folder.id }, ctx), /Denied fixture/)
+    mode = 'oversized'; await writeFile(join(home, 'AGENTS.md'), 'x'.repeat(128001))
+    await assert.rejects(tool.execute({ workspace: folder.id }, ctx), /size limit/)
+    await writeFile(join(home, 'AGENTS.md'), 'Remote policy')
+    mode = 'directory'; await rm(join(home, 'AGENTS.md')); await mkdir(join(home, 'AGENTS.md'))
+    await assert.rejects(tool.execute({ workspace: folder.id }, ctx), /regular file/)
+    await rm(join(home, 'AGENTS.md'), { recursive: true }); await writeFile(join(home, 'AGENTS.md'), 'Remote policy')
+    mode = 'changed'; checks = 0
+    await assert.rejects(tool.execute({ workspace: folder.id }, ctx), /target changed/)
+    mode = 'aborted'; await assert.rejects(tool.execute({ workspace: folder.id }, ctx))
+    assert.equal(commits, 1)
+  })
+})
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: legacy pending switch dispatches privately and preserves historical names`, async () => {
+    await withTempWorkspace(async home => {
+      const folders = new FolderRegistry(home); await folders.init()
+      await mkdir(join(home, 'target'))
+      const target = await folders.register(join(home, 'target'))
+      const store = new Store(join(home, 'sessions')); await store.init()
+      const bus = new Bus()
+      try {
+        const state: SessionState = { projectId: 'test-project', sessionId: 'web:legacy-switch', segmentIndex: 0, physicalIdVersion: 2, mode: 'session' }
+        await store.saveState(state.sessionId, state)
+        const base = new Tools(home)
+        base.register(new UseProjectTool({ projectId: 'test-project', folders }))
+        const tools = new SessionTools(base, home)
+        assert.equal(tools.get('use_project'), undefined)
+        assert.equal(tools.get('workspace_use')?.name, 'workspace_use')
+        assert.deepEqual(tools.getDefinitions().map(tool => tool.function.name), ['workspace_use'])
+        const history: ChatMessage[] = [
+          { role: 'system', content: 'Policy' },
+          { role: 'assistant', content: '', tool_calls: [{ id: 'legacy', type: 'function', function: { name: 'use_project', arguments: JSON.stringify({ folder: target.id }) } }] },
+        ]
+        const session = new SwitchingSession(home, state.sessionId, state, history,
+          { name: 'recovery', listModels: () => [], chat: async () => ({ content: 'Recovered', toolCalls: [] }) },
+          tools, bus, store, ref => folders.lookupWorkdir(ref) ?? { node: 'missing' })
+        await store.appendMessages(session.physicalSessionId, history.map(message => ({ ...message, timestamp: new Date().toISOString() })))
+        await session.run()
+        assert.equal(state.folderId, target.id)
+        assert.equal(session.history.find(m => m.tool_calls)?.tool_calls?.[0]?.function.name, 'use_project')
+        const result = session.history.find(m => m.tool_call_id === 'legacy')!
+        assert.equal(result.name, 'use_project')
+        assert.match(result.content as string, /Working context committed/)
+        const saved = await Array.fromAsync(store.readSessionLog(session.physicalSessionId))
+        assert.match(JSON.stringify(saved), /"name":"use_project"/)
+      } finally { store.close?.(); bus.stopAll() }
+    })
+  })
+}

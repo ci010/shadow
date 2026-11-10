@@ -1,3 +1,4 @@
+import { deepseekAccountAuth } from './deepseek-account-auth.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { RuntimeDiagnosticLog, ReadinessResult } from '../runtime/diagnostic-log.ts'
@@ -24,7 +25,7 @@ export interface ProviderSetupStatus {
   type?: string
   name?: string
   model: string
-  authMode: 'api-key' | 'copilot' | 'none'
+  authMode: 'api-key' | 'copilot' | 'deepseek-account' | 'none'
   ready: boolean
   reason?: string
   baseUrl?: string
@@ -36,7 +37,7 @@ export interface ConfiguredProvider {
   provider: string
   type?: string
   name?: string
-  authMode: 'api-key' | 'copilot' | 'none'
+  authMode: 'api-key' | 'copilot' | 'deepseek-account' | 'none'
   hasApiKey: boolean
   selected: boolean
   baseUrl?: string
@@ -104,6 +105,8 @@ interface Flow {
 
 interface SetupOptions {
   instanceId?: string
+  accountHome?: string
+  accountAuth?: (home: string, id: string) => ReturnType<typeof deepseekAccountAuth>
   diagnostics?: RuntimeDiagnosticLog
   getConfig: () => Config
   store: ConfigStore
@@ -188,6 +191,10 @@ export class ProviderSetup {
     for (const child of this.children.values()) child.invalidate()
   }
 
+  private accountAuth(id: string) {
+    return (this.options.accountAuth ?? deepseekAccountAuth)(this.options.accountHome ?? this.options.getConfig().agent.workspace, id)
+  }
+
   configured(): ConfiguredProvider[] {
     const config = this.options.getConfig()
     const spec = parseModelSpec(config.agent.model)
@@ -204,7 +211,7 @@ export class ProviderSetup {
       const auth = isCopilotProviderType(type) ? copilotAuthForInstance(config, provider, this.rootAuth) : undefined
       const cachedCopilot = auth && (auth.hasAccessToken() || auth.hasValidApiKey())
       const settings = resolveProviderSettings(config, provider)
-      const explicit = entry && (entry.type || isCopilotProviderType(type) || entry.apiKey?.trim() ||
+      const explicit = entry && (entry.type || type === 'deepseek-account' || isCopilotProviderType(type) || entry.apiKey?.trim() ||
         entry.baseUrl?.trim() || entry.quickModel?.trim() ||
         Object.keys(entry.modelContextWindows ?? {}).length > 0)
       if (!explicit && !settings.apiKey.trim() && !(isCopilotProviderType(type) && cachedCopilot)) continue
@@ -230,6 +237,7 @@ export class ProviderSetup {
       provider: selectedId, type: 'copilot-v1', model: config.agent.model,
       authMode: 'api-key', hasApiKey: false, ready: false, reason: 'retired_copilot',
     }
+    if (providerType(config, selectedId) === 'deepseek-account') return this.check(config)
     const auth = copilotAuthForInstance(config, isCopilotProviderType(providerType(config, selectedId)) ? selectedId : 'copilot', this.rootAuth)
     if (!refresh && this.readiness?.revision === auth.getRevision() && this.readiness?.host === auth.getHost() && this.readiness.config === config && this.readiness.until > this.now()) return this.readiness.value
     const value = this.check(config, this.shutdown.signal, refresh)
@@ -250,6 +258,10 @@ export class ProviderSetup {
       ready: false,
       baseUrl: safeBaseUrl(settings.baseUrl),
       hasApiKey: !!settings.apiKey,
+    }
+    if (settings.authMode === 'deepseek-account') {
+      const ready = this.accountAuth(provider).ready()
+      return { ...status, ready, reason: ready ? undefined : 'missing_credentials' }
     }
     if (settings.authMode === 'copilot') {
       status.host = auth.getHost()
@@ -296,6 +308,7 @@ export class ProviderSetup {
   }
 
   async save(input: SetupInput, signal?: AbortSignal): Promise<ProviderSetupStatus> {
+    if ((input.type ?? providerType(this.options.getConfig(), input.provider)) === 'deepseek-account' && (input.apiKey || input.baseUrl)) throw new Error('Account provider endpoints and authentication are fixed')
     this.cancelActive()
     const raw = changeSelection(await this.options.store.read(), input)
     const candidate = ConfigSchema.parse(raw)
@@ -504,6 +517,8 @@ export class ProviderSetup {
   }
 
   async dispose(): Promise<void> {
+    const config = this.options.getConfig()
+    for (const [id] of Object.entries(config.providers)) if (providerType(config, id) === 'deepseek-account') this.accountAuth(id).cancel()
     await Promise.all([...this.children.values()].map(child => child.dispose()))
     clearInterval(this.cleanupTimer)
     this.shutdown.abort()
@@ -513,6 +528,11 @@ export class ProviderSetup {
 
   plugin(): GatewayPlugin {
     return (app) => {
+      const account = (id: string | undefined) => {
+        const config = this.options.getConfig()
+        if (!id || !config.providers[id] || providerType(config, id) !== 'deepseek-account') throw new Error('Unknown DeepSeek Account instance')
+        return this.accountAuth(id)
+      }
       app.use('/api/provider/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
       app.use('/api/auth/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
       app.post('/api/provider/instances', async (c) => {
@@ -539,6 +559,28 @@ export class ProviderSetup {
         try { return c.json(await this.save(input.data, c.req.raw.signal)) } catch {
           return c.json({ error: 'Provider settings could not be saved or activated.' }, 500)
         }
+      })
+      app.post('/api/deepseek-account/login', async (c) => {
+        c.header('Cache-Control', 'no-store')
+        try { return c.json(await account(c.req.query('provider')).start()) }
+        catch { return c.json({ error: 'DeepSeek Account sign-in could not be initialized. Check service availability and third-party access.' }, 409) }
+      })
+      app.get('/api/deepseek-account/login/:id', (c) => {
+        c.header('Cache-Control', 'no-store')
+        try {
+          const status = account(c.req.query('provider')).status(c.req.param('id'))
+          return status ? c.json(status) : c.json({ error: 'Unknown account login' }, 404)
+        } catch { return c.json({ error: 'Unknown account provider' }, 400) }
+      })
+      app.delete('/api/deepseek-account/login/:id', (c) => {
+        c.header('Cache-Control', 'no-store')
+        try { return c.json(account(c.req.query('provider')).cancel(c.req.param('id')) ?? { state: 'cancelled' }) }
+        catch { return c.json({ error: 'Unknown account provider' }, 400) }
+      })
+      app.post('/api/deepseek-account/logout', async (c) => {
+        c.header('Cache-Control', 'no-store')
+        try { await account(c.req.query('provider')).logout(); this.invalidate(); return c.json({ authenticated: false }) }
+        catch { return c.json({ error: 'DeepSeek Account credentials could not be removed' }, 500) }
       })
       app.get('/api/auth', async (c) => {
         c.header('Cache-Control', 'no-store')

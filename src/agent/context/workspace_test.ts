@@ -61,6 +61,12 @@ test('system workspace context is stable across selection, locality and inherite
     assert.match(prompt, /Never remove user files or overwrite an existing destination without permission/)
     assert.match(prompt, /Verify the final file was saved at its durable destination before claiming delivery/)
     assert.match(prompt, /do not silently use session storage as final delivery/)
+    assert.match(prompt, /Deliver the requested outcome, not incidental working files/)
+    assert.match(prompt, /Create local deliverables only when the requested outcome requires them/)
+    assert.match(prompt, /Keep intermediate files in session data and promote only requested final files/)
+    assert.match(prompt, /persistent installations and dependencies in their normal platform locations with authorized scope/)
+    assert.match(prompt, /do not relocate existing user resources or silently elevate privileges/)
+    assert.doesNotMatch(prompt, /A GitHub PR|temporary clones|portable executable/)
   }
 })
 
@@ -105,11 +111,11 @@ test('ordinary workspace exposes discoverable Project resources', async () => {
 
 test('current session metadata mount is discoverable in the injected workspace prompt', async () => {
   const fs = new VirtualFs()
-  fs.mount('v:session', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', () => '{}')
+  fs.mount('v:sessions', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', () => '{}')
   const provider = workspaceProvider(resolve('.test-data', 'self-metadata-prompt'), fs)
   const prompt = (await provider.getPromptSection(context()))!
   assert.match(prompt, /Virtual resources:/)
-  assert.match(prompt, /v:session\/.*self\.json: read\/write current session/)
+  assert.match(prompt, /v:sessions\/.*self\.json: read\/write current session/)
   assert.match(prompt, /identity is runtime-bound; task metadata is parent-owned/)
   assert.doesNotMatch(prompt, /update_self/)
 })

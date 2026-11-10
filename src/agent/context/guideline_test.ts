@@ -210,7 +210,7 @@ test('current session JSON guidance is injected into ordinary and task system pr
   builder.register(executionContractProvider())
   builder.register(guidelineProvider())
   const ordinary = await builder.buildSystemPrompt(makeContext(general, false))
-  assert.match(ordinary, /v:session\/self\.json/)
+  assert.match(ordinary, /v:sessions\/self\.json/)
   assert.match(ordinary, /After understanding the first user request/)
   assert.match(ordinary, /not continual polishing/)
   assert.match(ordinary, /completed:true.*completed:false/)

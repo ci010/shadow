@@ -25,6 +25,7 @@ export interface ProjectRuntimeDependencies {
   catalog: ProjectCatalog
   configStore: ProjectConfigStore
   mainCluster: MainCluster
+  accountHome?: string
   copilotAuth: CopilotAuthenticator
   authorize: (request: Request) => boolean | Promise<boolean>
   realtimeHub?: RealtimeHub
