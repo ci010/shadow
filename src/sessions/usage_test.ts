@@ -73,6 +73,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         fails = false
         await provider.chat([], [], { model: 'test' })
         assert.deepEqual(await readTokenUsage(store, state), { usage: null, incomplete: true })
+        const records = (await Array.fromAsync(store.readSessionLog(physicalSessionId(state)))).filter(record => record.type === 'model_usage')
+        assert.deepEqual(records.map(record => record.model), ['test', 'test'])
         const save = t.mock.method(store, 'appendRawEvents', async () => { throw new Error('Synthetic persistence failure') })
         try { await assert.rejects(provider.chat([], [], { model: 'test' }), /persistence failure/) }
         finally { save.mock.restore() }

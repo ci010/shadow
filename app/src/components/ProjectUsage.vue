@@ -6,14 +6,24 @@
     <template v-if="data">
       <div class="summary-toolbar"><h3>{{ t('Usage summary') }}</h3><div class="period-switch" role="group" :aria-label="t('Summary period')"><button class="btn btn-sm" v-for="period in periods" :key="period.key" type="button" :aria-pressed="selectedPeriod === period.key" @click="selectedPeriod = period.key">{{ t(period.label) }}</button></div></div>
       <div class="summary-grid">
-        <article class="metric-card"><h3>{{ t('Tokens') }}</h3><div class="metric-value" :title="tokens(selectedUsage)">{{ compactNumber(selectedUsage.tokens) }}</div><small v-if="selectedUsage.unknownTokenCalls" class="partial">{{ t('Partial data') }}</small></article>
-        <article class="metric-card"><h3>{{ t('Estimated cost') }}</h3><div v-if="summaryCosts.length" class="cost-values"><div v-for="cost in summaryCosts" :key="cost.currency" class="metric-value" :title="exactCost(cost)">{{ compactCost(cost.amount) }} <span class="unit">{{ cost.currency }}</span></div></div><div v-else class="metric-value unavailable">{{ t('Unavailable') }}</div><small v-if="selectedUsage.unknownCostCalls" class="partial">{{ t('Partial data') }}</small></article>
-        <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div><small v-if="selectedUsage.unknownDurationCalls" class="partial">{{ t('Partial data') }}</small></article>
+        <article class="metric-card"><h3>{{ t('Tokens') }}</h3><div class="metric-value" :title="tokens(selectedUsage)">{{ compactNumber(selectedUsage.tokens) }}</div></article>
+        <article class="metric-card"><h3>{{ t('Estimated cost') }}</h3><div v-if="summaryCosts.length" class="cost-values"><div v-for="cost in summaryCosts" :key="cost.currency" class="metric-value" :title="exactCost(cost)">{{ compactCost(cost.amount) }} <span class="unit">{{ cost.currency }}</span></div></div><div v-else class="metric-value unavailable">{{ t('Unavailable') }}</div></article>
+        <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div></article>
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
+      </div>
+      <div class="activity-grid">
+        <section v-for="kind in activityKinds" :key="kind.key" class="activity-section" :aria-label="t(kind.title)">
+          <h3>{{ t(kind.title) }}</h3>
+          <p>{{ t(kind.description) }}</p>
+          <table v-if="selectedActivity[kind.key].length">
+            <thead><tr><th scope="col">{{ t(kind.label) }}</th><th scope="col">{{ t('Calls') }}</th></tr></thead>
+            <tbody><tr v-for="entry in selectedActivity[kind.key]" :key="entry.name"><th scope="row" class="activity-name">{{ entry.name }}</th><td>{{ formatNumber(entry.calls) }}</td></tr></tbody>
+          </table>
+          <p v-else>{{ t('No recorded calls in this period.') }}</p>
+        </section>
       </div>
       <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
       <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
-      <p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p>
       <div class="chart-toolbar">
         <div><h3>{{ t('Usage trends') }}</h3><p>{{ t('Daily trends have their own date range; summary selection applies only above.') }}</p></div>
         <div class="window-switch" :aria-label="t('Chart window')" role="group"><button class="btn btn-sm" v-for="days in [7, 30]" :key="days" type="button" :aria-pressed="windowDays === days" @click="windowDays = days">{{ t('Last {days} days', { days }) }}</button></div>
@@ -21,24 +31,21 @@
       <p class="trend-range">{{ points[0]?.date }} — {{ points.at(-1)?.date }} · UTC</p>
       <div class="charts">
         <article class="chart-card token-card">
-          <h3>{{ t('Daily tokens') }}</h3><p>{{ t('Daily known tokens; dashed bars are partial, gaps are unavailable.') }}</p>
+          <h3>{{ t('Daily tokens') }}</h3><p>{{ t('Daily known tokens.') }}</p>
           <p v-if="!points.some(p => p.tokens !== null)" class="empty-chart">{{ t('No known tokens in this window.') }}</p>
           <UsageTrendChart v-else :title="t('Daily tokens')" kind="bar" :points="tokenSeries" :format-axis="compactNumber" :min-interval="1" />
-          <p class="chart-stat">{{ t('{count} of {days} days available', { count: points.filter(p => p.tokens !== null).length, days: windowDays }) }}</p>
         </article>
         <article class="chart-card cost-card">
           <div class="cost-heading"><h3>{{ t('Daily estimated cost') }}</h3><label v-if="hasCny">{{ t('Cost unit') }} <UiSelect :value="costUnit" :aria-label="t('Cost unit')" @change="costChosen = true; costUnit = ($event.target as HTMLSelectElement).value as CostUnit"><option v-for="unit in costUnits" :key="unit" :value="unit">{{ unit }}</option></UiSelect></label></div>
-          <p>{{ t('Includes converted AI credits in USD; dashed bars indicate partial data.') }}</p>
+          <p>{{ t('Includes converted AI credits in USD.') }}</p>
           <p v-if="!costPoints.some(p => p.amount !== null)" class="empty-chart">{{ t('No known cost in this window for this unit.') }}</p>
           <UsageTrendChart v-else :title="`${t('Daily estimated cost')} (${costUnit})`" kind="bar" :points="costSeries" :format-axis="compactCost" />
-          <p class="chart-stat">{{ t('{count} of {days} days available', { count: costPoints.filter(p => p.amount !== null).length, days: windowDays }) }} · {{ costUnit }}</p>
 
         </article>
         <article class="chart-card">
           <h3>{{ t('Daily provider time') }}</h3><p>{{ t('Cumulative call time, not work duration; gaps are not interpolated.') }}</p>
           <p v-if="!points.some(p => p.seconds !== null)" class="empty-chart">{{ t('No known call time in this window.') }}</p>
           <UsageTrendChart v-else :title="t('Daily provider time')" kind="line" :points="timeSeries" :format-axis="timeAxis" />
-          <p class="chart-stat">{{ t('{count} of {days} days available', { count: points.filter(p => p.seconds !== null).length, days: windowDays }) }}</p>
         </article>
       </div>
 
@@ -56,14 +63,18 @@
       </div>
       <div v-if="dailyPage" class="daily-table" tabindex="0" :aria-label="t('Daily usage (UTC)')">
         <table><thead><tr><th scope="col">{{ t('Date') }}</th><th scope="col">{{ t('Tokens') }}</th><th scope="col">{{ t('Estimated cost') }}</th><th scope="col">{{ t('Provider time') }}</th><th scope="col">{{ t('Provider calls') }}</th></tr></thead>
-          <tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th scope="row">{{ day.date }}</th><td :title="tokens(day.usage)"><span class="trend" aria-hidden="true" :style="{ width: `${(day.usage.tokens ?? 0) / maximum * 100}%` }" /><span class="value">{{ compactNumber(day.usage.tokens) }} <small v-if="day.usage.unknownTokenCalls" class="partial">{{ t('Partial data') }}</small></span></td><td :title="costs(day.usage)"><div v-for="cost in displayCosts(day.usage.costs)" :key="cost.currency">{{ compactCost(cost.amount) }} <span class="unit">{{ cost.currency }}</span></div><span v-if="!displayCosts(day.usage.costs).length">{{ t('Unavailable') }}</span><small v-if="day.usage.unknownCostCalls" class="partial">{{ t('Partial data') }}</small></td><td :title="duration(day.usage)">{{ compactDuration(day.usage.durationMs) }} <small v-if="day.usage.unknownDurationCalls" class="partial">{{ t('Partial data') }}</small></td><td :title="formatNumber(day.usage.calls)">{{ compactNumber(day.usage.calls) }}</td></tr></tbody>
+          <tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th scope="row">{{ day.date }}</th><td :title="tokens(day.usage)"><span class="trend" aria-hidden="true" :style="{ width: `${(day.usage.tokens ?? 0) / maximum * 100}%` }" /><span class="value">{{ compactNumber(day.usage.tokens) }} </span></td><td :title="costs(day.usage)"><div v-for="cost in displayCosts(day.usage.costs)" :key="cost.currency">{{ compactCost(cost.amount) }} <span class="unit">{{ cost.currency }}</span></div><span v-if="!displayCosts(day.usage.costs).length">{{ t('Unavailable') }}</span></td><td :title="duration(day.usage)">{{ compactDuration(day.usage.durationMs) }} </td><td :title="formatNumber(day.usage.calls)">{{ compactNumber(day.usage.calls) }}</td></tr></tbody>
         </table>
       </div>
-      <details class="completeness"><summary>{{ t('Data completeness') }}</summary><p>{{ t('Selected summary period: {period}', { period: t(periods.find(p => p.key === selectedPeriod)!.label) }) }}</p><ul><li>{{ t('Missing token telemetry: {count} calls', { count: selectedUsage.unknownTokenCalls }) }}</li><li>{{ t('Missing cost telemetry: {count} calls', { count: selectedUsage.unknownCostCalls }) }}</li><li>{{ t('Missing duration telemetry: {count} calls', { count: selectedUsage.unknownDurationCalls }) }}</li></ul><p>{{ t('Coverage: {untracked} sessions without complete tracking; {undated} undated calls excluded. Scan capped: {capped}. Totals may be lower bounds.', { untracked: data.untrackedSessions, undated: data.undatedCalls, capped: data.scanLimitReached ? t('Yes') : t('No') }) }}</p><table class="coverage-table"><thead><tr><th>{{ t('Date') }}</th><th>{{ t('Missing tokens / cost / duration') }}</th></tr></thead><tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th>{{ day.date }}</th><td>{{ day.usage.unknownTokenCalls }} / {{ day.usage.unknownCostCalls }} / {{ day.usage.unknownDurationCalls }}</td></tr></tbody></table></details>
+      <details class="completeness"><summary>{{ t('Data completeness') }}</summary>
+        <p>{{ t('Daily tokens') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.tokens !== null).length, days: windowDays }) }}</p>
+        <p>{{ t('Daily estimated cost') }} · {{ t('{count} of {days} days available', { count: costPoints.filter(p => p.amount !== null).length, days: windowDays }) }} · {{ costUnit }}</p>
+        <p>{{ t('Daily provider time') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.seconds !== null).length, days: windowDays }) }}</p><p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p><p>{{ t('Selected summary period: {period}', { period: t(periods.find(p => p.key === selectedPeriod)!.label) }) }}</p><ul><li>{{ t('Missing token telemetry: {count} calls', { count: selectedUsage.unknownTokenCalls }) }}</li><li>{{ t('Missing cost telemetry: {count} calls', { count: selectedUsage.unknownCostCalls }) }}</li><li>{{ t('Missing duration telemetry: {count} calls', { count: selectedUsage.unknownDurationCalls }) }}</li></ul><p>{{ t('Coverage: {untracked} sessions without complete tracking; {undated} undated calls excluded. Scan capped: {capped}. Totals may be lower bounds.', { untracked: data.untrackedSessions, undated: data.undatedCalls, capped: data.scanLimitReached ? t('Yes') : t('No') }) }}</p><table class="coverage-table"><thead><tr><th>{{ t('Date') }}</th><th>{{ t('Missing tokens / cost / duration') }}</th></tr></thead><tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th>{{ day.date }}</th><td>{{ day.usage.unknownTokenCalls }} / {{ day.usage.unknownCostCalls }} / {{ day.usage.unknownDurationCalls }}</td></tr></tbody></table></details>
       <details class="methodology"><summary>{{ t('How usage is measured') }}</summary>
       <p>{{ t('As of {time}. Calendar dates use UTC; past 7 days includes today and the previous 6 days.', { time: formatDateTime(data.asOf, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }) }) }}</p>
       <p>{{ t('Costs are provider/model estimates, not invoices. AI credits are converted to USD at 100 credits = 1 USD and added to USD estimates. CNY remains separate; original records are unchanged.') }}</p>
       <p>{{ t('Time is summed provider-call elapsed time, including failed calls, excluding tools and user waiting. Concurrent calls overlap; this is not wall-clock work time. Older calls may have no duration.') }}</p>
+      <p>{{ t('Model counts require recorded model names; older calls without names are excluded. Tool counts use recorded results, including errors; unfinished calls without results are excluded.') }}</p>
       <p class="notice">{{ t('Values are known subtotals. Missing telemetry is unavailable, not zero; partial marks calls with missing data.') }}</p>
 
       </details>
@@ -85,6 +96,11 @@ const data = shallowRef<ProjectUsage>(), loading = ref(false), error = ref(false
 const periods = [{ key: 'today', label: 'Today' }, { key: 'past7Days', label: 'Past 7 days' }, { key: 'month', label: 'This month' }, { key: 'total', label: 'All time' }] as const
 const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
+const selectedActivity = computed(() => data.value!.activity[selectedPeriod.value])
+const activityKinds = [
+  { key: 'models', title: 'Model usage', label: 'Model', description: 'LLM calls by model in the selected summary period.' },
+  { key: 'tools', title: 'Tool usage', label: 'Tool', description: 'Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.' },
+] as const
 const summaryCosts = computed(() => displayCosts(selectedUsage.value.costs))
 const hasMissing = computed(() => !!data.value && (data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0 || [data.value.total, ...data.value.daily.map(d => d.usage)].some(u => u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
 function compactNumber(value: number | null) { return value === null ? t('Unavailable') : compactUsageNumber(value, formatNumber) }
@@ -111,8 +127,7 @@ watch(points, () => {
 const costPoints = computed(() => costWindow(points.value, costUnit.value))
 function costLabel(point: ReturnType<typeof costWindow>[number]) {
   const value = point.amount === null ? t('Unavailable') : `${formatNumber(point.amount, { maximumSignificantDigits: 15 })} ${costUnit.value}`
-  const missing = points.value.find(p => p.date === point.date)?.usage?.unknownCostCalls ?? 0
-  return `${point.date}: ${partial(value, missing)}`
+  return `${point.date}: ${value}`
 }
 const tokenSeries = computed<UsageChartDatum[]>(() => points.value.map(p => ({ date: p.date, value: p.tokens, label: pointLabel(p, 'tokens'), partial: !!p.usage?.unknownTokenCalls })))
 const timeSeries = computed<UsageChartDatum[]>(() => points.value.map(p => ({ date: p.date, value: p.seconds, label: pointLabel(p, 'seconds'), partial: !!p.usage?.unknownDurationCalls })))
@@ -122,13 +137,12 @@ function pointLabel(point: UsagePoint, metric: 'tokens' | 'seconds') {
   return `${point.date}: ${point.usage ? metric === 'tokens' ? tokens(point.usage) : duration(point.usage) : t('Unavailable')}`
 }
 const maximum = computed(() => dailyPage.value?.daily.reduce((max, day) => Math.max(max, day.usage.tokens ?? 0), 1) ?? 1)
-function partial(value: string, missing: number) { return missing ? t('{value} (partial; {count} calls missing)', { value, count: missing }) : value }
-function tokens(usage: ProjectUsageMetrics) { return partial(usage.tokens === null ? t('Unavailable') : formatNumber(usage.tokens), usage.unknownTokenCalls) }
+function tokens(usage: ProjectUsageMetrics) { return usage.tokens === null ? t('Unavailable') : formatNumber(usage.tokens) }
 function costs(usage: ProjectUsageMetrics) {
-  return partial(usage.costs.length ? displayCosts(usage.costs).map(exactCost).join(' · ') : t('Unavailable'), usage.unknownCostCalls)
+  return usage.costs.length ? displayCosts(usage.costs).map(exactCost).join(' · ') : t('Unavailable')
 }
 function duration(usage: ProjectUsageMetrics) {
-  return partial(usage.durationMs === null ? t('Unavailable') : t('{seconds} s', { seconds: formatNumber(usage.durationMs / 1000, { maximumFractionDigits: 3 }) }), usage.unknownDurationCalls)
+  return usage.durationMs === null ? t('Unavailable') : t('{seconds} s', { seconds: formatNumber(usage.durationMs / 1000, { maximumFractionDigits: 3 }) })
 }
 const dailyPage = shallowRef<ProjectUsagePage>()
 const pageLoading = ref(false), pageError = ref(false), requestedPage = ref(1)
@@ -198,6 +212,12 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .unavailable { color: var(--c-text-secondary); font-size: 20px; font-weight: 500; }
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
+.activity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 24px 0; }
+.activity-section { min-width: 0; }
+.activity-section table { table-layout: fixed; }
+.activity-section th, .activity-section td { min-width: 0; }
+.activity-section th:first-child { width: 75%; }
+.activity-name { overflow-wrap: anywhere; }
 .conversion-note { margin-top: 12px; }
 .scope-brief { margin: 4px 0; }
 .chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }
@@ -230,7 +250,7 @@ details li { line-height: 1.8; color: var(--c-text-secondary); }
 @container usage (max-width: 850px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 24px; }
   .metric-card:nth-child(3) { border-left: 0; }
-  .charts { grid-template-columns: minmax(0, 1fr); }
+  .charts, .activity-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @container usage (max-width: 380px) {
   .metric-card { padding: 0 12px; }

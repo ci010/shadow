@@ -77,7 +77,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>)
 
 const metrics = { calls: 2, tokens: 1234, unknownTokenCalls: 1, costs: [{ currency: 'USD', amount: 0.25 }, { currency: 'CNY', amount: 1 }], unknownCostCalls: 1, durationMs: 1500, unknownDurationCalls: 1 }
 function response(projectId = 'p'): ProjectUsage {
-  return { projectId, asOf: '2026-10-01T12:00:00Z', timeZone: 'UTC', total: metrics, today: metrics, past7Days: metrics, month: metrics, daily: [{ date: '2026-10-01', usage: metrics }], scanLimitReached: true, untrackedSessions: 1, undatedCalls: 2 }
+  return { projectId, asOf: '2026-10-01T12:00:00Z', timeZone: 'UTC', activity: { total: { models: [], tools: [] }, today: { models: [], tools: [] }, past7Days: { models: [], tools: [] }, month: { models: [], tools: [] } }, total: metrics, today: metrics, past7Days: metrics, month: metrics, daily: [{ date: '2026-10-01', usage: metrics }], scanLimitReached: true, untrackedSessions: 1, undatedCalls: 2 }
 }
 
 test('Project usage renders all windows, estimates, partial durations and UTC daily details', async t => {
@@ -87,9 +87,9 @@ test('Project usage renders all windows, estimates, partial durations and UTC da
   await settle()
   assert.equal(requested, 'http://fixture/projects/p/api/project/usage')
   assert.match(view.text(), /Today.*Past 7 days.*This month.*All time/)
-  assert.ok(view.nodes().some(n => n.props.title === '1,234 (partial; 1 calls missing)'))
+  assert.ok(view.nodes().some(n => n.props.title === '1,234'))
   assert.match(view.text(), /0.25\s+USD\s+1.00\s+CNY/)
-  assert.ok(view.nodes().some(n => n.props.title === '1.5 s (partial; 1 calls missing)'))
+  assert.ok(view.nodes().some(n => n.props.title === '1.5 s'))
   assert.match(view.text(), /2026-10-01/)
   assert.match(view.text(), /Calendar dates use UTC/)
   assert.match(view.text(), /not invoices/)
@@ -124,7 +124,7 @@ test('Project switching clears old data and late responses cannot leak across Pr
   finish?.(Response.json({ ...response('p'), total: { ...metrics, tokens: 99999 } }))
   await settle()
   assert.doesNotMatch(view.text(), /99,999/)
-  assert.ok(view.nodes().some(n => n.props.title === '1,234 (partial; 1 calls missing)'))
+  assert.ok(view.nodes().some(n => n.props.title === '1,234'))
   view.state.active = false; await settle()
 })
 
@@ -155,7 +155,7 @@ test('three chronological charts expose known values, keyboard targets and 7/30 
   assert.equal(typeof chart.props.formatAxis, 'function')
   assert.equal(points.length, 7)
   assert.ok(points.slice(0, -1).every(p => p.value === null && /Unavailable/.test(p.label)))
-  assert.deepEqual(points.at(-1), { date: '2026-10-01', value: 1234, label: '2026-10-01: 1,234 (partial; 1 calls missing)', partial: true })
+  assert.deepEqual(points.at(-1), { date: '2026-10-01', value: 1234, label: '2026-10-01: 1,234', partial: true })
   assert.doesNotMatch(view.text(), /Token share by day/)
   const change = view.nodes().find(n => n.tag === 'button' && n.text === 'Last 30 days')!
   ;(change.props.onClick as () => void)(); await settle()
@@ -198,12 +198,12 @@ test('cost chart switches units without mixing totals and preserves partial/abse
   await settle()
   const bars = () => (view.nodes().filter(n => n.tag === 'usage-trend-chart')[1]!.props.points as Array<{ value: number | null; label: string; partial: boolean }>).filter(p => p.value !== null)
   assert.equal(bars().length, 3)
-  assert.match(String(bars().at(-1)?.label), /6 USD \(partial/)
+  assert.match(String(bars().at(-1)?.label), /6 USD/)
   const select = view.nodes().find(n => n.tag === 'select')!
   ;(select.props.onChange as (event: unknown) => void)({ target: { value: 'CNY' } }); await settle()
   assert.equal(bars().length, 2)
   assert.match(String(bars()[0].label), /2026-09-30: 0 CNY$/)
-  assert.match(String(bars()[1].label), /30 CNY \(partial/)
+  assert.match(String(bars()[1].label), /30 CNY/)
   assert.ok(bars().every(n => !String(n.label).includes('USD')))
   assert.ok(select.children.every(n => n.props.value !== 'AI_CREDITS'))
   const change = view.nodes().find(n => n.tag === 'button' && n.text === 'Last 30 days')!
@@ -241,7 +241,7 @@ test('four KPI cards follow summary selection independently of the trend window;
   assert.match(flatten(details[0]), /Scan capped: Yes/)
   assert.ok(cards().every(n => !flatten(n).includes('calls missing')))
   assert.ok(view.nodes().some(n => n.props.title === '156,300,000 (partial; 1 calls missing)') === false) // titles follow the selected period
-  assert.ok(view.nodes().some(n => n.props.title === '42,000,000 (partial; 1 calls missing)'))
+  assert.ok(view.nodes().some(n => n.props.title === '42,000,000'))
   for (const [label, count] of [['Today', '1.2K'], ['All time', '1.2K'], ['Past 7 days', '156.3M']] as const) {
     const button = view.nodes().find(n => n.tag === 'button' && n.text === label)!
     ;(button.props.onClick as () => void)(); await settle()
@@ -391,17 +391,39 @@ test('credit-only and mixed USD estimates use one conversion across summary, cha
   await settle()
   assert.match(view.text(), /484.02\s+USD/)
   assert.equal(view.nodes().filter(n => n.tag === 'select').length, 0) // no irrelevant unit selector for USD/credits
-  assert.match(String(costBars()[0].label), /484.02 USD \(partial; 1 calls missing\)/)
+  assert.match(String(costBars()[0].label), /484.02 USD/)
   assert.equal(costBars()[0].partial, true)
   assert.match(view.text(), /100 AI credits = 1 USD/)
   assert.doesNotMatch(view.text(), /AI_CREDITS|not converted or added/)
   ;(view.nodes().find(n => n.tag === 'button' && n.text === 'Load daily history')!.props.onClick as () => void)()
   await settle()
-  assert.ok(view.nodes().some(n => n.tag === 'td' && n.props.title === '484.02 USD (partial; 1 calls missing)'))
+  assert.ok(view.nodes().some(n => n.tag === 'td' && n.props.title === '484.02 USD'))
   await view.button().click(); await settle()
   assert.match(String(costBars()[0].label), /484.02 USD/)
   converted.costs = [{ currency: 'AI_CREDITS', amount: 100 }]
   await view.button().click(); await settle()
   assert.match(view.text(), /1.00\s+USD/)
   assert.match(String(costBars()[0].label), /1 USD/)
+})
+
+
+test('model and tool counts follow the summary period; missing-data notices stay in the bottom disclosure', async t => {
+  const result = response()
+  result.activity.past7Days = { models: [{ name: 'fixture-model', calls: 17 }], tools: [{ name: 'dynamic_tool', calls: 9 }] }
+  result.activity.today = { models: [{ name: 'today-model', calls: 1 }], tools: [] }
+  t.mock.method(globalThis, 'fetch', async () => Response.json(result))
+  const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
+  await settle()
+  assert.match(view.text(), /fixture-model.*17/)
+  assert.match(view.text(), /dynamic_tool.*9/)
+  assert.equal(view.nodes().filter(n => n.tag === 'small' && n.text === 'Partial data').length, 0)
+  const notice = view.nodes().find(n => n.tag === 'p' && n.text.includes('Some usage is unavailable'))!
+  assert.equal(notice.parent?.tag, 'details')
+  assert.equal(notice.parent?.props.class, 'completeness')
+  const today = view.nodes().find(n => n.tag === 'button' && n.text === 'Today')!
+  ;(today.props.onClick as () => void)()
+  await settle()
+  assert.match(view.text(), /today-model/)
+  assert.doesNotMatch(view.text(), /fixture-model|dynamic_tool/)
+  assert.match(view.text(), /No recorded calls in this period/)
 })
