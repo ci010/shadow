@@ -13,6 +13,7 @@
     <p v-else-if="status?.reason && !status.ready && mode !== 'add' && !busy && !failedLogin && login.state !== 'succeeded'" class="notice error" role="alert">{{ providerDisplayName(status.provider) }} {{ t('is not ready.') }} {{ readinessMessage }}</p>
     <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" :aria-label="t('Authentication method')">
       <button :aria-pressed="method === 'copilot'" :disabled="busy || saving" @click="method = 'copilot'">GitHub Copilot</button>
+      <button :aria-pressed="method === 'deepseek-account'" :disabled="busy || saving" @click="method = 'deepseek-account'">DeepSeek Account</button>
       <button :aria-pressed="method === 'key'" :disabled="busy || saving" @click="method = 'key'">{{ t('API key / local provider') }}</button>
     </div>
 
@@ -58,6 +59,8 @@
       </div>
     </div>
 
+    <DeepSeekAccountSetup v-else-if="method === 'deepseek-account'" :api-base="apiBase" :provider="instanceId" :name="displayName" :editing="mode === 'edit'" :active="active" :initial-model="status?.model" @configured="$emit('configured')" @busy="accountBusy = $event" />
+
     <form v-else class="method-panel" @submit.prevent="saveProvider">
       <label>{{ t('Provider') }}
         <UiSelect v-model="provider" :disabled="saving || mode === 'edit'" @change="changeProvider">
@@ -67,7 +70,7 @@
         </UiSelect>
       </label>
       <label v-if="provider === 'custom'">{{ t('Provider name') }}
-        <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
+        <input v-model="customProvider" required pattern="[a-zA-Z][a-zA-Z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
       </label>
       <label>{{ t('Connection model') }} <input v-model="model" required :placeholder="t('Model ID from your provider')" :disabled="saving"></label>
       <label v-if="provider === 'custom'">{{ t('API base URL') }} <input v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving"></label>
@@ -87,6 +90,7 @@
 <script setup lang="ts">
 import { enterprisePrefix, enterpriseHostFromPrefix } from './copilot-host-input.ts'
 import { createUuid } from './uuid.ts'
+import DeepSeekAccountSetup from './DeepSeekAccountSetup.vue'
 import UiSelect from './components/UiSelect.vue'
 import { t, formatDateTime } from './i18n.ts'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -116,7 +120,7 @@ const lead = computed(() => props.mode === 'edit'
     ? t('Configure an API key or add a named local model endpoint.')
     : t('Sign in with GitHub Copilot, or configure an API key or local model endpoint.'))
 const availablePresets = computed(() => providerPresets)
-const method = ref(props.status?.authMode === 'copilot' && props.mode !== 'add' ? 'copilot' : 'key')
+const method = ref(props.status?.authMode === 'deepseek-account' && props.mode !== 'add' ? 'deepseek-account' : props.status?.authMode === 'copilot' && props.mode !== 'add' ? 'copilot' : 'key')
 const initialProvider = props.mode === 'add' ? availablePresets.value[0]?.id ?? 'custom'
   : props.status?.authMode === 'copilot' ? 'openai' : props.status?.type ?? props.status?.provider ?? 'openai'
 const provider = ref(props.status?.authMode === 'none' || !knownProviders.includes(initialProvider) ? 'custom' : initialProvider)
@@ -143,12 +147,14 @@ const newId = `account-${createUuid()}`
 const instanceId = computed(() => {
   if (props.mode === 'edit') return props.status!.provider
   if (props.mode === 'add') return method.value === 'copilot' ? `${newId}-copilot` : newId
+  if (method.value === 'deepseek-account') return 'deepseek-account'
   if (method.value === 'copilot') return 'copilot'
-  return provider.value === 'custom' ? customProvider.value.trim() : provider.value
+  return provider.value === 'custom' ? customProvider.value.trim().toLowerCase() : provider.value
 })
 // Follow connection choices until the user edits the name (including clearing it).
 // Existing names are always user-owned, even if they happen to match a default.
 const suggestedName = computed(() => {
+  if (method.value === 'deepseek-account') return 'DeepSeek Account'
   if (method.value === 'copilot') {
     return copilotHostType.value === 'enterprise'
       ? `GitHub Copilot (${selectedCopilotHost.value || 'GHE'})`
@@ -166,7 +172,8 @@ const displayName = computed({
 const apiKey = ref('')
 const message = ref('')
 const saving = ref(false)
-watch(saving, value => emit('saving', value), { flush: 'sync' })
+const accountBusy = ref(false)
+watch(() => saving.value || accountBusy.value, value => emit('saving', value), { flush: 'sync' })
 const copied = ref(false)
 const confirmSignOut = ref(false)
 const signedOut = ref(false)
@@ -178,7 +185,7 @@ const controller = createDeviceLoginController(client, (value) => {
   login.value = value
   if (value.state === 'succeeded') emit('configured')
 })
-const busy = computed(() => ['pending', 'starting', 'cancelling'].includes(login.value.state))
+const busy = computed(() => accountBusy.value || ['pending', 'starting', 'cancelling'].includes(login.value.state))
 const failedLogin = computed(() => ['denied', 'expired', 'error'].includes(login.value.state))
 const hasSavedKey = computed(() => props.status?.provider === instanceId.value && props.status.hasApiKey)
 const readinessMessages: Record<string, string> = {
@@ -210,12 +217,13 @@ function changeProvider() {
 }
 async function saveProvider() {
   if (!displayName.value.trim()) return
-  const name = provider.value === 'custom' ? customProvider.value.trim() : provider.value
+  // Provider types are machine identifiers; keep the user's casing in displayName.
+  const name = provider.value === 'custom' ? customProvider.value.trim().toLowerCase() : provider.value
   saving.value = true
   message.value = ''
   try {
     const result = await client.save({
-      provider: instanceId.value, type: props.status?.type ?? name,
+      provider: instanceId.value, type: props.mode === 'edit' ? props.status?.type ?? name : name,
       ...(displayName.value.trim() ? { name: displayName.value.trim() } : {}),
       model: model.value.trim(),
       ...(apiKey.value ? { apiKey: apiKey.value } : {}),
