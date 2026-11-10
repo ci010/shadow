@@ -442,3 +442,79 @@ test('existing provider names are not replaced by host defaults', async t => {
   await nextTick()
   assert.equal(view.nodes().find(node => node.tag === 'input')!.value, 'GitHub Copilot')
 })
+
+test('DeepSeek Account tab starts an isolated browser login, opens official desktop link and cancels on leave', async t => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = []
+  const opened: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    requests.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (String(input).includes('/api/provider/instances')) return Response.json({ ok: true })
+    return Response.json({ loginId: 'synthetic-login', state: 'pending', authorizeUrl: 'https://platform.deepseek.com/dsh/authorize?id=synthetic' })
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'add', status: null }, { openExternal: async (url: string) => { opened.push(url) } })
+  await view.click('DeepSeek Account')
+  assert.match(view.text(), /not a free API guarantee/)
+  assert.equal(view.nodes().some(node => node.props.type === 'password'), false)
+  await view.click('Sign in with DeepSeek Account')
+  assert.equal((requests[0]?.body as { type: string }).type, 'deepseek-account')
+  assert.equal((requests[0]?.body as { name: string }).name, 'DeepSeek Account')
+  assert.match(requests[1]!.url, /\/api\/deepseek-account\/login\?provider=account-/)
+  assert.deepEqual(opened, ['https://platform.deepseek.com/dsh/authorize?id=synthetic'])
+  assert.ok(view.nodes().some(node => node.tag === 'a' && node.props.href === opened[0]))
+  await view.click('Cancel login')
+  assert.equal(requests.at(-1)?.method, 'DELETE')
+  assert.equal(opened.length, 1)
+})
+
+test('DeepSeek Account edit keeps model and instance identity, never renders API key controls', async t => {
+  const calls: unknown[] = []
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    calls.push(JSON.parse(String(init?.body)))
+    return Response.json({ provider: 'named-account', type: 'deepseek-account', authMode: 'deepseek-account', hasApiKey: false, ready: true, model: 'deepseek-v4-pro@named-account' })
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: {
+    provider: 'named-account', type: 'deepseek-account', authMode: 'deepseek-account', name: 'Work account', ready: true, hasApiKey: false, model: 'deepseek-v4-pro@named-account',
+  } })
+  assert.equal(view.nodes().some(node => node.props.type === 'password'), false)
+  await view.click('Save provider connection')
+  assert.deepEqual(calls, [{ provider: 'named-account', type: 'deepseek-account', name: 'Work account', model: 'deepseek-v4-pro' }])
+})
+
+for (const mode of ['add', 'setup', 'edit']) {
+  test(`custom endpoint ${mode} normalizes identifiers without changing the display name`, async t => {
+    const requests: Record<string, unknown>[] = []
+    t.mock.method(globalThis, 'fetch', async (_input, init) => {
+      const body = JSON.parse(String(init?.body))
+      requests.push(body)
+      return Response.json({ ...body, authMode: 'none', ready: true, hasApiKey: false })
+    })
+    const view = mount(t, { apiBase: 'http://fixture.invalid', mode, status: mode === 'edit'
+      ? { provider: 'existing-endpoint', type: 'nvidia', name: 'Nvidia', model: 'test-model', baseUrl: 'http://localhost:1234/v1', authMode: 'none', ready: true, hasApiKey: false }
+      : { provider: 'openai', type: 'openai', model: 'gpt-4.1', authMode: 'api-key', ready: false, hasApiKey: false } })
+    if (mode !== 'edit') {
+      const select = view.nodes().find(node => node.tag === 'select')!
+      const handlers = select.props.onChange
+      for (const handler of Array.isArray(handlers) ? handlers : [handlers]) (handler as (value: string) => void)('custom')
+      await nextTick()
+      const update = (placeholder: string, value: string) => {
+        const input = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === placeholder)!
+        ;(input.props['onUpdate:modelValue'] as (value: string) => void)(value)
+      }
+      const custom = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'local')!
+      assert.equal(new RegExp(`^(?:${custom.props.pattern})$`).test('Nvidia'), true)
+      update('local', 'Nvidia')
+      update('Model ID from your provider', 'test-model')
+      const base = view.nodes().find(node => node.tag === 'input' && node.props.type === 'url')!
+      ;(base.props['onUpdate:modelValue'] as (value: string) => void)('http://localhost:1234/v1')
+      await nextTick()
+    }
+    await (view.nodes().find(node => node.tag === 'form')!.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0]!.type, 'nvidia')
+    assert.equal(requests[0]!.name, 'Nvidia')
+    assert.equal(requests[0]!.baseUrl, 'http://localhost:1234/v1')
+    assert.equal(requests[0]!.model, 'test-model')
+    if (mode === 'add') assert.match(String(requests[0]!.provider), /^account-/)
+    else assert.equal(requests[0]!.provider, mode === 'edit' ? 'existing-endpoint' : 'nvidia')
+  })
+}

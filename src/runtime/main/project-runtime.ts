@@ -292,7 +292,7 @@ export async function createProjectRuntime(
   }
   const events = new EventService(workspace, bus, (sessionId, input) => deliverInput(sessionId, input))
   cleanup.push(() => events.stop())
-  let provider = createAggregatedProvider(config, copilotAuth)
+  let provider = createAggregatedProvider(config, copilotAuth, dependencies.accountHome)
   let activeConfig = config
   const backgroundTasks = new BackgroundTaskManager(bus, events, scope, workspace)
   cleanup.push(() => backgroundTasks.stop())
@@ -1405,7 +1405,7 @@ export async function createProjectRuntime(
       if (!isDeepStrictEqual(newConfig.a2a, activeConfig.a2a)) {
         throw new Error('A2A configuration changes require a Project backend restart; edit the Project configuration while stopped.')
       }
-      const newProvider = createAggregatedProvider(newConfig, copilotAuth)
+      const newProvider = createAggregatedProvider(newConfig, copilotAuth, dependencies.accountHome)
       const newQuickModel = newConfig.agent.quickModel
       const newLlm = createLlmRuntimeConfig(newConfig)
       try {

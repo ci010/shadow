@@ -91,7 +91,7 @@ const editing = ref<string | null>(null)
 const saving = ref(false)
 const view = ref<HTMLElement | null>(null)
 const setup = ref<InstanceType<typeof ProviderSetup> | null>(null)
-const authLabels = { get 'api-key'() { return t('API key') }, get copilot() { return t('Device sign-in') }, get none() { return t('Keyless endpoint') } }
+const authLabels = { get 'api-key'() { return t('API key') }, get copilot() { return t('Device sign-in') }, get 'deepseek-account'() { return 'DeepSeek Account' }, get none() { return t('Keyless endpoint') } }
 const formMode = computed(() => editing.value ? 'edit' : props.status?.ready || providers.value.length ? 'add' : 'setup')
 const formStatus = computed<ProviderSetupStatus | null>(() => {
   const item = providers.value.find(item => item.provider === editing.value)
