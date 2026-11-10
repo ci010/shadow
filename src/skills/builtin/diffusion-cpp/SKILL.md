@@ -1,6 +1,6 @@
 ---
 name: diffusion-cpp
-description: "Use optional local stable-diffusion.cpp for Qwen Image 2.1 images/edits, legacy Qwen-Image-Edit, Anima, Z-Image-Turbo on constrained hardware, and MiniMax-H3 audio/video. Reuse existing weights first; inspect hardware, licenses, ModelScope downloads and CLI failures."
+description: "Use optional local stable-diffusion.cpp for Qwen Image 2.1 images/edits, legacy Qwen-Image-Edit, Anima, Z-Image-Turbo on constrained hardware, MiniMax-H3 audio/video, and MOSS-Image Base/SFT via explicit upstream CLI (no Shadow preset). Reuse existing weights first; inspect hardware, licenses, ModelScope downloads and CLI failures."
 core: true
 metadata:
   category: tools
@@ -21,11 +21,43 @@ or a replacement for Qwen editing. Legacy Qwen-Image-Edit and Anima are
 separate opt-in image presets. `video` uses MiniMax-H3. Do not download,
 run, or switch models silently.
 
+## Device-local shared runtime and model storage
+
+Reuse configured absolute paths and existing HF/ModelScope/ComfyUI caches first;
+never move an existing installation or redownload merely to normalize its layout.
+For new files, the default is the executing device's OS-user data directory,
+without a Shadow parent:
+
+- Windows: `%LOCALAPPDATA%/stable-diffusion.cpp` (resolve LOCALAPPDATA on that device).
+- macOS: `~/Library/Application Support/stable-diffusion.cpp` (resolve that device's home).
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/stable-diffusion.cpp` (absolute XDG_DATA_HOME only).
+
+Use `versions/<version-arch-backend>/` for binaries and adjacent libraries,
+`models/` for new weights. Diffusion has no automatic installer: manually install
+verified release archives under a pinned release-version/architecture/backend
+identity, preserving adjacent libraries and existing cache files in place.
+Files are shared across Projects/sessions only for the same OS user on the same
+device; Project configuration, license acknowledgement and execution permissions
+remain separate. A discovered file is not permission to run it. Configured binary
+paths take priority, then the host CLI environment override, then PATH, then
+bounded shared-directory discovery (direct/bin or one unambiguous versions entry).
+Multiple versions require explicit configuration; discovery never probes them.
+Do not guess usernames, resolve remote paths on Main, or fall back from a remote
+executor to Main. These tools still require their implemented local execution route.
+
+Runtime binaries and reusable model weights are dependencies, **not finished
+Documents/workspace deliverables**. Do not put new dependencies under Documents,
+a workspace, Project Home or session storage by applying deliverable rules.
+Generated user-facing media/files still follow the requested output destination.
+Downloads/installations always require source, disk and license approval; this
+storage policy does not itself authorize downloading, installing or execution.
+
 ## First look for what the user already has
 
 1. Run `status` and `discover` **before any network request**. Discovery checks
    `SHADOW_MODELS_DIR`, `HF_HUB_CACHE` (or `HF_HOME\hub`), `MODELSCOPE_CACHE`
-   (normally `~\.cache\modelscope\hub`), and common ComfyUI `models` paths.
+   (normally `~\.cache\modelscope\hub`), common ComfyUI `models` paths,
+   and the device-local `stable-diffusion.cpp/models/` default.
    Add user-approved absolute directories through `discover.roots`; inspect
    ComfyUI's configured `extra_model_paths.yaml` with the user's permission
    when it points elsewhere. HF snapshots often contain symlinks to blobs.
@@ -62,7 +94,7 @@ temporary session directory as permanent storage. When a file is missing,
 show precisely which components, sizes, disk space and license are involved;
 ask before downloading. Prefer the user's existing cache or a persistent
 shared directory they choose (including an external disk). If neither is
-available, a dedicated Shadow data-directory models folder is a fallback.
+available, use the device-local `stable-diffusion.cpp/models/` default above.
 Use a pinned revision, per-file download, checksum verification and a
 complete file before calling `configure`; do not fetch entire Diffusers
 repositories just to obtain a few components. GitHub release archives
@@ -174,6 +206,136 @@ with `modelscope download --model circlestone-labs/Anima
 <relative-file> --revision <pin> --local_dir <chosen-cache>`, once the
 user approves destination, license and disk usage. No automatic
 download or replacement of Qwen 2.1's default image preset.
+
+## MOSS-Image Base / SFT (explicit upstream CLI only)
+
+The [upstream MOSS guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/moss_image.md)
+supports both **Base and SFT**: a 5B diffusion transformer, Qwen3.5-9B text
+encoder and FLUX.2 VAE. Prompt enhancement is not included. This guidance was
+checked against [sd.cpp revision 73fef082](https://github.com/leejet/stable-diffusion.cpp/blob/73fef08224c50a49961004dc8c6fee2c0f640bcb/docs/moss_image.md).
+MOSS support landed in [68285df3](https://github.com/leejet/stable-diffusion.cpp/commit/68285df319457e2d79310b48513e4ba1bf8ebe9a);
+use a verified build containing that change, not an arbitrary older `sd-cli`.
+The checked release [master-1073-991f825](https://github.com/leejet/stable-diffusion.cpp/releases/tag/master-1073-991f825)
+contains it; this is a known-containing release, not a claim of the minimum
+release. Inspect the installed version/help and backend first; do not replace
+an existing installation automatically.
+
+**Shadow has no MOSS preset**: `diffusion_cpp configure` and `image` do not
+accept MOSS, and there is no tokenizer configuration field. Discovery does not
+validate a complete MOSS setup. Do not impersonate another preset or pass model
+selectors through `options`. Use an explicitly approved local `sd-cli` command
+on the executing device, outside the integrated generation tool; no automatic
+Project configuration, generation locking/cancellation or media delivery is
+provided by that direct route.
+
+### Short end-to-end setup and first run
+
+Treat a request to set up MOSS as the following workflow, not just a command
+example. Carry out authorized steps; ask only for missing download/license or
+execution decisions, and stop with a precise blocker when necessary.
+
+1. **Check the execution device.** Run `status`/`discover` first, inspect the
+   installed CLI version/help and GPU backend, and check free disk/RAM/VRAM.
+   Reuse a compatible runtime; if missing or too old, obtain approval for a
+   pinned, checksum-verified release and install its complete package (including
+   matching CUDA libraries) in the shared `versions/` directory. Never execute
+   a remote binary on Main or infer MOSS support from GPU detection alone.
+2. **Resolve all four components.** Select Base or SFT, inventory existing
+   files, and resolve the exact diffusion, Qwen3.5 encoder, FLUX.2 VAE and
+   **external tokenizer JSON** from the table below. Report only missing files,
+   pinned source revisions, sizes/total disk needs and applicable licenses;
+   obtain required approval before downloading. Do not fetch both variants or
+   a whole repository merely to get its tokenizer.
+3. **Download and verify.** Follow `v:skills/download` for eligible public
+   HTTPS files, or the provider's revision-pinned per-file downloader. Reuse
+   caches; save new components under shared `models/moss-image/` (or the chosen
+   persistent location), preserving existing paths. Verify trusted published
+   hashes where available; if unavailable, disclose the integrity limitation
+   rather than inventing a digest. Parse the tokenizer as JSON, require its
+   vocabulary/model structure, and confirm its upstream origin/revision; a
+   filename or successful JSON parse alone does not establish compatibility.
+4. **Wire the paths.** Record the resolved absolute CLI and four component
+   paths plus source revisions in a small setup manifest in the chosen model
+   directory, without overwriting an existing file. Pass those actual paths to
+   the example below, especially `--tokenizer`; do not call MOSS `configure`
+   or substitute another preset. Files may stay in separate existing caches:
+   the example's common `MOSS_ROOT` is only a layout illustration, not a copy
+   requirement. The manifest is a reuse aid, not a Shadow configuration file.
+5. **Run one smoke generation.** Use the approved prompt and a new durable
+   output path, one job at a time on the device. Start with a modest size
+   divisible by 16 (for example 512 x 512; the upstream example is 1024 x 1024),
+   using the MOSS flags below. Retain the process result/log and elapsed time;
+   use the execution tool's supported timeout/cancellation handling. On OOM,
+   report evidence and propose a smaller size/offload adjustment; do not loop
+   downloads or silently switch model variants.
+6. **Verify and hand back.** Require a successful process exit, then open the
+   resulting PNG to check it decodes, has the requested dimensions and contains
+   a plausible result. Report its actual output path, runtime/backend, variant,
+   reusable component/manifest paths and measured elapsed time (resource peaks
+   only if measured). CLI help, configured paths or a file existing alone are
+   not end-to-end success. If generation is deferred or fails, say setup is
+   partial and give the exact next action; do not claim successful inference.
+
+Select one diffusion variant, plus all three matching sidecars:
+
+| Component | Upstream file / source |
+| --- | --- |
+| Base diffusion | `diffusion_models/moss_image_base_int8_convrot_attn.safetensors` from [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models), or [leejet/MOSS-Image-Base-GGUF](https://huggingface.co/leejet/MOSS-Image-Base-GGUF) |
+| SFT diffusion (alternative, not an extra requirement) | `diffusion_models/moss_image_sft_int8_convrot_attn.safetensors` from the same Comfy-Org repository, or [leejet/MOSS-Image-SFT-GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF) |
+| Text encoder | `Qwen3.5-9B-Q4_K_M.gguf` from [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) |
+| VAE | `vae/flux2_ae.safetensors` from [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/vae) |
+| External tokenizer | `tokenizer/tokenizer.json` from [OpenMOSS-Team/MOSS-Image-Base](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
+
+`--tokenizer` is required: Qwen3.5 has a different vocabulary from the embedded
+Qwen tokenizer. Do not substitute Qwen3/Qwen3-VL encoders, Qwen Image VAEs or
+an unrelated tokenizer. Resolve exact filenames, revisions, sizes and hashes
+before any download (especially when selecting a GGUF quantization); the two
+diffusion formats above are alternatives, not a reason to fetch both.
+
+After license and execution approval, this POSIX-shell Base example follows
+the upstream flags. Replace every placeholder with discovered absolute paths;
+`SDCLI`, `MOSS_ROOT` and `OUTPUT` are illustrative shell variables, not Shadow
+configuration. `OUTPUT` must be a new user-approved PNG destination, not a path
+beside model weights. On Windows use equivalent PowerShell invocation syntax.
+
+```sh
+SDCLI='/absolute/path/to/sd-cli'
+MOSS_ROOT='/absolute/path/to/existing-or-approved-moss-components'
+OUTPUT='/absolute/path/to/new-moss-base.png'
+"$SDCLI" --diffusion-model "$MOSS_ROOT/diffusion_models/moss_image_base_int8_convrot_attn.safetensors" \
+  --llm "$MOSS_ROOT/text_encoders/Qwen3.5-9B-Q4_K_M.gguf" \
+  --vae "$MOSS_ROOT/vae/flux2_ae.safetensors" \
+  --tokenizer "$MOSS_ROOT/tokenizer/tokenizer.json" \
+  --cfg-scale 3.0 -p 'a lovely cat holding a sign says moss-image.cpp' \
+  -v --offload-to-cpu -H 1024 -W 1024 -o "$OUTPUT"
+```
+
+For SFT, replace only the diffusion path with the selected
+`moss_image_sft_int8_convrot_attn.safetensors` and choose a distinct output.
+Dimensions must be divisible by 16. The default discrete scheduler uses time
+shift 5; `--flow-shift` overrides it. The negative CFG branch skips DiT layer
+22 (zero-based). Do not transplant Qwen/Z/Anima sampling defaults or claim
+reference editing support. Check installed help before adding optional flags.
+Use a small approved smoke generation first and inspect the resulting PNG;
+file size, quantization and CPU offload do not guarantee VRAM fit, RAM use,
+quality or performance. No universal minimum VRAM or runtime is established here.
+
+Reuse existing paths first. For approved new dependencies, use the device-local
+shared `stable-diffusion.cpp/models/` directory described above (for example a
+`moss-image/` subtree), or the user's chosen persistent cache; keep binaries in
+pinned `versions/` entries and generated outputs separate. Never move existing
+weights, silently download models, or install a new runtime just to try MOSS.
+
+Review the original [Base model card/license](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base)
+and [SFT model card/license](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT),
+the selected repack/quantization revision, and the Qwen3.5 encoder, FLUX.2 VAE
+and tokenizer terms independently. The [OpenMOSS code README](https://github.com/OpenMOSS/MOSS-Image#license)
+labels the **standalone pipeline code** Apache-2.0; this is not proof of the
+weights' license. Weight licenses were not independently verified for this
+guide: if a model card/license cannot be retrieved, report that limitation and
+obtain confirmation of the applicable terms/authorization before download or
+execution, including cached weights. sd.cpp's MIT license and a mirror's label
+are not substitutes for upstream weight rights.
 
 ## Lower-resource text-to-image: Z-Image-Turbo
 

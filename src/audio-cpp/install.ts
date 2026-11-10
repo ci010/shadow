@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { inflateRawSync, crc32 } from 'node:zlib'
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { Aria2Downloader } from '../downloader/aria2.ts'
@@ -63,8 +63,30 @@ export async function extractZip(bytes: Buffer, directory: string, signal?: Abor
   if (cursor !== end) throw new Error('Invalid ZIP directory length')
 }
 
+const installationSchema = z.object({
+  archive: z.string(),
+  files: z.array(z.object({ path: z.string(), sha256: z.string() }).strict()).min(1),
+}).strict()
+const installationMarker = '.shadow-audiocpp-install.json'
+
+async function installationFiles(root: string, prefix = ''): Promise<Array<{ path: string; sha256: string }>> {
+  const files: Array<{ path: string; sha256: string }> = []
+  for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (!prefix && entry.name === installationMarker) continue
+    if (entry.isDirectory()) files.push(...await installationFiles(root, path))
+    else if (entry.isFile()) {
+      const hash = createHash('sha256')
+      for await (const chunk of createReadStream(join(root, path))) hash.update(chunk)
+      files.push({ path, sha256: hash.digest('hex') })
+    }
+    else throw new Error('Installation contains a link or special file')
+  }
+  return files.sort((a, b) => a.path.localeCompare(b.path))
+}
+
 export class AudioCppInstaller {
-  constructor(private readonly root: string, private readonly downloader: ArtifactDownloader = new Aria2Downloader()) {}
+  constructor(private readonly root: string, private readonly downloader: ArtifactDownloader = new Aria2Downloader(), private readonly legacyRoot?: string) {}
   async install(request: SetupRequest, signal?: AbortSignal, probe?: (binary: string) => Promise<void>): Promise<{ binary: string; path: string }> {
     const input = setupSchema.parse(request)
     if (input.binary.platform !== process.platform || input.binary.arch !== process.arch) throw new Error('audio.cpp package does not match this host')
@@ -74,10 +96,21 @@ export class AudioCppInstaller {
     await mkdir(cache, { recursive: true })
     const download = async (spec: z.infer<typeof artifact>, extension: string) => {
       const filename = spec.sha256 + extension
+      // Reuse a verified legacy cache in place; never migrate or delete it.
+      if (this.legacyRoot) {
+        const legacy = join(this.legacyRoot, 'downloads', filename)
+        try {
+          const hash = createHash('sha256')
+          for await (const chunk of createReadStream(legacy)) { signal?.throwIfAborted(); hash.update(chunk) }
+          if ((await stat(legacy)).size === spec.bytes && hash.digest('hex') === spec.sha256) return legacy
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      }
+      const directory = extension === '.gguf' ? join(this.root, 'models') : cache
+      await mkdir(directory, { recursive: true })
       // Strip model/host metadata: downloader enforces a strict request contract.
-      await this.downloader.download({ url: spec.url, sha256: spec.sha256, bytes: spec.bytes, approved: true, directory: cache, filename }, signal)
+      await this.downloader.download({ url: spec.url, sha256: spec.sha256, bytes: spec.bytes, approved: true, directory, filename }, signal)
       signal?.throwIfAborted()
-      const path = join(cache, filename)
+      const path = join(directory, filename)
       const hash = createHash('sha256')
       for await (const chunk of createReadStream(path)) { signal?.throwIfAborted(); hash.update(chunk) }
       if ((await stat(path)).size !== spec.bytes || hash.digest('hex') !== spec.sha256) throw new Error('Downloaded artifact integrity mismatch')
@@ -85,19 +118,47 @@ export class AudioCppInstaller {
     }
     if (input.binary.bytes > 512 * 1024 ** 2) throw new Error('ZIP archive exceeds 512 MiB limit')
     const archive = await download(input.binary, '.zip')
-    const target = join(this.root, 'packages', input.binary.sha256)
+    // A pinned artifact digest is the version identity when no release tag is supplied.
+    const target = join(this.root, 'versions', `${input.binary.sha256}-${input.binary.arch}-${input.backend}`)
     const stage = target + '.staging'
-    await rm(stage, { recursive: true, force: true })
-    await mkdir(stage, { recursive: true })
+    await mkdir(dirname(target), { recursive: true })
+    const lock = target + '.lock'
+    await mkdir(lock) // Fail closed on concurrent installation; no cross-Project config sharing.
     try {
-      await extractZip(await readFile(archive), stage, signal)
-      if (!(await stat(join(stage, entry))).isFile()) throw new Error('CLI is absent from package')
-      await chmod(join(stage, entry), 0o700)
-      signal?.throwIfAborted()
-      await rm(target, { recursive: true, force: true })
-      await rename(stage, target)
-    } finally { await rm(stage, { recursive: true, force: true }) }
-    await probe?.(join(target, entry))
+      let exists = false
+      try { await lstat(target); exists = true } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      if (exists) {
+        try {
+          if (!(await lstat(target)).isDirectory()) throw new Error('Target is not a directory')
+          const installed = installationSchema.parse(JSON.parse(await readFile(join(target, installationMarker), 'utf8')))
+          if (installed.archive !== input.binary.sha256 || !installed.files.some(file => file.path === entry)
+            || JSON.stringify(installed.files) !== JSON.stringify(await installationFiles(target))) {
+            throw new Error('Installed files do not match the verified manifest')
+          }
+        } catch (error) {
+          throw new Error(`Existing audio.cpp installation is incomplete or invalid; inspect and resolve manually without overwriting: ${target}`, { cause: error })
+        }
+      } else {
+        await rm(stage, { recursive: true, force: true })
+        await mkdir(stage, { recursive: true })
+        await extractZip(await readFile(archive), stage, signal)
+        if (!(await stat(join(stage, entry))).isFile()) throw new Error('CLI is absent from package')
+        await chmod(join(stage, entry), 0o700)
+        const files = await installationFiles(stage)
+        await writeFile(join(stage, installationMarker), JSON.stringify({ archive: input.binary.sha256, files }), { flag: 'wx', mode: 0o600 })
+        signal?.throwIfAborted()
+        await rename(stage, target)
+      }
+      // Hold the install lock through the probe, including when reusing an existing target.
+      try { await probe?.(join(target, entry)) } catch (error) {
+        throw new Error(`audio.cpp installation probe failed; inspect manually: ${target}`, { cause: error })
+      }
+    } finally {
+      try { await rm(stage, { recursive: true, force: true }) }
+      finally { await rm(lock, { recursive: true, force: true }) }
+    }
     const path = await download(input.model, '.gguf')
     const file = await open(path, 'r')
     try {

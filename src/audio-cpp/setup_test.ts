@@ -1,12 +1,12 @@
 import { crc32 } from 'node:zlib'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { AudioCppService } from './service.ts'
-import { extractZip, type SetupRequest } from './install.ts'
+import { AudioCppInstaller, extractZip, type SetupRequest } from './install.ts'
 import { RemoteAudio } from './remote.ts'
 import { assessCandidate, type Hardware } from './assessment.ts'
 import { AudioCppTool } from '../tools/audio-cpp.ts'
@@ -45,7 +45,7 @@ test('Agent tool setup verifies artifacts, probes, registers and routes inferenc
       try { reused = sha(await readFile(path)) === input.sha256 } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error }
       if (!reused) { transfers++; await writeFile(path, input.url.endsWith('.zip') ? binary : model) }
       return { path, sha256: input.sha256, bytes: input.bytes!, reused }
-    } })
+    } }, undefined, join(workspace, 'tool-store'))
     const tool = new AudioCppTool(service, 'p', workspace, 'audio'), ctx = context(workspace)
     const assessment = JSON.parse(await tool.execute({ action: 'assess', candidate: { family: 'sense_asr', downloadBytes: model.length + binary.length, platform: process.platform, arch: process.arch } }, ctx))
     assert.equal(assessment.hardware.platform, process.platform)
@@ -56,6 +56,8 @@ test('Agent tool setup verifies artifacts, probes, registers and routes inferenc
     const first = await service.read()
     assert.equal(first.routes?.asr, 'local')
     assert.equal(first.asr?.family, 'sense_asr')
+    assert.ok(first.binary?.startsWith(join(workspace, 'tool-store', 'versions')))
+    assert.ok(first.asr?.path.startsWith(join(workspace, 'tool-store', 'models')))
     await writeFile(join(workspace, 'input.wav'), 'RIFFfixture')
     assert.deepEqual(JSON.parse(await tool.execute({ action: 'transcribe', input: 'input.wav' }, ctx)), { text: 'fixture transcript' })
     await tool.execute({ action: 'setup', setup: request() }, ctx)
@@ -72,7 +74,7 @@ test('hash mismatch, malformed ZIP, unsupported loader and failed probe do not r
       const service = new AudioCppService(workspace, async () => { if (kind === 'probe') throw new Error('probe failed'); return '[{"family":"other"}]' }, { download: async input => {
         await writeFile(join(input.directory, input.filename), kind === 'hash' ? Buffer.from('corrupt') : input.url.endsWith('.zip') ? binary : model)
         return { path: join(input.directory, input.filename), sha256: input.sha256, bytes: input.bytes!, reused: false }
-      } })
+      } }, undefined, join(workspace, 'tool-store', kind))
       await assert.rejects(() => service.setup(request()))
       assert.deepEqual(await service.read(), { version: 1 })
       assert.equal((await service.status()).models.asr.status, 'not_configured')
@@ -150,5 +152,68 @@ test('verified ZIP extraction rejects symlink entries and damaged entry CRC befo
     const corrupt = zip('file', Buffer.from('data'))
     corrupt[34] ^= 0xff
     await assert.rejects(() => extractZip(corrupt, workspace), /ZIP size mismatch/)
+  })
+})
+
+test('new shared setup reuses verified legacy downloads in place without network or migration', async () => {
+  await withTempWorkspace(async workspace => {
+    const legacy = join(workspace, 'legacy'), root = join(workspace, 'shared')
+    const cache = join(legacy, 'downloads')
+    await mkdir(cache, { recursive: true })
+    const modelPath = join(cache, sha(model) + '.gguf')
+    const archivePath = join(cache, sha(binary) + '.zip')
+    await writeFile(modelPath, model)
+    await writeFile(archivePath, binary)
+    const installer = new AudioCppInstaller(root, { download: async () => { throw new Error('must reuse cache') } }, legacy)
+    const installed = await installer.install(request())
+    assert.equal(installed.path, modelPath)
+    assert.deepEqual(await readFile(modelPath), model)
+    assert.deepEqual(await readFile(archivePath), binary)
+    assert.ok(installed.binary.startsWith(join(root, 'versions')))
+  })
+})
+
+test('same-target installation is immutable, probes under lock, and rejects damaged targets without repair', async () => {
+  await withTempWorkspace(async workspace => {
+    const root = join(workspace, 'shared')
+    const installer = new AudioCppInstaller(root, { download: async input => {
+      const path = join(input.directory, input.filename)
+      await writeFile(path, input.url.endsWith('.zip') ? binary : model)
+      return { path, sha256: input.sha256, bytes: input.bytes!, reused: false }
+    } })
+    const first = await installer.install(request())
+    const before = await stat(first.binary)
+    const target = join(root, 'versions', `${sha(binary)}-${process.arch}-cpu`)
+    const marker = join(target, '.shadow-audiocpp-install.json')
+    const markerBefore = await stat(marker)
+    const second = await installer.install(request(), undefined, async () => {
+      assert.ok((await stat(target + '.lock')).isDirectory())
+    })
+    assert.deepEqual(second, first)
+    const after = await stat(first.binary)
+    assert.equal(after.ino, before.ino)
+    assert.equal(after.mtimeMs, before.mtimeMs)
+    assert.equal((await stat(marker)).ino, markerBefore.ino)
+    assert.equal((await stat(marker)).mtimeMs, markerBefore.mtimeMs)
+    await writeFile(first.binary, 'damaged existing CLI')
+    await assert.rejects(() => installer.install(request()), /incomplete or invalid.*manually/)
+    assert.equal(await readFile(first.binary, 'utf8'), 'damaged existing CLI')
+  })
+})
+
+test('pre-existing incomplete target is not extracted into, removed or repaired', async () => {
+  await withTempWorkspace(async root => {
+    const target = join(root, 'versions', `${sha(binary)}-${process.arch}-cpu`)
+    await mkdir(target, { recursive: true })
+    const sentinel = join(target, 'existing-library')
+    await writeFile(sentinel, 'keep this file')
+    const installer = new AudioCppInstaller(root, { download: async input => {
+      const path = join(input.directory, input.filename)
+      await writeFile(path, binary)
+      return { path, sha256: input.sha256, bytes: input.bytes!, reused: false }
+    } })
+    await assert.rejects(() => installer.install(request()), /incomplete or invalid.*manually/)
+    assert.equal(await readFile(sentinel, 'utf8'), 'keep this file')
+    await assert.rejects(stat(join(target, entry)), { code: 'ENOENT' })
   })
 })

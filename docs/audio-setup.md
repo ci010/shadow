@@ -113,13 +113,17 @@ private configuration and per-task routes, not separate inference implementation
    Download uses the existing bundled aria2 verifier; extraction rejects traversal,
    links, special files, duplicate paths, invalid CRC, unsupported ZIP methods and
    overlarge entries. No shell installers or unverified execution. Model is a single
-   GGUF, not a multi-file Python package. Paths are managed under Project Home
-   `.audio-cpp`; users do not edit paths/config files.
+   GGUF, not a multi-file Python package. New runtime/model paths use the shared
+   OS-user tool directory described below; Project configuration stays separate.
 5. Shadow probes the CLI loader catalog before model download, verifies the weight
    artifact and model-specific help, then configures the local task/route automatically.
    Config is written only after successful probes. Failed downloads/probes may leave
    verified cache files but do not register the new model. Reruns use the same managed
-   paths and verified download cache. Help/catalog is not an inference probe.
+   paths and verified download cache. Published version directories are immutable:
+   reruns verify the installation manifest and file hashes, then probe while holding
+   the install lock, without re-extracting or deleting the existing installation.
+   Missing manifests, incomplete files or integrity mismatches fail explicitly for
+   manual inspection, never automatic repair. Help/catalog is not an inference probe.
 6. Test a consented sample using `transcribe`/`speak` before claiming working inference.
    `status.inferenceVerified` is deliberately false: configuration is not acceptance.
 
@@ -204,3 +208,33 @@ its `status` rejected the new persisted `routes` key. Restart/reload with the cu
 backend and repeat ordinary Agent tool calls before claiming production-session
 acceptance. `status.inferenceVerified` remains false by design. TTS, automatic VAD,
 long recordings, microphone capture and browser chooser acceptance were not tested.
+
+## Device-local shared runtime and model storage
+
+Reuse configured absolute paths and existing HF/ModelScope/ComfyUI caches first;
+never move an existing installation or redownload merely to normalize its layout.
+For new files, the default is the executing device's OS-user data directory,
+without a Shadow parent:
+
+- Windows: `%LOCALAPPDATA%/audio.cpp` (resolve LOCALAPPDATA on that device).
+- macOS: `~/Library/Application Support/audio.cpp` (resolve that device's home).
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/audio.cpp` (absolute XDG_DATA_HOME only).
+
+Use `versions/<version-arch-backend>/` for binaries and adjacent libraries,
+`models/` for new weights. Audio's managed setup uses the pinned binary SHA-256
+as version identity and keeps verified legacy Project download caches in place.
+Files are shared across Projects/sessions only for the same OS user on the same
+device; Project configuration, license acknowledgement and execution permissions
+remain separate. A discovered file is not permission to run it. Configured binary
+paths take priority, then the host CLI environment override, then PATH, then
+bounded shared-directory discovery (direct/bin or one unambiguous versions entry).
+Multiple versions require explicit configuration; discovery never probes them.
+Do not guess usernames, resolve remote paths on Main, or fall back from a remote
+executor to Main. These tools still require their implemented local execution route.
+
+Runtime binaries and reusable model weights are dependencies, **not finished
+Documents/workspace deliverables**. Do not put new dependencies under Documents,
+a workspace, Project Home or session storage by applying deliverable rules.
+Generated user-facing media/files still follow the requested output destination.
+Downloads/installations always require source, disk and license approval; this
+storage policy does not itself authorize downloading, installing or execution.
