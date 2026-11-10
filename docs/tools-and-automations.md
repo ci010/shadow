@@ -1347,7 +1347,6 @@ Follow-up reads still use the unchanged resource ID/version, not the display kin
 Old historical text and attributed quotations are not rewritten. Runtime events,
 EventService and transport notifications remain separate concepts.
 
-
 Project log injection keeps the existing provenance split and relevance gate
 (initiative/shared modified files, or capped pass-through without signals).
 Both own and related logs now inject short briefings instead of complete

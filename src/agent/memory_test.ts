@@ -260,7 +260,7 @@ test('legacy log storage and original log wording remain unchanged by injection 
     const path = `${workspace}/memory/events/${date}.jsonl`
     await mkdir(`${workspace}/memory/events`, { recursive: true })
     const original = '\n' + JSON.stringify({ when: `${date}T00:00:00Z`, who: 'historical actor',
-      what: 'Original event report about event providers', origin: 'self', refs: ['v:signals/providers/old'] }) + '\n'
+      what: 'Original event report about event providers', origin: 'self', refs: ['v:events/providers/old'] }) + '\n'
     await writeFile(path, original)
     const out = await new MemoryStore(workspace).readLogs('self')
     assert(out.includes('### Recent Logs'))
