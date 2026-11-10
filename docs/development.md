@@ -606,16 +606,20 @@ and discards in-flight results.
 
 Use `read` on:
 
-- `v:debug/projects`: allowlisted Project ID/name and availability, not configuration.
-- `v:debug/projects/<encodedProjectId>` or `/status`: metadata and availability.
-- `v:debug/projects/<encodedProjectId>/sessions`: existing session list.
-- `v:debug/projects/<encodedProjectId>/sessions/<sessionId>[/overview|/full]`: existing local history formatter (physical references also supported).
-- `v:debug/projects/<encodedProjectId>/runtime/logs`: existing bounded/redacted runtime logs.
-- `v:debug/projects/<encodedProjectId>/runtime/sessions`: session diagnostic index.
-- `v:debug/projects/<encodedProjectId>/runtime/sessions/<encodedSessionId>/captures` or `/tools`: existing retained provider-input captures; reads do not enable capture.
+- `v:runtime/projects`: allowlisted Project ID/name and availability, not configuration.
+- `v:runtime/projects/<encodedProjectId>` or `/status`: metadata and availability.
+- `v:runtime/projects/<encodedProjectId>/sessions`: existing session list.
+- `v:runtime/projects/<encodedProjectId>/sessions/<sessionId>[/overview|/full]`: existing local history formatter (physical references also supported).
+- `v:runtime/projects/<encodedProjectId>/runtime/logs`: existing bounded/redacted runtime logs.
+- `v:runtime/projects/<encodedProjectId>/runtime/sessions`: session diagnostic index.
+- `v:runtime/projects/<encodedProjectId>/runtime/sessions/<encodedSessionId>/captures` or `/tools`: existing retained provider-input captures; reads do not enable capture.
 
 The diagnostic index may mention ordinary `v:runtime` views; only the paths above
-are available across Projects. No preview reconstruction, remote conversation
+are available across Projects. `v:runtime` is the only top-level diagnostics entry;
+there is no separate `v:debug` mount. Root glob/grep discovery exposes only a static
+`projects` guide, never the cross-Project catalog or target content. Searching
+`v:runtime/projects` or its descendants is explicitly unsupported; use explicit
+reads through the authorized bridge instead. No preview reconstruction, remote conversation
 forwarding, arbitrary data/config/credential path, search, write, messaging or
 execution is exposed. Host-held runtime/scope references resolve targets without
 starting them; unknown and unavailable targets are explicitly distinguished.

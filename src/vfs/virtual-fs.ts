@@ -152,7 +152,7 @@ export class VirtualFs {
     }
     if (!mount.write) throw new Error('Virtual filesystem path is read-only.')
     // Self metadata belongs to the session control plane, not its workdir.
-    if (context.remoteWorkdir && prefix !== 'v:session') throw new Error('Virtual configuration writes require a local workdir.')
+    if (context.remoteWorkdir && !(prefix === 'v:sessions' && subpath === 'self.json')) throw new Error('Virtual configuration writes require a local workdir.')
     if (context.tools.executionMode === 'call') throw new Error('Virtual configuration writes are unavailable in call mode.')
     context.signal.throwIfAborted()
     return Promise.resolve(mount.write(subpath, request, context))

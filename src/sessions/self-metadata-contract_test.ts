@@ -21,7 +21,7 @@ test('tool and inline guidance expose explicit self metadata, completion and reo
   assert.equal((tool.parameters.properties?.action as { enum: string[] }).enum.includes('update_self'), false)
   const guidance = await readFile(new URL('../agent/context/tools-guideline.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(guidance, /update_self/)
-  assert.match(guidance, /v:session\/self.json/)
+  assert.match(guidance, /v:sessions\/self.json/)
   assert.match(guidance, /first user request/)
   assert.match(guidance, /completed:true/)
   assert.match(guidance, /completed:false/)

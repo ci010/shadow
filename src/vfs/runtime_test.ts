@@ -165,3 +165,16 @@ test('general log export omits secrets, HTTP bodies/headers, arbitrary attribute
   assert.equal(redactRuntimeText('x'.repeat(10000)).length, 4096)
   assert.deepEqual(projectRuntimeRows([{ ...row, id: 'private-id' }, { ...row, time: Infinity }, null], 'p'), [])
 })
+
+
+test('cross-Project runtime diagnostics require an installed bridge and preserve actor checks', () => {
+  const runtime = createRuntimeHandler(new RuntimeDiagnosticLog(), 'p', (_project, actor) => {
+    if (actor !== context.sessionId) throw new Error('Invalid actor')
+  })
+  assert.throws(() => runtime.read('projects', context), /unavailable/)
+  assert.throws(() => runtime.read('projects/other/runtime/logs', { ...context, projectId: 'other' }), /current Project/)
+  let reads = 0
+  const bridged = createRuntimeHandler(new RuntimeDiagnosticLog(), 'p', () => { throw new Error('Invalid actor') }, undefined, undefined, undefined, () => { reads++; return 'secret' })
+  assert.throws(() => bridged.read('projects/other/sessions', context), /Invalid actor/)
+  assert.equal(reads, 0)
+})

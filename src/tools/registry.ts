@@ -592,7 +592,7 @@ export class SessionTools extends Tools {
       return this.rejectExecution(`${name} is unavailable in ${this.scope?.mode} mode; return to the parent for durable coordination or deferred work.`)
     }
     if (this.scope?.mode === 'task' && name === 'session') {
-      return this.rejectExecution('Task session metadata is parent-owned; read/write v:session/self.json for completion only.')
+      return this.rejectExecution('Task session metadata is parent-owned; read/write v:sessions/self.json for completion only.')
     }
     if (name === 'subagent' && this.scope && !this.scope.modes.includes('task') && args.mode === undefined) {
       return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`

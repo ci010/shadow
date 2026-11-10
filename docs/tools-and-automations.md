@@ -797,14 +797,14 @@ a semantic DAG optimizer and does not reinterpret relationship cycles as ownersh
 
 ## Retired automatic observation
 
-Automatic title/goal observation has been removed. Sessions publish explicit metadata via `write` of `v:session/self.json`; independent topic organization remains available.
+Automatic title/goal observation has been removed. Sessions publish explicit metadata via `write` of `v:sessions/self.json`; independent topic organization remains available.
 
 Fresh local asynchronous `subagent` tasks have parent-owned identity: supply `title`
 and `description` when creating one. `title` is a one-line display name (up to 120
 characters); `description` is discovery text (up to 4000 characters). For compatibility,
 existing description-only calls derive the title from its first 120 characters,
 flattening control characters. Both are persisted as the task's name and description.
-The task may use `write` of `v:session/self.json` with `completed:true` or
+The task may use `write` of `v:sessions/self.json` with `completed:true` or
 `completed:false` for non-reviewable tasks; unchanged adapted topic may be included in a full JSON roundtrip; focus may describe the current step. Reviewable tasks submit a final response instead of self-completing. Title and description are immutable to
 the child, including through legacy update. This does not grant parents a new
 cross-session editing API. Blocking `call` forks keep their existing metadata and
@@ -1139,7 +1139,7 @@ Reuse the same `requestId` and arguments for retries; inference choices are part
 of that request identity, and an accepted kickoff is not replayed.
 
 The dynamic tool also supports own metadata `update` and `register_folder`.
-For own metadata/completion, prefer `v:session/self.json`. Remote workdir sessions
+For own metadata/completion, prefer `v:sessions/self.json`. Remote workdir sessions
 can create peers, update themselves, and register directories with explicit
 `nodeId` plus `path` on the selected device. Child selection shares the UI picker
 protocol and Project ownership checks; offline or unsupported devices fail without
@@ -1285,7 +1285,7 @@ stable topic, optional current-step focus, explicit completion, derived activity
 navigation. Internal task executions are folded under their owner/Work; calls and
 organizer/observer archives never become independent dashboard topics.
 
-`write` of `v:session/self.json` accepts only topic, focus and completed for a
+`write` of `v:sessions/self.json` accepts only topic, focus and completed for a
 durable session. Tasks may change focus and non-reviewable completion; self topic adapts the parent-owned task title and must remain unchanged. Reviewable completion requires review. Calls cannot mutate self metadata. The tool no longer accepts a
 structured topic object. Unrelated native topic routing is unchanged. Formal outcomes, acceptance and boundaries belong in Work, not
 this discovery metadata. Session completion ends that session's responsibility; it
@@ -1305,7 +1305,7 @@ evidence, not an automatic observer or background model goal guess. Conversation
 metadata/completion changes invalidate organization source versions. Lightweight
 topics are never materialized as Work just to make organization possible.
 
-Current session metadata is available at `v:session/self.json` via read/write, including when the session selects a remote workdir: it is a Main control-plane resource, not a file in that directory. Likewise, `search` with `handler: "web"` uses the configured Main search provider regardless of session workdir locality; this does not provide remote-device network execution or allow filesystem fallback. Explicit Folder targeting remains restricted to ordinary filesystem operations and OS shells. Writes accept nonempty partial JSON objects or the full read result, with only topic (string, max 120), focus (string, max 4000; empty clears), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Task self topic adapts the parent-owned discovery title and must be preserved unchanged or omitted; task discovery title/description contracts are separate, and focus may change; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set the stable topic after understanding the first request. Subtask/debug phases update only focus; topic changes only for a real overall topic shift. Empty focus displays the topic. Sidebar labels always show topic. Session listings show focus additionally only when distinct.
+Current session metadata is available at `v:sessions/self.json` via read/write, including when the session selects a remote workdir: it is a Main control-plane resource, not a file in that directory. Likewise, `search` with `handler: "web"` uses the configured Main search provider regardless of session workdir locality; this does not provide remote-device network execution or allow filesystem fallback. Explicit Folder targeting remains restricted to ordinary filesystem operations and OS shells. Writes accept nonempty partial JSON objects or the full read result, with only topic (string, max 120), focus (string, max 4000; empty clears), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Task self topic adapts the parent-owned discovery title and must be preserved unchanged or omitted; task discovery title/description contracts are separate, and focus may change; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set the stable topic after understanding the first request. Subtask/debug phases update only focus; topic changes only for a real overall topic shift. Empty focus displays the topic. Sidebar labels always show topic. Session listings show focus additionally only when distinct.
 
 ### Conversation schedule chip
 
