@@ -180,3 +180,22 @@ test('reserved receipt metadata validates on restart and cannot become a path ca
   await assert.rejects(new ManagedChildWorkdirs(managed.rootPath, 'child', configured).init(), /metadata directory/)
   assert.equal(await readFile(join(created.receipt.path, 'tracked'), 'utf8'), 'first')
 })
+
+
+test('Windows paired-depth receipt paths beyond MAX_PATH retain SQLite locking and restart verification', { skip: process.platform !== 'win32' }, async t => {
+  const { root, source, configured } = await fixture(t)
+  const managedRoot = join(root, 'managed-session-workdirs-v1', 'a'.repeat(64))
+  const key = 'paired-depth-windows'
+  const lockPath = join(managedRoot, DERIVED_WORKSPACE_DIRECTORY, managedProjectScope('default'),
+    createHash('sha256').update(key).digest('hex') + '.json.lock.sqlite')
+  assert(lockPath.length > 260, 'fixture must reproduce the real paired Child path depth')
+  const managed = new ManagedChildWorkdirs(managedRoot, 'child', configured)
+  await managed.init()
+  const created = parseDerivedWorkspaceResult(await execute(managed, { action: 'create', key, branch: 'main' }))
+  assert.equal(await readFile(join(created.receipt.path, 'tracked'), 'utf8'), 'first')
+  assert((await lstat(lockPath)).isFile())
+  const restarted = new ManagedChildWorkdirs(managedRoot, 'child', configured)
+  await restarted.init()
+  assert.deepEqual(await execute(restarted, { action: 'verify', key }), created)
+  assert.equal(await git(source, ['symbolic-ref', '--short', 'HEAD'], signal), 'main')
+})
