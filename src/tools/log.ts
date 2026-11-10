@@ -1,4 +1,4 @@
-import { validateEventSummary } from '../agent/event-summary.ts'
+import { validateLogSummary } from '../agent/log-summary.ts'
 import { join } from 'node:path'
 import { appendFile, mkdir } from 'node:fs/promises'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -24,11 +24,11 @@ export class LogTool implements Tool {
       },
       summary: {
         type: 'string',
-        description: 'Short standalone event briefing (1–280 Unicode code points); include outcome and important uncertainty, not learning audit. Required for new reflector events.',
+        description: 'Short standalone log briefing (1–280 Unicode code points); include outcome and important uncertainty, not learning audit. Required for new reflector logs.',
       },
       what: {
         type: 'string',
-        description: 'Action or event description. Be concise.',
+        description: 'Description of what happened. Be concise.',
       },
       why: {
         type: 'string',
@@ -37,7 +37,7 @@ export class LogTool implements Tool {
       challenge: {
         type: 'string',
         description:
-          'Difficulty or blocker encountered during this event. Optional.',
+          'Difficulty or blocker recorded in this log. Optional.',
       },
       refs: {
         type: 'array',
@@ -48,15 +48,15 @@ export class LogTool implements Tool {
       session: {
         type: 'string',
         description:
-          'The session this event belongs to (origin/provenance). ' +
+          'The session this log belongs to (origin/provenance). ' +
           'Defaults to the current session.',
       },
-      key: { type: 'string', description: 'For learning batches: stable event key, reused on retries (e.g. source message index plus decision name).' },
+      key: { type: 'string', description: 'For learning batches: stable log key, reused on retries (e.g. source message index plus decision name).' },
     },
     required: ['who', 'what'],
   }
 
-  constructor(private workspace: string, private learningEvent?: (
+  constructor(private workspace: string, private learningLog?: (
     entry: { who: string; what: string; summary?: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
     key: unknown, context: ExecutionContext,
   ) => string | undefined) {}
@@ -69,7 +69,7 @@ export class LogTool implements Tool {
     args: Record<string, unknown>,
     context?: ExecutionContext,
   ): Promise<string> {
-    const summary = validateEventSummary(args.summary)
+    const summary = validateLogSummary(args.summary)
     const who = String(args.who)
     const what = String(args.what)
     const why = args.why != null ? String(args.why) : undefined
@@ -80,8 +80,8 @@ export class LogTool implements Tool {
     const origin = args.session != null
       ? String(args.session)
       : context?.sessionId
-    if (context && this.learningEvent) {
-      const result = this.learningEvent({ who, what, summary, why, challenge, refs, origin }, args.key, context)
+    if (context && this.learningLog) {
+      const result = this.learningLog({ who, what, summary, why, challenge, refs, origin }, args.key, context)
       if (result !== undefined) return result
     }
 
@@ -98,13 +98,13 @@ export class LogTool implements Tool {
     if (origin) entry.origin = origin
 
     const dateStr = now.toISOString().slice(0, 10)
-    const eventsDir = join(this.workspace, 'memory', 'events')
-    const filePath = join(eventsDir, `${dateStr}.jsonl`)
+    const logsDir = join(this.workspace, 'memory', 'events')
+    const filePath = join(logsDir, `${dateStr}.jsonl`)
 
-    await mkdir(eventsDir, { recursive: true })
+    await mkdir(logsDir, { recursive: true })
     await appendFile(filePath, JSON.stringify(entry) + '\n')
 
-    return `Logged event: ${who} — ${what}` +
+    return `Recorded log: ${who} — ${what}` +
       (why ? ` (why: ${why})` : '') +
       (challenge ? ` [challenge: ${challenge}]` : '')
   }

@@ -381,7 +381,7 @@ Agents read/list it through `read` on `v:memory/`, or use `search` with
 `handler: "glob"` / `handler: "grep"` and `path: "v:memory"`. There is no `v:wiki`
 mount or dedicated Wiki tool. Authorized local workers create/update shared
 Wiki Markdown at paths such as `v:memory/topics/xmcl-ops.md`; the Knowledge UI
-classifies those files as **Wiki**. Session memory, events, conventions and
+classifies those files as **Wiki**. Session memory, logs, conventions and
 internal state are different categories, not destinations for a Wiki import.
 Saying "Wiki, not Memory" selects the shared knowledge category without changing
 its canonical storage path. The authoring session can read/search it and delegate
@@ -544,7 +544,7 @@ The destination is Project memory, independent of the session's working folder.
 This does not grant the `write` tool to sessions that lack it.
 
 Through this virtual entry point, `memory/sessions/`, `memory/events/`, hidden
-state and non-Markdown files remain protected; use `log` to append events.
+state and non-Markdown files remain protected; use `log` to append logs.
 Remote-workdir and call-mode sessions retain their existing virtual-write
 restrictions. These are entry-point checks, not an OS sandbox for host commands.
 

@@ -9,7 +9,7 @@ function ectx(sessionId: string): ExecutionContext {
   return { sessionId } as unknown as ExecutionContext
 }
 
-async function readTodayEvents(
+async function readTodayLogs(
   workspace: string,
 ): Promise<Record<string, unknown>[]> {
   const today = new Date().toISOString().slice(0, 10)
@@ -25,7 +25,7 @@ test('log — origin defaults to the context session', async () => {
     const tool = new LogTool(workspace)
     await tool.execute({ who: 'agent', what: 'did X' }, ectx('discord:1'))
 
-    const [e] = await readTodayEvents(workspace)
+    const [e] = await readTodayLogs(workspace)
     assertEquals(e.origin, 'discord:1')
     assertEquals(e.who, 'agent')
     assertEquals(e.what, 'did X')
@@ -42,7 +42,7 @@ test('log — explicit session arg overrides origin', async () => {
       ectx('reflector:1'),
     )
 
-    const [e] = await readTodayEvents(workspace)
+    const [e] = await readTodayLogs(workspace)
     assertEquals(e.origin, 'discord:99')
   })
 })
@@ -61,7 +61,7 @@ test('log — optional fields carried through', async () => {
       ectx('s'),
     )
 
-    const [e] = await readTodayEvents(workspace)
+    const [e] = await readTodayLogs(workspace)
     assertEquals(e.why, 'c')
     assertEquals(e.challenge, 'd')
     assertEquals(e.refs, ['memory/topics/x.md'])
@@ -72,12 +72,12 @@ test('log — summary is normalized, code-point bounded and persisted without tr
   await withTempWorkspace(async workspace => {
     const tool = new LogTool(workspace)
     await tool.execute({ who: 'worker', what: 'Full details', summary: ' 😀 '.repeat(140) })
-    const events = await readTodayEvents(workspace)
+    const events = await readTodayLogs(workspace)
     assertEquals(events[0].summary, '😀 '.repeat(139) + '😀')
     const { rejects } = await import('node:assert/strict')
     for (const summary of ['', 'x'.repeat(281), '😀'.repeat(281), 123]) {
       await rejects(tool.execute({ who: 'worker', what: 'Details', summary }), /summary/)
     }
-    assertEquals((await readTodayEvents(workspace)).length, 1)
+    assertEquals((await readTodayLogs(workspace)).length, 1)
   })
 })

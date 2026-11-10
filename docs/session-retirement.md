@@ -90,7 +90,7 @@ in **both JSONL and SQLite**. No history migration or physical purge occurs.
   Markdown, browsable through existing knowledge tools/API, not session summaries
   or a second knowledge database. Existing exact content is reused; existing
   filenames are never overwritten. The agent must avoid semantic duplication.
-  Per-session memory, event logs and in-session compaction do not count as
+  Per-session memory, logs and in-session compaction do not count as
   cross-session preservation.
 - Host admission locking, history/state fingerprints, a fresh draft inventory,
   dependency and activity checks, current cron checks, durable

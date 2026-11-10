@@ -485,7 +485,7 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
       throw new Error('Invalid memory path; use a relative wiki filename under v:memory/.')
     }
     if (['sessions', 'events'].includes(parts[0].toLowerCase()) || !/\.md$/i.test(parts.at(-1)!)) {
-      throw new Error('Only wiki Markdown files are writable through v:memory/. Session records and internal state are read-only; use log to append events.')
+      throw new Error('Only wiki Markdown files are writable through v:memory/. Session records and internal state are read-only; use log to append logs.')
     }
     // Do not follow an alias into another Project, source records, or internal state.
     let target = resolve(workspace)

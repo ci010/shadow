@@ -19,10 +19,10 @@ export const githubDefinition: ProviderDefinition = {
     semantics: ['An occurrence ID combines issue ID and updatedAt. An observed new revision emits once relative to the preceding successful snapshot.'],
   },
   demandSchema: { type: 'object', required: ['repository'], additionalProperties: false, properties: { repository: { type: 'string', description: 'owner/name; owner uses letters, digits, underscore or hyphen; name also permits dots. Normalized to lowercase.' } } },
-  eventSchema: { type: 'object', required: ['id', 'number', 'title', 'url', 'state', 'updatedAt'], additionalProperties: false, properties: {
+  signalSchema: { type: 'object', required: ['id', 'number', 'title', 'url', 'state', 'updatedAt'], additionalProperties: false, properties: {
     id: { type: 'string' }, number: { type: 'integer', minimum: 1 }, title: { type: 'string' }, url: { type: 'string' }, state: { enum: ['OPEN', 'CLOSED'] }, updatedAt: { type: 'string' },
   } },
-  examples: [{ demand: { repository: 'owner/repo' }, event: { id: 'issue-1:2026-01-01T00:00:00Z', data: { id: 'issue-1', number: 1, title: 'Example issue', url: 'https://github.com/owner/repo/issues/1', state: 'OPEN', updatedAt: '2026-01-01T00:00:00Z' } } }],
+  examples: [{ demand: { repository: 'owner/repo' }, signal: { id: 'issue-1:2026-01-01T00:00:00Z', data: { id: 'issue-1', number: 1, title: 'Example issue', url: 'https://github.com/owner/repo/issues/1', state: 'OPEN', updatedAt: '2026-01-01T00:00:00Z' } } }],
   // This trusted GitHub-owned assertion is constrained by an exact static query.
   http: { origin: 'https://api.github.com', credential: { header: 'Authorization', prefix: 'Bearer ' },
     routes: [{ method: 'POST', path: '/graphql', effect: 'read', querySchema: { type: 'object', additionalProperties: false },
@@ -33,7 +33,7 @@ export const githubDefinition: ProviderDefinition = {
     const result = {};
     for (let offset=0; offset<demands.length; offset+=4) {
       const batch=demands.slice(offset,offset+4);
-      const cursors=batch.map(()=>null), done=batch.map(()=>false), events=batch.map(()=>[]), seen=batch.map(()=>new Set());
+      const cursors=batch.map(()=>null), done=batch.map(()=>false), signals=batch.map(()=>[]), seen=batch.map(()=>new Set());
       for(let page=0;page<10 && done.some(v=>!v);page++) {
         const variables={};
         for(let i=0;i<4;i++) {
@@ -50,9 +50,9 @@ export const githubDefinition: ProviderDefinition = {
           if(!connection || !Array.isArray(connection.nodes) || !connection.pageInfo) throw new Error('incomplete repository');
           for(const node of connection.nodes) {
             if(!node || typeof node.id!=='string' || typeof node.updatedAt!=='string' || !Number.isInteger(node.number) || node.number<1 || typeof node.title!=='string' || typeof node.url!=='string' || !['OPEN','CLOSED'].includes(node.state) || seen[i].has(node.id)) throw new Error('invalid or overlapping page');
-            seen[i].add(node.id); events[i].push({id:node.id+':'+node.updatedAt,data:{id:node.id,number:node.number,title:node.title,url:node.url,state:node.state,updatedAt:node.updatedAt}});
+            seen[i].add(node.id); signals[i].push({id:node.id+':'+node.updatedAt,data:{id:node.id,number:node.number,title:node.title,url:node.url,state:node.state,updatedAt:node.updatedAt}});
           }
-          if(events[i].length>500) throw new Error('snapshot bound exceeded');
+          if(signals[i].length>500) throw new Error('snapshot bound exceeded');
           const info=connection.pageInfo;
           if(typeof info.hasNextPage!=='boolean') throw new Error('invalid page');
           if(info.hasNextPage && (!info.endCursor || info.endCursor===cursors[i] || !connection.nodes.length)) throw new Error('cursor did not advance');
@@ -60,7 +60,7 @@ export const githubDefinition: ProviderDefinition = {
         }
       }
       if(done.some(v=>!v)) throw new Error('pagination bound exceeded');
-      for(let i=0;i<batch.length;i++) result[batch[i].key]={events:events[i],checkpoint:null};
+      for(let i=0;i<batch.length;i++) result[batch[i].key]={signals:signals[i],checkpoint:null};
     }
     return result;
   }`.replace('export async function run', "import { call } from '@shadow/fetch';\nexport async function run"),

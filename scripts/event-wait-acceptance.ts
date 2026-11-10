@@ -286,7 +286,7 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
         list: (ctx, options) => importer.virtualEntries(ctx, options),
       }],
       ['v:skills', 'skill bodies and category listings', createSkillsHandler(skills, (skill, ctx) => importer.registerSkillTools(skill, ctx))],
-      ['v:events/internal', 'internal event subscriptions and registered sources', createEventsHandler(events)],
+      ['v:signals/internal', 'internal event subscriptions and registered sources', createEventsHandler(events)],
       ['v:bg', 'owned executions and output', createBgTasksHandler(background, manager)],
       ['v:agents', 'available local roles', createAgentsHandler(agentTypes)],
     ] satisfies Array<[string, string, { read: import('../src/vfs/virtual-fs.ts').VirtualFsHandler; list: import('../src/vfs/virtual-fs.ts').VirtualFsListHandler }]>) {

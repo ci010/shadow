@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { EventProviderRuntime } from './runtime.ts'
+import { SignalProviderRuntime } from './runtime.ts'
 import { CapabilityBroker, CapabilityError } from '../../execution/grants.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import type { ProviderBrowserAccess } from '../../browser/provider-fetch.ts'
 
 const transport = { kind: 'browser' as const, instance: '0ad04ff9-9b91-4b9f-8830-3ddba8ca35ff', targetId: 'target-a' }
 const definition = { id: 'feed', version: 1, description: 'fixture', http: { origin: 'https://api.example.org', routes: [{ method: 'GET' as const, path: '/feed', querySchema: { type: 'object', additionalProperties: false } }] },
-  code: `import {call} from '@shadow/fetch'; export async function run({demands}) { const result = {}; for(const d of demands) { const r = await call({method:'GET',path:'/feed'}); result[d.key] = {events:[{id:'one',data:r.body}],checkpoint:null}; } return result; }` }
+  code: `import {call} from '@shadow/fetch'; export async function run({demands}) { const result = {}; for(const d of demands) { const r = await call({method:'GET',path:'/feed'}); result[d.key] = {signals:[{id:'one',data:r.body}],checkpoint:null}; } return result; }` }
 const { version: _version, ...reloadDefinition } = definition
 const subscription = { id: 'watch', instance: 'feed-watch', demand: {}, processor: 'export function run(){return []}' }
 
@@ -16,7 +16,7 @@ async function setup(workspace: string, browser: ProviderBrowserAccess, authored
   let native = 0
   const broker = new CapabilityBroker({ projectId: 'fixture', directory: join(workspace, 'receipts'), resolveSecret: async () => 'secret', deliver: async () => undefined, canDeliver: () => false,
     request: async () => { native++; throw new Error('must not fall back') } })
-  const runtime = new EventProviderRuntime(workspace, broker, async () => { throw new Error('unexpected') }, owner => owner === 'owner', () => true)
+  const runtime = new SignalProviderRuntime(workspace, broker, async () => { throw new Error('unexpected') }, owner => owner === 'owner', () => true)
   runtime.start(); runtime.publish('owner', authored)
   runtime.create('owner', { id: 'feed-watch', provider: 'feed', version: 1, transport }, browser)
   runtime.subscribe('owner', subscription)
@@ -44,7 +44,7 @@ test('browser transport stays instance-bound across reload, permissions and rest
   allowed = false; now += 60001; await runtime.run()
   assert.equal(requests, 1); assert.equal(runtime.snapshot('owner').errors['feed-watch'], 'browser_context_unavailable')
   await runtime.stop(); allowed = true
-  const restarted = new EventProviderRuntime(workspace, broker, async () => { throw new Error('unexpected') }, id => id === 'owner', () => true)
+  const restarted = new SignalProviderRuntime(workspace, broker, async () => { throw new Error('unexpected') }, id => id === 'owner', () => true)
   restarted.start(); t.after(() => restarted.stop()); now += 60001; await restarted.run()
   assert.equal(restarted.snapshot('owner').errors['feed-watch'], 'browser_context_unavailable'); assert.equal(native(), 0)
   restarted.bindBrowser('owner', 'feed-watch', access); now += 60001; await restarted.run(); assert.equal(requests, 2)
@@ -124,7 +124,7 @@ test('POST cleanup uncertainty blocks lifecycle while retaining mutation no-repl
   assert.equal(requests, 1)
 }))
 
-test('browser HTML string fixture parses locally then subscriber extracts structured event', async t => withTempWorkspace(async workspace => {
+test('browser HTML string fixture parses locally then subscriber extracts structured signal', async t => withTempWorkspace(async workspace => {
   let now = Date.now(); t.mock.method(Date, 'now', () => now)
   let title = 'baseline'; const messages: string[] = []
   const access: ProviderBrowserAccess = { binding: transport, assertCurrent() {}, request: async () =>
@@ -132,7 +132,7 @@ test('browser HTML string fixture parses locally then subscriber extracts struct
   const broker = new CapabilityBroker({ projectId:'fixture', directory:join(workspace,'receipts'),
     resolveSecret:async()=>{throw new Error('no secrets')},deliver:async()=>undefined,canDeliver:()=>false,
     request:async()=>{throw new Error('no native fallback')} })
-  const runtime = new EventProviderRuntime(workspace, broker, async (id, input) => {
+  const runtime = new SignalProviderRuntime(workspace, broker, async (id, input) => {
     if(input.kind === 'message') messages.push(input.content)
     return {status:'accepted',sessionId:id,inputId:input.id}
   }, () => true, () => true)
@@ -140,11 +140,11 @@ test('browser HTML string fixture parses locally then subscriber extracts struct
   const code = `import {call} from '@shadow/fetch';import {parseHtml} from '@shadow/html';
     export async function run({demands}){const result={};for(const d of demands){
       const r=await call({method:'GET',path:'/feed'});const title=parseHtml(r.body).querySelector('article > h1').textContent;
-      result[d.key]={mode:'snapshot',events:[{id:title,data:{title}}],checkpoint:null};}return result}`
+      result[d.key]={mode:'snapshot',signals:[{id:title,data:{title}}],checkpoint:null};}return result}`
   runtime.publish('owner',{...definition,code})
   runtime.create('owner',{id:'feed-watch',provider:'feed',version:1,transport},access)
   runtime.subscribe('owner',{...subscription,processor:`import {parseHtml} from '@shadow/html';
-    export function run({event}){return [{content:parseHtml('<p>'+event.data.title+'</p>').querySelector('p').textContent}]}`})
+    export function run({signal}){return [{content:parseHtml('<p>'+signal.data.title+'</p>').querySelector('p').textContent}]}`})
   await runtime.run();assert.deepEqual(messages,[])
   await runtime.reload('owner',{...reloadDefinition,code})
   title='changed';now+=60001;await runtime.run();assert.deepEqual(messages,['changed & local'])

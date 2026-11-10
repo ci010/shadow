@@ -645,7 +645,7 @@ test('scratch workbenches hide the explorer and Git without losing the expansion
   assert.match(source, /<HoverInfo v-if="explorerAvailable \|\| knowledgeSelected" :text="knowledgeSelected \? t\('Toggle Knowledge navigation \(Ctrl\+Shift\+E\)'\) : t\('Toggle files \(Ctrl\+Shift\+E\)'\)"/)
 })
 
-test('memory event previews retain original source, scoped quotes and view state without refetching', async t => {
+test('memory log previews retain original source, scoped quotes and view state without refetching', async t => {
   const pending = requests(t)
   const source = '{"when":"2026-09-10T16:45:44Z","who":"agent","what":"Record one"}\n'
   const { props, state } = mount(t, 'FilePreviewModal', {
@@ -653,9 +653,9 @@ test('memory event previews retain original source, scoped quotes and view state
   })
   pending[0]!.finish({ binary: false, content: source, size: source.length, sourcePath: 'C:\\Home\\memory\\events\\test.jsonl' })
   await settle()
-  assert.equal(state().isMemoryEvents, true)
+  assert.equal(state().isMemoryLogs, true)
   assert.equal(state().sourceView, false)
-  assert.equal(state().memoryRecords[0].event.what, 'Record one')
+  assert.equal(state().memoryRecords[0].log.what, 'Record one')
   assert.equal(state().sourcePath, 'C:\\Home\\memory\\events\\test.jsonl')
   state().sourceView = true
   await nextTick()
@@ -663,7 +663,7 @@ test('memory event previews retain original source, scoped quotes and view state
   assert.equal(pending.length, 1)
   props.dir = 'logs'
   await nextTick()
-  assert.equal(state().isMemoryEvents, false)
+  assert.equal(state().isMemoryLogs, false)
   assert.equal(state().sourcePath, undefined)
   assert.equal(state().sourceView, false)
 })

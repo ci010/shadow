@@ -36,7 +36,7 @@
       <template v-if="run.learning">
         <strong>{{ learningOutcomeLabel(run.learning) }}</strong>
         <p>{{ run.learning.summary }}</p>
-        <small>{{ t('Execution:') }} {{ statusLabel(run.status) }} · {{ t(run.learning.status === 'applied' ? '{count} verified artifacts' : '{count} recorded artifacts', { count: run.learning.artifacts }, run.learning.artifacts) }} · {{ t('{count} events', { count: run.learning.events }, run.learning.events) }} · {{ t('{count} decisions evaluated', { count: run.learning.evaluated }, run.learning.evaluated) }}</small>
+        <small>{{ t('Execution:') }} {{ statusLabel(run.status) }} · {{ t(run.learning.status === 'applied' ? '{count} verified artifacts' : '{count} recorded artifacts', { count: run.learning.artifacts }, run.learning.artifacts) }} · {{ t('{count} logs', { count: run.learning.events }, run.learning.events) }} · {{ t('{count} decisions evaluated', { count: run.learning.evaluated }, run.learning.evaluated) }}</small>
       </template>
       <p v-else>{{ run.status === 'running' ? t('Learning is in progress. Its outcome has not been verified.') : t('No verified learning receipt is available for this run. Execution status alone does not confirm learning.') }}</p>
     </div>

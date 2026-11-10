@@ -46,22 +46,22 @@ about a person's identity. Easily recomputed environment facts and temporary
 task state usually stay in source history. No durable change is a valid result.
 
 Reflector is the first-stage evidence learner: independently assess Wiki
-knowledge updates, key events/corrections/challenges, long-term memory and
+knowledge updates, key logs/corrections/challenges, long-term memory and
 material for downstream skills. A useful unresolved challenge can be logged with
 its source, attempted approaches, observed outcome and uncertainty before it
 supports a mature rule. Do not invent a resolution or force writes to all four
 destinations. Knowledge facts need not be behavioral lessons; prefer updating an
-existing Wiki item over duplicate pages. Stable event keys deduplicate retries,
+existing Wiki item over duplicate pages. Stable log keys deduplicate retries,
 not repeated user actions into a behavior counter: counting is not implemented
 by this workflow.
 
 Retention thresholds differ by destination: Wiki items need clear, sourced
 information with lasting reference value and a genuine addition or correction;
-key events/challenges need significant observed evidence worth tracking, not a
+key logs/challenges need significant observed evidence worth tracking, not a
 completed lesson. Long-term preferences and principles need stronger evidence,
 conditions and exceptions. Publishable skills need reusable procedures and
 supported outcomes, evaluated downstream. Only behavioral guidance must explain
-which future action changes; that extra test does not gate Wiki or event writes.
+which future action changes; that extra test does not gate Wiki or log writes.
 Receipts briefly explain relevant candidates retained or omitted (for example,
 duplicate, transient or unsupported), without an exhaustive checklist or quota.
 
@@ -101,7 +101,7 @@ current page and submitted full content, so reread/edit/save does not accumulate
 sections or drop earlier sources. It also recognizes the earlier generated
 heading/notice format; unrelated prose is preserved. It adds physical-source/range provenance,
 uses the existing memory writer (including alias and permission checks), reads
-back the page, records its hash and appends a deduplicated event. Thus a supported
+back the page, records its hash and appends a deduplicated log. Thus a supported
 Wiki candidate no longer needs separate write/readback/log model turns. This
 neither increases the execution budget nor removes the receipt-only finish turn.
 The host-selected reflector allowlist excludes generic `write`, even if a role
@@ -111,12 +111,12 @@ require Partial/Blocked naming the candidate, source and missing route; do not
 force them into decisions or bypass the route through filesystem paths. Historical
 direct-write effects/receipts are still audited and reused, not migrated or
 relabeled. This closes a publication bypass, not the separate problem of a model
-omitting an eligible event candidate on every retry; no automatic candidate
+omitting an eligible log candidate on every retry; no automatic candidate
 extraction, durable unsaved-intent journal or skill-size recovery is added here.
 
 This is recoverable ordered persistence, **not an atomic multi-file transaction**:
 a failure may leave the page or artifact written. Identical replay repairs missing
-bookkeeping without duplicating events, including after recreating the tool
+bookkeeping without duplicating logs, including after recreating the tool
 instance. Different stale content is rejected; existing pages use exact-match
 replacement through the normal writer. This is optimistic revision checking,
 not a global lock against arbitrary external writers. Later verification rejects
@@ -139,7 +139,7 @@ Before ending, learning agents submit `learning_result`:
 
 | Outcome | Meaning |
 | --- | --- |
-| Applied | Recorded effects persisted and passed artifact/event checks |
+| Applied | Recorded effects persisted and passed artifact/log checks |
 | No change | Assigned evidence was reviewed and nothing justified retention |
 | Partial | Some effects exist but the batch is incomplete |
 | Blocked | A prerequisite failed or a required receipt was absent |
@@ -159,8 +159,8 @@ aliases or `/full` and `/overview` are not interchangeable coverage proofs.
 Diagnostics retain the failed path and range for explicit recovery. Unresolved
 write failures remain blocking, independently of read recovery.
 Reflector direct writes need a
-provenance-bearing `log` event before Applied; the structured memory tool creates
-that event automatically. Changed artifacts pause for reconciliation rather than
+provenance-bearing log entry through `log` before Applied; the structured memory tool creates
+that log automatically. Changed artifacts pause for reconciliation rather than
 automatically overwriting another editor's change.
 
 The narrow lesson/Soul tool contracts do not make ordinary filesystem access
@@ -169,15 +169,15 @@ apply. Soul changes are described in the saved outcome; this is not a separate
 push notification or an implicit approval from the user.
 
 The Project `.learning/state.v1.json` journal stores pending bounded ranges,
-events, receipts and retries. JSONL and SQLite session stores use the same
+logs, receipts and retries. JSONL and SQLite session stores use the same
 journal. Existing `memory/.reflect-watermark.json` progress is imported without
 replaying already-consumed history or relabelling old runs. Historical missed
 writes and run-local skill drafts are not automatically replayed or installed.
 
-Encapsulation and Soul reflection consume explicit unconsumed event batches,
+Encapsulation and Soul reflection consume explicit unconsumed log batches,
 not a guessed daily filename. Their cursors are independent. A reflection with
-no new events does not start these downstream model calls. Stable log keys
-avoid duplicating an event when a retained batch is retried; already-persisted
+no new logs does not start these downstream model calls. Stable log keys
+avoid duplicating a log when a retained batch is retried; already-persisted
 effects are listed in recovery tasks.
 
 Enabled Project learning keeps checking on its configured schedule and starts
@@ -191,7 +191,7 @@ attention: scheduled retries do not silently change models or repair credentials
 Old pipeline-level paused records are normalized when the new learning runtime
 loads. New evidence and due failed batches receive alternating selection priority
 when both are available, so a backlog of failing retries cannot monopolize the
-pipeline. Unfinished ranges/events remain reserved; successful later ranges do
+pipeline. Unfinished ranges/logs remain reserved; successful later ranges do
 not advance the acknowledged cursor across an unfinished gap.
 `/learn <reflector|encapsulator|soul-reflector>` bypasses batch cooldown for an
 explicit attempt while retaining the same selection fairness and fresh context.
@@ -209,8 +209,8 @@ completion counts, observed costs or live configuration values.
 | Organizer delta | Coalesced saved-topic changes, or explicit delta action | 4 | 12 / 96,000 |
 | Organizer full | Explicit action | 8 | 24 / 192,000 |
 | Reflector | 30-minute check, pending evidence only | 6 | 18 / 96,000 |
-| Encapsulator | 2-hour check, unconsumed events only | 8 | 24 / 192,000 |
-| Soul reflector | 12-hour check, unconsumed events only | 4 | 12 / 48,000 |
+| Encapsulator | 2-hour check, unconsumed logs only | 8 | 24 / 192,000 |
+| Soul reflector | 12-hour check, unconsumed logs only | 4 | 12 / 48,000 |
 
 Automatic topic organization reuses existing session metadata/rename, topic
 creation/update and turn-finished/context-ended notifications. Ordinary session
@@ -273,8 +273,8 @@ SessionManager/BaseSession loop with only `read`, `learning_record` and
 
 Reflector batches pin at most four bounded source ranges from the current
 epoch, materialize immutable history resources and record private decisions
-and events. Encapsulation and Soul reflection consume exact unconsumed
-decision/event **versions**, with separate cursors. Workers must read every
+and logs. Encapsulation and Soul reflection consume exact unconsumed
+decision/log **versions**, with separate cursors. Workers must read every
 required input; changing a named record requires its read revision. Tool
 failures or missing/invalid receipts prevent application and acknowledgment.
 Per-worker limits include twelve model rounds, 128 tool calls and two minutes.
@@ -1272,8 +1272,8 @@ host restart; general records remain in the UI database but prior-generation
 records are excluded from this view. A fresh instance may already have startup
 logs. Source changes do not alter a running host: restart/relaunch the source
 backend or rebuild/relaunch the packaged backend to load this mount. Existing
-`v:bg`, `v:sessions` and `v:events` are execution/history/subscription views;
-the `log` tool writes learning events, not runtime diagnostics.
+`v:bg`, `v:sessions` and `v:signals` are execution/history/subscription views;
+the `log` tool writes learning logs, not runtime diagnostics.
 
 
 ### Lightweight conversation topics and Work associations
@@ -1330,42 +1330,58 @@ separate parent-owned contracts. Self views adapt task title to read-only topic,
 never task description to focus. New focus is persisted independently; clearing it
 falls back to topic without erasing any historical discovery metadata.
 
-### Event briefings and detail lookup
+### Log briefings and detail lookup
 
-Project event injection keeps the existing provenance split and relevance gate
+Memory's curated history is called **logs**, not external signals or runtime/bus events. This is a
+terminology correction, not a storage migration. The existing
+`memory/events/YYYY-MM-DD.jsonl` and `v:memory/events/` paths remain canonical
+compatibility interfaces for log records. Their physical line numbers and original
+content are preserved; no `memory/logs` copy or retrospective rewrite is created.
+The learning journal's `events`/`inputEvents` fields and outcome `events` count
+also retain their persisted/API spelling. They mean memory logs, not signal-provider
+data. Both JSONL and SQLite session backends continue using the same learning
+journal. Internal memory APIs and frontend record parsers use log names.
+Conversation-scoped memory retains stored `kind: 'event'` and immutable version
+hashes, while model-facing catalogs/read results project that kind as `log`.
+Follow-up reads still use the unchanged resource ID/version, not the display kind.
+Old historical text and attributed quotations are not rewritten. Runtime events,
+EventService and transport notifications remain separate concepts.
+
+
+Project log injection keeps the existing provenance split and relevance gate
 (initiative/shared modified files, or capped pass-through without signals).
-Both own and related events now inject short briefings instead of complete
-`what`/`why`/`challenge`/`refs`. New reflector `log` events require a standalone
+Both own and related logs now inject short briefings instead of complete
+`what`/`why`/`challenge`/`refs`. New reflector entries through `log` require a standalone
 `summary` of 1–280 Unicode code points; whitespace is normalized and oversized
 summaries are rejected, not silently truncated. The ledger accepts absent summaries
 for old records. Ordinary non-learning log callers remain backwards compatible.
-Automatically logged decision events use a short decision-status briefing.
+Automatically logged decision logs use a short decision-status briefing.
 
 `what` retains observed sequence and attributed outcomes, `why` retains evidenced
 reasons/context, and `challenge` retains obstacles/counterevidence/unknown scope.
 Exact evidence stays in `refs`. Learning routing audit, including why no Wiki
-update was appropriate, stays in `learning_result` rather than event details.
+update was appropriate, stays in `learning_result` rather than log details.
 
-Old events are not rewritten or summarized by another model: injection explicitly
+Old logs are not rewritten or summarized by another model: injection explicitly
 labels a bounded 180-code-point `what` preview as **not a summary**. Every briefing
 has a `v:memory/events/YYYY-MM-DD.jsonl` reference and physical line number; use
 `read` with that path, `offset` and `limit` to retrieve original details. VFS memory
-reads support these JSONL files; direct writes remain prohibited. The event block
+reads support these JSONL files; direct writes remain prohibited. The log block
 has a default total budget of 6,000 UTF-16 characters (including headings and
 references), in addition to existing per-section counts. Budget pressure removes
 oldest related briefings before oldest own briefings, with an explicit omission
 notice; a budget too small for even the notice returns no block. No topic
 aggregation, retrospective migration or additional LLM summarization is involved.
 
-## Programmable EventSourceProviders
+## Programmable SignalSourceProviders
 
-The lazy `event_provider` tool handles external sources; internal bus subscriptions use `event_subscribe`.
+The lazy `signal_provider` tool handles external sources; internal bus subscriptions use `event_subscribe`.
 Author a local manifest/restricted module and reload for REST JSON APIs, cursor
-feeds or public HTML/text acquisition. Read `v:events/providers/<id>` for the complete consumer contract; explicitly use
-`v:events/authoring/providers/<id>/revisions/<version>` for
+feeds or public HTML/text acquisition. Read `v:signals/providers/<id>` for the complete consumer contract; explicitly use
+`v:signals/authoring/providers/<id>/revisions/<version>` for
 revision manifests, code, schemas and examples; `instances` and `subscriptions`
 expose Project-wide configuration, processors and sanitized status. Generated views
-are read-only. Internal bus views live at `v:events/internal/`. Provider discover/inspect/share
+are read-only. Internal bus views live at `v:signals/internal/`. Provider discover/inspect/share
 actions are removed. Project instances capture narrow
 authorized origin/routes/methods/query/body/optional credential bindings that code
 reload cannot expand. Public sources need no secret. Exact demands deduplicate
@@ -1374,7 +1390,7 @@ Snapshot and bounded-retention delta modes commit checkpoints with fanout jobs.
 The built-in `github-issues@1` owns its fixed GraphQL query, batching and read-only
 body schema, using the same standard HTTP call API and host-injected PAT. The
 broker only enforces protocol-neutral origin/routes/schemas and host-bound route
-`effect:"read"` acquisition assertions; ordinary writes retain mutation receipts. See [EventSourceProviders](event-source-providers.md)
+`effect:"read"` acquisition assertions; ordinary writes retain mutation receipts. See [SignalSourceProviders](signal-source-providers.md)
 for complete REST/HTML authoring examples, virtual views/reload/create/subscribe,
 security, pagination/dedup bounds and inbox-acceptance reliability limitations.
 No arbitrary browser/JS-site support or exactly-once claim; fixture tests do not

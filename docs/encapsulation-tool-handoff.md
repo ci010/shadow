@@ -49,7 +49,7 @@ returned `synthetic:true`, `passed:true`, both cases passed, no capability calls
 source hash `sha256:f6ab231915aea8da3bccf95a6501541ef77dcdd367def8ccb871a4139cf2ff22`.
 Mock-only execution does not verify live permissions or delivery. This helper's
 `applied` artifact check is intended for encapsulation review, not reflector
-receipts where events alone can be legitimate effects.
+receipts where logs alone can be legitimate effects.
 
 ## Authoring/review handoff
 

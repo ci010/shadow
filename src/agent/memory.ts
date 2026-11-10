@@ -5,7 +5,7 @@ import { streamJsonlLines, streamJsonlObjects } from '../utils/jsonl.ts'
 
 const MEMORY_DIR = 'memory'
 
-interface EventLogEntry {
+interface LogEntry {
   when?: string
   who?: string
   summary?: string
@@ -14,7 +14,7 @@ interface EventLogEntry {
   why?: string
   challenge?: string
   refs?: unknown[]
-  /** Session that produced this event (provenance). */
+  /** Session that produced this log (provenance). */
   origin?: string
 }
 
@@ -23,18 +23,18 @@ function boundedInline(value: string, max: number): string {
   return points.length > max ? points.slice(0, max).join('') + '…' : points.join('')
 }
 
-function formatEventLogEntry(event: EventLogEntry, date: string, showOrigin = false): string {
-  const when = boundedInline(formatEventTime(event.when), 40)
-  const who = boundedInline(event.who ?? 'unknown', 60)
-  const origin = showOrigin && event.origin ? ` [${boundedInline(event.origin, 100)}]` : ''
-  const summary = event.summary && Array.from(event.summary).length <= 280
-    ? sanitizeMarkdownInline(event.summary) : ''
+function formatLogEntry(log: LogEntry, date: string, showOrigin = false): string {
+  const when = boundedInline(formatLogTime(log.when), 40)
+  const who = boundedInline(log.who ?? 'unknown', 60)
+  const origin = showOrigin && log.origin ? ` [${boundedInline(log.origin, 100)}]` : ''
+  const summary = log.summary && Array.from(log.summary).length <= 280
+    ? sanitizeMarkdownInline(log.summary) : ''
   // Old records have no authored summary. Never present an excerpt as one.
-  const brief = summary || `[legacy/detail preview, not a summary] ${boundedInline(event.what ?? '', 180)}`
-  return `- ${when}${origin} **${who}** — ${brief} (details: v:memory/events/${date}.jsonl, line ${event.detailLine})`
+  const brief = summary || `[legacy/detail preview, not a summary] ${boundedInline(log.what ?? '', 180)}`
+  return `- ${when}${origin} **${who}** — ${brief} (details: v:memory/events/${date}.jsonl, line ${log.detailLine})`
 }
 
-function formatEventTime(value?: string): string {
+function formatLogTime(value?: string): string {
   if (!value) return 'unknown time'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return sanitizeMarkdownInline(value)
@@ -51,7 +51,7 @@ function sanitizeMarkdownInline(value: string): string {
  * 1. **Session memory** (`memory/sessions/<session>.md`) — persistent context
  *    for a logical conversation.
  *
- * 2. **Daily event log** (`memory/events/YYYY-MM-DD.jsonl`) — structured daily
+ * 2. **Daily log** (`memory/events/YYYY-MM-DD.jsonl`) — structured daily
  *    history rendered to markdown before injection into the system prompt.
  */
 export class MemoryStore {
@@ -61,9 +61,9 @@ export class MemoryStore {
     this.memoryDir = workspacePath(workspace, MEMORY_DIR)
   }
 
-  // ── Daily event log ───────────────────────────────────────────────────
+  // ── Daily log ───────────────────────────────────────────────────
 
-  private eventLogPath(date?: string): string {
+  private logPath(date?: string): string {
     const d = date ?? new Date().toISOString().slice(0, 10)
     return join(this.memoryDir, 'events', `${d}.jsonl`)
   }
@@ -84,15 +84,15 @@ export class MemoryStore {
   }
 
   /**
-   * Read today's shared event pool, split by provenance:
-   * - **this session** (origin === currentSessionId) → eager, `### Recent Events`.
-   * - **other sessions** → `### Related Events`, **relevance-gated** (same
+   * Read today's shared log pool, split by provenance:
+   * - **this session** (origin === currentSessionId) → eager, `### Recent Logs`.
+   * - **other sessions** → `### Related Logs`, **relevance-gated** (same
    *   project or a shared modified file), capped with a `+N more` fold.
    *
    * Relevance gating only applies when the current session has signals
-   * (a project or a working set); otherwise related events pass through capped.
+   * (a project or a working set); otherwise related logs pass through capped.
    */
-  async readEvents(
+  async readLogs(
     currentSessionId: string,
     opts: {
       maxOwn?: number
@@ -106,21 +106,21 @@ export class MemoryStore {
     const { maxOwn = 40, maxRelated = 15, currentInitiative, initiativeOf } = opts
     const date = new Date().toISOString().slice(0, 10)
 
-    const own: EventLogEntry[] = []
-    const related: EventLogEntry[] = []
+    const own: LogEntry[] = []
+    const related: LogEntry[] = []
     let detailLine = 0
-    for await (const line of streamJsonlLines(this.eventLogPath(date), { skipEmpty: false })) {
+    for await (const line of streamJsonlLines(this.logPath(date), { skipEmpty: false })) {
       detailLine++
-      let event: EventLogEntry
-      try { event = JSON.parse(line) } catch { continue }
-      if (!event || typeof event !== 'object') continue
-      event.detailLine = detailLine
-      if (opts.since && !(Date.parse(event.when ?? '') > Date.parse(opts.since))) continue
-      if (event.origin && event.origin === currentSessionId) own.push(event)
-      else related.push(event)
+      let log: LogEntry
+      try { log = JSON.parse(line) } catch { continue }
+      if (!log || typeof log !== 'object') continue
+      log.detailLine = detailLine
+      if (opts.since && !(Date.parse(log.when ?? '') > Date.parse(opts.since))) continue
+      if (log.origin && log.origin === currentSessionId) own.push(log)
+      else related.push(log)
     }
 
-    // ─ Relevance gate for related events ─
+    // ─ Relevance gate for related logs ─
     const myFiles = await this.workingSetPaths(currentSessionId)
     const gatingEnabled = !!currentInitiative || myFiles.size > 0
     const relevanceCache = new Map<string, boolean>()
@@ -145,7 +145,7 @@ export class MemoryStore {
       return relevant
     }
 
-    const relevant: EventLogEntry[] = []
+    const relevant: LogEntry[] = []
     let irrelevant = 0
     for (const e of related) {
       if (await isRelevant(e.origin)) relevant.push(e)
@@ -157,13 +157,13 @@ export class MemoryStore {
     let omitted = 0
     const render = (): string => {
       const sections: string[] = []
-      if (shownOwn.length) sections.push(['### Recent Events (this session)',
-        ...shownOwn.map(e => formatEventLogEntry(e, date))].join('\n'))
+      if (shownOwn.length) sections.push(['### Recent Logs (this session)',
+        ...shownOwn.map(e => formatLogEntry(e, date))].join('\n'))
       const hidden = relevant.length - shownRelated.length + irrelevant
-      if (shownRelated.length || hidden) sections.push(['### Related Events (other sessions)',
-        ...shownRelated.map(e => formatEventLogEntry(e, date, true)),
+      if (shownRelated.length || hidden) sections.push(['### Related Logs (other sessions)',
+        ...shownRelated.map(e => formatLogEntry(e, date, true)),
         ...(hidden ? [`- +${hidden} more in other sessions`] : [])].join('\n'))
-      if (omitted) sections.push(`- ${omitted} event briefings omitted by budget; details: v:memory/events/${date}.jsonl`)
+      if (omitted) sections.push(`- ${omitted} log briefings omitted by budget; details: v:memory/events/${date}.jsonl`)
       return sections.join('\n\n')
     }
     const budget = Math.max(0, Math.floor(opts.maxChars ?? 6000))
@@ -182,7 +182,7 @@ export class MemoryStore {
 
   /**
    * Build a combined memory block for inclusion in the system prompt.
-   * Includes session memory + today's event log rendered as markdown.
+   * Includes session memory + today's log rendered as markdown.
    */
 
   // ── Session memory (per-logical-session persistent context) ──────────
