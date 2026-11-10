@@ -76,7 +76,7 @@ export function usageProvider(
       const started = performance.now()
       const record = (usage: LLMResponseUsage | null) => store.appendRawEvents(destination.physicalId, [{
         type: 'model_usage', id: randomUUID(), sessionId: destination.sessionId,
-        timestamp: new Date().toISOString(), usage, durationMs: Math.max(0, performance.now() - started),
+        timestamp: new Date().toISOString(), model: args[2]?.model, usage, durationMs: Math.max(0, performance.now() - started),
       }])
       let response
       try { response = await provider.chat(...args) }

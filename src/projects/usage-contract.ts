@@ -10,7 +10,20 @@ export const projectUsageMetricsSchema = z.object({
   durationMs: amount.nullable(),
   unknownDurationCalls: z.number().int().nonnegative(),
 })
+const activityPeriodSchema = z.object({
+  models: z.array(z.object({ name: z.string(), calls: z.number().int().nonnegative() })),
+  tools: z.array(z.object({ name: z.string(), calls: z.number().int().nonnegative() })),
+})
+export const projectUsageActivitySchema = z.object({
+  total: activityPeriodSchema, today: activityPeriodSchema,
+  past7Days: activityPeriodSchema, month: activityPeriodSchema,
+})
+export type ProjectUsageActivity = z.infer<typeof projectUsageActivitySchema>
 export const projectUsageSchema = z.object({
+  activity: projectUsageActivitySchema.default((): ProjectUsageActivity => ({
+    total: { models: [], tools: [] }, today: { models: [], tools: [] },
+    past7Days: { models: [], tools: [] }, month: { models: [], tools: [] },
+  })),
   projectId: z.string(), asOf: z.string().datetime(), timeZone: z.literal('UTC'),
   total: projectUsageMetricsSchema, today: projectUsageMetricsSchema,
   past7Days: projectUsageMetricsSchema, month: projectUsageMetricsSchema,

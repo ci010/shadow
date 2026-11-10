@@ -135,3 +135,102 @@ test('daily endpoint validates pages after authorization and never accepts calle
   assert.equal(response.headers.get('cache-control'), 'no-store')
   assert.deepEqual(await response.json(), { projectId: 'p', page: 2 })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: named activity uses source results, UTC windows and logical-call deduplication`, async () => {
+    await withTempWorkspace(async workspace => {
+      let store: SessionStore = new Store(join(workspace, 'activity')); await store.init()
+      const state = { sessionId: 'owner', projectId: 'p', segmentIndex: 1 }
+      const child = { sessionId: 'child', projectId: 'p', segmentIndex: 0, parent: { id: 'owner', physicalId: physicalSessionId(state, 0), index: 99 } }
+      const foreign = { sessionId: 'foreign', projectId: 'q', segmentIndex: 0 }
+      const model = (id: string, timestamp: string, name: unknown = 'z-model') => ({ type: 'model_usage', sessionId: 'owner', id, model: name, timestamp, usage: null })
+      const call = (id: string, name: string, args: unknown = {}) => ({ role: 'assistant', tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] })
+      const tool = (id: string, name: string, timestamp = '2026-10-01T00:00:00Z') => ({ role: 'tool', name, tool_call_id: id, timestamp, content: 'Error: synthetic failure' })
+      try {
+        await store.createSessionLog(physicalSessionId(state, 0), [
+          model('old', '2026-09-24T23:59:59.999Z'),
+          model('seven', '2026-09-25T00:00:00Z'),
+          model('today', '2026-10-01T00:00:00Z', 'a-model'),
+          call('dynamic', 'invoke_tool', { name: 'remote.search', args: {} }),
+          tool('dynamic', 'invoke_tool'),
+          call('unfinished', 'never-executed'),
+          call('cross-segment', 'invoke_tool', { name: 'remote.search' }),
+          tool('old-tool', 'read', '2026-09-24T23:59:59.999Z'),
+          tool('seven-tool', 'read', '2026-09-25T00:00:00Z'),
+        ])
+        await store.createSessionLog(physicalSessionId(state, 1), [
+          model('today', '2026-10-01T00:00:00Z', 'a-model'),
+          model('failed', '2026-10-01T01:00:00Z', 'a-model'),
+          model('future', '2026-10-01T12:00:00Z', 'excluded'),
+          model('undated', 'invalid', 'excluded'), model('legacy', '2026-10-01T01:00:00Z', null),
+          tool('dynamic', 'invoke_tool'), tool('cross-segment', 'invoke_tool'),
+          call('batch', 'multi_tool_use.parallel', { tool_uses: [
+            { recipient_name: 'functions.read', parameters: {} },
+            { recipient_name: 'functions.invoke_tool', parameters: { name: 'remote.search', args: {} } },
+          ] }), tool('batch', 'multi_tool_use.parallel'), tool('batch', 'multi_tool_use.parallel'),
+          tool('future-tool', 'excluded', '2026-10-01T12:00:00Z'), tool('undated-tool', 'excluded', 'invalid'),
+          { ...tool('wrong-owner', 'excluded'), sessionId: 'someone-else' },
+          call('init', 'invoke_tool', { source: 'source', args: {} }), tool('init', 'invoke_tool'),
+        ])
+        // Fork snapshots are references, not copied raw events. Same call IDs in
+        // genuinely separate logical sessions still represent separate executions.
+        await store.createSessionLog(physicalSessionId(child), [tool('dynamic', 'read')])
+        await store.createSessionLog(physicalSessionId(foreign), [tool('foreign', 'excluded')])
+        store.close?.(); store = new Store(join(workspace, 'activity')); await store.init()
+        const result = await readProjectUsage(store, [state, child, state, foreign], 'p', now)
+        assert.deepEqual(result.activity.total.models, [{ name: 'a-model', calls: 2 }, { name: 'z-model', calls: 2 }])
+        assert.deepEqual(result.activity.today.models, [{ name: 'a-model', calls: 2 }])
+        assert.deepEqual(result.activity.past7Days.models, [{ name: 'a-model', calls: 2 }, { name: 'z-model', calls: 1 }])
+        assert.deepEqual(result.activity.total.tools, [{ name: 'read', calls: 4 }, { name: 'remote.search', calls: 3 }])
+        assert.deepEqual(result.activity.past7Days.tools, [{ name: 'read', calls: 3 }, { name: 'remote.search', calls: 3 }])
+        assert.deepEqual(result.activity.today.tools, [{ name: 'remote.search', calls: 3 }, { name: 'read', calls: 2 }])
+        assert.deepEqual(result.activity.month, result.activity.today)
+      } finally { store.close?.() }
+    })
+  })
+}
+
+test('activity schema supplies independent empty periods for legacy payloads and validates counts', async () => {
+  const store = { async *readSessionLog() {} } as unknown as SessionStore
+  const { activity: _activity, ...legacy } = await readProjectUsage(store, [], 'p', now)
+  const parsed = projectUsageSchema.parse(legacy)
+  assert.deepEqual(parsed.activity, { total: { models: [], tools: [] }, today: { models: [], tools: [] }, past7Days: { models: [], tools: [] }, month: { models: [], tools: [] } })
+  const mutable = projectUsageSchema.parse(legacy)
+  mutable.activity.total.models.push({ name: 'x', calls: 1 })
+  assert.deepEqual(projectUsageSchema.parse(legacy).activity.total.models, [])
+  assert.equal(projectUsageSchema.safeParse({ ...legacy, activity: { ...parsed.activity, today: { models: [{ name: 'x', calls: -1 }], tools: [] } } }).success, false)
+})
+
+test('activity honors month boundaries and the shared source-record scan cap', async () => {
+  const state = { sessionId: 'owner', projectId: 'p', segmentIndex: 0 }
+  const store = { async *readSessionLog() {
+    yield { type: 'model_usage', sessionId: 'owner', id: 'previous-month', model: 'before', timestamp: '2026-09-30T23:59:59.999Z' }
+    yield { type: 'model_usage', sessionId: 'owner', id: 'month', model: 'inside', timestamp: '2026-10-01T00:00:00Z' }
+    yield { role: 'tool', name: 'before', tool_call_id: 'before', timestamp: '2026-09-30T23:59:59.999Z' }
+    yield { role: 'tool', name: 'inside', tool_call_id: 'inside', timestamp: '2026-10-01T00:00:00Z' }
+    for (let i = 4; i < 100_000; i++) yield { role: 'assistant' }
+    yield { role: 'tool', name: 'excluded', tool_call_id: 'cap', timestamp: '2026-10-01T00:00:00Z' }
+  } } as unknown as SessionStore
+  const result = await readProjectUsage(store, [state], 'p', now)
+  assert.equal(result.scanLimitReached, true)
+  assert.deepEqual(result.activity.month.models, [{ name: 'inside', calls: 1 }])
+  assert.deepEqual(result.activity.month.tools, [{ name: 'inside', calls: 1 }])
+  assert.deepEqual(result.activity.total.tools, [{ name: 'before', calls: 1 }, { name: 'inside', calls: 1 }])
+})
+
+
+test('Project usage includes archived automation runs and their child session costs', async () => {
+  await withTempWorkspace(async workspace => {
+    const store = new JsonlSessionStore(join(workspace, 'sessions')); await store.init()
+    const automation = { sessionId: 'automation:run', projectId: 'p', segmentIndex: 0, automation: { jobId: 'job', runId: 'run', startedAt: '2026-10-01T00:00:00Z' } } as SessionState
+    const child: SessionState = { sessionId: 'automation:child', projectId: 'p', segmentIndex: 0, parentSessionId: automation.sessionId }
+    try {
+      for (const state of [automation, child]) await store.createSessionLog(physicalSessionId(state), [{ type: 'model_usage', id: state.sessionId, sessionId: state.sessionId, timestamp: '2026-10-01T01:00:00Z', model: 'fixture', usage: tokens }])
+      const states = await SessionManager.prototype.listHistoryStates.call({ sessionStates: {}, deps: { projectId: 'p' }, store: { queryArchivedStates: async () => [automation, child] } } as unknown as SessionManager)
+      const usage = await readProjectUsage(store, states, 'p', now)
+      assert.equal(usage.total.calls, 2)
+      assert.deepEqual(usage.total.costs, [{ currency: 'USD', amount: 0.4 }])
+      assert.deepEqual(usage.activity.past7Days.models, [{ name: 'fixture', calls: 2 }])
+    } finally { store.close?.() }
+  })
+})

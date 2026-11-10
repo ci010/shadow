@@ -1,4 +1,13 @@
 {
+  "Model counts require recorded model names; older calls without names are excluded. Tool counts use recorded results, including errors; unfinished calls without results are excluded.": "Model counts require recorded model names; older calls without names are excluded. Tool counts use recorded results, including errors; unfinished calls without results are excluded.",
+  "Daily known tokens.": "Daily known tokens.",
+  "Includes converted AI credits in USD.": "Includes converted AI credits in USD.",
+  "Model usage": "Model usage",
+  "Tool usage": "Tool usage",
+  "Calls": "Calls",
+  "LLM calls by model in the selected summary period.": "LLM calls by model in the selected summary period.",
+  "Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.": "Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.",
+  "No recorded calls in this period.": "No recorded calls in this period.",
   "Pasted image": "Pasted image",
   "Insert image reference": "Insert image reference",
   "Insert reference to {name}": "Insert reference to {name}",
