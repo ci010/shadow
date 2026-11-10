@@ -85,3 +85,30 @@ test('program mutation and recovery fail closed when no human authorization cont
     assert.equal((await app.request(endpoint + '/work/resume', { method: 'POST' })).status, 403)
   } finally { await cron.stop() }
 }))
+
+
+test('disabled dispatch configuration can be restored to unconfigured defaults without enabling an unsafe run', async () => withTempWorkspace(async home => {
+  const cron = new CronService(home)
+  await cron.start()
+  await cron.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
+  const app = new Hono()
+  registerAutomationRoutes(app, cron, sessions, 'project', undefined, undefined, undefined, {
+    authorize: () => true, preference: () => false, update: async () => {},
+  }, undefined, {
+    validate: async config => { if (config.folderId !== 'supported-repository') throw new Error('An exact available source is required') },
+    resume: async () => {},
+  })
+  const patch = (body: unknown) => app.request(endpoint, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  try {
+    assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 200)
+    assert.equal((await patch({ enabled: true })).status, 400)
+    assert.equal((await patch({ program: { kind: 'work-dispatch', folderId: 'supported-repository' } })).status, 200)
+    assert.equal((await patch({ enabled: true })).status, 200)
+    assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 400, 'cannot clear the source of an enabled timer')
+    assert.equal((await patch({ enabled: false })).status, 200)
+    assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 200)
+    assert.equal(cron.listJobs().find(job => job.id === WORK_DISPATCH_ID)?.program?.folderId, undefined)
+    assert.equal((await app.request(endpoint + '/run', { method: 'POST' })).status, 400)
+    assert.equal((await patch({ enabled: true })).status, 400)
+  } finally { await cron.stop() }
+}))

@@ -13,7 +13,7 @@ import { WORK_DISPATCH_ID, workDispatchConfigSchema } from './work-dispatch-cont
 import type { CronJob } from './service.ts'
 
 const abort = () => new AbortController().signal
-const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source' })
+const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source', maxConcurrent: 1 })
 const job: CronJob = { ...WORK_DISPATCH_AUTOMATION, program: config, id: WORK_DISPATCH_ID, createdAt: new Date().toISOString(), enabled: true }
 function fixture(home: string, projectId = 'a') {
   const states = new Map<string, SessionState>(), active = new Set<string>(), waiting = new Map<string, unknown>()
@@ -44,7 +44,14 @@ function fixture(home: string, projectId = 'a') {
     verify: async () => {},
     changed: async () => { changed++ },
   }
-  const dispatcher = new WorkDispatcher(deps)
+  const bindRunner = (dispatcher: WorkDispatcher) => {
+    dispatcher.setRunner(async (round, signal) => {
+      const candidate = store.workRecords().find(record => automaticWorkEligible(record, store.workRecords()))
+      if (candidate) await dispatcher.dispatchWork(round, candidate.key, candidate.sequence, {}, signal)
+    })
+    return dispatcher
+  }
+  const dispatcher = bindRunner(new WorkDispatcher(deps))
   const create = (overrides: Partial<NonNullable<WorkRecord['workflow']>> = {}) => {
     const subject = { kind: 'work' as const, id: randomUUID() }
     const work: WorkRecord = { subject, key: workKey(subject), revision: 1, sequence: 1,
@@ -55,7 +62,7 @@ function fixture(home: string, projectId = 'a') {
     return work
   }
   const get = (work: WorkRecord) => store.workRecords().find(item => item.key === work.key)!
-  return { store, states, active, waiting, dispatcher, deps, create, get, delivered,
+  return { store, states, active, waiting, dispatcher, bindRunner, deps, create, get, delivered,
     counts: () => ({ creates, prepares, changed }), failPreparation: (v = true) => { preparationFails = v },
     failDelivery: (v = true) => { deliveryFails = v }, failTarget: () => { targetFails = true }, replay: () => { replay = true } }
 }
@@ -90,7 +97,7 @@ test('bounded admission, claim competition, durable same-assignee restart, and u
     const stale = { ...first, sequence: 2, workflow: { ...first.workflow!, assignee: 'racer', assignmentRevision: 2 }, automaticExecution: assigned.automaticExecution }
     assert.throws(() => f.store.claimAutomaticWork(stale, 1), /changed|assignee/)
     f.active.clear()
-    const restarted = new WorkDispatcher(f.deps)
+    const restarted = f.bindRunner(new WorkDispatcher(f.deps))
     await restarted.recover()
     assert.equal(f.get(assigned).workflow?.status, 'blocked')
     assert.equal(f.get(assigned).workflow?.assignee, id)
@@ -338,7 +345,7 @@ test('publisher help survives a crash after blocker save and transport failures 
     assert.equal(blocked.automaticExecution?.help?.attempts, 0)
     assert.equal(blocked.automaticExecution?.help?.delivered, false)
     f.deps.changed = async () => {}; f.failDelivery()
-    const restarted = new WorkDispatcher(f.deps)
+    const restarted = f.bindRunner(new WorkDispatcher(f.deps))
     await restarted.recover(); await restarted.recover(); await restarted.recover(); await restarted.recover()
     assert.equal(f.get(work).automaticExecution?.help?.attempts, 3)
     assert.equal(f.get(work).automaticExecution?.help?.delivered, false)
@@ -350,5 +357,105 @@ test('publisher help survives a crash after blocker save and transport failures 
     f.failDelivery(false)
     await restarted.recover()
     assert.equal(f.delivered.length, 3)
+  } finally { f.store.close() }
+}))
+
+
+test('parallel selections have independent workers/workspaces, model/location overrides, bounded device capacity and no duplicates', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const parallel = { ...job, program: workDispatchConfigSchema.parse({ ...config, maxConcurrent: 4, maxConcurrentPerDevice: 2, model: 'default-model', reasoningEffort: 'high' }) }
+    const checked: string[] = []
+    f.deps.validateTarget = async settings => { assert.ok(['source', 'alternate'].includes(settings.folderId!)); checked.push(settings.folderId!) }
+    f.deps.prepare = async (settings, id) => ({ folderId: `isolated-${id}`, path: `/synthetic/${settings.folderId}/${id}`, branch: `shadow/${id}` })
+    const first = f.create(), second = f.create(), third = f.create()
+    const results = await Promise.all([
+      f.dispatcher.dispatchWork(parallel, first.key, first.sequence, {}, abort()),
+      f.dispatcher.dispatchWork(parallel, second.key, second.sequence, { folderId: 'alternate', model: 'selected-model', reasoningEffort: 'max' }, abort()),
+    ])
+    assert.equal(f.delivered.length, 2)
+    assert.equal(new Set(results.map(record => record.workflow!.assignee)).size, 2)
+    assert.equal(new Set(results.map(record => record.automaticExecution!.folderId)).size, 2)
+    assert.equal(new Set(results.map(record => record.automaticExecution!.path)).size, 2)
+    const [a, b] = results.map(record => f.states.get(record.workflow!.assignee!)!)
+    assert.deepEqual(a.config, { model: 'default-model', reasoningEffort: 'high' })
+    assert.deepEqual(b.config, { model: 'selected-model', reasoningEffort: 'max' })
+    assert.equal(a.agentType, 'general')
+    assert.equal(b.automaticWork?.limits.folderId, 'alternate')
+    assert.equal(b.workdir?.nodeId, a.workdir?.nodeId)
+    assert.deepEqual(checked, ['source', 'alternate'])
+    await assert.rejects(f.dispatcher.dispatchWork(parallel, first.key, first.sequence, {}, abort()), /changed|eligible/)
+    await assert.rejects(f.dispatcher.dispatchWork(parallel, third.key, third.sequence, {}, abort()), /device.*capacity/)
+    assert.equal(f.get(third).workflow?.assignee, null)
+    assert.equal(f.delivered.length, 2)
+    const snapshot = f.dispatcher.snapshot(parallel.program)
+    assert.equal(snapshot.capacity.active, 2)
+    assert.equal(snapshot.capacity.onDevice, 2)
+    assert.equal(snapshot.capacity.available, false)
+    // Full device means even a fresh dispatcher is unnecessary.
+    let rounds = 0
+    f.dispatcher.setRunner(async () => { rounds++ })
+    await f.dispatcher.dispatch(parallel, abort())
+    assert.equal(rounds, 0)
+    f.active.clear()
+    await new WorkDispatcher(f.deps).recover()
+    for (const result of results) {
+      assert.equal(f.get(result).workflow?.status, 'blocked')
+      assert.equal(f.get(result).workflow?.assignee, result.workflow?.assignee)
+    }
+    assert.equal(f.delivered.length, 2, 'restart must not replay either admission')
+  } finally { f.store.close() }
+}))
+
+test('explicit dependency admission is rejected, snapshot includes its current status, and selection cannot override host budgets', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const prerequisite = f.create(), dependent = f.create({ dependencies: [prerequisite.key] })
+    const snapshot = f.dispatcher.snapshot(config, 0, 100)
+    const row = snapshot.records.find(record => record.key === dependent.key)!
+    assert.equal(row.eligible, false)
+    assert.deepEqual(row.dependencies, [{ key: prerequisite.key, status: 'pending' }])
+    await assert.rejects(f.dispatcher.dispatchWork(job, dependent.key, dependent.sequence, {}, abort()), /dependencies/)
+    await assert.rejects(f.dispatcher.dispatchWork(job, prerequisite.key, prerequisite.sequence, { maxConcurrent: 16 } as never, abort()), /Unrecognized key/)
+    assert.equal(f.counts().creates, 0)
+    assert.equal(f.delivered.length, 0)
+  } finally { f.store.close() }
+}))
+
+
+test('recovery uses current host capacity, not the executor stored capacity from an older configuration', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const earlier = { ...job, program: workDispatchConfigSchema.parse({ ...config, maxConcurrent: 4, maxConcurrentPerDevice: 4 }) }
+    const first = f.create()
+    await f.dispatcher.dispatchWork(earlier, first.key, first.sequence, {}, abort())
+    f.active.clear()
+    await f.dispatcher.recover()
+    const second = f.create()
+    await f.dispatcher.dispatchWork(earlier, second.key, second.sequence, {}, abort())
+    f.deps.capacityPolicy = () => ({ maxConcurrent: 1, maxConcurrentPerDevice: 1 })
+    const blocked = f.get(first)
+    assert.equal(f.states.get(blocked.workflow!.assignee!)?.automaticWork?.limits.maxConcurrent, 4)
+    await assert.rejects(f.dispatcher.resume(first.key, blocked.sequence, abort()), /capacity is occupied/)
+    assert.equal(f.delivered.length, 2)
+  } finally { f.store.close() }
+}))
+
+
+test('remote isolation binds its exact Child workdir without leaking addressing into Work receipts', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const workdir = { version: 2 as const, nodeId: 'windows-child', workdirId: 'picked-v1:isolated' }
+    f.deps.nodeForTarget = () => workdir.nodeId
+    f.deps.prepare = async () => ({ folderId: 'remote-isolated', path: 'C:\\work\\isolated', branch: 'shadow-derived-fixture', workdir })
+    const work = f.create()
+    const claimed = await f.dispatcher.dispatchWork(job, work.key, work.sequence, {}, abort())
+    const state = f.states.get(claimed.workflow!.assignee!)!
+    assert.deepEqual(state.workdir, workdir)
+    assert.equal(state.folderId, 'remote-isolated')
+    assert.equal(claimed.automaticExecution?.path, 'C:\\work\\isolated')
+    assert.equal('workdir' in claimed.automaticExecution!, false, 'Work receipts retain the registered Folder, not an unchecked alternate address')
+    assert.equal(f.dispatcher.snapshot(config).capacity.onDevice, 1)
+    assert.equal(f.dispatcher.snapshot(config).capacity.nodeId, 'windows-child')
   } finally { f.store.close() }
 }))

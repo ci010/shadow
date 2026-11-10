@@ -29,13 +29,16 @@ heuristic, not a benchmark, cost/latency ranking or guarantee of task quality.
 
 ## Automatic Work dispatch
 
-The standard `default:work-dispatch-v1` automation performs a program-only scan
-(default `every 60s`) and calls no model when there is no eligible Work. Configure
-its one registered local repository Workspace before enabling it. Claims are
-atomic, executors use isolated real Git worktrees, and blocked/failed executions
-retain their assignee and recovery context. See [Automatic Work dispatch](work-auto-dispatch.md)
-for the authorized configuration/recovery API, capacity and isolation guarantees,
-normal waiting versus failure, and unverified live GitHub/remote boundaries.
+The standard `default:work-dispatch-v1` automation checks for eligible Work and
+capacity (default `every 60s`), then runs an internal fresh-context dispatcher to
+choose Work, source Workspace and worker model. Idle checks call no model.
+Configure its registered repository default before enabling it. Claims are
+atomic, independent workers use isolated real Git worktrees within bounded
+Project/device capacity, and blocked/failed executions retain their assignee.
+Ordinary sessions can read `v:skills/auto-dispatch` to edit the Project's
+supplementary instructions and explicit cross-run memory through virtual files.
+See [Automatic Work dispatch](work-auto-dispatch.md) for configuration/recovery,
+customization, local/Child isolation guarantees and device upgrade requirements.
 
 ## Learning outcomes and recovery
 

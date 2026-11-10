@@ -1,11 +1,23 @@
 import { z } from 'zod'
+import { REASONING_EFFORTS } from '../agent/llm-config.ts'
+
+export const workDispatchSelectionSchema = z.object({
+  folderId: z.string().min(1).max(512).optional(),
+  model: z.string().trim().min(1).max(512).optional(),
+  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+}).strict()
+export type WorkDispatchSelection = z.infer<typeof workDispatchSelectionSchema>
 
 export const WORK_DISPATCH_DEFAULT_KEY = 'work-dispatch-v1'
 export const WORK_DISPATCH_ID = `default:${WORK_DISPATCH_DEFAULT_KEY}`
-/** Host-only program configuration. No model or external message can author this action. */
+/** Host-only automation policy. Dispatcher selections cannot alter ceilings or enablement. */
 export const workDispatchConfigSchema = z.object({
   kind: z.literal('work-dispatch'),
   folderId: z.string().min(1).max(512).optional(),
+  model: z.string().trim().min(1).max(512).optional(),
+  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+  maxConcurrent: z.number().int().min(1).max(16).default(4),
+  maxConcurrentPerDevice: z.number().int().min(1).max(16).default(2),
   inferenceRequests: z.number().int().min(1).max(1000).default(100),
   toolCalls: z.number().int().min(1).max(10000).default(200),
   argumentBytes: z.number().int().min(1).max(10000000).default(1000000),

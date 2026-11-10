@@ -197,6 +197,8 @@ export interface StartSessionOptions {
   chatId?: string
   /** Model override for this session. */
   model?: string
+  /** Trusted caller inference override, set before first admission. */
+  reasoningEffort?: SessionConfig['reasoningEffort']
   /** Trusted internal caller output ceiling; persisted with this execution, not a provider retry. */
   maxTokens?: number
   /** Host-only one-shot ceilings, never accepted from model arguments or persisted settings. */
@@ -1548,9 +1550,14 @@ ${JSON.stringify(request)}`,
       if (resume && (state?.recovery?.pendingToolCalls ?? 0) > 0 && resume.acknowledgeToolReplay !== true) {
         throw new SessionResumeError('Confirm that unfinished tools may run again and repeat side effects. Remote shells only reconcile saved execution records.')
       }
-      if (state?.automaticWork && (!state.folderId || !state.workdir || state.workdir.nodeId !== LOCAL_NODE_ID
-        || state.workdir.workdirId !== localFolderWorkdirRef(state.folderId).workdirId) && !(input.kind === 'control' && input.command.type === 'cancel')) {
-        throw new Error('Automatic Work has no prepared isolated Workspace; source-directory fallback is prohibited')
+      if (state?.automaticWork && !(input.kind === 'control' && input.command.type === 'cancel')) {
+        // assertFolderAccess above validates the exact registered Folder/workdir
+        // pair. Remote addressing is accepted only with that host-owned validator,
+        // never from a display path or an arbitrary caller-supplied node reference.
+        const prepared = state.folderId && state.workdir && (state.workdir.nodeId === LOCAL_NODE_ID
+          ? state.workdir.workdirId === localFolderWorkdirRef(state.folderId).workdirId
+          : !!this.deps.assertSessionFolder && !!this.deps.ownsFolder?.(state.folderId) && !!this.deps.ownsWorkdir?.(state.workdir))
+        if (!prepared) throw new Error('Automatic Work has no prepared isolated Workspace; source-directory fallback is prohibited')
       }
       const ownerId = delegationOwner(state)
       const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
@@ -2199,7 +2206,10 @@ ${JSON.stringify(request)}`,
       sessionId,
       undefined,
       { ...opts.locality, agentType: opts.agentType, model: opts.model, automation: opts.automation, statePersistence: opts.statePersistence, mode: opts.mode,
-        ...(opts.maxTokens !== undefined ? { config: { maxTokens: opts.maxTokens } } : {}) },
+        ...(opts.maxTokens !== undefined || opts.reasoningEffort !== undefined ? { config: {
+          ...(opts.maxTokens !== undefined ? { maxTokens: opts.maxTokens } : {}),
+          ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
+        } } : {}) },
     )
     if (opts.signal?.aborted) {
       const state = this.sessionStates[sessionId]
@@ -2261,13 +2271,13 @@ ${JSON.stringify(request)}`,
   }
 
   /** Bind only a host-created automatic executor that has never admitted work. */
-  async bindAutomaticWorkWorkspace(sessionId: string, folderId: string): Promise<void> {
+  async bindAutomaticWorkWorkspace(sessionId: string, folderId: string, workdir = localFolderWorkdirRef(folderId)): Promise<void> {
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state?.automaticWork || state.mode !== 'session' || state.lastActivityAt || this.acceptedInputs.has(sessionId)
         || this.sessions[sessionId] || this.preparations.has(sessionId)) throw new Error('Automatic executor locality is already sealed')
       if (!this.deps.ownsFolder?.(folderId)) throw new Error('Workspace belongs to another Project')
-      const next = { ...state, folderId, workdir: localFolderWorkdirRef(folderId) }
+      const next = { ...state, folderId, workdir }
       if (!this.deps.ownsWorkdir?.(next.workdir)) throw new Error('Isolated Workdir belongs to another Project')
       this.deps.assertSessionFolder?.(next)
       await this.store.saveState(sessionId, next)
