@@ -38,14 +38,26 @@ export function resendableUserMessage<T extends HistoryMessage>(messages: readon
   return last && isUserMessage(last) ? last : undefined
 }
 
-export function messageTime(timestamp?: string, locale: string = i18n.global.locale.value): { dateTime?: string; label: string; title: string } {
+export function messageTime(timestamp?: string, locale: string = i18n.global.locale.value, now = new Date()): { dateTime?: string; label: string; title: string } {
   const date = typeof timestamp === 'string' && timestamp ? new Date(timestamp) : undefined
   if (!date || !Number.isFinite(date.getTime())) return { label: t('Time unavailable'), title: t('No timestamp was recorded for this message.') }
   return {
     dateTime: date.toISOString(),
-    label: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date),
+    label: formatMessageFooterTime(date, now, locale),
     title: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'long' }).format(date),
   }
+}
+
+/** Relative local calendar days for the last four days; full dates otherwise. */
+function formatMessageFooterTime(date: Date, now: Date, locale: string): string {
+  // Compare calendar dates, not elapsed 24-hour periods (midnight and DST matter).
+  const calendarDay = (value: Date) => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate())
+  const days = (calendarDay(now) - calendarDay(date)) / 86_400_000
+  const day = days >= 0 && days < 4
+    ? new Intl.RelativeTimeFormat(locale, { numeric: days < 2 ? 'auto' : 'always' }).format(-days, 'day')
+    : new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
+  const time = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date)
+  return `${day} ${time}`
 }
 
 export function messageHistoryMarkers(
