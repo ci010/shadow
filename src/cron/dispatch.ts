@@ -1,5 +1,6 @@
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { cronContextMode, type CronJob } from './service.ts'
+import type { ReasoningEffort } from '../agent/llm-config.ts'
 import type { AutomationSessionRef } from './contracts.ts'
 
 /** All fresh executions, including learning, enter the normal SessionManager lifecycle. */
@@ -10,7 +11,7 @@ export class CronDispatcher {
     private changed: (sessionId?: string) => void = () => {},
   ) {}
 
-  async dispatch(job: CronJob, signal: AbortSignal, task = job.task ?? '', onAccepted?: (sessionId: string) => void, executionLimits?: NonNullable<Parameters<SessionManager['startSession']>[0]['executionLimits']>): Promise<string> {
+  async dispatch(job: CronJob, signal: AbortSignal, task = job.task ?? '', onAccepted?: (sessionId: string) => void, executionLimits?: NonNullable<Parameters<SessionManager['startSession']>[0]['executionLimits']>, inference?: { model?: string; reasoningEffort?: ReasoningEffort }): Promise<string> {
     signal.throwIfAborted()
     if (job.program) throw new Error('Program automation requires its host handler; agent dispatch is forbidden.')
     const mode = cronContextMode(job)
@@ -39,6 +40,7 @@ export class CronDispatcher {
       const started = await this.sessions.startSession({
         channel: 'cron', chatId: runId, agentType: job.agentType ?? 'general',
         task, signal, mode: 'task', automation, waitForCompletion: true,
+        model: inference?.model, reasoningEffort: inference?.reasoningEffort,
         ...(job.source !== 'learning' ? { statePersistence: { version: 1 as const, kind: 'fresh-automation' as const, jobId: job.id } } : {}),
         onAccepted, executionLimits: executionLimits ?? job.executionLimits,
         locality: {

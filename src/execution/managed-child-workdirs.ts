@@ -1,4 +1,6 @@
 import { normalizeStoredWorkdirIdentity } from './workdir-storage.ts'
+import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from './derived-workspace-contract.ts'
+import { DERIVED_WORKSPACE_DIRECTORY, executeChildDerivedWorkspace, validateChildDerivedWorkspaceDirectory } from './child-derived-workspace.ts'
 import { availableExecShells } from './processes/shells.ts'
 import { workdirIdOf } from './workdir-contracts.ts'
 import { browseDirectories, pickerPath, LEGACY_FOLDER_PICKER_ID, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../folders/picker.ts'
@@ -105,6 +107,10 @@ export class ManagedChildWorkdirs {
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     for (const entry of await readdir(this.#root, { withFileTypes: true })) {
+      if (entry.name === DERIVED_WORKSPACE_DIRECTORY) {
+        await validateChildDerivedWorkspaceDirectory(join(this.#root, DERIVED_WORKSPACE_DIRECTORY))
+        continue
+      }
       if (entry.name === IDENTITY_DIRECTORY) {
         await this.#directory(join(this.#root, IDENTITY_DIRECTORY))
         continue
@@ -179,6 +185,7 @@ export class ManagedChildWorkdirs {
     signal.throwIfAborted()
     assertExecutionSupported(request, this.workdirs, this.support)
     if (request.nodeId !== this.nodeId || !request.projectScope) throw new Error('Execution requires the configured Main Project scope')
+    if (request.operation === DERIVED_WORKSPACE_OPERATION) parseDerivedWorkspaceArgs(request.args)
     if (request.workdirId !== undefined) {
       const bindings = await this.#bindings(request, signal)
       const binding = bindings.find(b => b.workdirId === workdirIdOf(request))
@@ -195,11 +202,12 @@ export class ManagedChildWorkdirs {
   get operationHandlers(): readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] {
     return [{
       handles: operation => [FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(operation) || operation === MANAGED_SESSION_OPERATION || [
-        'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
+        'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', DERIVED_WORKSPACE_OPERATION,
       ].includes(operation),
       execute: async (request, signal) => {
         if ([FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) return this.#pick(request, signal)
         if (request.operation === MANAGED_SESSION_OPERATION) return this.#allocate(request, signal)
+        if (request.operation === DERIVED_WORKSPACE_OPERATION) return this.#derive(request, signal)
         const bindings = await this.#bindings(request, signal)
         const handlers = [new CapabilityFilesystem(bindings), new CapabilityGit(bindings), new CapabilityWorkdirIdentity(bindings)]
         return handlers.find(handler => handler.handles(request.operation))!.execute(request, signal)
@@ -228,7 +236,7 @@ export class ManagedChildWorkdirs {
     return {
       version: 2, workdirId: binding.workdirId, nodeId: this.nodeId,
       support: { operations: [...MANAGED_WORKDIR_OPERATIONS], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000, untilExit: true } },
-      displayName: binding.displayName ?? binding.workdirId, displayPath: binding.rootPath,
+      displayName: binding.displayName ?? binding.workdirId, displayPath: binding.rootPath, platform: process.platform,
       online: !this.#unavailable.has(binding.workdirId),
     }
   }
@@ -319,7 +327,12 @@ export class ManagedChildWorkdirs {
       Object.keys(request.args).join(',') !== 'path') throw new TypeError('Invalid owner picker request')
     const path = (request.args as { path: unknown }).path
     if (request.operation === FOLDER_BROWSE_OPERATION) return JSON.stringify(await browseDirectories(path, signal))
-    const rootPath = await realpath(pickerPath(path))
+    const descriptor = await this.#registerPickedPath(pickerPath(path), signal)
+    return JSON.stringify({ version: 2, nodeId: this.nodeId, workdirId: descriptor.workdirId, displayName: descriptor.displayName, displayPathSnapshot: descriptor.displayPath })
+  }
+
+  async #registerPickedPath(path: string, signal: AbortSignal): Promise<WorkdirAdvertisement> {
+    const rootPath = await realpath(path)
     if (!(await stat(rootPath)).isDirectory() || contains(rootPath, this.#ready()) || contains(this.#ready(), rootPath)) {
       throw new Error('Selected folder must not overlap managed session storage')
     }
@@ -344,10 +357,40 @@ export class ManagedChildWorkdirs {
       this.#unavailable.delete(workdirId)
       const descriptor = this.#descriptor({ workdirId, rootPath, displayName: basename(rootPath) || rootPath })
       await this.onWorkdir?.(descriptor)
-      return JSON.stringify({ version: 2, nodeId: this.nodeId, workdirId, displayName: descriptor.displayName, displayPathSnapshot: rootPath })
+      return descriptor
     })
     this.#writes = result.catch(() => {})
     return result
+  }
+
+  async #derive(request: ExecutionRequestV2, signal: AbortSignal): Promise<string> {
+    await this.assertCanExecute(request, signal)
+    const source = (await this.#bindings(request, signal)).find(binding => binding.workdirId === workdirIdOf(request))!
+    const args = parseDerivedWorkspaceArgs(request.args)
+    if (args.action !== 'inspect' && (contains(this.#ready(), await realpath(source.rootPath)) || contains(await realpath(source.rootPath), this.#ready()))) {
+      throw new Error('Derived worktrees must not overlap managed session storage')
+    }
+    const result = await executeChildDerivedWorkspace({
+      root: this.#ready(), nodeId: this.nodeId, projectScope: request.projectScope!, source, args,
+      assertSource: async () => {
+        signal.throwIfAborted()
+        await this.#directory(this.#ready())
+        await this.#bindings(request, signal)
+        await this.#assertBinding(source.workdirId, source.rootPath)
+      },
+      register: (path, s) => this.#registerPickedPath(path, s),
+      describe: async (workdirId, s) => {
+        if (!/^picked-v1:[0-9a-f]{64}$/.test(workdirId)) throw new Error('Invalid derived Child workdir identity')
+        const binding = (await this.#bindings({ ...request, workdirId }, s)).find(binding => binding.workdirId === workdirId)
+        if (!binding) throw new Error('Retained derived workdir binding is unavailable')
+        await this.#assertBinding(workdirId, binding.rootPath)
+        return this.#descriptor(binding)
+      },
+    }, signal)
+    // create already advertised through the shared picked-folder registration path.
+    if (args.action === 'verify' && 'workdir' in result) await this.onWorkdir?.(result.workdir)
+    signal.throwIfAborted()
+    return JSON.stringify(result)
   }
 
   #allocate(request: ExecutionRequestV2, signal: AbortSignal): Promise<string> {
