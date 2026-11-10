@@ -265,3 +265,11 @@ workdirs, frontend Folder selection and retry-bound directory identity.
 Keep unrelated worktree edits. Device synchronization is Git-only. No commit,
 push, deployment or real Main/Child restart is part of this implementation request.
 Passing focused tests is not a full production-readiness claim.
+
+## Role previews in a Child workspace
+
+The approved Child workspace UI forwards read-only `GET`/`HEAD` requests for
+`/api/agent-types` and `/api/agent-types/:name/context` to Main, including
+Project-scoped paths. These settings previews use the existing device-proof
+and revocation checks; they do not carry a Main bearer credential. Other routes
+and mutation methods in this namespace remain blocked by the Child UI tunnel.

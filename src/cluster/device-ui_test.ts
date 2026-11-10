@@ -48,6 +48,8 @@ async function fixture(developmentUrl?: string) {
   deviceChallengeApiPlugin({ authority, clientKey: () => 'test-child' })(ingress)
   registerGatewayRoutes(main, [], { launchCredential: 'main-private', clientAddresses: addresses, authorizeClient: request => bridge.authorize(request) })
   main.get('/api/projects', c => c.json({ projects: [{ id: 'same-main-project' }] }))
+  main.get('/projects/p1/api/agent-types', c => c.json([{ name: 'general', source: 'builtin' }]))
+  main.get('/projects/p1/api/agent-types/general/context', c => c.json({ systemPrompt: 'Role preview', tools: [], channel: c.req.query('channel') }))
   main.post('/api/echo', async c => new Response(await c.req.text(), { headers: { 'Content-Type': c.req.header('Content-Type')! } }))
   main.get('/api/stream', c => new Response(new ReadableStream({ start(output) {
     output.enqueue(new TextEncoder().encode('data: ready\n\n'))
@@ -64,7 +66,7 @@ async function fixture(developmentUrl?: string) {
 
 test('workspace tunnels only business routes, never control/credentials or path escapes', () => {
   for (const path of ['/api/models', '/projects/p1/api/models', '/api/projects', '/projects/p1/api/sessions', '/api/live?topics=projects', '/api/media?chatId=chat&path=%2Fhome%2Fuploads%2Fpasted.png', '/projects/p1/api/media?path=C%3A%5Cuploads%5Cpasted%2Epng&download=1', '/nodes/v1', '/host/v1/query']) assert.equal(deviceUiPath(path), true, path)
-  for (const path of ['/api/agent-types', '/projects/p1/api/agent-types/general/context', '/debug/models', '/local/v1/stop', '/cluster/v1/node', '/pair/v1/offers', '/api/web-auth/pair', '/api/mobile',
+  for (const path of ['/api/agent-types/general', '/api/agent-types/general/context/extra', '/debug/models', '/local/v1/stop', '/cluster/v1/node', '/pair/v1/offers', '/api/web-auth/pair', '/api/mobile',
     '/projects/p1/api/web-auth/session', '//evil.test/api/projects', '/api/../local/v1', '/api/%2e%2e/local', '/api/%2fmedia?path=%2Fuploads%2Fimage.png', '/api/%5cmedia?path=ok', '/api\\local']) assert.equal(deviceUiPath(path), false, path)
 })
 
@@ -319,4 +321,25 @@ test('history gzip survives real Main/Child HTTP hops without double decoding or
   assert.equal(opaque.headers['content-encoding'], 'fixture-unknown', 'do not strip an encoding that fetch did not decode')
   assert.equal(opaque.bytes.toString(), 'opaque')
   assert.equal((await read('gzip', undefined, undefined, false)).status, 401)
+})
+
+test('approved Child can browse role definitions and context without opening role mutations', async t => {
+  const f = await fixture(); t.after(() => f.bridge.close())
+  const headers = { Authorization: 'Bearer child-private' }
+  for (const path of ['/api/agent-types', '/projects/p1/api/agent-types/general/context']) {
+    assert.equal(deviceUiPath(path), true, path)
+    assert.equal(deviceUiPath(path, 'HEAD'), true, path)
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      assert.equal(deviceUiPath(path, method), false, `${method} ${path}`)
+      assert.equal((await f.child.request(path, { method, headers })).status, 404)
+    }
+  }
+  const list = '/projects/p1/api/agent-types'
+  assert.equal((await f.child.request(list)).status, 401)
+  const response = await f.child.request(list, { headers })
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), [{ name: 'general', source: 'builtin' }])
+  const context = await f.child.request(`${list}/general/context?channel=web`, { headers })
+  assert.equal(context.status, 200)
+  assert.deepEqual(await context.json(), { systemPrompt: 'Role preview', tools: [], channel: 'web' })
 })
