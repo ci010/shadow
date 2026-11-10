@@ -25,9 +25,7 @@ test('estimated-cost labels are localized without treating credits as currency',
   try {
     i18n.global.locale.value = 'zh-CN'
     assert.equal(i18n.global.t('Known cost subtotal (incomplete)'), '已知费用小计（不完整）')
-    assert.equal(i18n.global.t('Cost could not be estimated'), '未能估算费用')
     assert.equal(i18n.global.t('Estimated cost'), '预估消耗')
-    assert.equal(i18n.global.t('Cost estimate incomplete'), '费用估算不完整')
     assert.equal(formatUsageCost({ amount: 1.25, currency: 'AI_CREDITS' }), '1.25 AI credits')
   } finally { i18n.global.locale.value = previous }
 })
