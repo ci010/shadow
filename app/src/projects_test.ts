@@ -248,3 +248,80 @@ test('project JSON omits implicit GET Content-Type and preserves all header repr
     })
   }
 })
+
+test('project JSON translates only its deadline cancellation across fetch and body reads', async t => {
+  const { projectJson, createConditionalProjectJson } = await import('./projects.ts')
+  let deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    assert.equal(ms, 15_000)
+    return deadline.signal
+  })
+  const timeoutReason = new DOMException('fixture deadline', 'TimeoutError')
+  const aborted = () => new DOMException('The user aborted a request.', 'AbortError')
+  const timeoutMessage = /project request timed out after 15 seconds/
+  const caller = new AbortController()
+  const fetchTimeout: typeof fetch = async (_, init) => {
+    deadline.abort(timeoutReason)
+    assert.equal(init?.signal?.reason, timeoutReason)
+    throw aborted()
+  }
+  await assert.rejects(projectJson('http://fixture', '/api/projects', { signal: caller.signal }, fetchTimeout), timeoutMessage)
+  await assert.rejects(projectJson('http://fixture', '/api/projects', undefined, async () => { throw timeoutReason }), timeoutMessage)
+  deadline = new AbortController()
+  const bodyTimeout: typeof fetch = async () => {
+    const response = Response.json({})
+    response.json = async () => { deadline.abort(timeoutReason); throw aborted() }
+    return response
+  }
+  await assert.rejects(projectJson('http://fixture', '/api/projects', undefined, bodyTimeout), timeoutMessage)
+  deadline = new AbortController()
+  const reader = createConditionalProjectJson('http://fixture', '/api/projects', value => value, bodyTimeout)
+  await assert.rejects(reader.load(caller.signal), timeoutMessage)
+  const failure = new TypeError('real network failure')
+  await assert.rejects(projectJson('http://fixture', '/api/projects', undefined, async () => { throw failure }), error => error === failure)
+  await assert.rejects(projectJson('http://fixture', '/api/projects', undefined, async () => new Response('', { status: 503 })), /HTTP 503/)
+})
+
+test('project JSON preserves caller cancellation and unrelated AbortError', async t => {
+  const { projectJson, createConditionalProjectJson } = await import('./projects.ts')
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal)
+  const caller = new AbortController()
+  const cancellation = new DOMException('caller cancelled', 'AbortError')
+  const request: typeof fetch = async () => {
+    caller.abort(cancellation)
+    deadline.abort(new DOMException('later deadline', 'TimeoutError'))
+    throw cancellation
+  }
+  await assert.rejects(projectJson('http://fixture', '/api/projects', { signal: caller.signal }, request), error => error === cancellation)
+  const reader = createConditionalProjectJson('http://fixture', '/api/projects', value => value, request)
+  await assert.rejects(reader.load(caller.signal), error => error === cancellation)
+  // Without an aborted deadline, an AbortError is a real failure, not a timeout.
+  const freshDeadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => freshDeadline.signal)
+  await assert.rejects(projectJson('http://fixture', '/api/projects', undefined, async () => { throw cancellation }), error => error === cancellation)
+})
+
+test('conditional project JSON retains its validated cache after a body timeout', async t => {
+  const { createConditionalProjectJson } = await import('./projects.ts')
+  let deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal)
+  let calls = 0
+  const reader = createConditionalProjectJson('http://fixture', '/api/projects', value => value, async (_, init) => {
+    calls++
+    assert.equal(new Headers(init?.headers).get('If-None-Match'), calls === 1 ? null : 'fixture-etag')
+    if (calls === 1) return Response.json({ validated: true }, { headers: { ETag: 'fixture-etag' } })
+    if (calls === 3) return new Response(null, { status: 304 })
+    const response = Response.json({ invalid: true })
+    response.json = async () => {
+      deadline.abort(new DOMException('deadline', 'TimeoutError'))
+      throw new DOMException('The user aborted a request.', 'AbortError')
+    }
+    return response
+  })
+  const signal = new AbortController().signal
+  const cached = await reader.load(signal)
+  await assert.rejects(reader.load(signal), /project request timed out after 15 seconds/)
+  deadline = new AbortController()
+  assert.equal(await reader.load(signal), cached)
+})
