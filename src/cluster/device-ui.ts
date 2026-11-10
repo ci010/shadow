@@ -22,13 +22,18 @@ export function deviceUiAudience(value: string): string {
   return url.toString()
 }
 /** UI business APIs only. Control/device/credential ingress never becomes tunnelable. */
-export function deviceUiPath(value: string): boolean {
+export function deviceUiPath(value: string, method = 'GET'): boolean {
   // Query values include encoded attachment paths (and may contain URLs). They
   // are business API data, not part of the route admission/escape check.
   const rawPath = value.split(/[?#]/, 1)[0]!
   if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\') || /%2f|%5c|%2e/i.test(rawPath)) return false
   const path = new URL(value, 'http://workspace.internal').pathname
   const bare = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
+  // The settings role browser needs these read-only business endpoints on Child too.
+  // Keep the rest of this namespace closed rather than admitting future mutations.
+  if (/^\/api\/agent-types(?:\/|$)/.test(bare)) {
+    return ['GET', 'HEAD'].includes(method) && /^\/api\/agent-types(?:\/[^/]+\/context)?\/?$/.test(bare)
+  }
   return (/^\/api(?:\/|$)/.test(bare) && !/^\/api\/(?:web-auth|mobile|agent-types)(?:\/|$)/.test(bare))
     || /^\/(?:host\/)?v1\/query(?:\/|$)/.test(bare)
     || /^\/nodes\/v1(?:\/|$)/.test(bare)
@@ -41,7 +46,7 @@ export function deviceUiResourcePath(value: string): boolean {
   return !path.split('/').some(segment => segment.startsWith('.') && segment !== '.vite' && segment !== '.vite-shadow-app' && segment !== '.pnpm')
 }
 export function deviceUiRequestPath(path: string, method: string): boolean {
-  return deviceUiPath(path) || (['GET', 'HEAD'].includes(method) && deviceUiResourcePath(path))
+  return deviceUiPath(path, method) || (['GET', 'HEAD'].includes(method) && deviceUiResourcePath(path))
 }
 export function deviceUiHeaders(headers: Headers): Headers {
   const result = new Headers()
