@@ -209,7 +209,6 @@
                 <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} {{ t('completion') }}</span>
                 <span class="usage-badge total">{{ formatNumber(msg.usage.totalTokens) }} {{ t('total') }}</span>
                 <span v-for="cost in msg.usage.costs" :key="cost.currency" class="usage-badge usage-cost" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')"><span class="i-lucide-coins" aria-hidden="true" />{{ formatUsageCost(cost) }}</span>
-                <span v-if="msg.usage.costIncomplete" class="usage-badge">{{ t(msg.usage.costs?.length ? 'Cost estimate incomplete' : 'Cost could not be estimated') }}</span>
               </div>
               <div class="chat-footer-actions">
                 <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
