@@ -88,19 +88,19 @@ export function startSessionSoundMonitor(options: {
     let generation = 0
     async function refresh() {
       if (closed || lifetime.signal.aborted) return
-      const { graph, activity } = lease
-      if (graph.state.loading || activity.state.loading) return
+      const { sessions, activity } = lease
+      if (sessions.state.loading || activity.state.loading) return
       if (controller) { dirty = true; return }
-      if ((!graph.state.value || !activity.state.value) && !graph.state.error && !activity.state.error) return
+      if ((!sessions.state.value || !activity.state.value) && !sessions.state.error && !activity.state.error) return
       dirty = false
       const ownGeneration = generation
       const current = controller = new AbortController()
       const signal = AbortSignal.any([current.signal, lifetime.signal])
       try {
-        if (graph.state.error || activity.state.error) throw new Error(graph.state.error || activity.state.error)
-        if (!graph.state.value || !activity.state.value) return
+        if (sessions.state.error || activity.state.error) throw new Error(sessions.state.error || activity.state.error)
+        if (!sessions.state.value || !activity.state.value) return
         const snapshot: ProjectConversationState = {
-          sessions: graph.state.value, stages: activity.state.value.stages, sessionsError: '', stagesError: '',
+          sessions: sessions.state.value, stages: activity.state.value.stages, sessionsError: '', stagesError: '',
         }
         if (options.live.isLive && !options.live.isLive()) { tracker.reset(); finished.clear() }
         const changes = tracker.observe(snapshot)
@@ -163,7 +163,7 @@ export function startSessionSoundMonitor(options: {
       },
     })
     const stopWatching = watch(() => [
-      lease.graph.state.revision, lease.graph.state.loading, lease.graph.state.error,
+      lease.sessions.state.revision, lease.sessions.state.loading, lease.sessions.state.error,
       lease.activity.state.revision, lease.activity.state.loading, lease.activity.state.error,
     ], () => { void refresh() }, { immediate: true })
     return { close() { closed = true; controller?.abort(); stopWatching(); lease.release(); errors.delete(`project:${projectId}`) } }

@@ -581,7 +581,7 @@ invalidations are coalesced; hidden idle chat panes do not render token updates
 or retain individual network connections. A hidden submitted request can retain
 its shared subscription to observe completion.
 Execution cards also observe the owning project's sessions topic and
-coalesce graph refreshes; metadata-only call-wait changes update mounted cards
+coalesce logical-summary refreshes; metadata-only call-wait changes update mounted cards
 without reloading the conversation or discarding its draft.
 
 This is not a durable token-event ledger. Replay is bounded and in memory.
@@ -591,17 +591,17 @@ the UI never re-admits a command or implicitly resumes interrupted execution.
 The host-wide `projects` topic invalidates the project catalog after committed
 creation or rename. Session phase transitions, blocking-call waits and yield
 changes publish `activity` invalidations on the owning `sessions` topic; these
-refresh only the lightweight stages snapshot, not the session graph. Committed
-session creation, metadata/configuration changes and deletion invalidate the graph.
+refresh only the lightweight stages snapshot, not the session summary. Committed
+session creation, metadata/configuration changes and deletion invalidate the summary.
 Runtime startup also resets affected subscriptions once its HTTP routes are ready.
-The renderer's `project-live-state.ts` shares one catalog per host and one graph
+The renderer's `project-live-state.ts` shares one catalog per host and one logical session summary
 and activity snapshot per Project across chat panes, sidebars and notification
 sounds. Reads start on subscription and subsequently on invalidation, explicit
 refresh or reset; reconnect recovery also refreshes these snapshots even when
 the cursor is replayable, so failed HTTP reads cannot leave them stale.
 Bursts coalesce and changes during a read get one serialized
 follow-up. Reset/disposal abort obsolete reads. There is no periodic HTTP polling
-of `projects`, `graph` or `stages`, including when a notification monitor keeps
+of `projects`, `summary` or `stages`, including when a notification monitor keeps
 the shared state alive on another page. Snapshot failures remain visible until
 retry, a new event or reset; they are not presented as empty successful state.
 Not every other resource has push hooks: Nodes still use visible-only polling,
@@ -1049,7 +1049,7 @@ background completion event. Remote foreground exec inside calls is explicitly
 unsupported; this does not change ordinary session/task execution. These lifecycle
 rules do not constitute an OS sandbox or roll back external side effects.
 
-The session graph exposes mode, role, structural parent, execution status, and the
+The session summary exposes mode, role, logical delegation/context parents, execution status, and the
 optional native `parentToolCallId`. Both JSONL and SQLite preserve this correlation
 field; older records can still be matched through their tool admission receipts.
 The UI lists legacy and ordinary durable conversations, while displaying delegated one-shot

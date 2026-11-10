@@ -1,5 +1,5 @@
 import { affectsSessionResource } from './session-invalidation.ts'
-import { createSessionGraphLoader } from './session-graph-snapshot.ts'
+import { createSessionSummaryLoader } from './session-summary-snapshot.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
@@ -119,12 +119,8 @@ export function createProjectLiveState(
   }
   function createProject(base: string, projectId: string) {
     const scope = projectBase(base, projectId)
-    const graphLoader = createSessionGraphLoader(scope, projectId, request)
-    const graphSnapshot = createSnapshot(signal => graphLoader.load(signal), delay, { initialLoading: true })
-    const graph = { ...graphSnapshot,
-      reset() { graphLoader.reset(); graphSnapshot.reset() },
-      refresh() { graphLoader.reset(); return graphSnapshot.refresh() },
-    }
+    const summaryLoader = createSessionSummaryLoader(scope, projectId, request)
+    const sessions = createSnapshot(signal => summaryLoader.load(signal), delay, { initialLoading: true })
     type Activity = { stages: ReturnType<typeof parseSessionStages>; activeRequestIds: Record<string, string>; recoveries: ReturnType<typeof parseSessionRecoveries> }
     // Each read owns its overlay. Events arriving after HTTP started must win,
     // even if the response was captured before a fast tool finished.
@@ -169,7 +165,7 @@ export function createProjectLiveState(
     let started = false
     const gate = createInitialLiveSnapshot({ refresh() {
       started = true
-      graph.reset(); activity.reset()
+      sessions.reset(); activity.reset()
       if (usage.work) work.reset()
     } })
     const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId }, {
@@ -178,8 +174,7 @@ export function createProjectLiveState(
         // Events before readiness are covered by the initial snapshot.
         if (!started) return
         if (!isRecord(event.payload) || event.payload.event !== 'activity') {
-          graphLoader.invalidate(event.payload)
-          graph.invalidate()
+          sessions.invalidate()
         }
         const payload = event.payload
         const model = isRecord(payload) && payload.event === 'activity'
@@ -208,8 +203,8 @@ export function createProjectLiveState(
     const gated = <T>(snapshot: ReturnType<typeof createSnapshot<T>>) => ({ ...snapshot,
       async read() { await gate.getPromise(); await snapshot.read() },
     })
-    return { graph: gated(graph), activity: gated(activity), ready: gate.getPromise, work, usage, observers, users: 0,
-      dispose() { gate.dispose(); subscription.close(); graph.dispose(); activity.dispose(); work.dispose(); observers.clear() },
+    return { sessions: gated(sessions), activity: gated(activity), ready: gate.getPromise, work, usage, observers, users: 0,
+      dispose() { gate.dispose(); subscription.close(); sessions.dispose(); activity.dispose(); work.dispose(); observers.clear() },
     }
   }
   return {
@@ -244,10 +239,10 @@ export function createProjectLiveState(
       if (observer) current.observers.add(observer)
       let released = false
       return {
-        graph: current.graph, activity: current.activity, work: current.work,
-        read: () => Promise.all([current.graph.read(), current.activity.read()]).then(() => {}),
+        sessions: current.sessions, activity: current.activity, work: current.work,
+        read: () => Promise.all([current.sessions.read(), current.activity.read()]).then(() => {}),
         refresh: () => released ? Promise.resolve() : Promise.all([
-          current.graph.refresh(), current.activity.refresh(), ...(includeWork ? [current.work.refresh()] : []),
+          current.sessions.refresh(), current.activity.refresh(), ...(includeWork ? [current.work.refresh()] : []),
         ]).then(() => {}),
         release() {
           if (released) return

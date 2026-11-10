@@ -85,7 +85,7 @@ test('background chips and sidebar delegated activity update without making an i
             parentStage = url.searchParams.get('parent') ?? parentStage
             background = url.searchParams.get('background') ?? background
             json({ ok: true })
-          } else if (path.endsWith('/api/sessions/graph')) {
+          } else if (path.endsWith('/api/sessions/summary')) {
             json({ nodes: [], sessions: [
               { sessionId: 'web:chat-owner', name: 'Owner conversation', mode: 'session' },
               { sessionId: 'web:chat-other', name: 'Other conversation', mode: 'session' },

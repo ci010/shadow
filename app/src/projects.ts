@@ -1,6 +1,7 @@
 import { t } from './i18n.ts'
 import { apiUrl, projectBase, sessionKey, type SessionRef } from './api-url.ts'
-import { isRecord, parseSessionGraph, type SidebarSession } from './folders-sidebar.ts'
+import { isRecord, type SidebarSession } from './folders-sidebar.ts'
+import { parseSessionSummary } from './session-summary-snapshot.ts'
 import { parseSessionStages } from './session-activity.ts'
 
 export interface ProjectRecord {
@@ -158,7 +159,7 @@ export async function fetchProjectConversations(base: string, projectId: string,
   request: typeof fetch = fetch): Promise<ProjectConversationState> {
   const scope = projectBase(base, projectId)
   const results = await Promise.allSettled([
-    projectJson(scope, '/api/sessions/graph', { signal }, request).then(value => parseSessionGraph(value, projectId)),
+    projectJson(scope, '/api/sessions/summary', { signal }, request).then(value => parseSessionSummary(value, projectId)),
     projectJson(scope, '/api/sessions/stages', { signal }, request).then(parseSessionStages),
   ])
   const error = (reason: unknown) => reason instanceof Error ? reason.message : t('Could not load project activity. Retry.')

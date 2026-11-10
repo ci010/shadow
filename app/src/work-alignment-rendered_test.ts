@@ -182,7 +182,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
             json({ projects: [{ id: 'p', name: 'Release evidence', createdAt: at }] })
           } else if (path.endsWith('/api/config')) {
             json({ agent: { model: 'fixture', workspace: 'C:\\synthetic-home', temperature: 0.7 }, learning: {} })
-          } else if (path.endsWith('/api/sessions/graph')) {
+          } else if (path.endsWith('/api/sessions/summary')) {
             json({ sessions: [{ sessionId: 'web:fixture', title: 'Evaluation session' }], nodes: [] })
           } else if (path.endsWith('/api/sessions/stages')) {
             json({ stages: { 'web:fixture': questionOpen ? 'waiting' : 'idle', 'web:untracked': 'waiting' } })

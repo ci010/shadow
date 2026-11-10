@@ -111,30 +111,30 @@ let disposed = false
 function toggle(id: string) { if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id) }
 function subscribe() {
   const current = lease = liveState.acquireProject(props.apiBase, props.project.id)
-  const stopGraph = watch(() => [current.graph.state.revision, current.graph.state.error], () => {
-    if (current.graph.state.value) {
-      sessions.value = current.graph.state.value
+  const stopSessions = watch(() => [current.sessions.state.revision, current.sessions.state.error], () => {
+    if (current.sessions.state.value) {
+      sessions.value = current.sessions.state.value
       homeCache?.setSessions(scope.value, sessions.value)
     }
   }, { immediate: true })
   const stopActivity = watch(() => [current.activity.state.revision, current.activity.state.error], () => {
     if (current.activity.state.value) stages.value = current.activity.state.value.stages
-    const detail = [...new Set([current.graph.state.error, current.activity.state.error].filter(Boolean))].join(' ')
+    const detail = [...new Set([current.sessions.state.error, current.activity.state.error].filter(Boolean))].join(' ')
     error.value = detail && runtimeState.value === 'failed'
       ? t('This project could not start. Use Retry project startup beside its name.') : detail
   }, { immediate: true })
   // Graph failure/recovery changes availability, but ordinary session revisions
   // (including turn start/end) are not catalog changes.
-  const stopMetadata = watch(() => current.graph.state.error, () => {
+  const stopMetadata = watch(() => current.sessions.state.error, () => {
     void refreshMetadata(current)
   })
   const catalog = createLiveResourceRefresh(livePool, {
     base: props.apiBase, projectId: props.project.id, resource: 'channels',
     // Resource readiness owns the initial snapshot and reconnect retries. A
-    // session graph (especially observed groups) need not have channelAddress.
+    // session sessions (especially observed groups) need not have channelAddress.
     refresh: () => { void refreshMetadata(current) },
   })
-  stopWatching = () => { stopGraph(); stopActivity(); stopMetadata(); catalog.dispose() }
+  stopWatching = () => { stopSessions(); stopActivity(); stopMetadata(); catalog.dispose() }
 }
 async function refresh() {
   liveFolderRevision.value++
@@ -147,7 +147,7 @@ async function refreshMetadata(snapshot: ProjectLiveLease) {
   const current = new AbortController()
   controller = current
   try {
-    if (!snapshot.graph.state.error) {
+    if (!snapshot.sessions.state.error) {
       try {
         const catalog = await createBotSettingsClient(scope.value, props.project.id).catalog(current.signal)
         if (current.signal.aborted) return
@@ -162,8 +162,8 @@ async function refreshMetadata(snapshot: ProjectLiveLease) {
         // Recover independently: no further channel event may arrive.
         retryCatalog(snapshot)
       }
-    } else if (snapshot.graph.state.error) clearBotConnections()
-    error.value = [...new Set([snapshot.graph.state.error, snapshot.activity.state.error].filter(Boolean))].join(' ')
+    } else if (snapshot.sessions.state.error) clearBotConnections()
+    error.value = [...new Set([snapshot.sessions.state.error, snapshot.activity.state.error].filter(Boolean))].join(' ')
     if (error.value) {
       try {
         const status = await createProjectsClient(props.apiBase).status(props.project.id, current.signal)

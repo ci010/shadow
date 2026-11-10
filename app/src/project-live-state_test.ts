@@ -20,11 +20,14 @@ function fixture(t: TestContext, manualReady = false) {
       return { ready: () => promise, close() { observers.delete(key) } }
     },
   }) }, {
-    request: async (url, init) => new Promise(resolve => requests.push({
+    request: async (url, init) => {
+      assert.equal(new URL(String(url)).pathname.endsWith('/sessions/graph'), false, 'ordinary live consumers never request a physical graph')
+      return new Promise(resolve => requests.push({
       path: new URL(String(url)).pathname, url: new URL(String(url)), signal: init!.signal!, headers: new Headers(init?.headers),
       finish: (value, status = 200, etag) => resolve(status === 304 ? new Response(null, { status })
         : Response.json(value, { status, headers: etag ? { ETag: etag } : undefined })),
-    })),
+    }))
+    },
   })
   t.after(() => store.dispose())
   async function tick() { await flush(); t.mock.timers.tick(50); await flush() }
@@ -45,7 +48,7 @@ test('workbench overview shares one live reader and stops reading when the surfa
   assert.equal(f.requests.length, 3)
   const work = f.requests.find(request => request.path.endsWith('/work'))!
   work.finish(emptyWork)
-  f.requests.find(request => request.path.endsWith('/graph'))!.finish(graph('One'))
+  f.requests.find(request => request.path.endsWith('/summary'))!.finish(graph('One'))
   f.requests.find(request => request.path.endsWith('/stages'))!.finish({ stages: {} })
   await flush()
   assert.equal(first.work.state.value, second.work.state.value)
@@ -78,7 +81,7 @@ test('chat, sidebar and sound consumers share snapshots and produce zero idle HT
   f.requests[1].finish(graph('One'))
   f.requests[2].finish({ stages: { 'web:one': 'idle' } })
   await flush()
-  assert.equal(leases[0].graph.state.value, leases[1].graph.state.value)
+  assert.equal(leases[0].sessions.state.value, leases[1].sessions.state.value)
   assert.equal(catalogs[0].state.value, catalogs[1].state.value)
   t.mock.timers.tick(5 * 60_000)
   await flush()
@@ -117,10 +120,10 @@ test('bursts coalesce and changes during a read get one serialized follow-up', a
   await f.tick()
   assert.equal(f.requests.length, 6)
   const followup = f.requests.slice(4)
-  followup.find(request => request.path.endsWith('/graph'))!.finish(graph('After'))
+  followup.find(request => request.path.endsWith('/summary'))!.finish(graph('After'))
   followup.find(request => request.path.endsWith('/stages'))!.finish({ stages: { 'web:one': 'idle' } })
-  await lease.graph.read()
-  assert.equal(lease.graph.state.value?.[0].label, 'After')
+  await lease.sessions.read()
+  assert.equal(lease.sessions.state.value?.[0].label, 'After')
 })
 
 test('reset aborts old snapshots, project scopes stay separate, and failures remain retryable', async t => {
@@ -139,17 +142,17 @@ test('reset aborts old snapshots, project scopes stay separate, and failures rem
   f.requests[4].finish({}, 503)
   f.requests[5].finish({ stages: { 'web:one': 'invalid' } })
   await flush()
-  assert.equal(a.graph.state.value, undefined)
-  assert.match(a.graph.state.error, /503/)
+  assert.equal(a.sessions.state.value, undefined)
+  assert.match(a.sessions.state.error, /503/)
   assert.match(a.activity.state.error, /activity/)
-  assert.equal(b.graph.state.value?.[0].label, 'B')
+  assert.equal(b.sessions.state.value?.[0].label, 'B')
   assert.equal(b.activity.state.value?.stages['web:one'], 'waiting-for-call')
   const retry = a.refresh()
   await f.tick()
   f.requests[6].finish(graph('Recovered'))
   f.requests[7].finish({ stages: { 'web:one': 'idle' }, recoveries: { 'web:one': { id: 'turn', reason: 'stopped' } } })
   await retry
-  assert.equal(a.graph.state.error, '')
+  assert.equal(a.sessions.state.error, '')
   assert.equal(a.activity.state.value?.recoveries['web:one'].id, 'turn')
   f.event({ kind: 'sessions', projectId: 'a' })
   await f.tick()
@@ -158,7 +161,7 @@ test('reset aborts old snapshots, project scopes stay separate, and failures rem
   f.requests[8].finish(graph('Disposed'))
   f.requests[9].finish({ stages: {} })
   await flush()
-  assert.equal(a.graph.state.value?.[0].label, 'Recovered')
+  assert.equal(a.sessions.state.value?.[0].label, 'Recovered')
 })
 
 test('project creation and rename notifications refresh the shared catalog without polling', async t => {
@@ -188,7 +191,7 @@ test('reconnection retries failed snapshots even when replay has no new invalida
   for (const request of f.requests) request.finish({}, 503)
   await flush()
   assert.ok(catalog.state.error)
-  assert.ok(lease.graph.state.error)
+  assert.ok(lease.sessions.state.error)
   const previousResets = resets
   for (const observer of f.observers.values()) observer.reconnected?.()
   await f.tick()
@@ -199,9 +202,9 @@ test('reconnection retries failed snapshots even when replay has no new invalida
   f.requests[5].finish({ stages: { 'web:one': 'idle' } })
   await lease.activity.read()
   assert.equal(catalog.state.error, '')
-  assert.equal(lease.graph.state.error, '')
+  assert.equal(lease.sessions.state.error, '')
   assert.equal(lease.activity.state.error, '')
-  assert.equal(lease.graph.state.value?.[0].label, 'Recovered')
+  assert.equal(lease.sessions.state.value?.[0].label, 'Recovered')
 })
 
 
@@ -209,7 +212,7 @@ test('project initialization waits for ready; activation reuses shared applied g
   const f = fixture(t, true)
   const first = f.store.acquireProject('http://fixture', 'a')
   const reading = first.read()
-  assert.equal(first.graph.state.loading, true)
+  assert.equal(first.sessions.state.loading, true)
   assert.equal(first.activity.state.loading, true)
   await f.tick()
   assert.equal(f.requests.length, 0)
@@ -261,16 +264,16 @@ test('gated initial loading has no early HTTP and dispose settles readers', asyn
   const f = fixture(t, true)
   const catalog = f.store.acquireCatalog('http://fixture')
   const project = f.store.acquireProject('http://fixture', 'a')
-  const readers = [catalog.read(), project.graph.read(), project.activity.read()]
+  const readers = [catalog.read(), project.sessions.read(), project.activity.read()]
   assert.equal(catalog.state.loading, true)
-  assert.equal(project.graph.state.loading, true)
+  assert.equal(project.sessions.state.loading, true)
   assert.equal(project.activity.state.loading, true)
   await f.tick()
   assert.equal(f.requests.length, 0)
   catalog.release(); project.release()
   await Promise.all(readers)
   assert.equal(catalog.state.loading, false)
-  assert.equal(project.graph.state.loading, false)
+  assert.equal(project.sessions.state.loading, false)
   assert.equal(project.activity.state.loading, false)
   t.mock.timers.tick(1000); await flush()
   assert.equal(f.requests.length, 0)
@@ -298,7 +301,7 @@ test('history hints do not refresh Work overview; actual activity and Work chang
   const f = fixture(t)
   const lease = f.store.acquireProject('http://fixture', 'a', undefined, true)
   await f.tick()
-  for (const request of f.requests) request.finish(request.path.endsWith('/work') ? emptyWork : request.path.endsWith('/graph') ? graph('One') : { stages: {} })
+  for (const request of f.requests) request.finish(request.path.endsWith('/work') ? emptyWork : request.path.endsWith('/summary') ? graph('One') : { stages: {} })
   await flush()
   f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
   await f.tick()
@@ -310,25 +313,25 @@ test('history hints do not refresh Work overview; actual activity and Work chang
 })
 
 
-test('scoped session events use summary reads through the shared store and reconnect restores full graph', async t => {
+test('scoped session events use summary reads through the shared store and reconnect revalidates the logical inventory', async t => {
   const f = fixture(t)
   const lease = f.store.acquireProject('http://fixture', 'a')
   await f.tick()
   const node = { physicalId: 'physical-one', logicalId: 'web:one', parentPhysicalId: null }
   f.requests[0].finish({ ...graph('Before'), nodes: [node] })
   f.requests[1].finish({ stages: {} })
-  await lease.graph.read()
+  await lease.sessions.read()
   f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
   await f.tick()
-  const summary = f.requests.slice(2).find(request => request.path.endsWith('/graph'))!
-  assert.deepEqual(JSON.parse(summary.url.searchParams.get('sessionIds')!), ['web:one'])
+  const summary = f.requests.slice(2).find(request => request.path.endsWith('/summary'))!
+  assert.equal(summary.url.searchParams.has('sessionIds'), false)
   summary.finish({ ...graph('After'), nodes: [node], partial: true, sessionIds: ['web:one'] })
   assert.equal(f.requests.filter(request => request.path.endsWith('/stages')).length, 1, 'pure history does not reread activity')
-  await lease.graph.read()
-  assert.equal(lease.graph.state.value?.[0].title, 'After')
+  await lease.sessions.read()
+  assert.equal(lease.sessions.state.value?.[0].title, 'After')
   f.observers.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!.reconnected()
   await f.tick()
-  const recovery = f.requests.slice(3).find(request => request.path.endsWith('/graph'))!
+  const recovery = f.requests.slice(3).find(request => request.path.endsWith('/summary'))!
   assert.equal(recovery.url.searchParams.has('sessionIds'), false)
   lease.release()
 })
@@ -339,7 +342,7 @@ test('history persistence does not reread stages; admission, completion and lega
   const lease = f.store.acquireProject('http://fixture', 'a')
   await f.tick()
   f.requests[0].finish(graph('Before')); f.requests[1].finish({ stages: {} })
-  await lease.graph.read()
+  await lease.sessions.read()
   f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
   await f.tick()
   assert.equal(f.requests.filter(request => request.path.endsWith('/stages')).length, 1)
@@ -360,7 +363,7 @@ test('metadata-only invalidations update the graph without rereading activity or
   const f = fixture(t)
   const lease = f.store.acquireProject('http://fixture', 'a', undefined, true)
   await f.tick()
-  f.requests.find(r => r.path.endsWith('/graph'))!.finish(graph('Before'))
+  f.requests.find(r => r.path.endsWith('/summary'))!.finish(graph('Before'))
   f.requests.find(r => r.path.endsWith('/stages'))!.finish({ stages: {} })
   f.requests.find(r => r.path.endsWith('/work'))!.finish(emptyWork)
   await flush()
@@ -369,10 +372,10 @@ test('metadata-only invalidations update the graph without rereading activity or
   })
   await f.tick()
   assert.equal(f.requests.length, 4)
-  assert.ok(f.requests[3].path.endsWith('/graph'))
+  assert.ok(f.requests[3].path.endsWith('/summary'))
   f.requests[3].finish(graph('Renamed'))
   await flush()
-  assert.equal(lease.graph.state.value?.[0].label, 'Renamed')
+  assert.equal(lease.sessions.state.value?.[0].label, 'Renamed')
   assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 1)
   assert.equal(f.requests.filter(r => r.path.endsWith('/work')).length, 1)
 })
@@ -397,7 +400,7 @@ test('real live topic changes reuse project snapshots; transport recovery still 
     request: async url => {
       const path = new URL(String(url)).pathname
       requests.push(path)
-      return Response.json(path.endsWith('/graph') ? graph('One') : { stages: {} })
+      return Response.json(path.endsWith('/summary') ? graph('One') : { stages: {} })
     },
   })
   t.after(() => { store.dispose(); client.dispose() })
@@ -508,7 +511,7 @@ test('legacy, malformed and unknown-session activity recover with HTTP; deletes 
   await f.tick()
   f.event(activityTopic, { event: 'activity', sessionId: 'web:new', activity: model('llm') })
   f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: { 'web:one': 'idle' } })
-  f.requests.filter(r => r.path.endsWith('/graph')).at(-1)!.finish(graph('A'))
+  f.requests.filter(r => r.path.endsWith('/summary')).at(-1)!.finish(graph('A'))
   await flush()
   assert.equal(lease.activity.state.value?.stages['web:new'], undefined, 'late activity cannot resurrect a removed session')
 })
@@ -570,7 +573,7 @@ test('shared recovery inventory remains single-owner when chat readiness reads a
   const f = fixture(t)
   const lease = f.store.acquireProject('http://fixture', 'a')
   await f.tick()
-  f.requests.find(r => r.path.endsWith('/graph'))!.finish(graph('One'))
+  f.requests.find(r => r.path.endsWith('/summary'))!.finish(graph('One'))
   f.requests.find(r => r.path.endsWith('/stages'))!.finish({ stages: {} })
   await flush()
   f.observers.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!.reconnected!()
@@ -579,7 +582,7 @@ test('shared recovery inventory remains single-owner when chat readiness reads a
   assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 2)
   assert.equal(lease.activity.state.readReason, 'recovery')
   f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
-  f.requests.filter(r => r.path.endsWith('/graph')).at(-1)!.finish(graph('One'))
+  f.requests.filter(r => r.path.endsWith('/summary')).at(-1)!.finish(graph('One'))
   await chatRead
   await f.tick()
   assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 2)
@@ -613,35 +616,35 @@ test('304 activity revalidation preserves newer in-flight SSE overlays and clear
 })
 
 
-test('scoped legacy ended notifications revalidate only known nodes through the shared reader', async t => {
+test('scoped legacy ended notifications revalidate logical summaries through the shared reader', async t => {
   const f = fixture(t)
   const lease = f.store.acquireProject('http://fixture', 'a')
   const initial = { sessions: [{ sessionId: 'web:one', title: 'Worker' }],
     nodes: [{ physicalId: 'physical-one', logicalId: 'web:one', parentPhysicalId: null }] }
   await f.tick()
-  f.requests.find(r => r.path.endsWith('/graph'))!.finish(initial)
+  f.requests.find(r => r.path.endsWith('/summary'))!.finish(initial)
   f.requests.find(r => r.path.endsWith('/stages'))!.finish({ stages: {} })
   await flush()
   // session.ended currently publishes this unhinted payload. It must not be
   // treated as a topology change just because it has no resource hints.
   for (let i = 0; i < 10; i++) f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one' })
   await f.tick()
-  let graphs = f.requests.filter(r => r.path.endsWith('/graph'))
+  let graphs = f.requests.filter(r => r.path.endsWith('/summary'))
   assert.equal(graphs.length, 2)
-  assert.deepEqual(JSON.parse(graphs[1].url.searchParams.get('sessionIds')!), ['web:one'])
+  assert.equal(graphs[1].url.searchParams.has('sessionIds'), false)
   graphs[1].finish({ ...initial, partial: true, sessionIds: ['web:one'],
     sessions: [{ ...initial.sessions[0], executionStatus: 'completed' }] })
   f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
   await flush()
-  assert.equal(lease.graph.state.value?.[0].executionStatus, 'completed')
+  assert.equal(lease.sessions.state.value?.[0].executionStatus, 'completed')
   // A real segment transition arriving via the same publisher must recover.
   f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one' })
   await f.tick()
-  graphs = f.requests.filter(r => r.path.endsWith('/graph'))
+  graphs = f.requests.filter(r => r.path.endsWith('/summary'))
   graphs.at(-1)!.finish({ ...initial, partial: true, sessionIds: ['web:one'],
     nodes: [{ ...initial.nodes[0], physicalId: 'next-segment' }] })
   await flush()
-  graphs = f.requests.filter(r => r.path.endsWith('/graph'))
+  graphs = f.requests.filter(r => r.path.endsWith('/summary'))
   assert.equal(graphs.at(-1)!.url.searchParams.has('sessionIds'), false)
   graphs.at(-1)!.finish(initial)
   f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
