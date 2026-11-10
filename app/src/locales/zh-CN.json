@@ -1168,6 +1168,7 @@
   "Default mode": "默认模式",
   "Default model": "默认模型",
   "Default selected by timeout": "超时选择了默认项",
+  "The project request timed out after 15 seconds. Check Main and retry.": "项目请求在 15 秒后超时。请检查 Main 后重试。",
   "Default · {label}": "默认 · {label}",
   "Defer · continue independent work": "暂缓 · 继续独立工作",
   "Deferred · not approved": "已暂缓 · 未批准",
