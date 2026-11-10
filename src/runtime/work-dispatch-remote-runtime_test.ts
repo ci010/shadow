@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -308,7 +308,7 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
       assert.notEqual(native.displayPath, source)
       assert((await lstat(join(native.displayPath, '.git'))).isFile(), 'derived resource is a real linked Git worktree')
       assert.match(execution.branch!, /^shadow(?:\/|-)derived-[0-9a-f-]{36}$/)
-      assert.equal(await git(native.displayPath, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal), join(source, '.git'))
+      assert.equal(await realpath(await git(native.displayPath, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal)), await realpath(join(source, '.git')))
       assert.equal(await git(native.displayPath, ['symbolic-ref', '--short', 'HEAD'], signal), execution.branch)
       assert.equal(await git(native.displayPath, ['rev-parse', 'HEAD'], signal), sourceHead)
       assert.equal(await readFile(join(native.displayPath, 'tracked.txt'), 'utf8'), 'committed source\n')
