@@ -166,7 +166,7 @@ export class SubagentTool implements Tool {
     // Resolve agent type
     const agentType = this.agentTypes.resolve(typeName)
     if (!agentType) {
-      return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.allNames().join(', ')}`
+      return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.all().filter(type => !type.root || type.name === 'general').map(type => type.name).join(', ')}`
     }
     const mode = args.mode ?? 'task'
     const title = mode === 'task' ? parseSessionName(args.title ?? description.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120)) : undefined
