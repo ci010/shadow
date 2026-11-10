@@ -144,7 +144,7 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
               result.headers.forEach((value, key) => res.setHeader(key, value))
               res.end(await result.text())
             } else if (path.endsWith('/api/work')) json({ items: [], sessions: [], requests: [], effects: [] })
-            else if (path.endsWith('/api/sessions/graph')) json({ sessions: [], nodes: [] })
+            else if (path.endsWith('/api/sessions/summary')) json({ sessions: [], nodes: [] })
             else if (path.endsWith('/api/sessions/stages')) json({ stages: {} })
             else next()
           } catch (error) { next(error) }

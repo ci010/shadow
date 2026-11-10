@@ -60,7 +60,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     const path = new URL(String(input)).pathname
     if (path === '/api/projects') return Response.json({ projects: ['a', 'b'].map(id => ({ id, name: id, createdAt: '' })) })
     const id = path.split('/')[2]!
-    if (path.endsWith('/graph')) return Response.json({ sessions: [
+    if (path.endsWith('/summary')) return Response.json({ sessions: [
       { sessionId: 'web:root', mode: 'session', name: 'Review release' },
       { sessionId: 'sub:task', mode: 'task', parentSessionId: 'web:root', name: 'Internal check' },
       ...botIds.filter(sessionId => id === 'a' || !sessionId.startsWith('bot:')).map(sessionId => ({ sessionId, mode: 'session' })),

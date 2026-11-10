@@ -60,8 +60,8 @@ test('catalog and tree grouping use IDs, keep scratch chats and reflection insid
 test('failed org resources do not block concurrent graphs or erase their independent stages', async () => {
   const request: typeof fetch = async input => {
     const url = new URL(String(input))
-    if (url.pathname === '/projects/a/api/sessions/graph') return new Response('', { status: 503 })
-    if (url.pathname.endsWith('/graph')) return Response.json({ sessions: [{ sessionId: 'web:chat-same' }], nodes: [] })
+    if (url.pathname === '/projects/a/api/sessions/summary') return new Response('', { status: 503 })
+    if (url.pathname.endsWith('/summary')) return Response.json({ sessions: [{ sessionId: 'web:chat-same' }], nodes: [] })
     return Response.json({ stages: { 'web:chat-same': 'llm' } })
   }
   const [a, b] = await Promise.all(['a', 'b'].map(id => fetchProjectConversations('http://fixture', id, new AbortController().signal, request)))

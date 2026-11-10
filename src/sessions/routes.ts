@@ -273,7 +273,8 @@ export function sessionsApiPlugin(
       return c.json({ sessionId, tasks })
     })
 
-    app.get('/api/sessions/graph', async (c) => {
+    for (const path of ['/api/sessions/summary', '/api/sessions/graph']) app.get(path, async (c) => {
+      const summary = c.req.path.endsWith('/summary')
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
@@ -316,8 +317,18 @@ export function sessionsApiPlugin(
         .filter(task => task.status === 'running' || task.status === 'cancelling')
         .map(task => task.sessionId))
       const enrichedSessions = []
+      // Resolve only the logical context parent. Never enumerate physical segments
+      // for navigation: a session may have arbitrarily many historical segments.
+      const physicalOwners = new Map<string, { id: string; last: number }>()
+      const contextParents = new Map<string, string>()
       for (const session of list) {
         const state = await sessions.readSessionState(session.sessionId)
+        if (summary) {
+          const identity = state ?? session
+          const prefix = physicalSessionId(identity, 0).slice(0, -1)
+          physicalOwners.set(prefix, { id: session.sessionId, last: session.segmentIndex })
+          if (state?.parent?.physicalId) contextParents.set(session.sessionId, state.parent.physicalId)
+        }
         const execution = {
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
@@ -361,12 +372,15 @@ export function sessionsApiPlugin(
           topic: state ? sessionTopic(state) : title,
           focus: state?.focus,
           description: execution.description,
-          config: state?.config ?? undefined,
+          ...(summary ? { config: undefined, inferenceOverrides: state?.config ? {
+            model: state.config.model, thinking: state.config.thinking,
+            reasoningEffort: state.config.reasoningEffort, contextWindow: state.config.contextWindow,
+          } : undefined } : { config: state?.config ?? undefined }),
           inferenceDefaults,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
             null,
         })
-        for (let i = 0; i <= session.segmentIndex; i++) {
+        if (!summary) for (let i = 0; i <= session.segmentIndex; i++) {
           const physicalId = physicalSessionId(state ?? session, i)
           const parentPhysicalId = state?.parent?.physicalId ??
             null
@@ -384,6 +398,17 @@ export function sessionsApiPlugin(
         }
       }
 
+      if (summary) {
+        for (const row of enrichedSessions) {
+          const physical = contextParents.get(row.sessionId)
+          const match = physical?.match(/^(.*-)(\d+)$/)
+          const owner = match ? physicalOwners.get(match[1]) : undefined
+          if (owner && Number(match![2]) <= owner.last && owner.id !== row.sessionId) {
+            Object.assign(row, { contextParentSessionId: owner.id })
+          }
+        }
+        return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions })
+      }
       return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions, nodes,
         ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),
       })

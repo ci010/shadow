@@ -464,7 +464,7 @@ subscription. Actual organization execution retains its ordinary session and
 Work mutation notifications. Completed automatic checks publish after scheduling
 the next retry so the status snapshot includes its next check deadline.
 
-Session graph revisions do not imply catalog changes. Folder catalog commits
+Session summary revisions do not imply catalog changes. Folder catalog commits
 publish Project-scoped `folders` invalidations after successful persistence;
 node connection/registry transitions publish `nodes` invalidations. These readers
 are independent, so folder changes do not reload device inventory. Bot/config
@@ -473,56 +473,33 @@ recovery remain available. Channel-manager spontaneous connection transitions do
 not yet have a complete notification source; silently changed channel connection
 status may require manual refresh or live recovery rather than being real-time.
 
-Known session invalidations with supported change hints, or legacy scoped
-invalidations without hints (including `session.ended`), can request
-`GET /api/sessions/graph?sessionIds=<JSON array>` instead of the full graph.
-Requests are bounded to 32 distinct IDs and remain Project-scoped. The response
-contains complete summaries and physical nodes for only those sessions. Before
-merging, the client compares all session/node fields except known mutable
-presentation and status attributes against its retained wire graph. Changed
-lineage, parent references/indexes, segment sets, membership or unknown future
-fields require an authoritative full read; this also applies to hinted events.
-Stable summaries are merged before resolving cross-session physical parents.
-The bus-to-realtime mapper keeps handoff global because it can change both
-source and target; it must not collapse that fact into a source-only probe.
-TopicService scoped callbacks describe self-metadata or creation (unknown IDs
-recover full); its Folder registration callback remains global.
-Initial reads, unknown/new sessions, global invalidations, malformed/unknown
-hints, manual refresh and recovery use the full graph. Missing/deleted or
-malformed partial rows trigger a full read rather than guessing topology. A
-structural scoped event therefore costs a bounded probe plus a full recovery;
-this conservative first optimization does not support partial node creation.
-Invalidations during an in-flight read retain their serialized follow-up; no
-additional debounce or event suppression is introduced. Activity/history/Work
-reader behavior and publisher wire contracts are unchanged.
+Ordinary navigation uses `GET /api/sessions/summary`, not the physical
+`/api/sessions/graph` representation. The existing `/api/sessions` inventory
+lacks the execution, automation, defaults and logical-parent enrichment required
+by chat, sidebar, quick-open and notification consumers, so it is not reused.
+The summary shares the graph endpoint's enrichment and bounded label/automation
+previews, but never enumerates historical segment nodes or transfers arbitrary
+session `config`. It sends only model/thinking/reasoning/context-window overrides
+as `inferenceOverrides`, plus resolved `inferenceDefaults`, preserving composer
+settings and execution-card labels. Context-fork parents are resolved to logical
+IDs without building physical nodes; delegation parents retain their own field.
 
-WorkOrganizer presentation callbacks now carry the owning run session ID with a
-`work` hint (begin, patch/prune, finish and interrupted status). These writes
-change the organizer's presentation/coverage, not source-session lineage. Work
-overview consumers still refresh; the graph probes the known run row and retains
-the same topology checks. Begin occurs before run-session creation, so a new or
-unknown run still requires a full inventory read; lifecycle notifications remain
-independent. A real SQLite organizer → realtime publisher → graph-reader test
-uses a synthetic inventory growing from 718 to 719 sessions: initial read, fresh
-run begin, three patches and finish change six full requests into two full plus
-four partial requests, 4,884,219 → 1,632,123 JSON bytes (66.58% less). The fresh
-run begin still requires full recovery. This does not reduce total request count
-or measure live CPU, latency, or HAR event attribution.
+The shared Project live reader owns one conditional summary and one activity
+snapshot. Initialization, scoped/global invalidations, manual refresh and
+reconnect all revalidate the summary; activity-only updates still avoid inventory
+reads. Invalidations during a read retain a serialized follow-up. Consumers
+share reads; releasing the last consumer aborts pending requests. This still
+reads/enriches the logical inventory on Main and is not server-side pagination
+or an incremental inventory protocol.
 
-Other globals remain intentional/conservative: WorkAlignment changes may notify
-previous/new assignees, descendants and decision holders; successor creation can
-add topology. Cron inventory changes affect enabled existing-session targets
-(`hasCron`); fresh cron/organizer/learning runs add sessions. GitHub and
-learning callbacks still use broad recovery. TopicService folder registration,
-handoff, reset/reconnect, manual refresh and unknown/deleted rows retain full
-recovery. Project SQL exposes Work tables as read-only snapshots, not a second
-Work mutation path; Work-tool writes persist through InitiativeStore and publish
-through WorkAlignment. No blanket Work/cron suppression is applied here.
+`GET /api/sessions/graph` and its bounded `sessionIds` query remain available
+for explicit physical-history consumers, with the existing graph loader and
+its topology recovery tests. No ordinary mounted UI consumer uses that loader.
+The Project workbench's Graph tab is a Work overview visualization backed by
+`/api/work`, not a physical session graph. Its existing visible-only Work lease
+continues to refresh while visible and pauses when released; opening it does
+not require a redundant physical session graph fetch. No new graph UI is added.
 
-Without captured SSE payloads, repeated HAR full reads alone cannot establish
-which invalidation caused each request. Request/byte savings for stable scoped
-events are covered by a synthetic 665-session replay, not a measured live CPU
-improvement or a claim that every HAR reread is avoidable.
 Graph `name` and `title` are label previews capped at 160 UTF-16 code units
 (with an ellipsis and no split surrogate pair). Their existing naming/fallback
 priority is retained; persisted names and full task descriptions are unchanged.
@@ -535,10 +512,10 @@ This narrows transfer and per-session enrichment work; it does not eliminate
 the inventory lookup (including archived inventory paging) or replace
 authoritative reads with event payloads.
 
-Full graph and stages readers also hold an endpoint-local, in-memory ETag and
+Summary, explicit full-graph and stages readers hold an endpoint-local, in-memory ETag and
 validated snapshot. They send `If-None-Match` on subsequent reads; an unchanged
 representation returns bodyless `304`, reusing the validated snapshot without
-JSON decoding (and without reparsing the graph). Partial graph responses never
+JSON decoding (and without reparsing the snapshot). Partial graph responses never
 replace the full graph's validator or base. A `304` still reconciles activity
 notifications received while HTTP was in flight. Legacy servers without ETag
 continue to return full JSON. These are explicit revalidations with `no-store`,
@@ -577,7 +554,7 @@ response for sessions still present in its inventory; they cannot resurrect dele
 rows or be overwritten by a stale in-flight response. The bounded fingerprint map
 stores no response authority; eviction or fingerprint failure permits a notification
 rather than suppressing updates. Pure history persistence does not invalidate
-activity snapshots; admission, completion and broad legacy notifications still do. Known session metadata changes can use targeted graph reads;
+activity snapshots; admission, completion and broad legacy notifications still do. Session metadata changes revalidate the logical summary;
 unknown/new sessions, handoff/end and broad Project events retain full recovery.
 Pure title/description/completion edits, existing-session configuration edits and
 working-folder switches publish `session.changed` with `metadataOnly: true`.
