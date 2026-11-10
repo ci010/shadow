@@ -43,7 +43,9 @@ On the existing authorized Project automation API:
   integers from 1 to 16. Optional `model` and `reasoningEffort` select the dispatcher
   model and default worker settings; individual admissions can override the worker
   model/effort. With no override, existing model defaults apply.
-- PATCH `{"enabled":true}` or `{"enabled":false}` controls timer admission.
+- PATCH `{"enabled":true}` or `{"enabled":false}` controls timer admission. While
+  disabled, the program may also be restored to an unconfigured state without
+  `folderId`; enabling or manually running still requires an available source.
 - POST the usual `/run` to schedule now, including while the timer is disabled.
 - POST `/cancel` to abort an in-flight scheduling round and stop admitted automatic
   executors without releasing Work or removing artifacts. Disabling only stops
