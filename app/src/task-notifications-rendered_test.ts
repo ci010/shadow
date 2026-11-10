@@ -65,7 +65,7 @@ async function renderTaskNotifications(web: boolean) {
           const state = createProjectLiveState(pool, {delayMs:0,request:async input => {
             const path = new URL(String(input)).pathname;
             if (path === '/api/projects') return Response.json({projects:[{id:'release',name:'Release Project',createdAt:''}]});
-            if (path.endsWith('/graph')) return Response.json({sessions:[{sessionId:'web:check',mode:'session',name:'Release check'}],nodes:[]});
+            if (path.endsWith('/summary')) return Response.json({sessions:[{sessionId:'web:check',mode:'session',name:'Release check'}],nodes:[]});
             if (path.endsWith('/stages')) return Response.json({stages:{'web:check':'idle'}});
             throw new Error('Unexpected fixture request: ' + path);
           }});

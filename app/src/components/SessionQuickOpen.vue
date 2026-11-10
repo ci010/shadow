@@ -29,7 +29,7 @@ function stageFor(session: SidebarSession & { projectId: string }) {
 function delegatedFor(session: SidebarSession & { projectId: string }) {
   const lease = entryFor(session.projectId)?.lease
   const stages = lease?.activity.state.value?.stages ?? {}
-  return summarizeSubagents(activeSubagentsByOwner(lease?.graph.state.value ?? [], stages).get(session.sessionId) ?? [], stages)
+  return summarizeSubagents(activeSubagentsByOwner(lease?.sessions.state.value ?? [], stages).get(session.sessionId) ?? [], stages)
 }
 function metadataFor(session: SidebarSession & { projectId: string }) {
   return sessionListMetadata(session, folderCatalogs.value[session.projectId] ?? [], [], now.value)
@@ -60,9 +60,9 @@ watch(() => [props.apiBase, ...props.projects.map(project => project.id)], (_, _
   }
 }, { immediate: true })
 const results = computed(() => searchQuickOpenSessions(filteredLeases.value.flatMap(({ projectId, lease }) =>
-  (lease.graph.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id), projectFilter.value))
-const loading = computed(() => filteredLeases.value.some(({ lease }) => lease.graph.state.loading))
-const failures = computed(() => filteredLeases.value.filter(({ lease }) => lease.graph.state.error))
+  (lease.sessions.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id), projectFilter.value))
+const loading = computed(() => filteredLeases.value.some(({ lease }) => lease.sessions.state.loading))
+const failures = computed(() => filteredLeases.value.filter(({ lease }) => lease.sessions.state.error))
 const projectLabel = (projectId: string) => props.projects.find(project => project.id === projectId)?.name ?? projectId
 const optionId = (index: number) => `${id}-option-${index}`
 watch([query, results], () => { selected.value = 0 })
@@ -114,7 +114,7 @@ function keydown(event: KeyboardEvent) {
 }
 function retry(projectId: string) {
   const entry = leases.value.find(entry => entry.projectId === projectId)
-  if (entry) void entry.lease.graph.refresh()
+  if (entry) void entry.lease.sessions.refresh()
 }
 onMounted(() => {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -154,7 +154,7 @@ onBeforeUnmount(() => {
     <div v-if="failures.length" class="failures">
       <div v-for="failure in failures" :key="failure.projectId" class="failure">
         <span>{{ t('Could not load sessions for {project}', { project: projectLabel(failure.projectId) }) }}</span>
-        <button type="button" :disabled="failure.lease.graph.state.loading" @click="retry(failure.projectId)">{{ t('Retry') }}</button>
+        <button type="button" :disabled="failure.lease.sessions.state.loading" @click="retry(failure.projectId)">{{ t('Retry') }}</button>
       </div>
     </div>
     <ul :id="`${id}-results`" role="listbox" :aria-label="t('Sessions')" class="results">

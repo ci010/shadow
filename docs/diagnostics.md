@@ -30,6 +30,18 @@ segments:
 | `spanBeforeId` | Independent completed-span cursor from `trace.nextBeforeId` |
 | `textLimit` | Maximum characters per string, 1–16000 |
 
+Both views include `trace.spanMetrics` for every span on the loaded trace page,
+including completed successes omitted from summary detail. Entries are linked by
+`traceId` + `spanId`; `metrics` contains only explicitly allowlisted, validated
+numeric counts and bounded identifiers, independent of the shared evidence-text
+budget. This preserves recorded request body/wire bytes, content encoding,
+model/provider, HTTP status/error codes and token/context counts when present.
+Known timeout events retain numeric metrics; `model.response` events retain only
+allowlisted usage counts extracted from encoded messages up to 1,000,000 characters.
+No message text, headers or exception messages enter this channel. Unknown keys,
+invalid values and absent telemetry are omitted, not inferred as zero. Older
+traces may lack HTTP/token/context fields; this export does not add instrumentation.
+
 Follow `history.nextOffset` and `trace.nextBeforeId` independently. Live
 collection is not atomic; active work can append records while the snapshot
 is read. For a stopped backend, `scripts/diagnose-session.ts` can read explicit

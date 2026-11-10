@@ -115,7 +115,7 @@ test('automations open ordinary conversations and navigate run history without a
             const send = () => json(failRuns ? { error: 'Synthetic unavailable history' } : { runs: emptyRuns ? [] : runs.slice(offset, offset + 30), total: emptyRuns ? 0 : runs.length, offset }, failRuns ? 503 : 200)
             if (hold) pending.push(send)
             else send()
-          } else if (path === '/api/sessions/graph') json({ sessions: [...runs.map(run => ({
+          } else if (path === '/api/sessions/summary') json({ sessions: [...runs.map(run => ({
             sessionId: run.sessionId, title: run.title, mode: 'session',
             automation: { contextMode: 'fresh', jobId: automation.id, name: automation.name, runId: run.id, startedAt: run.startedAt },
           })), { sessionId: 'web:ordinary', title: 'Ordinary conversation', mode: 'session' }], nodes: [] })

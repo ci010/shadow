@@ -2,8 +2,8 @@
   <section class="channel-index" :aria-label="t('Channel content')">
     <header><h2>{{ channelName }}</h2><p>{{ t('Choose a post or thread to open its original history.') }}</p></header>
     <label class="channel-search">{{ t('Search posts and threads') }}<input v-model="query" type="search" /></label>
-    <p v-if="lease?.graph.state.error" role="alert">{{ t('Live state is unavailable. Retry.') }} <button class="btn btn-sm" @click="lease?.graph.refresh()">{{ t('Retry') }}</button></p>
-    <p v-else-if="lease?.graph.state.loading && !histories.length" role="status">{{ t('Loading') }}</p>
+    <p v-if="lease?.sessions.state.error" role="alert">{{ t('Live state is unavailable. Retry.') }} <button class="btn btn-sm" @click="lease?.sessions.refresh()">{{ t('Retry') }}</button></p>
+    <p v-else-if="lease?.sessions.state.loading && !histories.length" role="status">{{ t('Loading') }}</p>
     <p v-else-if="!filtered.length" class="empty">{{ t('No posts or threads found.') }}</p>
     <ul><li v-for="post in filtered" :key="post.conversationId" class="post">
       <button v-if="post.histories.length === 1" class="post-open" @click="emit('open', post.histories[0]!.sessionId)"><strong>{{ post.title }}</strong><time v-if="post.lastActivityAt" :datetime="post.lastActivityAt">{{ formatDateTime(post.lastActivityAt) }}</time></button>
@@ -26,13 +26,13 @@ const lifecycleActive = ref(true), query = ref('')
 function release() { lease.value?.release(); lease.value = undefined }
 watch(() => [props.apiBase, props.projectId, props.active, lifecycleActive.value] as const, () => {
   release()
-  if (props.active && lifecycleActive.value && props.projectId) { lease.value = live.acquireProject(props.apiBase, props.projectId); void lease.value.graph.read() }
+  if (props.active && lifecycleActive.value && props.projectId) { lease.value = live.acquireProject(props.apiBase, props.projectId); void lease.value.sessions.read() }
 }, { immediate: true })
 watch(() => props.channelKey, () => { query.value = '' })
 onActivated(() => { lifecycleActive.value = true })
 onDeactivated(() => { lifecycleActive.value = false })
 onUnmounted(release)
-const histories = computed(() => props.channelKey.projectId === props.projectId ? discordChannelHistories(lease.value?.graph.state.value ?? [], props.channelKey) : [])
+const histories = computed(() => props.channelKey.projectId === props.projectId ? discordChannelHistories(lease.value?.sessions.state.value ?? [], props.channelKey) : [])
 const channelName = computed(() => histories.value.find(s => s.discordChannel?.id === props.channelKey.channelId)?.discordChannel?.name || histories.value.find(s => s.discordChannel?.parentName)?.discordChannel?.parentName || props.channelKey.channelId)
 const filtered = computed(() => discordChannelPosts(histories.value, props.channelKey).filter(post => post.title.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase())))
 </script>

@@ -81,7 +81,7 @@ export interface CreateEventSubscription {
 
 /**
  * A first-class, named producer of events. Sources are discoverable (via
- * `v:events/sources`) and can carry a default {@link EventDelivery} policy so
+ * `v:signals/internal/sources`) and can carry a default {@link EventDelivery} policy so
  * urgency can be declared once per source instead of on every event.
  */
 export interface EventSourceDescriptor {

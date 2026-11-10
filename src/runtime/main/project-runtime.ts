@@ -166,7 +166,7 @@ import {
   createSkillsHandler,
 } from '../../vfs/mounts.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
-import { createProviderEventsHandler } from '../../events/providers/vfs.ts'
+import { createProviderSignalsHandler } from '../../signals/providers/vfs.ts'
 import { createModelsHandler } from '../../vfs/models.ts'
 import { createAgentsHandler } from '../../vfs/agents.ts'
 
@@ -188,8 +188,9 @@ import { ProjectActions } from '../../projects/actions.ts'
 import { projectActionsPlugin } from '../../projects/action-routes.ts'
 import { ProjectActionTool } from '../../tools/project-action.ts'
 import { EventService } from '../../events/service.ts'
-import { EventProviderRuntime } from '../../events/providers/runtime.ts'
-import { EventProviderTool } from '../../tools/event-provider.ts'
+import { SignalProviderRuntime } from '../../signals/providers/runtime.ts'
+import { SignalProviderTool } from '../../tools/signal-provider.ts'
+import { registerSignalTools } from '../../tools/signal-tools.ts'
 import { watchAutomationSessions } from '../../cron/notifications.ts'
 import { CronService } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
@@ -1133,7 +1134,7 @@ export async function createProjectRuntime(
   const memoryVfs = createMemoryHandler(workspace, project.id)
   vfs.mount(
     'v:memory',
-    'read Project memory; write wiki Markdown files (session records, event logs and internal state are read-only here)',
+    'read Project memory; write wiki Markdown files (session records, logs and internal state are read-only here)',
     memoryVfs.read,
     memoryVfs.list,
     memoryVfs.write,
@@ -1186,22 +1187,22 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
-  const eventProviders = new EventProviderRuntime(
+  const signalProviders = new SignalProviderRuntime(
     workspace, capabilityBroker, (id, input) => deliverInput(id, input),
     id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
     ref => agentCredentials.names().includes(ref),
   )
-  cleanup.push(() => eventProviders.stop())
-  const eventsVfs = createProviderEventsHandler(eventProviders, project.id, createEventsHandler(events))
+  cleanup.push(() => signalProviders.stop())
+  const signalsVfs = createProviderSignalsHandler(signalProviders, project.id, createEventsHandler(events))
   vfs.mount(
-    'v:events',
-    'read Project provider revisions, instances and subscriptions; internal session events',
-    eventsVfs.read,
-    eventsVfs.list,
+    'v:signals',
+    'read external signal providers, instances and subscriptions; internal/ is a separate runtime event view',
+    signalsVfs.read,
+    signalsVfs.list,
     undefined,
-    eventsVfs.directory,
+    signalsVfs.directory,
   )
-  const eventProviderTool = new EventProviderTool(eventProviders, project.id, {
+  const signalProviderTool = new SignalProviderTool(signalProviders, project.id, {
     contexts: (context, instance) => importTool.providerBrowserContexts(context, instance),
     bind: (context, binding) => importTool.bindProviderBrowser(context, binding),
   })
@@ -1212,7 +1213,7 @@ export async function createProjectRuntime(
   })
   const learningTools = new LearningTools(learningRuntime)
   for (const tool of [learningTools.memory, learningTools.skill, learningTools.soul, learningTools.result]) tools.register(tool)
-  tools.register(new LogTool(workspace, (entry, key, context) => learningTools.appendEvent(entry, key, context)))
+  tools.register(new LogTool(workspace, (entry, key, context) => learningTools.appendLog(entry, key, context)))
   for (const tool of [new SkillSaveTool(skillEditing)]) {
     tools.register(tool)
     importTool.registerBuiltin(tool.name, tool)
@@ -1443,7 +1444,8 @@ export async function createProjectRuntime(
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
   registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
-  registerInternalEventTools(importTool, events, [eventProviderTool])
+  registerInternalEventTools(importTool, events)
+  registerSignalTools(importTool, signalProviderTool)
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
   cronService.setOnJobRemoved((jobId) => {
@@ -1772,7 +1774,7 @@ export async function createProjectRuntime(
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
       () => knowledgeMaintenance.stop(),
-      () => eventProviders.stop(),
+      () => signalProviders.stop(),
       () => github.stop(),
       () => cronService.stop(),
       () => stopLearning,
@@ -1829,7 +1831,7 @@ export async function createProjectRuntime(
   workDispatchReady = true
   const workJob = cronService.listJobs().find(job => job.program && job.enabled !== false)
   if (workJob) await cronService.runNow(workJob.id)
-  eventProviders.start()
+  signalProviders.start()
   events.registerManagedSource({ source: 'github', kind: 'custom', description: 'Explicit Project GitHub resource subscriptions' })
   github.start()
   a2a.validate()

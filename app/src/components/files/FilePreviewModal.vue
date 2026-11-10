@@ -9,7 +9,7 @@
               <option v-for="option in textEncodings" :key="option.value" :value="option.value">{{ option.label }}</option>
             </UiSelect>
           </label>
-          <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
+          <button v-if="isMarkdown || isMemoryLogs || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
           <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" :text="t('Reload preview')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Reload preview')" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
           <HoverInfo v-if="!inline" :text="fullscreen ? t('Exit fullscreen') : t('Fullscreen')" v-slot="{ triggerProps }">
           <button
@@ -69,15 +69,15 @@
           <div v-if="loading" class="file-modal-note">{{ t('Loading…') }}</div>
           <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button></div>
           <div v-else-if="binary" class="file-modal-note">{{ t('This file contains binary data. Use Download to save it.') }}</div>
-          <div v-else-if="isMemoryEvents && !sourceView" ref="selectionRoot" class="file-memory-events" role="list" :aria-label="t('Memory events')">
-            <MemoryEventRecord v-for="record in memoryRecords" :key="record.start" :record="record" />
+          <div v-else-if="isMemoryLogs && !sourceView" ref="selectionRoot" class="file-memory-logs" role="list" :aria-label="t('Memory logs')">
+            <MemoryLogRecord v-for="record in memoryRecords" :key="record.start" :record="record" />
           </div>
           <article v-else-if="isMarkdown && !sourceView" ref="selectionRoot" class="file-markdown selectable-text" :aria-label="t('Markdown preview')">
             <div v-for="(block, index) in renderedMarkdown" :key="index" class="file-source-block"
               :data-source-start="block.start" :data-source-end="block.end" :data-source-provenance="block.provenance" v-markdown-link-hints v-html="block.html" />
           </article>
           <pre v-else ref="selectionRoot" class="file-modal-text"><FileHighlightText :key="selectionKey" ref="highlight" :source="textContent" :path="path" :active="active && loaded && !loading && !binary" @error="highlightError = $event" /></pre>
-          <div v-if="highlightError && ((!isMarkdown && !isMemoryEvents) || sourceView)" class="file-modal-note file-highlight-notice" role="status">{{ highlightError }} <button class="file-modal-btn" @click="highlight?.retry()">{{ t('Retry') }}</button></div>
+          <div v-if="highlightError && ((!isMarkdown && !isMemoryLogs) || sourceView)" class="file-modal-note file-highlight-notice" role="status">{{ highlightError }} <button class="file-modal-btn" @click="highlight?.retry()">{{ t('Retry') }}</button></div>
           <div v-if="truncated" class="file-modal-note">{{ t('Preview truncated — use “Download” for the full file.') }}</div>
         </div>
         <div v-else class="file-modal-note">
@@ -105,7 +105,7 @@ import HoverInfo from '../HoverInfo.vue'
 import FileHighlightText from './FileHighlightText.vue'
 import FileViewerPreview from './FileViewerPreview.vue'
 import { fileViewerFormat } from '../../file-viewer.ts'
-import MemoryEventRecord from './MemoryEventRecord.vue'
+import MemoryLogRecord from './MemoryLogRecord.vue'
 import ImageAnnotationPreview from './ImageAnnotationPreview.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
@@ -113,7 +113,7 @@ import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.t
 import { decodeTextPreview, textEncodings, type TextEncoding } from '../../../../src/execution/filesystem/text-encoding.ts'
 import { isArchive } from '../../archive-format.ts'
 import { readArchiveEntry } from '../../archive-files.ts'
-import { isMemoryEventFile, parseMemoryEvents } from '../../memory-events.ts'
+import { isMemoryLogFile, parseMemoryLogs } from '../../memory-logs.ts'
 import { fileMarkdownUrl, formatFileQuote, markdownSelectionLines, markdownSourceBlocks, plainSelectionLines, renderedSelectionLines } from '../../file-selection.ts'
 import {
   type FileEntry,
@@ -153,7 +153,7 @@ function releaseArchive() {
   archiveBlob.value = undefined
 }
 const isMarkdown = computed(() => !props.entry.archive && ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
-const isMemoryEvents = computed(() => !props.entry.archive && isMemoryEventFile(path.value))
+const isMemoryLogs = computed(() => !props.entry.archive && isMemoryLogFile(path.value))
 const sourceView = ref(false)
 const textMode = computed(() => !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive || !!props.attachmentUrl))))
 const rawSource = computed(() => props.attachmentUrl ?? (props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value)))
@@ -174,7 +174,7 @@ const sourcePath = ref<string>()
 const encoding = ref<TextEncoding>('auto')
 const encodingWarning = ref('')
 const truncated = ref(false)
-const memoryRecords = computed(() => isMemoryEvents.value ? parseMemoryEvents(textContent.value, truncated.value) : [])
+const memoryRecords = computed(() => isMemoryLogs.value ? parseMemoryLogs(textContent.value, truncated.value) : [])
 const loading = ref(false)
 const error = ref('')
 function archiveMediaError() {
@@ -191,7 +191,7 @@ const selectionEnabled = computed(() => props.active && props.selectionActive &&
 const selectionKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, path.value, sourceView.value, frameNonce.value, encoding.value]))
 function quoteSelection(text: string, range: Range): void {
   if (!selectionEnabled.value || !props.canQuote || !selectionRoot.value || !text.trim()) return
-  const lines = isMemoryEvents.value && !sourceView.value
+  const lines = isMemoryLogs.value && !sourceView.value
     ? renderedSelectionLines(selectionRoot.value, range, memoryRecords.value)
     : isMarkdown.value && !sourceView.value
       ? markdownSelectionLines(selectionRoot.value, range, renderedMarkdown.value)
@@ -539,7 +539,7 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
   border-radius: var(--radius-control);
 }
 
-.file-memory-events { box-sizing: border-box; container: memory-events / inline-size; max-width: 88ch; margin: 0 auto; padding: 12px 16px 32px; color: var(--c-text); }
+.file-memory-logs { box-sizing: border-box; container: memory-logs / inline-size; max-width: 88ch; margin: 0 auto; padding: 12px 16px 32px; color: var(--c-text); }
 .file-markdown { box-sizing: border-box; max-width: 75ch; margin: 0 auto; padding: 12px 16px 32px; color: var(--c-text); font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
 .file-source-block { display: contents; }
 .file-markdown :deep(h1), .file-markdown :deep(h2), .file-markdown :deep(h3), .file-markdown :deep(h4), .file-markdown :deep(h5), .file-markdown :deep(h6) { font-weight: 600; line-height: 1.3; margin: 1.5em 0 .65em; }

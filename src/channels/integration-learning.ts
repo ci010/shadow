@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { retrySchema, type Pipeline } from '../agent/learning/ledger.ts'
+import { memoryLogView } from '../memory/log-view.ts'
 import { DerivedMemoryInputSchema, MemorySourceSchema, type DerivedMemoryInput, type MemoryResource } from '../memory/contracts.ts'
 import type { MemoryDomains } from '../memory/domains.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -22,7 +23,7 @@ const reference = (resource: MemoryResource): Reference => ({
   id: resource.id, version: resource.version, kind: resource.kind, title: resource.title,
 })
 const referenceKey = (ref: Reference) => `${ref.id}:${ref.version}`
-const described = (ref: Reference) => ({ ...ref, path: `v:memory/${ref.id}/${ref.version}` })
+const described = (ref: Reference) => ({ ...memoryLogView(ref), path: `v:memory/${ref.id}/${ref.version}` })
 const rangeSchema = z.object({
   physicalId: z.string(), segmentIndex: z.number().int().nonnegative(),
   offset: z.number().int().nonnegative(), end: z.number().int().positive(), hash: version,
@@ -300,7 +301,7 @@ export class DiscordLearning {
             if (!ref) throw new Error('Memory is unavailable in this learning batch.')
             const value = this.options.memory.read(scope.access, ref.id, ref.version)
             readInputs.add(referenceKey(ref))
-            return JSON.stringify(value)
+            return JSON.stringify({ ...value, resource: memoryLogView(value.resource) })
           },
         })
         register({
@@ -366,12 +367,12 @@ export class DiscordLearning {
       }
     }
     batch = currentBatch
-    const events: DerivedMemoryInput[] = pipeline === 'reflector' ? [...effects.values()].map(effect => ({
+    const logs: DerivedMemoryInput[] = pipeline === 'reflector' ? [...effects.values()].map(effect => ({
       id: randomUUID(), kind: 'event', title: `Decision recorded: ${effect.input.title}`.slice(0, 200),
       content: JSON.stringify({ type: 'decision-recorded', batchId: currentBatch.id, name: effect.name,
         resourceId: effect.input.id, inputs: currentBatch.inputs, scope: 'Conversation-only evidence; not instructions or publication approval.' }),
     })) : []
-    batch.prepared = { effects: [...effects.values()], events, sources: this.options.memory.sources(scope.access), receipt }
+    batch.prepared = { effects: [...effects.values()], events: logs, sources: this.options.memory.sources(scope.access), receipt }
     batch.status = 'applying'
     this.update(document, batch)
     await this.commit(scope, document, batch)

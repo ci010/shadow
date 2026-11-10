@@ -1,6 +1,6 @@
-# Programmable EventSourceProviders
+# Programmable SignalSourceProviders
 
-`event_provider` is the general authored provider path, separate from internal
+`signal_provider` is the general authored provider path, separate from internal
 `event_subscribe`, cron and EventService. A provider is restricted
 code plus a self-describing manifest, not a GraphQL transport abstraction.
 REST, GraphQL and public HTML/text acquisition are implementation choices.
@@ -9,33 +9,33 @@ Installation does not create instances, provision credentials or perform IO.
 
 ## Discover, author, bind, subscribe
 
-Discover tools with `search({handler:"glob",path:"v:tools/events",query:"**"})`,
-read the exact returned contract, then invoke `event_provider` via `invoke_tool`.
-Start with `v:events/` (“可订阅的事件来源”), then read
-`v:events/providers/<id>`: **one complete consumer file**, not a directory.
-It includes capabilities/noncapabilities, demand and event-data schemas, examples,
+Discover tools with `search({handler:"glob",path:"v:tools/signals",query:"**"})`,
+read the exact returned contract, then invoke `signal_provider` via `invoke_tool`.
+Start with `v:signals/` (“可订阅的信号来源”), then read
+`v:signals/providers/<id>`: **one complete consumer file**, not a directory.
+It includes capabilities/noncapabilities, demand and signal-data schemas, examples,
 baseline/update/repeat semantics, minimal instance purpose/availability and exact
 `invoke_tool` subscription calls. With multiple applicable versions the same file
 shows each contract with its pinned instances; latest does not override older pins.
 No instances/examples means setup is needed, not an invented executable call.
 
 Implementation details require explicit authoring paths:
-- `v:events/authoring/providers/<id>/revisions/<version>/manifest.json`, `source.ts`
-- `v:events/authoring/subscriptions/<id>/diagnostics.json` for pending job diagnostics.
-Explicit management paths remain `v:events/instances/<id>/{config.json,status.json}`,
-`v:events/subscriptions/<id>/{config.json,processor.ts,status.json}` and
-`v:events/status.json`. Consumer subscription status is a count and next-step hint,
+- `v:signals/authoring/providers/<id>/revisions/<version>/manifest.json`, `source.ts`
+- `v:signals/authoring/subscriptions/<id>/diagnostics.json` for pending job diagnostics.
+Explicit management paths remain `v:signals/instances/<id>/{config.json,status.json}`,
+`v:signals/subscriptions/<id>/{config.json,processor.ts,status.json}` and
+`v:signals/status.json`. Consumer subscription status is a count and next-step hint,
 not internal job IDs. Management config includes bindings/transport and secret
 reference names, never resolved credentials or cookies.
 
 Root recursive list/search includes consumer files only; `providers/` lists files,
 not revision directories. To search implementation code explicitly scope search to
-`v:events/authoring`. There are no implementation aliases under `providers/`.
+`v:signals/authoring`. There are no implementation aliases under `providers/`.
 Directories list children; normal read offset/limit and search paging apply.
 This is progressive disclosure, **not an authorization boundary**. Views are
 generated from runtime state, not duplicate persistence; writes are rejected.
-Internal runtime subscriptions and sources are at `v:events/internal/` and
-`v:events/internal/sources`. They remain available to internal-event consumers
+Internal runtime subscriptions and sources are at `v:signals/internal/` and
+`v:signals/internal/sources`. They remain available to internal-event consumers
 without a provider-authoring session. Unrecognized root paths are rejected;
 internal subscriptions are not mixed into consumer root search.
 
@@ -80,9 +80,9 @@ establishes a silent first batch and incrementally consumes subsequent batches.
     }}]
   },
   "demandSchema":{"type":"object","additionalProperties":false},
-  "eventSchema":{"type":"object","required":["id","title"],"additionalProperties":false,
+  "signalSchema":{"type":"object","required":["id","title"],"additionalProperties":false,
     "properties":{"id":{"type":"string"},"title":{"type":"string"}}},
-  "examples":[{"demand":{},"event":{"id":"change-1","data":{"id":"change-1","title":"Changed"}}}]
+  "examples":[{"demand":{},"signal":{"id":"change-1","data":{"id":"change-1","title":"Changed"}}}]
 }
 ```
 `providers/changes.ts`:
@@ -92,7 +92,7 @@ export async function run({ demands }) {
   const result = {}
   for (const d of demands) {
     let after = d.checkpoint || '', checkpoint = after, complete = false
-    const events = [], seen = new Set()
+    const signals = [], seen = new Set()
     for (let page = 0; page < 8; page++) {
       const response = await call({ method: 'GET', path: '/changes', query: { after } })
       if (response.status !== 200 || !Array.isArray(response.body?.items)) throw new Error('incomplete feed')
@@ -100,7 +100,7 @@ export async function run({ demands }) {
       if (typeof body.cursor !== 'string' || (body.next !== null && typeof body.next !== 'string')) throw new Error('bad cursor')
       for (const item of body.items) {
         if (typeof item.id !== 'string' || typeof item.title !== 'string') throw new Error('bad item')
-        if (!seen.has(item.id)) { seen.add(item.id); events.push({ id: item.id, data: { id: item.id, title: item.title } }) }
+        if (!seen.has(item.id)) { seen.add(item.id); signals.push({ id: item.id, data: { id: item.id, title: item.title } }) }
       }
       checkpoint = body.cursor
       if (body.next === null) { complete = true; break }
@@ -108,7 +108,7 @@ export async function run({ demands }) {
       after = body.next
     }
     if (!complete) throw new Error('pagination budget exceeded')
-    result[d.key] = { mode: 'delta', events, checkpoint }
+    result[d.key] = { mode: 'delta', signals, checkpoint }
   }
   return result
 }
@@ -117,7 +117,7 @@ If history must not be scanned initially, implement an endpoint-specific latest
 cursor operation when `checkpoint === null` and return an empty first delta.
 Do not advance past pages that were not successfully represented in output.
 
-Reload with `invoke_tool({name:"event_provider",args:{action:"reload",path:"providers/changes.json"}})`.
+Reload with `invoke_tool({name:"signal_provider",args:{action:"reload",path:"providers/changes.json"}})`.
 The host assigns version 1 (or the next version) and probes empty demands: code
 must return `{}` with no IO. Repeat edit + reload to repin all matching Project instances.
 A lower-level `publish` accepts the same metadata with explicit `version` and
@@ -129,14 +129,14 @@ On an actual direct-user turn, create using `action:"create", input_json`:
 ```
 Then each authorized subscribing session uses `action:"subscribe", input_json`:
 ```json
-{"id":"change-messages","instance":"changes-watch","demand":{},"processor":"export function run({event}) { return [{content:event.data.title}] }"}
+{"id":"change-messages","instance":"changes-watch","demand":{},"processor":"export function run({signal}) { return [{content:signal.data.title}] }"}
 ```
 The destination is always that session, not a supplied arbitrary session ID.
 Processors have no IO capabilities; they may import the pure local `@shadow/html`
 module and return 0–16 `{content}` drafts.
 Conditional `[]` filters; multiple drafts fan out. Their persisted failures and
 retries are isolated. `run` requests a host cycle (no rate-limit bypass), and
-`v:events/subscriptions/<id>/status.json` reports a queued count and actionable next step. Establish a successful baseline
+`v:signals/subscriptions/<id>/status.json` reports a queued count and actionable next step. Establish a successful baseline
 before claiming monitoring; a fixture is not live source verification.
 
 ### Complete public HTML/text crawler example
@@ -149,8 +149,8 @@ before claiming monitoring; a fixture is not live source verification.
   "stateVersion":"headline-snapshot-v1",
   "http":{"origin":"https://news.example.org","routes":[{"method":"GET","path":"/news"}]},
   "demandSchema":{"type":"object","additionalProperties":false},
-  "eventSchema":{"type":"object","required":["title"],"additionalProperties":false,"properties":{"title":{"type":"string"}}},
-  "examples":[{"demand":{},"event":{"id":"Hello","data":{"title":"Hello"}}}]
+  "signalSchema":{"type":"object","required":["title"],"additionalProperties":false,"properties":{"title":{"type":"string"}}},
+  "examples":[{"demand":{},"signal":{"id":"Hello","data":{"title":"Hello"}}}]
 }
 ```
 `providers/headline.ts`:
@@ -164,13 +164,13 @@ export async function run({ demands }) {
     if (response.status !== 200 || typeof response.body !== 'string') throw new Error('HTML expected')
     const title = parseHtml(response.body).querySelector('h1')?.textContent.trim()
     if (!title || title.length > 256) throw new Error('headline markup changed')
-    result[d.key] = { mode: 'snapshot', events: [{ id: title, data: { title } }], checkpoint: null }
+    result[d.key] = { mode: 'snapshot', signals: [{ id: title, data: { title } }], checkpoint: null }
   }
   return result
 }
 ```
 Reload, create `{id:"news-watch",provider:"headline",version:1}`, and subscribe
-with `{id:"headlines",instance:"news-watch",demand:{},processor:"export function run({event}) { return [{content:event.data.title}] }"}`.
+with `{id:"headlines",instance:"news-watch",demand:{},processor:"export function run({signal}) { return [{content:signal.data.title}] }"}`.
 No `secretRef` or credential is needed. External text remains untrusted data,
 not instructions. This parses static HTML strings (including strings acquired
 through an independently authorized browser/native acquisition); it does not
@@ -220,7 +220,7 @@ The supported JSON Schema subset is the existing broker validator: single type,
 properties, required, boolean additionalProperties, object-schema items, enum,
 const, string/array length and numeric min/max; description/title/$schema are
 annotations. Unsupported keywords fail closed. Schemas validate manifests,
-examples, generic normalized demands and every emitted event's **data**.
+examples, generic normalized demands and every emitted signal's **data**.
 
 Instance creation captures the declaration as an immutable authorized `binding`;
 a caller can supply a binding explicitly. Origin, credential header/prefix,
@@ -254,7 +254,7 @@ demand normalization is finite canonical JSON: object keys sorted for identity,
 array order/case/numeric values preserved. It does not execute custom host
 normalizers. GitHub additionally lowercases its validated repository demand.
 Return a map with every requested key and no others. Each value is:
-`{mode:"snapshot"|"delta",events:[{id,data}],checkpoint}`. Omitted mode is legacy
+`{mode:"snapshot"|"delta",signals:[{id,data}],checkpoint}`. Omitted mode is legacy
 snapshot. IDs are stable occurrence/entity-revision strings, not random poll IDs.
 Duplicate IDs in one collection fail; deduplicate overlapping pages in code.
 
@@ -277,12 +277,12 @@ or state limits do not advance any cursor. Provider-specific checkpoint is data,
 not authority. Processors and outbox have persisted independent retries; drafts
 are saved before delivery. A 15-second host timer runs cycles; each instance
 reserves at least 60 seconds between collections, persisted before IO. Limits:
-500 events/demand/batch, 1 MiB output/demand, 32 instances, 128 subscriptions,
+500 signals/demand/batch, 1 MiB output/demand, 32 instances, 128 subscriptions,
 64 custom revisions, 2000 jobs, 16 MiB saved state; at most 64 due jobs/cycle.
 Collection caps 40 requests and 32 KiB request input; restricted execution
 (default 15 seconds, 32 bridge calls) and HTTP limits may fail earlier.
 
-Private state is `projectStoragePath(ProjectHome,'.events','providers-v1.json')`,
+New private state is `projectStoragePath(ProjectHome,'.signals','providers-v2.json')`,
 not the selected workdir. One Project runtime is the sole supported writer; atomic
 private-file replacement is used. Legacy query-only custom definitions must be
 reauthored with an explicit HTTP declaration before loading. Obsolete bindings using
@@ -290,6 +290,50 @@ the removed query-allowlist contract must be recreated under an explicit HTTP po
 unsupported persisted state fails closed rather than silently dropping constraints. Do not edit runtime
 state manually. The four latest authored revisions and all pinned revisions are
 retained on reload; all matching Project instances are coherently repinned.
+
+## Naming and compatibility boundary
+
+External providers collect **signals** (`{id,data}`); a subscription processor
+receives `{signal}` and produces session-input content drafts. This is separate
+from the internal EventService, Bus events, session-input provenance and browser
+`AbortSignal`/`EventSource` APIs. `v:signals/internal/` is navigation to internal
+runtime events, **not** another external signal provider.
+
+Current names are `src/signals/providers/`, `SignalProviderRuntime`,
+`SignalSourceProvider`, `SourceSignal`, `SignalRecord`, `signalSchema`,
+`Collection.signals`, `examples[].signal`, `signal_provider`, the
+`v:tools/signals` catalog, and the `signal-sources` skill. Provider consumer files
+are `v:signals/providers/<id>`. There is no active `v:signals` mount or legacy
+external-provider tool in discovery.
+
+Compatibility is isolated in `src/signals/providers/legacy-compat.ts`:
+
+- A fresh Project uses `.signals/providers-v2.json` (format 2). If an existing
+  `.events/providers-v1.json` is present, that exact file remains the storage
+  location: it is not moved, deleted, or replaced by an empty new state. Format 1
+  is decoded in memory; subsequent ordinary atomic saves write format 2 to the
+  same file. This is forward compatibility, not an old-binary downgrade promise.
+  If both files exist, startup fails closed for explicit reconciliation.
+- Format-1 manifests (`eventSchema`, `examples[].event`) and pending jobs (`event`)
+  are decoded to current names. Instance IDs, subscription IDs/owners, demands,
+  checkpoints, seen IDs, silent baselines, pending draft content, delivery offsets,
+  attempt counts and timestamps are retained. The immutable authored code and
+  processor source are not text-rewritten. Old custom provider revision hashes
+  are retained privately as `legacyRevisions` to preserve broker mutation-receipt
+  identities; new revisions use the current definition hash.
+- Old authored collectors may still return `events`; the collection boundary
+  normalizes it to `signals`. Old processor modules may still destructure `event`;
+  the processor invocation boundary supplies that alias alongside `signal`.
+  Old manifests are accepted at publish/reload boundaries. Conflicting old and
+  new schema/envelope keys are rejected instead of silently choosing one.
+- Historical `invoke_tool` calls naming `signal_provider` resolve to
+  `signal_provider` before permission and argument checks. Old role tool allow/
+  block names are normalized as well; an old blacklist cannot accidentally grant
+  the renamed capability. Only the current tool is advertised. This does not
+  rewrite historical messages or user configuration.
+
+No startup process scans or migrates unrelated runtime data. Existing older
+query-only/unsupported HTTP contracts still fail closed as described above.
 
 ## Project scope and host lifecycle
 
@@ -330,7 +374,7 @@ the manifest is not a guarantee of application-level read semantics.
 
 `github-issues@1` uses the same restricted runtime and CapabilityBroker, with
 host-injected Bearer PAT and **fixed read-only GraphQL** constraints. Create with
-`{id:"issues",provider:"github-issues",version:1,secretRef:"github-events"}`;
+`{id:"issues",provider:"github-issues",version:1,secretRef:"github-signals"}`;
 subscribe with demand `{repository:"owner/repo"}`. The origin is fixed to
 `https://api.github.com`. GitHub owns the static query, aliases, variables, pagination
 and response validation. It uses standard `call({method:"POST",path:"/graphql",body:{query,variables}})`
@@ -376,12 +420,12 @@ available to authored code and all eligible Project subscribers: bind only sourc
 Workflow (requires user authorization, not merely code publication):
 1. Use existing `browser_setup` selection/approval workflow to bind the owner's
    Project **managed** browser copy, then `connect` with its exact instance ID.
-   No profile is selected, copied, launched or inspected by `event_provider`.
+   No profile is selected, copied, launched or inspected by `signal_provider`.
    Compatibility attach/autoConnect instances are not supported by this route.
 2. Open/sign in to the authorized HTTPS origin using ordinary browser tools or
    the user. An existing top-level page at the **same origin** is required; this
    feature does not navigate, open tabs, render pages, scrape DOM or bypass login.
-3. Invoke `event_provider` with `action:"browser_contexts", id:<instance UUID>`.
+3. Invoke `signal_provider` with `action:"browser_contexts", id:<instance UUID>`.
    It returns bounded `{targetId,origin}` metadata (not full URLs or cookies).
    This only resolves instances owned by the calling session and already ready
    under its browser/evaluate permissions; another session's instance cannot be

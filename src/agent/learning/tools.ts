@@ -1,5 +1,5 @@
 import { LEARNING_RECEIPT_RECORDED } from './receipt.ts'
-import { validateEventSummary } from '../event-summary.ts'
+import { validateLogSummary } from '../log-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -7,7 +7,7 @@ import type { ExecutionContext } from '../../tools/context.ts'
 import type { Tool } from '../../tools/tool.ts'
 import { createMemoryHandler } from '../../vfs/mounts.ts'
 import { parseSkillFile } from '../../skills/parse.ts'
-import { fingerprint, type LearningBatch, type LearningEvent } from './ledger.ts'
+import { fingerprint, type LearningBatch, type LearningLog } from './ledger.ts'
 import { LearningRuntime } from './pipelines.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
 
@@ -35,7 +35,7 @@ const skillPatchSchema = z.object({ action: z.literal('patch'), name: slug, revi
   match: z.string().min(1).max(LEARNED_SKILL_MAX_LENGTH),
   replacement: z.string().max(LEARNED_SKILL_MAX_LENGTH),
 }).strict()
-// Deliberately excludes event/session records, decisions and executable resources.
+// Deliberately excludes log/session records, decisions and executable resources.
 const wikiPath = z.string().regex(/^(?:topics|concepts|identities|tools)\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/)
 const wikiReadSchema = z.object({ action: z.literal('read_wiki'), path: wikiPath }).strict()
 const wikiSaveSchema = z.object({ action: z.literal('save_wiki'), path: wikiPath, revision,
@@ -83,32 +83,32 @@ export class LearningTools {
     return batch
   }
 
-  /** Stable keys are scoped to a retained batch, so a retry cannot append the same event twice. */
-  appendEvent(entry: { who: string; what: string; summary?: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
+  /** Stable keys are scoped to a retained batch, so a retry cannot append the same log twice. */
+  appendLog(entry: { who: string; what: string; summary?: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
     key: unknown, context: ExecutionContext): string | undefined {
     if (!this.runtime.ledger.batchFor(context.sessionId)) return undefined
     const batch = this.authorize(context)
-    if (batch.pipeline !== 'reflector') throw new Error('Downstream learning consumes events; it does not re-log them.')
+    if (batch.pipeline !== 'reflector') throw new Error('Downstream learning consumes logs; it does not re-log them.')
     const origin = text.parse(entry.origin)
-    if (!batch.sources.some(source => source.sessionId === origin)) throw new Error('Event provenance is outside this learning batch.')
+    if (!batch.sources.some(source => source.sessionId === origin)) throw new Error('Log provenance is outside this learning batch.')
     const id = fingerprint(`${batch.id}:${origin}:${text.parse(key)}`)
-    const previous = batch.events.find(event => event.id === id)
-    if (previous) return `Learning event already recorded: ${id}`
-    const summary = validateEventSummary(entry.summary)
+    const previous = batch.events.find(log => log.id === id)
+    if (previous) return `Learning log already recorded: ${id}`
+    const summary = validateLogSummary(entry.summary)
     const when = new Date().toISOString()
     const path = `memory/events/${batch.createdAt.slice(0, 10)}.jsonl`
     const file = projectStoragePath(this.runtime.sessions.workspace, path)
     // Recover an append that committed immediately before the journal write/process failed.
     const prior = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean)
-      .map(line => JSON.parse(line) as LearningEvent).find(event => event.id === id) : undefined
-    if (!prior && !summary) throw new Error('New reflector events require a short summary (1–280 Unicode code points).')
-    const event: LearningEvent = prior ?? { ...entry, summary, origin, id, when, path }
+      .map(line => JSON.parse(line) as LearningLog).find(log => log.id === id) : undefined
+    if (!prior && !summary) throw new Error('New reflector logs require a short summary (1–280 Unicode code points).')
+    const log: LearningLog = prior ?? { ...entry, summary, origin, id, when, path }
     if (!prior) {
       mkdirSync(projectStoragePath(this.runtime.sessions.workspace, 'memory', 'events'), { recursive: true })
-      appendFileSync(file, JSON.stringify(event) + '\n')
+      appendFileSync(file, JSON.stringify(log) + '\n')
     }
-    this.runtime.ledger.event(batch.id, event)
-    return `Logged learning event: ${id}`
+    this.runtime.ledger.log(batch.id, log)
+    return `Logged learning log: ${id}`
   }
 
   readonly memory: Tool = {
@@ -148,7 +148,7 @@ export class LearningTools {
         const references = [...new Set([...previous.references, ...submitted.references,
           ...evidence.map(ref => `- [${ref.description}](${ref.reference})`)])]
         const content = `${submitted.body}\n\n${wikiProvenanceStart}\n## Learning provenance\n${references.join('\n')}\n\n${wikiProvenanceNotice}\n${wikiProvenanceEnd}\n`
-        // Exact-content replay repairs a crash between file, artifact and event writes.
+        // Exact-content replay repairs a crash between file, artifact and log writes.
         // A different current revision is never overwritten by a stale retry.
         if (current !== content) {
           if (args.revision !== currentRevision) throw new Error('Wiki changed since read. Reread and merge before saving.')
@@ -159,7 +159,7 @@ export class LearningTools {
         if (saved !== content) throw new Error('Wiki write did not persist the requested content.')
         const savedRevision = fingerprint(saved)
         this.runtime.ledger.artifact(batch.id, { path, revision: savedRevision, kind: 'memory' })
-        this.appendEvent({ who: 'reflector', what: args.summary, summary: args.summary,
+        this.appendLog({ who: 'reflector', what: args.summary, summary: args.summary,
           refs: [path, ...evidence.map(ref => ref.reference)], origin: args.wikiEvidence[0].sessionId }, `wiki:${args.path}:${savedRevision}`, context)
         return JSON.stringify({ path, revision: savedRevision, verified: true, provenance: evidence })
       }
@@ -168,13 +168,13 @@ export class LearningTools {
       const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
       const currentRevision = current ? fingerprint(current) : ''
       if (args.action === 'read') return JSON.stringify({ path, revision: currentRevision, content: current })
-      const sources = batch.sources.length ? batch.sources.map(source => source.sessionId) : batch.inputEvents.map(event => event.origin)
+      const sources = batch.sources.length ? batch.sources.map(source => source.sessionId) : batch.inputEvents.map(log => log.origin)
       if (args.evidence.some(id => !sources.includes(id))) throw new Error('Decision evidence must come from the assigned learning batch.')
       if (args.evaluation !== 'new' && !current) throw new Error('Read an existing decision before evaluating it.')
       if (args.evaluation === 'new' && current) throw new Error('Existing decisions must be supported, corrected or retired, not recreated.')
       const evidence = batch.sources.filter(source => args.evidence.includes(source.sessionId))
         .map(source => `${source.sessionId} / ${source.physicalId} [${source.offset}, ${source.end})`)
-      if (!evidence.length) evidence.push(...batch.inputEvents.filter(event => args.evidence.includes(event.origin)).map(event => `${event.origin} / event ${event.id}`))
+      if (!evidence.length) evidence.push(...batch.inputEvents.filter(log => args.evidence.includes(log.origin)).map(log => `${log.origin} / log ${log.id}`))
       const content = [
         `# ${args.title}`, '', `Kind: ${args.kind}`, `Evidence interpretation: ${args.confidence}`,
         `Evaluation: ${args.evaluation}`, `Status: ${args.evaluation === 'retired' ? 'retired; do not apply' : args.confidence === 'inferred' ? 'provisional hypothesis; verify before applying' : 'scoped observation; not authorization'}`,
@@ -190,7 +190,7 @@ export class LearningTools {
       if (saved !== content) throw new Error('Memory write did not persist the requested decision.')
       this.runtime.ledger.artifact(batch.id, { path, revision: fingerprint(saved), kind: 'memory' },
         args.evaluation === 'new' ? undefined : `${path}:${evidence.join('|')}`)
-      if (batch.pipeline === 'reflector') this.appendEvent({
+      if (batch.pipeline === 'reflector') this.appendLog({
         who: 'reflector', summary: `Decision ${args.evaluation}: ${Array.from(args.title).slice(0, 180).join('')}${Array.from(args.title).length > 180 ? '…' : ''}. Consult the decision and source evidence before applying.`,
         what: `${args.evaluation}: ${args.title}`, why: args.rationale,
         refs: [path], origin: args.evidence[0],
@@ -252,7 +252,7 @@ export class LearningTools {
 
   readonly result: Tool = {
     name: 'learning_result', optIn: true,
-    description: 'Submit the learning outcome once all work is finished. Runtime verifies recorded artifacts/events. no_change needs a reason and no effects. Session completion alone does not acknowledge learning.',
+    description: 'Submit the learning outcome once all work is finished. Runtime verifies recorded artifacts/logs. no_change needs a reason and no effects. Session completion alone does not acknowledge learning.',
     parameters: { type: 'object', properties: {
       status: { type: 'string', enum: ['applied', 'no_change', 'partial', 'blocked', 'draft_only'] },
       summary: { type: 'string', description: 'What changed and why, or why no durable change is justified. Include unresolved blockers.' },
@@ -265,7 +265,7 @@ export class LearningTools {
       if (args.status === 'applied' && !effects) throw new Error('No verified learning effects. Use no_change, blocked or draft_only instead.')
       if (args.status === 'no_change' && effects) throw new Error('This batch has persisted effects; report applied or partial instead.')
       if (args.status === 'applied' && batch.pipeline === 'reflector' && batch.artifacts.length && !batch.events.length) {
-        throw new Error('Record a provenance-bearing log event for the direct memory changes before reporting applied.')
+        throw new Error('Record a provenance-bearing log for the direct memory changes before reporting applied.')
       }
       if (args.status === 'applied' || args.status === 'no_change') await this.runtime.verify(batch, false, context.signal)
       context.signal.throwIfAborted()
@@ -296,7 +296,7 @@ export class LearningTools {
       const content = existsSync(file) ? readFileSync(file, 'utf8') : ''
       if (args.action === 'read') return JSON.stringify({ revision: content ? fingerprint(content) : '', content })
       if (args.revision !== (content ? fingerprint(content) : '')) throw new Error('SOUL.md changed; read before editing.')
-      if (new Set(args.evidence).size < 2 || args.evidence.some(id => !batch.inputEvents.some(event => event.origin === id))) {
+      if (new Set(args.evidence).size < 2 || args.evidence.some(id => !batch.inputEvents.some(log => log.origin === id))) {
         throw new Error('Soul changes need evidence from at least two distinct source sessions in this batch.')
       }
       const continuity = 'If you change this file, tell the user'

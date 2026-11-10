@@ -72,9 +72,9 @@ test('rendered composer distinguishes queue actions and routes custom question a
             const url=new URL(String(input),location.origin);
             if (!url.pathname.includes('/api/')) return nativeFetch(input,init);
             const json=(data,status=200) => Promise.resolve(Response.json(data,{status}));
-            if (url.pathname.endsWith('/graph')) return json({nodes:[],sessions:[
+            if (url.pathname.endsWith('/summary')) return json({nodes:[],sessions:[
               {sessionId,mode:'session',segmentIndex:0,label:'Composer fixture'},
-              ...channelIds.map(id=>({sessionId:id,mode:'session',segmentIndex:0,label:'Channel fixture',config:fixture.configs[id] ?? {},
+              ...channelIds.map(id=>({sessionId:id,mode:'session',segmentIndex:0,label:'Channel fixture',inferenceOverrides:fixture.configs[id] ?? {},
                 inferenceDefaults:{model:'gpt-agent@fixture',thinking:{type:'enabled'},reasoningEffort:'low',contextWindow:400000}})),
             ]});
             if (url.pathname.endsWith('/config') && init.method === 'PATCH') {

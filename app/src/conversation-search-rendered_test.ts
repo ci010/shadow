@@ -99,7 +99,7 @@ test('conversation search and split panes survive cached heavy-history activatio
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/search-fixture.ts"></script></body></html>')
           } else if (path === '/__fail') { failHistory = url.searchParams.get('value') === 'true'; json({ ok: true }) }
-          else if (path.endsWith('/api/sessions/graph')) json({ sessions: ['web:chat-one', 'web:child', 'web:chat-two', 'web:chat-heavy'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
+          else if (path.endsWith('/api/sessions/summary')) json({ sessions: ['web:chat-one', 'web:child', 'web:chat-two', 'web:chat-heavy'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
           else if (path.endsWith('/api/sessions/stages')) json({ stages: {}, activeRequestIds: {}, recoveries: {} })
           else if (path.endsWith('/api/chat/session')) {
             const data = { history: histories[`web:${url.searchParams.get('chatId')}`]?.messages ?? [], systemPrompt: '', tools: [] }

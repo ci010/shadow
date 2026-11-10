@@ -1,25 +1,25 @@
 <template>
   <article class="memory-record selectable-text" role="listitem" :data-source-line="record.start">
-    <template v-if="record.kind === 'event'">
+    <template v-if="record.kind === 'log'">
       <header class="memory-record-meta">
-        <strong>{{ record.event.who }}</strong>
-        <span v-if="record.event.when">{{ memoryEventTime(record.event.when) }}</span>
+        <strong>{{ record.log.who }}</strong>
+        <span v-if="record.log.when">{{ memoryLogTime(record.log.when) }}</span>
         <span class="memory-record-line">{{ t('Line') }} {{ record.start }}</span>
       </header>
-      <p class="memory-record-what">{{ record.event.what }}</p>
+      <p class="memory-record-what">{{ record.log.what }}</p>
       <dl class="memory-record-details">
-        <template v-if="record.event.why">
-          <dt>{{ t('Why') }}</dt><dd>{{ record.event.why }}</dd>
+        <template v-if="record.log.why">
+          <dt>{{ t('Why') }}</dt><dd>{{ record.log.why }}</dd>
         </template>
-        <template v-if="record.event.challenge">
-          <dt>{{ t('Challenge') }}</dt><dd>{{ record.event.challenge }}</dd>
+        <template v-if="record.log.challenge">
+          <dt>{{ t('Challenge') }}</dt><dd>{{ record.log.challenge }}</dd>
         </template>
-        <template v-if="record.event.refs?.length">
+        <template v-if="record.log.refs?.length">
           <dt>{{ t('References') }}</dt>
-          <dd><ul class="memory-record-refs"><li v-for="(reference, index) in record.event.refs" :key="index"><code>{{ reference }}</code></li></ul></dd>
+          <dd><ul class="memory-record-refs"><li v-for="(reference, index) in record.log.refs" :key="index"><code>{{ reference }}</code></li></ul></dd>
         </template>
-        <template v-if="record.event.origin">
-          <dt>{{ t('Session') }}</dt><dd class="memory-record-origin">{{ record.event.origin }}</dd>
+        <template v-if="record.log.origin">
+          <dt>{{ t('Session') }}</dt><dd class="memory-record-origin">{{ record.log.origin }}</dd>
         </template>
         <template v-for="field in record.extra" :key="field.name">
           <dt>{{ field.name }}</dt><dd>{{ field.value }}</dd>
@@ -35,9 +35,9 @@
 
 <script setup lang="ts">
 import { t } from '../../i18n.ts'
-import { memoryEventTime, type MemoryEventRecord } from '../../memory-events.ts'
+import { memoryLogTime, type MemoryLogRecord } from '../../memory-logs.ts'
 
-defineProps<{ record: MemoryEventRecord }>()
+defineProps<{ record: MemoryLogRecord }>()
 </script>
 
 <style scoped>
@@ -56,7 +56,7 @@ defineProps<{ record: MemoryEventRecord }>()
 .memory-record-refs code, .memory-record-origin, .memory-record-raw { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; }
 .memory-record-warning { margin: 0 0 12px; color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; }
 .memory-record-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
-@container memory-events (max-width: 480px) {
+@container memory-logs (max-width: 480px) {
   .memory-record-details { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .memory-record-details dt { max-width: none; margin-top: 8px; }
 }
