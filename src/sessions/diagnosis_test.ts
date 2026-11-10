@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { Hono } from 'hono'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { OtelStore } from '../otel/store.ts'
+import type { SessionTraceResponse } from '../otel/session-trace.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import { createSessionDiagnosis, diagnosisProjection, parseDiagnosisQuery, type DiagnosisSource } from './diagnosis.ts'
@@ -205,3 +206,53 @@ test('image redaction retains only payload size before text truncation, includin
   assert.deepEqual(projection.project({ type: 'image_url', image_url: { url: 'https://private.example/a' } }), { type: 'image_url', omitted: 'non-text-content' })
   assert.equal(projection.redactedPaths.length, 4)
 })
+
+for (const view of ['summary', 'full'] as const) {
+  test(`diagnosis ${view} keeps page metrics after history exhausts text budget`, async () => {
+    const source: DiagnosisSource = {
+      getState: () => ({ sessionId: 'metrics', segmentIndex: 0 }),
+      async *readRecords() {
+        for (let i = 0; i < 40; i++) yield { role: 'user', content: 'x '.repeat(8_000) }
+      },
+      querySpans: (): SessionTraceResponse => ({ sessionId: 'metrics', hasMore: true, nextBeforeId: 7, entries: [
+        { id: 8, traceId: 'trace', spanId: 'success', name: 'llm', startTime: 1, live: false, statusCode: 1,
+          attributes: {
+            'llm.request.body_bytes': '12000000', 'llm.request.wire_body_bytes': '12345',
+            'llm.request.content_encoding': 'gzip', 'llm.provider': 'openai', 'llm.model': 'gpt-test',
+            'http.response.status_code': '200', 'gen_ai.usage.input_tokens': '123',
+            headers: 'private-header', prompt: 'private-prompt',
+            'llm.input_tools': '-1', contextWindow: 'Infinity', 'error.code': 'bad code with private text',
+          }, events: [{ name: 'model.response', time: 2, attributes: {
+            message: JSON.stringify({ content: 'private-response', usage: { promptTokens: 123, totalTokens: 130, token: 'private-token' } }),
+          } }],
+        },
+        { id: 7, traceId: 'trace', spanId: 'failure', name: 'llm', startTime: 3, live: false, statusCode: 2,
+          attributes: { 'http.status_code': '503', 'error.code': 'service_unavailable',
+            'llm.model': 'x'.repeat(161), 'llm.provider': 'https://private.example' },
+          events: [{ name: 'exception', time: 4, attributes: { 'exception.message': 'private-error' } }],
+        },
+        { id: null, traceId: 'trace', spanId: 'live', name: 'llm', startTime: 5, live: true, attributes: {}, events: [] },
+      ] }),
+    }
+    const result = await createSessionDiagnosis(source, 'metrics', query(`view=${view}&textLimit=16000`))
+    assert.ok(result.privacy.truncatedPaths.length)
+    assert.equal(result.trace.entries[0].attributes, '[TRUNCATED]')
+    assert.equal(result.trace.entries.length, view === 'summary' ? 2 : 3)
+    assert.deepEqual(result.trace.spanMetrics, [
+      { traceId: 'trace', spanId: 'success', metrics: {
+        'llm.request.body_bytes': 12000000, 'llm.request.wire_body_bytes': 12345,
+        'http.response.status_code': 200, 'gen_ai.usage.input_tokens': 123,
+        'llm.provider': 'openai', 'llm.model': 'gpt-test', 'llm.request.content_encoding': 'gzip',
+      }, events: [{ index: 0, name: 'model.response', metrics: { promptTokens: 123, totalTokens: 130 } }] },
+      { traceId: 'trace', spanId: 'failure', metrics: { 'http.status_code': 503, 'error.code': 'service_unavailable' }, events: [] },
+      { traceId: 'trace', spanId: 'live', metrics: {}, events: [] },
+    ])
+    assert.equal(result.trace.hasMore, true)
+    assert.equal(result.trace.nextBeforeId, 7)
+    assert.equal(result.trace.observedCount, 3)
+    assert.ok(!JSON.stringify(result.trace.spanMetrics).includes('private'))
+    const unavailable = await createSessionDiagnosis({ ...source, querySpans: undefined }, 'metrics', query())
+    assert.equal(unavailable.trace.available, false)
+    assert.deepEqual(unavailable.trace.spanMetrics, [])
+  })
+}
