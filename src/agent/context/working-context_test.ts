@@ -29,7 +29,7 @@ test('initial local instructions and discovery use exactly the switch preparatio
     let switched = ''
     const tool = new UseProjectTool({ projectId: 'p', folders })
     await tool.execute({ folder: folder.id }, {
-      projectId: 'p', toolCallName: 'use_project', signal: new AbortController().signal,
+      projectId: 'p', toolCallName: 'workspace_use', signal: new AbortController().signal,
       switchProjectFolder: async (prepared: { content: string }) => { switched = prepared.content; return 'receipt' },
     } as unknown as ExecutionContext)
     assert.equal(initial, switched)
@@ -57,7 +57,12 @@ test('no-folder, unknown metadata, remote and unavailable snapshots do not read 
     assert.match(content, /remote|unavailable/)
   }
   const local = { available: true as const, locality: 'local' as const, path: '/effective', workdir: localFolderWorkdirRef('f') }
-  assert.match(await prepareWorkingContext(local), /Selected Project workspace: none/)
+  const unselected = await prepareWorkingContext(local)
+  assert.match(unselected, /Selected Project workspace: none/)
+  assert.match(unselected, /use session data for working files/)
+  assert.match(unselected, /Only when the requested outcome includes a final local file/)
+  assert.match(unselected, /Do not create a delivery folder when the requested outcome does not require local files/)
+  assert.doesNotMatch(unselected, /Without a selected Workspace, save finished deliverables/)
   const unknown = await prepareWorkingContext(local, 'unknown')
   assert.match(unknown, /"id":"unknown"/)
   assert.doesNotMatch(unknown, /Applicable workspace instructions|"name"/)

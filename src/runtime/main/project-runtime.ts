@@ -1093,7 +1093,9 @@ export async function createProjectRuntime(
     if (!state?.folderId) return undefined
     const location = resolveSessionLocations(workspace, state, undefined, workdirLookup).workdir
     if (!location.available) throw new Error('Selected folder skill scope is unavailable')
-    return location.locality === 'local' ? { folderId: state.folderId, path: location.path } : undefined
+    return location.locality === 'local'
+      ? { folderId: state.folderId, path: location.path }
+      : { folderId: state.folderId, path: location.workdir.displayPathSnapshot ?? '', workdir: { nodeId: location.workdir.nodeId, workdirId: location.workdir.workdirId } }
   }, (path, context, continuation) => skillEditing.readRaw(path, context, continuation))
   vfs.mount(
     'v:skills',

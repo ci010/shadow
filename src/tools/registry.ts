@@ -26,7 +26,7 @@ const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['use_project', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'sql'])
+const EXEMPT_TOOLS = new Set(['workspace_use', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'sql'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
@@ -72,13 +72,13 @@ export class Tools {
 
   /** Host context preparation is independent of the model's tool allowlist. */
   workingContextFolder(id: string) {
-    const selector = this.tools.get('use_project')
+    const selector = this.tools.get('workspace_use')
     return selector instanceof UseProjectTool ? selector.selectedFolder(id) : undefined
   }
 
   /** Per-call selection does not commit a new working context or import Folder instructions. */
   async executionTargetFolder(identifier: string, signal: AbortSignal) {
-    const selector = this.tools.get('use_project')
+    const selector = this.tools.get('workspace_use')
     if (!(selector instanceof UseProjectTool)) throw new Error('Project Workspace targeting is unavailable; no fallback is allowed.')
     return selector.executionTargetFolder(identifier, signal)
   }
@@ -674,7 +674,7 @@ export class SessionTools extends Tools {
   override workingContextFolder(id: string) { return this.base.workingContextFolder(id) }
 
   // Folder resolution is a host service, not a session-local dynamic tool or
-  // permission to expose use_project through the model's allowlist.
+  // permission to expose workspace_use through the model's allowlist.
   override executionTargetFolder(identifier: string, signal: AbortSignal) {
     return this.base.executionTargetFolder(identifier, signal)
   }

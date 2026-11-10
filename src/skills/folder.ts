@@ -1,9 +1,11 @@
+import type { ExecutionContext } from '../tools/context.ts'
+import { discoverRemoteFolderSkills, readRemoteFolderSkillResource } from './remote-folder.ts'
 import { readdir, realpath, readFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { Skill } from './loader.ts'
 import { loadSingleSkill } from './parse.ts'
 
-export interface FolderSkillScope { folderId: string; path: string }
+export interface FolderSkillScope { folderId: string; path: string; workdir?: { nodeId: string; workdirId: string } }
 export interface FolderSkill extends Skill { folderScope: FolderSkillScope }
 
 function within(root: string, path: string): boolean {
@@ -12,7 +14,11 @@ function within(root: string, path: string): boolean {
 }
 
 /** Narrow repository convention; no global watcher/cache and no execution on discovery. */
-export async function discoverFolderSkills(scope: FolderSkillScope, admin = false): Promise<FolderSkill[]> {
+export async function discoverFolderSkills(scope: FolderSkillScope, admin = false, context?: ExecutionContext): Promise<FolderSkill[]> {
+  if (scope.workdir) {
+    if (!context) throw new Error('Remote skill discovery requires execution context')
+    return discoverRemoteFolderSkills(scope, admin, context)
+  }
   const directory = join(scope.path, '.agents', 'skills')
   let root: string
   try { root = await realpath(directory) } catch (error) {
@@ -39,12 +45,17 @@ export function folderSkillsSummary(skills: FolderSkill[], scope: FolderSkillSco
   return [
     `Selected-folder skills: ${JSON.stringify(scope)}; convention: .agents/skills/<name>/SKILL.md.`,
     'Only this selected folder scope is current; previous folder skill discovery/instructions are superseded. Project/global skills remain available at v:skills/<name>. Folder bodies and tools load only on an explicit read of v:skills/folder/<name>; discovery and resource reads do not activate tools.',
+    ...(scope.workdir ? ['Remote skill documents and resources are read on the selected device; tool declarations are not executable or registered on Main.'] : []),
     ...skills.map(skill => `- read(${JSON.stringify(`v:skills/folder/${skill.meta.name}`)}): ${JSON.stringify(skill.meta.description)}; source=${JSON.stringify(join(skill.dirPath, 'SKILL.md'))}`),
     ...(skills.length ? [] : ['(No applicable folder skills.)']),
   ].join('\n')
 }
 
-export async function readFolderSkillResource(skill: FolderSkill, resource: string): Promise<string> {
+export async function readFolderSkillResource(skill: FolderSkill, resource: string, context?: ExecutionContext): Promise<string> {
+  if (skill.folderScope.workdir) {
+    if (!context) throw new Error('Remote skill resource requires execution context')
+    return readRemoteFolderSkillResource(skill, resource, context)
+  }
   const path = resolve(skill.dirPath, resource)
   if (!within(skill.dirPath, path) || !within(skill.dirPath, await realpath(path))) throw new Error('Folder skill resource must remain inside its skill directory')
   return readFile(path, 'utf8')

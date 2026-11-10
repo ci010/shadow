@@ -48,7 +48,7 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
     } }))
     const sessionTools = new SessionTools(registry, main, ['read', 'write', 'search'])
     // Host target resolution must work even when context switching is not exposed.
-    assert.equal(sessionTools.get('use_project'), undefined)
+    assert.equal(sessionTools.get('workspace_use'), undefined)
     let change: RecordedFileChange | undefined
     const context: ExecutionContext = { ...base, tools: sessionTools, cwd: main, toolCallId: 'write-call',
       resolveToolTarget: async (identifier, operation) => resolveExplicitToolTarget(main, base,
@@ -166,7 +166,7 @@ test('dynamic validation accepts only builtin hidden alias and rejects mixed sel
   assert.match(String(await tools.executeDynamic('business', { workspace: 'inbox' }, context)), /invalid arguments/)
 })
 
-test('use_project advertises required workspace and rejects mixed or extra keys before acquiring access', async () => {
+test('workspace_use advertises required workspace and rejects mixed or extra keys before acquiring access', async () => {
   let acquired = 0
   const tool = new UseProjectTool({ projectId: 'test', folders: {
     list: () => [folder], requireAvailable: async () => folder,
@@ -174,12 +174,12 @@ test('use_project advertises required workspace and rejects mixed or extra keys 
   } })
   assert.deepEqual(tool.parameters.required, ['workspace'])
   assert.deepEqual(Object.keys(tool.parameters.properties), ['workspace'])
-  const context = { ...base, projectId: 'test', toolCallName: 'use_project', switchProjectFolder: async () => 'switched' }
+  const context = { ...base, projectId: 'test', toolCallName: 'workspace_use', switchProjectFolder: async () => 'switched' }
   await assert.rejects(tool.execute({ workspace: 'child', folder: 'child' }, context), /not both/)
   await assert.rejects(tool.execute({ workspace: 'child', extra: true }, context), /Expected only workspace/)
   assert.equal(acquired, 0)
   // The hidden alias still reaches the exact registered remote target and fails
   // closed at the existing scoped-instruction boundary, without switching.
-  await assert.rejects(tool.execute({ folder: 'child' }, context), /Remote workspace switching is unavailable/)
+  await assert.rejects(tool.execute({ folder: 'child' }, context), /Remote workspace instruction reads are unavailable/)
   assert.equal(acquired, 1)
 })
