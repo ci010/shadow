@@ -42,7 +42,7 @@ test('domain-local pending work feeds the existing scheduler without sharing Pro
       t.mock.timers.tick(20); await tick()
       assert.equal(runs, 2)
       assert.equal(service.status().pipelines.encapsulator.pending, false)
-      assert.equal(ledger.eventsFor('encapsulator').length, 0)
+      assert.equal(ledger.logsFor('encapsulator').length, 0)
     } finally { await service.stop(); scope.close() }
   })
 })

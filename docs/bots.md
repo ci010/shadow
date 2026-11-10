@@ -605,7 +605,7 @@ export default defineTool({
 `inspect` reports the binding's schedule; `stop` removes it. `set` accepts 1–10,080
 whole minutes. Repeating the same settings is idempotent. One schedule per original
 binding/session uses the existing Project CronService `.cron/jobs.json` inventory,
-not an event-provider instance, new scheduler or queue. Restart reloads that
+not an signal-provider instance, new scheduler or queue. Restart reloads that
 inventory. Each tick targets only the existing bound durable session through its
 normal admission queue, with a stable per-slot input ID. It creates no sessions.
 Deployment revision, enabled/subscribed binding and saved session binding are
@@ -656,7 +656,7 @@ batches and 64 attempts per batch are supported before host recovery/archival is
 required. Bot source names are at most 128 characters; cursors/errors 256 and
 attempt IDs 64. `inspect` projects cursors and unfinished batches with their latest
 attempt, not the ever-growing completed-batch archive. Source cursors remain
-opaque; source read permissions are separate. No event-provider private state is
+opaque; source read permissions are separate. No signal-provider private state is
 used. Restarting the same deployment preserves progress; a changed deployment gets
 a fresh namespace rather than silently inheriting old processing authority.
 
