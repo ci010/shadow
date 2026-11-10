@@ -1,152 +1,200 @@
 # Automatic Work dispatch
 
-Automatic dispatch is a **program action in the standard persisted automation/cron
-service**, not a second scheduler or an agent polling loop. The fixed Project-local
-job is `default:work-dispatch-v1`, installed once with schedule `every 60s`.
-It appears in the normal automation catalog, enable/disable, run/cancel, run-history
-and usage APIs. Timer overlap, shutdown, abort and persistence use `CronService`.
-An idle scan creates no session and makes no model request.
+The Project-local `default:work-dispatch-v1` job uses the existing automation/cron
+service. A bounded host preflight checks whether eligible Work and capacity exist;
+an idle scan creates no session and makes no model request. When scheduling is
+useful, the host starts a **fresh-context internal dispatcher agent** through the
+normal `CronDispatcher` / `SessionManager` lifecycle. It does not create another
+scheduler or provider loop. Timer overlap, shutdown, abort and persistence remain
+owned by `CronService`.
 
-## Configure the one Project dispatcher
+## Configure the Project automation
 
-A Work record does not implicitly identify a repository. The one dispatcher per
-Project must explicitly bind a registered, available **local repository-root
-Workspace**. It starts disabled and cannot be enabled or manually run without that
-binding. Missing, revoked, subdirectory and remote targets fail before any claim;
-remote display paths are never used on Main. No target is guessed from the current
-chat or another Project. The normal automation notice explains an unconfigured job.
-The current configuration entry point is the authorized automation API (there is
-no new dedicated Workspace picker).
+The job is installed once, disabled, with schedule `every 60s`. Configure a
+registered, available **repository-root Workspace** as its default source
+before enabling or manually running it. The dispatcher can choose a different
+supported registered source for an individual Work, including an online Child
+that advertises `workdir.git.derive`. Missing, revoked, subdirectory and unsupported
+targets fail before claim; remote display paths never become Main paths. There is
+no new dedicated Workspace picker.
 
-On the owning Project router, using the existing human-owner authorization:
+On the existing authorized Project automation API:
 
-- `GET /api/automations`: includes the standard job/schedule/enabled state, notice,
-  program configuration, configuration error and running state.
-- `PATCH /api/automations/default:work-dispatch-v1` with
-  `{"program":{"kind":"work-dispatch","folderId":"<registered Workspace ID>","inferenceRequests":100,"toolCalls":200,"argumentBytes":1000000},"schedule":"every 60s"}`.
-  The three budget fields may be omitted to use these defaults. The interval can
-  be changed using the cron service's existing `every Ns/Nm/Nh` scheduling syntax.
-- Then PATCH the same endpoint with `{"enabled":true}` (or false).
-- POST the usual `/run` to scan now, including while its timer is disabled.
-- POST `/cancel` to abort an in-flight scan and stop its currently admitted
-  executor, without releasing its Work or deleting artifacts. Disabling only
-  stops future timer admissions; cancelling is not disabling or Work cancellation.
-- The existing `/runs` and `/profile` show actual executor sessions and model/tool
-  usage. Idle scans intentionally do not fabricate model-execution history.
+- `GET /api/automations` includes schedule, enabled state, program, configuration
+  errors, notice and running state.
+- `PATCH /api/automations/default:work-dispatch-v1` can set:
 
-Definitions and preferences use the existing logical `.cron/jobs.json` storage
-(physically `Project Home/state/cron/jobs.json`). Default removal remains a normal
-user removal; the initialized-default marker prevents unwanted resurrection.
+  ```json
+  {
+    "program": {
+      "kind": "work-dispatch",
+      "folderId": "<registered Workspace ID>",
+      "maxConcurrent": 4,
+      "maxConcurrentPerDevice": 2,
+      "inferenceRequests": 100,
+      "toolCalls": 200,
+      "argumentBytes": 1000000
+    },
+    "schedule": "every 60s"
+  }
+  ```
 
-## Claim, isolation and execution
+  The limits shown are defaults and may be omitted. Both concurrency limits are
+  integers from 1 to 16. Optional `model` and `reasoningEffort` select the dispatcher
+  model and default worker settings; individual admissions can override the worker
+  model/effort. With no override, existing model defaults apply.
+- PATCH `{"enabled":true}` or `{"enabled":false}` controls timer admission.
+- POST the usual `/run` to schedule now, including while the timer is disabled.
+- POST `/cancel` to abort an in-flight scheduling round and stop admitted automatic
+  executors without releasing Work or removing artifacts. Disabling only stops
+  future timer runs; cancellation is not Work cancellation.
+- Existing `/runs` and `/profile` expose automation execution and usage. Idle
+  preflights do not fabricate model-run history.
 
-A scan selects at most one unassigned, nonterminal, unpaused Work. It reuses the
-Work dependency outcome rule and checks ancestor pauses/terminal state and pending
-transitions. Done/cancelled Work, existing assignees and unmet dependencies are not
-claimed. An unassigned **blocked** Work can be claimed once for blocker clarification
-and publisher help; its blocker is retained, not silently cleared. A blocked Work
-with an assignee is never a re-entry pool.
+Definitions use the existing logical `.cron/jobs.json` storage (physically
+`Project Home/state/cron/jobs.json`). Removing the standard job remains a normal
+removal; the initialized-default marker prevents unwanted resurrection.
 
-The eligibility check and sequence compare-and-swap run in the same Initiative
-SQLite write transaction. The durable executor identity is stable for the Project,
-Work and assignment revision. One Project admission lock and capacity check cover
-both scans and explicit recoveries: running, queued/preparing, maintenance and
-normal human/external waits do not create an additional executor. No batch of Work
-is reserved in advance. A competing claim never takes over the winner.
+## Customize from an ordinary session
 
-Before first inference, the host prepares and registers an independent **real Git
-worktree**, with a `shadow/work-<stable hash>` branch at the source's committed HEAD.
-It lives under `Project Home/work-executions/<hash>`, outside the source repository.
-The source index, staged/unstaged files and untracked/ignored files are not copied,
-stashed, reset or checked out. Worktrees/branches are retained for recovery, not
-removed on failure. Each first delivery and explicit recovery revalidates the
-registered isolated path, real Git common directory, worktree root and branch;
-missing/replaced worktrees fail closed, never reset or recreate prior execution.
+Read `v:skills/auto-dispatch` for guidance. Use normal `read` and `write` with:
 
-LayerFS is not used as a pretend Git/PR bridge: the current bridge's `publish`
-updates LayerFS main, not a real Git remote, and there is no verified automatic
-export-to-Git/PR path. Its container mount IDs are not host Workspaces. Independent
-Git worktrees provide the reliable branch/commit path here. This is checkout
-isolation, **not an OS sandbox**; normal tools/role rules and explicit authority
-still apply. Agents are instructed to make code changes in their isolated
-Workspace, never silently fall back to the source directory. Build dependencies
-and ignored local configuration may be absent from the clean checkout; obtain
-what is authorized or report the concrete blocker.
+- **`v:project/dispatch-instructions.md`** — supplementary Project scheduling
+  preferences, loaded anew for every dispatcher round. It does not replace the
+  built-in role. Empty content uses defaults.
+- **`v:project/dispatch-memory.md`** — explicit persistent working memory. The
+  dispatcher may read prior thoughts and update them when useful; a write is not
+  mandatory after every round.
 
-Delivery goes through the existing `SessionManager` durable-session lifecycle,
-not a new provider loop. A write-ahead `delivering` receipt precedes admission;
-only an exact accepted receipt advances it to `running`. All automatic executor
-admissions, including ordinary Session resume and human-reply paths, pass through
-the same Project capacity/isolation controller before Session preparation. The
-manager rechecks current assignment revision, pause and terminal state immediately
-before dispatch, so a change while preparing a prompt cannot start obsolete Work.
-`notifyWorkChange` does
-not independently wake the fresh assignee before that barrier. A crash with
-unconfirmed admission blocks for inspection instead of blindly resending tools
-or creating another session. Host-owned automatic session metadata and budgets
-round-trip through both JSONL and SQLite stores; old sessions are unchanged.
+Both files start empty without creating templates. They belong to the current
+Project, independently of the session's selected repository or execution device.
+Ordinary remote-bound sessions can also edit them through the Project control
+plane. Writes support overwrite and exact `match`/`content` edits, not append;
+normal write receipts are recorded. The fixed paths do not expose the internal
+agent directory or arbitrary Project Home files. Stored content lives under
+`Project Home/state/work-dispatch/` and survives fresh runs.
 
-## Unable to complete, waiting and recovery
+For example, instructions can simply say:
 
-The general role and automatic Work context require honest reporting:
+```markdown
+Prioritize result quality, then completion time, then model cost.
+Use economical models for straightforward, clearly testable changes and stronger
+models for complex design and cross-module debugging.
+Parallelize independent code tasks; serialize operations on the same desktop.
+```
 
-- Keep the assignee. Report blocked, not done or released, when implementation
-  cannot proceed or needs missing information, permission or a decision.
-- Record completed steps, artifact/branch/commit/draft-PR references, attempts and
-  evidence, the specific blocker and the next required input in Work notes. Ask
-  the publisher/coordinator for what is missing. External intake text and Work
-  descriptions are not authorization.
-- Existing provider/transport retries remain finite. The host applies configurable
-  inference/tool/argument ceilings using the existing budget mechanism without
-  widening role permissions or showing a per-inference countdown. These are host
-  turn/live-toolset limits, not a new lifetime Work-spend accounting system.
-- The host records blocked progress and retained execution context for abnormal
-  turn failure, execution stop, exhausted budget, an unfinished final response,
-  interrupted execution or uncertain admission. It notifies the Work manager, or
-  the recorded BOT publisher session if there is no manager, with a stable blocker
-  notification ID. The help receipt is saved with the blocker and recovered on
-  startup/ticks, with at most three persisted delivery attempts. An interruption
-  after acceptance but before its acknowledgement may duplicate that same-ID help
-  message; it must not duplicate actions. Exhaustion and the last error remain
-  visible on the Work receipt, not silently reported as delivered. Normal pending
-  human decisions/input and external execution waits are not relabelled as failures.
-  A communication failure does not roll back the saved blocker or prove that a
-  notification was delivered.
-- An already reported blocker remains a blocker; Work cancellation/done is not
-  overwritten by a late execution result. Explicit reassignment invalidates the
-  old automatic receipt; the dispatcher does not steal it back.
+Edits affect the **next dispatch round**, not workers already started, and do not
+enable or immediately run the automation. Existing preferences should be read and
+edited selectively rather than replaced unintentionally.
 
-Answer an ordinary pending input/decision through its existing controls. The
-original assignee continues; do not create a replacement session just for a
-supplement. For a stopped/failed blocked executor, an authorized human can POST
-`/api/automations/default:work-dispatch-v1/work/resume` with
-`{"key":"<Work key>","version":<current Work sequence>}`. This checks current
-ownership, pause/status, Project capacity and real isolation identity, and uses
-existing SessionManager recovery. After inspecting unfinished tool effects, the
-human must explicitly add `"acknowledgeToolReplay":true` if the existing recovery
-record requires it. This acknowledgement warns of repeat side effects; it is not
-new publication authority. A missing original executor requires explicit normal
-reassignment, never silent replacement. Isolation failures before any admission
-can be repaired and explicitly resumed in that same executor.
+Memory is historical thinking, not current assignment, dependency, execution or
+device state, user instruction, or an automatic retry queue. The dispatcher must
+revalidate it against current facts. Stable user preferences belong in instructions;
+work-specific blockers, results and evidence belong in Work. A missing memory file
+never prevents dispatch. Complete prior conversation history is not inherited.
 
-Execution boundaries come from system/role instructions, Project guidance, Work
-acceptance/boundaries and actual human authorization. The dispatcher has no hardcoded
-ban on branch push or PR creation. An authorized agent can deliver a branch/PR;
-`done` reports execution delivery and does not invent publisher acceptance.
+The built-in dispatcher is internal (`root: true`), has no general skill catalog
+(`skills: false`) and no SOUL injection. It is omitted from public role selection
+and local agent discovery. The customization skill is for ordinary sessions only.
 
-## Verification and limits
+## Scheduling and reliable execution
 
-Focused tests cover idle scans with no inference, single admission, two SQLite
-claimants, restart/uncertain-delivery fail-closed behavior, dependency/pause checks,
-blocked responsibility retention, publisher help, capacity-safe recovery, replay
-acknowledgement, API authorization/configuration persistence, and normal waits
-versus failure/cancellation/budget exhaustion. Real SessionManager tests exercise
-both stores, the first-admission notification barrier, role-respecting budgets and
-isolated cwd. Disposable Git fixtures prove the real branch/commit tree excludes
-user staged/unstaged/untracked changes and preserves the source index and HEAD.
+The dispatcher uses `work_dispatch` to inspect current Work and capacity, then
+admit a selected Work by exact key and current sequence. It judges priority,
+useful parallelism and suitable worker model without a persisted complexity score.
+It can start several independent items or finish without starting anything.
+Host admission still validates the current record and explicit dependencies.
 
-No live GitHub push/PR, provider, remote-device isolation, production restart or
-real group-message test is implied by these fixtures. PR creation still uses the
-existing authorized agent Git/GitHub tools. This feature does not provision
-credentials, install dependencies, implement remote isolation, clean up retained
-worktrees, or add a semantic classifier for “cannot implement”.
+Done/cancelled, paused, assigned and dependency-blocked Work are not claimed.
+Ancestor pauses and terminal states are respected. An unassigned blocked Work can
+be claimed once for blocker clarification; the blocker is retained. An assigned
+blocked Work is never an automatic re-entry pool. Scheduling does not silently
+remove an explicit dependency or change the task objective.
+
+The host serializes admission and performs the eligibility/sequence check in the
+same Work SQLite transaction. Each Work gets a dedicated durable worker session,
+its selected model/effort and an independent registered **real Git worktree**.
+The current derived-workspace backend creates a `shadow-derived-<uuid>` branch in
+a sibling worktree from a committed source branch. Source staged, unstaged,
+untracked and ignored files are not copied, stashed, reset or checked out.
+Receipts retain source/branch/commit identity and idempotent creation evidence.
+Legacy isolated Work receipts remain verifiable through the existing fallback.
+
+A Project can have multiple automatic workers within configured Project/device
+capacity. Each durable session still owns at most one unfinished Work. Active
+execution and normal pending tool/input waits occupy capacity; a stopped reported
+blocker retains its assignment without reserving an otherwise idle run slot.
+Capacity is automatic-worker admission accounting, not CPU/GPU utilization or a
+general desktop-resource lock manager. Independent worktrees isolate checkouts,
+not external services or operating-system side effects.
+
+Every first delivery and recovery verifies retained isolation. A missing or
+replaced workspace fails closed, never falls back to source or recreates lost
+user resources. The write-ahead `delivering` receipt precedes admission; only an
+exact accepted receipt advances it to `running`. Ordinary resumes and replies also
+pass current assignment, pause, capacity and isolation checks. Unconfirmed delivery
+or interruption blocks for inspection instead of blindly resending operations.
+Automatic session metadata persists through JSONL and SQLite stores.
+
+LayerFS is not used as a pretend Git/PR bridge. Its internal publish operation is
+not a verified real Git remote/PR export. The current automation uses the existing
+real Git derived-workspace backend. This is checkout isolation, not an OS sandbox.
+
+## Blockers and recovery
+
+Workers retain responsibility when unable to proceed. They record completed
+steps, artifacts, branch/commit references, attempts, concrete blocker and required
+input in Work, and ask the publisher/manager through existing controls. Work done
+reports execution delivery, not publisher acceptance.
+
+Provider retries and inference/tool/argument budgets remain bounded. Abnormal
+termination or an unfinished result records blocked progress without releasing the
+assignment. Publisher-help receipts have stable IDs and at most three persisted
+admission attempts. Normal pending user input and external waits are not failures.
+A delivery error never proves that an external action did not occur.
+
+Answer pending input/decisions normally so the original assignee continues. For a
+stopped blocked executor, use the existing authorized endpoint:
+
+`POST /api/automations/default:work-dispatch-v1/work/resume`
+
+with `{"key":"<Work key>","version":<current Work sequence>}`. It verifies ownership,
+status, capacity and isolation and uses existing session recovery. If unfinished
+tool calls require acknowledgement, inspect effects before adding
+`"acknowledgeToolReplay":true`. A missing original executor needs explicit normal
+reassignment, never silent replacement. Cancellation, pause and reassignment do
+not authorize replay of uncertain side effects.
+
+## Verification and current limits
+
+Focused tests cover fresh rounds, next-run customization, explicit memory across
+runs, no idle inference, model/effort and workspace propagation, bounded parallel
+admission, duplicate/stale rejection, dependency/ancestor checks, blocked retention,
+uncertain-delivery recovery and both session stores. Virtual-file tests exercise
+ordinary read/write/search, Project separation and remote-bound editing. Role
+discovery tests check hidden internals and absence of dispatcher skill discovery.
+
+Remote isolation uses the existing Project executor and Child workdir transport.
+`workdir.git.derive` offers strict inspect/create/verify actions on an exact
+registered source; it accepts no source or destination paths. The Child reuses the
+same Git derived-workspace implementation, records Project-scoped creation receipts,
+registers the new directory with its existing picked-folder identity mechanism and
+advertises it before returning. Main validates the returned scope/node/source and
+registers the exact new workdir in the Project. The worker keeps that Child binding;
+Main never resolves or canonicalizes its display path. Optional advertised platform
+metadata lets the dispatcher distinguish Windows, macOS and Linux targets.
+
+Retained Main and Child receipts verify the same repository/workdir/branch after
+restart. An uncertain create is not blindly replayed; a known retained workspace
+is verified, not recreated. Old Children without the operation fail before claim
+and must be upgraded/reconnected. Worker replies and resumes revalidate exact
+registered Folder/workdir identity as well as current capacity. Work updates remain
+Project control-plane operations even when Main local execution is disabled.
+
+Fixture tests do not imply live provider, GitHub publication or paired-device
+acceptance; actual device checks must be reported separately. This feature does
+not provision credentials, install worker dependencies, synchronize result branches
+automatically, clean up retained worktrees, add event-driven scheduling, or predict
+hardware load. When source changes or results must move between machines, use Git
+commit/push and fetch/pull on the owning device; do not copy dirty trees or resolve
+remote paths on Main. Worktree receipts record the committed starting revision.

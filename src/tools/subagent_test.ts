@@ -156,3 +156,22 @@ test('registry delegates remote tasks with opaque parent binding and rejects cal
     assert.equal(fields.length, 2, 'Never fall back to Main when the parent binding is stale')
   }
 })
+
+
+test('unknown-role errors do not advertise internal dispatcher roles', async () => {
+  const sessions = {
+    getSessionState: () => ({ sessionId: 'web:parent', mode: 'session' }),
+    getAllowedSubagentModes: () => ['task'], assertCanCreateChild() {},
+  } as unknown as SessionManager
+  const types = {
+    resolve: () => undefined,
+    all: () => [
+      { name: 'general', root: true }, { name: 'sub' }, { name: 'dispatcher', root: true },
+    ],
+  } as unknown as AgentTypesManager
+  const tool = new SubagentTool({} as Bus, sessions, types, {} as ChannelManager)
+  const result = await tool.execute({ agent_type: 'missing', description: 'Unknown', task: 'Inspect' },
+    { sessionId: 'web:parent' } as ExecutionContext)
+  assert.match(result, /Available: general, sub/)
+  assert.doesNotMatch(result, /dispatcher/)
+})

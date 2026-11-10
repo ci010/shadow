@@ -28,7 +28,7 @@ test('agent role API exposes default execution mode rather than a lifetime flag'
     assert(verify && 'allowedTools' in verify)
     assert.equal(verify.defaultMode, 'task')
     assert.equal(listed.find(role => role.name === 'general')?.defaultMode, 'session')
-    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'ask', 'reply', 'work'])
+    assert.deepEqual(verify.allowedTools, roles.resolve('verify')?.allowedTools)
   })
 })
 
@@ -40,4 +40,24 @@ test('agent catalog and context use product API paths, not debug paths', async (
   assert.equal((await app.request('/api/agent-types/general/context')).status, 501)
   assert.equal((await app.request('/debug/agent-types')).status, 404)
   assert.equal((await app.request('/debug/agent-types/general/context')).status, 404)
+})
+
+
+test('internal roles stay out of public role selection while general remains available', async () => {
+  await withTempWorkspace(async workspace => {
+    const roles = new AgentTypesManager(workspace)
+    await roles.load()
+    roles.setWorkspaceType('internal-fixture', {
+      name: 'internal-fixture', description: 'Internal only', prompt: 'Internal',
+      root: true, source: 'workspace', defaultMode: 'task', skills: false,
+    })
+    const app = new Hono()
+    await agentTypesPlugin(undefined, roles)(app)
+    const body = await (await app.request('/api/agent-types')).json() as Array<{ name: string }>
+    assert(body.some(role => role.name === 'general'))
+    assert(!body.some(role => role.name === 'internal-fixture'))
+    assert(!body.some(role => role.name === 'dispatcher'))
+    assert(!body.some(role => role.name === 'work-organizer'))
+    assert(!roles.getAgentTypesSummary().includes('internal-fixture'))
+  })
 })

@@ -13,6 +13,8 @@ export interface WorkdirAdvertisement {
   workdirId: string
   displayName: string
   displayPath?: string
+  /** Device-native OS metadata only; never inferred from an opaque display path. */
+  platform?: NodeJS.Platform
   online: boolean
   support: ExecutionSupport
 }
@@ -21,12 +23,13 @@ export const EXECUTION_PROTOCOL_FEATURE = 'workdir-execution-v2'
 export const IMPLEMENTED_OPERATIONS = [
   'process.execute', 'filesystem.read', 'filesystem.write', 'workdir.git.status',
   'workdir.git.diff', 'workdir.identity', 'workdir.process.execute',
-  'workdir.process.execute-once', 'workdir.process.reconcile',
+  'workdir.process.execute-once', 'workdir.process.reconcile', 'workdir.git.derive',
   'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select',
 ] as const
 export const NODE_OPERATIONS = new Set(['process.execute', 'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select'])
 const SHELL_OPERATIONS = new Set(['process.execute', 'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile'])
 const SHELLS = ['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh']
+const PLATFORMS = ['aix', 'android', 'darwin', 'freebsd', 'haiku', 'linux', 'openbsd', 'sunos', 'win32', 'cygwin', 'netbsd']
 export const isExecutionIdentifier = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v)
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 function keys(v: Record<string, unknown>, allowed: string[], errors: string[]) {
@@ -58,11 +61,12 @@ export function validateExecutionSupport(value: unknown, scope?: 'node' | 'workd
 export function validateWorkdirAdvertisement(value: unknown): ValidationResult<WorkdirAdvertisement> {
   if (!record(value)) return { success: false, errors: ['workdir must be an object'] }
   const errors: string[] = []
-  keys(value, ['version', 'nodeId', 'workdirId', 'displayName', 'displayPath', 'online', 'support'], errors)
+  keys(value, ['version', 'nodeId', 'workdirId', 'displayName', 'displayPath', 'platform', 'online', 'support'], errors)
   if (value.version !== 2) errors.push('workdir version must be 2; upgrade both peers')
   if (!isExecutionIdentifier(value.nodeId) || !isExecutionIdentifier(value.workdirId)) errors.push('workdir identifiers are invalid')
   if (!text(value.displayName, 256)) errors.push('displayName is invalid')
   if (value.displayPath !== undefined && !text(value.displayPath, 4096)) errors.push('displayPath is invalid')
+  if (value.platform !== undefined && (typeof value.platform !== 'string' || !PLATFORMS.includes(value.platform))) errors.push('platform is invalid')
   if (typeof value.online !== 'boolean') errors.push('online must be boolean')
   const support = validateExecutionSupport(value.support, 'workdir')
   if (!support.success) errors.push(...support.errors)
