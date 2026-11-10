@@ -12,7 +12,7 @@ export function agentTypesPlugin(
       if (!agentTypes) {
         return c.json({ error: 'agent_types_unavailable' }, 501)
       }
-      const types = agentTypes.all().map((t) => ({
+      const types = agentTypes.all().filter(t => !t.root || t.name === 'general').map((t) => ({
         name: t.name,
         description: t.description,
         source: t.source,
