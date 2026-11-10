@@ -197,6 +197,7 @@ import { SessionProfileService } from '../../sessions/profile.ts'
 import { createStatsHandler } from '../../vfs/stats.ts'
 import { createRuntimeHandler } from '../../vfs/runtime.ts'
 import { FrontendLog, registerFrontendLogRoutes } from '../frontend-log.ts'
+import { requestDiagnostic } from '../../gateway/request-diagnostic.ts'
 import { RuntimeDiagnosticLog } from '../diagnostic-log.ts'
 
 import { OtelStore } from '../../otel/store.ts'
@@ -380,6 +381,7 @@ export async function createProjectRuntime(
   // ── Create gateway app early so we can pass it to Agent ──
   const app = new Hono()
   app.use('*', (_c, next) => scope.run(next))
+  app.use('*', requestDiagnostic())
   if (!dependencies.realtimeHub) registerRealtimeRoute(app, realtimeHub, dependencies.authorize)
   const evalBridge = new EvalBridgeRuntime({ projectId: project.id, scope })
   cleanup.push(() => evalBridge.shutdown())
