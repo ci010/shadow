@@ -1,3 +1,4 @@
+import { localToolRoot } from '../utils/local-tool-paths.ts'
 import { homedir } from 'node:os'
 import { isAbsolute, join, parse, resolve } from 'node:path'
 import { readdir, realpath, stat } from 'node:fs/promises'
@@ -42,6 +43,7 @@ export function knownModelRoots(env: NodeJS.ProcessEnv = process.env, home = hom
     join(home, 'ComfyUI', 'models'),
     join(home, 'ComfyUI_windows_portable', 'ComfyUI', 'models'),
     comfy && join(comfy, 'models'),
+    join(localToolRoot('stable-diffusion.cpp', process.platform, env, home), 'models'),
   ].filter((path): path is string => !!path).map(path => resolve(path))
 }
 

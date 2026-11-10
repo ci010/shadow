@@ -19,6 +19,36 @@ binary or model directory. An explicitly selected remote API route runs from the
 owning host and sends content only when transcribe/speak is invoked. Request user consent before network downloads,
 large disk use or a model with special license terms.
 
+## Device-local shared runtime and model storage
+
+Reuse configured absolute paths and existing HF/ModelScope/ComfyUI caches first;
+never move an existing installation or redownload merely to normalize its layout.
+For new files, the default is the executing device's OS-user data directory,
+without a Shadow parent:
+
+- Windows: `%LOCALAPPDATA%/audio.cpp` (resolve LOCALAPPDATA on that device).
+- macOS: `~/Library/Application Support/audio.cpp` (resolve that device's home).
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/audio.cpp` (absolute XDG_DATA_HOME only).
+
+Use `versions/<version-arch-backend>/` for binaries and adjacent libraries,
+`models/` for new weights. Audio's managed setup uses the pinned binary SHA-256
+as version identity and keeps verified legacy Project download caches in place.
+Files are shared across Projects/sessions only for the same OS user on the same
+device; Project configuration, license acknowledgement and execution permissions
+remain separate. A discovered file is not permission to run it. Configured binary
+paths take priority, then the host CLI environment override, then PATH, then
+bounded shared-directory discovery (direct/bin or one unambiguous versions entry).
+Multiple versions require explicit configuration; discovery never probes them.
+Do not guess usernames, resolve remote paths on Main, or fall back from a remote
+executor to Main. These tools still require their implemented local execution route.
+
+Runtime binaries and reusable model weights are dependencies, **not finished
+Documents/workspace deliverables**. Do not put new dependencies under Documents,
+a workspace, Project Home or session storage by applying deliverable rules.
+Generated user-facing media/files still follow the requested output destination.
+Downloads/installations always require source, disk and license approval; this
+storage policy does not itself authorize downloading, installing or execution.
+
 ## Unified Agent-driven setup
 
 The composer **Set up audio** button asks local vs remote and submits the choice to
@@ -89,8 +119,8 @@ source repository for limits and fixture-vs-live verification boundaries.
 
 The upstream release includes `tools/model_manager_v2.py` and `model_specs/`;
 the Python manager requires Python 3 for downloading, **not inference**. Inspect
-the selected model spec and license before install. Keep models in persistent
-project-local storage rather than an ephemeral conversation directory. Prefer a
+the selected model spec and license before install. Keep existing models in place; for new weights use the shared device-local
+`audio.cpp/models/` directory described above, not ephemeral conversation storage. Prefer a
 ready-to-use single-file GGUF. The upstream manager stages downloads and
 publishes a package manifest:
 
