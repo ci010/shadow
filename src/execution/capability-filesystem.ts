@@ -106,9 +106,14 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
   ): Promise<string> {
     const args = parseReadArgs(value)
     const target = await resolveExistingTarget(root, args.path)
+    if (args.within !== undefined) {
+      const boundary = await resolveExistingTarget(root, args.within)
+      if (escapesRoot(boundary, target)) throw pathDenied()
+    }
     try {
       signal.throwIfAborted()
       const info = await stat(target)
+      if (args.kind === 'file' && !info.isFile()) throw new CapabilityFilesystemError('file-type-denied', 'Filesystem target must be a regular file')
       if (args.query !== undefined) {
         if (!info.isDirectory()) throw new CapabilityFilesystemError('file-type-denied', 'File search requires a directory')
         try {
@@ -285,13 +290,15 @@ function pathDenied(): CapabilityFilesystemError {
   )
 }
 
-function parseReadArgs(value: unknown): { path: string; query?: string } {
-  const candidate = recordWithKeys(value, ['path', 'query'])
+function parseReadArgs(value: unknown): { path: string; query?: string; within?: string; kind?: 'file' } {
+  const candidate = recordWithKeys(value, ['path', 'query', 'within', 'kind'])
   if (typeof candidate.path !== 'string' || candidate.path.length === 0) {
     throw invalidArgs()
   }
   if (candidate.query !== undefined && !validFileSearchQuery(candidate.query)) throw invalidArgs()
-  return { path: candidate.path, ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
+  if (candidate.kind !== undefined && candidate.kind !== 'file') throw invalidArgs()
+  if (candidate.within !== undefined && (typeof candidate.within !== 'string' || !candidate.within)) throw invalidArgs()
+  return { path: candidate.path, ...(candidate.kind === 'file' ? { kind: 'file' as const } : {}), ...(typeof candidate.within === 'string' ? { within: candidate.within } : {}), ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
 }
 
 function parseWriteArgs(value: unknown): {
