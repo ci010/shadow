@@ -105,11 +105,11 @@ test('ordinary workspace exposes discoverable Project resources', async () => {
 
 test('current session metadata mount is discoverable in the injected workspace prompt', async () => {
   const fs = new VirtualFs()
-  fs.mount('v:session', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', () => '{}')
+  fs.mount('v:sessions', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', () => '{}')
   const provider = workspaceProvider(resolve('.test-data', 'self-metadata-prompt'), fs)
   const prompt = (await provider.getPromptSection(context()))!
   assert.match(prompt, /Virtual resources:/)
-  assert.match(prompt, /v:session\/.*self\.json: read\/write current session/)
+  assert.match(prompt, /v:sessions\/.*self\.json: read\/write current session/)
   assert.match(prompt, /identity is runtime-bound; task metadata is parent-owned/)
   assert.doesNotMatch(prompt, /update_self/)
 })

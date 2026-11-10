@@ -3357,7 +3357,7 @@ old/new context, instruction provenance/scope and supersession of old defaults.
 Locality is refreshed for subsequent calls; already running processes and
 existing children retain their captured context.
 
-`v:session/self.json` exposes `topic`, `focus` and `completed`, not filesystem
+`v:sessions/self.json` exposes `topic`, `focus` and `completed`, not filesystem
 paths. An unchanged roundtrip is accepted; unknown fields are rejected. The committed
 `session.changed` notification refreshes the existing session list, sidebar
 folder selection and file workbench. Browsing alone does not mutate execution.

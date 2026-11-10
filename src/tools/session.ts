@@ -6,7 +6,7 @@ import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 export class SessionTool implements Tool {
   readonly name = 'session'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Create durable peer conversations and register folders. Read/write v:session/self.json for your own metadata/completion. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.'
+  readonly description = 'Create durable peer conversations and register folders. Read/write v:sessions/self.json for your own metadata/completion. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
