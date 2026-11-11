@@ -1,4 +1,8 @@
 {
+  "Share": "Share",
+  "{count} calls · {kinds} categories": "{count} calls · {kinds} categories",
+  "Show top 10": "Show top 10",
+  "Show all {count} categories": "Show all {count} categories",
   "Model counts require recorded model names; older calls without names are excluded. Tool counts use recorded results, including errors; unfinished calls without results are excluded.": "Model counts require recorded model names; older calls without names are excluded. Tool counts use recorded results, including errors; unfinished calls without results are excluded.",
   "Daily known tokens.": "Daily known tokens.",
   "Includes converted AI credits in USD.": "Includes converted AI credits in USD.",
