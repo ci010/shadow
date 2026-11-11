@@ -27,7 +27,11 @@ const readSchema = z.object({ action: z.literal('read'), name: slug }).strict()
 export const LEARNED_SKILL_MAX_LENGTH = 8000
 const skillLimits = Object.freeze({ maxLength: LEARNED_SKILL_MAX_LENGTH, lengthUnit: 'UTF-16 code units', recommendedMaxLength: 7200 })
 const skillSchema = z.object({ action: z.literal('save'), name: slug, revision,
-  content: z.string().trim().min(1).max(LEARNED_SKILL_MAX_LENGTH),
+  content: z.string().trim().min(1).superRefine((content, ctx) => {
+    if (content.length <= LEARNED_SKILL_MAX_LENGTH) return
+    ctx.addIssue({ code: z.ZodIssueCode.too_big, maximum: LEARNED_SKILL_MAX_LENGTH, type: 'string', inclusive: true,
+      message: `Lesson not saved: contentLength=${content.length}, maxLength=${LEARNED_SKILL_MAX_LENGTH}, overBy=${content.length - LEARNED_SKILL_MAX_LENGTH} (UTF-16 code units after trim). No artifact or recovery recorded. Do not retry an oversized whole save. Next maintenance write: patch the unique exact superseded guidance using the read revision, or save one genuinely shortened complete consolidation (target <=7200), preserving safety conditions and evidence. A patch must also fit the complete lesson limit. Defer optional expansion; if neither fits the remaining work capacity, report partial with the unsaved correction. A read/check is not recovery; only a successful same-name save/patch can resolve this failure.` })
+  }),
 }).strict()
 // Preflight accepts oversized drafts so checking is not itself a failed write.
 const skillCheckSchema = z.object({ action: z.literal('check'), name: slug, revision, content: z.string() }).strict()
@@ -238,7 +242,10 @@ export class LearningTools {
       const current = store.read(args.name)
       const currentContent = current.files['SKILL.md']?.toString() ?? ''
       if (args.action === 'read') return JSON.stringify({ name: args.name, revision: current.revision ?? '', content: currentContent,
-        contentLength: currentContent.length, limits: skillLimits })
+        contentLength: currentContent.length, limits: skillLimits,
+        maintenance: { headroom: LEARNED_SKILL_MAX_LENGTH - currentContent.trim().length,
+          preferredAction: currentContent.trim().length >= skillLimits.recommendedMaxLength ? 'patch' : 'save_or_patch',
+          guidance: 'Correct superseded guidance before optional extensions. Near the recommended target prefer a unique exact patch, not whole-lesson expansion. A patch still validates the complete lesson; a shortened complete replacement remains allowed. No write has occurred.' } })
       if (args.revision !== (current.revision ?? '')) throw new Error('Skill changed since read. Read it again and merge before checking or saving.')
       if (args.action === 'check') {
         const length = args.content.trim().length

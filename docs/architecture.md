@@ -604,6 +604,25 @@ follow-up. Reset/disposal abort obsolete reads. There is no periodic HTTP pollin
 of `projects`, `summary` or `stages`, including when a notification monitor keeps
 the shared state alive on another page. Snapshot failures remain visible until
 retry, a new event or reset; they are not presented as empty successful state.
+Summary revalidation optionally negotiates row deltas with
+`Accept: application/vnd.shadow.session-summary-delta+json` and an exact
+`If-None-Match` base. An unchanged representation returns 304. Otherwise Main
+returns either the legacy `{sessions}` body or `{delta:1, base, upsert, removed,
+order}`; `order` enumerates the complete resulting session IDs, and `upsert`
+replaces whole rows (including removed fields). The response ETag always identifies
+the complete result, not the patch. Readers validate the base and reconstructed
+inventory before replacing their own cache. Generation checks prevent concurrent
+or aborted reads from overwriting newer cached bases. Reconnects revalidate the
+same authoritative endpoint, including deletion recovery.
+Each sessions API plugin retains at most eight historical representations with a
+16 MiB serialized-body budget; history is scoped by Project and exact URL. A
+missing/evicted base, runtime restart, legacy client, or patch larger than the full
+body falls back to full JSON. Legacy servers ignore the Accept preference and
+continue to work, without a new CORS request-header requirement. This saves
+transfer, not server inventory enumeration or state reads; initial loads still
+transfer the complete inventory. The delta includes all IDs, so its size is linear
+in row count even for a single-row change.
+
 Not every other resource has push hooks: Nodes still use visible-only polling,
 and provider configuration uses ordinary bounded HTTP reads.
 

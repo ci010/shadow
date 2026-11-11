@@ -37,8 +37,9 @@ success. Provider failures or invalid final receipts can still fail the run.
 
 ## Finite automatic retries
 
-LearningLedger stops automatically selecting an unchanged batch after three recorded
-deferrals. Existing older batches already above that threshold are also skipped.
+LearningLedger normally stops automatically selecting a batch after three recorded
+deferrals, with the single structured reflector candidate continuation described
+below. Existing older batches already above three deferrals are skipped.
 Fresh eligible ranges/logs can still run; the capped batch stays unfinished and
 reserved, so its hole is not acknowledged or silently skipped by the reviewed cursor.
 Attempts, effects, outcomes and errors remain intact. Newly capped batches persist a
@@ -93,10 +94,34 @@ resolution; historical tool receipts preserve earlier reasons. The host checks
 structure, scope and persistence, not whether the reason or correction is true.
 Unresolved candidates prohibit `applied`/`no_change`. Resolving one does not bypass
 full assigned-source coverage or permit acknowledging unread ranges. Failed saves
-leave the candidate pending. A candidate remains pending through the existing
-three-deferral automatic pause; manual retry policy and execution ceilings are
-unchanged. Old prose-only partial receipts are not parsed or migrated into
-candidates: this mechanism only helps newly structured receipts.
+leave the candidate pending.
+
+Automatic selection normally stops after three deferrals. A reflector batch with
+retained structured candidates at exactly three deferrals now has **one additional
+continuation opportunity**, after its existing cooldown. This closes the case
+where the first useful candidate is only identified on the final regular attempt.
+The journal records `candidateContinuationUsed` at admission (`bind`), not selection
+or successful publication: interruption/restart cannot renew it. It is per batch,
+not per path, candidate edit, resolution or apparent progress. The fourth deferral
+parks unresolved work; a crash before that deferral also cannot re-admit the spent
+continuation automatically. Without manual retries, the bound is three ordinary
+deferrals plus one candidate continuation, each under the existing execution
+ceilings. No extra inference/tool budget is added within an attempt.
+
+Selection retains the existing persisted fresh/retry alternation and orders due
+batches by `notBefore`; the extra opportunity cannot take every fresh-work slot.
+This is not a wall-clock retry guarantee: cron availability, older due batches,
+source eligibility and cooldown still govern admission. Pending candidates,
+partial receipts, effects and reviewed cursors remain visible/unchanged when
+parked. Manual retries remain available and intentionally are not limited by this
+automatic cap.
+
+No journal migration or counter reset is performed. Existing structured reflector
+batches at exactly three deferrals with no continuation marker qualify on the next
+selection after deployment (even if their old `paused` text describes the previous
+policy). Historical batches already beyond three deferrals stay parked. Prose-only
+partial receipts are not parsed into candidates. Previously excluded/ineligible
+sources are not re-enabled.
 
 Deployment requires loading the updated backend. For a later bounded cron audit,
 check an actual identified-but-unsaved correction yields a structured candidate,
@@ -105,5 +130,14 @@ must either persist a source-grounded correction with conditions and provenance,
 explicitly explain a duplicate/superseded/unsupported disposition, or honestly
 retain it pending/paused. Verify no duplicate logs, stale overwrite, invented
 human authority, automatic draft publication or cursor advance over unread work.
+For a candidate first retained at the third deferral, verify one post-cooldown
+admission records the durable continuation marker, fresh sources still receive
+alternating slots, and unresolved work parks after that opportunity without
+renewal on rewording or restart. Audit historical `paused` text against counters
+and the marker, not as the sole eligibility test. Cross-batch candidates targeting
+different pages may still describe overlapping requirements: inspect existing
+knowledge and preserve explicit dispositions without expanding assigned source
+authority. Same-page candidates from different dates must merge against the
+current revision, preserving later corrections rather than restoring older claims.
 Compare the resulting page to source, not merely receipt counts; semantic benefit
 and live model compliance remain unverified by synthetic tests.
