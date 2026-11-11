@@ -89,6 +89,7 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
         lock = new DatabaseSync(toNamespacedPath(`${file}.lock.sqlite`))
         lock.exec('BEGIN IMMEDIATE')
         const folder = await this.options.folders.requireExecutionAvailable(source.id, signal)
+        if (folder.kind === 'layerfs') throw new Error('LayerFS workspaces cannot be used as Git isolation sources; no Main fallback.')
         if (folder.kind === 'remote') {
           if (!this.options.remote || !this.options.folders.registerRemote) throw new Error('Remote workspace creation is unsupported; no Main filesystem fallback.')
           if (request.workKey !== undefined) this.options.validateWork(request.workKey)
@@ -295,7 +296,7 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
   async verify(receipt: DerivedWorkspaceReceipt, signal: AbortSignal): Promise<void> {
     if (receipt.remote !== undefined) return this.#verifyRemote(receipt, signal)
     const source = await this.options.folders.requireExecutionAvailable(receipt.sourceId, signal)
-    if (source.kind === 'remote' || source.path !== receipt.sourcePath ||
+    if (source.kind === 'remote' || source.kind === 'layerfs' || source.path !== receipt.sourcePath ||
       await realpath(await isolationGit(source.path, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal)) !== receipt.commonDir) throw new Error('Current source repository identity mismatch.')
     const commonStat = await stat(receipt.commonDir)
     if (`${commonStat.dev}:${commonStat.ino}` !== receipt.commonIdentity) throw new Error('Current source repository identity mismatch.')

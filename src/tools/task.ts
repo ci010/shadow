@@ -6,6 +6,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 export class TaskTool implements Tool {
   readonly name = 'task'
   readonly description = 'Submit a structured verdict for a fixed local task revision, or inspect its review record. Only the designated reviewer (parent by default) may review; worker finals never accept themselves. Changes automatically rerun the original worker; PASS delivers once; blocked escalates. Agent reviewers are created by the workflow. Calls and A2A are unsupported; Work is unchanged. Read then retry a settled failed local worker in its original history using expectedVersion; creator only, not calls or A2A. Retry continues from recorded results, never blindly replays tools.'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly parameters: ToolParameters = {
     type: 'object', properties: {

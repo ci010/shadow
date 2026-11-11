@@ -111,6 +111,7 @@ function parseExecShell(
  */
 export class ExecTool implements Tool<ToolResult> {
   readonly name = 'exec'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description: string =
     'Run a command or script. Use `shell: "node"` for inline TypeScript with tool access and infer() for bounded semantic computation; see node-scripting.'
@@ -255,9 +256,14 @@ export class ExecTool implements Tool<ToolResult> {
     context: ExecutionContext,
   ): Promise<ToolResult> {
     if (this.nodeOnly && String(args.workspace ?? args.folder ?? '').startsWith('layerfs:')) throw new ToolNoEffectError('LayerFS OS shells are unavailable in node-only exec.')
-    const layerResult = await layerfsRoute('exec', args, context, this.workspace)
-    if (layerResult !== undefined) return layerResult
     context = await executionTargetContext(args, context, 'workdir.process.execute-once')
+    if (this.nodeOnly && context.layerfsWorkdir) throw new ToolNoEffectError('LayerFS OS shells are unavailable in node-only exec.')
+    const layerArgs = { ...args, timeout_ms: args.timeout_ms ?? (context.tools?.executionMode === 'call' ? MAX_CALL_TIMEOUT_MS : this._defaultTimeoutMs) }
+    if ((String(args.workspace ?? '').startsWith('layerfs:') || context.layerfsWorkdir) && DANGEROUS_PATTERNS.some(pattern => pattern.test(String(args.script)))) return 'Error: command blocked by safety filter'
+    const layerResult = await layerfsRoute('exec', layerArgs, context, this.workspace, {
+      run: start => this.executeLayerFSRequest(layerArgs, context, start),
+    })
+    if (layerResult !== undefined) return layerResult
     context.signal.throwIfAborted()
     if (context.recoveringToolCall && !context.remoteWorkdir) {
       throw new ToolOutcomeUnknownError('This saved local execution has no verifiable durable reconciliation route. Its outcome remains unknown; the command was not re-executed.')
@@ -294,6 +300,61 @@ export class ExecTool implements Tool<ToolResult> {
         this.executeRequest(request, { ...context, signal }, true, cancel))
     }
     return this.executeRequest(request, context, false)
+  }
+
+  private async executeLayerFSRequest(args: Record<string, unknown>, context: ExecutionContext,
+    start: (signal: AbortSignal, observe: (text: string) => void) => Promise<ToolResult>): Promise<ToolResult> {
+    if (context.tools?.executionMode === 'call') {
+      const denied = context.tools.executionDenial('exec', args)
+      if (denied) return denied
+      return context.tools.runForeground(context.signal, signal => this.runLayerFSRequest(args, { ...context, signal }, start, true))
+    }
+    return this.runLayerFSRequest(args, context, start, false)
+  }
+
+  private async runLayerFSRequest(args: Record<string, unknown>, context: ExecutionContext,
+    start: (signal: AbortSignal, observe: (text: string) => void) => Promise<ToolResult>, foreground: boolean): Promise<ToolResult> {
+    context.signal.throwIfAborted()
+    const controller = new AbortController()
+    const abort = () => controller.abort(context.signal.reason)
+    const timeout = Number(args.timeout_ms)
+    let output = ''
+    if (timeout !== 0 || foreground) context.signal.addEventListener('abort', abort, { once: true })
+    const completion = start(controller.signal, text => { output = (output + text).slice(-131072) })
+    void completion.catch(() => {})
+    const cleanup = async () => {
+      controller.abort(new Error('LayerFS execution cancelled'))
+      try {
+        const result = await waitForExit(completion, 11000)
+        if (!result) throw new ToolOutcomeUnknownError('LayerFS cleanup not confirmed; do not rerun.')
+      } catch (error) {
+        if (foreground) context.tools.rejectExecution('LayerFS foreground cleanup not confirmed.')
+        throw error
+      }
+    }
+    try {
+      const result = timeout === 0 ? null : await waitForExit(completion, timeout, context.signal)
+      if (result) return result.status
+      if (foreground) {
+        await cleanup()
+        return completedToolFailure({ isError: true, content: [{ type: 'text', text: 'LayerFS foreground wait expired; sandbox process group stopped.' }] })
+      }
+      const id = this.backgroundTasks.runPromiseTask({
+        kind: 'process', title: `LayerFS exec: ${String(args.script).slice(0, 80)}`,
+        sessionId: context.sessionId, inputId: context.messageId, observe: () => output,
+        callback: { sessionId: context.sessionId, replyTo: { channel: context.channel, chatId: context.chatId }, isGroup: context.isGroup, senderName: 'Background Task' },
+        onCancel: cleanup,
+      }, completion.then(result => {
+        const text = requireToolText(result)
+        if (typeof result === 'object' && result.isError) throw new Error(text)
+        return text
+      }))
+      return `LayerFS process running in background.\nExecution ID: ${backgroundExecutionId(id)}\nOutput so far:\n${output}`
+    } catch (error) {
+      if (!(error instanceof ToolOutcomeUnknownError)) await cleanup()
+      else if (foreground) context.tools.rejectExecution('LayerFS foreground outcome unknown.')
+      throw error
+    } finally { context.signal.removeEventListener('abort', abort) }
   }
 
   private async executeRemoteRequest(args: Record<string, unknown>, context: ExecutionContext, foreground = false): Promise<ToolResult> {

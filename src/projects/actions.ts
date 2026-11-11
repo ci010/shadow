@@ -46,7 +46,7 @@ export class ProjectActions {
     const folder = this.folders.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
     // Remote display paths are never interpreted on Main.
-    if (folder.kind === 'remote') throw new FolderError('remote_actions_unsupported', 'User actions currently require a registered local folder.', 409)
+    if (folder.kind === 'remote' || folder.kind === 'layerfs') throw new FolderError('remote_actions_unsupported', 'User actions currently require a registered local folder.', 409)
     return this.folders.requireAvailable(id)
   }
   #mutate<T>(fn: (next: UserAction[]) => Promise<T> | T): Promise<T> {

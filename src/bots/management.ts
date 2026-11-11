@@ -93,7 +93,7 @@ export function botPackageTool(options: Options): Tool {
       let frozen: ReturnType<BotDeployments['freeze']>, gitSource = false
       try {
         const folder = await options.folders.requireAvailable(input.folderId)
-        if (folder.kind === 'remote') throw new Error('BOT source must be a registered local Folder; no Main fallback is permitted.')
+        if (folder.kind === 'remote' || folder.kind === 'layerfs') throw new Error('BOT source must be a registered local Folder; no Main fallback is permitted.')
         let path = folder.path
         if (lstatSync(path).isSymbolicLink()) throw new Error('BOT source symlinks are forbidden.')
         for (const part of parts) {path=join(path,part);if(lstatSync(path).isSymbolicLink())throw new Error('BOT source symlinks are forbidden.')}

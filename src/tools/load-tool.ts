@@ -914,6 +914,11 @@ export class ImportTool implements Tool {
     return undefined
   }
 
+  canInvokeFromLayerFS(toolName: string): boolean {
+    const entry = this.builtins.get(toolName)
+    return !!entry && this.loadable.get(toolName) === entry && !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsLayerFSWorkdir === true
+  }
+
   canInvokeFromRemote(toolName: string): boolean {
     const entry = this.loadable.get(toolName)
     return (toolName === 'session' || isWorkTool(toolName)) && entry !== undefined && entry === this.builtins.get(toolName) &&

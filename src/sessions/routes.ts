@@ -242,6 +242,7 @@ export function sessionsApiPlugin(
         const key = c.req.param('key')!
         const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
         if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
+      if (base.locality === 'layerfs') return c.json({ error: 'layerfs_unsupported', message: 'Session UI file and Git routes do not support LayerFS mounts; no Main fallback.' }, 501)
         if (base.locality === 'remote') {
           if (!sessions.remoteExecutor) return operation === 'status'
             ? c.json({ available: false, reason: 'remote_unsupported', entries: [] })
@@ -818,6 +819,7 @@ export function sessionsApiPlugin(
       if (!query) return c.json({ error: 'invalid_query' }, 400)
       const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
       if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
+      if (base.locality === 'layerfs') return c.json({ error: 'layerfs_unsupported', message: 'Session UI file and Git routes do not support LayerFS mounts; no Main fallback.' }, 501)
       if (base.locality === 'local') return serveLocalFileSearch(c, base.path)
       if (!sessions.remoteExecutor) return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
       try {
@@ -850,6 +852,7 @@ export function sessionsApiPlugin(
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
+      if (base.locality === 'layerfs') return c.json({ error: 'layerfs_unsupported', message: 'Session UI file routes do not support LayerFS mounts; no Main fallback.' }, 501)
       if (base.locality === 'remote') {
         const path = normalizeRemoteWorkspacePath(relPath)
         if (!path) return c.json({ error: 'invalid_path' }, 400)
@@ -921,6 +924,7 @@ export function sessionsApiPlugin(
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
+      if (base.locality === 'layerfs') return c.json({ error: 'layerfs_unsupported', message: 'Session UI file routes do not support LayerFS mounts; no Main fallback.' }, 501)
       if (base.locality === 'remote') {
         return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
       }
@@ -951,6 +955,7 @@ export function sessionsApiPlugin(
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
+      if (base.locality === 'layerfs') return c.json({ error: 'layerfs_unsupported', message: 'Session UI file routes do not support LayerFS mounts; no Main fallback.' }, 501)
       if (base.locality === 'remote') {
         return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
       }
@@ -971,6 +976,7 @@ export function sessionsApiPlugin(
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
+      if (base.locality === 'layerfs') return c.json({ error: 'layerfs_unsupported', message: 'Session UI file routes do not support LayerFS mounts; no Main fallback.' }, 501)
       if (base.locality === 'remote') {
         if (encoding !== 'auto' && encoding !== 'utf-8') return c.json({ error: 'remote_encoding_unavailable' }, 501)
         const path = normalizeRemoteWorkspacePath(relPath)

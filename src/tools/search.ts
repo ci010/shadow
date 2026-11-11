@@ -1,4 +1,7 @@
+import { executeRemoteFilesystemSearch } from '../execution/remote-filesystem-client.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
+import { layerfsRoute } from './layerfs-route.ts'
+import { isCompletedToolFailure, toolResultText } from './tool.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { isAbsolute } from 'node:path'
@@ -23,6 +26,7 @@ function parseSpace(space: string): { scheme: string; qualifier: string } {
 export class SearchTool implements Tool {
   readonly name = 'search'
   readonly supportsRemoteWorkdir = true
+  readonly supportsLayerFSWorkdir = true
   readonly readonly = true
   readonly description = 'Search names with glob, content with grep, or the web. Virtual searches return read paths without activating skills, connecting services or launching browsers.'
   readonly parameters: ToolParameters = {
@@ -129,10 +133,22 @@ export class SearchTool implements Tool {
     }
     const virtualPath = ['grep', 'glob'].includes(scheme) && root && isVirtualPath(root) ? root
       : scheme === 'glob' && !root && isVirtualPath(query) ? query.split(/[\\/]/)[0] : undefined
+    if (scheme !== 'web' && !virtualPath) {
+      const layerResult = await layerfsRoute('search', { ...args, handler: scheme, path: root, include }, context, this.workspace)
+      if (layerResult !== undefined) {
+        if (isCompletedToolFailure(layerResult)) throw new Error(toolResultText(layerResult))
+        return toolResultText(layerResult)
+      }
+    }
     // Web search uses the configured Main provider, independently of file locality.
-    if (context.remoteWorkdir && (args.workspace !== undefined || args.folder !== undefined)) return 'Error: remote filesystem glob/grep search is not supported by this executor; no Main ripgrep or filesystem fallback is allowed.'
-    if (context.remoteWorkdir && scheme !== 'web' && (!virtualPath || !/^v:sessions(?:[\\/]|$)/.test(virtualPath))) {
-      return 'Error: only v:sessions searches are supported with a remote workdir.'
+    if (context.remoteWorkdir && scheme !== 'web') {
+      if (virtualPath && !/^v:sessions(?:[\\/]|$)/.test(virtualPath)) return 'Error: only v:sessions searches of virtual paths are supported with a remote workdir.'
+      if (!virtualPath) return executeRemoteFilesystemSearch({
+        ...context.remoteWorkdir,
+        sessionId: context.sessionId,
+        turnId: context.messageId,
+        signal: context.signal,
+      }, root ?? '.', { handler: scheme as 'glob' | 'grep', query, include, limit: args.limit as number | undefined, offset: args.offset as number | undefined })
     }
 
     switch (scheme) {

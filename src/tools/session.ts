@@ -5,6 +5,7 @@ import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 
 export class SessionTool implements Tool {
   readonly name = 'session'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description = 'Create durable peer conversations and register folders. Read/write v:sessions/self.json for your own metadata/completion. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.'
   readonly parameters: ToolParameters = {
@@ -39,6 +40,7 @@ export class SessionTool implements Tool {
     if (action === 'create') return JSON.stringify(await this.topics.create(request, context.sessionId, context.signal))
     if (action === 'update') return JSON.stringify(await this.topics.update(request, context.sessionId))
     if (action === 'register_folder') {
+      if (context.layerfsWorkdir) throw new Error('LayerFS sessions cannot register sandbox paths as host folders. Use an existing registered Workspace or explicit LayerFS creation.')
       if (context.remoteWorkdir && request.nodeId === undefined) throw new Error('A remote session cannot register its display path on Main. Use a Main-local Project session to register a Main-local folder or select an existing remote capability.')
       if (Object.keys(request).some(key => key !== 'path' && key !== 'description' && key !== 'nodeId')) throw new TypeError('register_folder accepts only path, description and nodeId.')
       return JSON.stringify(await this.topics.registerFolder(request.path, context.signal, request.description as string | undefined, request.nodeId))

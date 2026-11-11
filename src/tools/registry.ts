@@ -137,6 +137,9 @@ export class Tools {
     }
     const executionDenied = (context.tools?.getExecutionPolicy() ?? this.getExecutionPolicy())?.(tool, args, context)
     if (executionDenied) return executionDenied
+    if (context.layerfsWorkdir && tool.supportsLayerFSWorkdir !== true) {
+      return `Error: tool "${name}" does not support LayerFS workdirs; no Main fallback is allowed`
+    }
     if (context.remoteWorkdir && tool.supportsRemoteWorkdir !== true) {
       return `Error: tool "${name}" does not support remote workdirs`
     }

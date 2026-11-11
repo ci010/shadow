@@ -69,7 +69,8 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
     await assert.rejects(read.execute({ folder: 'child', path: 'photo.png' }, context), /Remote image reads/)
     await assert.rejects(read.execute({ folder: 'foreign', path: 'note.txt' }, context), /Unknown or ambiguous/)
     assert.equal(calls, before)
-    assert.match(await new SearchTool(main, undefined, undefined, false).execute({ folder: 'child', handler: 'grep', query: 'x' }, context), /remote filesystem glob\/grep search is not supported/)
+    assert.equal(await new SearchTool(main, undefined, undefined, false).execute({ folder: 'child', handler: 'grep', query: 'x' }, context), 'No matches found')
+    assert.equal(calls, before + 1)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

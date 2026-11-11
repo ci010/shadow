@@ -25,6 +25,7 @@ const coordinationSchema = z.object({
  */
 export class MessageTool implements Tool {
   readonly name = 'message'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description = 'Send concise actionable context to an agent in this Project: sessionId + content normally suffice. Relevant context enters its next safe step, without interrupting tools. Your running task accepts corrections to its existing assignment, not another task. Use delivery=queue for subsequent work. Routine progress/acknowledgements archive. Admission is not application or ownership transfer; wait for completion or confirmed cancellation before taking over its files.'
   readonly parameters: ToolParameters = {

@@ -2,7 +2,7 @@ import type { ExecutionContext } from './context.ts'
 import { ToolNoEffectError, ToolOutcomeUnknownError } from './tool.ts'
 
 export const executionTargetParameters = {
-  workspace: { type: 'string' as const, description: 'For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch.' },
+  workspace: { type: 'string' as const, description: 'Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID.' },
 }
 
 /** Hidden compatibility for saved calls; never normalize third-party tool arguments. */
@@ -50,6 +50,7 @@ export async function executionTargetContext(
     if (typeof args.workspace !== 'string' || !args.workspace.trim()) {
       throw new ToolNoEffectError('workspace must be a nonempty registered Project Workspace identifier, not a path.')
     }
+    if (args.workspace.startsWith('layerfs:')) return { ...context, cwd: undefined, remoteWorkdir: undefined, layerfsWorkdir: { workspace: args.workspace }, fileChangeTarget: undefined }
     if (!context.resolveToolTarget) throw new ToolNoEffectError('Workspace targeting is unavailable in this execution context; no fallback is allowed.')
     try { target = await context.resolveToolTarget(args.workspace, operation) }
     catch (error) {
@@ -58,5 +59,5 @@ export async function executionTargetContext(
     }
   }
   context.signal.throwIfAborted()
-  return { ...context, cwd: target.cwd, remoteWorkdir: target.remoteWorkdir, fileChangeTarget: target.fileChangeTarget }
+  return { ...context, cwd: target.cwd, remoteWorkdir: target.remoteWorkdir, layerfsWorkdir: target.layerfsWorkdir, fileChangeTarget: target.fileChangeTarget }
 }

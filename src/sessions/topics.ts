@@ -187,7 +187,7 @@ export class TopicService {
           topicRequestHash, createdBySessionId, mode: 'session', parentSessionId: null,
           agentType: parsed.agentType, initiativeId: parsed.initiativeId,
           folderId: folder?.id,
-          workdir: folder ? folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
+          workdir: folder ? folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
           focus, setupInstructions,
           ...(Object.keys(inference).length ? { config: inference } : {}),
           workPolicy,

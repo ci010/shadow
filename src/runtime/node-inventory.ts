@@ -43,7 +43,7 @@ export function mainLocalNodeInventory(options: {
     implementationVersion: options.implementationVersion,
     executionProtocol: 'compatible',
     support: { operations: options.shellAvailable ? ['process.execute'] : [] },
-    workdirs: options.folders.list().filter(folder => folder.kind !== 'remote').map(folder => {
+    workdirs: options.folders.list().filter(folder => folder.kind !== 'remote' && folder.kind !== 'layerfs').map(folder => {
       const ref = localFolderWorkdirRef(folder.id)
       return { version: 2, nodeId: options.localNodeId, workdirId: ref.workdirId, displayName: folder.name,
         support: { operations: ['filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', ...(options.shellAvailable ? ['workdir.process.execute'] : [])] },

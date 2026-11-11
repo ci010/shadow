@@ -337,6 +337,7 @@ export abstract class BaseSession {
       if (!current.available) throw new Error(`Session workdir unavailable: ${current.reason}`)
       executionContext = { ...executionContext,
         folderId: this.state.folderId,
+        layerfsWorkdir: current.locality === 'layerfs' ? { workspace: current.workspace } : undefined,
         cwd: current.locality === 'local' ? current.path : undefined,
         remoteWorkdir: current.locality === 'remote' ? {
           nodeId: current.workdir.nodeId, workdirId: current.workdir.workdirId,
@@ -911,6 +912,7 @@ export abstract class BaseSession {
           await this.tools.executionTargetFolder(folder, signal), operation,
         ),
         remoteWorkdir,
+        layerfsWorkdir: locations.workdir.locality === 'layerfs' ? { workspace: locations.workdir.workspace } : undefined,
         tools: this.tools,
         signal,
         defaultExecShell: this.state.config?.defaultShell,

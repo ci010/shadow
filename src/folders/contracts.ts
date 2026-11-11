@@ -22,7 +22,14 @@ export interface RemoteFolderRecord extends FolderBase {
   identity: WorkdirIdentityV1
 }
 
-export type FolderRecord = LocalFolderRecord | RemoteFolderRecord
+/** Non-host resource. path is sandbox display metadata, never a Main path. */
+export interface LayerFSFolderRecord extends FolderBase {
+  kind: 'layerfs'
+  mount: string
+  workdir: WorkdirRefV2
+}
+
+export type FolderRecord = LocalFolderRecord | RemoteFolderRecord | LayerFSFolderRecord
 
 export interface CloneOperation {
   id: string

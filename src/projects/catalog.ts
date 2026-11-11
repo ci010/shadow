@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { appDataPaths } from '../utils/data-paths.ts'
 import { writePrivateFile } from '../config/store.ts'
-import type { FolderRecord, RemoteFolderRecord } from '../folders/contracts.ts'
+import type { FolderRecord, LayerFSFolderRecord, RemoteFolderRecord } from '../folders/contracts.ts'
 import { parseWorkdirIdentity, workdirIdentitiesOverlap, type WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
 import { isClusterIdentifier } from '../cluster/contracts.ts'
 import { parseWorkdirRef, type WorkdirRefV2 } from '../sessions/locality.ts'
@@ -15,7 +15,7 @@ function onlyFields(value: object, fields: readonly string[]): boolean {
   return !Array.isArray(value) && Object.keys(value).every(key => fields.includes(key))
 }
 
-const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity']
+const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity', 'mount']
 const claimFields = ['projectId', 'workdir', 'identity']
 
 interface CatalogData {
@@ -44,13 +44,22 @@ export interface RemoteOwnershipClaim {
 
 function remoteRef(value: unknown): WorkdirRefV2 {
   const ref = parseWorkdirRef(value)
-  if (!ref || ref.nodeId === 'local' || !isClusterIdentifier(ref.nodeId) || !isClusterIdentifier(ref.workdirId)) {
+  if (!ref || ref.nodeId === 'local' || ref.nodeId === 'layerfs' || !isClusterIdentifier(ref.nodeId) || !isClusterIdentifier(ref.workdirId)) {
     throw new Error('Invalid remote folder reference')
   }
   if (isManagedWorkdir(ref.workdirId)) {
     throw new FolderError('managed_workdir_not_folder', 'Managed session workdirs cannot be registered as project folders.')
   }
   return ref
+}
+
+function validateLayerFSFolder(folder: LayerFSFolderRecord): void {
+  const ref = parseWorkdirRef(folder.workdir)
+  if (typeof folder.mount !== 'string' || !folder.mount.startsWith('layerfs:') || folder.mount.length > 1024 ||
+    !ref || ref.nodeId !== 'layerfs' || ref.workdirId !== folder.mount ||
+    typeof folder.path !== 'string' || !/^\/workspaces\/\d+$/.test(folder.path) || 'identity' in folder) {
+    throw new Error('Invalid LayerFS folder: non-host mount identity required')
+  }
 }
 
 function name(value: unknown): string {
@@ -125,13 +134,15 @@ export class ProjectCatalog {
       for (const folder of data.folders) {
         if (!folder || !onlyFields(folder, folderFields) || !ids.has(folder.projectId) || typeof folder.id !== 'string' ||
           folderIds.has(folder.id) || typeof folder.path !== 'string' ||
-          (folder.kind !== 'remote' && (!isAbsolute(folder.path) || (folder.kind !== undefined && folder.kind !== 'local'))) ||
+          (folder.kind !== 'remote' && folder.kind !== 'layerfs' && (!isAbsolute(folder.path) || (folder.kind !== undefined && folder.kind !== 'local'))) ||
           (folder.description !== undefined && typeof folder.description !== 'string') ||
           typeof folder.name !== 'string' || typeof folder.createdAt !== 'string') throw new Error('Invalid project folders')
-        if (folder.kind === 'remote') {
+        if (folder.kind === 'layerfs') {
+          validateLayerFSFolder(folder)
+        } else if (folder.kind === 'remote') {
           folder.workdir = remoteRef(folder.workdir)
           parseWorkdirIdentity(folder.identity)
-        } else if (folder.workdir !== undefined || folder.identity !== undefined) {
+        } else if (folder.workdir !== undefined || folder.identity !== undefined || folder.mount !== undefined) {
           throw new Error('Local folders cannot contain remote workdir or identity fields')
         }
         folderIds.add(folder.id)
@@ -156,11 +167,13 @@ export class ProjectCatalog {
           } else {
             if ((record.description !== undefined && typeof record.description !== 'string') ||
               typeof record.id !== 'string' || typeof record.path !== 'string' ||
-              (record.kind !== 'remote' && !isAbsolute(record.path))) throw new Error('Invalid retired folder')
-            if (record.kind === 'remote') {
+              (record.kind !== 'remote' && record.kind !== 'layerfs' && !isAbsolute(record.path))) throw new Error('Invalid retired folder')
+            if (record.kind === 'layerfs') {
+              validateLayerFSFolder(record)
+            } else if (record.kind === 'remote') {
               record.workdir = remoteRef(record.workdir)
               parseWorkdirIdentity(record.identity)
-            } else if (record.workdir !== undefined || record.identity !== undefined) {
+            } else if (record.workdir !== undefined || record.identity !== undefined || record.mount !== undefined || record.kind !== undefined && record.kind !== 'local') {
               throw new Error('Retired local folders cannot contain remote workdir or identity fields')
             }
             if (folderIds.has(record.id)) throw new Error('A retired folder cannot be active')
@@ -356,7 +369,7 @@ export class ProjectCatalog {
 
   isRetiredWorkdir(projectId: string, ref: WorkdirRefV2): boolean {
     return (this.#current().retiredFolders ?? []).some(folder => folder.projectId === projectId &&
-      (folder.kind === 'remote'
+      (folder.kind === 'remote' || folder.kind === 'layerfs'
         ? folder.workdir.nodeId === ref.nodeId && folder.workdir.workdirId === ref.workdirId
         : ref.nodeId === 'local' && ref.workdirId === `local-project-v1:${folder.id}`)) ||
       (this.#current().retiredRemoteClaims ?? []).some(claim => claim.projectId === projectId &&
@@ -380,7 +393,10 @@ export class ProjectCatalog {
       if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
       const relatedClaims: RemoteOwnershipClaim[] = []
       let conflict: boolean
-      if (folder.kind === 'remote') {
+      if (folder.kind === 'layerfs') {
+        if (targetProjectId !== undefined) throw new FolderError('layerfs_project_bound', 'LayerFS mounts cannot move between Projects.', 409)
+        conflict = false
+      } else if (folder.kind === 'remote') {
         this.#assertSessionOwnershipAvailable()
         const claims = this.remoteClaims(folder.workdir.nodeId)
         if (claims.some(claim => !claim.identity)) {
@@ -396,7 +412,7 @@ export class ProjectCatalog {
         if (homes.some(home => overlaps(home, canonical))) {
           throw new FolderError('folder_overlaps_home', 'Project Home and host data cannot be removed or moved as a registered folder.', 409)
         }
-        conflict = current.folders.some(item => item.id !== id && item.kind !== 'remote' &&
+        conflict = current.folders.some(item => item.id !== id && item.kind !== 'remote' && item.kind !== 'layerfs' &&
           (overlaps(item.path, folder.path) || overlaps(item.path, canonical)))
         if ([...this.#reservations.values()].some(item => overlaps(item.path, canonical))) {
           throw new FolderError('folder_busy', 'A clone is using this folder. Wait for it to finish or cancel it.', 409)
@@ -435,7 +451,7 @@ export class ProjectCatalog {
   async #assertOwnership(projectId: string, path: string): Promise<void> {
     if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
     if (this.isDeleting(projectId)) throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
-    if ([...this.#current().folders.filter(folder => folder.kind !== 'remote'), ...this.#reservations.values()].some(folder => folder.projectId !== projectId && overlaps(folder.path, path))) {
+    if ([...this.#current().folders.filter(folder => folder.kind !== 'remote' && folder.kind !== 'layerfs'), ...this.#reservations.values()].some(folder => folder.projectId !== projectId && overlaps(folder.path, path))) {
       throw new FolderError('folder_owned_by_another_project', 'This folder overlaps a folder belonging to another project.', 409)
     }
     const homes = [this.hostHome, ...this.reservedHomes]
@@ -461,13 +477,35 @@ export class ProjectCatalog {
       description = folderDescription(description)
       const canonical = await existingDirectory(path)
       await this.#assertOwnership(projectId, canonical)
-      const existing = this.folders(projectId).find(folder => folder.kind !== 'remote' && overlaps(folder.path, canonical) &&
+      const existing = this.folders(projectId).find(folder => folder.kind !== 'remote' && folder.kind !== 'layerfs' && overlaps(folder.path, canonical) &&
         relative(folder.path, canonical) === '')
       if (existing) return existing
       const folder = { projectId, id: randomUUID(), name: basename(canonical) || canonical, path: canonical, ...(description !== undefined ? { description } : {}), createdAt: new Date().toISOString() }
       signal?.throwIfAborted()
       this.#commit({ ...this.#current(), folders: [...this.#current().folders, folder] })
       return { ...folder }
+    })
+  }
+
+  /** Internal Project-service admission only; caller must authorize the current namespace first. */
+  registerLayerFSFolder(projectId: string, mount: string, metadata: { path: string; name?: string }, signal: AbortSignal, description?: string): Promise<LayerFSFolderRecord> {
+    return this.#transaction(() => {
+      signal.throwIfAborted()
+      if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project unavailable.', 409)
+      const folder: LayerFSFolderRecord & { projectId: string } = {
+        projectId, id: randomUUID(), kind: 'layerfs', mount,
+        workdir: { version: 2, nodeId: 'layerfs', workdirId: mount },
+        path: metadata.path, name: metadata.name ?? 'LayerFS workspace', createdAt: new Date().toISOString(),
+        ...(description !== undefined ? { description: folderDescription(description) } : {}),
+      }
+      validateLayerFSFolder(folder)
+      const existing = this.#current().folders.find(item => item.kind === 'layerfs' && item.mount === mount)
+      if (existing) {
+        if (existing.projectId !== projectId) throw new FolderError('layerfs_project_mismatch', 'Mount belongs to another Project.', 409)
+        return structuredClone(existing) as LayerFSFolderRecord
+      }
+      this.#commit({ ...this.#current(), folders: [...this.#current().folders, folder] })
+      return structuredClone(folder)
     })
   }
 

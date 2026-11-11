@@ -82,3 +82,12 @@ async function executeRemoteText(
   }
   return output.join('')
 }
+
+/** Search uses the existing filesystem.read grant and device-side confinement. */
+export function executeRemoteFilesystemSearch(
+  target: RemoteFilesystemTarget,
+  path: string,
+  search: import('./filesystem/search-text.ts').FilesystemSearch,
+): Promise<string> {
+  return executeRemoteFilesystemText(target, 'filesystem.read', { path, search }, 256 * 1024)
+}

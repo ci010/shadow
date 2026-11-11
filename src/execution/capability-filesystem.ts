@@ -1,3 +1,4 @@
+import { parseFilesystemSearch, searchFilesystem, type FilesystemSearch } from './filesystem/search-text.ts'
 import { workdirIdOf } from './workdir-contracts.ts'
 import { isUtf8 } from 'node:buffer'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
@@ -114,6 +115,17 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
       signal.throwIfAborted()
       const info = await stat(target)
       if (args.kind === 'file' && !info.isFile()) throw new CapabilityFilesystemError('file-type-denied', 'Filesystem target must be a regular file')
+      if (args.search !== undefined) {
+        if (!info.isDirectory() && !info.isFile()) throw new CapabilityFilesystemError('file-type-denied', 'Search requires a file or directory')
+        try {
+          const output = await searchFilesystem(target, args.search, signal, await realpath(root))
+          if (Buffer.byteLength(output) > this.#maxReadBytes) throw resultTooLarge('read')
+          return output
+        } catch (error) {
+          if (error instanceof CapabilityFilesystemError || signal.aborted) throw error
+          throw new CapabilityFilesystemError('file-search-unavailable', error instanceof Error ? error.message : 'Remote search failed')
+        }
+      }
       if (args.query !== undefined) {
         if (!info.isDirectory()) throw new CapabilityFilesystemError('file-type-denied', 'File search requires a directory')
         try {
@@ -290,15 +302,20 @@ function pathDenied(): CapabilityFilesystemError {
   )
 }
 
-function parseReadArgs(value: unknown): { path: string; query?: string; within?: string; kind?: 'file' } {
-  const candidate = recordWithKeys(value, ['path', 'query', 'within', 'kind'])
+function parseReadArgs(value: unknown): { path: string; query?: string; within?: string; kind?: 'file'; search?: FilesystemSearch } {
+  const candidate = recordWithKeys(value, ['path', 'query', 'within', 'kind', 'search'])
   if (typeof candidate.path !== 'string' || candidate.path.length === 0) {
     throw invalidArgs()
+  }
+  let search: FilesystemSearch | undefined
+  if (candidate.search !== undefined) {
+    if (candidate.query !== undefined) throw invalidArgs()
+    try { search = parseFilesystemSearch(candidate.search) } catch { throw invalidArgs() }
   }
   if (candidate.query !== undefined && !validFileSearchQuery(candidate.query)) throw invalidArgs()
   if (candidate.kind !== undefined && candidate.kind !== 'file') throw invalidArgs()
   if (candidate.within !== undefined && (typeof candidate.within !== 'string' || !candidate.within)) throw invalidArgs()
-  return { path: candidate.path, ...(candidate.kind === 'file' ? { kind: 'file' as const } : {}), ...(typeof candidate.within === 'string' ? { within: candidate.within } : {}), ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
+  return { path: candidate.path, ...(search ? { search } : {}), ...(candidate.kind === 'file' ? { kind: 'file' as const } : {}), ...(typeof candidate.within === 'string' ? { within: candidate.within } : {}), ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
 }
 
 function parseWriteArgs(value: unknown): {

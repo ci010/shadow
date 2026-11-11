@@ -189,6 +189,7 @@ export class ReadTool implements Tool<ToolResult> {
   private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
   readonly readonly = (args: Record<string, unknown>) => !isSkillRootPath(args.path)
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
@@ -229,9 +230,9 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    context = await executionTargetContext(args, context, 'filesystem.read')
     const layerResult = await layerfsRoute('read', args, context, this.workspace)
     if (layerResult !== undefined) return layerResult
-    context = await executionTargetContext(args, context, 'filesystem.read')
     const raw = String(args.path)
     if (args.encoding !== undefined && !isTextEncoding(args.encoding)) throw new TypeError('Unsupported read encoding.')
     const encoding: TextEncoding = isTextEncoding(args.encoding) ? args.encoding : 'auto'

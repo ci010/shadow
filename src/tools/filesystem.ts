@@ -150,6 +150,7 @@ export function applyReplacementDetailed(
 
 export class WriteTool implements Tool {
   readonly name = 'write'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Write or edit a file. With `match`: find and replace. Creates directories as needed. Returns a short receipt; use view_edit with the returned edit ID for the recorded patch.'
@@ -195,12 +196,12 @@ export class WriteTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    context = await executionTargetContext(args, context, 'filesystem.write')
     const layerResult = await layerfsRoute('write', args, context, this.workspace)
     if (layerResult !== undefined) {
       if (isCompletedToolFailure(layerResult)) throw new Error(toolResultText(layerResult))
       return toolResultText(layerResult)
     }
-    context = await executionTargetContext(args, context, 'filesystem.write')
     context.signal.throwIfAborted()
     const rawPath = String(args.path)
     const virtualPath = isAbsolute(rawPath) ? relative(this.workspace, rawPath) : rawPath

@@ -23,6 +23,7 @@ export function workReceipt(record: WorkRecord) {
 
 export class WorkTool implements Tool {
   readonly name = 'work'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) => ['context', 'list', 'tree'].includes(String(args.action))
   readonly description = 'Shared work notes and Project goal map, never a prerequisite for tools. create associates the current session automatically. link key associates this conversation with existing Work without changing focus or assignment. Current scope is the unique unfinished assignment. Session completion never completes Work. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'

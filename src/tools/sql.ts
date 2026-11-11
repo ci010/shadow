@@ -5,6 +5,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 
 export class SqlTool implements Tool {
   readonly name = 'sql'
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) => {
     try { return args.query === undefined || typeof args.query === 'string' && parseSql(args.query).every(statement => statement.operation === 'SELECT') }

@@ -81,6 +81,7 @@ export interface Tool<Result extends ToolResult = string> {
   /** Trusted implementation policy, never an MCP hint or model argument. Cleanup must enforce resource ownership itself. */
   readonly workAdmission?: (args: Record<string, unknown>) => 'cleanup' | undefined
   /** Explicitly opts the tool into capability-backed remote workspace handling. */
+  readonly supportsLayerFSWorkdir?: boolean
   readonly supportsRemoteWorkdir?: boolean
   /** If true, this tool is opt-in only — hidden unless explicitly listed in allowedTools. */
   readonly optIn?: boolean
