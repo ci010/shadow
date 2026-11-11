@@ -75,7 +75,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
       const { join } = require('node:path');
       app.setPath('userData', ${JSON.stringify(resolve(directory, 'profile'))});
       app.whenReady().then(async () => {
-        const win = new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,contextIsolation:true}});
+        const win = new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});
         win.webContents.on('console-message', event => console.log('renderer:',event.message));
         try {
           await win.loadURL(${JSON.stringify(url)});
@@ -89,9 +89,9 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
             // ResizeObserver + canvas resize can settle after more than one frame,
             // especially in a hidden Windows Electron window. Await the observable
             // size rather than relying on a fixed 80ms delay.
-            for (let attempt=0;attempt<30;attempt++) {
-              await new Promise(r=>setTimeout(r,30));
-              if (await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>Math.abs(window.usageInstance(e).getWidth()-e.clientWidth)<2)')) break;
+            for (let attempt=0;attempt<60;attempt++) {
+              await new Promise(r=>setTimeout(r,50));
+              if (attempt >= 3 && await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>Math.abs(window.usageInstance(e).getWidth()-e.clientWidth)<2)')) break;
             }
             const info = await win.webContents.executeJavaScript(
               '('+(() => {
