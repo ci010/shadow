@@ -464,6 +464,15 @@ activity dots: information blue for active, pending, or call-blocked work;
 amber for replies needed; green for completion; red for failure; and neutral
 ink for ready, inactive, cancelled, or unavailable states. Icon shape and the
 accessible state label carry the distinction as well as color.
+A conversation with persisted failed-turn recovery keeps the red failure icon
+while ready or inactive, including after reload. A new active turn or pending
+reply takes precedence; an intentional stop is not a failure. Delegated activity
+must not hide the foreground failure in the compact status slot.
+Provider-failure recovery names the safe error category and states that the
+request has stopped. A collapsed, keyboard-accessible retry-rules disclosure
+explains bounded automatic retries and ambiguous-outcome safety; it is policy,
+not a claim that those attempts occurred for this request. Keep upstream error
+bodies and credentials out of recovery copy.
 Session IDs have an adjacent copy icon with copied/error feedback; Bot IDs use
 the same control. Copy the complete value even when its display is truncated.
 Keep normal hover dismissal, keyboard entry and square controls.

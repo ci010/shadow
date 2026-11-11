@@ -26,7 +26,7 @@ import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-acti
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'
 
 const props = defineProps<{ stage?: string | null; hasCron?: boolean; hasBackgroundTasks?: boolean; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
-const activity = computed(() => sessionActivity(props.iconOnly && !isWorkingStage(props.stage)
+const activity = computed(() => sessionActivity(props.iconOnly && props.stage !== 'failed' && !isWorkingStage(props.stage)
   ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : props.stage
   : props.stage))
 const delegatedRunning = computed(() => props.iconOnly && !isWorkingStage(props.stage)
