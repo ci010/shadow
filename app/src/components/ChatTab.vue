@@ -325,6 +325,13 @@
             <div>
               <strong>{{ currentRecovery.providerFailure ? t('Model provider failed') : currentRecovery.reason === 'stopped' ? t('Request stopped') : currentRecovery.reason === 'failed' ? t('Request failed') : t('Request interrupted') }}</strong>
               <p v-if="currentRecovery.providerFailure">{{ providerFailureMessage(currentRecovery.providerFailure) }}</p>
+              <template v-if="currentRecovery.providerFailure">
+                <p>{{ t('This request has stopped; no automatic retry is pending. The rules below describe the retry policy, not the attempts made for this request.') }}</p>
+                <details class="provider-retry-details">
+                  <summary>{{ t('Automatic retry rules and safety limits') }}</summary>
+                  <ul><li v-for="rule in providerRetryGuidance()" :key="rule">{{ rule }}</li></ul>
+                </details>
+              </template>
               <p>{{ t('Continue without adding a message.') }}</p>
               <p v-if="currentRecovery.pendingToolCalls">{{ t('Remote shell calls only check the Child\'s saved execution record; a missing result stays unknown.') }}</p>
               <button v-if="currentRecovery.providerFailure" class="provider-settings-button" @click="router.push({ name: 'settings', params: { section: 'providers' } })">{{ t('Open provider settings') }}</button>
@@ -499,7 +506,7 @@ import { captureHistoryScroll, historyPresentationRows, historyRevealRow, usePro
 import { createCommitBottomScroll, firstSessionIndex } from '../chat-render-hotspots'
 import { useRoute, useRouter } from 'vue-router'
 import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
-import { providerFailureMessage } from '../provider-setup.ts'
+import { providerFailureMessage, providerRetryGuidance } from '../provider-setup.ts'
 import DOMPurify from 'dompurify'
 import SessionReferenceMenu from './SessionReferenceMenu.vue'
 import { useMobileResources } from '../mobile-resources.ts'
@@ -3427,6 +3434,11 @@ function resendLastMessage() {
 .resume-bar { flex-wrap: wrap; }
 .resume-bar > div { flex: 1; min-width: min(100%, 240px); overflow-wrap: anywhere; }
 .resume-bar.provider-failure { border-color: var(--c-error); }
+.provider-retry-details { margin-top: 6px; font-size: 12px; line-height: 1.5; color: var(--c-text-secondary); }
+.provider-retry-details summary { display: list-item; align-content: center; min-height: 44px; cursor: pointer; color: var(--c-text); }
+.provider-retry-details summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.provider-retry-details ul { margin: 0; padding: 0 0 0 20px; max-height: 220px; overflow-y: auto; }
+.provider-retry-details li + li { margin-top: 6px; }
 .provider-settings-button { margin-top: 8px; padding: 6px 10px; min-height: 36px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text); cursor: pointer; }
 .provider-settings-button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .resume-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 12px; line-height: 1.5; }

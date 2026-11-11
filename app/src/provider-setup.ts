@@ -72,6 +72,18 @@ export function providerFailureMessage(kind: string): string {
   }
 }
 
+/** Policy, not an attempt receipt: recovery stores a safe category, not raw upstream errors. */
+export function providerRetryGuidance(): string[] {
+  return [
+    t('Copilot 401: refresh the cached API key and retry once. Persistent authentication or access errors require checking the account and permissions.'),
+    t('Connection failure before the request could be processed: retry up to 5 times with exponential backoff and jitter.'),
+    t('Temporary 429 rate limit: honor Retry-After when available, with up to 5 retries and a 2-minute waiting budget. Quota or billing limits are not automatically retried.'),
+    t('Recognized Copilot large-image 408 timeout: try up to 3 times. This special rule does not apply to every timeout.'),
+    t('Other server errors, unsupported models or invalid parameters: stop for inspection rather than retrying every error code.'),
+    t('If a request may already have been processed or its response was interrupted, it is not automatically replayed. It may have been billed. Inspect existing work before continuing; unfinished tools may repeat side effects.'),
+  ]
+}
+
 export function copilotFailureMessage(code: string, stage?: string, httpStatus?: number): string {
   if (code === 'network' && typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus <= 599) return t('Authentication failed at {stage} with HTTP {status}. The server returned an error; this is not a connection timeout.', { stage: stage ?? 'authentication', status: httpStatus })
   if (code === 'denied' && stage === 'copilot_access') return t('GitHub authorization succeeded, but the Copilot access check was rejected. Check the selected account host, license, SSO and organization policy.')

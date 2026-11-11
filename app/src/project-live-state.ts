@@ -6,7 +6,7 @@ import { shallowReactive, shallowReadonly } from 'vue'
 import { hostBase, projectBase } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { createConditionalProjectJson, createProjectsClient, projectJson } from './projects.ts'
-import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages } from './session-activity.ts'
+import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages, recoveredSessionStage } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../../src/sessions/activity-read-model.ts'
@@ -127,7 +127,7 @@ export function createProjectLiveState(
     let overlay = new Map<string, SessionActivityReadModel>()
     function applyActivity(value: Activity, id: string, model: SessionActivityReadModel): Activity {
       if (!Object.hasOwn(value.stages, id)) return value
-      const next = { stages: { ...value.stages, [id]: model.waitingForCall ? 'waiting-for-call' as const : model.stage },
+      const next = { stages: { ...value.stages, [id]: model.waitingForCall ? 'waiting-for-call' as const : recoveredSessionStage(model.stage, model.recovery) },
         activeRequestIds: { ...value.activeRequestIds }, recoveries: { ...value.recoveries } }
       delete next.activeRequestIds[id]
       delete next.recoveries[id]

@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
   parseConfiguredProviders, parseDeviceLogin, parseProviderSetup, type DeviceLogin, type LoginView,
-  copilotFailureMessage, providerFailureMessage,
+  copilotFailureMessage, providerFailureMessage, providerRetryGuidance,
 } from './provider-setup.ts'
 
 const pending: DeviceLogin = {
@@ -396,4 +396,29 @@ test('provider recovery copy distinguishes missing, expired and denied access fr
   assert.match(providerFailureMessage('authorization'), /Signing in again may not resolve/)
   assert.match(providerFailureMessage('authentication'), /only if.*invalid or expired/)
   assert.match(providerFailureMessage('unknown-old-kind'), /could not complete/)
+})
+
+
+test('error recovery explains bounded retries and ambiguous-outcome safety in both languages', async () => {
+  const { i18n } = await import('./i18n.ts')
+  const prior = i18n.global.locale.value
+  try {
+    i18n.global.locale.value = 'en'
+    const rules = providerRetryGuidance()
+    assert.equal(rules.length, 6)
+    assert.match(rules[0]!, /401.*retry once/)
+    assert.match(rules[1]!, /up to 5.*exponential backoff/)
+    assert.match(rules[2]!, /429.*Retry-After.*2-minute/)
+    assert.match(rules[2]!, /Quota or billing.*not automatically retried/)
+    assert.match(rules[3]!, /408.*up to 3.*not apply to every timeout/)
+    assert.match(rules[4]!, /unsupported models or invalid parameters/)
+    assert.match(rules[5]!, /not automatically replayed.*billed.*side effects/)
+    i18n.global.locale.value = 'zh-CN'
+    const translated = providerRetryGuidance()
+    assert.equal(translated.length, rules.length)
+    translated.forEach((rule, index) => {
+      assert.notEqual(rule, rules[index])
+      assert.match(rule, /[\u4e00-\u9fff]/)
+    })
+  } finally { i18n.global.locale.value = prior }
 })

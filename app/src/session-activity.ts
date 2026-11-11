@@ -52,6 +52,12 @@ export function shouldRefreshReadonlyHistory(
   return stage === 'llm' || stage === 'tool' || stage !== previous || elapsedMs >= 5000
 }
 
+/** Recovery is persisted separately from runtime activity. Keep a stopped failure
+ * visible after eviction/reload, without overriding a new turn or a pending reply. */
+export function recoveredSessionStage(stage: SessionStage, recovery?: SessionRecovery | null): SessionStage {
+  return (stage === 'idle' || stage === 'inactive') && recovery?.reason === 'failed' ? 'failed' : stage
+}
+
 export function parseSessionStages(value: unknown): Record<string, SessionStage> {
   if (typeof value !== 'object' || value === null || !('stages' in value)
     || typeof value.stages !== 'object' || value.stages === null || Array.isArray(value.stages)) {
@@ -62,13 +68,14 @@ export function parseSessionStages(value: unknown): Record<string, SessionStage>
     || Array.isArray(waitingForCalls) || Object.values(waitingForCalls).some(waiting => typeof waiting !== 'boolean'))) {
     throw new Error(t('Session activity is unavailable.'))
   }
+  const recoveries = parseSessionRecoveries(value)
   const result: Record<string, SessionStage> = {}
   for (const [id, stage] of Object.entries(value.stages)) {
     if (!isWorkingStage(stage) && stage !== 'idle' && stage !== 'inactive' && stage !== 'pending'
       && stage !== 'completed' && stage !== 'failed' && stage !== 'cancelled') throw new Error(t('Session activity is unavailable.'))
     result[id] = stage === 'waiting' && waitingForCalls
       && Object.prototype.hasOwnProperty.call(waitingForCalls, id)
-      && (waitingForCalls as Record<string, boolean>)[id] ? 'waiting-for-call' : stage
+      && (waitingForCalls as Record<string, boolean>)[id] ? 'waiting-for-call' : recoveredSessionStage(stage, recoveries[id])
   }
   return result
 }

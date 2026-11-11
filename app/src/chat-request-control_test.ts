@@ -263,6 +263,8 @@ test('Continue is prominent above the composer, gated by persisted recovery rath
   assert.match(source, /Continue without adding a message\./)
   assert.match(source, /v-if="currentRecovery.pendingToolCalls"[\s\S]*?Remote shell calls only check/)
   assert.match(source, /providerFailureMessage\(currentRecovery.providerFailure\)/)
+  assert.match(source, /This request has stopped; no automatic retry is pending/)
+  assert.match(source, /<details class="provider-retry-details">[\s\S]*?<summary>\{\{ t\('Automatic retry rules and safety limits'\) \}\}<\/summary>[\s\S]*?providerRetryGuidance\(\)/)
   assert.match(source, /Open provider settings/)
   assert.match(source, /type="checkbox" :checked="acknowledgedRecoveryId === currentRecovery\.id"/)
   assert.match(source, /acknowledgedRecoveryId !== currentRecovery\.id/)

@@ -650,3 +650,28 @@ test('scoped legacy ended notifications revalidate logical summaries through the
   f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
   await flush()
 })
+
+
+test('provider failures stay visible across HTTP and live updates, and clear on a new turn', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a')
+  await f.tick()
+  const recovery = { id: 'failed-turn', reason: 'failed', providerFailure: 'request' }
+  f.requests[0].finish(graph('One'))
+  f.requests[1].finish({ stages: { 'web:one': 'inactive' }, recoveries: { 'web:one': recovery } })
+  await flush()
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'failed')
+  const send = (activity: unknown) => f.event(activityTopic, { event: 'activity', sessionId: 'web:one', activity })
+  send(model('idle', { recovery }))
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'failed')
+  send(model('inactive', { recovery }))
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'failed')
+  send(model('llm', { activeRequestId: 'next-turn' }))
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'llm')
+  assert.deepEqual(lease.activity.state.value?.recoveries, {})
+  send(model('idle'))
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'idle')
+  send(model('inactive', { recovery: { id: 'stop', reason: 'stopped' } }))
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'inactive')
+  lease.release()
+})

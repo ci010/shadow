@@ -100,3 +100,18 @@ test('rate-limit waiting remains cancellable working status without spinning or 
   assert.deepEqual(parseSessionStages({ stages }), stages)
   assert.deepEqual(displayedSessionStages(stages, 'chat', true, 'llm'), stages)
 })
+
+
+test('failed recovery replaces resting icons but never active work or intentional stops', () => {
+  const recovery = { id: 'turn', reason: 'failed', providerFailure: 'request' }
+  for (const stage of ['idle', 'inactive']) {
+    assert.deepEqual(parseSessionStages({ stages: { chat: stage }, recoveries: { chat: recovery } }), { chat: 'failed' })
+    for (const reason of ['stopped', 'interrupted']) {
+      assert.deepEqual(parseSessionStages({ stages: { chat: stage }, recoveries: { chat: { id: 'turn', reason } } }), { chat: stage })
+    }
+  }
+  for (const stage of ['llm', 'tool', 'waiting', 'rate-limit', 'completed', 'cancelled']) {
+    assert.equal(parseSessionStages({ stages: { chat: stage }, recoveries: { chat: recovery } }).chat, stage)
+  }
+  assert.equal(parseSessionStages({ stages: { chat: 'inactive' }, recoveries: {} }).chat, 'inactive')
+})
