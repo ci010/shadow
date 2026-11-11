@@ -1,6 +1,7 @@
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
+import { createSummaryResponder } from './summary-delta.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
@@ -200,6 +201,7 @@ export function sessionsApiPlugin(
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
   } = {},
 ): GatewayPlugin {
+  const summaryResponse = createSummaryResponder()
   return (app: Hono) => {
     const authorizeOwnerQuestion: Parameters<Hono['use']>[1] = async (c, next) => {
       if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && sessions?.yields.get(c.req.param('key') ?? '')?.ownerOnly &&
@@ -407,7 +409,7 @@ export function sessionsApiPlugin(
             Object.assign(row, { contextParentSessionId: owner.id })
           }
         }
-        return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions })
+        return summaryResponse(c, sessions.projectId, { sessions: enrichedSessions })
       }
       return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions, nodes,
         ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),

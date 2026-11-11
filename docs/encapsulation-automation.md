@@ -302,3 +302,62 @@ establishing the actually loaded build and admitted run window.
 Final fourth-pass `pnpm typecheck` passed backend/scripts, A2A bridge, desktop and
 Vue; scoped `git diff --check` passed. Existing concurrent edits were preserved.
 No commit, push, restart, production knowledge write or ledger mutation occurred.
+
+## Fifth pass: actionable host size feedback before another rewrite (2026-11-11)
+
+The reported production `event-provider-boundary-audit` attempt at
+`v:sessions/~23df2f84966aad3e/c/17.1` eventually patched and completed its
+receipt after three oversized whole saves. This is parent-supplied evidence that
+patch recovery works, not evidence that the model chooses it early. The reported
+12:15 baseline was 63 batches (31 no_change, 22 applied, 10 pending); this local
+change has not run in that production window.
+
+The minimal change is host feedback, not a new stateful write prohibition:
+- `learned_skill read` now supplies `maintenance.headroom` (8000 minus trimmed
+  current length), `preferredAction` (`patch` at >=7200, otherwise
+  `save_or_patch`) and correction-first guidance. This recommendation does not
+  reject a legitimate complete replacement, including one above the 7200 target.
+- An oversized save, including a patch whose resulting complete lesson is too
+  large, retains a Zod `too_big` failure but now reports exact trimmed
+  `contentLength`, `maxLength` and `overBy` in UTF-16 code units. The first
+  rejection explicitly directs the next maintenance write to an exact correction
+  patch or one genuinely shortened complete consolidation, deferring optional
+  expansion. It identifies unsaved scope/partial as the honest stop path.
+- Read/check still cannot clear a failed write; only a verified same-name write
+  can recover it. The failure occurs before edit-store save/artifact recording.
+  The existing paired-call audit and receipt validation remain authoritative.
+
+This deliberately avoids a per-name retry ban, forcing patch-only maintenance,
+raising limits, automatic deletion or inventing a required output. **The host
+ensures accurate feedback and rejects oversize content; choosing the advised
+next action remains model behavior.** It does not stop generation of repeated
+bad arguments or guarantee saving before the receipt boundary. Existing hard
+work/receipt budgets remain the backstop. Evaluate actual post-deployment calls,
+not prompt presence, before claiming fewer wasted rewrites.
+
+Local verification: five focused files (`pipelines`, `batch-isolation`,
+`read-coverage`, `skill-edit`, `learning-finish`) passed 53/53; `pnpm typecheck`
+passed backend/scripts, A2A bridge, desktop and Vue. Extended real edit-store
+coverage checks near-limit headroom/action hints, first and repeated failed
+writes, exact trim/emoji lengths, unchanged stored revision/no artifacts, then
+an accepted shorter full replacement and receipt. Existing audit cases retain
+read/check/different-name non-recovery and same-name save/patch recovery. The
+first development run failed because a Zod-v4-style error callback was ignored
+by this repository's Zod v3; replaced it with a typed `superRefine` issue and
+reran both checks successfully. No dependency or limit was changed.
+
+No production skill/memory read or write, `/learn`, ledger edit, recovery retry,
+commit, push, restart or deployment was performed. In particular the reported
+parked `7ba14e0b` (ten attempts), `6838ed78` (three), and `cc71d395` (three)
+remain outside this local change's recovery scope. The obsolete independent
+Grant guidance in `mixed-version-execution-gate-audit` has **not** been corrected
+by this work. Do not equate feedback deployment with backlog recovery. Any
+later authorized maintenance must reread the current revision, save the actual
+correction and verify its receipt; the bounded manual path and targeting limits
+above still apply.
+
+After parent review, the durable parent owns finite +24h/+48h read-only checks:
+record the loaded build and admitted window, same-name oversized attempts before
+first correction, actual saved revision/discovery/receipt, unsaved corrections,
+remaining parked batches and budget consumption. Without deployment report
+baseline only; do not retry parked batches or mutate knowledge during monitoring.

@@ -145,3 +145,100 @@ test('three deferrals park unchanged automatic retries durably, retaining manual
     assert.deepEqual(ledger.batch(batch.id).attempts, ['attempt-0', 'attempt-1', 'attempt-2'])
   })
 })
+
+const candidate = {
+  path: 'topics/scoped-requirement.md', correction: 'Retain the scoped requirement, not implementation acceptance.',
+  action: 'Read current Wiki and merge only missing supported constraints.', conditions: 'May already be superseded.',
+  evidence: [{ sessionId: 'web:source', physicalId: 'web:source-0', offset: 0, end: 1 }],
+}
+
+test('first structured candidate on final regular attempt gets one cooldown-bound continuation, fair to fresh sources', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
+  await withTempWorkspace(async workspace => {
+    let ledger = new LearningLedger(workspace, 'a')
+    const batch = ledger.create('reflector', [source(0, 1)], [])
+    ledger.artifact(batch.id, { path: 'memory/topics/existing.md', revision: 'prior', kind: 'memory' })
+    for (let i = 0; i < 3; i++) {
+      ledger.bind(batch.id, `regular-${i}`)
+      ledger.propose(batch.id, 'partial', 'Honest unresolved scope', i === 2 ? [candidate] : undefined)
+      ledger.complete(batch.id)
+      ledger.defer(batch.id, false)
+      if (i < 2) t.mock.timers.tick(3_600_001)
+    }
+    ledger = new LearningLedger(workspace, 'a')
+    assert.equal(ledger.pending('reflector', true), undefined, 'cooldown is not bypassed')
+    t.mock.timers.tick(3_600_001)
+    assert.equal(ledger.select('reflector', [source(1, 2)], [])?.id, batch.id)
+    ledger = new LearningLedger(workspace, 'a')
+    const fresh = ledger.select('reflector', [source(1, 2)], [])!
+    assert.notEqual(fresh.id, batch.id, 'persisted fresh/retry alternation still applies')
+    done(ledger, fresh.id, 'fresh')
+    assert.equal(ledger.cursor(source(0, 1)), 0, 'later success cannot skip unresolved evidence')
+    ledger.bind(batch.id, 'continuation')
+    ledger = new LearningLedger(workspace, 'a')
+    assert.equal(ledger.batch(batch.id).candidateContinuationUsed, true)
+    ledger.interrupt(batch.id, 'crash after admission, before receipt/deferral')
+    assert.equal(ledger.pending('reflector', true), undefined, 'crash cannot renew spent opportunity')
+    assert.equal(ledger.batch(batch.id).pendingCandidates?.length, 1)
+    assert.equal(ledger.batch(batch.id).artifacts[0].revision, 'prior')
+    ledger.defer(batch.id, false)
+    t.mock.timers.tick(3_600_001)
+    assert.equal(ledger.select('reflector', [], []), undefined)
+    assert.match(ledger.unfinished()[0].retry!.paused!, /Automatic retry limit/)
+    assert.equal(ledger.select('reflector', [], [], true)?.id, batch.id, 'manual recovery remains available')
+    ledger.bind(batch.id, 'manual')
+    ledger.propose(batch.id, 'partial', 'Rewording or replacing a candidate grants no new budget',
+      [{ ...candidate, correction: 'A rewritten correction.' }])
+    ledger.complete(batch.id)
+    ledger.defer(batch.id, false)
+    t.mock.timers.tick(3_600_001)
+    assert.equal(new LearningLedger(workspace, 'a').pending('reflector', true), undefined)
+  })
+})
+
+test('unchanged structured candidate in continuation stays visible and paused after fourth deferral', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
+  await withTempWorkspace(async workspace => {
+    let ledger = new LearningLedger(workspace, 'a')
+    const batch = ledger.create('reflector', [source(0, 1)], [])
+    for (let i = 0; i < 4; i++) {
+      assert.equal(ledger.select('reflector', [], [])?.id, batch.id)
+      ledger.bind(batch.id, `attempt-${i}`)
+      ledger.propose(batch.id, 'partial', 'Still unresolved', [candidate])
+      ledger.complete(batch.id)
+      ledger.defer(batch.id, false)
+      t.mock.timers.tick(3_600_001)
+      ledger = new LearningLedger(workspace, 'a')
+    }
+    assert.equal(ledger.pending('reflector', true), undefined)
+    assert.equal(ledger.unfinished()[0].pendingCandidates?.[0].path, candidate.path)
+    assert.equal(ledger.unfinished()[0].retry?.attempts, 4)
+    assert.equal(ledger.cursor(source(0, 1)), 0)
+    assert.equal(ledger.batch(batch.id).proposal?.status, 'partial')
+  })
+})
+
+test('historical exactly-three-deferral structured batch qualifies without resetting counters or old pause text', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
+  await withTempWorkspace(async workspace => {
+    let ledger = new LearningLedger(workspace, 'a')
+    const batch = ledger.create('reflector', [source(0, 1)], [])
+    // Build the old persisted shape: candidates plus a three-deferral pause,
+    // with no continuation marker. No production journal migration is needed.
+    for (let i = 0; i < 3; i++) {
+      ledger.bind(batch.id, `old-${i}`)
+      ledger.interrupt(batch.id, 'unfinished')
+      ledger.defer(batch.id, false)
+    }
+    ledger.propose(batch.id, 'partial', 'Old structured receipt', [candidate])
+    ledger = new LearningLedger(workspace, 'a')
+    assert.match(ledger.batch(batch.id).retry!.paused!, /Automatic retry limit/)
+    assert.equal(ledger.pending('reflector', true), undefined)
+    t.mock.timers.tick(3_600_001)
+    assert.equal(ledger.pending('reflector', true)?.id, batch.id)
+    ledger.bind(batch.id, 'new-continuation')
+    assert.equal(ledger.batch(batch.id).retry?.attempts, 3)
+    ledger.interrupt(batch.id, 'still incomplete')
+    assert.equal(new LearningLedger(workspace, 'a').pending('reflector', true), undefined)
+  })
+})
