@@ -396,7 +396,7 @@ export async function createProjectRuntime(
   const sameWorkdir = (left: WorkdirRefV2, right: WorkdirRefV2) => left.nodeId === right.nodeId && left.workdirId === right.workdirId
   // Check ownership directly. No authorization object is constructed or passed.
   const directoryAccess = (ref: WorkdirRefV2): boolean => {
-    const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
+    const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
     if (folder) return true
     if (folderRegistry.isRetiredWorkdir(ref)) return false
     if (isManagedWorkdir(ref.workdirId)) return ref.nodeId !== 'local' && ownsManagedWorkdir(project.id, ref.workdirId)
@@ -418,14 +418,14 @@ export async function createProjectRuntime(
     if (request.workdirId === undefined || !DIRECTORY_OPERATIONS.includes(request.operation)) return denyAccess()
     if (request.sessionId.startsWith('folder:')) {
       const folder = folderRegistry.get(request.sessionId.slice('folder:'.length))
-      const ref = folder && (folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id))
+      const ref = folder && (folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id))
       if (!ref || ref.nodeId !== request.nodeId || ref.workdirId !== request.workdirId) {
         throw new FolderError('folder_access_revoked', 'This folder is no longer available to this project.', 409)
       }
     } else sessions.assertFolderAccess(request.sessionId)
     const ref: WorkdirRefV2 = { version: 2, nodeId: request.nodeId, workdirId: request.workdirId }
     if (!directoryAccess(ref)) denyAccess()
-    const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
+    const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
     // Verify the exact selected directory, without refreshing unrelated devices.
     if (folder) await folderRegistry.requireExecutionAvailable(folder.id, signal)
     else if (!isManagedWorkdir(ref.workdirId)) {
@@ -490,9 +490,30 @@ export async function createProjectRuntime(
   loadable.set('session_proxy', new SessionProxyTool())
   let layerfsBootstrap: import('../../execution/layerfs/bootstrap.ts').LayerFSBootstrap | undefined
   let layerfsWorkflow: import('../../execution/layerfs/workflow.ts').LayerFSWorkflow | undefined
+  const layerFSMountAvailable = async (mount: string, signal: AbortSignal) => {
+    const { LayerFSTool } = await import('../../tools/layerfs.ts')
+    const { isCompletedToolFailure, toolResultText } = await import('../../tools/tool.ts')
+    const result = await new LayerFSTool(project.id, workspace).execute({ action: 'status', workspace: mount }, {
+      projectId: project.id, sessionId: `layerfs-workspace:${project.id}`, signal,
+    } as import('../../tools/context.ts').ExecutionContext)
+    const receipt = JSON.parse(toolResultText(result))
+    if (isCompletedToolFailure(result) || receipt.ok !== true) throw new Error('LayerFS mount is unavailable; no host fallback.')
+    const identity = JSON.parse(Buffer.from(mount.slice('layerfs:'.length), 'base64url').toString())
+    const listsMount = (value: unknown, depth = 0): boolean => {
+      if (!value || typeof value !== 'object' || depth > 8) return false
+      if (!Array.isArray(value) && (value as Record<string, unknown>).path === identity.path) return true
+      return Object.values(value).some(child => listsMount(child, depth + 1))
+    }
+    if (!listsMount(receipt.result)) throw new Error('The selected LayerFS mount is not listed as active. No host fallback or remount was attempted.')
+    return { path: identity.path as string, name: `LayerFS ${identity.sandbox}:${identity.path}` }
+  }
+  folderRegistry.configureLayerFS({
+    authorize: layerFSMountAvailable,
+    requireAvailable: async (folder, signal) => { await layerFSMountAvailable(folder.mount, signal) },
+  })
   loadable.set('layerfs', {
     factory: async () => {
-      const { LayerFSTool } = await import('../../tools/layerfs.ts')
+      const { createLayerFSTools } = await import('../../tools/layerfs.ts')
       const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
       const { LayerFSBootstrap, matchesBootstrapApproval } = await import('../../execution/layerfs/bootstrap.ts')
       const managed = managedLayerFS(project.id, workspace)
@@ -502,7 +523,7 @@ export async function createProjectRuntime(
       const { LayerFSWorkflow } = await import('../../execution/layerfs/workflow.ts')
       layerfsWorkflow ??= new LayerFSWorkflow(project.id, managed, verify,
         (path, signal) => folderRegistry.register(path, signal, 'Separate LayerFS baseline candidate; original checkout preserved. Content review is required before import.'), backgroundTasks)
-      return new LayerFSTool(project.id, workspace, managed, layerfsBootstrap, backgroundTasks, layerfsWorkflow)
+      return createLayerFSTools(project.id, workspace, managed, layerfsBootstrap, backgroundTasks, layerfsWorkflow)
     },
   })
   // Ordinary LayerFS routes share this Project-owned worker; sessions never close it.
@@ -1007,6 +1028,20 @@ export async function createProjectRuntime(
   })
   tools.register(new UseProjectTool({
     projectId: project.id, folders: folderRegistry,
+    readLayerFSInstructions: async (folder, ctx) => {
+      const { layerfsRoute, LayerFSFileNotFoundError } = await import('../../tools/layerfs-route.ts')
+      const { isCompletedToolFailure, toolResultText } = await import('../../tools/tool.ts')
+      try {
+        const result = await layerfsRoute('read', { workspace: folder.mount, path: 'AGENTS.md' }, { ...ctx, remoteWorkdir: undefined }, workspace)
+        if (result === undefined || isCompletedToolFailure(result)) throw new Error('LayerFS workspace instructions could not be read; prior context retained.')
+        const content = toolResultText(result)
+        if (Buffer.byteLength(content) > 128000) throw new Error('LayerFS AGENTS.md exceeds the instruction size limit; prior context retained.')
+        return { content }
+      } catch (error) {
+        if (error instanceof LayerFSFileNotFoundError) return { content: '' }
+        throw error
+      }
+    },
     beforeSwitch: async (ctx, folderId) => {
       const state = sessions.getSessionState(ctx.sessionId)
       if (!state?.automaticWork) return
@@ -1190,13 +1225,25 @@ export async function createProjectRuntime(
     const state = sessions.getSessionState(id)
     if (!isOwnerSession(state, project.id) || !state || sessions.isManagedConversation(id)) return false
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
-    return locations.workdir.available && locations.workdir.locality === 'local'
+    return locations.workdir.available && (locations.workdir.locality === 'local' || locations.workdir.locality === 'layerfs')
   }
   const remoteDerived = new RemoteDerivedWorkspaceBackend({ projectId: project.id, executor: remoteExecutor })
   const derivedWorkspaces = new DerivedWorkspaces({ projectId: project.id, directory: resolve(workspace, 'derived-workspaces'), folders: folderRegistry, remote: remoteDerived,
     validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
   })
-  importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor))
+  let layerfsWorkspaces: import('../../execution/layerfs/workspace-create.ts').LayerFSWorkspaces | undefined
+  importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor, async (args, context) => {
+    const { LayerFSWorkspaces } = await import('../../execution/layerfs/workspace-create.ts')
+    const { LayerFSTool } = await import('../../tools/layerfs.ts')
+    const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
+    layerfsWorkspaces ??= new LayerFSWorkspaces({ projectId: project.id, directory: resolve(workspace, 'layerfs-workspaces'),
+      identity: async () => process.env.SHADOW_LAYERFS_CONFIG ? `operator:${process.env.SHADOW_LAYERFS_CONFIG}` : `managed:${(await managedLayerFS(project.id, workspace).namespaceInfo()).namespace}`,
+      run: (request, ctx) => new LayerFSTool(project.id, workspace).execute(request, ctx),
+      register: (mount, ctx, description) => folderRegistry.registerLayerFS(mount, ctx.signal, description),
+      validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
+    })
+    return layerfsWorkspaces.create(args, context)
+  }))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
   const signalProviders = new SignalProviderRuntime(
@@ -1266,6 +1313,7 @@ export async function createProjectRuntime(
     await validateWorkProgram(settings, signal)
     if (!settings.folderId) throw new Error('Implementation requires a registered repository source. Bootstrap with work_bootstrap before implementation.')
     const folder = await folderRegistry.requireExecutionAvailable(settings.folderId, signal)
+    if (folder.kind === 'layerfs') throw new Error('Automatic Git-worktree isolation does not support LayerFS sources; no Main fallback.')
     if (coordinator && folder.kind !== 'remote') throw new Error('Main local execution is disabled; select an authorized online Child source. No Main fallback.')
     if (folder.kind === 'remote') {
       const available = mainCluster.workdirLookup(folder.workdir, DERIVED_WORKSPACE_OPERATION)
@@ -1288,10 +1336,10 @@ export async function createProjectRuntime(
     },
     targets: () => folderRegistry.list().map(folder => {
       const remote = folder.kind === 'remote'
-      const ref = remote ? folder.workdir : localFolderWorkdirRef(folder.id)
+      const ref = folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id)
       const state = remote ? mainCluster.workdirLookup(ref, DERIVED_WORKSPACE_OPERATION) : folderRegistry.lookupWorkdir(ref)
       const advertised = remote ? mainCluster.registry.listWorkdirs(ref.nodeId).find(item => item.workdirId === ref.workdirId) : undefined
-      const supported = (!coordinator || remote) && !!state && state.node === 'online' && !!state.workdir?.online && !state.incompatible
+      const supported = folder.kind !== 'layerfs' && (!coordinator || remote) && !!state && state.node === 'online' && !!state.workdir?.online && !state.incompatible
       return { folderId: folder.id, name: folder.name, nodeId: ref.nodeId,
         platform: remote ? advertised?.platform : process.platform, supported,
         reason: supported ? 'Repository-root identity is checked again on its owning device before admission.'
@@ -1360,7 +1408,7 @@ export async function createProjectRuntime(
     sessions, workspace,
     folderPath: state => {
       const folder = state.folderId ? folderRegistry.get(state.folderId) : undefined
-      return folder && folder.kind !== 'remote' ? folder.path : undefined
+      return folder && folder.kind !== 'remote' && folder.kind !== 'layerfs' ? folder.path : undefined
     },
     protected: id => backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
       processManager.list().some(process => !process.exitedAt) ||
@@ -1459,7 +1507,7 @@ export async function createProjectRuntime(
       await configStore.update(raw => ({ ...raw, organization: { ...(raw.organization as object),
         enabled } }))
     },
-  }, automationProfiles, { validate: (settings, signal) => settings.folderId ? validateWorkTarget(settings, signal) : validateWorkProgram(settings, signal), running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
+  }, automationProfiles, { validateAdmission: validateWorkProgram, validate: (settings, signal) => settings.folderId ? validateWorkTarget(settings, signal) : validateWorkProgram(settings, signal), running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
     resume: (key, version, signal, acknowledgeToolReplay) => workDispatcher.resume(key, version, signal, acknowledgeToolReplay) })
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
@@ -1681,7 +1729,7 @@ export async function createProjectRuntime(
       }
       await sessions.buildSession(sessionId, undefined, {
         folderId: folder.id,
-        workdir: folder.kind === 'remote' ? folder.workdir : {
+        workdir: folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : {
           ...localFolderWorkdirRef(folder.id),
           displayName: folder.name,
           displayPathSnapshot: folder.path,
@@ -1701,7 +1749,7 @@ export async function createProjectRuntime(
     },
     invalidate: () => sessions.invalidateFolderSessions(),
     sessionsToRetire: (folder, claims) => sessions.folderDependentSessions(folder.id, [
-      folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id),
+      folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id),
       ...claims.map(claim => claim.workdir),
     ]),
   })

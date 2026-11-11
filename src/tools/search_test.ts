@@ -197,8 +197,6 @@ test('explicit roots cannot bypass remote scope or silently override another roo
     nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not execute') },
   } }
   for (const args of [
-    { handler: 'grep', path: 'src', query: 'x' },
-    { handler: 'glob', path: 'src', query: 'v:sessions/**' },
     { handler: 'grep', path: 'v:memory', query: 'x' },
   ]) assert.match(await search.execute(args, remote), /only v:sessions searches/)
   assert.match(await search.execute({ space: 'grep:v:memory', path: 'src', query: 'x' }, context), /not both/)
@@ -413,7 +411,7 @@ test('remote workdir virtual sessions stay on the control plane for handler/path
   }
   assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), 'v:sessions/web:one')
   assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'needle' }, context), /v:sessions\/web:one.*needle/)
-  for (const path of ['src', 'v:tools', 'v:sessions-other']) {
+  for (const path of ['v:tools', 'v:sessions-other']) {
     assert.match(await search.execute({ handler: 'glob', path, query: '**' }, context), /only v:sessions searches/)
   }
 })

@@ -6,6 +6,7 @@ import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 export interface DynamicToolImporter {
   initializeSource?(name: string, args: Record<string, unknown>, context: ExecutionContext, explicit?: boolean): Promise<string | undefined>
   canInvokeFromRemote?(toolName: string): boolean
+  canInvokeFromLayerFS?(toolName: string): boolean
   resolveInvocationTools?(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string
   importForInvocation(
     toolName: string,
@@ -22,6 +23,7 @@ export interface DynamicToolImporter {
 export class InvokeTool implements Tool<ToolResult> {
   readonly name = 'invoke_tool'
   readonly supportsRemoteWorkdir = true
+  readonly supportsLayerFSWorkdir = true
   readonly description =
     'Execute an exact tool name from v:tools, loading it lazily (shared initialization may register sibling tools). To discover tools of an uninitialized source, omit name and pass source with args: {}; this initializes only, without executing a tool. Read v:tools/@sources__ for source metadata. Validates the live schema; invalid arguments return the contract without execution.'
   readonly parameters: ToolParameters = {
@@ -58,6 +60,7 @@ export class InvokeTool implements Tool<ToolResult> {
         return 'Error: source initialization requires args: {}.'
       }
       if (context.remoteWorkdir) return 'Error: source initialization is unavailable for remote workdirs.'
+      if (context.layerfsWorkdir && args.source !== 'layerfs') return 'Error: only the LayerFS maintenance source can be initialized from this workspace; no host source fallback.'
       return await this.importer?.initializeSource?.(args.source, args.args as Record<string, unknown>, context, true)
         ?? 'Error: unknown or unavailable source; read v:tools/@sources__ for initialization metadata.'
     }
@@ -65,6 +68,10 @@ export class InvokeTool implements Tool<ToolResult> {
     if (!name) return 'Error: name is required (or use source with args: {} for initialization)'
     if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {
       return 'Error: remote workdirs support only built-in Project-Home session and Work tools through invoke_tool.'
+    }
+
+    if (context.layerfsWorkdir && !context.tools.activeDynamicTools().some(tool => tool.name === name && tool.supportsLayerFSWorkdir) && !this.importer?.canInvokeFromLayerFS?.(name)) {
+      return 'Error: this tool does not support LayerFS workspaces. Initialize source layerfs for its maintenance tools; no host fallback.'
     }
 
     const toolArgs = args.args

@@ -1,12 +1,14 @@
 # LayerFS setup and connection
 
-## Fresh-session path: connect → one consent → automatic bootstrap → original task
+## Fresh-session path: layerfs_connect → one consent → automatic layerfs_bootstrap → original task
 
-Invoke `layerfs {action:"connect"}`. An existing approved installation is reused.
-Without one, the owner Web session gets an automatic `bootstrap_plan`: WSL distro
+Initialize `invoke_tool {source:"layerfs",args:{}}` to register the independent
+tools (no provisioning), then invoke `layerfs_connect {}`. An existing approved
+installation is reused.
+Without one, the owner Web session gets an automatic `layerfs_bootstrap_plan`: WSL distro
 inventory only, no root command, download or worker startup. A unique eligible
 distribution is selected automatically; multiple candidates need a distro choice
-using `bootstrap_plan {distribution:"name-from-inventory"}`. Docker Desktop's
+using `layerfs_bootstrap_plan {distribution:"name-from-inventory"}`. Docker Desktop's
 internal distributions are never candidates.
 
 For `status:"needs_approval"`, invoke ask with the **exact** returned
@@ -14,13 +16,14 @@ For `status:"needs_approval"`, invoke ask with the **exact** returned
 plan-bound question/options. The question explains the pinned official source/images/dependency downloads, potentially
 several GiB and a lengthy native build, root commands within the selected distro,
 private retained resources, and future reuse of the root worker. One question
-covers that scoped setup; neither an unanswered question nor `approved:true`
+covers that scoped layerfs_setup; neither an unanswered question nor `approved:true`
 itself is authorization. A request to change application code is not consent to
-run setup on the current PC.
+run layerfs_setup on the current PC.
 
 After approval call:
+Tool: `layerfs_bootstrap`
 ```json
-{"action":"bootstrap","plan":"RETURNED_SESSION_BOUND_TOKEN","approval":{"sessionId":"FROM_ANSWER_REFERENCE","physicalId":"FROM_ANSWER_REFERENCE","requestId":"FROM_ANSWER_REFERENCE"},"approved":true,"allowRootWorker":true,"allowDownloads":true}
+{"plan":"RETURNED_SESSION_BOUND_TOKEN","approval":{"sessionId":"FROM_ANSWER_REFERENCE","physicalId":"FROM_ANSWER_REFERENCE","requestId":"FROM_ANSWER_REFERENCE"},"approved":true,"allowRootWorker":true,"allowDownloads":true}
 ```
 Copy `approval` from the ask answer's `reference`; the host checks the persisted
 human answer for this exact question and plan. A timeout, deferred/custom answer,
@@ -31,7 +34,7 @@ No SDK path, image choice, script, URL, JSON file or environment variable is tak
 from the user on this path. The native tool derives them from the bundled recipe.
 The plan is session-bound and expires after fifteen minutes. Setup runs as a
 Project-owned background task and returns a `bg:` execution ID. Wait for its
-completion event; do not poll or manually replay it. `v:bg` and `bootstrap_status`
+completion event; do not poll or manually replay it. `v:bg` and `layerfs_bootstrap_status`
 allow inspection and the normal cancel tool can cancel the owned execution.
 Cancellation does not prove WSL/Docker side effects stopped.
 
@@ -46,8 +49,8 @@ retained in private per-step logs, not echoed into the conversation.
 
 `probe_failed` with `provisioningStarted:false` means the LayerFS provisioning
 script was not dispatched; it does not claim that starting WSL had no OS/service
-effects. Inspect `bootstrap_status`. If it reports `probeRecoveryCandidate`, call
-`bootstrap_recover {executionId:"EXACT_FAILED_BG_ID"}`. This owner-only action
+effects. Inspect `layerfs_bootstrap_status`. If it reports `probeRecoveryCandidate`, call
+`layerfs_bootstrap_recover {executionId:"EXACT_FAILED_BG_ID"}`. This owner-only action
 checks the exact attempt, launcher closure, absent build artifacts and absence of
 an installed runtime; it archives the old journal and marks it `recovered`.
 It does not delete evidence, terminate WSL, rerun a probe, download or build.
@@ -58,11 +61,11 @@ blocked. A successful recovery permits a **new plan and approval**, not replay
 of the old operation. Never emulate this action with file edits.
 
 A separate, deliberately narrow recovery exists when the build finished but the
-SDK host runtime **never opened**. `bootstrap_status.connectionRecoveryCandidate`
+SDK host runtime **never opened**. `layerfs_bootstrap_status.connectionRecoveryCandidate`
 identifies only an original `uncertain/connect_worker` attempt with a saved
 installation. After explicit owner consent to one root worker connection attempt,
-call `bootstrap_recover_connection` with its exact `executionId`, `approved:true`
-and `allowRootWorker:true`. Like advanced setup, these flags record caller-obtained
+call `layerfs_bootstrap_recover_connection` with its exact `executionId`, `approved:true`
+and `allowRootWorker:true`. Like advanced layerfs_setup, these flags record caller-obtained
 consent; they do not themselves grant permission. The owning tool checks the
 saved installation matches, the SDK runtime directory is absent, no managed
 helper remains, and valid WSL inventories show the selected distro installed and
@@ -72,25 +75,26 @@ one connection attempt; another uncertain result stays blocked. Inspection alone
 never grants recovery permission. Existing runtime directories require operator
 reconciliation even if the worker appears down.
 
-On success, **continue the original request**: connect, check source import
+On success, **continue the original request**: layerfs_connect, check source import
 safety, then perform the requested branch/isolation/tests. Do not mark the task
 complete merely because the worker started. A subsequent fresh session reuses the
-saved installation through connect with no repeated bootstrap or manual setup.
+saved installation through layerfs_connect with no repeated layerfs_bootstrap or manual layerfs_setup.
 
-### Supported post-import quarantine (not bootstrap retry)
+### Supported post-import quarantine (not layerfs_bootstrap retry)
 
-When `import_status` reports a retained failed/unknown import, use the direct
-owner-session `import_recovery_plan`. It creates a 15-minute, session-bound plan
+When `layerfs_import_status` reports a retained failed/unknown import, use the direct
+owner-session `layerfs_import_recovery_plan`. It creates a 15-minute, session-bound plan
 from a fingerprint of the installed profile and import/worker evidence; no root
 inspection, worker close, pointer mutation or copying is performed by planning.
 Call ask with the exact returned approvalRequest. A deferred, custom, foreign or
 unrelated answer is not approval. After approval, invoke:
 
+Tool: `layerfs_import_recover`
 ```json
-{"action":"import_recover","plan":"RETURNED_PLAN","approval":{"sessionId":"FROM_ANSWER","physicalId":"FROM_ANSWER","requestId":"FROM_ANSWER"},"approved":true,"allowRootWorker":true}
+{"plan":"RETURNED_PLAN","approval":{"sessionId":"FROM_ANSWER","physicalId":"FROM_ANSWER","requestId":"FROM_ANSWER"},"approved":true,"allowRootWorker":true}
 ```
 
-Wait for the background completion event. The action holds Project setup ownership
+Wait for the background completion event. The action holds Project layerfs_setup ownership
 and a cross-process recovery lock; it rechecks the fingerprint and shutdown state.
 It only gracefully closes an owned worker after a fresh healthy response proves
 zero active calls. Foreign/retained helpers or ambiguous ownership remain blocked;
@@ -103,7 +107,7 @@ Success retains the old runtime, journal and Store resources **unchanged** and
 selects a fresh generation with distinct SDK project name, host/Linux home and
 container prefix. It does not repair or retry the old import, rebuild binaries,
 import source or start the new worker. The result returns a `namespace`; pass it
-to the next `connect`/`create`. `namespace_status` lists safe retained history.
+to the next `layerfs_connect`/`layerfs_import`. `layerfs_namespace_status` lists safe retained history.
 Old mount IDs and in-flight old-namespace requests cannot route to the new Store.
 Missing, malformed or foreign pointers and interrupted generation preparation
 fail closed, including after app restart; never clear their history/locks manually
@@ -123,13 +127,13 @@ remote display path. Foreign ownership and linked ancestors fail closed. On
 registration failure, outputs are retained; retry the same path/mode after fixing
 the cause, never delete them merely to retry.
 
-Use the returned `workspaceId` as `destinationWorkspace` in `baseline_plan` below.
-Then answer its exact approvalRequest, call `baseline_prepare`, and wait for its
-background result. Review and `import_preview` the returned baseline Workspace
-before `create`. Registration authorizes neither copying nor import, and does not
-replace the exact LayerFS bootstrap or baseline-review approvals.
+Use the returned `workspaceId` as `destinationWorkspace` in `layerfs_baseline_plan` below.
+Then answer its exact approvalRequest, call `layerfs_baseline_prepare`, and wait for its
+background result. Review and `layerfs_import_preview` the returned baseline Workspace
+before `layerfs_import`. Registration authorizes neither copying nor import, and does not
+replace the exact LayerFS layerfs_bootstrap or baseline-review approvals.
 
-`baseline_plan {workspace,destinationWorkspace}` performs only metadata/Git
+`layerfs_baseline_plan {workspace,destinationWorkspace}` performs only metadata/Git
 inventory reads; copying requires its own exact approvalRequest to be answered. Both selectors
 must resolve through the owning Project's local workspace route (source read,
 destination write). The destination must be separate from the source; Project
@@ -137,7 +141,7 @@ Home is not used as a registered baseline. The plan reports selected file/byte
 counts, exclusions and review warnings. It selects Git-tracked **working-tree**
 regular files, not committed versions; untracked files are excluded.
 
-After human approval use `baseline_prepare` with the same selectors, plan,
+After human approval use `layerfs_baseline_prepare` with the same selectors, plan,
 `approval` reference and `approved:true`. Preparation is background work; wait for
 its result. It creates a unique exclusive directory in the destination workspace's
 `.layerfs-baselines` and registers it only after successful copying/revalidation.
@@ -146,7 +150,7 @@ VCS/dependency/build trees and linked/unsafe paths cannot be copied through this
 This fixed curated scope is not a full clone. Credential-named source modules are
 retained with warnings; non-code data inside those directories remains excluded.
 Use `importPolicy:"whole_tree"` on a separately reviewed tree to include dependencies. Unknown embedded secrets remain possible: review contents and then run
-`import_preview` on the returned workspace before `create`.
+`layerfs_import_preview` on the returned workspace before `layerfs_import`.
 
 Plans are source/owner-bound, single-use and expire after 15 minutes. Traversal,
 copying, outputs and bytes are bounded. Source/destination metadata is rechecked;
@@ -155,7 +159,7 @@ destinations and uncertain registration are retained for inspection, not cleaned
 replayed or reported ready. Do not copy into or remove material from the original
 checkout merely to get past import checks.
 
-### Supported bootstrap and boundaries
+### Supported layerfs_bootstrap and boundaries
 
 The bundled source recipe targets Windows x64, an existing x86-64 WSL2 distro,
 Python ≥3.9, git, FUSE, local rootful Docker API ≥1.48 with the default
@@ -179,15 +183,15 @@ and a new host output leaf; it never replaces old state. A definite **preflight*
 refusal can get a new plan only after the cause is corrected. Failed/uncertain
 builds, crashes or lost receipts remain retained and block automatic replay.
 Do not clear journals or delete/recreate resources to bypass this boundary.
-`bootstrap_status` reports saved state, not current runtime health.
+`layerfs_bootstrap_status` reports saved state, not current runtime health.
 
 No `SHADOW_LAYERFS_CONFIG`, hand-written JSON or backend restart is needed for
-managed setup. Session sleep/reset does not stop the shared worker. Clean Project
+managed layerfs_setup. Session sleep/reset does not stop the shared worker. Clean Project
 shutdown closes it gracefully and permits later on-demand restart. Persistence of
 running sandboxes across worker/WSL lifetime is not guaranteed. Uncertain worker
 startup or imports still block automatic restart/replay.
 
-## Advanced: connect an existing operator installation
+## Advanced: layerfs_connect an existing operator installation
 
 Use this path only when an operator supplies/selects an existing installation;
 it is not the default response to the original parallel-development prompt.
@@ -213,7 +217,6 @@ package version alone is not evidence of compatibility.
 3. In a durable local owner Web session, call:
    ```json
    {
-     "action": "setup",
      "approved": true,
      "allowRootWorker": true,
      "installation": {
@@ -233,11 +236,11 @@ package version alone is not evidence of compatibility.
 4. Check the returned `ready`, `answering`, `docker`, and `sandboxVerified` fields.
    `ready:true` means the worker answers and Docker is reachable; it is **not** a
    passing import/mount/isolation/merge test. `sandboxVerified` remains false.
-5. Run `import_preview {workspace:"registered-curated-baseline"}` and review the
+5. Run `layerfs_import_preview {workspace:"registered-curated-baseline"}` and review the
    source contents for credentials. Do not remove anything from the original
-   checkout to satisfy preview. `create` requires its `sourceReview` token plus
+   checkout to satisfy preview. `layerfs_import` requires its `sourceReview` token plus
    `sourceReviewed:true`; missing, expired, changed, foreign-session or reused
-   tokens fail before import. Managed create returns a `bg:` task and uses the
+   tokens fail before import. Managed layerfs_import returns a `bg:` task and uses the
    official Runtime initialization job to allocate its own labeled plain Docker
    volume and import once. Background import admission requires the direct durable
    owning session, not a task, leaf call, nested script or recovered invocation.
@@ -247,10 +250,10 @@ package version alone is not evidence of compatibility.
 
 Managed profiles are private Project config; they are not user-created workspaces
 or deliverables. Do not edit them or recovery journals with write/exec to bypass
-setup approval, replace an installation, clear an uncertain state or force restart.
-`runtime_status` inspects the current owned helper or saved state without starting
+layerfs_setup approval, replace an installation, clear an uncertain state or force restart.
+`layerfs_runtime_status` inspects the current owned helper or saved state without starting
 one. While the helper is busy it immediately reports `health:"not_checked"` and
-import progress instead of queueing a probe behind Init. `import_status` reads
+import progress instead of queueing a probe behind Init. `layerfs_import_status` reads
 sanitized current or retained progress; it can recognize older SDK deadline
 failure records without exposing paths, catalog keys or raw native errors.
 A retained `uncertain` marker still blocks another import—diagnostics never clear it.
@@ -267,7 +270,7 @@ reinitialization is exposed.
 
 ## Artifact provenance and OS prerequisites
 
-Updating Shadow installs the bootstrap recipe, **not** LayerFS binaries or Docker
+Updating Shadow installs the layerfs_bootstrap recipe, **not** LayerFS binaries or Docker
 images. The upstream npm packages are private and the checked releases have no
 prebuilt assets. The approval-gated source build is the normal acquisition route;
 never invent an npm install or substitute an unverified download URL. Immutable
@@ -281,7 +284,7 @@ Do not confuse a fresh **session** with a bare operating system.
 
 ## Diagnostics and operator configuration compatibility
 
-`layerfs {action:"doctor"}` only reads configuration. It never loads SDK code,
+`layerfs_doctor {}` only reads configuration. It never loads SDK code,
 starts a worker or imports a repository. Managed mode reports saved phase and
 next action; operator mode reports stable codes such as `CONFIG_NOT_SET`.
 Both use `runtime:"not_checked"`; configuration validity is not runtime health.
@@ -295,17 +298,17 @@ provision private home/Store/volume/runtime/worker resources first. On Windows a
 macOS a worker endpoint is required; Linux needs a supported local filesystem.
 To use this legacy mode, set the variable in the **backend's environment** and
 restart that backend; an agent exec child cannot change its parent's environment.
-Managed setup deliberately does not replace this explicit override.
+Managed layerfs_setup deliberately does not replace this explicit override.
 
 The full contract and compatibility evidence are in the Shadow repository's
 `docs/layerfs.md`, not a bundled `docs/` resource. This guide is always readable
-as `v:skills/layerfs/setup.md` without a source checkout.
+as `v:skills/layerfs/layerfs_setup.md` without a source checkout.
 
 ## Before importing a repository
 
-`create` recursively imports **all** files, including dotfiles, ignored and
+`layerfs_import` recursively imports **all** files, including dotfiles, ignored and
 untracked files. There are no import ignore rules or content credential scanner.
-`import_preview` adds an enforced metadata/name preflight. `importPolicy:"curated"`
+`layerfs_import_preview` adds an enforced metadata/name preflight. `importPolicy:"curated"`
 (default) rejects VCS/dependency/build entries as out of scope, not secrets.
 `importPolicy:"whole_tree"` includes `.git`, `.venv`, `node_modules` and build data
 and traverses them recursively with warnings; it does not bypass credential checks.
@@ -315,7 +318,7 @@ code/docs/assets are reviewable, while nested non-code data, `.env` and keys rem
 protected. Counts/findings are bounded; no incomplete or blocked scan permits import.
 Neither policy silently excludes files that Init will read. Review tokens bind source,
 session and policy, last 15 minutes and are consumed once after a matching metadata
-rescan. Repeat the exact `importPolicy` on create; a different scope needs new review. A successful preview is not proof of no embedded secrets and cannot
+rescan. Repeat the exact `importPolicy` on layerfs_import; a different scope needs new review. A successful preview is not proof of no embedded secrets and cannot
 eliminate races in a mutable source tree. Use a separate, content-reviewed,
 credential-free registered baseline and preserve the original source.
 Do not treat `.gitignore` as a security boundary or import auth files for a test.

@@ -10,7 +10,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
           },
           "path": {
             "type": "string",
@@ -58,7 +58,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
           },
           "path": {
             "type": "string",
@@ -151,7 +151,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
           },
           "script": {
             "type": "string",
@@ -193,7 +193,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "For read/write/exec also accepts layerfs: mount IDs (UTF-8 file read/overwrite, sh/bash exec only; no background/node; see layerfs skill). Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Selects its exact device and directory for this call only. Omit to retain session locality. Unavailable targets fail; no Main fallback or automatic device switch."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
           },
           "query": {
             "type": "string",

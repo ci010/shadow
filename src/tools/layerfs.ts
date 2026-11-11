@@ -74,7 +74,7 @@ export class LayerFSTool implements Tool<ToolResult> {
     if (!reviews) { reviews = new LayerFSImportReview(); reviewServices.set(key, reviews) }
     this.reviews = reviews
   }
-  async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, context: ExecutionContext, lifecycle?: { observe: (text: string) => void }): Promise<ToolResult> {
     if (context.projectId !== this.projectId) throw new Error('LayerFS Project mismatch.')
     if (context.remoteWorkdir) throw new Error('LayerFS remote execution is unsupported; no Main fallback.')
     context.signal.throwIfAborted()
@@ -199,7 +199,7 @@ export class LayerFSTool implements Tool<ToolResult> {
       }
       const config = useManaged && await useManaged.configured() ? await useManaged.configuration(context.signal, identity.namespace) : await configuration(this.projectId)
       context.signal.throwIfAborted()
-      const output = await runBridge(config, project, String(a.action), a, context.signal, a.action !== 'create' && typeof a.bridgeTimeoutMs === 'number' ? a.bridgeTimeoutMs : undefined)
+      const output = await runBridge(config, project, String(a.action), a, context.signal, a.action !== 'create' && typeof a.bridgeTimeoutMs === 'number' ? a.bridgeTimeoutMs : undefined, lifecycle)
       // A definite SDK refusal is a completed failure, not a successful text result.
       // This does not claim rollback/no effect; Unknown is raised by the bridge.
       if (JSON.parse(output).ok === false) return completedToolFailure({
@@ -208,4 +208,64 @@ export class LayerFSTool implements Tool<ToolResult> {
       return output
     } finally { if (!backgroundOwnsLock) busy.delete(lock) }
   }
+}
+
+/** Agent-facing intents. The legacy dispatcher remains for internal ordinary-tool routing only. */
+const intentDefinitions = {
+  doctor: ['Inspect configuration only; never starts the runtime.', [], []],
+  connect: ['Reuse the approved runtime, or return a first-run approval plan.', [], []],
+  setup: ['Connect an existing trusted installation after explicit owner consent; not an installer. Read v:skills/layerfs/setup.md.', ['installation', 'approved', 'allowRootWorker'], []],
+  runtime_status: ['Inspect saved/current runtime health without starting a worker.', [], []],
+  bootstrap_plan: ['Discover existing WSL candidates and return a session-bound bootstrap approval request; no provisioning.', [], ['distribution']],
+  bootstrap: ['Start the exact approved pinned source build in the owning session. Flags alone are not authorization. Wait for the background event; never replay.', ['plan', 'approval', 'approved', 'allowRootWorker', 'allowDownloads'], []],
+  bootstrap_status: ['Inspect retained bootstrap progress and guarded recovery candidates.', [], []],
+  bootstrap_recover: ['Archive an exact failed pre-provisioning probe after safety checks; never rebuilds or deletes.', ['executionId'], []],
+  bootstrap_recover_connection: ['Attempt one explicitly approved connection to a retained completed build only after ownership/stopped-distro checks; no rebuild/import.', ['executionId', 'approved', 'allowRootWorker'], []],
+  import_preview: ['Review bounded source metadata before import; not a secret-content scan. Source must be a registered local workspace.', ['workspace'], ['importPolicy']],
+  import_status: ['Inspect sanitized import progress or retained failure evidence; never retries.', [], []],
+  import_recovery_plan: ['Plan quarantine of a failed/unknown import; return the exact human approval request without mutation.', [], []],
+  import_recover: ['Quarantine retained import resources and select a fresh namespace after exact human approval; no deletion/retry/import.', ['plan', 'approval', 'approved', 'allowRootWorker'], []],
+  namespace_status: ['Inspect safe active/quarantined namespace metadata.', [], []],
+  baseline_plan: ['Plan a separate curated tracked-working-tree baseline; source read and separate destination write authorization required.', ['workspace', 'destinationWorkspace'], []],
+  baseline_prepare: ['Copy and register a new exclusive baseline after exact plan approval; preserve original and any partial outputs.', ['workspace', 'destinationWorkspace', 'plan', 'approval', 'approved'], []],
+  create: ['Low-level reviewed source import, not workspace registration. Import all approved files once; wait for background completion, never replay unknown outcomes.', ['workspace', 'sourceReview', 'sourceReviewed'], ['importPolicy', 'importTimeoutMs']],
+  list: ['List LayerFS inventory, paged at 100 items.', [], ['offset']],
+  branches: ['List LayerFS branches, paged at 100 items.', [], ['offset']],
+  history: ['Inspect branch checkpoint history.', ['branch'], ['offset']],
+  fork: ['Create a distinct branch from the optional baseline ref; never overwrites the host source.', ['branch'], ['ref']],
+  load: ['Fork a historical checkpoint into a new branch, not an in-place rollback.', ['branch', 'ref'], []],
+  mount: ['Mount a branch and return an opaque layerfs: workspace ID for ordinary read/write/exec; not a host path or registration.', ['branch'], []],
+  status: ['Inspect workspace activity/changes for an opaque LayerFS mount ID.', ['workspace'], []],
+  commit: ['Checkpoint sandbox changes after testing; does not overwrite the source checkout.', ['workspace'], ['message']],
+  close: ['Close a clean mount only; dirty workspaces are refused, with no force/discard option.', ['workspace'], []],
+  diff: ['Inspect paged differences between ref and branch; currently no hunks.', ['ref', 'branch'], ['offset']],
+  merge: ['Create a named integration branch from ref and branch; inspect conflicts and test before publishing.', ['ref', 'branch', 'name'], ['message']],
+  publish: ['Update LayerFS main from branch, not host source files. Test and review first.', ['branch'], ['ref']],
+} as const
+
+/** Replace registration of new LayerFSTool(...) with ...createLayerFSTools(...).
+ * All intents share the same review/managed/bootstrap/workflow services and safety dispatch.
+ */
+export function createLayerFSTools(...args: ConstructorParameters<typeof LayerFSTool>): Tool<ToolResult>[] {
+  const dispatcher = new LayerFSTool(...args)
+  return Object.entries(intentDefinitions).map(([action, [description, required, optional]]) => {
+    const fields = [...required, ...optional, 'namespace']
+    const properties = Object.fromEntries(fields.map(key => [key, { ...dispatcher.parameters.properties[key] }]))
+    return {
+      name: action === 'create' ? 'layerfs_import' : action === 'list' ? 'layerfs_sandboxes' : `layerfs_${action}`,
+      supportsLayerFSWorkdir: true,
+      description: `${description} Local Project only. See v:skills/layerfs.`,
+      parameters: { type: 'object', additionalProperties: false, properties, required: [...required] },
+      async execute(input, context) {
+        // Enforce the small intent boundary even for direct callers bypassing schema validation.
+        for (const key of Object.keys(input)) if (!fields.includes(key)) throw new ToolNoEffectError(`Unexpected ${key} for layerfs_${action}.`)
+        for (const key of required) if (input[key] === undefined) throw new ToolNoEffectError(`Missing ${key}.`)
+        for (const [key, value] of Object.entries(input)) {
+          const type = properties[key].type
+          if (type === 'integer' ? !Number.isSafeInteger(value) : type === 'object' ? value === null || typeof value !== 'object' || Array.isArray(value) : typeof value !== type) throw new ToolNoEffectError(`Invalid ${key}.`)
+        }
+        return dispatcher.execute({ ...input, action }, context)
+      },
+    }
+  })
 }

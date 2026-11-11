@@ -222,6 +222,7 @@ export class DirectoryBotService implements ConversationPolicies {
       const folder = await this.options.folders.requireAvailable(match[1], context.signal)
       if (folder.projectId !== this.options.projectId) throw new Error('Folder does not belong to this Project.')
       this.assertCurrent(policy, sessionId)
+      if (folder.kind === 'layerfs') throw new Error('LayerFS resource sharing is not supported; no Main fallback is allowed.')
       const source = { folderId: folder.id, folderName: folder.name, relativePath: relative }
       if (folder.kind === 'remote') {
         if (!this.options.remoteExecutor) throw new Error('Remote reading is unavailable; no local path was used.')

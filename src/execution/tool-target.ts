@@ -8,7 +8,7 @@ export function resolveExplicitToolTarget(
   workspace: string, state: SessionLocalityState, lookup: WorkdirLookup | undefined,
   executor: Executor | undefined, folder: FolderRecord, operation: string,
 ): ResolvedToolTarget {
-  const ref = folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id)
+  const ref = folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id)
   return { ...resolveWorkdirToolTarget(workspace, state, lookup, executor, ref, operation),
     fileChangeTarget: { nodeId: ref.nodeId, workdirId: ref.workdirId, folderId: folder.id } }
 }
@@ -28,6 +28,7 @@ export function resolveWorkdirToolTarget(
   if (!resolved.available) throw new Error(`Execution target unavailable: ${resolved.reason}`)
   const fileChangeTarget = { nodeId: ref.nodeId, workdirId: ref.workdirId }
   if (resolved.locality === 'local') return { cwd: resolved.path, remoteWorkdir: undefined, fileChangeTarget }
+  if (resolved.locality === 'layerfs') return { cwd: undefined, remoteWorkdir: undefined, layerfsWorkdir: { workspace: resolved.workspace }, fileChangeTarget }
   if (!executor) throw new Error('Remote executor unavailable. No Main fallback is allowed.')
   return { cwd: undefined, remoteWorkdir: { nodeId: ref.nodeId, workdirId: ref.workdirId, executor }, fileChangeTarget }
 }

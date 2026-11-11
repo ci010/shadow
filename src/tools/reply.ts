@@ -7,6 +7,7 @@ import type { A2aSessions } from '../a2a/sessions.ts'
 export class ReplyTool implements Tool {
   readonly name = 'reply'
   readonly readonly = false
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description = 'Answer a specific pending request using its returned request_id. For a child decision, text must exactly match an offered option. For ordinary local/remote input, text is the requested information, never new authorization. Only the stored parent or remote task owner may reply. Does not send a general message or replace final responses.'
   readonly parameters = {

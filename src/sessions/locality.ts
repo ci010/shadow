@@ -33,6 +33,8 @@ export interface WorkdirState {
   readonly node: 'online' | 'offline' | 'missing' | 'revoked'
   readonly workdir?: {
     readonly online: boolean
+    readonly backend?: 'layerfs'
+    readonly workspace?: string
     /** Trusted local directory supplied by the resource registry, never a display path. */
     readonly path?: string
   }
@@ -47,6 +49,7 @@ export type WorkdirLookup = (
 export type WorkdirResolution =
   | { available: true; locality: 'local'; workdir: WorkdirRefV2; path: string }
   | { available: true; locality: 'remote'; workdir: WorkdirRefV2 }
+  | { available: true; locality: 'layerfs'; workdir: WorkdirRefV2; workspace: string }
   | { available: false; workdir: WorkdirRefV2; reason: WorkdirUnavailableReason }
 
 export interface SessionLocalityState {
@@ -139,6 +142,7 @@ export function resolveSessionLocations(
   // descriptor or display path to retain its existing identity.
   const resourceState = nativeManaged && state.workdir === undefined ? undefined : lookup?.(ref)
   if (nativeManaged) {
+    if (resourceState?.workdir?.backend === 'layerfs') return unavailable('incompatible')
     if (resourceState?.incompatible) return unavailable('incompatible')
     if (resourceState?.node === 'revoked') return unavailable('workdir-revoked')
     if (resourceState?.node === 'offline') return unavailable('node-offline')
@@ -154,6 +158,10 @@ export function resolveSessionLocations(
   const resource = resourceState.workdir
   if (!resource) return unavailable('workdir-missing')
   if (!resource.online) return unavailable('workdir-offline')
+  if (ref.nodeId === 'layerfs' || resource.backend === 'layerfs') {
+    if (ref.nodeId !== 'layerfs' || resource.backend !== 'layerfs' || resource.workspace !== ref.workdirId || !ref.workdirId.startsWith('layerfs:')) return unavailable('incompatible')
+    return { home, sessionDataDir, workdir: { available: true, locality: 'layerfs', workdir: ref, workspace: resource.workspace } }
+  }
   if (!local) return { home, sessionDataDir, workdir: { available: true, locality: 'remote', workdir: ref } }
   if (typeof resource.path !== 'string' || !isAbsolute(resource.path)) return unavailable('incompatible')
   return { home, sessionDataDir, workdir: { available: true, locality: 'local', workdir: ref, path: resolve(resource.path) } }

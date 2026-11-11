@@ -34,6 +34,7 @@ const parameters = {
 export class AskTool implements Tool<ToolResult> {
   readonly name = 'ask'
   readonly readonly = false
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description = 'Ask in the context of the goal, then wait. kind=input returns text, never permission. kind=decision needs question, two options and default_option; brief is optional. Set workKey for where the issue arose and decisionKey for the ancestor it changes; the host attaches the goal path automatically. Phrase the question as an outcome-level choice. Resolve local implementation choices yourself; a blocked approach may be replaced instead of escalated. Roots ask humans, children ask their stored parent. approved:false permits only investigation or authorized unaffected work. Use reply for pending requests; messages do not answer them.'
   readonly parameters: ToolParameters = parameters

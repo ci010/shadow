@@ -12,6 +12,7 @@ export function toolInvocationKey(call: ToolCall, context: ExecutionContext): st
     args: lazy ? call.arguments.args : call.arguments,
     instance: lazy ? call.arguments.instance : undefined,
     projectId: context.projectId, folderId: context.folderId, cwd: context.cwd,
+    layerfsWorkdir: context.layerfsWorkdir,
     remoteWorkdir: context.remoteWorkdir ? { nodeId: context.remoteWorkdir.nodeId, workdirId: context.remoteWorkdir.workdirId } : undefined }
   return createHash('sha256').update(JSON.stringify(value, (_key, item) =>
     item && typeof item === 'object' && !Array.isArray(item)

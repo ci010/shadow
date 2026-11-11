@@ -51,6 +51,7 @@ export class SubagentTool implements Tool {
   readonly name = 'subagent'
   // Orchestration remains on Main; buildSession preserves the parent's opaque
   // workdir/folder binding and child tools dispatch through its remote executor.
+  readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description = 'Create an asynchronous reviewable local task, or invoke a blocking bounded leaf call. Declare review at creation: parent (default) or an independently managed agent. Structured verdicts automatically rerun requested changes in the same worker history; only PASS delivers success. Remote A2A tasks remain legacy one-shot and do not support this review lifecycle. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.'
   readonly parameters: ToolParameters = {
@@ -140,6 +141,10 @@ export class SubagentTool implements Tool {
       return this.remote.start(args.agent_type, args.task, ctx)
     }
     const parentState = this.sessions.getSessionState(ctx.sessionId)
+    if (ctx.layerfsWorkdir && (parentState?.workdir?.version !== 2
+      || parentState.workdir.nodeId !== 'layerfs' || parentState.workdir.workdirId !== ctx.layerfsWorkdir.workspace)) {
+      return 'Error: LayerFS parent mount binding is missing or changed; no subagent was started. Refresh the working context before delegating.'
+    }
     if (ctx.remoteWorkdir && (parentState?.workdir?.version !== 2
       || parentState.workdir.nodeId !== ctx.remoteWorkdir.nodeId
       || parentState.workdir.workdirId !== ctx.remoteWorkdir.workdirId)) {

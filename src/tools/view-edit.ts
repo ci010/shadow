@@ -10,6 +10,7 @@ export class ViewEditTool implements Tool {
   readonly readonly = true
   // This reads Main's session log, not the remote workdir's filesystem.
   readonly supportsRemoteWorkdir = true
+  readonly supportsLayerFSWorkdir = true
   readonly description = 'View the recorded patch for a write receipt edit ID in this session. Returns plain unified hunks, not the current file. No changes and unavailable diffs are reported explicitly.'
   readonly parameters: ToolParameters = {
     type: 'object',

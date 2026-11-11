@@ -7,7 +7,7 @@ import { localFolderWorkdirRef, type WorkdirState, type WorkdirRefV2 } from '../
 import type { FolderRecord } from './contracts.ts'
 import type { ProjectCatalog } from '../projects/catalog.ts'
 import type { RemoteFolderOwnership } from './remote-ownership.ts'
-import type { RemoteFolderRecord } from './contracts.ts'
+import type { LayerFSFolderRecord, RemoteFolderRecord } from './contracts.ts'
 import { isManagedWorkdir, ownsManagedWorkdir } from '../execution/managed-workdir.ts'
 
 // A rename must not mint new resource identities for existing directory grants.
@@ -88,6 +88,8 @@ function parseRecords(value: unknown): FolderRecord[] {
       !Number.isFinite(Date.parse(item.createdAt)) ||
       new Date(item.createdAt).toISOString() !== item.createdAt
     ) throw invalid()
+    if (item.kind !== undefined && item.kind !== 'local') throw invalid()
+    if (item.workdir !== undefined || item.mount !== undefined || item.identity !== undefined) throw invalid()
     let path: string
     try {
       path = absoluteDirectoryPath(item.path)
@@ -102,6 +104,15 @@ function parseRecords(value: unknown): FolderRecord[] {
   })
 }
 
+/** Injected by the owning Project service, never supplied by tool arguments.
+ * authorize must verify the live Project namespace, not merely decode mount metadata.
+ * Availability is asynchronous; synchronous lookup only declares registry membership.
+ */
+export interface LayerFSFolderService {
+  authorize: (mount: string, signal: AbortSignal) => Promise<{ path: string; name?: string }>
+  requireAvailable: (folder: LayerFSFolderRecord, signal: AbortSignal) => Promise<void>
+}
+
 export class FolderRegistry {
   readonly filePath: string
   #records: FolderRecord[] = []
@@ -109,6 +120,18 @@ export class FolderRegistry {
   #ready = false
   #writes: Promise<unknown> = Promise.resolve()
   #remoteOwnership?: RemoteFolderOwnership
+  #layerfs?: LayerFSFolderService
+
+  configureLayerFS(service: LayerFSFolderService): void { this.#layerfs = service }
+
+  async registerLayerFS(mount: string, signal: AbortSignal, description?: string): Promise<LayerFSFolderRecord> {
+    this.#assertReady()
+    if (!this.scope || !this.#layerfs) throw new FolderError('layerfs_unavailable', 'Project LayerFS authorization is not configured.', 503)
+    signal.throwIfAborted()
+    const metadata = await this.#layerfs.authorize(mount, signal)
+    signal.throwIfAborted()
+    return this.scope.catalog.registerLayerFSFolder(this.scope.projectId, mount, metadata, signal, description)
+  }
 
   constructor(workspace: string, private readonly scope?: { projectId: string; catalog: ProjectCatalog }) {
     this.filePath = projectStoragePath(absoluteDirectoryPath(workspace), 'folders.v2.json')
@@ -198,7 +221,8 @@ export class FolderRegistry {
     if (!this.scope) throw new FolderError('projects_unavailable', 'Project folder ownership is not configured.', 503)
     const folder = this.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
-    if (folder.kind === 'remote' || targetProjectId !== undefined) await this.requireAvailable(id, signal)
+    if (folder.kind === 'layerfs' && targetProjectId !== undefined) throw new FolderError('layerfs_project_bound', 'LayerFS mounts cannot move between Projects.', 409)
+    if (folder.kind === 'remote' || folder.kind === 'layerfs' || targetProjectId !== undefined) await this.requireAvailable(id, signal)
     return this.scope.catalog.changeFolderProject(this.scope.projectId, id, targetProjectId, signal)
   }
 
@@ -206,7 +230,7 @@ export class FolderRegistry {
     if (state.folderId) {
       const folder = this.get(state.folderId)
       if (!folder) throw new FolderError('folder_access_revoked', 'This conversation’s folder was removed or moved. Its history is preserved.', 409)
-      const bound = folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id)
+      const bound = folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id)
       if (!state.workdir || bound.nodeId !== state.workdir.nodeId || bound.workdirId !== state.workdir.workdirId) {
         throw new FolderError('folder_workdir_mismatch', 'This conversation’s workdir does not match its registered folder. No alternate target was selected.', 409)
       }
@@ -281,6 +305,11 @@ export class FolderRegistry {
       if (!this.#remoteOwnership) throw new FolderError('remote_folders_unavailable', 'Remote folder ownership is not configured.', 503)
       return this.#remoteOwnership.requireAvailable(folder, signal)
     }
+    if (folder.kind === 'layerfs') {
+      if (!this.#layerfs) throw new FolderError('layerfs_unavailable', 'Project LayerFS authorization is not configured.', 503)
+      await this.#layerfs.requireAvailable(folder, signal)
+      return folder
+    }
     const canonical = await existingDirectory(folder.path)
     if (pathKey(canonical) !== pathKey(folder.path)) {
       throw new FolderError('folder_unavailable', 'The registered folder changed. Open the folder again.', 409)
@@ -289,11 +318,15 @@ export class FolderRegistry {
   }
 
   lookupWorkdir(ref: WorkdirRefV2): WorkdirState | undefined {
+    if (ref.nodeId === 'layerfs') {
+      const folder = this.list().find(folder => folder.kind === 'layerfs' && folder.mount === ref.workdirId)
+      return { node: 'online', ...(folder && this.#layerfs ? { workdir: { online: true, backend: 'layerfs' as const, workspace: ref.workdirId } } : {}) }
+    }
     if (ref.version !== 2 || ref.nodeId !== 'local' || !ref.workdirId.startsWith(FOLDER_PREFIX)) {
       return undefined
     }
     const folder = this.get(ref.workdirId.slice(FOLDER_PREFIX.length))
-    if (!folder || folder.kind === 'remote') return { node: 'online' }
+    if (!folder || folder.kind === 'remote' || folder.kind === 'layerfs') return { node: 'online' }
     let online = false
     try {
       online = statSync(folder.path).isDirectory() &&

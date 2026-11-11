@@ -7,6 +7,7 @@ import type { ExecShell } from './shell.ts'
 
 export interface ResolvedToolTarget {
   cwd?: string
+  layerfsWorkdir?: { workspace: string }
   remoteWorkdir?: { nodeId: string; workdirId: string; executor: Executor }
   fileChangeTarget: { nodeId: string; workdirId: string; folderId?: string }
 }
@@ -43,6 +44,8 @@ export interface ExecutionContext extends MessageContext {
   resolveToolTarget?: (folder: string, operation: string) => Promise<ResolvedToolTarget>
   /** Only for host-stamped reconciliation of a persisted V1 tool call; not a new targeting API. */
   resolveStoredToolTarget?: (nodeId: string, workdirId: string, operation: string) => Promise<ResolvedToolTarget>
+  /** Non-host sandbox identity. Mutually exclusive with cwd and remoteWorkdir; never resolve its paths on Main. */
+  layerfsWorkdir?: { workspace: string }
   /** Resource-backed remote workspace. Local-only tools must reject this context. */
   remoteWorkdir?: {
     nodeId: string

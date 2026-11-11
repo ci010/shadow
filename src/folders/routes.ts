@@ -142,6 +142,7 @@ export class FolderService {
         const query = fileSearchQuery(c)
         if (!query) return c.json({ error: 'invalid_query' }, 400)
         const folder = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+        if (folder.kind === 'layerfs') throw new FolderError('layerfs_route_unsupported', 'This UI file operation does not support LayerFS mounts; no Main fallback.', 409)
         if (folder.kind !== 'remote') return serveLocalFileSearch(c, folder.path)
         const output = await executeRemoteFilesystemText(this.#remoteTarget(c, folder),
           FILESYSTEM_READ_OPERATION, { path: '.', query })
@@ -157,6 +158,7 @@ export class FolderService {
         try {
           this.#assertOpen()
           const folder = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+          if (folder.kind === 'layerfs') throw new FolderError('layerfs_route_unsupported', 'This UI operation does not support LayerFS mounts; no Main fallback.', 409)
           if (folder.kind === 'remote') return serveRemoteGit(c, this.#remoteTarget(c, folder), operation)
           return await serveLocalGit(c, folder.path, operation)
         } catch (error) {
@@ -169,7 +171,7 @@ export class FolderService {
       return createHtmlPreview(c, async () => {
         this.#assertOpen()
         const folder = await this.#options.registry.requireAvailable(id)
-        return folder.kind === 'remote' ? undefined : folder.path
+        return folder.kind === 'remote' || folder.kind === 'layerfs' ? undefined : folder.path
       })
     })
     // Read-only /:id/{files,raw,preview,static/*} uses the registered folder,
@@ -181,6 +183,7 @@ export class FolderService {
           const folder = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
           const path = operation === 'static' ? staticFilePath(c) : c.req.query('path') ?? ''
           if (path === null) return c.json({ error: 'invalid_path' }, 400)
+          if (folder.kind === 'layerfs') throw new FolderError('layerfs_route_unsupported', 'This UI operation does not support LayerFS mounts; no Main fallback.', 409)
           if (folder.kind === 'remote') return serveRemoteFolderFiles(c, this.#remoteTarget(c, folder), folder,
             operation === 'static' ? 'raw' : operation, path)
           return await serveLocalFiles(c, folder.path, { folderId: folder.id },

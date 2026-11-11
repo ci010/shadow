@@ -629,6 +629,7 @@ export class WebChannel extends AbstractChannel {
         return mediaFileResponse(image, c.req.raw, c.req.query('download') === '1')
       }
 
+      if (workdir.locality === 'layerfs') return c.json({ error: 'LayerFS media routes are not supported; no Main fallback' }, 404)
       const uploadsRoot = join(locations.sessionDataDir, 'uploads')
       const privateUpload = explicitSessionId !== undefined ||
         (isAbsolute(rawPath) && !escapesRoot(uploadsRoot, rawPath))
