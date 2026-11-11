@@ -14,6 +14,7 @@ import { BotWakes } from '../../bots/wake.ts'
 import { WorkDispatcher } from '../../cron/work-dispatch.ts'
 import { ProjectDispatchFiles } from '../../cron/work-dispatch-files.ts'
 import { WorkDispatchAgent } from '../../cron/work-dispatch-agent.ts'
+import { WorkBootstrapTool } from '../../cron/work-bootstrap.ts'
 import { DerivedWorkspaces } from '../../folders/derived-workspace.ts'
 import { RemoteDerivedWorkspaceBackend } from '../../folders/remote-derived-workspace.ts'
 import { DERIVED_WORKSPACE_OPERATION } from '../../execution/derived-workspace-contract.ts'
@@ -1006,6 +1007,18 @@ export async function createProjectRuntime(
   })
   tools.register(new UseProjectTool({
     projectId: project.id, folders: folderRegistry,
+    beforeSwitch: async (ctx, folderId) => {
+      const state = sessions.getSessionState(ctx.sessionId)
+      if (!state?.automaticWork) return
+      if (state.automaticWork.phase === 'bootstrap') {
+        workDispatcher.assertBootstrapBinding(ctx.sessionId, folderId)
+        const retained = await derivedWorkspaces.retained(`automation:${ctx.sessionId}`)
+        if (!retained || retained.workspaceId !== folderId || retained.sourceId !== state.automaticWork.limits.folderId) throw new Error('Prepared automatic isolation receipt is unavailable')
+        await validateWorkTarget(state.automaticWork.limits, ctx.signal)
+        await derivedWorkspaces.verify(retained, ctx.signal)
+        workDispatcher.assertBootstrapBinding(ctx.sessionId, folderId)
+      } else if (state.folderId !== folderId) throw new Error('Automatic Work must retain its isolated Workspace')
+    },
     switched: ctx => { importTool.clearFolderSkillTools(ctx.tools); importTool.clearFolderMcpTools(ctx.tools) },
   }))
   context.register(initiativeProvider(initiatives))
@@ -1244,12 +1257,16 @@ export async function createProjectRuntime(
   // ── Cron service ──────────────────────────────────────────────────
   const cronService = new CronService(workspace, config.cron.timezone)
   let workDispatchReady = false
-  const validateWorkTarget = async (settings: WorkDispatchConfig, signal: AbortSignal) => {
+  const validateWorkProgram = async (settings: WorkDispatchConfig, signal: AbortSignal) => {
     signal.throwIfAborted()
     await sessions.validateExecutionInference({ model: settings.model, reasoningEffort: settings.reasoningEffort })
     signal.throwIfAborted()
-    if (!settings.folderId) throw new Error('Select a registered repository Workspace first.')
+  }
+  const validateWorkTarget = async (settings: WorkDispatchConfig, signal: AbortSignal) => {
+    await validateWorkProgram(settings, signal)
+    if (!settings.folderId) throw new Error('Implementation requires a registered repository source. Bootstrap with work_bootstrap before implementation.')
     const folder = await folderRegistry.requireExecutionAvailable(settings.folderId, signal)
+    if (coordinator && folder.kind !== 'remote') throw new Error('Main local execution is disabled; select an authorized online Child source. No Main fallback.')
     if (folder.kind === 'remote') {
       const available = mainCluster.workdirLookup(folder.workdir, DERIVED_WORKSPACE_OPERATION)
       if (available.node !== 'online' || !available.workdir?.online || available.incompatible) {
@@ -1262,6 +1279,7 @@ export async function createProjectRuntime(
     }
   }
   const workDispatcher = new WorkDispatcher({ projectId: project.id, store: initiatives, sessions,
+    validateProgram: validateWorkProgram,
     validateTarget: validateWorkTarget,
     capacityPolicy: () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID)?.program,
     nodeForTarget: settings => {
@@ -1273,7 +1291,7 @@ export async function createProjectRuntime(
       const ref = remote ? folder.workdir : localFolderWorkdirRef(folder.id)
       const state = remote ? mainCluster.workdirLookup(ref, DERIVED_WORKSPACE_OPERATION) : folderRegistry.lookupWorkdir(ref)
       const advertised = remote ? mainCluster.registry.listWorkdirs(ref.nodeId).find(item => item.workdirId === ref.workdirId) : undefined
-      const supported = !!state && state.node === 'online' && !!state.workdir?.online && !state.incompatible
+      const supported = (!coordinator || remote) && !!state && state.node === 'online' && !!state.workdir?.online && !state.incompatible
       return { folderId: folder.id, name: folder.name, nodeId: ref.nodeId,
         platform: remote ? advertised?.platform : process.platform, supported,
         reason: supported ? 'Repository-root identity is checked again on its owning device before admission.'
@@ -1283,7 +1301,7 @@ export async function createProjectRuntime(
       await validateWorkTarget(settings, signal)
       const folder = await folderRegistry.requireExecutionAvailable(settings.folderId!, signal)
       const retained = await derivedWorkspaces.retained(`automation:${sessionId}`)
-      const branch = retained?.baseBranch ?? (folder.kind === 'remote'
+      const branch = settings.baseBranch ?? retained?.baseBranch ?? (folder.kind === 'remote'
         ? (await remoteDerived.inspectSource(folder, signal)).branch
         : await isolationGit(folder.path, ['symbolic-ref', 'HEAD'], signal))
       const prepared = await derivedWorkspaces.createDerivedWorkspace({ source: folder.id, branch, idempotencyKey: `automation:${sessionId}` }, signal)
@@ -1316,6 +1334,10 @@ export async function createProjectRuntime(
     },
     changed: async (record, previous) => { realtime.invalidateSessions(); await sessions.notifyWorkChange(record, previous) },
   })
+  const workBootstrap = new WorkBootstrapTool(project.id, workDispatcher,
+    (nodeId, path, signal) => topics.registerFolder(path, signal, undefined, nodeId))
+  importTool.registerBuiltin(workBootstrap.name, workBootstrap)
+  coordinator?.allow(workBootstrap)
   const workFinished = bus.on('session.turn.finished', scope.bind(fact => workDispatcher.finished(fact)))
   cleanup.push(() => { bus.off(workFinished) })
   const assertBotWake = (scope: BotHostScope) => {
@@ -1437,7 +1459,7 @@ export async function createProjectRuntime(
       await configStore.update(raw => ({ ...raw, organization: { ...(raw.organization as object),
         enabled } }))
     },
-  }, automationProfiles, { validate: validateWorkTarget, running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
+  }, automationProfiles, { validate: (settings, signal) => settings.folderId ? validateWorkTarget(settings, signal) : validateWorkProgram(settings, signal), running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
     resume: (key, version, signal, acknowledgeToolReplay) => workDispatcher.resume(key, version, signal, acknowledgeToolReplay) })
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'

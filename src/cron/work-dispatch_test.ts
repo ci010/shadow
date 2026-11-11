@@ -37,6 +37,10 @@ function fixture(home: string, projectId = 'a') {
     getSessionRecovery: () => replay ? { id: 'recovery', pendingToolCalls: 1 } : undefined,
     resumeSession: async (id: string, _recovery: string, acknowledged: boolean) => { assert.equal(acknowledged, true); active.add(id) },
     bindAutomaticWorkWorkspace: async (id: string, folderId: string) => { states.get(id)!.folderId = folderId },
+    prepareAutomaticWorkWorkspace: async (id: string, limits: any, folderId: string, workdir: any) => {
+      const state = states.get(id)!
+      state.automaticWork = { ...state.automaticWork!, limits, prepared: { folderId, nodeId: workdir.nodeId, workdirId: workdir.workdirId } }
+    },
   } as unknown as WorkDispatcherDeps['sessions']
   const deps: WorkDispatcherDeps = { projectId, store, sessions,
     validateTarget: async value => { if (!value.folderId || targetFails) throw new Error('Workspace unavailable/remote') },
@@ -457,5 +461,44 @@ test('remote isolation binds its exact Child workdir without leaking addressing 
     assert.equal('workdir' in claimed.automaticExecution!, false, 'Work receipts retain the registered Folder, not an unchecked alternate address')
     assert.equal(f.dispatcher.snapshot(config).capacity.onDevice, 1)
     assert.equal(f.dispatcher.snapshot(config).capacity.nodeId, 'windows-child')
+  } finally { f.store.close() }
+}))
+
+test('bootstrap rechecks and reserves exact-device capacity before binding; failed/aborted preparation retains its assignee', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  const policy = workDispatchConfigSchema.parse({ kind: 'work-dispatch', maxConcurrent: 4, maxConcurrentPerDevice: 1 })
+  const round = { ...job, program: policy }
+  f.deps.validateProgram = async () => {}
+  f.deps.nodeForTarget = settings => settings.folderId === 'remote' ? 'child' : 'local'
+  f.deps.prepare = async (_settings, id) => ({ folderId: `isolated-${id}`, path: '/opaque/child/worktree', branch: 'shadow/fixture',
+    workdir: { version: 2, nodeId: 'child', workdirId: `isolated-${id}` } })
+  const dispatcher = new WorkDispatcher(f.deps)
+  try {
+    const first = f.create(), second = f.create()
+    const occupied = await dispatcher.dispatchWork(round, first.key, first.sequence, { folderId: 'remote' }, abort())
+    const bootstrap = await dispatcher.dispatchWork(round, second.key, second.sequence, {}, abort())
+    const id = bootstrap.workflow!.assignee!
+    assert.equal(f.states.get(id)?.automaticWork?.phase, 'bootstrap')
+    await assert.rejects(dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/main', abort()), /capacity is occupied/)
+    assert.equal(f.get(second).workflow?.assignee, id)
+    assert.equal(f.states.get(id)?.folderId, undefined)
+    const controller = new AbortController(); controller.abort()
+    await assert.rejects(dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/main', controller.signal), /abort/i)
+    f.active.delete(occupied.workflow!.assignee!)
+    const current = f.get(first)
+    f.store.saveWork({ ...current, sequence: current.sequence + 1, workflow: { ...current.workflow!, status: 'done' } }, current.sequence, 'user', 'fixture_done')
+    await dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/main', abort())
+    assert.equal(f.states.get(id)?.automaticWork?.prepared?.nodeId, 'child')
+    assert.equal(f.states.get(id)?.folderId, undefined, 'preparation is not binding')
+    assert.equal(dispatcher.snapshot({ ...policy, folderId: 'remote' }).capacity.onDevice, 1)
+    const preparedId = f.states.get(id)!.automaticWork!.prepared!.folderId
+    dispatcher.assertBootstrapBinding(id, preparedId)
+    await assert.rejects(dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/another', abort()), /same base/)
+    f.active.delete(id)
+    await dispatcher.recover()
+    assert.equal(f.get(second).workflow?.assignee, id)
+    assert.equal(f.get(second).workflow?.status, 'blocked', 'restart retains effects rather than replaying admission')
+    assert.equal(f.states.get(id)?.automaticWork?.phase, 'bootstrap')
+    assert.equal(f.states.get(id)?.automaticWork?.prepared?.folderId, preparedId)
   } finally { f.store.close() }
 }))

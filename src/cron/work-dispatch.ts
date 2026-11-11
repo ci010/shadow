@@ -7,12 +7,13 @@ import { LOCAL_NODE_ID, localFolderWorkdirRef, type WorkdirRefV2 } from '../sess
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { SessionTurnFact, SessionInput, DeliveryReceipt } from '../sessions/input.ts'
 import type { CronJob } from './service.ts'
-import { WORK_DISPATCH_ID, workDispatchConfigSchema, AUTOMATIC_WORK_GUIDANCE, type WorkDispatchConfig, workDispatchSelectionSchema, type WorkDispatchSelection } from './work-dispatch-contract.ts'
+import { WORK_DISPATCH_ID, workDispatchConfigSchema, AUTOMATIC_WORK_GUIDANCE, AUTOMATIC_WORK_BOOTSTRAP_GUIDANCE, type WorkDispatchConfig, workDispatchSelectionSchema, type WorkDispatchSelection } from './work-dispatch-contract.ts'
 
 export interface WorkDispatcherDeps {
   projectId: string
   store: InitiativeStore
-  sessions: Pick<SessionManager, 'getSessionState' | 'isSessionBusy' | 'setAutomaticWorkAdmission' | 'buildSession' | 'deliver' | 'inputs' | 'yields' | 'isWaitingForCall' | 'isWaitingForExternalExecution' | 'getSessionRecovery' | 'resumeSession' | 'bindAutomaticWorkWorkspace'>
+  sessions: Pick<SessionManager, 'getSessionState' | 'isSessionBusy' | 'setAutomaticWorkAdmission' | 'buildSession' | 'deliver' | 'inputs' | 'yields' | 'isWaitingForCall' | 'isWaitingForExternalExecution' | 'getSessionRecovery' | 'resumeSession' | 'bindAutomaticWorkWorkspace' | 'prepareAutomaticWorkWorkspace'>
+  validateProgram?(config: WorkDispatchConfig, signal: AbortSignal): Promise<void>
   validateTarget(config: WorkDispatchConfig, signal: AbortSignal): Promise<void>
   nodeForTarget?(config: WorkDispatchConfig): string
   capacityPolicy?(): Pick<WorkDispatchConfig, 'maxConcurrent' | 'maxConcurrentPerDevice'> | undefined
@@ -37,7 +38,10 @@ export class WorkDispatcher {
   private capacity(config: WorkDispatchConfig, excluding?: string) {
     const active = this.deps.store.workRecords().filter(record => record.key !== excluding && this.occupies(record))
     const nodeId = this.deps.nodeForTarget?.(config) ?? LOCAL_NODE_ID
-    const onDevice = active.filter(record => (this.deps.sessions.getSessionState(record.workflow!.assignee!)?.workdir?.nodeId ?? LOCAL_NODE_ID) === nodeId).length
+    const onDevice = active.filter(record => {
+      const state = this.deps.sessions.getSessionState(record.workflow!.assignee!)
+      return (state?.automaticWork?.prepared?.nodeId ?? state?.workdir?.nodeId ?? LOCAL_NODE_ID) === nodeId
+    }).length
     // Recovery retains the worker's budgets/model/source, not a stale Project capacity.
     const policy = this.deps.capacityPolicy?.() ?? config
     return { nodeId, active: active.length, onDevice, maxConcurrent: policy.maxConcurrent, maxConcurrentPerDevice: policy.maxConcurrentPerDevice,
@@ -101,7 +105,7 @@ export class WorkDispatcher {
         if (!this.capacity(state!.automaticWork!.limits, record.key).available) throw new WorkConflict('Project or device automatic execution capacity is occupied.')
       }
       check()
-      await this.deps.verify(state!.automaticWork!.limits, sessionId, record.automaticExecution!, signal)
+      if (state!.automaticWork!.phase !== 'bootstrap') await this.deps.verify(state!.automaticWork!.limits, sessionId, record.automaticExecution!, signal)
       check()
       return admit(check) // Recheck after async Session preparation, immediately before dispatch().
     }
@@ -219,7 +223,7 @@ export class WorkDispatcher {
     if (job.id !== WORK_DISPATCH_ID) throw new Error('Unknown Work dispatcher')
     const config = workDispatchConfigSchema.parse(job.program)
     const ready = await this.exclusive(async () => {
-      await this.deps.validateTarget(config, signal)
+      await (this.deps.validateProgram ?? this.deps.validateTarget)(config, signal)
       await this.recover()
       for (const record of this.deps.store.workRecords()) {
         if (this.occupies(record) && record.automaticExecution!.stage === 'claimed') await this.launch(record, signal)
@@ -227,8 +231,8 @@ export class WorkDispatcher {
       const records = this.deps.store.workRecords()
       // A full default device must not prevent considering another supported device,
       // but all-full/unsupported inventories do not spend a fresh inference every tick.
-      const targets = this.deps.targets?.().filter(target => target.supported)
-      const hasCapacity = targets ? targets.some(target => this.capacity({ ...config, folderId: target.folderId }).available) : this.capacity(config).available
+      const targets = this.deps.targets?.()
+      const hasCapacity = targets?.length ? targets.some(target => target.supported && this.capacity({ ...config, folderId: target.folderId }).available) : this.capacity(config).available
       return hasCapacity && records.some(record => automaticWorkEligible(record, records))
     }, signal)
     if (!ready) return // no session and no inference when idle
@@ -246,7 +250,7 @@ export class WorkDispatcher {
     if (job.id !== WORK_DISPATCH_ID) throw new Error('Unknown Work dispatcher')
     const config = workDispatchConfigSchema.parse({ ...workDispatchConfigSchema.parse(job.program), ...workDispatchSelectionSchema.parse(selection) })
     signal.throwIfAborted()
-    await this.deps.validateTarget(config, signal)
+    await (config.folderId ? this.deps.validateTarget : this.deps.validateProgram ?? this.deps.validateTarget)(config, signal)
     const records = this.deps.store.workRecords()
     const candidate = records.find(record => record.key === key)
     if (!candidate || candidate.sequence !== version || !automaticWorkEligible(candidate, records)) throw new WorkConflict('Work changed or is not eligible; dependencies and ancestor boundaries must be satisfied.')
@@ -257,14 +261,14 @@ export class WorkDispatcher {
     const sessionId = `work-executor:${token}`
     let prepared: Awaited<ReturnType<WorkDispatcherDeps['prepare']>> | undefined
     let preparationError: unknown
-    try { prepared = await this.deps.prepare(config, sessionId, signal) }
+    try { if (config.folderId) prepared = await this.deps.prepare(config, sessionId, signal) }
     catch (error) { preparationError = error }
     signal.throwIfAborted()
     let state = this.deps.sessions.getSessionState(sessionId)
     if (!state) {
       await this.deps.sessions.buildSession(sessionId, undefined, { mode: 'session', agentType: 'general',
         config: { ...(config.model ? { model: config.model } : {}), ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}) },
-        folderId: prepared?.folderId, workdir: prepared ? prepared.workdir ?? localFolderWorkdirRef(prepared.folderId) : undefined, automaticWork: { key: candidate.key, jobId: WORK_DISPATCH_ID, limits: config },
+        folderId: prepared?.folderId, workdir: prepared ? prepared.workdir ?? localFolderWorkdirRef(prepared.folderId) : undefined, automaticWork: { key: candidate.key, jobId: WORK_DISPATCH_ID, limits: config, ...(!config.folderId ? { phase: 'bootstrap' as const } : {}) },
         automation: { jobId: job.id, name: job.name ?? 'Work auto-dispatch', runId: sessionId, startedAt: new Date().toISOString(), contextMode: 'fresh',
           config: { source: 'cron', schedule: job.schedule, agentType: 'general' } } })
       state = this.deps.sessions.getSessionState(sessionId)
@@ -288,13 +292,14 @@ export class WorkDispatcher {
     if (!this.owned(record) || record.paused || ['done', 'cancelled'].includes(record.workflow!.status)
       || record.workflow!.status === 'blocked' && record.automaticExecution!.stage !== 'claimed') return
     const execution = record.automaticExecution!
-    if (!execution.folderId || this.deps.sessions.getSessionState(execution.sessionId)?.folderId !== execution.folderId) {
+    const bootstrap = this.deps.sessions.getSessionState(execution.sessionId)?.automaticWork?.phase === 'bootstrap'
+    if (!bootstrap && (!execution.folderId || this.deps.sessions.getSessionState(execution.sessionId)?.folderId !== execution.folderId)) {
       await this.block(record.key, 'No verified isolated Workspace is bound to this executor.'); return
     }
     const state = this.deps.sessions.getSessionState(execution.sessionId)
     try {
       if (!state?.automaticWork) throw new Error('Automatic executor configuration missing')
-      await this.deps.verify(state.automaticWork.limits, execution.sessionId, execution, signal)
+      if (!bootstrap) await this.deps.verify(state.automaticWork.limits, execution.sessionId, execution, signal)
     } catch (error) { await this.block(record.key, `Isolation identity verification failed: ${String(error).slice(0, 800)}`); return }
     // Write-ahead admission barrier: a crash here is blocked, never blindly resent.
     record = await this.save(record, { automaticExecution: { ...execution, stage: 'delivering' } }, 'automatic_delivery')
@@ -306,7 +311,7 @@ export class WorkDispatcher {
       const receipt = await this.deps.sessions.deliver(execution.sessionId, {
         id: execution.inputId, kind: 'message', timestamp: new Date().toISOString(), policy: 'queue',
         source: { kind: 'event', eventId: execution.inputId, type: 'work-assignment', source: 'system' },
-        content: `${AUTOMATIC_WORK_GUIDANCE}\n\nAssigned Work key: ${record.key}. Read v:works/keys/${encodeURIComponent(record.key)}. Isolated branch: ${execution.branch}.` +
+        content: `${bootstrap ? AUTOMATIC_WORK_BOOTSTRAP_GUIDANCE + '\n\n' : ''}${AUTOMATIC_WORK_GUIDANCE}\n\nAssigned Work key: ${record.key}. Read v:works/keys/${encodeURIComponent(record.key)}. Isolated branch: ${execution.branch}.` +
           (record.workflow!.status === 'blocked' ? `\nExisting blocker is retained: ${record.workflow!.blockedReason}. This first assignment is for blocker clarification and publisher help, not permission to clear the blocker or execute blocked actions.` : ''),
       })
       if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.inputId !== execution.inputId || receipt.sessionId !== execution.sessionId) throw new Error('Unconfirmed Work admission')
@@ -314,6 +319,50 @@ export class WorkDispatcher {
       if (this.owned(current) && current.automaticExecution!.stage === 'delivering') await this.save(current,
         { automaticExecution: { ...current.automaticExecution!, stage: 'running' } }, 'automatic_admitted')
     } catch (error) { await this.block(record.key, `Work delivery failed or has an unknown outcome: ${String(error).slice(0, 800)}. Inspect admission before explicit recovery.`) }
+  }
+
+  /** Narrow host grant: only the current, unpaused bootstrap assignee, never Work text. */
+  assertBootstrap(sessionId: string): WorkRecord {
+    const state = this.deps.sessions.getSessionState(sessionId)
+    const record = state?.automaticWork && this.current(state.automaticWork.key)
+    if (!state || state.projectId !== this.deps.projectId || state.mode !== 'session' || state.automaticWork?.phase !== 'bootstrap'
+      || state.folderId || state.workdir || !record || !this.owned(record) || record.workflow!.assignee !== sessionId || record.paused
+      || ['done', 'cancelled'].includes(record.workflow!.status)) throw new WorkConflict('Requires the current unbound automatic bootstrap assignee in this Project.')
+    this.assertBoundaries(record)
+    return record
+  }
+
+  assertBootstrapBinding(sessionId: string, folderId: string): void {
+    const record = this.assertBootstrap(sessionId)
+    const automatic = this.deps.sessions.getSessionState(sessionId)!.automaticWork!
+    if (automatic.prepared?.folderId !== folderId || record.automaticExecution!.folderId !== folderId) throw new WorkConflict('Bind only the host-prepared isolated Workspace, never its source.')
+    if (!this.capacity(automatic.limits, record.key).available) throw new WorkConflict('Project or selected device capacity is occupied.')
+  }
+
+  /** A retry reuses the automation worktree receipt; it cannot change the chosen source. */
+  prepareBootstrap(sessionId: string, folderId: string, branch: string, signal: AbortSignal): Promise<{ folderId: string; path: string; branch: string }> {
+    return this.exclusive(async () => {
+      signal.throwIfAborted()
+      let record = this.assertBootstrap(sessionId)
+      const state = this.deps.sessions.getSessionState(sessionId)!
+      const automatic = state.automaticWork!
+      if (automatic.limits.folderId && automatic.limits.folderId !== folderId) throw new WorkConflict('Bootstrap source is already selected; recover with the same source.')
+      if (automatic.limits.baseBranch && automatic.limits.baseBranch !== branch) throw new WorkConflict('Bootstrap base branch is already selected; recover with the same base.')
+      const config = workDispatchConfigSchema.parse({ ...automatic.limits, folderId, baseBranch: branch })
+      await this.deps.validateTarget(config, signal)
+      if (!this.capacity(config, record.key).available) throw new WorkConflict('Project or selected device capacity is occupied; retain this bootstrap worker and retry later.')
+      this.assertBootstrap(sessionId)
+      const prepared = await this.deps.prepare(config, sessionId, signal)
+      signal.throwIfAborted()
+      record = this.assertBootstrap(sessionId)
+      // Persist isolation evidence before publishing a binding grant. A failed state write
+      // retains the same receipt and assignee; a retry never creates another worktree.
+      await this.save(record, { automaticExecution: { ...record.automaticExecution!, folderId: prepared.folderId,
+        path: prepared.path, branch: prepared.branch } }, 'automatic_bootstrap_prepared')
+      await this.deps.sessions.prepareAutomaticWorkWorkspace(sessionId, config, prepared.folderId,
+        prepared.workdir ?? localFolderWorkdirRef(prepared.folderId))
+      return prepared
+    }, signal)
   }
 
   isRunning(): boolean {
@@ -345,7 +394,8 @@ export class WorkDispatcher {
     const state = this.deps.sessions.getSessionState(execution.sessionId)
     if (!state?.automaticWork) throw new WorkConflict('Original executor is unavailable; explicit reassignment is required.')
     if (!this.capacity(state.automaticWork.limits, key).available) throw new WorkConflict('Project or device automatic execution capacity is occupied; finish or stop an executor first.')
-    if (!execution.folderId) {
+    const bootstrap = state.automaticWork.phase === 'bootstrap'
+    if (!execution.folderId && !bootstrap) {
       await this.deps.validateTarget(state.automaticWork.limits, signal)
       const prepared = await this.deps.prepare(state.automaticWork.limits, execution.sessionId, signal)
       await this.deps.sessions.bindAutomaticWorkWorkspace(execution.sessionId, prepared.folderId, prepared.workdir)
@@ -353,7 +403,7 @@ export class WorkDispatcher {
         folderId: prepared.folderId, path: prepared.path, branch: prepared.branch } }, 'automatic_isolation_recovered')
     }
     signal.throwIfAborted()
-    await this.deps.verify(state.automaticWork.limits, execution.sessionId, record.automaticExecution!, signal)
+    if (!bootstrap) await this.deps.verify(state.automaticWork.limits, execution.sessionId, record.automaticExecution!, signal)
     signal.throwIfAborted()
     const recovery = this.deps.sessions.getSessionRecovery(execution.sessionId)
     if (recovery?.pendingToolCalls && !acknowledgeToolReplay) throw new WorkConflict('Unfinished tools require explicit acknowledgeToolReplay after inspection.')
