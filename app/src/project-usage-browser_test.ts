@@ -86,7 +86,13 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".echart-plot canvas").length'),3,await win.webContents.executeJavaScript('document.body.innerText'));
           for (const locale of ['en','zh-CN']) for (const dark of [false,true]) for (const width of [1180,700,350]) {
             await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+'); document.querySelector("#app").style.width="'+width+'px"; window.usageLocale('+JSON.stringify(locale)+');');
-            await new Promise(r=>setTimeout(r,80));
+            // ResizeObserver + canvas resize can settle after more than one frame,
+            // especially in a hidden Windows Electron window. Await the observable
+            // size rather than relying on a fixed 80ms delay.
+            for (let attempt=0;attempt<30;attempt++) {
+              await new Promise(r=>setTimeout(r,30));
+              if (await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>Math.abs(window.usageInstance(e).getWidth()-e.clientWidth)<2)')) break;
+            }
             const info = await win.webContents.executeJavaScript(
               '('+(() => {
                 const all=s=>Array.from(document.querySelectorAll(s));
