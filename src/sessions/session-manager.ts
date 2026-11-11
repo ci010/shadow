@@ -1557,7 +1557,9 @@ ${JSON.stringify(request)}`,
         const prepared = state.folderId && state.workdir && (state.workdir.nodeId === LOCAL_NODE_ID
           ? state.workdir.workdirId === localFolderWorkdirRef(state.folderId).workdirId
           : !!this.deps.assertSessionFolder && !!this.deps.ownsFolder?.(state.folderId) && !!this.deps.ownsWorkdir?.(state.workdir))
-        if (!prepared) throw new Error('Automatic Work has no prepared isolated Workspace; source-directory fallback is prohibited')
+        if (state.automaticWork.phase === 'bootstrap') {
+          if (state.folderId || state.workdir) throw new Error('Bootstrap Work must remain unbound until its prepared isolation is committed')
+        } else if (!prepared) throw new Error('Automatic Work has no prepared isolated Workspace; source-directory fallback is prohibited')
       }
       const ownerId = delegationOwner(state)
       const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
@@ -2268,6 +2270,20 @@ ${JSON.stringify(request)}`,
       `[session-manager] Started session ${sessionId} (${opts.agentType})`,
     )
     return sessionId
+  }
+
+  /** Host-only bootstrap preparation receipt. Binding still uses the normal context commit. */
+  async prepareAutomaticWorkWorkspace(sessionId: string, limits: import('../cron/work-dispatch-contract.ts').WorkDispatchConfig,
+    folderId: string, workdir: WorkdirRefV2): Promise<void> {
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state?.automaticWork || state.automaticWork.phase !== 'bootstrap' || state.folderId || state.mode !== 'session') throw new Error('Automatic bootstrap is no longer unbound')
+      if (!this.deps.ownsFolder?.(folderId) || !this.deps.ownsWorkdir?.(workdir)) throw new Error('Isolated Workspace belongs to another Project')
+      const automaticWork = automaticWorkSessionSchema.parse({ ...state.automaticWork, limits,
+        prepared: { folderId, nodeId: workdir.nodeId, workdirId: workdir.workdirId } })
+      await this.store.saveState(sessionId, { ...state, automaticWork })
+      state.automaticWork = automaticWork
+    })
   }
 
   /** Bind only a host-created automatic executor that has never admitted work. */

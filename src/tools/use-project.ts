@@ -19,6 +19,7 @@ export class UseProjectTool implements Tool {
   constructor(private readonly options: {
     projectId: string
     folders: Pick<FolderRegistry, 'list' | 'requireAvailable' | 'requireExecutionAvailable' | 'acquireAccess'>
+    beforeSwitch?: (context: ExecutionContext, folderId: string) => Promise<void>
     switched?: (context: ExecutionContext) => void
   }) {}
 
@@ -67,6 +68,8 @@ export class UseProjectTool implements Tool {
       const current = await this.options.folders.requireAvailable(folder.id, context.signal)
       const currentRef = current.kind === 'remote' ? current.workdir : localFolderWorkdirRef(current.id)
       if (currentRef.nodeId !== workdir.nodeId || currentRef.workdirId !== workdir.workdirId || current.path !== folder.path) throw new Error('Workspace target changed during preparation; no state changed.')
+      context.signal.throwIfAborted()
+      await this.options.beforeSwitch?.(context, folder.id)
       context.signal.throwIfAborted()
       const receipt = await context.switchProjectFolder({ folderId: folder.id, workdir, content })
       this.options.switched?.(context)

@@ -3633,9 +3633,13 @@ skill's `references/mcp-args.md` for connection evidence and permitted flags.
 
 Local selected folders recognize explicit `.mcp.json` (`mcpServers`) and
 `.vscode/mcp.json` (`servers`, including VS Code `type: "http"`) declarations.
-`workspace_use` validates these before committing and appends only folder-local
-source discovery. Invalid/unreadable declarations fail the switch without
-printing file values. No declaration is copied into Project configuration.
+Session startup and `workspace_use` discover these without connecting. Invalid,
+unreadable or oversized declarations do not block conversation startup or a workspace
+switch: the committed working-context snapshot contains a sanitized warning that
+folder MCP sources are unavailable. Workspace instructions and ordinary messages
+are still loaded and persisted. Explicit MCP discovery/invocation remains strict;
+no invalid source is activated and file values/parser diagnostics are never printed.
+No declaration is copied into Project configuration.
 Both files may contribute; source IDs include a folder/file hash so their
 servers cannot overwrite Project sources or one another. Folder-relative
 stdio execution uses that folder as cwd. These files are JSON, not JSONC;

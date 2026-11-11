@@ -10,13 +10,14 @@ owned by `CronService`.
 
 ## Configure the Project automation
 
-The job is installed once, disabled, with schedule `every 60s`. Configure a
-registered, available **repository-root Workspace** as its default source
-before enabling or manually running it. The dispatcher can choose a different
-supported registered source for an individual Work, including an online Child
-that advertises `workdir.git.derive`. Missing, revoked, subdirectory and unsupported
-targets fail before claim; remote display paths never become Main paths. There is
-no new dedicated Workspace picker.
+The job is installed once, disabled, with schedule `every 60s`. It belongs to the
+**Project**, not a repository: it can be enabled and manually run with no registered
+Workspace. Empty projects with no eligible Work stay idle. A registered, available
+**repository-root Workspace** remains an optional default source. The dispatcher
+can choose a different supported registered source for an individual Work,
+including an online Child that advertises `workdir.git.derive`. Explicit missing,
+revoked, subdirectory and unsupported targets fail before claim; remote display
+paths never become Main paths. There is no new dedicated Workspace picker.
 
 On the existing authorized Project automation API:
 
@@ -43,9 +44,9 @@ On the existing authorized Project automation API:
   integers from 1 to 16. Optional `model` and `reasoningEffort` select the dispatcher
   model and default worker settings; individual admissions can override the worker
   model/effort. With no override, existing model defaults apply.
-- PATCH `{"enabled":true}` or `{"enabled":false}` controls timer admission. While
-  disabled, the program may also be restored to an unconfigured state without
-  `folderId`; enabling or manually running still requires an available source.
+- PATCH `{"enabled":true}` or `{"enabled":false}` controls timer admission.
+  `folderId` is optional, including for enabled and manually run programs. Removing
+  the default source affects new admissions, not already assigned workers.
 - POST the usual `/run` to schedule now, including while the timer is disabled.
 - POST `/cancel` to abort an in-flight scheduling round and stop admitted automatic
   executors without releasing Work or removing artifacts. Disabling only stops
@@ -114,8 +115,10 @@ blocked Work is never an automatic re-entry pool. Scheduling does not silently
 remove an explicit dependency or change the task objective.
 
 The host serializes admission and performs the eligibility/sequence check in the
-same Work SQLite transaction. Each Work gets a dedicated durable worker session,
-its selected model/effort and an independent registered **real Git worktree**.
+same Work SQLite transaction. Each Work gets a dedicated durable worker session
+and its selected model/effort. With a selected source, admission prepares an
+independent registered **real Git worktree** before the first worker delivery.
+Without a source, the first delivery starts only the bootstrap phase below.
 The current derived-workspace backend creates a `shadow-derived-<uuid>` branch in
 a sibling worktree from a committed source branch. Source staged, unstaged,
 untracked and ignored files are not copied, stashed, reset or checked out.
@@ -130,9 +133,11 @@ Capacity is automatic-worker admission accounting, not CPU/GPU utilization or a
 general desktop-resource lock manager. Independent worktrees isolate checkouts,
 not external services or operating-system side effects.
 
-Every first delivery and recovery verifies retained isolation. A missing or
-replaced workspace fails closed, never falls back to source or recreates lost
-user resources. The write-ahead `delivering` receipt precedes admission; only an
+Every implementation-phase first delivery and recovery verifies retained isolation.
+Bootstrap deliveries instead require the current unbound automatic assignee and
+current dependency/ancestor/capacity checks; they are not implementation admission.
+A missing or replaced implementation workspace fails closed, never falls back to
+source or recreates lost user resources. The write-ahead `delivering` receipt precedes admission; only an
 exact accepted receipt advances it to `running`. Ordinary resumes and replies also
 pass current assignment, pause, capacity and isolation checks. Unconfirmed delivery
 or interruption blocks for inspection instead of blindly resending operations.
@@ -141,6 +146,57 @@ Automatic session metadata persists through JSONL and SQLite stores.
 LayerFS is not used as a pretend Git/PR bridge. Its internal publish operation is
 not a verified real Git remote/PR export. The current automation uses the existing
 real Git derived-workspace backend. This is checkout isolation, not an OS sandbox.
+
+## Workspace-less bootstrap
+
+With no default or per-Work source, the host claims Work for a fresh, unbound durable
+worker and persists `automaticWork.phase: bootstrap`. The dispatcher keeps its
+small scheduling tool surface; it does not gain shell or provisioning powers.
+The worker uses the ordinary agent permission model to discover or acquire a
+source **only with actual human authorization**. Work text, dispatch instructions,
+assignment and device inventory are not permission to clone, download or access
+arbitrary directories. Missing authority or unavailable acquisition routes require
+publisher/human help. This does not add a generic clone/download operation.
+
+The narrow dynamic `work_bootstrap` tool is available only to that Work's current
+unpaused bootstrap assignee, in its owning Project, through a direct call (not a
+script, remote-bound context or replay of an unfinished tool):
+
+1. `register` requires an explicit inventory `nodeId` and existing directory `path`.
+   It reuses the device picker and Project ownership checks. Child paths stay opaque
+   on Main; an offline/unsupported/denied device or a wrong-device receipt fails
+   without a Main filesystem fallback. Registration does not switch the worker.
+2. `prepare` requires the registered `folderId` and an explicit existing branch,
+   e.g. `refs/remotes/origin/main` or `refs/heads/main`, not `HEAD` or a revision
+   expression. The existing derived-workspace backend validates it and pins a
+   committed base without changing the source checkout or fetching. The automation's
+   stable worker id is the idempotency key. A retry must retain the same source/base;
+   a different request cannot silently create an alternate worktree. The receipt,
+   selected base and prepared binding grant are persisted before returning.
+3. Call `workspace_use` alone with the returned isolated `folderId`. The runtime
+   rechecks current assignment, boundaries, capacity, source and derived identity.
+   Only the prepared folder/node/workdir tuple can commit; binding the source or
+   an arbitrary folder is refused. The existing context commit persists the
+   `implementation` phase with the folder/workdir and appends the normal working
+   context snapshot. Repository implementation may now begin there.
+
+Configured-source compatibility remains: if no `baseBranch` is configured, its
+current symbolic branch is the base (retained for recovery). An optional explicit
+`baseBranch` uses the same full-ref validation. Bootstrap workers choose their base
+explicitly, so an unrelated user's source branch need not be the starting point.
+No dirty files are copied. Source acquisition and implementation are not an OS
+sandbox: ordinary tools retain existing permissions. Host checks enforce the
+phase, binding and admission boundaries; they do not prove that an arbitrary
+shell command obeyed semantic task guidance.
+
+An unbound worker initially occupies Project capacity and the Main/bootstrap device
+slot. Preparing an exact source rechecks device capacity and accounts its reserved
+slot on that source device, even before binding. Failed preparation or interruption
+retains the same worker, phase and artifacts; use its existing recovery controls and
+retry the same source/base after inspecting effects. No automatic alternate-device
+retry, source execution or cleanup is performed. Both session stores preserve the
+phase and prepared identity. Other managed tasks retain the existing owner-only
+`workspace_register`/`workspace_create` gates; this is not a general owner grant.
 
 ## Blockers and recovery
 
