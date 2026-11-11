@@ -97,7 +97,8 @@ export async function projectJson(base: string, path: string, init?: RequestInit
 /** A single endpoint's validated snapshot, scoped to its owning live reader.
  * Always revalidate against Main; never use a disk/browser cache or reuse across
  * Projects/queries. Older servers without ETag continue to return full JSON. */
-export function createConditionalProjectJson<T>(base: string, path: string, parse: (value: unknown) => T, request: typeof fetch = fetch) {
+export function createConditionalProjectJson<T>(base: string, path: string, parse: (value: unknown) => T, request: typeof fetch = fetch,
+  transport?: { headers: Record<string, string>; decode: (value: unknown, previous: T | undefined, etag: string | undefined) => unknown }) {
   let cached: { etag: string; value: T } | undefined
   let generation = 0
   return {
@@ -105,7 +106,7 @@ export function createConditionalProjectJson<T>(base: string, path: string, pars
     async load(signal: AbortSignal): Promise<T> {
       const current = ++generation
       const previous = cached
-      const headers = new Headers()
+      const headers = new Headers(transport?.headers)
       if (previous) headers.set('If-None-Match', previous.etag)
       return projectResponse(base, path, { signal, headers, cache: 'no-store' }, request, async response => {
         signal.throwIfAborted()
@@ -113,7 +114,8 @@ export function createConditionalProjectJson<T>(base: string, path: string, pars
           if (!previous) throw new Error('Main returned 304 without a validated snapshot.')
           return previous.value
         }
-        const value = parse(await response.json())
+        const json: unknown = await response.json()
+        const value = parse(transport ? transport.decode(json, previous?.value, previous?.etag) : json)
         signal.throwIfAborted()
         const etag = response.headers.get('ETag')
         if (current === generation) cached = etag ? { etag, value } : undefined
