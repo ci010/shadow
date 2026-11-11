@@ -55,7 +55,15 @@ function paint() {
     ]), chip)
     chipMounts.push(chip); root.append(chip); offset = item.end
   }
-  root.append(document.createTextNode(current.slice(offset)))
+  const tail = current.slice(offset)
+  if (tail) root.append(document.createTextNode(tail))
+  // A trailing text newline alone has no visible final line in contenteditable.
+  // Keep a layout-only break so the first Shift+Enter moves the caret visibly.
+  if (current.endsWith('\n')) {
+    const end = document.createElement('br')
+    end.setAttribute('data-composer-end', '')
+    root.append(end)
+  }
   if (focused) setSelectionRange(saved.start, saved.end)
 }
 function publish(text: string) { current = text; emit('update:modelValue', text) }
@@ -70,7 +78,12 @@ function onInput() {
   if (text === current) return
   // Some browser edit commands emit input without beforeinput.
   if (history.at(-1)?.text !== current) remember()
-  publish(text); paint(); setSelectionRange(saved.start, saved.end)
+  publish(text)
+  // Ordinary typing (including an IME commit) already has the right DOM and
+  // caret. Replacing that text node can interrupt the browser's edit session.
+  const plainText = text.length > 0 && !text.endsWith('\n') && !composerReferences(text, props.images).length
+    && Array.from(editor.value.childNodes).every(node => node.nodeType === Node.TEXT_NODE)
+  if (!plainText) { paint(); setSelectionRange(saved.start, saved.end) }
 }
 function beforeInput(e: InputEvent) {
   if (props.disabled || composing.value || e.isComposing) return
