@@ -657,7 +657,17 @@ export abstract class BaseSession {
             ...executionContext, toolCallId: tc.id, toolCallName: executionName,
             switchProjectFolder: calls.length === 1 && executionName === 'workspace_use' ? async prepared => {
               signal.throwIfAborted()
-              const next = { ...this.state, folderId: prepared.folderId, workdir: prepared.workdir }
+              const automatic = this.state.automaticWork
+              if (automatic) {
+                const target = automatic.prepared
+                if (automatic.phase === 'bootstrap'
+                  ? !target || target.folderId !== prepared.folderId || target.nodeId !== prepared.workdir.nodeId || target.workdirId !== prepared.workdir.workdirId
+                  : this.state.folderId !== prepared.folderId || this.state.workdir?.nodeId !== prepared.workdir.nodeId || this.state.workdir?.workdirId !== prepared.workdir.workdirId) {
+                  throw new Error('Automatic Work may bind only its host-prepared isolated Workspace. Use work_bootstrap prepare first; no source-directory implementation.')
+                }
+              }
+              const next = { ...this.state, folderId: prepared.folderId, workdir: prepared.workdir,
+                ...(automatic?.phase === 'bootstrap' ? { automaticWork: { ...automatic, phase: 'implementation' as const } } : {}) }
               const resolved = resolveSessionLocations(this.workspace, next, undefined, this.workdirLookup).workdir
               if (!resolved.available) throw new Error('Target folder execution unavailable; prior context retained.')
               const content = prepared.content

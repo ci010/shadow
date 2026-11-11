@@ -11,7 +11,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 const sessions = { automationFeatureStates: async () => [] } as unknown as SessionManager
 const endpoint = `/api/automations/${WORK_DISPATCH_ID}`
 
-test('standard program automation persists its 60s schedule, target, limits and enablement; API is authorized and rejects unconfigured/remote targets', async () => withTempWorkspace(async home => {
+test('standard program automation persists its 60s schedule, target, limits and enablement; API is authorized and rejects invalid configured targets', async () => withTempWorkspace(async home => {
   const cron = new CronService(home)
   let runs = 0, resumed = 0, stopped = 0
   let release: (() => void) | undefined
@@ -33,7 +33,8 @@ test('standard program automation persists its 60s schedule, target, limits and 
     const summary = listed.automations.find((item: { id: string }) => item.id === WORK_DISPATCH_ID)
     assert.equal(summary.schedule, 'every 60s')
     assert.equal(summary.enabled, false)
-    assert.match(summary.configurationError, /Select a registered/)
+    assert.equal(summary.configurationError, undefined)
+    assert.match(summary.notice, /without a default Workspace/)
     assert.equal((await request('/run', 'POST')).status, 400)
     assert.equal((await request('', 'PATCH', { enabled: true })).status, 400)
     assert.equal((await request('', 'PATCH', { program: { kind: 'work-dispatch', folderId: 'remote' } })).status, 400)
@@ -69,7 +70,7 @@ test('standard program automation persists its 60s schedule, target, limits and 
       assert.equal(restored.listJobs().filter(job => job.program).length, 1)
     } finally { await restored.stop() }
     assert.throws(() => cron.addJob({ ...WORK_DISPATCH_AUTOMATION, program: workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'other' }) }, 'another-dispatcher'), /Invalid cron job/)
-    assert.throws(() => parseStoredCronJobs({ version: 1, ownershipVersion: 2, jobs: [{ ...WORK_DISPATCH_AUTOMATION, id: WORK_DISPATCH_ID, createdAt: new Date().toISOString(), enabled: true }] }), /Invalid/)
+    assert.doesNotThrow(() => parseStoredCronJobs({ version: 1, ownershipVersion: 2, jobs: [{ ...WORK_DISPATCH_AUTOMATION, id: WORK_DISPATCH_ID, createdAt: new Date().toISOString(), enabled: true }] }))
   } finally { release?.(); await cron.stop() }
 }))
 
@@ -87,28 +88,39 @@ test('program mutation and recovery fail closed when no human authorization cont
 }))
 
 
-test('disabled dispatch configuration can be restored to unconfigured defaults without enabling an unsafe run', async () => withTempWorkspace(async home => {
+test('workspace-less Project dispatch enables, runs manually and persists without weakening selected-target validation', async () => withTempWorkspace(async home => {
   const cron = new CronService(home)
+  let runs = 0
+  cron.setHandler(async job => { assert.equal(job.program?.folderId, undefined); runs++ })
   await cron.start()
   await cron.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
   const app = new Hono()
   registerAutomationRoutes(app, cron, sessions, 'project', undefined, undefined, undefined, {
     authorize: () => true, preference: () => false, update: async () => {},
   }, undefined, {
-    validate: async config => { if (config.folderId !== 'supported-repository') throw new Error('An exact available source is required') },
+    validate: async config => { if (config.folderId && config.folderId !== 'supported-repository') throw new Error('An exact available source is required') },
     resume: async () => {},
   })
   const patch = (body: unknown) => app.request(endpoint, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   try {
     assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 200)
-    assert.equal((await patch({ enabled: true })).status, 400)
+    assert.equal((await patch({ enabled: true })).status, 200)
     assert.equal((await patch({ program: { kind: 'work-dispatch', folderId: 'supported-repository' } })).status, 200)
     assert.equal((await patch({ enabled: true })).status, 200)
-    assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 400, 'cannot clear the source of an enabled timer')
+    assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 200, 'an enabled Project timer needs no default repository')
     assert.equal((await patch({ enabled: false })).status, 200)
     assert.equal((await patch({ program: { kind: 'work-dispatch' } })).status, 200)
     assert.equal(cron.listJobs().find(job => job.id === WORK_DISPATCH_ID)?.program?.folderId, undefined)
-    assert.equal((await app.request(endpoint + '/run', { method: 'POST' })).status, 400)
-    assert.equal((await patch({ enabled: true })).status, 400)
+    assert.equal((await app.request(endpoint + '/run', { method: 'POST' })).status, 202)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(runs, 1)
+    assert.equal((await patch({ enabled: true })).status, 200)
+    await cron.flush()
+    const restored = new CronService(home)
+    try {
+      await restored.start()
+      const saved = restored.listJobs().find(job => job.id === WORK_DISPATCH_ID)!
+      assert.equal(saved.enabled, true); assert.equal(saved.program?.folderId, undefined)
+    } finally { await restored.stop() }
   } finally { await cron.stop() }
 }))
