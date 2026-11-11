@@ -605,6 +605,8 @@ test('lesson maintenance preflights size, consolidates a full replacement and ve
     assert.equal(baseline.limits.maxLength, 8000)
     assert.equal(baseline.limits.lengthUnit, 'UTF-16 code units')
     assert.equal(baseline.contentLength, original.length)
+    assert.equal(baseline.maintenance.headroom, 8000 - original.trim().length)
+    assert.equal(baseline.maintenance.preferredAction, 'patch')
     const oversized = original + 'New repeated explanation. '.repeat(80)
     const checked = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: oversized }, ctx))
     assert.equal(checked.withinLimit, false)
@@ -617,7 +619,20 @@ test('lesson maintenance preflights size, consolidates a full replacement and ve
       assert.equal(boundary.withinLimit, withinLimit)
       assert.equal(boundary.contentLength, length)
     }
-    await assert.rejects(f.tools.skill.execute({ action: 'save', name, revision: baseline.revision, content: oversized }, ctx), /8000/)
+    // Real rejected writes, not only preflight: exact feedback on the first and
+    // repeated failure, with no persisted correction or artifact to acknowledge.
+    for (const draft of [oversized, `  ${oversized}😀  `]) {
+      await assert.rejects(f.tools.skill.execute({ action: 'save', name, revision: baseline.revision, content: draft }, ctx), error => {
+        const message = (error as Error).message
+        assert.match(message, /too_big/)
+        assert(message.includes(`contentLength=${draft.trim().length}, maxLength=8000, overBy=${draft.trim().length - 8000}`))
+        assert.match(message, /Do not retry an oversized whole save/)
+        assert.match(message, /only a successful same-name save\/patch/)
+        return true
+      })
+      assert.equal(f.runtime.skillStore!.read(name).revision, baseline.revision)
+      assert.equal(f.runtime.ledger.batchFor(id)!.artifacts.length, 0)
+    }
     const consolidated = header + constraints + 'Steps: separate reported tests, active backend build and actual recipient evidence. A passing test is not delivery. Example: missing recipient evidence leaves delivery unknown; counterexample: verified receipt.\n'
     const check = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: consolidated }, ctx))
     assert.equal(check.withinLimit, true)
