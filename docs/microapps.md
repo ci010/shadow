@@ -323,6 +323,15 @@ and an optional PNG at `GET /api/microapps/:id/icon?revision=<sha256>`, under th
 owning Project prefix. Both require owner access; icons are not arbitrary file
 reads and a stale revision is rejected.
 
+Electron's background catalog scan retains cached entries and open windows when
+an individual Project cannot be checked, while continuing to update other Projects.
+A structured `project_unavailable` / `starting` HTTP 503 receives a 30-second
+per-Project grace period; continued startup failures are then reported. Failed
+Projects, access errors, other HTTP errors and request timeouts remain visible
+immediately, with the Project/request operation in diagnostics. Explicit app opens
+still reject on startup errors; the grace period applies only to background scans.
+The existing 10-second GET timeout and polling cadence are unchanged.
+
 The framework does not install app dependencies. Frontend dependencies must be
 bundled. Node uses the host runtime (including Electron's Node mode); Python
 must be available on PATH. Use `SHADOW_APP_DATA` for persistent files, not the

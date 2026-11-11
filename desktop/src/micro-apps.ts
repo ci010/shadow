@@ -24,6 +24,7 @@ interface NativeAppOptions {
   defaultIconPath: string
   platform?: NodeJS.Platform
   fetch?: typeof globalThis.fetch
+  now?: () => number
   createWindow(input: MicroAppWindowInput): Promise<MicroAppWindowHandle>
   decodeIcon(png: Buffer): { png: Buffer; width: number; height: number }
   setUserTasks(tasks: Task[]): boolean
@@ -59,6 +60,11 @@ export function pngIconContainer(png: Buffer, width: number, height: number): Bu
   return Buffer.concat([header, png])
 }
 
+class ProjectStartingError extends Error {}
+
+// Only structured startup responses get a bounded grace period, never access or network errors.
+const STARTUP_GRACE_MS = 30_000
+
 export class DesktopMicroApps {
   private authorization: RuntimeAuthorization | null = null
   private epoch = new AbortController()
@@ -72,6 +78,7 @@ export class DesktopMicroApps {
   private readonly catalogs = new Map<string, NativeMicroApp[]>()
   private lastTasks = ''
   private lastError = ''
+  private readonly startingSince = new Map<string, number>()
 
   constructor(private readonly options: NativeAppOptions) {}
   get hasOpenWindows(): boolean { return this.windows.size > 0 || this.openings.size > 0 }
@@ -89,6 +96,8 @@ export class DesktopMicroApps {
     for (const entry of this.windows.values()) this.closeWindow(entry)
     this.windows.clear()
     this.catalogs.clear()
+    this.startingSince.clear()
+    this.lastError = ''
     this.icons.clear()
     this.authorization = value ? { ...value } : null
     if (value) void this.refresh()
@@ -102,19 +111,36 @@ export class DesktopMicroApps {
       signal: AbortSignal.any([signal, AbortSignal.timeout(body === undefined ? 10_000 : 30_000)]),
     })
     if (!response.ok) {
-      await response.body?.cancel()
-      throw new Error(`Micro App request failed (HTTP ${response.status}); check Project availability and access`)
+      if (response.status === 503 && response.headers.get('content-type')?.startsWith('application/json')) {
+        let payload: unknown
+        try { payload = JSON.parse((await limitedBytes(response, 16 * 1024)).toString('utf8')) } catch { /* Unstructured errors remain visible. */ }
+        if (isRecord(payload) && payload.error === 'project_unavailable') {
+          if (payload.state === 'starting') throw new ProjectStartingError('Project is starting (HTTP 503)')
+          if (payload.state === 'failed') throw new Error('Project failed to start (HTTP 503)')
+        }
+      } else await response.body?.cancel()
+      throw new Error(`HTTP ${response.status}${response.status === 401 || response.status === 403 ? '; check Project access' : ''}`)
     }
     return response
   }
 
   private async json(authorization: RuntimeAuthorization, path: string, body?: unknown, signal = this.epoch.signal): Promise<unknown> {
-    const response = await this.read(authorization, path, body, signal)
-    if (!response.headers.get('content-type')?.startsWith('application/json')) {
-      await response.body?.cancel()
-      throw new Error('Micro App response is not JSON')
+    try {
+      const response = await this.read(authorization, path, body, signal)
+      if (!response.headers.get('content-type')?.startsWith('application/json')) {
+        await response.body?.cancel()
+        throw new Error('Micro App response is not JSON')
+      }
+      return JSON.parse((await limitedBytes(response, 2 * 1024 * 1024)).toString('utf8')) as unknown
+    } catch (error) {
+      if (signal.aborted) throw error
+      const detail = error instanceof Error && error.name === 'TimeoutError'
+        ? `timed out after ${body === undefined ? 10 : 30}s`
+        : error instanceof Error ? error.message : 'request failed'
+      const message = `Micro Apps ${body === undefined ? 'GET' : 'POST'} ${path}: ${detail}`
+      if (error instanceof ProjectStartingError) throw new ProjectStartingError(message)
+      throw new Error(message, { cause: error })
     }
-    return JSON.parse((await limitedBytes(response, 2 * 1024 * 1024)).toString('utf8')) as unknown
   }
 
   private asset(authorization: RuntimeAuthorization, identity: MicroAppIdentity, app: NativeMicroApp, signal = this.epoch.signal) {
@@ -241,11 +267,22 @@ export class DesktopMicroApps {
           signal.throwIfAborted()
           this.catalogs.set(projectId, apps)
           checked.add(projectId)
-        } catch (error) { errors.push(error instanceof Error ? error.message : 'Project apps unavailable') }
+          this.startingSince.delete(projectId)
+        } catch (error) {
+          if (signal.aborted) return
+          if (error instanceof ProjectStartingError) {
+            const now = (this.options.now ?? Date.now)()
+            const since = this.startingSince.get(projectId) ?? now
+            this.startingSince.set(projectId, since)
+            if (now - since < STARTUP_GRACE_MS) continue
+          } else this.startingSince.delete(projectId)
+          errors.push(`Project ${projectId} catalog refresh: ${error instanceof Error ? error.message : 'apps unavailable'}`)
+        }
       }
     }))
     signal.throwIfAborted()
     for (const id of this.catalogs.keys()) if (!projects.includes(id)) this.catalogs.delete(id)
+    for (const id of this.startingSince.keys()) if (!projects.includes(id)) this.startingSince.delete(id)
     for (const [key, entry] of observedWindows) {
       if (this.windows.get(key) !== entry) continue
       const projectId = entry.identity.projectId
