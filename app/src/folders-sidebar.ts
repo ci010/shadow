@@ -1,4 +1,5 @@
 import { parseChannelSource, type ChannelSource } from '../../src/channels/passive-contract.ts'
+import { DiscordChannelNavigationSchema, type DiscordChannelNavigation } from '../../src/channels/discord-navigation.ts'
 import { t } from './i18n.ts'
 import { sessionActivity } from './session-activity.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
@@ -16,6 +17,8 @@ export const FOLDER_ACTIONS = [
 
 export interface SidebarSession {
   channelSource?: ChannelSource
+  discordChannel?: DiscordChannelNavigation
+  discordHistoryIds?: string[]
   groupObservation?: import('./service-groups.ts').ServiceGroup
   automation?: AutomationSessionRef
   sessionId: string
@@ -141,7 +144,9 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
     const channelSource = parseChannelSource(session.channelSource, session.sessionId, projectId ?? session.projectId as string | undefined)
     let channelAddress: ChannelAddress | undefined
-    try { channelAddress = channelSource ?? channelAddressFromSessionId(session.sessionId) }
+    // Navigation metadata only, never routing authority.
+    try { channelAddress = channelSource ?? channelAddressFromSessionId(session.sessionId.startsWith('channel-inbox:')
+      ? `bot:${session.sessionId.slice('channel-inbox:'.length)}` : session.sessionId) }
     catch { throw invalid() }
     if (channelAddress && (projectId !== undefined && channelAddress.projectId !== projectId
       || session.projectId !== undefined && channelAddress.projectId !== session.projectId)) throw invalid()
@@ -170,6 +175,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       projectId: session.projectId as string | undefined,
       channelAddress,
       channelSource,
+      discordChannel: session.discordChannel === undefined ? undefined : DiscordChannelNavigationSchema.parse(session.discordChannel),
       inferenceDefaults: isRecord(defaults) && typeof defaults.model === 'string' ? {
         model: defaults.model,
         ...(typeof defaults.contextWindow === "number" ? { contextWindow: defaults.contextWindow } : {}),
@@ -254,7 +260,11 @@ export function groupFolderSessions(folders: FolderRecord[], sessions: SidebarSe
 }) {
   const owners = automationSessionOwners(sessions)
   const allRegular = persistentConversations(sessions).filter(session => !owners.has(session.sessionId))
-  const regular = navigation ? recentSidebarSessions(allRegular, navigation.activeSessionId, PROJECT_SESSION_LIMIT, navigation.draftActivity) : allRegular
+  // Bot conversations have their own disclosure trees, outside the ordinary
+  // chat quota. Keep their source order and apply active-row pinning only to chats.
+  const recentChats = navigation ? new Set(recentSidebarSessions(allRegular.filter(session => !session.channelAddress),
+    navigation.activeSessionId, PROJECT_SESSION_LIMIT, navigation.draftActivity).map(session => session.sessionId)) : undefined
+  const regular = recentChats ? allRegular.filter(session => session.channelAddress || recentChats.has(session.sessionId)) : allRegular
   const folderIds = new Set(folders.map(folder => folder.id))
   const automations = new Map<string, { id: string; name: string; sessions: SidebarSession[] }>()
   for (const session of sessions) {
