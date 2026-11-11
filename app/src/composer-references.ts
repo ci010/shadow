@@ -34,6 +34,7 @@ export interface ComposerInput {
 export function composerNodeText(node: Node): string {
   if (node.nodeType === 3) return node.textContent ?? ''
   if (!(node instanceof Element)) return ''
+  if (node.hasAttribute('data-composer-end')) return ''
   if (node.hasAttribute('data-reference')) return node.getAttribute('data-reference')!
   if (node.tagName === 'BR') return '\n'
   // Browsers leave a filler break after deleting the entire editable contents.
@@ -53,6 +54,11 @@ export function composerPoint(root: Node, offset: number): [Node, number] {
   let remaining = Math.max(0, offset)
   for (const child of root.childNodes) {
     const length = composerNodeText(child).length
+    // At a terminal newline, place the caret on the empty line before its
+    // layout break, not at the preceding text node's ambiguous end position.
+    if (remaining === length && child.nextSibling instanceof Element && child.nextSibling.hasAttribute('data-composer-end')) {
+      return [root, Array.prototype.indexOf.call(root.childNodes, child) + 1]
+    }
     if (child instanceof Element && (child.hasAttribute('data-reference') || child.tagName === 'BR')) {
       if (remaining < length) return [root, Array.prototype.indexOf.call(root.childNodes, child) + (remaining > length / 2 ? 1 : 0)]
     } else if (remaining <= length) {

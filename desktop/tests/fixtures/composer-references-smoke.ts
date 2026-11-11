@@ -74,6 +74,28 @@ async function main() {
       check(dropped.defaultPrevented,'native rich drop blocked');
       return true;
     })()`), true)
+    // Exercise real Chromium editing, not just synthetic beforeinput events.
+    await run(`window.fixture.text.value=''`)
+    await delay(30)
+    assert.equal(await run(`document.querySelector('.reference-composer').childNodes.length`), 0)
+    await run(`window.fixture.input.value.focus()`)
+    await window.webContents.insertText('首')
+    assert.equal(await run(`window.fixture.text.value`), '首')
+    await run(`window.firstTypedNode=document.querySelector('.reference-composer').firstChild`)
+    await window.webContents.insertText('字')
+    assert.equal(await run(`document.querySelector('.reference-composer').firstChild===window.firstTypedNode`), true, 'ordinary typing preserves the active text node')
+    await run(`window.caretTop=()=>{const r=getSelection().getRangeAt(0).cloneRange();r.collapse(false);return r.getBoundingClientRect().top};window.beforeNewline=window.caretTop()`)
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: ['shift'] })
+    window.webContents.sendInputEvent({ type: 'char', keyCode: '\r', modifiers: ['shift'] })
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter', modifiers: ['shift'] })
+    await delay(30)
+    assert.equal(await run(`window.fixture.text.value`), '首字\n')
+    assert.equal(await run(`window.fixture.input.value.selectionStart`), 3, 'layout break does not add serialized text')
+    await window.webContents.insertText('下一行')
+    assert.equal(await run(`window.fixture.text.value`), '首字\n下一行')
+    assert.equal(await run(`window.caretTop()>window.beforeNewline+10`), true, 'first Shift+Enter places subsequent typing on the next visual line')
+    await run(`window.fixture.text.value=window.initialReferenceText`)
+    await delay(30)
     for (const width of [800, 375]) {
       window.setSize(width, 700)
       await delay(60)
