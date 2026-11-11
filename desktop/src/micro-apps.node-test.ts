@@ -238,3 +238,72 @@ test('changing a revision while its native page loads cancels the pending window
   assert.equal(f.app.status, 'stopped')
   assert.equal(f.calls.filter(path => path.endsWith('/stop')).length, 1)
 })
+
+test('startup scanning has bounded per-project grace, preserves windows/cache and updates healthy projects', async t => {
+  let now = 0, mode = 'ready', healthyName = 'Healthy'
+  const errors: string[] = [], tasks: Task[][] = []
+  let closed = false
+  const app = { id, revision, manifest: { name: 'Cached' }, status: 'running' }
+  const manager = new DesktopMicroApps({
+    userDataPath: '/unused', executablePath: '/Shadow.exe', appPath: '/app', packaged: true,
+    defaultIconPath: '/default.ico', platform: 'win32', now: () => now,
+    decodeIcon: () => { throw new Error('No icon expected') },
+    setUserTasks: value => { tasks.push(value); return true }, onError: message => errors.push(message),
+    createWindow: async () => ({ focus() {}, close() { closed = true } }),
+    fetch: async input => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/projects') return Response.json({ projects: [{ id: 'p' }, { id: 'healthy' }] })
+      if (path === '/projects/healthy/api/microapps') return Response.json({ apps: [{ ...app, manifest: { name: healthyName } }] })
+      if (path.endsWith('/stop')) return Response.json({})
+      if (path.startsWith('/projects/p/')) {
+        if (mode === 'timeout') throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+        if (mode === 'denied') return Response.json({}, { status: 403 })
+        if (mode !== 'ready') return Response.json({ error: 'project_unavailable', state: mode }, { status: 503 })
+        if (path.endsWith('/status')) return Response.json(app)
+        if (path.endsWith('/open')) return Response.json({ url: `http://127.0.0.1:43211/#shadow_ticket=${'t'.repeat(43)}` })
+        return Response.json({ apps: [app] })
+      }
+      throw new Error(`Unexpected ${path}`)
+    },
+  })
+  t.after(() => manager.shutdown())
+  manager.setAuthorization({ apiBase: 'http://127.0.0.1:43210', launchToken: 'test' })
+  await manager.refresh()
+  await manager.open(identity)
+  mode = 'starting'; healthyName = 'Updated'
+  await manager.refresh()
+  assert.deepEqual(errors, [])
+  assert.equal(closed, false)
+  assert.equal(tasks.at(-1)!.length, 2)
+  assert.ok(tasks.at(-1)!.some(task => task.title === 'Updated · healthy'))
+  await assert.rejects(manager.open(identity), /GET \/projects\/p\/api\/microapps\/.*Project is starting/)
+  now = 30_000
+  await manager.refresh()
+  assert.match(errors.at(-1)!, /Project p catalog refresh:.*GET.*Project is starting/)
+  const count = errors.length
+  await manager.refresh()
+  assert.equal(errors.length, count)
+  mode = 'failed'; await manager.refresh()
+  assert.match(errors.at(-1)!, /Project p.*failed to start/)
+  mode = 'denied'; await manager.refresh()
+  assert.match(errors.at(-1)!, /Project p.*403.*access/)
+  await assert.rejects(manager.open(identity), /403/)
+  mode = 'timeout'; await manager.refresh()
+  assert.match(errors.at(-1)!, /Project p.*GET.*timed out after 10s/)
+  assert.equal(closed, false)
+  mode = 'ready'; await manager.refresh()
+  mode = 'starting'; await manager.refresh()
+  assert.equal(errors.length, count + 3)
+})
+
+test('disconnect during catalog scanning does not report stale failures', async t => {
+  const f = await fixture(t)
+  f.failCatalog()
+  const pause = f.pauseCatalog()
+  const refreshing = f.manager.refresh()
+  await pause.entered
+  f.manager.setAuthorization(null)
+  pause.release()
+  await refreshing
+  assert.deepEqual(f.errors, [])
+})
