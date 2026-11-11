@@ -4186,5 +4186,11 @@
   "Read means seen, not accepted. It does not change Work or notify agents.": "Read means seen, not accepted. It does not change Work or notify agents.",
   "No matching completed work": "No matching completed work",
   "Unread": "Unread",
-  "Completion time unavailable": "Completion time unavailable"
+  "Completion time unavailable": "Completion time unavailable",
+  "Channel content": "Channel content",
+  "Choose a post or thread to open its original history.": "Choose a post or thread to open its original history.",
+  "Search posts and threads": "Search posts and threads",
+  "No posts or threads found.": "No posts or threads found.",
+  "Passive inbox": "Passive inbox",
+  "Original history": "Original history"
 }
