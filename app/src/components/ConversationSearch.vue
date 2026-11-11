@@ -1,13 +1,27 @@
 <template>
   <div v-if="open" ref="searchRoot" class="conversation-search" role="search" :aria-label="t('Search conversation')" :aria-busy="loading || navigating" @keydown="searchKey">
     <div class="search-controls">
+      <div class="search-field">
       <span class="i-lucide-search search-icon" aria-hidden="true" />
       <input ref="input" v-model="query" type="search" :aria-label="t('Search all conversation history')" :placeholder="t('Search all messages')"
         autocomplete="off" spellcheck="false" @compositionstart="composing = true" @compositionend="endComposition" />
-      <span class="search-count" role="status" aria-live="polite" aria-atomic="true">{{ loading ? t('Loading history...') : query.trim() ? `${matches.length ? selected + 1 : 0} / ${matches.length}` : '' }}</span>
-      <button type="button" :disabled="!matches.length || loading || navigating" :aria-label="t('Previous match')" :title="t('Previous match (Shift+Enter)')" @click="move(-1)"><span class="i-lucide-chevron-up" aria-hidden="true" /></button>
-      <button type="button" :disabled="!matches.length || loading || navigating" :aria-label="t('Next match')" :title="t('Next match (Enter)')" @click="move(1)"><span class="i-lucide-chevron-down" aria-hidden="true" /></button>
-      <button type="button" :aria-label="t('Close conversation search')" :title="t('Close search (Esc)')" @click="close(true)"><span class="i-lucide-x" aria-hidden="true" /></button>
+      <span class="search-count" role="status" aria-live="polite" aria-atomic="true">
+        <span v-if="loading || navigating" class="i-lucide-loader-circle search-spinner" aria-hidden="true" />
+        <span v-if="loading" class="sr-only">{{ t('Loading history...') }}</span>
+        <template v-else-if="query.trim()">{{ matches.length ? selected + 1 : 0 }} / {{ matches.length }}</template>
+      </span>
+      </div>
+      <div class="search-actions">
+        <HoverInfo :text="t('Previous match (Shift+Enter)')" v-slot="{ triggerProps }">
+          <button v-bind="triggerProps" type="button" :disabled="!matches.length || loading || navigating" :aria-label="t('Previous match')" @click="move(-1)"><span class="i-lucide-chevron-up" aria-hidden="true" /></button>
+        </HoverInfo>
+        <HoverInfo :text="t('Next match (Enter)')" v-slot="{ triggerProps }">
+          <button v-bind="triggerProps" type="button" :disabled="!matches.length || loading || navigating" :aria-label="t('Next match')" @click="move(1)"><span class="i-lucide-chevron-down" aria-hidden="true" /></button>
+        </HoverInfo>
+        <HoverInfo class="search-close" :text="t('Close search (Esc)')" v-slot="{ triggerProps }">
+          <button v-bind="triggerProps" type="button" :aria-label="t('Close conversation search')" @click="close(true)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        </HoverInfo>
+      </div>
     </div>
     <p v-if="error" class="search-error" role="alert">{{ error }} <button type="button" @click="load">{{ t('Retry') }}</button></p>
     <p v-else class="search-scope">{{ query.trim() && !loading && !matches.length ? t('No matching messages in this conversation.') : t('All history · message text · Enter / Shift+Enter to navigate') }}</p>
@@ -16,6 +30,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
+import HoverInfo from './HoverInfo.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { conversationMatches, isConversationFindKey, type ConversationSearchEntry, type ConversationSearchMatch } from '../conversation-search.ts'
 
@@ -174,32 +189,41 @@ defineExpose({ show, close })
 </script>
 
 <style scoped>
-.conversation-search { position: absolute; top: 44px; left: 8px; right: 8px; z-index: 20; border: 1px solid var(--c-border); border-radius: var(--radius-control); box-shadow: 0 8px 24px #0003; min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); color: var(--c-text); container-type: inline-size; }
-.search-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.search-icon { flex: 0 0 16px; width: 16px; height: 16px; margin-right: 4px; color: var(--c-text-secondary); }
-input { flex: 1; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
+.conversation-search { position: absolute; top: 44px; right: 12px; width: min(560px, calc(100% - 24px)); box-sizing: border-box; z-index: 20; min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); box-shadow: 0 8px 24px var(--c-shadow-soft); background: var(--c-bg-card); color: var(--c-text); container-type: inline-size; }
+.search-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.search-field { display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; padding: 0 10px; border: 1px solid var(--c-control-border); background: var(--c-bg-input); transition: border-color .15s ease; }
+.search-field:focus-within { border-color: var(--c-blue); outline: 1px solid var(--c-blue); outline-offset: -1px; }
+.search-icon { flex: 0 0 16px; width: 16px; height: 16px; color: var(--c-text-muted); }
+input { flex: 1; width: 0; min-width: 0; min-height: 36px; box-sizing: border-box; padding: 7px 0; border: 0; border-radius: var(--radius-control); outline: none; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; }
+input::-webkit-search-cancel-button { display: none; }
 input::placeholder { color: var(--c-text-muted); }
-.search-count { flex: 0 0 auto; padding: 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--c-text-secondary); }
-button { display: inline-grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.search-count { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--c-text-secondary); }
+.search-spinner { width: 14px; height: 14px; animation: search-spin .8s linear infinite; }
+.search-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.search-close { margin-left: 4px; padding-left: 6px; border-left: 1px solid var(--c-border); }
+button { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; transition: background-color .14s ease, color .14s ease; }
 button span { width: 16px; height: 16px; }
 button:hover:not(:disabled) { color: var(--c-text); background: var(--c-bg-muted); }
 button:disabled { opacity: .4; cursor: not-allowed; }
-input:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.search-scope, .search-error { margin: 6px 0 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.search-scope { color: var(--c-text-secondary); }
+button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.search-scope, .search-error { margin: 8px 2px 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.search-scope { color: var(--c-text-muted); }
 .search-error { color: var(--c-error); }
-.search-error button { width: auto; height: auto; padding: 0 4px; color: inherit; text-decoration: underline; font: inherit; }
-@container (max-width: 340px) {
-  .search-controls { flex-wrap: wrap; }
-  .search-icon { display: none; }
-  input { flex: 1 0 100%; box-sizing: border-box; }
-  .search-count { flex: 1; padding-left: 0; }
+.search-error button { width: auto; height: auto; min-height: 32px; padding: 0 6px; color: inherit; text-decoration: underline; font: inherit; }
+@keyframes search-spin { to { transform: rotate(360deg); } }
+@container (max-width: 380px) {
+  .search-controls { flex-wrap: wrap; gap: 6px; }
+  .search-field { flex-basis: 100%; }
+  .search-actions { margin-left: auto; }
 }
 @media (max-width: 700px), (pointer: coarse) {
   input { min-height: 44px; font-size: 16px; }
-  button { flex-basis: 44px; width: 44px; height: 44px; }
-  .search-count { padding: 0 2px; }
-  .search-icon { display: none; }
+  button { width: 44px; height: 44px; }
+  .search-error button { width: auto; min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-spinner { animation: none; }
+  .search-field, button { transition: none; }
 }
 </style>
 
