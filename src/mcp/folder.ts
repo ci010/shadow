@@ -5,10 +5,19 @@ import { parseMcpConfigDocument } from './config.ts'
 import type { McpServerConfig } from '../config/schema.ts'
 
 export interface FolderMcpSource { config: McpServerConfig; cwd: string; declaration: string }
+/** Safe to surface during optional discovery: never contains file values or parser diagnostics. */
+export class FolderMcpDiscoveryError extends Error {
+  constructor(file: '.mcp.json' | '.vscode/mcp.json', reason: 'unreadable' | 'invalid') {
+    super(reason === 'unreadable'
+      ? `Cannot read folder MCP declaration ${file}; check access and the 128000-byte limit.`
+      : `Invalid folder MCP declaration ${file}; expected a valid MCP server map. Values and parser diagnostics are withheld.`)
+    this.name = 'FolderMcpDiscoveryError'
+  }
+}
 /** Explicit conventions only. Discovery never connects or interpolates credentials. */
 export async function discoverFolderMcp(folder: { id: string; path: string }): Promise<FolderMcpSource[]> {
   const sources: FolderMcpSource[] = []
-  for (const file of ['.mcp.json', '.vscode/mcp.json']) {
+  for (const file of ['.mcp.json', '.vscode/mcp.json'] as const) {
     const declaration = join(folder.path, file)
     let text: string
     try {
@@ -16,7 +25,7 @@ export async function discoverFolderMcp(folder: { id: string; path: string }): P
       text = await readFile(declaration, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-      throw new Error(`Cannot read folder MCP declaration ${file}; check access and the 128000-byte limit.`)
+      throw new FolderMcpDiscoveryError(file, 'unreadable')
     }
     try {
       let input = JSON.parse(text)
@@ -36,7 +45,7 @@ export async function discoverFolderMcp(folder: { id: string; path: string }): P
       }
     } catch {
       // Parser diagnostics can contain credential-bearing JSON fragments.
-      throw new Error(`Invalid folder MCP declaration ${file}; expected a valid MCP server map. Values and parser diagnostics are withheld.`)
+      throw new FolderMcpDiscoveryError(file, 'invalid')
     }
   }
   return sources
