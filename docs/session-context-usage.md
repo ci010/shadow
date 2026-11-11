@@ -123,3 +123,10 @@ Missing-data badges and warnings are kept in the bottom data-completeness and
 measurement disclosures, not beside the summary values or daily values. The
 bottom disclosure also contains chart-window coverage counts; unavailable values
 remain unavailable rather than being fabricated as zero.
+
+Model and tool activity use separate, stacked horizontal ranking charts. Bars use
+one linear scale per chart (zero to its largest count); labels show exact counts
+and shares of that chart's entire selected-period total. Initially the top ten
+categories are shown; expanding reveals every remaining category without merging
+it into an Other bucket. Shares still include the hidden tail. Narrow panes place
+long names above their bars and keep values visible without horizontal scrolling.

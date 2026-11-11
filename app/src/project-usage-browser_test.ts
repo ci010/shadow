@@ -40,6 +40,8 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           const data = { projectId:'fixture', asOf:'2026-10-01T12:00:00Z', timeZone:'UTC', total:metrics, today:metrics, past7Days:metrics, month:metrics,
             daily: Array.from({length:31}, (_,i) => ({date:new Date(Date.UTC(2026,9,1-i)).toISOString().slice(0,10), usage:{...metrics,tokens:10000*(i+1)}})),
             scanLimitReached:false, untrackedSessions:0, undatedCalls:0 };
+          const activity = { models: [{name:'gpt-6.1-sol@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot',calls:532},{name:'gpt-6-astra@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot',calls:14}], tools: ['exec','read','write','search','message','learning_result','subagent','task','learned_skill','learning_memory','ask','log','cancel','cron_add','reply'].map((name,i)=>({name,calls:[4990,4759,3494,1640,498,317,212,187,155,66,65,65,37,36,18][i]})) };
+          data.activity = {total:activity,today:activity,past7Days:activity,month:activity};
           window.fetch = async url => {
             if (String(url).endsWith('/api/project/usage')) return Response.json(data);
             if (String(url).includes('/api/project/usage/daily')) return Response.json({projectId:'fixture',asOf:data.asOf,page:1,pageSize:10,total:31,hasMore:true,daily:data.daily.slice(0,10)});
@@ -73,7 +75,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
       const { join } = require('node:path');
       app.setPath('userData', ${JSON.stringify(resolve(directory, 'profile'))});
       app.whenReady().then(async () => {
-        const win = new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,contextIsolation:true}});
+        const win = new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});
         win.webContents.on('console-message', event => console.log('renderer:',event.message));
         try {
           await win.loadURL(${JSON.stringify(url)});
@@ -84,7 +86,13 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".echart-plot canvas").length'),3,await win.webContents.executeJavaScript('document.body.innerText'));
           for (const locale of ['en','zh-CN']) for (const dark of [false,true]) for (const width of [1180,700,350]) {
             await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+'); document.querySelector("#app").style.width="'+width+'px"; window.usageLocale('+JSON.stringify(locale)+');');
-            await new Promise(r=>setTimeout(r,80));
+            // ResizeObserver + canvas resize can settle after more than one frame,
+            // especially in a hidden Windows Electron window. Await the observable
+            // size rather than relying on a fixed 80ms delay.
+            for (let attempt=0;attempt<60;attempt++) {
+              await new Promise(r=>setTimeout(r,50));
+              if (attempt >= 3 && await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>Math.abs(window.usageInstance(e).getWidth()-e.clientWidth)<2)')) break;
+            }
             const info = await win.webContents.executeJavaScript(
               '('+(() => {
                 const all=s=>Array.from(document.querySelectorAll(s));
@@ -101,6 +109,15 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
             assert.ok(info.plots.every(p=>p.height===240));
             assert.ok(info.radius.every(r=>r==='0px')); assert.equal(info.overflow,false);
             assert.equal(info.headingOverlap,false,JSON.stringify({locale,dark,width,info}));
+            const rankings = await win.webContents.executeJavaScript('('+(() => {
+              const sections = [...document.querySelectorAll('.activity-section')];
+              return { rows: sections.map(s => s.querySelectorAll('.ranking-row').length),
+                widths: [...document.querySelectorAll('.ranking-bar')].map(e => e.style.width),
+                overflow: sections.some(s => s.scrollWidth > s.clientWidth),
+                stacked: sections[1].getBoundingClientRect().top >= sections[0].getBoundingClientRect().bottom };
+            }).toString()+')()');
+            assert.deepEqual(rankings.rows,[2,10]); assert.equal(rankings.overflow,false); assert.equal(rankings.stacked,true);
+            assert.equal(rankings.widths[0],'100%');
             assert.ok(info.charts[0].top < info.charts[1].top);
             assert.equal(info.kpis[0].top===info.kpis[2].top,width>850);
             assert.equal(info.charts[1].top===info.charts[2].top,width>850);
@@ -130,13 +147,13 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           await win.webContents.executeJavaScript('document.querySelector("#app").style.width="1180px"; document.querySelector(".chart-interaction").scrollIntoView({block:"center"}); document.querySelector(".chart-interaction").focus()');
           const key = async name => { win.webContents.sendInputEvent({type:'keyDown',keyCode:name}); win.webContents.sendInputEvent({type:'keyUp',keyCode:name}); await new Promise(r=>setTimeout(r,60)); };
           const readout = () => win.webContents.executeJavaScript('document.querySelector(".chart-readout").innerText');
-          await key('End'); assert.equal(await readout(),'2026-10-01: 1,234,567 (partial; 1 calls missing)');
+          await key('End'); assert.equal(await readout(),'2026-10-01: 1,234,567');
           await key('Left'); assert.equal(await readout(),'2026-09-30: 0');
-          await key('Left'); assert.equal(await readout(),'2026-09-29: Unavailable (partial; 1 calls missing)');
+          await key('Left'); assert.equal(await readout(),'2026-09-29: Unavailable');
           await key('Right'); assert.equal(await readout(),'2026-09-30: 0');
           await key('Home'); assert.match(await readout(),/^2026-09-02:/);
           await key('Escape'); assert.match(await readout(),/Hover or tap/);
-          for (const [index,label] of [[1,'2026-10-01: 10 CNY (partial; 1 calls missing)'],[2,'2026-10-01: 293 s (partial; 1 calls missing)']]) {
+          for (const [index,label] of [[1,'2026-10-01: 10 CNY'],[2,'2026-10-01: 293 s']]) {
             await win.webContents.executeJavaScript('document.querySelectorAll(".chart-interaction")['+index+'].focus()');
             await key('End');
             assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-readout")['+index+'].innerText'),label);
@@ -145,18 +162,18 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           await new Promise(r=>setTimeout(r,50));
           await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("[role=option]")).find(e=>e.innerText.trim()==="USD").click(); document.querySelectorAll(".chart-interaction")[1].focus()');
           await key('End');
-          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-readout")[1].innerText'),'2026-10-01: 496.34 USD (partial; 1 calls missing)');
+          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-readout")[1].innerText'),'2026-10-01: 496.34 USD');
           // Real pointer movement uses ECharts' coordinate conversion solely for observation.
           const position = await win.webContents.executeJavaScript('(()=>{const e=document.querySelector(".echart-plot");const c=window.usageInstance(e);const p=c.convertToPixel({seriesIndex:0},[29,1234567]);const r=e.getBoundingClientRect(); document.activeElement.blur(); return {x:Math.round(r.left+p[0]),y:Math.round(r.top+p[1])};})()');
           win.webContents.sendInputEvent({type:'mouseMove',...position});
           await new Promise(r=>setTimeout(r,100));
-          assert.equal(await readout(),'2026-10-01: 1,234,567 (partial; 1 calls missing)');
-          assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".usage-chart div")).some(e=>e.innerText.trim().split(String.fromCharCode(10)).join(" ")==="2026-10-01 1,234,567 (partial; 1 calls missing)")'),true);
+          assert.equal(await readout(),'2026-10-01: 1,234,567');
+          assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".usage-chart div")).some(e=>e.innerText.trim().split(String.fromCharCode(10)).join(" ")==="2026-10-01 1,234,567")'),true);
           assert.equal(await win.webContents.executeJavaScript('document.querySelector(".project-usage").scrollWidth>document.querySelector(".project-usage").clientWidth'),false);
           win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...position});
           win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...position});
           await new Promise(r=>setTimeout(r,80));
-          assert.equal(await readout(),'2026-10-01: 1,234,567 (partial; 1 calls missing)');
+          assert.equal(await readout(),'2026-10-01: 1,234,567');
           assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll("details.chart-data tbody tr").length'),90);
           assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>e.getAttribute("aria-hidden")==="true")'),true);
           await win.webContents.executeJavaScript('window.oldCharts=Array.from(document.querySelectorAll(".echart-plot")).map(e=>window.usageInstance(e)); window.usageApp.unmount(); document.documentElement.classList.toggle("dark")');

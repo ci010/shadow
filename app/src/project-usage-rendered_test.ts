@@ -357,7 +357,7 @@ test('usage styling inherits real light/dark theme tokens and panel-width layout
   assert.match(css, /\.token-card \{ grid-column: 1 \/ -1;/)
   assert.doesNotMatch(css, /donut|share-card/)
   assert.match(source, /<UiSelect :value="costUnit"/)
-  assert.equal((source.match(/<button /g) ?? []).length, (source.match(/<button class="btn btn-sm"/g) ?? []).length)
+  assert.equal((source.match(/<button /g) ?? []).length, (source.match(/<button class="btn btn-sm(?: [^"]*)?"/g) ?? []).length)
 })
 
 test('three chart slots use theme-derived marks and matching accessible titles', async t => {
@@ -426,4 +426,29 @@ test('model and tool counts follow the summary period; missing-data notices stay
   assert.match(view.text(), /today-model/)
   assert.doesNotMatch(view.text(), /fixture-model|dynamic_tool/)
   assert.match(view.text(), /No recorded calls in this period/)
+})
+
+
+test('ranked bars show top ten, exact counts and whole-period shares without hiding the tail', async t => {
+  const result = response()
+  result.activity.past7Days.tools = Array.from({ length: 12 }, (_, i) => ({ name: `tool-${i}`, calls: i + 1 }))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(result))
+  const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
+  await settle()
+  const rows = () => view.nodes().filter(n => n.props.class === 'ranking-row')
+  const bars = () => view.nodes().filter(n => n.props.class === 'ranking-bar')
+  assert.equal(rows().length, 10)
+  assert.equal(bars()[0]!.props.style && (bars()[0]!.props.style as { width: string }).width, '100%')
+  assert.equal(view.nodes().find(n => n.props.class === 'ranking-name')!.text, 'tool-11')
+  assert.match(view.text(), /78 calls · 12 categories/)
+  assert.match(view.text(), /15.4%/)
+  const toggle = view.nodes().find(n => n.tag === 'button' && n.text === 'Show all 12 categories')!
+  ;(toggle.props.onClick as () => void)()
+  await settle()
+  assert.equal(rows().length, 12)
+  assert.equal(toggle.props['aria-expanded'], true)
+  assert.match(view.text(), /Show top 10/)
+  ;(toggle.props.onClick as () => void)()
+  await settle()
+  assert.equal(rows().length, 10)
 })

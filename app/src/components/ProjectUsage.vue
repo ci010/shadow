@@ -12,13 +12,21 @@
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
       <div class="activity-grid">
-        <section v-for="kind in activityKinds" :key="kind.key" class="activity-section" :aria-label="t(kind.title)">
-          <h3>{{ t(kind.title) }}</h3>
-          <p>{{ t(kind.description) }}</p>
-          <table v-if="selectedActivity[kind.key].length">
-            <thead><tr><th scope="col">{{ t(kind.label) }}</th><th scope="col">{{ t('Calls') }}</th></tr></thead>
-            <tbody><tr v-for="entry in selectedActivity[kind.key]" :key="entry.name"><th scope="row" class="activity-name">{{ entry.name }}</th><td>{{ formatNumber(entry.calls) }}</td></tr></tbody>
-          </table>
+        <section v-for="chart in activityCharts" :key="chart.key" class="activity-section" :aria-label="t(chart.title)">
+          <div class="activity-heading"><h3>{{ t(chart.title) }}</h3><span>{{ t('{count} calls · {kinds} categories', { count: formatNumber(chart.total), kinds: formatNumber(chart.entries.length) }) }}</span></div>
+          <p>{{ t(chart.description) }}</p>
+          <template v-if="chart.entries.length">
+            <div class="ranking-head" aria-hidden="true"><span>{{ t(chart.label) }}</span><span>{{ t('Calls') }}</span><span>{{ t('Share') }}</span></div>
+            <ol class="ranking-chart" :aria-label="t(chart.title)">
+              <li v-for="entry in (expandedActivity[chart.key] ? chart.entries : chart.entries.slice(0, 10))" :key="entry.name" class="ranking-row">
+                <span class="ranking-name">{{ entry.name }}</span>
+                <span class="ranking-track" aria-hidden="true"><span class="ranking-bar" :style="{ width: `${chart.maximum ? entry.calls / chart.maximum * 100 : 0}%` }" /></span>
+                <span class="ranking-count"><span class="sr-only">{{ t('Calls') }}: </span>{{ formatNumber(entry.calls) }}</span>
+                <span class="ranking-share"><span class="sr-only">{{ t('Share') }}: </span>{{ formatNumber(chart.total ? entry.calls / chart.total : 0, { style: 'percent', maximumFractionDigits: 1 }) }}</span>
+              </li>
+            </ol>
+            <button class="btn btn-sm ranking-toggle" v-if="chart.entries.length > 10" type="button" :aria-expanded="expandedActivity[chart.key]" @click="expandedActivity[chart.key] = !expandedActivity[chart.key]">{{ expandedActivity[chart.key] ? t('Show top 10') : t('Show all {count} categories', { count: chart.entries.length }) }}</button>
+          </template>
           <p v-else>{{ t('No recorded calls in this period.') }}</p>
         </section>
       </div>
@@ -101,6 +109,12 @@ const activityKinds = [
   { key: 'models', title: 'Model usage', label: 'Model', description: 'LLM calls by model in the selected summary period.' },
   { key: 'tools', title: 'Tool usage', label: 'Tool', description: 'Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.' },
 ] as const
+const expandedActivity = ref({ models: false, tools: false })
+watch(() => [props.projectId, selectedPeriod.value], () => { expandedActivity.value = { models: false, tools: false } })
+const activityCharts = computed(() => activityKinds.map(kind => {
+  const entries = [...selectedActivity.value[kind.key]].sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name))
+  return { ...kind, entries, total: entries.reduce((sum, entry) => sum + entry.calls, 0), maximum: entries[0]?.calls ?? 0 }
+}))
 const summaryCosts = computed(() => displayCosts(selectedUsage.value.costs))
 const hasMissing = computed(() => !!data.value && (data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0 || [data.value.total, ...data.value.daily.map(d => d.usage)].some(u => u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
 function compactNumber(value: number | null) { return value === null ? t('Unavailable') : compactUsageNumber(value, formatNumber) }
@@ -212,12 +226,31 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .unavailable { color: var(--c-text-secondary); font-size: 20px; font-weight: 500; }
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
-.activity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 24px 0; }
+.activity-grid { display: grid; gap: 28px; margin: 28px 0; }
 .activity-section { min-width: 0; }
-.activity-section table { table-layout: fixed; }
-.activity-section th, .activity-section td { min-width: 0; }
-.activity-section th:first-child { width: 75%; }
-.activity-name { overflow-wrap: anywhere; }
+.activity-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.activity-heading > span { font-size: 12px; color: var(--c-text-secondary); font-variant-numeric: tabular-nums; }
+.ranking-chart { list-style: none; margin: 0; padding: 0; }
+.ranking-head, .ranking-row { display: grid; grid-template-columns: minmax(140px, 30%) minmax(0, 1fr) 80px 64px; align-items: center; gap: 16px; }
+.ranking-head { color: var(--c-text-secondary); font-size: 11px; margin: 16px 0 6px; }
+.ranking-head > :first-child { grid-column: span 2; }
+.ranking-head > :not(:first-child) { text-align: right; }
+.ranking-row { min-height: 36px; padding: 6px 0; font-size: 12px; }
+.ranking-name { overflow-wrap: anywhere; line-height: 1.5; }
+.ranking-track { height: 12px; background: var(--c-bg-muted); }
+.ranking-bar { display: block; height: 100%; background: var(--c-primary); }
+.ranking-count, .ranking-share { text-align: right; font-variant-numeric: tabular-nums; }
+.ranking-share { color: var(--c-text-secondary); }
+.ranking-toggle { margin-top: 12px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@container usage (max-width: 550px) {
+  .ranking-head { grid-template-columns: minmax(0, 1fr) 70px 54px; gap: 10px; }
+  .ranking-head > :first-child { grid-column: auto; }
+  .ranking-row { grid-template-columns: minmax(0, 1fr) 70px 54px; gap: 6px 10px; padding: 10px 0; }
+  .ranking-name { grid-column: 1 / -1; }
+  .ranking-track { grid-row: 2; }
+  .ranking-count, .ranking-share { grid-row: 2; }
+}
 .conversion-note { margin-top: 12px; }
 .scope-brief { margin: 4px 0; }
 .chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }
