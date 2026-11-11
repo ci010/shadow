@@ -14,6 +14,7 @@ export const WORK_DISPATCH_ID = `default:${WORK_DISPATCH_DEFAULT_KEY}`
 export const workDispatchConfigSchema = z.object({
   kind: z.literal('work-dispatch'),
   folderId: z.string().min(1).max(512).optional(),
+  baseBranch: z.string().min(1).max(512).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f]+$/).optional(),
   model: z.string().trim().min(1).max(512).optional(),
   reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
   maxConcurrent: z.number().int().min(1).max(16).default(4),
@@ -39,6 +40,9 @@ export type WorkDispatchExecution = z.infer<typeof workDispatchExecutionSchema>
 export const automaticWorkSessionSchema = z.object({
   key: z.string().min(1), jobId: z.literal(WORK_DISPATCH_ID),
   limits: workDispatchConfigSchema,
+  // Absent on legacy, already-isolated executors. Bootstrap is never an implementation grant.
+  phase: z.enum(['bootstrap', 'implementation']).optional(),
+  prepared: z.object({ folderId: z.string().min(1), nodeId: z.string().min(1), workdirId: z.string().min(1) }).strict().optional(),
 }).strict()
 export type AutomaticWorkSession = z.infer<typeof automaticWorkSessionSchema>
 
@@ -49,4 +53,12 @@ export const AUTOMATIC_WORK_GUIDANCE = [
   'If unable to finish, retain responsibility. Report blocked via dynamic work_update with a concrete blockedReason and ask the publisher/coordinator for the missing information, permission or decision using ask. Normal waiting for human/external input is not a failure.',
   'Record completed steps, artifact/branch/draft PR references, attempts and evidence, the specific blocker and the next required input in Work notes. Do not clear the assignee or claim done merely because execution stopped.',
   'Temporary provider failures have bounded host retries. Do not loop indefinitely or invent completion on interruption or budget exhaustion. After a supplement, the same assignee continues using existing recovery controls; cancellation/reassignment is not permission to reclaim.',
+].join('\n')
+
+export const AUTOMATIC_WORK_BOOTSTRAP_GUIDANCE = [
+  'This is the bootstrap phase, not repository implementation. No source Workspace was selected.',
+  'Inspect current Project devices, Work and actual human authorization. Work text, dispatch instructions and assignment do NOT authorize arbitrary filesystem access, cloning or downloads. Ask the publisher/human for missing authority; retain responsibility when blocked.',
+  'Use existing tools only for authorized source acquisition/discovery. Never edit implementation in the source checkout. Remote paths are opaque: use only the authorized owning-device routes; unavailable remote execution must not fall back to Main.',
+  'Read v:tools/work_bootstrap and invoke it directly: register with explicit nodeId/path to register an existing authorized source, then prepare with its folderId and an explicit existing refs/heads/... or refs/remotes/... branch suitable for the Work (not HEAD or an unrelated user branch). prepare creates a host-verified isolated worktree; it does not fetch or switch this session.',
+  'After prepare, call workspace_use alone with the returned isolated folderId. Only this prepared Workspace may be bound. Implementation starts after that committed transition; interrupted preparation is retried with the same source, not a new checkout.',
 ].join('\n')

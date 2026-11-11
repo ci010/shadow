@@ -41,8 +41,8 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
         id: job.id, name: job.name ?? job.task ?? job.id, source: job.source ?? 'cron',
         session: 'fresh', schedule: job.schedule, task: job.task, agentType: job.agentType,
         ...(job.program ? { program: job.program, running: cron.isRunning(job.id) || programControls?.running?.() === true,
-          configurationError: !job.program.folderId ? 'Select a registered repository Workspace before enabling or running.' : undefined,
-          notice: !job.program.folderId ? 'Configure this automation with a registered repository Workspace before enabling or running.' : 'Fresh dispatcher rounds select Work, models and devices; idle ticks do not call a model. Workers use isolated local or supported Child Git worktrees.' } : {}),
+          configurationError: undefined, // Project dispatch can bootstrap without a default Workspace.
+          notice: !job.program.folderId ? 'Project dispatch is ready without a default Workspace. Eligible Work starts an unbound bootstrap worker, which must acquire an authorized source and bind its prepared isolated worktree before implementation.' : 'Fresh dispatcher rounds select Work, models and devices; idle ticks do not call a model. Workers use isolated local or supported Child Git worktrees.' } : {}),
         enabled: job.enabled !== false,
         editable: job.source !== 'learning' || !!learningControls,
         configuredEnabled: job.source === 'learning' ? learningControls?.preference(job.id) ?? job.enabled !== false : job.enabled !== false,
@@ -82,8 +82,8 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
       const parsed = z.object({ program: workDispatchConfigSchema, schedule: z.string().regex(/^every ([1-9][0-9]*)[smh]$/).optional() }).strict().safeParse(body)
       if (!parsed.success || !programControls) return c.json({ error: 'invalid_automation_update' }, 400)
       try {
-        // A disabled automation may retain (or restore) its unconfigured default.
-        // Enabling and manual execution still require an available exact source.
+        // A default source is optional; when selected its exact target is validated.
+        // Enabled workspace-less programs still validate inference configuration.
         if (parsed.data.program.folderId || job.enabled !== false) await programControls.validate(parsed.data.program, c.req.raw.signal)
         await cron.configureProgram(id, parsed.data.program, parsed.data.schedule)
       } catch (error) { return c.json({ error: 'invalid_work_dispatch_configuration', message: String(error) }, 400) }

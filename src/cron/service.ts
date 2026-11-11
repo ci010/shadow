@@ -65,8 +65,7 @@ function isCronJob(value: unknown): value is CronJob {
   if (v.program !== undefined) {
     const parsed = workDispatchConfigSchema.safeParse(v.program)
     if (!parsed.success || v.id !== WORK_DISPATCH_ID || v.session !== 'fresh' || v.source !== 'cron'
-      || v.botWake !== undefined || v.executionLimits !== undefined || v.target !== undefined || v.event !== undefined
-      || v.enabled !== false && !parsed.data.folderId) return false
+      || v.botWake !== undefined || v.executionLimits !== undefined || v.target !== undefined || v.event !== undefined) return false
     v.program = parsed.data
   }
   if (v.botWake !== undefined) {
@@ -337,7 +336,6 @@ export class CronService {
     const job = this.jobs.get(id)
     if (!job) return false
     if (typeof enabled !== 'boolean') throw new TypeError('Enabled must be a boolean')
-    if (enabled && job.program && !job.program.folderId) throw new TypeError('Configure a registered Workspace before enabling automatic Work.')
     if ((job.enabled !== false) === enabled) return true
     job.enabled = enabled
     this.scheduledJobs.get(id)?.stop()

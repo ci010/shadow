@@ -17,7 +17,7 @@ const inputSchema = z.discriminatedUnion('action', [
 export class WorkDispatchAgent implements Tool {
   readonly name = 'work_dispatch'
   readonly optIn = true
-  readonly description = 'Dispatcher-only Project Work snapshot and reliable dispatch. snapshot is paginated and includes eligibility, explicit dependencies, target support and capacity. dispatch requires key and current sequence as version; optional folderId/model/reasoningEffort override defaults. Admission is not completion. Stale, dependent, already assigned or capacity-blocked Work is rejected.'
+  readonly description = 'Dispatcher-only Project Work snapshot and reliable dispatch. snapshot is paginated and includes eligibility, explicit dependencies, target support and capacity. dispatch requires key and current sequence as version; optional folderId/model/reasoningEffort override defaults. With no default or selected folderId, starts an unbound bootstrap worker which must acquire an authorized source and bind host-prepared isolation before implementation. Admission is not completion. Stale, dependent, already assigned or capacity-blocked Work is rejected.'
   readonly parameters = {
     type: 'object' as const,
     properties: {
