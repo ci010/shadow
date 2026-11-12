@@ -10,6 +10,38 @@ backend restart. A first-run approval-gated source bootstrap now acquires/builds
 the pinned runtime automatically on a supported existing Windows/WSL environment.
 OS/WSL/Docker installation remains separate.
 
+**Current execution model:** registered workspaces are committed branches, not
+persistent mounts. Official SDK file writes checkpoint automatically; exec owns
+mount/run/checkpoint/unmount. **Independent branches run concurrently**; overlapping
+branch operations are refused while reserved. Durable branch-scoped reservations
+and journals retain UNKNOWN for reconciliation without blocking unrelated branches.
+Concurrent external SDK writers/mounts are unsupported; unknown upstream sandbox
+allocation can still block new sandbox starts (not unrelated committed-file tools).
+Historical real-platform tests below describe the older adapter, not live
+qualification of this committed-state refactor. See [the current API](#committed-branch-workspace-api).
+
+## Scenario skills and tool discovery
+
+Start at `v:skills/layerfs` for navigation:
+
+- `v:skills/layerfs-worker`: ordinary read/write/search/exec in an assigned branch;
+  no installation management.
+- `v:skills/layerfs-manager`: create/register independent branch workspaces, assign
+  work and inspect/test/integrate results.
+- `v:skills/layerfs-setup`: authorized owner lifecycle, reviewed imports, baselines
+  and guarded recovery. Its canonical resource remains `v:skills/layerfs/setup.md`.
+
+These scenarios guide discovery, not role permissions or separate tool sources.
+Read the relevant skill, then read an exact flattened contract such as
+`v:tools/layerfs_branches` and call
+`invoke_tool {name:"layerfs_branches",args:{}}`. Search `v:tools` for `layerfs_`
+when the name is unknown. Exact-name invocation lazily loads the implementation;
+reading a skill does not activate the builtin factory. No preliminary source
+initialization is needed. The legacy `invoke_tool {source:"layerfs",args:{}}`
+is an optional contract-discovery fallback, not installation/connection. There is
+no public `layerfs {action:...}` router. Discovery never grants runtime consent or
+bypasses owner-session, workspace, source-review or recorded-approval checks.
+
 ## Operator prerequisites
 
 Upstream: [Ephemeral-AI-Lab/layerfs](https://github.com/Ephemeral-AI-Lab/layerfs).
@@ -476,142 +508,153 @@ the parent backend. The bundled `v:skills/layerfs/setup.md` explains prerequisit
 without requiring a source checkout; this document is repository documentation,
 not a skill-relative resource.
 
-## Workspace-facing API
+## Committed-branch Workspace API
 
-After approved setup **and source import**, use the ordinary creation tool:
+After approved setup and source import:
 
 ```text
 workspace_create {backend:"layerfs",source:"main",idempotencyKey:"task-stable-key"}
 ```
 
-This forks a generated independent branch, mounts it and registers a LayerFS-backed
-Workspace. The returned `workspaceId` is accepted by read/write/search/exec and
-workspace_use. The default backend remains git-worktree. Git `source` is a registered
-repository selector and `branch` names its existing base; LayerFS `source` currently
-names an already-imported branch, and optional `branch` names the new branch.
-Initial host source import is not implicit; these source/branch semantics are still
-backend-specific and must not be presented as complete creation parity.
+This forks a new branch and registers it **without a persistent mount**. Optional
+branch names the new branch; source names an imported LayerFS branch, not a host
+workspace. Default Git-worktree creation is unchanged. No setup/import is implicit.
+Creation journals prevent replay of uncertain forks/bindings. Registration can be
+retried with the same idempotency key after a confirmed binding. Namespace changes
+reject old identities instead of redirecting them.
 
-Creation journals retain intent before each SDK mutation. The same idempotency key
-returns the retained resource or refuses an uncertain dispatch; it does not replay
-fork/mount. Failed mounts may retain a sandbox. Registration failures retain the
-confirmed mount and can re-register it without repeating fork/mount. Namespace
-changes reject old creation identities and mount IDs rather than redirecting them.
+The existing catalog mount field carries a versioned opaque ID containing
+`{version:2,project,branch}`; its workdir remains non-host kind=layerfs. Display
+location `layerfs-branch:<branch>` is not a filesystem address. This deliberately
+keeps existing catalog/session JSONL and SQLite reference storage unchanged.
+Children inherit the ID; ordinary per-call workspace selection and workspace_use
+retain authorization and never fall back to Main. Root AGENTS.md is read through
+fs.stat/fs.read; all bounded pages are assembled. Clipped lines, changed snapshot
+roots, non-files, or instructions above 128000 bytes are refused, not partially
+loaded. Nested instructions still require explicit reads.
 
-Registered LayerFS records use kind=layerfs and an opaque mount workdir reference.
-Their container path is display metadata only, never a Main filesystem binding.
-workspace_use reads sandbox AGENTS.md through an injected reader before committing
-context. Children inherit the selected workdir; initially bound sessions must read
-root instructions before work if not already loaded. Snapshots identify backend
-and location. Local-only tools default to fail-closed on a LayerFS context.
+### Files: official v1.1 fs API
 
-## Low-level API
+Contracts were checked read-only at upstream
+`73d974dea8a8d0b056a16dc6b2380d89438ce484` (api/agent/src/fs and Store read implementation).
+No sandbox Python, shell, base64, ls or rg emulates filesystem operations.
 
-Initialize `invoke_tool {source:"layerfs",args:{}}` to register the independent
-contracts without installing anything. There is no public `layerfs {action:...}`
-router. The internal dispatcher is retained for adapters and stored compatibility.
+- Paths are absolute branch-relative SDK paths (`/src/a.ts`), not sandbox/host
+  paths. Relative inputs are normalized; traversal, NUL and backslashes are refused.
+- Read uses fs.stat then fs.read or fs.list. UTF-8 text up to 256 KiB is assembled
+  across the SDK's bounded pages, checking root consistency. Long clipped lines
+  are refused. Binary/image reads and legacy encoding conversion are unsupported.
+- Write uses fs.write; match uses fs.edit's **exact unique** replacement. Both
+  checkpoint automatically and return the SDK head receipt. Payloads are limited
+  to 64 KiB. No global edit, append, BOM conversion, newline-normalized matching,
+  host view_edit patch, or optimistic read-modify-write parity is claimed.
+  Parent directories must already exist (unlike host write's auto-mkdir). For new
+  directories, explicitly run `exec` with `mkdir -p` first (it checkpoints), then
+  write; the file adapter never secretly runs shell or exposes fs.mkdir/fs.apply.
+- Search uses fs.glob or **literal** fs.grep, not regex; grep include is unsupported.
+  Narrow path instead. Native items/hasMore/nextPagePos, skipped binary counts and
+  lineTruncated flags are preserved. Search offset is the SDK pagePos; directory
+  read offset is one-based (nextPagePos + 1). Do not infer completion from an empty
+  page when hasMore is true. No extra filesystem operation APIs are exposed yet.
+- Main is readonly: create a branch before writing or running commands.
 
-- Setup/diagnostics: layerfs_connect, layerfs_doctor, layerfs_setup,
-  layerfs_runtime_status and individual layerfs_bootstrap* tools.
-- Import/baseline: layerfs_import_preview, layerfs_import, layerfs_import_status,
-  layerfs_baseline_plan/prepare, layerfs_import_recovery_plan/recover and
-  layerfs_namespace_status. Existing exact approvals/token binding remain in force.
-  sourceReviewed is a caller acknowledgement, not host-verifiable human content review
-  or a secret-free certificate. The preview is metadata-only.
-- Advanced development: layerfs_fork, layerfs_load (new branch from historical ref),
-  layerfs_mount, layerfs_sandboxes, layerfs_branches, layerfs_status,
-  layerfs_commit, layerfs_history, layerfs_diff, layerfs_merge,
-  layerfs_publish and layerfs_close. Dedicated read/write/exec duplicates are not public.
-- Diff still omits hunks. Merge creates a new integration branch; inspect conflicts,
-  mount, test and checkpoint before publish. Publish updates LayerFS main only,
-  not the original checkout. Close refuses dirty mounts, without force/discard.
+### Exec: one owned mount/run/checkpoint/unmount lifecycle
 
-## Ordinary tools on LayerFS
+Exec supports sh/bash, args and branch-relative cwd, but not node. Each call checks
+inventory, creates a sandbox, mounts the current branch, runs once, checkpoints,
+unmounts **without discard/force**, then closes its sandbox. Changes checkpoint
+**even when the command exits nonzero**; that exit remains a completed tool failure
+with command output and checkpoint receipt, not a successful commit masquerading
+as command success. A lifecycle failure after dispatch is UNKNOWN and retains
+phase evidence; partial effects are not rolled back.
 
-Use the same workspace selector and ordinary parameters as local/remote workspaces:
+The ordinary wait window applies to the whole lifecycle. timeout_ms:0 transfers
+to background; a positive wait can return a bg: handle while the same promise
+continues. Background ownership spans checkpoint/unmount/close, not just shell
+exit. Each output stream captures 64 KiB with total byte counts/truncation flags.
+No extra execution is dispatched after transfer. Cancellation uses the existing
+token-bound sandbox supervisor; cancellation or lost receipts do not trigger
+automatic commit/discard/cleanup on an aborted signal. A retained mount needs
+explicit reconciliation. Linux setsid -w/sh/sleep/kill/mkdir/cat/rm are required;
+no helper is installed implicitly. Live cancellation still needs qualification.
 
-- Read supports text decoding, line numbering/paging, directories and images.
-  Text transport is bounded at 256 KiB; image limits match ordinary read. Paths
-  may be relative or absolute within the mounted workspace, never host paths.
-- Write supports exact match/global replacement (preserving BOM and line endings),
-  append, and UTF-8/BOM overwrite. The current write transport limit is 64 KiB.
-  Prior bytes are observed when available, and view_edit receipts retain sandbox
-  provenance rather than a host path. Edit/append requires readable UTF-8 text.
-- Search supports grep/glob, include and offset/limit using sandbox rg, with bounded
-  output and explicit failure on truncation or missing prerequisites. It never uses
-  Main ripgrep. Remote search likewise executes filesystem.read on the owning device.
-- Exec supports script/args/cwd with sh (default) or bash. `timeout_ms` is the
-  ordinary foreground wait window (0–2147483647, default inherited from ExecTool):
-  zero transfers directly to background; a positive window returns the completed
-  result or a `bg:` handle while the original command continues. Timeout alone
-  does not terminate the command or make its outcome UNKNOWN. Live output,
-  completion notifications and cancellation use the normal background manager.
-  No second SDK dispatch or bridge wall-clock deadline is introduced on transfer.
-  Leaf calls remain foreground-only and terminate/confirm cleanup at their deadline.
-  Actual transport loss or unconfirmed process cleanup still reports UNKNOWN.
-  The node runtime is not supported on this Linux adapter.
-- Sandbox helpers require standard Linux sh/base64/wc/ls/mkdir/printf, plus rg for
-  search. No helper dependency is silently installed. Relative symlinks retain
-  upstream/container semantics; this is not a new universal host sandbox.
+### Exclusion, evidence and legacy records
 
-This is interface/target unification, not a claim that every backend capability is
-identical. Scoped skill/MCP and UI file/Git/media routes remain unsupported on
-LayerFS and fail closed. No fresh real provisioning/SDK end-to-end qualification
-was performed for this unified-workspace path; synthetic coverage does not replace it.
+Ordinary operations reserve only their branch. Independent branch reads, writes
+and full exec lifetimes run concurrently. Same-branch overlap is refused, not
+silently queued or replayed. Fork/load reserve the new branch and source ref;
+merge reserves both input branches and the new integration branch; publish
+reserves its source branch and main. Source refs are conservatively reserved by
+name, including explicit commit refs; no ambiguous ref-to-branch inference or
+immutable-ref substitution is performed. Diagnostic list/history/status/diff remain
+available but do not promise a transactional snapshot during mutations.
 
-## Safety and integration limits
+A short SQLite `BEGIN IMMEDIATE` transaction atomically admits a sorted resource
+set. Its OS lock is crash-released and has a bounded 1-second busy timeout; it is
+never held over SDK execution. Durable owner-token reservations live under Project
+Home in `layerfs-operations/<namespace-project>.jsonl.sqlite`, with phase journals
+in `<namespace-project>.jsonl.resources/<sha256-ref>.jsonl`. Operator mode without
+Home uses the operator configuration directory. Project/namespace names partition
+the database. Release validates the exact owner and journal set only after a
+settled receipt **and child process exit**, including client close. Partial
+admission/journal creation or release retains reservations, never steals resources.
+Pre-migration `<namespace-project>.jsonl` journals remain broad quarantines, as do
+unknown create/legacy management operations whose scope cannot safely be narrowed.
 
-- Registered LayerFS workspaces preserve mount identities, not host directory bindings.
-  Never register `/workspaces/1` as a local Folder or pass it as a Main cwd. There
-  is no host export or automatic source merge-back. Running LayerFS on remote
-  Shadow executors remains unsupported; remote workspaces themselves use their
-  owning executor, without Main fallback.
-- Only one operation per workspace is admitted; overlapping calls fail busy before dispatch (wait for the receipt, do not replay). different workspaces can run in
-  parallel. Project management operations have a separate lock. Non-import SDK
-  management operations have a default 330-second bridge receipt deadline.
-  Ordinary lifecycle-managed exec has no competing bridge deadline: timeout_ms
-  controls only the foreground wait. Imports use the single SDK budget and
-  renewable silence watchdog described above. Managed exec cancellation asks a
-  token-bound sandbox supervisor to stop its own process group and waits for the
-  original SDK execution receipt; an unconfirmed stop is UNKNOWN, not cancelled.
-  Other bridge cancellation does not necessarily stop daemon work. Lost/invalid
-  receipts, SDK Unknown, abnormal bridge exit or oversized protocol output raise
-  outcome-unknown; nothing is automatically resent.
-  Inspect status/history and reconcile manually before retrying any mutation.
-- Exec uses SDK Writable sinks; each output stream retains only 64 KiB with total
-  byte counts and truncation markers. Background observation is bounded as well.
-  Internal file/image transport has a separately bounded larger capture allowance;
-  it does not raise the ordinary exec output cap. SDK pages and daemon/native
-  buffers remain under upstream control.
-- Lifecycle-managed sandbox exec requires Linux `setsid -w`, sh, sleep, kill,
-  mkdir, cat and rm. Missing helpers fail before the user script runs; nothing is
-  installed implicitly. The random cancellation token is not a guessed host PID.
-  Real SDK acceptance of the concurrent cancellation-marker exec still requires
-  live qualification; synthetic shell fixtures are not proof of that capability.
-- Mount failure can leave a newly created sandbox: inspect `list`; do not blindly
-  replay mount. No project/volume removal is automated here.
-- Definite SDK error receipts are marked as completed tool failures (`isError`),
-  preserving code/detail; SDK Unknown still raises outcome-unknown. A refusal may follow earlier effects;
-  errors are not general rollback guarantees. Conflicts require human/agent review.
-- LayerFS working state is disposable, not a reliable backup. Keep source and
-  independently backed-up durable outputs. Credentials must not enter snapshots.
+Phase records are synced before lifecycle dispatch and contain the original branch,
+resource set, owner, returned sandbox/mount and checkpoint when known, never command
+or file content. Crash, timeout, cancellation or UNKNOWN preserves evidence and
+blocks only those reserved resources. There is no automatic replay, expiry, discard,
+force cleanup or recovery tool. Operators must establish that work stopped, inspect
+and safely checkpoint/close through the official SDK, preserve evidence and reconcile
+both reservations and journals. Status exposes retained branch phases; a crash before
+journal creation can require inspection of the reservation database itself.
+
+Inventory pages `project.list_sandboxes` then official `sandbox.list_workspaces`.
+Only the latter's explicit `branch` metadata establishes mount ownership. Known
+unrelated mounts do not block operations; matching mounts, even clean, do. Missing
+branch metadata and unreadable/malformed inventory fail closed without inferring
+branch from a mount number/path. Finite pagination bounds apply. This protects
+against existing stale manual mounts, not arbitrary concurrent external SDK writers;
+Shadow's protocol is not a cross-client transaction.
+
+Pinned upstream `engine/crates/layerfs-node/src/sandbox.rs` serializes native sandbox
+allocation/reclaim under its own project guard, not entire exec lifetimes. Unknown
+allocation retains upstream `create.intent`, which can refuse **all new sandbox
+starts** until operator reconciliation. Shadow does not bypass or clear that guard:
+A unknown create keeps A's reservation, while unrelated B committed-file operations
+remain available if inventory ownership is known. B exec can still fail upstream.
+Known A checkpoint/mount uncertainty does not impose a Shadow-wide lock on B.
+
+Legacy registered mount IDs remain stored unchanged. Ordinary file/exec calls
+refuse them explicitly; no branch is inferred. Inspect status and explicitly
+checkpoint/close the legacy mount, then create a new branch-backed Workspace from
+its known branch. Advanced layerfs_mount is maintenance-only, not an ordinary file
+route. layerfs_commit/close operate on legacy mounts; new branch workspaces have no
+persistent mount to manually commit/close. Close still refuses dirty mounts.
+
+Read the scenario skill, then the exact `v:tools/layerfs_NAME` contract and invoke
+`invoke_tool {name:"layerfs_NAME",args:{...}}` with its actual parameters. No
+preliminary source initialization is required for these flattened tools. Setup/import/baseline approval gates are unchanged. Fork/load create new
+branches; merge creates an integration branch; history/diff inspect committed state
+(diff still has no hunks). Publish updates LayerFS main only, never host source.
+No automatic export, project/volume removal or source merge-back is implemented.
+
+Scoped skill/MCP and UI file/Git/media routes remain unsupported on LayerFS. Remote
+Shadow executors remain unsupported for this backend; local/remote host tools are
+unchanged. Keep independent backups and never import credentials.
 
 ## Verification scope
 
-Managed-setup tests use synthetic Runtime/SDK modules and injected subprocesses,
-not WSL or root execution. They cover approval/context gates, private paths,
-persistence/reuse after clean shutdown, real helper IPC, automatic bridge wiring,
-uncertain-state no-replay, SDK Unknown handling and graceful-close failure cleanup.
-These are application integration tests, not live qualification of managed setup
-against the real upstream worker on this host.
-
-Focused tests use a synthetic SDK to verify real child-process dispatch, bounded
-Writable capture, Project-bound selectors, dirty unmount arguments, cancellation,
-abnormal exit and local/remote admission guards. They do not prove upstream Store,
-Docker, WSL, conflict resolution or runtime provisioning works on this machine.
-No SDK, daemon or image was installed to perform those synthetic tests. Later real
-platform tests are recorded above and in
-[layerfs-e2e-wsl-20261105.md](layerfs-e2e-wsl-20261105.md) and
-[layerfs-e2e-macos-20261105.md](layerfs-e2e-macos-20261105.md); their limited
-passing matrix and unresolved failures must not be expanded into a general
-platform-readiness claim.
+Synthetic SDK contract tests cover positional fs calls, paging/root consistency,
+unsupported argument refusal, branch identity, legacy refusal, Project isolation,
+checkpoint/nonzero exit receipts, background lifecycle ownership, mounted-state
+refusal and retained UNKNOWN exclusion. Barrier-based tests prove two exec lifetimes
+and sandbox allocations overlap, with B file operations during A exec; same-branch
+refusal, merge/publish complete ref sets, cancellation/UNKNOWN across new bridge
+processes, namespace isolation and SQLite admission crash rollback are covered.
+They run child processes, but no real
+LayerFS, Docker, WSL, setup/import or dependency install. This committed-state route
+has **not** been live-qualified. Earlier platform tests above and linked historical
+reports tested the older mounted-file adapter; their success does not qualify this
+refactor or imply parallel-branch parity.

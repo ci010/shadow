@@ -86,7 +86,7 @@ function isScriptLoadable(entry: LoadableEntry): entry is ScriptLoadable {
  */
 export interface FactoryLoadable {
   factory: () => Promise<Tool | Tool[]>
-  contracts?: Array<Pick<Tool, 'name' | 'description' | 'parameters'>>
+  contracts?: Array<Pick<Tool, 'name' | 'description' | 'parameters' | 'supportsLayerFSWorkdir'>>
 }
 
 function isMcpLoadable(entry: LoadableEntry): entry is McpLoadable {
@@ -916,7 +916,11 @@ export class ImportTool implements Tool {
 
   canInvokeFromLayerFS(toolName: string): boolean {
     const entry = this.builtins.get(toolName)
-    return !!entry && this.loadable.get(toolName) === entry && !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsLayerFSWorkdir === true
+    if (entry) return this.loadable.get(toolName) === entry && !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsLayerFSWorkdir === true
+    const owners = [...this.loadable].filter(([, candidate]) => isFactoryLoadable(candidate) && candidate.contracts?.some(tool => tool.name === toolName))
+    if (owners.length !== 1) return false
+    const [name, owner] = owners[0]
+    return this.builtins.get(name) === owner && isFactoryLoadable(owner) && owner.contracts?.some(tool => tool.name === toolName && tool.supportsLayerFSWorkdir === true) === true
   }
 
   canInvokeFromRemote(toolName: string): boolean {

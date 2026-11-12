@@ -71,7 +71,7 @@ export class InvokeTool implements Tool<ToolResult> {
     }
 
     if (context.layerfsWorkdir && !context.tools.activeDynamicTools().some(tool => tool.name === name && tool.supportsLayerFSWorkdir) && !this.importer?.canInvokeFromLayerFS?.(name)) {
-      return 'Error: this tool does not support LayerFS workspaces. Initialize source layerfs for its maintenance tools; no host fallback.'
+      return 'Error: this tool does not support LayerFS workspaces. Read v:skills/layerfs-worker or discover exact maintenance tool names through v:skills/layerfs-manager; no host fallback.'
     }
 
     const toolArgs = args.args

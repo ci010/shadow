@@ -2,7 +2,7 @@ import type { ExecutionContext } from './context.ts'
 import { ToolNoEffectError, ToolOutcomeUnknownError } from './tool.ts'
 
 export const executionTargetParameters = {
-  workspace: { type: 'string' as const, description: 'Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID.' },
+  workspace: { type: 'string' as const, description: 'Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved.' },
 }
 
 /** Hidden compatibility for saved calls; never normalize third-party tool arguments. */

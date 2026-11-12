@@ -1,3 +1,5 @@
+import { join, dirname } from 'node:path'
+import { parseBranchWorkspace } from '../execution/layerfs/workspace-identity.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { LayerFSImportReview, importPolicy } from '../execution/layerfs/import-review.ts'
 import { IMPORT_TIMEOUT, importTimeoutMs } from '../execution/layerfs/import-timeout.ts'
@@ -9,8 +11,8 @@ import type { LayerFSWorkflow } from '../execution/layerfs/workflow.ts'
 import type { ExecutionContext } from './context.ts'
 import { ToolNoEffectError, completedToolFailure, type Tool, type ToolParameters, type ToolResult } from './tool.ts'
 
-const actions = ['doctor', 'setup', 'connect', 'runtime_status', 'bootstrap_plan', 'bootstrap', 'bootstrap_status', 'bootstrap_recover', 'bootstrap_recover_connection', 'import_preview', 'import_status', 'import_recovery_plan', 'import_recover', 'namespace_status', 'baseline_plan', 'baseline_prepare', 'create', 'list', 'branches', 'history', 'fork', 'load', 'mount', 'status', 'read', 'write', 'exec', 'commit', 'close', 'diff', 'merge', 'publish'] as const
-const workspaceActions = new Set(['status', 'read', 'write', 'exec', 'commit', 'close'])
+const actions = ['doctor', 'setup', 'connect', 'runtime_status', 'bootstrap_plan', 'bootstrap', 'bootstrap_status', 'bootstrap_recover', 'bootstrap_recover_connection', 'import_preview', 'import_status', 'import_recovery_plan', 'import_recover', 'namespace_status', 'baseline_plan', 'baseline_prepare', 'create', 'list', 'branches', 'history', 'fork', 'load', 'mount', 'branch_workspace', 'status', 'read', 'write', 'search', 'exec', 'commit', 'close', 'diff', 'merge', 'publish'] as const
+const workspaceActions = new Set(['status', 'read', 'write', 'search', 'exec', 'commit', 'close'])
 const busy = new Set<string>()
 const reviewServices = new Map<string, LayerFSImportReview>()
 export function validateLayerArgs(a: Record<string, unknown>, project: string): void {
@@ -27,22 +29,24 @@ export function validateLayerArgs(a: Record<string, unknown>, project: string): 
   if (typeof a.command === 'string' && Buffer.byteLength(a.command) > 65536) throw new Error('Command too large.')
   if (a.path !== undefined && (!a.path || String(a.path).includes('\0') || String(a.path).split('/').includes('..'))) throw new Error('Expected sandbox-relative file path without traversal.')
   if (a.offset !== undefined && (!Number.isSafeInteger(a.offset) || Number(a.offset) < 0)) throw new Error('Invalid page offset.')
-  if (a.action === 'read') {
-    a.start ??= 1; a.end ??= Number(a.start) + 199
-    if (!Number.isSafeInteger(a.start) || !Number.isSafeInteger(a.end) || Number(a.start) < 1 || Number(a.end) < Number(a.start) || Number(a.end) - Number(a.start) > 999) throw new Error('Read requires 1–1000 lines.')
-  }
+  if (a.action === 'branch_workspace' && (typeof a.branch !== 'string' || !a.branch)) throw new Error('Missing branch.')
+  if (a.action === 'read' && a.start !== undefined && (!Number.isSafeInteger(a.start) || Number(a.start) < 1)) throw new Error('Invalid read start.')
+  if (a.action === 'read' && a.end !== undefined && (!Number.isSafeInteger(a.end) || Number(a.end) < Number(a.start ?? 1))) throw new Error('Invalid read end.')
   if (workspaceActions.has(String(a.action))) {
     if (typeof a.workspace !== 'string' || a.workspace.length > 1024) throw new Error('Expected LayerFS workspace ID returned by mount.')
-    let ws: { project?: string; sandbox?: string; path?: string }
+    let ws: { version?: number; project?: string; sandbox?: string; path?: string }
     try { ws = JSON.parse(Buffer.from(a.workspace.replace(/^layerfs:/, ''), 'base64url').toString()) } catch { throw new Error('Invalid LayerFS workspace ID.') }
-    if (ws.project !== project || !/^\d+$/.test(ws.sandbox ?? '') || !/^\/workspaces\/\d+$/.test(ws.path ?? '')) throw new Error('Workspace ID is invalid or belongs to another Project or quarantined namespace.')
+    if (ws.version === 2 || ['read', 'write', 'search', 'exec'].includes(String(a.action))) {
+      parseBranchWorkspace(a.workspace, project)
+      if (['commit', 'close'].includes(String(a.action))) throw new ToolNoEffectError('Branch-backed workspaces checkpoint automatically and have no persistent mount to close.')
+    } else if (ws.project !== project || !/^\d+$/.test(ws.sandbox ?? '') || !/^\/workspaces\/\d+$/.test(ws.path ?? '')) throw new Error('Workspace ID is invalid or belongs to another Project or quarantined namespace.')
   }
 }
 
 export class LayerFSTool implements Tool<ToolResult> {
   readonly name = 'layerfs'
-  readonly description = 'Optional real LayerFS 1.1 SDK bridge. Use connect as the everyday entry: reuse approved managed Windows/WSL, or return an automatic first-run bootstrap plan. After one explicit owner approval, bootstrap downloads/builds pinned official sources in the selected existing WSL distro and connects automatically in a background job; no user paths or environment edits. Requires approved, allowRootWorker, allowDownloads, the session-bound plan and a matching recorded human decision reference. Inspect bootstrap_status; bootstrap_recover can archive an exact failed pre-provisioning probe after safety checks, never a dispatched/uncertain build. bootstrap_recover_connection reuses a retained completed build only after explicit owner consent, exact executionId, absent SDK runtime directory, no managed helper and stopped distro checks; one connection attempt, no rebuild/import. setup is the advanced existing-installation path. Shadow persists private paths and owns worker lifecycle; no environment variable or backend restart. setup is not an installer/download. doctor checks configuration only; runtime_status never starts a worker. Explicit operator environment remains supported and takes precedence. For failed imports, import_recovery_plan returns an exact human approval request; import_recover verifies inactive ownership and selects a fresh private namespace while retaining all old resources. It never retries/deletes the old import. namespace_status lists safe quarantine metadata; use the returned namespace for connect. baseline_plan takes registered source workspace and a separate write-authorized destinationWorkspace; after exact approval baseline_prepare copies selected tracked working-tree files to a new exclusive directory and registers it, excluding dependencies/known credential artifacts and leaving the original untouched. Both workflows require direct owner-session context and recorded human approval, not flags alone. Before create, import_preview performs a bounded metadata-only review of the registered local source. importPolicy curated (default) rejects VCS/dependency/build entries as out of scope; whole_tree includes and recursively reviews them. Neither policy filters the source; symlinks and credential/private-runtime artifacts stay blocked. Credential-related source directories are traversed with warnings, not blanket exempted; nested non-code data remains protected. Use a separate curated baseline if blocked, never delete from the original checkout. create requires sourceReview from that preview and sourceReviewed:true after content review; tokens are session/source/policy-bound, single-use and expire in 15 minutes. Managed create returns a background execution ID; wait for its completion event. import_status exposes sanitized current/retained progress and deadline failures, never retries; runtime_status does not queue behind imports and reports health:not_checked while busy. create imports every allowed file (no ignore rules or credential-free guarantee); fork/load creates a new branch (load requires historical ref), mount returns a sandbox workspace ID. Use ordinary read/write/exec workspace with that ID (bounded UTF-8 files/overwrite and sh/bash only; see skill); never use its container path as a host workspace. commit checkpoints without overwriting source; close refuses dirty workspaces. publish updates LayerFS main, NOT source files. No retries on unknown outcomes. See v:skills/layerfs.'
-  readonly parameters: ToolParameters = {
+  readonly description = 'Optional real LayerFS 1.1 SDK bridge. Use connect as the everyday entry: reuse approved managed Windows/WSL, or return an automatic first-run bootstrap plan. After one explicit owner approval, bootstrap downloads/builds pinned official sources in the selected existing WSL distro and connects automatically in a background job; no user paths or environment edits. Requires approved, allowRootWorker, allowDownloads, the session-bound plan and a matching recorded human decision reference. Inspect bootstrap_status; bootstrap_recover can archive an exact failed pre-provisioning probe after safety checks, never a dispatched/uncertain build. bootstrap_recover_connection reuses a retained completed build only after explicit owner consent, exact executionId, absent SDK runtime directory, no managed helper and stopped distro checks; one connection attempt, no rebuild/import. setup is the advanced existing-installation path. Shadow persists private paths and owns worker lifecycle; no environment variable or backend restart. setup is not an installer/download. doctor checks configuration only; runtime_status never starts a worker. Explicit operator environment remains supported and takes precedence. For failed imports, import_recovery_plan returns an exact human approval request; import_recover verifies inactive ownership and selects a fresh private namespace while retaining all old resources. It never retries/deletes the old import. namespace_status lists safe quarantine metadata; use the returned namespace for connect. baseline_plan takes registered source workspace and a separate write-authorized destinationWorkspace; after exact approval baseline_prepare copies selected tracked working-tree files to a new exclusive directory and registers it, excluding dependencies/known credential artifacts and leaving the original untouched. Both workflows require direct owner-session context and recorded human approval, not flags alone. Before create, import_preview performs a bounded metadata-only review of the registered local source. importPolicy curated (default) rejects VCS/dependency/build entries as out of scope; whole_tree includes and recursively reviews them. Neither policy filters the source; symlinks and credential/private-runtime artifacts stay blocked. Credential-related source directories are traversed with warnings, not blanket exempted; nested non-code data remains protected. Use a separate curated baseline if blocked, never delete from the original checkout. create requires sourceReview from that preview and sourceReviewed:true after content review; tokens are session/source/policy-bound, single-use and expire in 15 minutes. Managed create returns a background execution ID; wait for its completion event. import_status exposes sanitized current/retained progress and deadline failures, never retries; runtime_status does not queue behind imports and reports health:not_checked while busy. create imports every allowed file (no ignore rules or credential-free guarantee); fork/load creates a new branch (load requires historical ref), mount returns a legacy sandbox ID for maintenance only. Use workspace_create backend=layerfs for committed-branch ordinary SDK file tools and transient mount/exec/checkpoint/unmount. File writes checkpoint automatically; exec checkpoints even nonzero exit. Never use container paths as host workspaces. commit checkpoints without overwriting source; close refuses dirty workspaces. publish updates LayerFS main, NOT source files. No retries on unknown outcomes. See v:skills/layerfs.'
+  static readonly parameters: ToolParameters = {
     type: 'object', additionalProperties: false,
     properties: {
       action: { type: 'string', enum: [...actions] },
@@ -64,9 +68,10 @@ export class LayerFSTool implements Tool<ToolResult> {
       offset: { type: 'integer' }, start: { type: 'integer' }, end: { type: 'integer' },
     }, required: ['action'],
   }
+  readonly parameters = LayerFSTool.parameters
   private readonly managed?: ManagedLayerFS
   private readonly reviews: LayerFSImportReview
-  constructor(private readonly projectId: string, home?: string, managed?: ManagedLayerFS, private readonly bootstrap?: LayerFSBootstrap,
+  constructor(private readonly projectId: string, private readonly home?: string, managed?: ManagedLayerFS, private readonly bootstrap?: LayerFSBootstrap,
     private readonly background?: Pick<BackgroundTaskManager, 'runPromiseTask'>, private readonly workflow?: LayerFSWorkflow) {
     this.managed = managed ?? (home ? managedLayerFS(projectId, home) : undefined)
     const key = `${home ?? ''}\0${projectId}`
@@ -147,10 +152,10 @@ export class LayerFSTool implements Tool<ToolResult> {
       context.signal.throwIfAborted()
       return JSON.stringify({ ok: true, result })
     }
-    const selected = workspaceActions.has(String(a.action)) ? JSON.parse(Buffer.from(String(a.workspace).replace(/^layerfs:/, ''), 'base64url').toString()) : undefined
-    const lock = selected ? `${project}:${selected.sandbox}:${selected.path}` : `${project}:management`
-    if (busy.has(lock)) throw new Error('LayerFS Project operation already in flight; wait for its receipt, do not replay.')
-    busy.add(lock)
+    const lock = project
+    const ownsLock = ['create', 'setup', 'connect'].includes(String(a.action))
+    if (!['list', 'branches', 'history', 'status', 'diff'].includes(String(a.action)) && busy.has(lock)) throw new Error('LayerFS Project operation already in flight; wait for its receipt, do not replay.')
+    if (ownsLock) busy.add(lock)
     let backgroundOwnsLock = false
     try {
       if (a.action === 'connect' && process.env.SHADOW_LAYERFS_CONFIG) {
@@ -199,6 +204,9 @@ export class LayerFSTool implements Tool<ToolResult> {
       }
       const config = useManaged && await useManaged.configured() ? await useManaged.configuration(context.signal, identity.namespace) : await configuration(this.projectId)
       context.signal.throwIfAborted()
+      const journalHome = this.home ?? (process.env.SHADOW_LAYERFS_CONFIG ? dirname(process.env.SHADOW_LAYERFS_CONFIG) : undefined)
+      if (!journalHome) throw new ToolNoEffectError('LayerFS durable journal location unavailable; no dispatch.')
+      a.journal = join(journalHome, 'layerfs-operations', project + '.jsonl')
       const output = await runBridge(config, project, String(a.action), a, context.signal, a.action !== 'create' && typeof a.bridgeTimeoutMs === 'number' ? a.bridgeTimeoutMs : undefined, lifecycle)
       // A definite SDK refusal is a completed failure, not a successful text result.
       // This does not claim rollback/no effect; Unknown is raised by the bridge.
@@ -206,7 +214,7 @@ export class LayerFSTool implements Tool<ToolResult> {
         isError: true, content: [{ type: 'text', text: output }],
       })
       return output
-    } finally { if (!backgroundOwnsLock) busy.delete(lock) }
+    } finally { if (ownsLock && !backgroundOwnsLock) busy.delete(lock) }
   }
 }
 
@@ -234,8 +242,8 @@ const intentDefinitions = {
   history: ['Inspect branch checkpoint history.', ['branch'], ['offset']],
   fork: ['Create a distinct branch from the optional baseline ref; never overwrites the host source.', ['branch'], ['ref']],
   load: ['Fork a historical checkpoint into a new branch, not an in-place rollback.', ['branch', 'ref'], []],
-  mount: ['Mount a branch and return an opaque layerfs: workspace ID for ordinary read/write/exec; not a host path or registration.', ['branch'], []],
-  status: ['Inspect workspace activity/changes for an opaque LayerFS mount ID.', ['workspace'], []],
+  mount: ['Advanced legacy mount for explicit status/checkpoint/close only; ordinary file/exec tools require workspace_create backend=layerfs branch-backed identity. Never a host path.', ['branch'], []],
+  status: ['Inspect legacy mount activity or branch-backed workspace root and retained operation journal phases. Diagnostics do not replay, reconcile or clear UNKNOWN.', ['workspace'], []],
   commit: ['Checkpoint sandbox changes after testing; does not overwrite the source checkout.', ['workspace'], ['message']],
   close: ['Close a clean mount only; dirty workspaces are refused, with no force/discard option.', ['workspace'], []],
   diff: ['Inspect paged differences between ref and branch; currently no hunks.', ['ref', 'branch'], ['offset']],
@@ -243,19 +251,30 @@ const intentDefinitions = {
   publish: ['Update LayerFS main from branch, not host source files. Test and review first.', ['branch'], ['ref']],
 } as const
 
+/** Pure discovery metadata: no runtime/service construction or source initialization. */
+export function layerFSToolContracts() {
+  return Object.entries(intentDefinitions).map(([action, [description, required, optional]]) => ({
+    name: action === 'create' ? 'layerfs_import' : action === 'list' ? 'layerfs_sandboxes' : `layerfs_${action}`,
+    supportsLayerFSWorkdir: true,
+    description: `${description} Local Project only. See v:skills/layerfs.`,
+    parameters: { type: 'object' as const, additionalProperties: false,
+      properties: Object.fromEntries([...required, ...optional, 'namespace'].map(key => [key, { ...LayerFSTool.parameters.properties[key] }])),
+      required: [...required] },
+  }))
+}
+
 /** Replace registration of new LayerFSTool(...) with ...createLayerFSTools(...).
  * All intents share the same review/managed/bootstrap/workflow services and safety dispatch.
  */
 export function createLayerFSTools(...args: ConstructorParameters<typeof LayerFSTool>): Tool<ToolResult>[] {
   const dispatcher = new LayerFSTool(...args)
-  return Object.entries(intentDefinitions).map(([action, [description, required, optional]]) => {
+  const contracts = layerFSToolContracts()
+  return Object.entries(intentDefinitions).map(([action, [, required, optional]], index) => {
     const fields = [...required, ...optional, 'namespace']
-    const properties = Object.fromEntries(fields.map(key => [key, { ...dispatcher.parameters.properties[key] }]))
+    const contract = contracts[index]
+    const properties = contract.parameters.properties
     return {
-      name: action === 'create' ? 'layerfs_import' : action === 'list' ? 'layerfs_sandboxes' : `layerfs_${action}`,
-      supportsLayerFSWorkdir: true,
-      description: `${description} Local Project only. See v:skills/layerfs.`,
-      parameters: { type: 'object', additionalProperties: false, properties, required: [...required] },
+      ...contract,
       async execute(input, context) {
         // Enforce the small intent boundary even for direct callers bypassing schema validation.
         for (const key of Object.keys(input)) if (!fields.includes(key)) throw new ToolNoEffectError(`Unexpected ${key} for layerfs_${action}.`)
