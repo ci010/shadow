@@ -96,8 +96,34 @@ function timestamp(value: unknown): value is string {
   return month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]! && Number.isFinite(Date.parse(value))
 }
 
+/** Only the known validation envelope is displayable; never surface proxy HTML or arbitrary errors. */
+async function toggleFailureReason(response: Response): Promise<string | undefined> {
+  if (response.status !== 400 || !response.headers.get('content-type')?.includes('application/json')) return
+  const reader = response.body?.getReader()
+  if (!reader) return
+  try {
+    const chunks: Uint8Array[] = []
+    let size = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > 4096) return
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes))
+    if (!record(value) || value.error !== 'invalid_work_dispatch_configuration' || typeof value.message !== 'string') return
+    const reason = value.message.replace(/^Error:\s*/, '').trim()
+    if (!reason || reason.length > 512 || /[\u0000-\u001f\u007f<>]/.test(reason)) return
+    return reason
+  } catch { return undefined } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+}
+
 async function read<T>(
-  url: URL, signal: AbortSignal, parse: (value: unknown) => T, request: typeof fetch,
+  url: URL, signal: AbortSignal, parse: (value: unknown) => T, request: typeof fetch, toggling = false,
 ): Promise<T> {
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
   try {
@@ -106,7 +132,16 @@ async function read<T>(
     deadline.throwIfAborted()
     if (response.status === 401 || response.status === 403) throw new AutomationRequestError(t('Access to automations was denied.'), 'denied')
     if (response.status === 404) throw new AutomationRequestError(t('Automations are unavailable. Update and restart Main, then retry.'))
-    if (!response.ok) throw new AutomationRequestError(t('Automations could not be loaded. Check Main and retry.'))
+    if (!response.ok) {
+      if (toggling) {
+        const reason = await toggleFailureReason(response)
+        deadline.throwIfAborted()
+        throw new AutomationRequestError(reason
+          ? t('Automation could not be updated: {reason}', { reason })
+          : t('Automation could not be updated. Check Main and retry.'))
+      }
+      throw new AutomationRequestError(t('Automations could not be loaded. Check Main and retry.'))
+    }
     const value: unknown = await response.json()
     deadline.throwIfAborted()
     return parse(value)
@@ -114,6 +149,7 @@ async function read<T>(
     signal.throwIfAborted()
     if (error instanceof AutomationRequestError) throw error
     if (error instanceof SyntaxError) throw invalid()
+    if (toggling) throw new AutomationRequestError(t('Automation could not be updated. Check Main and retry.'))
     throw new AutomationRequestError(deadline.aborted
       ? t('Loading automations timed out. Check Main and retry.')
       : t('Automations could not be loaded. Check Main and retry.'))
@@ -195,7 +231,7 @@ export async function setAutomationEnabled(base: string, id: string, enabled: bo
   if (!identifier(id) || typeof enabled !== 'boolean') throw invalid()
   await read(apiUrl(base, `/api/automations/${encodeURIComponent(id)}`), signal, value => {
     if (!record(value) || !record(value.automation) || value.automation.id !== id) throw invalid()
-  }, (url, init) => request(url, { ...init, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }))
+  }, (url, init) => request(url, { ...init, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }), true)
 }
 
 /** Feature admission is independent of whether its saved job definition is editable. */

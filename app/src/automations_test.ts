@@ -791,3 +791,33 @@ test('disabled topic organization prevents dashboard dispatch and offers stable 
   assert.equal((source.match(/:disabled="organizationBusy \|\| organizationDisabled"/g) ?? []).length, 2)
   assert.match(source, /automationChatLocation\(projectId, 'system:work-organizer'\)/)
 })
+
+
+test('enable failures preserve bounded known validation reasons instead of claiming inventory failed', async () => {
+  const request: typeof fetch = async (input, init) => {
+    assert.equal(new URL(String(input)).pathname, '/projects/a/api/automations/default%3Awork-dispatch-v1')
+    assert.equal(init?.method, 'PATCH')
+    assert.deepEqual(JSON.parse(String(init?.body)), { enabled: true })
+    return Response.json({ error: 'invalid_work_dispatch_configuration', message: 'Error: Select a registered repository Workspace first.' }, { status: 400 })
+  }
+  await assert.rejects(setAutomationEnabled(base, 'default:work-dispatch-v1', true, signal(), request), /Automation could not be updated: Select a registered repository Workspace first\./)
+  for (const [status, value] of [
+    [400, { error: 'unknown', message: 'private upstream diagnostic' }],
+    [500, { error: 'invalid_work_dispatch_configuration', message: 'private upstream diagnostic' }],
+    [400, { error: 'invalid_work_dispatch_configuration', message: '<script>bad</script>' }],
+    [400, { error: 'invalid_work_dispatch_configuration', message: 'bad\u0000reason' }],
+    [400, { error: 'invalid_work_dispatch_configuration', message: 'x'.repeat(513) }],
+    [400, { error: 'invalid_work_dispatch_configuration', message: 'reason', extra: 'x'.repeat(4096) }],
+    [400, { error: 'invalid_work_dispatch_configuration', message: {} }],
+  ] as const) {
+    await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => Response.json(value, { status })), /^AutomationRequestError: Automation could not be updated\. Check Main and retry\.$/)
+  }
+  for (const status of [401, 403]) await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => Response.json({}, { status })), /denied/)
+  for (const body of ['<html>proxy failure</html>', '{invalid']) {
+    await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => new Response(body, { status: 400, headers: { 'content-type': 'application/json' } })), /Automation could not be updated\. Check Main/)
+  }
+  await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => { throw new TypeError('network') }), /Automation could not be updated\. Check Main/)
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(setAutomationEnabled(base, 'work', true, controller.signal, request), { name: 'AbortError' })
+})

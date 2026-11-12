@@ -12,7 +12,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
   learningOutcome?: (sessionId: string) => LearningOutcome | undefined, learningNotice?: (jobId: string) => string | undefined,
   learningControls?: { preference: (jobId: string) => boolean; globallyEnabled: () => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; interval?: (jobId: string) => number; updateInterval?: (jobId: string, intervalMs: number) => Promise<void> },
   systemControls?: { preference: (jobId: string) => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; authorize: (request: Request) => boolean | Promise<boolean>; modelSettings?: (jobId: string) => { model?: string; defaultModel: string }; updateModel?: (jobId: string, model: string | null) => Promise<void> }, profileService?: AutomationProfileService,
-  programControls?: { running?: () => boolean; cancel?: () => Promise<boolean>; validate: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; resume: (key: string, version: number, signal: AbortSignal, acknowledgeToolReplay: boolean) => Promise<void> }): void {
+  programControls?: { running?: () => boolean; cancel?: () => Promise<boolean>; validate: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; validateAdmission: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; resume: (key: string, version: number, signal: AbortSignal, acknowledgeToolReplay: boolean) => Promise<void> }): void {
   const profiler = profileService ?? new AutomationProfileService(cron, sessions, projectId)
   app.get('/api/automations/:id/profile', async c => {
     const id = c.req.param('id')
@@ -105,7 +105,9 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1
       || !('enabled' in body) || typeof body.enabled !== 'boolean') return c.json({ error: 'invalid_automation_update' }, 400)
     if (job?.program && body.enabled) {
-      try { if (!programControls) throw new Error('Work dispatcher unavailable'); await programControls.validate(job.program, c.req.raw.signal) }
+      // Project admission is not execution: a saved default source may be offline.
+      // Target/isolation checks still run on configuration, manual run and dispatch.
+      try { if (!programControls) throw new Error('Work dispatcher unavailable'); await programControls.validateAdmission(job.program, c.req.raw.signal) }
       catch (error) { return c.json({ error: 'invalid_work_dispatch_configuration', message: String(error) }, 400) }
     }
     if (system) await systemControls!.update(id, body.enabled)

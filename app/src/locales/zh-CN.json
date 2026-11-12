@@ -642,6 +642,8 @@
   "Automations": "自动化",
   "Automations are unavailable. Retry.": "自动化不可用。请重试。",
   "Automations are unavailable. Update and restart Main, then retry.": "自动化不可用。请更新并重启主节点后重试。",
+  "Automation could not be updated: {reason}": "无法更新自动化：{reason}",
+  "Automation could not be updated. Check Main and retry.": "无法更新自动化。请检查主节点后重试。",
   "Automations could not be loaded. Check Main and retry.": "无法加载自动化。请检查主节点后重试。",
   "Automations require a Vue application context.": "自动化需要 Vue 应用上下文。",
   "Available models": "可用模型",
