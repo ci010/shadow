@@ -323,6 +323,9 @@ test('scoped session events use summary reads through the shared store and recon
   await lease.sessions.read()
   f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
   await f.tick()
+  assert.equal(f.requests.length, 2, 'message/tool history does not reread navigation or activity')
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['metadata'] })
+  await f.tick()
   const summary = f.requests.slice(2).find(request => request.path.endsWith('/summary'))!
   assert.equal(summary.url.searchParams.has('sessionIds'), false)
   summary.finish({ ...graph('After'), nodes: [node], partial: true, sessionIds: ['web:one'] })

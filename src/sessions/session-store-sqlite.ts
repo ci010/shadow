@@ -236,6 +236,7 @@ export class SqliteSessionStore implements SessionStore {
   private stmtReadFirstLog: ReturnType<Database['prepare']>
 
   private readonly fresh: FreshAutomationStateStore
+  archiveRevision = () => this.fresh.revision()
   readArchivedState = (id: string) => this.fresh.archived(id)
   queryArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.query(query)
   countArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.count(query)

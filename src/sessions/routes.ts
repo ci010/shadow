@@ -2,6 +2,7 @@ import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
 import { createSummaryResponder } from './summary-delta.ts'
+import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
@@ -201,7 +202,11 @@ export function sessionsApiPlugin(
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
   } = {},
 ): GatewayPlugin {
-  const summaryResponse = createSummaryResponder()
+  const summaryResponse = createSummaryResponder(undefined, undefined, true)
+  const summaryRows = new SummaryRowCache<{ sessionId: string; [key: string]: unknown }>()
+  // Recreated logical IDs must not reuse titles from a deleted execution's log.
+  const stateIdentities = new WeakMap<object, number>()
+  let nextStateIdentity = 0
   return (app: Hono) => {
     const authorizeOwnerQuestion: Parameters<Hono['use']>[1] = async (c, next) => {
       if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && sessions?.yields.get(c.req.param('key') ?? '')?.ownerOnly &&
@@ -291,8 +296,12 @@ export function sessionsApiPlugin(
         } catch { return c.json({ error: 'invalid_graph_session_ids' }, 400) }
       }
       const selected = requestedIds ? new Set(requestedIds) : undefined
-      const list = (await sessions.listHistorySessions()).filter(session => session.agentType !== 'work-observer'
-        && (!selected || selected.has(session.sessionId)))
+      const states = summary ? (await sessions.listSummaryStates()).filter(state => !state.retirement && state.agentType !== 'work-observer'
+        && (!selected || selected.has(state.sessionId))) : []
+      const list = summary ? states.map(state => sessions.historySessionSummary(state))
+        : (await sessions.listHistorySessions()).filter(state => state.agentType !== 'work-observer' && (!selected || selected.has(state.sessionId)))
+      const statesById = new Map(states.map(state => [state.sessionId, state]))
+      if (summary && !selected) summaryRows.retain(new Set(statesById.keys()))
       c.header('Cache-Control', 'no-store')
 
       const nodes: Array<{
@@ -324,14 +333,17 @@ export function sessionsApiPlugin(
       // for navigation: a session may have arbitrarily many historical segments.
       const physicalOwners = new Map<string, { id: string; last: number }>()
       const contextParents = new Map<string, string>()
+      if (summary) for (const state of states) {
+        const prefix = physicalSessionId(state, 0).slice(0, -1)
+        physicalOwners.set(prefix, { id: state.sessionId, last: state.segmentIndex })
+        if (state.parent?.physicalId) contextParents.set(state.sessionId, state.parent.physicalId)
+      }
       for (const session of list) {
-        const state = await sessions.readSessionState(session.sessionId)
-        if (summary) {
-          const identity = state ?? session
-          const prefix = physicalSessionId(identity, 0).slice(0, -1)
-          physicalOwners.set(prefix, { id: session.sessionId, last: session.segmentIndex })
-          if (state?.parent?.physicalId) contextParents.set(session.sessionId, state.parent.physicalId)
-        }
+        const state = summary ? statesById.get(session.sessionId)! : await sessions.readSessionState(session.sessionId)
+        const physical = contextParents.get(session.sessionId)
+        const match = physical?.match(/^(.*-)(\d+)$/)
+        const owner = match ? physicalOwners.get(match[1]) : undefined
+        const contextParentSessionId = owner && Number(match![2]) <= owner.last && owner.id !== session.sessionId ? owner.id : undefined
         const execution = {
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
@@ -351,7 +363,6 @@ export function sessionsApiPlugin(
           : state?.topic ?? state?.name ?? state?.generatedTitle ?? state?.chatName
             ?? (execution.mode !== 'session' ? state?.description : undefined)
         // Message history can be expensive; only unnamed rows need that fallback.
-        const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId) ?? undefined)
         let inferenceDefaults: ReturnType<SessionManager['getSessionInferenceDefaults']> | null
         if (state && execution.mode === 'session') {
           try {
@@ -361,13 +372,30 @@ export function sessionsApiPlugin(
             inferenceDefaults = null
           }
         }
-        enrichedSessions.push({
+        if (summary && state && !stateIdentities.has(state)) stateIdentities.set(state, ++nextStateIdentity)
+        // Pull-validated dirty row: only navigation inputs, not task records,
+        // prompt captures, working context, children or other execution payloads.
+        // Resolve external defaults/waiters on every read so mutable dependencies
+        // remain authoritative even when their publisher emits no event.
+        const inferenceOverrides = state?.config ? {
+          model: state.config.model, thinking: state.config.thinking,
+          reasoningEffort: state.config.reasoningEffort, contextWindow: state.config.contextWindow,
+        } : undefined
+        const discordChannel = state && sessions.projectId ? discordChannelNavigation(state, sessions.projectId) : undefined
+        const navigationAutomation = graphAutomation(automation)
+        const fingerprint = summary ? [state && stateIdentities.get(state), { ...session, automation: navigationAutomation }, execution, namedTitle,
+          discordChannel, inferenceOverrides, inferenceDefaults,
+          cronTargets.has(session.sessionId), backgroundOwners.has(session.sessionId), contextParentSessionId] : undefined
+        const cached = summary ? summaryRows.get(session.sessionId, fingerprint) : undefined
+        if (cached) { enrichedSessions.push(cached); continue }
+        const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId, state ?? undefined) ?? undefined)
+        const row = {
           ...session,
           ...execution,
           // The renderer prioritizes name over title, so bound both preview fields.
           name: graphTitle(session.name),
-          automation: graphAutomation(automation),
-          discordChannel: state && sessions.projectId ? discordChannelNavigation(state, sessions.projectId) : undefined,
+          automation: navigationAutomation,
+          discordChannel,
           completed: state?.completed ?? false,
           hasCron: cronTargets.has(session.sessionId),
           hasBackgroundTasks: backgroundOwners.has(session.sessionId),
@@ -375,14 +403,17 @@ export function sessionsApiPlugin(
           topic: state ? sessionTopic(state) : title,
           focus: state?.focus,
           description: execution.description,
-          ...(summary ? { config: undefined, inferenceOverrides: state?.config ? {
-            model: state.config.model, thinking: state.config.thinking,
-            reasoningEffort: state.config.reasoningEffort, contextWindow: state.config.contextWindow,
-          } : undefined } : { config: state?.config ?? undefined }),
+          ...(summary ? { config: undefined, inferenceOverrides } : { config: state?.config ?? undefined }),
           inferenceDefaults,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
             null,
-        })
+          ...(contextParentSessionId ? { contextParentSessionId } : {}),
+        }
+        // Detach nested focus/automation/defaults from mutable runtime metadata.
+        const snapshot = summary ? structuredClone(row) : row
+        enrichedSessions.push(snapshot)
+        // An empty log can receive its first user record without a metadata change.
+        if (summary && (namedTitle !== undefined || title !== undefined)) summaryRows.set(session.sessionId, fingerprint, snapshot)
         if (!summary) for (let i = 0; i <= session.segmentIndex; i++) {
           const physicalId = physicalSessionId(state ?? session, i)
           const parentPhysicalId = state?.parent?.physicalId ??
@@ -402,14 +433,6 @@ export function sessionsApiPlugin(
       }
 
       if (summary) {
-        for (const row of enrichedSessions) {
-          const physical = contextParents.get(row.sessionId)
-          const match = physical?.match(/^(.*-)(\d+)$/)
-          const owner = match ? physicalOwners.get(match[1]) : undefined
-          if (owner && Number(match![2]) <= owner.last && owner.id !== row.sessionId) {
-            Object.assign(row, { contextParentSessionId: owner.id })
-          }
-        }
         return summaryResponse(c, sessions.projectId, { sessions: enrichedSessions })
       }
       return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions, nodes,

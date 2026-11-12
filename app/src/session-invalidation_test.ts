@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { affectsSessionResource } from './session-invalidation.ts'
+import { affectsSessionResource, affectsSessionSummary } from './session-invalidation.ts'
 
 test('session change hints narrow resource reads while legacy/unknown hints remain conservative', () => {
   const event = { event: 'invalidate', sessionId: 'web:one' }
@@ -16,4 +16,16 @@ test('session change hints narrow resource reads while legacy/unknown hints rema
   }
   assert.equal(affectsSessionResource({ ...event, changes: ['history', 'work'] }, 'web:one', 'work'), true)
   assert.equal(affectsSessionResource({ ...event, changes: ['history', 'work'] }, 'web:one', 'scheduled-tasks'), false)
+})
+
+test('summary ignores history/tool progress and work-only hints, preserving directory dependencies', () => {
+  for (const changes of [['history'], ['work'], ['history', 'work']]) {
+    assert.equal(affectsSessionSummary({ event: 'invalidate', changes }), false)
+  }
+  for (const changes of [['metadata'], ['activity'], ['background-tasks'], ['scheduled-tasks'], [], ['future']]) {
+    assert.equal(affectsSessionSummary({ event: 'invalidate', changes }), true)
+  }
+  assert.equal(affectsSessionSummary({ event: 'activity' }), false)
+  assert.equal(affectsSessionSummary({ event: 'invalidate' }), true)
+  assert.equal(affectsSessionSummary(null), true)
 })

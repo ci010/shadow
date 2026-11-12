@@ -50,3 +50,21 @@ test('summary deltas are reader-owned, project scoped, deletion/order safe and b
   const evicted = await tinyApp.request('http://main/tiny', { headers: { 'Accept': 'application/vnd.shadow.session-summary-delta+json', 'If-None-Match': first.headers.get('ETag')! } })
   assert.ok((await evicted.json()).sessions)
 })
+
+
+test('immutable summary transport skips serialization on 304 and serializes only changed rows', async () => {
+  let encodes = 0
+  const row = (sessionId: string, title: string) => ({ sessionId, title,
+    toJSON() { encodes++; return { sessionId, title } } })
+  let rows = [row('a', 'A'), row('b', 'B')]
+  const app = new Hono(), respond = createSummaryResponder(undefined, undefined, true)
+  app.get('/summary', c => respond(c, 'p', { sessions: rows }))
+  const first = await app.request('/summary')
+  assert.equal(encodes, 2)
+  const same = await app.request('/summary', { headers: { 'If-None-Match': first.headers.get('ETag')! } })
+  assert.equal(same.status, 304); assert.equal(encodes, 2)
+  rows = [row('a', 'Changed'), rows[1]]
+  const changed = await app.request('/summary')
+  assert.equal(encodes, 3)
+  assert.equal((await changed.json()).sessions[0].title, 'Changed')
+})

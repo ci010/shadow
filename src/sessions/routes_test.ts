@@ -1,4 +1,5 @@
 import { sessionWorkspacePath } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 import assert, { deepEqual as assertEquals, notDeepEqual as assertNotEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { join, resolve } from 'node:path'
@@ -18,7 +19,7 @@ import type {
   JobStatusV1,
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
-import type { SessionManager } from './session-manager.ts'
+import { SessionManager } from './session-manager.ts'
 import { resolveInWorkspace } from '../execution/filesystem/local-files.ts'
 import {
   resolveSessionFileBase,
@@ -791,6 +792,8 @@ test('navigation summary omits physical nodes and arbitrary config while preserv
   const manager = {
     projectId: 'a',
     listHistorySessions: async () => states,
+    listSummaryStates: async () => states,
+    historySessionSummary: (state: SessionState) => state,
     readSessionState: async (id: string) => states.find(state => state.sessionId === id),
     getFirstUserMessage: async () => { throw new Error('Named navigation rows must not read history') },
     getSessionInferenceDefaults: () => ({ model: 'default' }),
@@ -817,4 +820,61 @@ test('navigation summary omits physical nodes and arbitrary config while preserv
   // The original inventory API is deliberately not reused: it lacks enrichment.
   const inventory = await (await app.request('/api/sessions')).json()
   assert.equal(inventory.sessions[1].contextParentSessionId, undefined)
+})
+
+
+test('summary reuses rows without N+1 reads and refreshes live dependencies without events', async () => {
+  const states: SessionState[] = Array.from({ length: 20 }, (_, i) => ({ sessionId: `s${i}`, segmentIndex: 0 }))
+  let messageReads = 0, defaults = 'default', waiting = false
+  const yields = new Map(), inputs = new Map()
+  const jobs: import('../cron/service.ts').CronJob[] = []
+  const tasks: ReturnType<import('../agent/background-task.ts').BackgroundTaskManager['listTasks']> = []
+  const manager = {
+    listSummaryStates: async () => states,
+    historySessionSummary: SessionManager.prototype.historySessionSummary,
+    readSessionState: async () => { throw new Error('N+1 state read') },
+    getFirstUserMessage: async () => { messageReads++; return 'First message' },
+    getSessionInferenceDefaults: () => ({ model: defaults }),
+    isWaitingForCall: (id: string) => id === 's0' && waiting,
+    yields, inputs,
+  } as unknown as SessionManager
+  const app = new Hono()
+  sessionsApiPlugin(manager, { cron: { listJobs: () => jobs }, backgroundTasks: { listTasks: () => tasks } })(app)
+  const load = async () => {
+    const response = await app.request('/api/sessions/summary')
+    assert.equal(response.status, 200)
+    return (await response.json()).sessions
+  }
+  await load(); assert.equal(messageReads, 20)
+  await load(); assert.equal(messageReads, 20, 'unchanged rows do not reread logs')
+  states[0].workingContext = 'large execution context'.repeat(10000)
+  states[0].lastKnownTokens = 80000
+  await load(); assert.equal(messageReads, 20, 'execution-only churn does not dirty navigation')
+  states[0].completed = true
+  assert.equal((await load())[0].completed, true)
+  assert.equal(messageReads, 21, 'single row mutation only assembles that row')
+  jobs.push({ id: 'job', schedule: 'every 1h', createdAt: '2026-01-01', target: { sessionId: 's0' } })
+  assert.equal((await load())[0].hasCron, true)
+  jobs[0].enabled = false; assert.equal((await load())[0].hasCron, false)
+  tasks.push({ id: 'bg', sessionId: 's0', status: 'running' } as typeof tasks[number])
+  assert.equal((await load())[0].hasBackgroundTasks, true)
+  tasks[0].status = 'completed'; assert.equal((await load())[0].hasBackgroundTasks, false)
+  waiting = true; assert.equal((await load())[0].executionStatus, 'waiting')
+  waiting = false; yields.set('s0', {}); assert.equal((await load())[0].executionStatus, 'waiting')
+  yields.clear(); inputs.set('s0', {}); assert.equal((await load())[0].executionStatus, 'waiting')
+  inputs.clear(); assert.notEqual((await load())[0].executionStatus, 'waiting')
+  defaults = 'new-default'; assert.equal((await load())[0].inferenceDefaults.model, defaults)
+  states[0].config = { model: 'override' }; assert.equal((await load())[0].inferenceOverrides.model, 'override')
+  states[0].name = 'Renamed'; assert.equal((await load())[0].title, 'Renamed')
+  const beforeRecreation = messageReads
+  states[1] = { ...states[1] }
+  await load(); assert.equal(messageReads, beforeRecreation + 1, 'recreated state identity cannot inherit an old log title')
+  states[1].parent = { id: states[0].sessionId, physicalId: physicalSessionId(states[0], 1) }
+  assert.equal((await load())[1].contextParentSessionId, undefined)
+  states[0].segmentIndex = 1
+  assert.equal((await load())[1].contextParentSessionId, states[0].sessionId, 'owner rollover dirties dependent child')
+  states.shift(); assert.equal((await load()).length, 19)
+  assert.equal((await load())[0].contextParentSessionId, undefined, 'owner deletion clears context edge')
+  states.push({ sessionId: 'created', segmentIndex: 0, name: 'New' })
+  assert.equal((await load()).at(-1).title, 'New')
 })

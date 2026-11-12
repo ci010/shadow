@@ -98,6 +98,14 @@ export class FreshAutomationStateStore {
       CREATE INDEX IF NOT EXISTS runs_parent ON runs(parent_id);
       CREATE INDEX IF NOT EXISTS runs_active ON runs(archived);
       CREATE INDEX IF NOT EXISTS runs_ownership ON runs(project_id, folder_id, workdir);
+      CREATE TABLE IF NOT EXISTS archive_revision (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL);
+      INSERT OR IGNORE INTO archive_revision VALUES (1, 0);
+      CREATE TRIGGER IF NOT EXISTS archive_revision_insert AFTER INSERT ON runs WHEN NEW.archived = 1
+      BEGIN UPDATE archive_revision SET revision = revision + 1 WHERE id = 1; END;
+      CREATE TRIGGER IF NOT EXISTS archive_revision_delete AFTER DELETE ON runs WHEN OLD.archived = 1
+      BEGIN UPDATE archive_revision SET revision = revision + 1 WHERE id = 1; END;
+      CREATE TRIGGER IF NOT EXISTS archive_revision_update AFTER UPDATE ON runs WHEN OLD.archived = 1 OR NEW.archived = 1
+      BEGIN UPDATE archive_revision SET revision = revision + 1 WHERE id = 1; END;
     `)
     this.db = db
     return db
@@ -182,6 +190,22 @@ export class FreshAutomationStateStore {
     db.prepare('INSERT OR IGNORE INTO claims(project_id, folder_id, workdir) VALUES (?, ?, ?)')
       .run(state.projectId!, state.folderId ?? '', state.workdir ? JSON.stringify(state.workdir) : '')
     })
+  }
+
+  /** Transactional archive-only revision, including writes by other connections.
+   * Active slot/index churn and ownership claims do not invalidate navigation.
+   * Read-only legacy databases retain conservative invalidation until upgraded. */
+  async revision(): Promise<string> {
+    await this.queue
+    const db = this.database()
+    if (!db) return 'absent'
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_revision'").get()) {
+      const row = db.prepare('SELECT revision FROM archive_revision WHERE id = 1').get() as { revision: number }
+      return `archive:${row.revision}`
+    }
+    const local = db.prepare('SELECT total_changes() AS value').get() as { value: number }
+    const external = db.prepare('PRAGMA data_version').get() as { data_version: number }
+    return `${local.value}:${external.data_version}`
   }
 
   async has(id: string): Promise<boolean> { await this.queue; return !!this.row(id) }
