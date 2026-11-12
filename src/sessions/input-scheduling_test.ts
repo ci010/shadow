@@ -1960,3 +1960,35 @@ test('automatic rate-limit waiting stays in the same turn, rejects duplicate Con
     assert.equal(waits.at(-1), undefined)
   } finally { await f.close() }
 })
+
+
+test('owner Web background continuation shares prompt and tool authority without human input', async () => {
+  const f = await fixture({ manager: true, state: { sessionId: 'web:owner-continuation', projectId: 'fixture' } })
+  const prompts: Array<{ admin?: boolean; inputSource?: string }> = []
+  const contexts: ExecutionContext[] = []
+  ;(f.manager as any).deps.context.buildSystemPrompt = async (context: { admin?: boolean; inputSource?: string }) => {
+    prompts.push(context)
+    return 'Fixture'
+  }
+  f.tools.register({
+    name: 'fixture_authority', description: '', parameters: { type: 'object', properties: {} },
+    execute: async (_args, context) => { contexts.push(context); return 'checked' },
+  })
+  try {
+    await f.manager.deliver(f.state.sessionId, {
+      ...input('background-authority'),
+      source: { kind: 'event', eventId: 'background-authority', type: 'exec-complete', source: 'runtime' },
+    })
+    await waitFor(() => f.calls.length === 1)
+    f.calls[0].resolve({ content: null, toolCalls: [{ id: 'authority', name: 'fixture_authority', arguments: {} }] })
+    await waitFor(() => f.calls.length === 2)
+    assert.equal(prompts[0].admin, true)
+    assert.equal(prompts[0].inputSource, 'event')
+    assert.equal(contexts[0].admin, true)
+    assert.equal(contexts[0].inputSource, 'event')
+    assert.equal(contexts[0].workUserInput, undefined)
+    f.calls[1].resolve(done())
+    await waitFor(() => f.facts.length === 1)
+    assert.equal(f.facts[0].source.kind, 'event')
+  } finally { await f.close() }
+})

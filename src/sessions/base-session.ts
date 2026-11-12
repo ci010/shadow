@@ -765,7 +765,7 @@ export abstract class BaseSession {
     }
     this.suppressWakeOutput = input.source.kind === 'event' && input.source.source === 'bot-wake' && input.source.type === 'bot-wake'
     const silent = input.kind === 'message' && input.policy === 'silent'
-    const msg = inputContext(this.id, input)
+    const msg = inputContext(this.id, input, this.state)
     this.boundedSystemTask = this.isBoundedSystemTask(msg.channel)
     const senderName = msg.senderName ?? msg.senderId
     const isGroup = !!msg.isGroup
