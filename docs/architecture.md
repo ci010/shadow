@@ -618,9 +618,47 @@ Each sessions API plugin retains at most eight historical representations with a
 16 MiB serialized-body budget; history is scoped by Project and exact URL. A
 missing/evicted base, runtime restart, legacy client, or patch larger than the full
 body falls back to full JSON. Legacy servers ignore the Accept preference and
-continue to work, without a new CORS request-header requirement. This saves
-transfer, not server inventory enumeration or state reads; initial loads still
-transfer the complete inventory. The delta includes all IDs, so its size is linear
+continue to work, without a new CORS request-header requirement. Initial loads still
+transfer the complete inventory.
+
+The summary endpoint reads archive pages once rather than re-reading each archived
+state during enrichment (including the unnamed-title fallback). Its manager-local
+archive snapshot has a 16 MiB serialized-state admission limit and is invalidated
+by a transactional SQLite archive-only revision. Triggers cover archived inserts,
+updates/deletes and transitions to/from the archive across connections, for both
+JSONL and SQLite stores; fresh active writes and ownership claims do not invalidate
+it. Read-only legacy databases without the revision table conservatively fall back
+to `total_changes()`/`data_version`. Stores without a revision token remain uncached.
+Live state is overlaid on every request; archived executions are never hydrated
+into execution maps. A write crossing a paged read prevents caching that read.
+A separate 16 MiB derived-row cache pull-validates detached navigation inputs,
+resolved inference defaults, call/yield/input waiting state, cron targets,
+background owners and the resolved context parent on every request. It compares
+only projected metadata, not serialized full execution states: working context,
+task records, token accounting and automation prompts are excluded. Nested input
+mutations still dirty the row; only changed rows are cloned/serialized for admission. It does not rely on notification delivery
+or TTLs. Rows are detached from mutable runtime objects; deleted rows are pruned on
+full reads. Empty unnamed logs are not cached, so a first user message remains
+visible even before a metadata update. Unchanged rows avoid log reads and enrichment;
+immutable transport rows reuse serialized JSON, and unchanged ordered identities
+reuse the body and ETag before returning 304.
+
+The shared frontend reader ignores history-only and Work-only invalidations for
+summary, while metadata, activity-invalidation, schedules and background-owner
+hints still refresh it. Unknown/legacy hints remain conservative. Direct activity
+payloads continue to update their separate overlay without summary HTTP reads.
+`pnpm exec node --import tsx src/sessions/summary-read-model_bench.ts 10000` runs
+an in-memory synthetic cache-operation comparison against full-state fingerprints
+(cold, unchanged, single-row and token-accounting churn); it is not an HTTP latency
+benchmark and never reads production runtime data.
+
+This is not an O(1) inventory API: every request still scans projected metadata,
+resolves defaults and context ownership, and checks runtime dependencies.
+An actual archive revision change still rereads archive pages;
+oversized archives safely bypass caching. Changed responses still join/hash the full
+body, and the renderer still reconciles the complete ordered inventory. Pagination
+or separate historical search would require a distinct product/API contract, not
+silent history truncation. The delta includes all IDs, so its size is linear
 in row count even for a single-row change.
 
 Not every other resource has push hooks: Nodes still use visible-only polling,

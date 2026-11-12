@@ -22,6 +22,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: future-only slots, indexed history, bounded boot and preserved legacy state`, async () => {
     await withTempWorkspace(async root => {
       let store = new Store(root)
+      try {
       await store.init()
       const legacy: SessionState = { sessionId: 'cron:legacy', projectId: 'fixture-project', ownershipVersion: 2, segmentIndex: 0 }
       await store.saveState(legacy.sessionId, legacy)
@@ -38,7 +39,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await store.saveState(pending.sessionId, pending)
       store.close()
       store = new Store(root)
-      try {
         assert.deepEqual(Object.keys(await store.listAllStates()).sort(), [legacy.sessionId, pending.sessionId].sort())
         assert.equal(await store.getState('cron:100'), null)
         assert.equal((await store.readArchivedState('cron:100'))?.executionId, 'execution:100')
@@ -159,5 +159,33 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       await assert.rejects(assertSessionProjectOwnership(reopened, 'foreign'), /does not belong/)
       await assert.rejects(reopened.readArchivedState(run.sessionId))
     } finally { reopened.close() }
+  })
+})
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: archive revision tracks own and external writes`, async () => {
+  await withTempWorkspace(async root => {
+    const store = new Store(root)
+    try {
+      await store.init()
+      const absent = await store.archiveRevision()
+      const run = state('revision')
+      await store.saveState(run.sessionId, run)
+      const active = await store.archiveRevision()
+      assert.notEqual(active, absent)
+      assert.equal(await store.archiveRevision(), active)
+      await store.saveState(run.sessionId, { ...run, focus: 'changed active row' })
+      assert.equal(await store.archiveRevision(), active, 'active writes must not invalidate archive')
+      await store.saveState(run.sessionId, run)
+      const activeDb = new DatabaseSync(join(root, `.fresh-automation-v1-${Store === JsonlSessionStore ? 'jsonl' : 'sqlite'}`, 'archive.db'))
+      try { activeDb.prepare('UPDATE runs SET parent_id = parent_id WHERE session_id = ?').run(run.sessionId) } finally { activeDb.close() }
+      assert.equal(await store.archiveRevision(), active, 'external active writes also preserve archive revision')
+      await store.archiveState(run)
+      const archived = await store.archiveRevision()
+      assert.notEqual(archived, active)
+      const db = new DatabaseSync(join(root, `.fresh-automation-v1-${Store === JsonlSessionStore ? 'jsonl' : 'sqlite'}`, 'archive.db'))
+      try { db.prepare('DELETE FROM runs WHERE session_id = ?').run(run.sessionId) } finally { db.close() }
+      assert.notEqual(await store.archiveRevision(), archived)
+      assert.deepEqual(await store.queryArchivedStates(), [])
+    } finally { store.close() }
   })
 })

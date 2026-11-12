@@ -2699,6 +2699,31 @@ ${JSON.stringify(request)}`,
     return state
   }
 
+  private summaryArchive?: { revision: string; states: SessionState[] }
+
+  /** Read-only navigation snapshot. Never hydrates archived executions into live maps. */
+  async listSummaryStates(): Promise<SessionState[]> {
+    const revision = await this.store.archiveRevision?.()
+    let archived = revision !== undefined && this.summaryArchive?.revision === revision
+      ? this.summaryArchive.states : undefined
+    if (!archived) {
+      archived = []
+      if (this.store.queryArchivedStates) for (let offset = 0; ; offset += 1000) {
+        const page = await this.store.queryArchivedStates({ projectId: this.deps.projectId, offset, limit: 1000 })
+        archived.push(...page)
+        if (page.length < 1000) break
+      }
+      // Do not publish a cache entry if a write crossed the paged read.
+      if (revision !== undefined && revision === await this.store.archiveRevision?.()) {
+        this.summaryArchive = Buffer.byteLength(JSON.stringify(archived)) <= 16 * 1024 * 1024
+          ? { revision, states: archived } : undefined
+      }
+    }
+    const states = new Map(Object.values(this.sessionStates).map(state => [state.sessionId, state]))
+    for (const state of archived) if (!states.has(state.sessionId)) states.set(state.sessionId, state)
+    return [...states.values()]
+  }
+
   /** Explicit history enumeration. Startup and live controllers must use listSessions. */
   async listHistoryStates(query: { jobId?: string } = {}): Promise<SessionState[]> {
     const states = new Map(Object.values(this.sessionStates).filter(state => !query.jobId || resolveAutomationSession(state)?.jobId === query.jobId).map(state => [state.sessionId, state]))
@@ -2772,7 +2797,12 @@ ${JSON.stringify(request)}`,
   }
 
   async listHistorySessions(): Promise<ReturnType<SessionManager['listSessions']>> {
-    return (await this.listHistoryStates()).filter(state => !state.retirement).map(state => ({
+    return (await this.listHistoryStates()).filter(state => !state.retirement).map(state => this.historySessionSummary(state))
+  }
+
+  /** Project a state already read by a history consumer; avoids archive N+1 reads. */
+  historySessionSummary(state: SessionState): ReturnType<SessionManager['listSessions']>[number] {
+    return ({
       ...(state.projectId ? { projectId: state.projectId } : {}),
       sessionId: state.sessionId,
       channelSource: state.channelSource,
@@ -2784,7 +2814,7 @@ ${JSON.stringify(request)}`,
       folderId: state.folderId, initiativeId: state.initiativeId, automation: state.automation,
       agentType: state.agentType, mode: state.mode, completed: state.completed, executionStatus: state.executionStatus,
       createdBySessionId: state.createdBySessionId,
-    }))
+    })
   }
 
   private retrySettledAutomations(after?: Promise<unknown>): void {
@@ -3179,8 +3209,8 @@ ${JSON.stringify(request)}`,
   }
 
   /** Get the first user message content for a session (used as title). */
-  async getFirstUserMessage(sessionId: string): Promise<string | null> {
-    const state = await this.readSessionState(sessionId)
+  async getFirstUserMessage(sessionId: string, knownState?: SessionState): Promise<string | null> {
+    const state = knownState ?? await this.readSessionState(sessionId)
     if (!state) return null
     const physicalId = physicalSessionId(state, 0)
     for await (const parsed of this.store.readSessionLog(physicalId)) {

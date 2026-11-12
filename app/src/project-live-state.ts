@@ -1,4 +1,4 @@
-import { affectsSessionResource } from './session-invalidation.ts'
+import { affectsSessionResource, affectsSessionSummary } from './session-invalidation.ts'
 import { createSessionSummaryLoader } from './session-summary-snapshot.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { t } from './i18n.ts'
@@ -173,7 +173,7 @@ export function createProjectLiveState(
         for (const observer of observers) observer.event?.(event)
         // Events before readiness are covered by the initial snapshot.
         if (!started) return
-        if (!isRecord(event.payload) || event.payload.event !== 'activity') {
+        if (affectsSessionSummary(event.payload)) {
           sessions.invalidate()
         }
         const payload = event.payload

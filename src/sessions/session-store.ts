@@ -255,6 +255,8 @@ export interface SessionStore {
 
   readArchivedState?(sessionKey: string): Promise<SessionState | null>
   queryArchivedStates?(query?: ArchivedStateQuery): Promise<SessionState[]>
+  /** Optional authoritative archive invalidation token, including external writes. */
+  archiveRevision?(): Promise<string>
   countArchivedStates?(query?: ArchivedStateQuery): Promise<number>
   archiveFeatureStates?(projectId?: string): Promise<SessionState[]>
   archiveState?(state: SessionState): Promise<void>

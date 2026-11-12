@@ -2,19 +2,32 @@ import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 
 /** Bounded, per-runtime transport history only; never an authoritative read cache. */
-export function createSummaryResponder(maxBytes = 16 * 1024 * 1024, maxEntries = 8) {
+export function createSummaryResponder(maxBytes = 16 * 1024 * 1024, maxEntries = 8, immutableRows = false) {
+  const serialized = new WeakMap<object, string>()
+  let latest: { scope: string; refs: object[]; body: string; etag: string } | undefined
   const history = new Map<string, { scope: string; rows: Map<string, string>; bytes: number }>()
   let bytes = 0
   return <T extends { sessionId: string }>(c: Context, projectId: string | undefined, value: { sessions: T[] }): Response => {
     const scope = JSON.stringify([projectId ?? null, c.req.url])
-    const body = JSON.stringify(value)
-    const etag = `"${createHash('sha256').update(scope).update('\n').update(body).digest('hex')}"`
+    const same = immutableRows && latest?.scope === scope && latest.refs.length === value.sessions.length
+      && value.sessions.every((row, i) => row === latest!.refs[i])
+    const encode = (row: T): string => {
+      const cached = immutableRows ? serialized.get(row) : undefined
+      if (cached !== undefined) return cached
+      const text = JSON.stringify(row)
+      if (immutableRows) serialized.set(row, text)
+      return text
+    }
+    const body = same ? latest!.body : `{"sessions":[${value.sessions.map(encode).join(',')}]}`
+    const etag = same ? latest!.etag : `"${createHash('sha256').update(scope).update('\n').update(body).digest('hex')}"`
+    if (!same) latest = immutableRows && Buffer.byteLength(body) <= maxBytes
+      ? { scope, refs: [...value.sessions], body, etag } : undefined
     c.header('Cache-Control', 'no-store')
     c.header('ETag', etag)
     c.header('Vary', 'Accept')
     const validators = c.req.header('If-None-Match')?.match(/(?:W\/)?"[^"\r\n]*"|\*/g) ?? []
     if (validators.some(v => v === '*' || v.replace(/^W\//, '') === etag)) return c.body(null, 304)
-    const rows = new Map(value.sessions.map(row => [row.sessionId, JSON.stringify(row)]))
+    const rows = new Map(value.sessions.map(row => [row.sessionId, encode(row)]))
     const baseTag = c.req.header('If-None-Match')
     const base = baseTag ? history.get(baseTag) : undefined
     let output = body
