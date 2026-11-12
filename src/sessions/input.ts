@@ -1,6 +1,18 @@
 import type { InboundMessage, MessageContext } from '../bus/events.ts'
 import { channelAddressFromSessionId, type ChannelAddress } from '../bus/events.ts'
 import type { CommandReceipt } from '../slash-commands/receipt.ts'
+import type { SessionState } from './session-store.ts'
+import { isOwnerSession } from './owner-policy.ts'
+
+/** Execution authority is not human approval. Only host-owned durable Web
+ * identity may supply the missing principal on an event continuation. Never
+ * consult event sender/origin/attributes or the reply projection for authority. */
+export function inputAdmin(sessionId: string, input: SessionInput, state?: SessionState): boolean {
+  if (input.source.kind === 'user') return input.source.sender.admin ?? false
+  return input.source.kind === 'event' && state?.sessionId === sessionId &&
+    typeof state.projectId === 'string' && isOwnerSession(state, state.projectId) &&
+    !state.channelBoundary && !state.serviceGeneration
+}
 
 export interface ReplyAddress {
   channelAddress?: ChannelAddress
@@ -193,7 +205,7 @@ export function inputSender(input: SessionInput): { id: string; name: string } {
 }
 
 /** Tool/channel context is a projection, never the identity of the input target. */
-export function inputContext(sessionId: string, input: SessionInput): MessageContext {
+export function inputContext(sessionId: string, input: SessionInput, state?: SessionState): MessageContext {
   const reply = input.replyTo ?? sessionReplyAddress(sessionId)
   const sender = inputSender(input)
   const user = input.source.kind === 'user' ? input.source.sender : undefined
@@ -210,7 +222,7 @@ export function inputContext(sessionId: string, input: SessionInput): MessageCon
     ...(user?.displayMetadata ? { displayMetadata: user.displayMetadata } : {}),
     chatName: user?.chatName,
     isGroup: user?.isGroup ?? (input.source.kind === 'event' ? input.source.isGroup : undefined),
-    admin: user?.admin ?? false,
+    admin: inputAdmin(sessionId, input, state),
   }
 }
 

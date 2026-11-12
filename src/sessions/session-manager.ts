@@ -3630,9 +3630,9 @@ ${JSON.stringify(request)}`,
 
   private async prepareSessionContext(input: SessionInput, sessionId: string) {
     this.assertHistoryWritable(sessionId)
-    const msg = inputContext(sessionId, input)
     const state = this.sessionStates[sessionId] ??
       await this.getOrCreateState(sessionId)
+    const msg = inputContext(sessionId, input, state)
     const behavior = state.config ?? {}
 
     const conversationPolicy = this.deps.conversationPolicies?.resolve(sessionId)
