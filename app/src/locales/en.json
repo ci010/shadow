@@ -613,6 +613,8 @@
   "Automations": "Automations",
   "Automations are unavailable. Retry.": "Automations are unavailable. Retry.",
   "Automations are unavailable. Update and restart Main, then retry.": "Automations are unavailable. Update and restart Main, then retry.",
+  "Automation could not be updated: {reason}": "Automation could not be updated: {reason}",
+  "Automation could not be updated. Check Main and retry.": "Automation could not be updated. Check Main and retry.",
   "Automations could not be loaded. Check Main and retry.": "Automations could not be loaded. Check Main and retry.",
   "Automations require a Vue application context.": "Automations require a Vue application context.",
   "Available models": "Available models",

@@ -22,6 +22,7 @@ test('standard program automation persists its 60s schedule, target, limits and 
   registerAutomationRoutes(app, cron, sessions, 'project', undefined, undefined, undefined, {
     authorize: request => request.headers.get('x-owner') === 'yes', preference: () => false, update: async () => {},
   }, undefined, {
+    validateAdmission: async () => {},
     validate: async config => { if (config.folderId !== 'local-repository') throw new Error('Registered available local repository required; remote or missing targets are refused') },
     resume: async () => { resumed++ }, cancel: async () => { stopped++; return true },
   })
@@ -36,7 +37,7 @@ test('standard program automation persists its 60s schedule, target, limits and 
     assert.equal(summary.configurationError, undefined)
     assert.match(summary.notice, /without a default Workspace/)
     assert.equal((await request('/run', 'POST')).status, 400)
-    assert.equal((await request('', 'PATCH', { enabled: true })).status, 400)
+    assert.equal((await request('', 'PATCH', { enabled: true })).status, 200, 'Project admission does not require an execution target')
     assert.equal((await request('', 'PATCH', { program: { kind: 'work-dispatch', folderId: 'remote' } })).status, 400)
     assert.equal((await request('', 'PATCH', { enabled: true }, false)).status, 403)
     assert.equal((await request('/run', 'POST', undefined, false)).status, 403)
@@ -98,6 +99,7 @@ test('workspace-less Project dispatch enables, runs manually and persists withou
   registerAutomationRoutes(app, cron, sessions, 'project', undefined, undefined, undefined, {
     authorize: () => true, preference: () => false, update: async () => {},
   }, undefined, {
+    validateAdmission: async () => {},
     validate: async config => { if (config.folderId && config.folderId !== 'supported-repository') throw new Error('An exact available source is required') },
     resume: async () => {},
   })
@@ -122,5 +124,45 @@ test('workspace-less Project dispatch enables, runs manually and persists withou
       const saved = restored.listJobs().find(job => job.id === WORK_DISPATCH_ID)!
       assert.equal(saved.enabled, true); assert.equal(saved.program?.folderId, undefined)
     } finally { await restored.stop() }
+  } finally { await cron.stop() }
+}))
+
+
+test('enabling a restored legacy default checks inference admission, not its stale execution source', async () => withTempWorkspace(async home => {
+  const original = new CronService(home)
+  await original.start()
+  await original.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
+  await original.configureProgram(WORK_DISPATCH_ID, workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'old-offline-source' }))
+  await original.stop()
+  const cron = new CronService(home)
+  await cron.start()
+  await cron.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
+  let inferenceAvailable = true, targetChecks = 0
+  const app = new Hono()
+  registerAutomationRoutes(app, cron, sessions, 'project', undefined, undefined, undefined, {
+    authorize: request => request.headers.get('x-owner') === 'yes', preference: () => false, update: async () => {},
+  }, undefined, {
+    validateAdmission: async () => { if (!inferenceAvailable) throw new Error('Configured model unavailable') },
+    validate: async () => { targetChecks++; throw new Error('Saved execution source unavailable') },
+    resume: async () => {},
+  })
+  const patch = (enabled: boolean, authorized = true) => app.request(endpoint, { method: 'PATCH', headers: {
+    'content-type': 'application/json', ...(authorized ? { 'x-owner': 'yes' } : {}),
+  }, body: JSON.stringify({ enabled }) })
+  try {
+    assert.equal((await patch(true, false)).status, 403)
+    inferenceAvailable = false
+    const denied = await patch(true)
+    assert.equal(denied.status, 400)
+    assert.match((await denied.json()).message, /Configured model unavailable/)
+    assert.equal(cron.listJobs()[0]?.enabled, false)
+    inferenceAvailable = true
+    assert.equal((await patch(true)).status, 200)
+    assert.equal(targetChecks, 0)
+    assert.equal(cron.listJobs()[0]?.program?.folderId, 'old-offline-source', 'never silently clear saved targets')
+    assert.equal((await app.request(endpoint + '/run', { method: 'POST', headers: { 'x-owner': 'yes' } })).status, 400)
+    assert.equal(targetChecks, 1, 'execution still validates the exact saved target')
+    inferenceAvailable = false
+    assert.equal((await patch(false)).status, 200, 'disabling requires no inference or source')
   } finally { await cron.stop() }
 }))

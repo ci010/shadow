@@ -45,6 +45,11 @@ On the existing authorized Project automation API:
   model and default worker settings; individual admissions can override the worker
   model/effort. With no override, existing model defaults apply.
 - PATCH `{"enabled":true}` or `{"enabled":false}` controls timer admission.
+  Enabling checks dispatcher inference configuration, not repository availability:
+  even an older saved default source may currently be offline. This does not clear
+  or migrate that saved source. Selecting a source, manually running with one, and
+  admitting a worker still validate the exact execution target; isolation and
+  authorization requirements are unchanged.
   `folderId` is optional, including for enabled and manually run programs. Removing
   the default source affects new admissions, not already assigned workers.
 - POST the usual `/run` to schedule now, including while the timer is disabled.
