@@ -155,7 +155,7 @@ test('real managed IPC helper runs the public runtime contract against synthetic
          get_init:async()=>({step:'done'}),list:async()=>initialized?[{name:${JSON.stringify(layerfsName('one'))},initialized:true,volume:'fixture-store',image:settings.image}]:[]},close:async()=>{}};
       }}
     `)
-    await writeFile(join(dir, 'api', 'agent', 'src', 'index.js'), `export const LayerFS={open:async()=>({project:{list_branches:async()=>({volume:process.env.LAYERFS_VOLUME,home:process.env.LAYERFS_HOME})},workspace:{exec:async(ws,command,message,sinks)=>{await new Promise(r=>sinks.stdout.write('managed-route\\n',r));return {code:0}}},close:async()=>{}})}`)
+    await writeFile(join(dir, 'api', 'agent', 'src', 'index.js'), `export const LayerFS={open:async()=>({project:{list_branches:async()=>({volume:process.env.LAYERFS_VOLUME,home:process.env.LAYERFS_HOME}),list_sandboxes:async()=>({items:[],hasMore:false})},fs:{stat:async()=>({type:'file',size:14,root:'r'}),read:async()=>({text:'managed-route\\n',root:'r',truncated:false,lineTruncated:false})},close:async()=>{}})}`)
     const home = join(dir, 'home')
     const service = managedLayerFS('one', home, () => new ManagedLayerFS('one', home, () => spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("process.platform !== 'win32'", 'true') : arg), options)) as typeof spawn }), 'win32'))
     const tool = new LayerFSTool('one', home), context = owner(dir)
@@ -170,9 +170,9 @@ test('real managed IPC helper runs the public runtime contract against synthetic
       const result = JSON.parse(toolResultText(await tool.execute({ action: 'branches' }, context)))
       assert.equal(result.result.volume, 'fixture-store')
       assert.match(result.result.home, /^\/var\/lib\/shadow-layerfs\//)
-      const workspace = 'layerfs:' + Buffer.from(JSON.stringify({ project: layerfsName('one'), sandbox: '1', path: '/workspaces/1' })).toString('base64url')
+      const workspace = 'layerfs:' + Buffer.from(JSON.stringify({ version: 2, project: layerfsName('one'), branch: 'feature' })).toString('base64url')
       const read = await new ReadTool(home).execute({ workspace, path: 'example.txt' }, { ...context, resolveToolTarget: async () => { throw Error('must not fall back to host') } })
-      assert.equal(JSON.parse(toolResultText(read)).result.stdout.text, 'managed-route\n')
+      assert.equal(toolResultText(read), 'managed-route\n')
       assert.equal(managedLayerFS('one', home), service)
     } finally { await closeManagedLayerFS('one', home) }
     assert.equal(JSON.parse(await readFile(join(dir, 'home', 'state', 'layerfs', 'worker-state.json'), 'utf8')).phase, 'stopped')

@@ -334,3 +334,38 @@ test('root reads list only name/description entries; opaque sources stay in the 
   assert.doesNotMatch(activeRoot, /"parameters"|secretSchemaField/)
   assert.deepEqual(JSON.parse(await f.read('v:tools/imported_sibling')).parameters, plain.parameters)
 })
+
+
+test('LayerFS contracts are flat and offline; exact invocation lazily loads from a LayerFS workspace', async t => {
+  const { layerFSToolContracts } = await import('./layerfs.ts')
+  const contracts = layerFSToolContracts()
+  let initialized = 0
+  const f = await setup(t, new Map<string, LoadableEntry>([['layerfs', {
+    contracts,
+    factory: async () => { initialized++; return contracts.map(contract => ({ ...contract, execute: async () => 'fixture-only' })) },
+  }]]))
+  assert.match(await f.read('v:tools'), /"name":"layerfs_connect"/)
+  assert.match(await f.search({ query: 'layerfs_history' }), /v:tools\/layerfs_history/)
+  assert.equal(JSON.parse(await f.read('v:tools/layerfs_connect')).name, 'layerfs_connect')
+  assert.equal(initialized, 0)
+  assert.equal(f.tools.activeDynamicTools().length, 0)
+  assert.equal(f.importer.canInvokeFromLayerFS('layerfs_connect'), true)
+  assert.equal(f.importer.canInvokeFromLayerFS('mail__SearchMessages'), false)
+  const ctx = { ...f.context, layerfsWorkdir: { workspace: 'layerfs:fixture' } }
+  assert.equal(await f.tools.execute('invoke_tool', { name: 'layerfs_connect', args: {} }, ctx), 'fixture-only')
+  assert.equal(initialized, 1)
+  assert.equal(f.connect.mock.callCount(), 0)
+})
+
+test('LayerFS factory routing refuses unmarked or ambiguous advertised tools', async t => {
+  const parameters = { ...schema, type: 'object' as const }
+  const marked = { name: 'marked', description: 'fixture', parameters, supportsLayerFSWorkdir: true }
+  const unmarked = { name: 'unmarked', description: 'fixture', parameters }
+  const factory = async () => ({ ...marked, execute: async () => 'unused' })
+  const f = await setup(t, new Map<string, LoadableEntry>([
+    ['one', { contracts: [marked, unmarked], factory }],
+    ['two', { contracts: [marked], factory }],
+  ]))
+  assert.equal(f.importer.canInvokeFromLayerFS('marked'), false)
+  assert.equal(f.importer.canInvokeFromLayerFS('unmarked'), false)
+})

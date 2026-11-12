@@ -153,3 +153,17 @@ test('unsupported UI file and Git routes reject LayerFS without using sandbox di
     } finally { await service.dispose() }
   })
 })
+
+
+test('versioned committed-branch identity survives catalog reload without host path binding', async () => {
+  const { branchWorkspace } = await import('../execution/layerfs/workspace-identity.ts')
+  await withTempWorkspace(async root => {
+    const home = join(root, 'home'), id = branchWorkspace('active', 'feature/test')
+    const catalog = new ProjectCatalog(home); await catalog.init()
+    const folder = await catalog.registerLayerFSFolder(DEFAULT_PROJECT_ID, id, { path: 'layerfs-branch:feature/test' }, signal)
+    const reloaded = new ProjectCatalog(home); await reloaded.init()
+    assert.deepEqual(reloaded.folders(DEFAULT_PROJECT_ID).find(f => f.id === folder.id), folder)
+    assert.equal(folder.workdir.workdirId, id)
+    await assert.rejects(catalog.registerLayerFSFolder(DEFAULT_PROJECT_ID, id, { path: 'layerfs-branch:wrong' }, signal), /mismatch/)
+  })
+})

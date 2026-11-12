@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
 import { join, toNamespacedPath } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { parseBranchWorkspace } from './workspace-identity.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
 import { isCompletedToolFailure, toolResultText, ToolNoEffectError, ToolOutcomeUnknownError, type ToolResult } from '../../tools/tool.ts'
 
@@ -18,12 +19,12 @@ interface Creation {
   identity: string
   branch: string
   source: string
-  phase: 'planned' | 'fork-dispatched' | 'forked' | 'mount-dispatched' | 'mounted' | 'failed'
+  phase: 'planned' | 'fork-dispatched' | 'forked' | 'binding-dispatched' | 'bound' | 'failed'
   workspace?: string
 }
 const queues = new Map<string, Promise<unknown>>()
 
-/** A LayerFS mount is deliberately NOT registered as a host directory. Creation
+/** A LayerFS committed-branch identity is deliberately NOT registered as a host directory. Creation
  * journals preserve uncertain mutations; retrying a request never repeats them. */
 export class LayerFSWorkspaces {
   constructor(private readonly options: {
@@ -70,7 +71,7 @@ export class LayerFSWorkspaces {
         let record: Creation
         try {
           record = JSON.parse(await readFile(file, 'utf8'))
-          if (record.fingerprint !== fingerprint || record.identity !== identity || record.source !== source || typeof record.branch !== 'string' || (args.branch !== undefined && record.branch !== args.branch) || !['planned', 'fork-dispatched', 'forked', 'mount-dispatched', 'mounted', 'failed'].includes(record.phase)) throw new ToolNoEffectError('LayerFS creation identity or idempotency parameters changed; retained resources were not touched.')
+          if (record.fingerprint !== fingerprint || record.identity !== identity || record.source !== source || typeof record.branch !== 'string' || (args.branch !== undefined && record.branch !== args.branch) || !['planned', 'fork-dispatched', 'forked', 'binding-dispatched', 'bound', 'failed'].includes(record.phase)) throw new ToolNoEffectError('LayerFS creation identity or idempotency parameters changed; retained resources were not touched.')
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           record = { fingerprint, identity, source, branch: typeof args.branch === 'string' ? args.branch : `shadow-derived-${args.name ? String(args.name) + '-' : ''}${randomUUID()}`, phase: 'planned' }
@@ -87,7 +88,7 @@ export class LayerFSWorkspaces {
           }
           return receipt.result
         }
-        if (record.phase === 'fork-dispatched' || record.phase === 'mount-dispatched') throw new ToolOutcomeUnknownError('LayerFS creation has an unconfirmed mutation. Inspect branches/sandboxes and reconcile; this request was not replayed.')
+        if (record.phase === 'fork-dispatched' || record.phase === 'binding-dispatched') throw new ToolOutcomeUnknownError('LayerFS creation has an unconfirmed mutation. Inspect branches/sandboxes and reconcile; this request was not replayed.')
         if (record.phase === 'failed') throw new ToolNoEffectError('This LayerFS creation previously failed. Inspect retained branches/sandboxes; use a new request only after reconciliation.')
         if (record.phase === 'planned') {
           record.phase = 'fork-dispatched'; await save(record)
@@ -95,17 +96,18 @@ export class LayerFSWorkspaces {
           record.phase = 'forked'; await save(record)
         }
         if (record.phase === 'forked') {
-          record.phase = 'mount-dispatched'; await save(record)
-          const mounted = await run({ action: 'mount', branch: record.branch })
-          if (typeof mounted?.workspace !== 'string' || !mounted.workspace.startsWith('layerfs:')) throw new ToolOutcomeUnknownError('LayerFS mount receipt lacks a workspace ID; inspect sandboxes, do not repeat creation.')
-          record.workspace = mounted.workspace; record.phase = 'mounted'; await save(record)
+          record.phase = 'binding-dispatched'; await save(record)
+          const mounted = await run({ action: 'branch_workspace', branch: record.branch })
+          if (typeof mounted?.workspace !== 'string' || !mounted.workspace.startsWith('layerfs:')) throw new ToolOutcomeUnknownError('LayerFS branch binding receipt lacks a workspace ID; inspect branches, do not repeat creation.')
+          record.workspace = mounted.workspace; record.phase = 'bound'; await save(record)
         }
-        if (!record.workspace?.startsWith('layerfs:')) throw new ToolOutcomeUnknownError('Invalid retained LayerFS mount receipt; no mutation was replayed.')
+        if (!record.workspace?.startsWith('layerfs:')) throw new ToolOutcomeUnknownError('Invalid retained LayerFS branch binding receipt; no mutation was replayed.')
+        if (parseBranchWorkspace(record.workspace).branch !== record.branch) throw new ToolOutcomeUnknownError('Retained LayerFS branch identity differs from the creation journal; no registration or replay.')
         const description = `${args.description ? String(args.description) + '\n' : ''}LayerFS workspace from ${record.source} (${record.branch})${args.workKey ? `; Work ${String(args.workKey)}` : ''}`
         const registered = await this.options.register(record.workspace, context, description)
         return JSON.stringify({ backend: 'layerfs', source: record.source, branch: record.branch, workspaceId: registered.id,
           idempotencyKey: recoveryKey, description, ...(args.workKey ? { workKey: args.workKey } : {}), registered: true, location: { backend: 'layerfs', mount: record.workspace },
-          routing: 'Use the registered workspaceId with ordinary tools or workspace_use. The container path is display metadata only, never a Main path.',
+          routing: 'Use the registered workspaceId with ordinary tools or workspace_use. Branch location is display metadata only, never a Main path. File writes and completed exec checkpoint automatically.',
           delivery: 'Checkpoint/publish retain LayerFS changes only; no automatic export to the original checkout.' })
       } catch (error) {
         const message = `${error instanceof Error ? error.message : String(error)} Recovery idempotencyKey: ${recoveryKey}`

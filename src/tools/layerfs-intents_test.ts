@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createLayerFSTools, LayerFSTool } from './layerfs.ts'
+import { createLayerFSTools, LayerFSTool, layerFSToolContracts } from './layerfs.ts'
 import type { ExecutionContext } from './context.ts'
 
 test('factory exposes 29 narrow intents, not dispatcher or file-operation duplicates', () => {
   const tools = createLayerFSTools('synthetic-project')
+  assert.deepEqual(tools.map(({ name, description, parameters, supportsLayerFSWorkdir }) => ({ name, description, parameters, supportsLayerFSWorkdir })), layerFSToolContracts())
   assert.equal(tools.length, 29)
   assert.equal(new Set(tools.map(t => t.name)).size, 29)
   for (const name of ['layerfs', 'layerfs_read', 'layerfs_write', 'layerfs_exec']) assert.ok(!tools.some(t => t.name === name))

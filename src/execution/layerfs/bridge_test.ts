@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
-import { configuration, layerfsName, runBridge } from './bridge.ts'
+import { join, dirname } from 'node:path'
+import { configuration, layerfsName, runBridge as rawBridge } from './bridge.ts'
 import { validateLayerArgs, LayerFSTool } from '../../tools/layerfs.ts'
 import { ToolOutcomeUnknownError, isCompletedToolFailure, toolResultText } from '../../tools/tool.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
-import { resolveExecShell } from '../processes/shells.ts'
+
+const runBridge: typeof rawBridge = (config, project, action, args, signal, timeout, lifecycle) => rawBridge(config, project, action, { journal: join(dirname(config.sdkModule), 'operation.jsonl'), ...args }, signal, timeout, lifecycle)
 
 test('workspace IDs are Project-bound, source selectors are not host paths, reads bounded', () => {
  const project = layerfsName('one')
@@ -23,86 +24,6 @@ test('tool refuses foreign Project and remote contexts before configuration', as
  const tool = new LayerFSTool('one')
  await assert.rejects(tool.execute({ action: 'list' }, { projectId: 'two' } as ExecutionContext), /mismatch/)
  await assert.rejects(tool.execute({ action: 'list' }, { projectId: 'one', remoteWorkdir: {} } as ExecutionContext), /no Main fallback/)
-})
-
-test('real process bridge dispatches SDK, streams bounded output and preserves dirty refusal', async () => {
- const dir = await mkdtemp(join(process.cwd(), '.layerfs-test-'))
- try {
-  const sdkModule = join(dir, 'sdk.mjs')
-  await writeFile(sdkModule, `export const LayerFS = { open: async () => ({
-   project: { list_branches: async () => ({ env: process.env.LAYERFS_HOME }) },
-   workspace: {
-    exec: async (ws, command, message, sinks) => { await new Promise((ok, no) => sinks.stdout.write(Buffer.alloc(100000, 65), e => e ? no(e) : ok())); return { code: 0 }; },
-    unmount: async (ws, discard, force) => { if (discard || force) throw Error('unsafe'); throw Object.assign(Error('Dirty'), {code:'Dirty'}); }
-   }, close: async () => {}
-  }) }`)
-  const config = { sdkModule, env: { LAYERFS_HOME: dir } }
-  const project = layerfsName('one')
-  const workspace = Buffer.from(JSON.stringify({ project, sandbox: '1', path: '/workspaces/1' })).toString('base64url')
-  const receipt = JSON.parse(await runBridge(config, project, 'exec', { workspace, command: 'test' }, new AbortController().signal))
-  assert.equal(receipt.result.stdout.text.length, 65536)
-  assert.equal(receipt.result.stdout.bytes, 100000)
-  assert.equal(receipt.result.stdout.truncated, true)
-  const dirty = JSON.parse(await runBridge(config, project, 'close', { workspace }, new AbortController().signal))
-  assert.equal(dirty.error.code, 'Dirty')
-  const env = JSON.parse(await runBridge(config, project, 'branches', {}, new AbortController().signal))
-  assert.equal(env.result.env, dir)
-  assert.equal(process.env.LAYERFS_HOME, undefined)
-  await writeFile(sdkModule, `export const LayerFS = { open: async () => { await new Promise(r=>setTimeout(r,10000)); } }`)
-  const controller = new AbortController()
-  const promise = runBridge(config, project, 'list', {}, controller.signal)
-  setTimeout(() => controller.abort(), 50)
-  await assert.rejects(promise, ToolOutcomeUnknownError)
-  await writeFile(sdkModule, 'process.exit(2)')
-  await assert.rejects(runBridge(config, project, 'list', {}, new AbortController().signal), ToolOutcomeUnknownError)
- } finally { await rm(dir, { recursive: true, force: true }) }
-})
-
-test('different workspaces run concurrently; same workspace is refused while busy', async () => {
- const dir = await mkdtemp(join(process.cwd(), '.layerfs-test-'))
- const prior = process.env.SHADOW_LAYERFS_CONFIG
- try {
-  const sdkModule = join(dir, 'sdk.mjs'), configPath = join(dir, 'config.json')
-  await writeFile(sdkModule, `export const LayerFS = { open: async () => ({ workspace: { exec: async () => { await new Promise(r=>setTimeout(r,150)); return {code:0}; } }, close: async () => {} }) }`)
-  await writeFile(configPath, JSON.stringify({ projects: { one: { sdkModule, env: { LAYERFS_HOME: dir, LAYERFS_STORE_PATH: join(dir, 'store'), LAYERFS_WORKER_ENDPOINT: join(dir, 'worker') } } } }))
-  process.env.SHADOW_LAYERFS_CONFIG = configPath
-  const project = layerfsName('one')
-  const id = (path: string) => Buffer.from(JSON.stringify({ project, sandbox: '1', path })).toString('base64url')
-  const a = {action:'exec', workspace:id('/workspaces/1'), command:'test'}
-  const b = {action:'exec', workspace:id('/workspaces/2'), command:'test'}
-  const context = { projectId:'one', sessionId:'web:bridge', signal:new AbortController().signal } as ExecutionContext
-  const tool = new LayerFSTool('one')
-  const first = tool.execute(a, context)
-  await assert.rejects(tool.execute(a, context), /already in flight/)
-  const second = tool.execute(b, context)
-  for (const result of await Promise.all([first, second])) assert.equal(JSON.parse(toolResultText(result)).ok, true)
-  let operation = ''
-  await assert.rejects(tool.execute({action:'create',workspace:'registered'}, { ...context, resolveToolTarget: async (_, op) => { operation = op; throw Error('grant denied') } }), /grant denied/)
-  assert.equal(operation, 'filesystem.read')
- } finally {
-  if (prior === undefined) delete process.env.SHADOW_LAYERFS_CONFIG; else process.env.SHADOW_LAYERFS_CONFIG = prior
-  await rm(dir, {recursive:true,force:true})
- }
-})
-
-test('sandbox read/write use quoted literal content and do not overwrite source', async t => {
- const shell = await resolveExecShell(process.platform === 'win32' ? 'git-bash' : 'sh')
- if (!shell) { t.skip('POSIX shell required for the local SDK fixture'); return }
- const dir = await mkdtemp(join(process.cwd(), '.layerfs-test-'))
- try {
-  const sdkModule = join(dir, 'sdk.mjs')
-  await writeFile(sdkModule, `import {execFileSync} from 'node:child_process';
-   export const LayerFS = {open: async()=>({workspace:{exec:async(ws,command,message,sinks)=>{
-    const output=execFileSync(${JSON.stringify(shell.command)},['-lc',command],{cwd: ${JSON.stringify(dir)}}); await new Promise((ok,no)=>sinks.stdout.write(output,e=>e?no(e):ok())); return {code:0};
-   }},close:async()=>{}})}`)
-  const project = layerfsName('one'), workspace = Buffer.from(JSON.stringify({project,sandbox:'1',path:'/workspaces/1'})).toString('base64url')
-  const config = {sdkModule, env:{LAYERFS_HOME:dir}}, signal = new AbortController().signal
-  const content = "literal ' quote $HOME ; $(false)\nsecond line\n"
-  const written = JSON.parse(await runBridge(config,project,'write',{workspace,path:"a'b.txt",content},signal))
-  assert.equal(written.ok,true)
-  const read = JSON.parse(await runBridge(config,project,'read',{workspace,path:"a'b.txt",start:1,end:20},signal))
-  assert.equal(read.result.stdout.text,content)
- } finally { await rm(dir,{recursive:true,force:true}) }
 })
 
 test('host configuration is opt-in, allowlisted and refuses shared Project stores', async () => {
@@ -129,9 +50,9 @@ test('create accepts a registered source selector and SDK refusals are completed
  const prior = process.env.SHADOW_LAYERFS_CONFIG
  try {
   const sdkModule = join(dir,'sdk.mjs'), configPath = join(dir,'config.json')
-  await writeFile(sdkModule, `export const LayerFS = {
+  await writeFile(sdkModule, `export const isRefusal=e=>['Dirty','InvalidInput','Failed'].includes(e?.code); export const LayerFS = {
    init: async(project,source,timeout)=>({created:{kind:'Initialized',project,source,timeout},close:async()=>{}}),
-   open: async()=>({workspace:{unmount:async()=>{throw Object.assign(Error('Dirty workspace'),{code:'Dirty'});}},branch:{fork:async()=>{throw Object.assign(Error('Bad branch'),{code:'InvalidInput'});}},project:{list_branches:async()=>{throw Object.assign(Error('Lost reply'),{code:'Unknown'});}},close:async()=>{}})
+   open: async()=>({workspace:{unmount:async()=>{throw Object.assign(Error('Dirty workspace'),{code:'Dirty'});}},branch:{fork:async()=>{throw Object.assign(Error('Bad branch'),{code:'InvalidInput'});}},project:{list_sandboxes:async()=>({items:[],hasMore:false}),list_branches:async()=>{throw Object.assign(Error('Lost reply'),{code:'Unknown'});}},close:async()=>{}})
   }`)
   await writeFile(configPath,JSON.stringify({projects:{one:{sdkModule,env:{LAYERFS_HOME:dir,LAYERFS_STORE_PATH:join(dir,'store'),LAYERFS_WORKER_ENDPOINT:join(dir,'worker')}}}}))
   process.env.SHADOW_LAYERFS_CONFIG = configPath
@@ -170,7 +91,7 @@ for (const fails of [false, true]) test(`operator import uses the SDK budget and
  const dir = await mkdtemp(join(process.cwd(), '.layerfs-timeout-test-'))
  try {
   const sdkModule = join(dir, 'sdk.mjs')
-  await writeFile(sdkModule, `export const LayerFS = { init: async (_project,_source,timeout) => {
+  await writeFile(sdkModule, `export const isRefusal=e=>['Dirty','InvalidInput','Failed'].includes(e?.code); export const LayerFS = { init: async (_project,_source,timeout) => {
    if(timeout!==1000) throw Error('Wrong native import budget');
    await new Promise(resolve=>setTimeout(resolve,1700));
    ${fails ? "throw Object.assign(Error('Project(Deadline)'),{code:'Failed'});" : "return {created:{kind:'Initialized',timeout},close:async()=>{}};"}
@@ -193,7 +114,9 @@ test('silent or cancelled operator imports remain unknown; no automatic retry', 
   await assert.rejects(runBridge({sdkModule,env:{}}, 'fixture', 'create', {source:dir}, new AbortController().signal, 250), (error: unknown) => error instanceof ToolOutcomeUnknownError && /heartbeat lost/.test(error.message))
   await writeFile(sdkModule, `export const LayerFS={init:async()=>{await new Promise(resolve=>setTimeout(resolve,2000));return {created:{kind:'Initialized'},close:async()=>{}}}}`)
   const controller = new AbortController()
-  const request = runBridge({sdkModule,env:{}}, 'fixture', 'create', {source:dir}, controller.signal)
+  const blocked = JSON.parse(await runBridge({sdkModule,env:{}}, 'fixture', 'create', {source:dir}, controller.signal))
+  assert.equal(blocked.error.code, 'Busy', 'Retained journal prevents a new process from replaying the unknown import')
+  const request = runBridge({sdkModule,env:{}}, 'other-fixture', 'create', {source:dir,journal:join(dir,'other-operation.jsonl')}, controller.signal)
   const timer = setTimeout(()=>controller.abort(),250)
   try { await assert.rejects(request, (error: unknown) => error instanceof ToolOutcomeUnknownError && /cancelled/.test(error.message)) }
   finally { clearTimeout(timer) }

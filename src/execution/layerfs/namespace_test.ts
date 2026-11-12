@@ -23,7 +23,7 @@ async function fixture(work: (f: any) => Promise<void>) {
   try {
     await mkdir(join(home, 'config'), { recursive: true }); await mkdir(join(state, 'runtime', '.runtime'), { recursive: true })
     const apiRoot = join(root, 'api'); await mkdir(join(apiRoot, 'api', 'agent', 'src'), { recursive: true })
-    await writeFile(join(apiRoot, 'api', 'agent', 'src', 'index.js'), `export const LayerFS={open:async project=>({project:{list_branches:async()=>({project,volume:process.env.LAYERFS_VOLUME})},workspace:{exec:async(_ws,_command,_message,sinks)=>{await new Promise(r=>sinks.stdout.write('namespace:'+project,r));return {code:0}}},close:async()=>{}})}`)
+    await writeFile(join(apiRoot, 'api', 'agent', 'src', 'index.js'), `export const LayerFS={open:async project=>({project:{list_branches:async()=>({project,volume:process.env.LAYERFS_VOLUME}),list_sandboxes:async()=>({items:[],hasMore:false})},fs:{stat:async()=>({type:'file',size:100,root:'r'}),read:async()=>({text:'namespace:'+project,root:'r',truncated:false,lineTruncated:false})},close:async()=>{}})}`)
     const profile = JSON.stringify({ version: 1, projectId: 'p', approvedRootWorker: true, installation: { apiRoot, bundle: '/fixture/build', image: 'sha256:' + 'a'.repeat(64), distribution: 'FixtureWSL', node: '/fixture/node' } })
     oldFiles.set(join(home, 'config', 'layerfs-managed.json'), profile)
     oldFiles.set(join(state, 'worker-state.json'), JSON.stringify({ phase: 'uncertain' }))
@@ -76,9 +76,9 @@ test('approved quarantine preserves old evidence, selects disjoint identities, b
     const context = { projectId: 'p', sessionId: 'web:owner', signal: signal() } as ExecutionContext
     const result = JSON.parse(toolResultText(await tool.execute({ action: 'branches', namespace: recovery.namespace }, context)))
     assert.equal(result.result.project, recovery.project)
-    const newMount = 'layerfs:' + Buffer.from(JSON.stringify({ project: recovery.project, sandbox: '1', path: '/workspaces/1' })).toString('base64url')
+    const newMount = 'layerfs:' + Buffer.from(JSON.stringify({ version: 2, project: recovery.project, branch: 'feature' })).toString('base64url')
     const read = await new ReadTool(f.home).execute({ workspace: newMount, path: 'index.ts' }, { ...context, resolveToolTarget: async () => { throw Error('Must not fall back to host') } })
-    assert.equal(JSON.parse(toolResultText(read)).result.stdout.text, `namespace:${recovery.project}`)
+    assert.equal(toolResultText(read), `namespace:${recovery.project}`)
     const oldMount = 'layerfs:' + Buffer.from(JSON.stringify({ project: layerfsName('p'), sandbox: '1', path: '/workspaces/1' })).toString('base64url')
     await assert.rejects(tool.execute({ action: 'read', workspace: oldMount, path: 'index.ts' }, context), /another Project/)
     await assert.rejects(tool.execute({ action: 'connect', namespace: 'legacy' }, context), /not active/)

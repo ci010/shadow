@@ -2,9 +2,11 @@
 
 ## Fresh-session path: layerfs_connect → one consent → automatic layerfs_bootstrap → original task
 
-Initialize `invoke_tool {source:"layerfs",args:{}}` to register the independent
-tools (no provisioning), then invoke `layerfs_connect {}`. An existing approved
-installation is reused.
+Start with `v:skills/layerfs-setup`. Read `v:tools/layerfs_connect`, then invoke
+`invoke_tool {name:"layerfs_connect",args:{}}` when connection/reuse is authorized.
+The tools are already flattened; no preliminary source initialization is required.
+Skill reads provide guidance, not builtin factory activation or consent.
+An existing approved installation is reused.
 Without one, the owner Web session gets an automatic `layerfs_bootstrap_plan`: WSL distro
 inventory only, no root command, download or worker startup. A unique eligible
 distribution is selected automatically; multiple candidates need a distro choice
@@ -302,7 +304,7 @@ Managed layerfs_setup deliberately does not replace this explicit override.
 
 The full contract and compatibility evidence are in the Shadow repository's
 `docs/layerfs.md`, not a bundled `docs/` resource. This guide is always readable
-as `v:skills/layerfs/layerfs_setup.md` without a source checkout.
+as `v:skills/layerfs/setup.md` without a source checkout.
 
 ## Before importing a repository
 

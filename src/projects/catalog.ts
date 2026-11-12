@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { parseBranchWorkspace } from '../execution/layerfs/workspace-identity.ts'
 import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { appDataPaths } from '../utils/data-paths.ts'
@@ -57,9 +58,12 @@ function validateLayerFSFolder(folder: LayerFSFolderRecord): void {
   const ref = parseWorkdirRef(folder.workdir)
   if (typeof folder.mount !== 'string' || !folder.mount.startsWith('layerfs:') || folder.mount.length > 1024 ||
     !ref || ref.nodeId !== 'layerfs' || ref.workdirId !== folder.mount ||
-    typeof folder.path !== 'string' || !/^\/workspaces\/\d+$/.test(folder.path) || 'identity' in folder) {
-    throw new Error('Invalid LayerFS folder: non-host mount identity required')
+    typeof folder.path !== 'string' || 'identity' in folder) {
+    throw new Error('Invalid LayerFS folder: non-host resource identity required')
   }
+  if (folder.path.startsWith('layerfs-branch:')) {
+    if (folder.path !== `layerfs-branch:${parseBranchWorkspace(folder.mount).branch}`) throw new Error('LayerFS branch display metadata mismatch')
+  } else if (!/^\/workspaces\/\d+$/.test(folder.path)) throw new Error('Invalid legacy LayerFS mount display metadata')
 }
 
 function name(value: unknown): string {

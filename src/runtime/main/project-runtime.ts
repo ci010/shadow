@@ -499,6 +499,7 @@ export async function createProjectRuntime(
     const receipt = JSON.parse(toolResultText(result))
     if (isCompletedToolFailure(result) || receipt.ok !== true) throw new Error('LayerFS mount is unavailable; no host fallback.')
     const identity = JSON.parse(Buffer.from(mount.slice('layerfs:'.length), 'base64url').toString())
+    if (identity.version === 2) return { path: `layerfs-branch:${identity.branch}`, name: `LayerFS ${identity.branch}` }
     const listsMount = (value: unknown, depth = 0): boolean => {
       if (!value || typeof value !== 'object' || depth > 8) return false
       if (!Array.isArray(value) && (value as Record<string, unknown>).path === identity.path) return true
@@ -511,7 +512,9 @@ export async function createProjectRuntime(
     authorize: layerFSMountAvailable,
     requireAvailable: async (folder, signal) => { await layerFSMountAvailable(folder.mount, signal) },
   })
+  const { layerFSToolContracts } = await import('../../tools/layerfs.ts')
   loadable.set('layerfs', {
+    contracts: layerFSToolContracts(),
     factory: async () => {
       const { createLayerFSTools } = await import('../../tools/layerfs.ts')
       const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
@@ -1032,7 +1035,7 @@ export async function createProjectRuntime(
       const { layerfsRoute, LayerFSFileNotFoundError } = await import('../../tools/layerfs-route.ts')
       const { isCompletedToolFailure, toolResultText } = await import('../../tools/tool.ts')
       try {
-        const result = await layerfsRoute('read', { workspace: folder.mount, path: 'AGENTS.md' }, { ...ctx, remoteWorkdir: undefined }, workspace)
+        const result = await layerfsRoute('read', { workspace: folder.mount, path: 'AGENTS.md', requireFile: true }, { ...ctx, remoteWorkdir: undefined }, workspace)
         if (result === undefined || isCompletedToolFailure(result)) throw new Error('LayerFS workspace instructions could not be read; prior context retained.')
         const content = toolResultText(result)
         if (Buffer.byteLength(content) > 128000) throw new Error('LayerFS AGENTS.md exceeds the instruction size limit; prior context retained.')
