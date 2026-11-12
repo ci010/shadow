@@ -1130,7 +1130,7 @@ for (const phase of ['provider', 'tool'] as const) {
       }
       f.session.dispatch(input('queued'), llm)
       const activity = await (await app.request('/api/sessions/stages')).json()
-      const restoredRequestId = activity.activeRequestIds[f.state.sessionId]
+      const restoredRequestId = activity.activity[f.state.sessionId].activeRequestId
       assert.equal(restoredRequestId, 'request-first')
       const response = await app.request(`/api/sessions/${encodeURIComponent(f.state.sessionId)}/cancel`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: restoredRequestId }),
@@ -1153,7 +1153,7 @@ for (const phase of ['provider', 'tool'] as const) {
       assert.equal(stale.status, 409)
       assert.equal(f.calls[1].signal.aborted, false)
       const successor = await (await app.request('/api/sessions/stages')).json()
-      assert.equal(successor.activeRequestIds[f.state.sessionId], 'queued')
+      assert.equal(successor.activity[f.state.sessionId].activeRequestId, 'queued')
       f.calls[1].resolve(done())
       await waitFor(() => f.facts.length === 2)
       assert.equal(f.facts[1].inputId, 'queued')

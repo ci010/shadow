@@ -26,42 +26,17 @@ test('LLM, tool execution and waiting retain working controls', () => {
   assert.equal(sessionActivity(undefined).label, 'Status unavailable')
 })
 
-test('activity snapshots retain real session stages and reject malformed status rather than showing idle', () => {
-  const stages = { 'web:chat-a': 'llm', 'web:chat-b': 'tool', 'web:chat-c': 'idle', 'web:chat-d': 'inactive', 'web:chat-e': 'waiting' }
-  assert.deepEqual(parseSessionStages({ stages }), stages)
-  for (const value of [undefined, null, {}, { stages: [] }, { stages: null }, { stages: { a: 'working' } }, { stages: { a: 1 } }]) {
+test('sparse activity validates the complete envelope and restores field defaults', () => {
+  assert.deepEqual(parseSessionStages({ activity: { a: { stage: 'llm' }, b: { stage: 'idle' }, c: { activeRequestId: 'turn' } } }), { a: 'llm', b: 'idle', c: 'inactive' })
+  assert.deepEqual(parseSessionStages({ activity: {} }), {})
+  assert.deepEqual(parseActiveRequestIds({ activity: { a: { activeRequestId: 'turn' } } }), { a: 'turn' })
+  const recovery = { id: 'turn', reason: 'stopped' }
+  assert.deepEqual(parseSessionRecoveries({ activity: { a: { recovery } } }), { a: recovery })
+  assert.deepEqual(parseSessionStages({ activity: { a: { stage: 'waiting', waitingForCall: true }, b: { stage: 'waiting' } } }), { a: 'waiting-for-call', b: 'waiting' })
+  for (const value of [undefined, null, {}, { stages: {} }, { activity: [] }, { activity: null },
+    ...[null, [], { stage: 'working' }, { stage: 1 }, { activeRequestId: '' }, { activeRequestId: 12 },
+      { waitingForCall: 'true' }, { waitingForCall: true }, { recovery: {} }, { recovery: { id: 'x', reason: 'completed' } }, { surprise: true }].map(a => ({ activity: { a } }))]) {
     assert.throws(() => parseSessionStages(value), /activity is unavailable/)
-  }
-})
-
-test('restored activity requires validated server input identities, never session IDs or inferred tokens', () => {
-  const activeRequestIds = { 'web:chat-one': 'input-one', 'web:chat-two': 'input-two' }
-  assert.deepEqual(parseActiveRequestIds({ activeRequestIds }), activeRequestIds)
-  assert.deepEqual(parseActiveRequestIds({ stages: { 'web:chat-one': 'tool' } }), {})
-  for (const activeRequestIds of [null, [], 1, { 'web:chat-one': '' }, { 'web:chat-one': 12 }]) {
-    assert.throws(() => parseActiveRequestIds({ activeRequestIds }), /identity is unavailable/)
-  }
-})
-
-test('call-wait metadata distinguishes blocking calls from yields without inventing activity', () => {
-  const stages = { task: 'waiting', reusable: 'waiting', yield: 'waiting', idle: 'idle', finished: 'completed' }
-  assert.deepEqual(parseSessionStages({ stages, waitingForCalls: { task: true, reusable: true, yield: false, idle: true, finished: true, absent: true } }), {
-    task: 'waiting-for-call', reusable: 'waiting-for-call', yield: 'waiting', idle: 'idle', finished: 'completed',
-  })
-  assert.deepEqual(parseSessionStages({ stages, waitingForCalls: { task: false } }), stages)
-  assert.deepEqual(parseSessionStages({ stages }), stages, 'Older snapshots retain their original stage meanings')
-  for (const waitingForCalls of [null, [], 1, { task: 'true' }, { task: null }]) {
-    assert.throws(() => parseSessionStages({ stages, waitingForCalls }), /activity is unavailable/)
-  }
-})
-
-test('only validated persisted recovery advertises Resume; idle, finished, legacy status and drafts do not fabricate it', () => {
-  const recoveries = { 'web:chat-one': { id: 'paused', reason: 'stopped' }, 'web:chat-two': { id: 'crashed', reason: 'interrupted' } }
-  assert.deepEqual(parseSessionRecoveries({ recoveries }), recoveries)
-  assert.deepEqual(parseSessionRecoveries({ stages: { 'web:chat-one': 'idle' } }), {})
-  assert.deepEqual(parseSessionRecoveries({ recoveries: {} }), {})
-  for (const recoveries of [null, [], { root: null }, { root: {} }, { root: { id: 'x', reason: 'completed' } }]) {
-    assert.throws(() => parseSessionRecoveries({ recoveries }))
   }
 })
 
@@ -97,7 +72,7 @@ test('rate-limit waiting remains cancellable working status without spinning or 
   assert.equal(isAnimatingStage('rate-limit'), false)
   assert.equal(sessionActivity('rate-limit').label, 'Waiting for model rate limit (automatic retry)')
   const stages = { chat: 'rate-limit' as const }
-  assert.deepEqual(parseSessionStages({ stages }), stages)
+  assert.deepEqual(parseSessionStages({ activity: { chat: { stage: 'rate-limit' } } }), stages)
   assert.deepEqual(displayedSessionStages(stages, 'chat', true, 'llm'), stages)
 })
 
@@ -105,13 +80,13 @@ test('rate-limit waiting remains cancellable working status without spinning or 
 test('failed recovery replaces resting icons but never active work or intentional stops', () => {
   const recovery = { id: 'turn', reason: 'failed', providerFailure: 'request' }
   for (const stage of ['idle', 'inactive']) {
-    assert.deepEqual(parseSessionStages({ stages: { chat: stage }, recoveries: { chat: recovery } }), { chat: 'failed' })
+    assert.deepEqual(parseSessionStages({ activity: { chat: { stage, recovery } } }), { chat: 'failed' })
     for (const reason of ['stopped', 'interrupted']) {
-      assert.deepEqual(parseSessionStages({ stages: { chat: stage }, recoveries: { chat: { id: 'turn', reason } } }), { chat: stage })
+      assert.deepEqual(parseSessionStages({ activity: { chat: { stage, recovery: { id: 'turn', reason } } } }), { chat: stage })
     }
   }
-  for (const stage of ['llm', 'tool', 'waiting', 'rate-limit', 'completed', 'cancelled']) {
-    assert.equal(parseSessionStages({ stages: { chat: stage }, recoveries: { chat: recovery } }).chat, stage)
+  for (const stage of ['llm', 'tool', 'waiting', 'rate-limit']) {
+    assert.equal(parseSessionStages({ activity: { chat: { stage, recovery } } }).chat, stage)
   }
-  assert.equal(parseSessionStages({ stages: { chat: 'inactive' }, recoveries: {} }).chat, 'inactive')
+  assert.equal(parseSessionStages({ activity: {} }).chat, undefined)
 })

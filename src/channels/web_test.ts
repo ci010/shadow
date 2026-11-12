@@ -691,12 +691,12 @@ test('history append validates complete old prefix and metadata, not client coun
     const initial = await (await read()).json()
     assert.ok((await (await read(initial.revision, '999')).json()).data, 'unchanged revision does not excuse a mismatched count')
     history.push({ role: 'system', content: 'inserted context' }, { role: 'assistant', content: 'answer' })
-    const response = await read(initial.revision)
+    const response = await app.request(`/api/chat/session?chatId=delta&snapshot=${initial.revision}&historyCount=1&historyRevision=${initial.historyRevision}`)
     assert.equal(response.headers.get('cache-control'), 'no-store')
     const wire = await response.text()
     const append = JSON.parse(wire)
     assert.deepEqual(append.delta.history, history.slice(1))
-    assert.ok(wire.length < JSON.stringify(initial).length / 100, 'growing history sends only suffix')
+    assert.ok(wire.length < JSON.stringify(initial).length / 50, 'growing history sends only suffix and bounded validators')
     for (const count of ['-1', '1.0', '01', '9007199254740992', '999', '0']) {
       assert.ok((await (await read(initial.revision, count)).json()).data)
     }
@@ -732,18 +732,18 @@ test('history block reuse requires exact hash/count and bounded offset', async (
   try {
     const base = await read({ snapshot: '' })
     const params = { snapshot: base.revision, historyRevision: base.historyRevision, historyCount: '1' }
-    assert.match(base.metadataRevision, /^[a-f0-9]{64}$/)
+    assert.match(base.metadataVersions.systemPrompt, /^[a-f0-9]{64}$/)
+    const versions = Object.fromEntries(Object.entries(base.metadataVersions).map(([key, value]) => [`${key}Revision`, String(value)]))
     history.push({ role: 'assistant', content: 'small append' })
-    const omitted = await read({ ...params, metadataRevision: base.metadataRevision })
-    assert.equal('metadata' in omitted.delta, false)
-    assert.equal(omitted.delta.baseMetadataRevision, base.metadataRevision)
-    assert.equal(omitted.metadataRevision, base.metadataRevision)
-    assert.ok((await read(params)).delta.metadata, 'old clients still receive metadata')
-    assert.ok((await read({ ...params, metadataRevision: 'invalid' })).delta.metadata)
+    const omitted = await read({ ...params, ...versions })
+    assert.deepEqual(omitted.delta.metadataPatch, {})
+    assert.deepEqual(omitted.metadataVersions, base.metadataVersions)
+    assert.equal(Object.keys((await read(params)).delta.metadataPatch).length, 4, 'missing validators replace all fields')
+    assert.deepEqual(Object.keys((await read({ ...params, ...versions, toolsRevision: 'invalid' })).delta.metadataPatch), ['tools'])
     systemPrompt = 'new'
-    const changed = await read({ ...params, metadataRevision: base.metadataRevision })
-    assert.equal(changed.delta.metadata.systemPrompt, 'new')
-    assert.notEqual(changed.metadataRevision, base.metadataRevision)
+    const changed = await read({ ...params, ...versions })
+    assert.deepEqual(changed.delta.metadataPatch, { systemPrompt: 'new' })
+    assert.notEqual(changed.metadataVersions.systemPrompt, base.metadataVersions.systemPrompt)
     history = [...Array.from({ length: 16 }, () => ({ role: 'system', content: 'leading' })), ...original, { role: 'assistant', content: 'suffix' }]
     const delta = await read(params)
     assert.equal(delta.delta.historyOffset, 16)
@@ -880,5 +880,42 @@ test('history gzip negotiates encoding without changing validators, snapshots or
     assert.equal(blocked.status, 401)
     assert.deepEqual(await blocked.json(), { error: 'unauthorized' })
     assert.equal(blocked.headers.get('Content-Encoding'), null, 'authorization guard precedes history middleware')
+  } finally { await channel.stop() }
+})
+
+
+test('HTTP history null omission shares full, delta and revision projection', async () => {
+  const app = new Hono()
+  const tool = { id: 'call', type: 'function', function: { name: 'read', arguments: '{"value":null}' } }
+  let history: Record<string, unknown>[] = [{ role: 'assistant', content: null, reasoning_content: null, reasoning_text: null, tool_calls: [tool] }]
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:nulls', segmentIndex: 0 }),
+    getContext: async () => ({ systemPrompt: '', tools: [] }),
+    getHistory: async () => ({ messages: history }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const read = async (query = '') => (await app.request(`/api/chat/session?chatId=nulls${query}`)).json()
+  try {
+    const full = await read('&snapshot=')
+    assert.deepEqual(full.data.history, [{ role: 'assistant', tool_calls: [tool] }])
+    assert.deepEqual((await read()).history, full.data.history)
+    assert.equal(history[0].content, null, 'store/provider message is untouched')
+    history = [{ role: 'assistant', tool_calls: [tool] }]
+    assert.deepEqual(await read(`&snapshot=${full.revision}&historyCount=1`), { revision: full.revision, unchanged: true })
+    assert.equal((await read('&snapshot=')).historyRevision, full.historyRevision)
+    history.push({ role: 'tool', content: '{"value":null}', reasoning_text: null })
+    const delta = await read(`&snapshot=${full.revision}&historyCount=1&historyRevision=${full.historyRevision}`)
+    assert.deepEqual(delta.delta.history, [{ role: 'tool', content: '{"value":null}' }])
+    const fresh = await read('&snapshot=')
+    assert.equal(delta.revision, fresh.revision)
+    assert.equal(delta.historyRevision, fresh.historyRevision)
+    assert.deepEqual([...full.data.history, ...delta.delta.history], fresh.data.history)
+    history[0] = { role: 'assistant', content: 'old text', tool_calls: [tool] }
+    const withText = await read('&snapshot=')
+    history[0].content = null
+    const cleared = await read(`&snapshot=${withText.revision}&historyCount=2&historyRevision=${withText.historyRevision}`)
+    assert.ok(cleared.data, 'clearing an existing field replaces full messages, never field-merges')
+    assert.equal('content' in cleared.data.history[0], false)
   } finally { await channel.stop() }
 })

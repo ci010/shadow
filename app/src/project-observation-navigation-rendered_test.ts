@@ -51,7 +51,7 @@ test('project settings and Knowledge click through history and observed groups w
       if (path.endsWith('/api/knowledge')) { json({ entries: [], links: [] }); return }
       if (path.endsWith('/api/folders')) { json({ folders: [] }); return }
       if (/\/api\/sessions\/bot%3Ahistory$/.test(path)) { json({ messages: [{ role: 'user', content: 'Existing history fixture' }] }); return }
-      json({ projects, sessions: [], nodes: [], stages: {}, jobs: [], requests: [], messages: [], tools: [], providers: [] })
+      json({ projects, sessions: [], nodes: [], activity: {}, jobs: [], requests: [], messages: [], tools: [], providers: [] })
     }) },
   }], server: { host: '127.0.0.1', port: 0 } })
   await server.listen(); t.after(() => server.close())

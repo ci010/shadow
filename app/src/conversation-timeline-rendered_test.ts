@@ -90,7 +90,7 @@ test('continuous ChatTab prepends, preserves boundaries and handles live rollove
             response.end('<!doctype html><html><body style="margin:0"><div id="app"></div><script type="module" src="/persistence.ts"></script></body></html>')
           } else if (path === '/fixture-reject') { rejectSend = url.searchParams.get('value') === 'true'; json({ ok: true }) }
           else if (path.endsWith('/api/sessions/summary')) json({ sessions: ['web:chat-one', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
-          else if (path.endsWith('/api/sessions/stages')) json({ stages: {}, activeRequestIds: {}, recoveries: {} })
+          else if (path.endsWith('/api/sessions/stages')) json({ activity: {} })
           else if (path === '/fixture-append') { extraLive = true; json({ok:true}) }
           else if (path === '/fixture-sleep') { extraLive = false; json({ok:true}) }
           else if (path === '/fixture-rollover') { rollover = true; json({ok:true}) }

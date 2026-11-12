@@ -86,7 +86,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
               return json({key,config});
             }
             if (url.pathname.includes('/bot-package/reviews/')) return json({projectId:'fixture',reviews:[]});
-            if (url.pathname.endsWith('/stages')) return json({stages:{[sessionId]:fixture.question?'waiting':'idle'}});
+            if (url.pathname.endsWith('/stages')) return json({activity:{[sessionId]:{stage:fixture.question?'waiting':'idle'}}});
             if (url.pathname.endsWith('/ask')) {
               if (init.method === 'POST') {
                 const body=JSON.parse(init.body); fixture.answers.push(body);

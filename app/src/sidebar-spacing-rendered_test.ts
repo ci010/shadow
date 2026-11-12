@@ -132,7 +132,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
             path: `C:\\synthetic\\${id}`, createdAt: '',
           })) : [] }
           else if (path === '/api/sessions/summary') data = { sessions: work ? sessions : [], nodes: [] }
-          else if (path === '/api/sessions/stages') data = { stages: { 'web:chat-one': 'llm', 'web:chat-two': 'waiting', 'task:one': 'llm' } }
+          else if (path === '/api/sessions/stages') data = { activity: { 'web:chat-one': { stage: 'llm' }, 'web:chat-two': { stage: 'waiting' }, 'task:one': { stage: 'llm' } } }
           else if (path === '/api/channels') data = { channels: [{
             id: 'bot', projectId: 'work', platform: 'qq', displayName: 'QQ bot', label: 'QQ',
             enabled: true, configured: true, state: 'connected', config: {}, secrets: {},

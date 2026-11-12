@@ -1617,7 +1617,8 @@ interface RawMessage {
   role: string
   responseContext?: unknown
   timestamp?: string
-  content: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> | null
+  /** HTTP history omits absent top-level values; items are complete replacements. */
+  content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> | null
   reasoning_content?: string | null
   reasoning_text?: string | null
   tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>

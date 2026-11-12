@@ -93,7 +93,7 @@ test('background chips and sidebar delegated activity update without making an i
               { sessionId: 'leaf', name: 'Nested review', mode: 'call', parentSessionId: 'worker', executionStatus: phase === 'running' ? 'running' : 'completed' },
             ] })
           } else if (path.endsWith('/api/sessions/stages')) {
-            json({ stages: { 'web:chat-owner': parentStage, 'web:chat-other': 'idle', worker: phase === 'waiting' ? 'waiting' : phase === 'pending' ? 'idle' : 'llm', leaf: 'tool' }, activeRequestIds: {}, recoveries: {} })
+            json({ activity: { 'web:chat-owner': { stage: parentStage }, 'web:chat-other': { stage: 'idle' }, worker: { stage: phase === 'waiting' ? 'waiting' : phase === 'pending' ? 'idle' : 'llm' }, leaf: { stage: 'tool' } } })
           } else if (path.endsWith('/background-tasks')) {
             const sessionId = decodeURIComponent(path.split('/').at(-2)!)
             if (background === 'error') { json({}, 503); return }

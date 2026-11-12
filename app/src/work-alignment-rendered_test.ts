@@ -185,7 +185,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
           } else if (path.endsWith('/api/sessions/summary')) {
             json({ sessions: [{ sessionId: 'web:fixture', title: 'Evaluation session' }], nodes: [] })
           } else if (path.endsWith('/api/sessions/stages')) {
-            json({ stages: { 'web:fixture': questionOpen ? 'waiting' : 'idle', 'web:untracked': 'waiting' } })
+            json({ activity: { 'web:fixture': { stage: questionOpen ? 'waiting' : 'idle' }, 'web:untracked': { stage: 'waiting' } } })
           } else if (path.endsWith('/ask')) {
             const pending = path.includes('web%3Afixture') || path.includes('web:fixture') ? questionOpen ? question : null : input
             if (request.method === 'POST') {

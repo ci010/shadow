@@ -3,6 +3,8 @@ import { presenceReportSchema } from '../sessions/presence.ts'
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import type { ChannelCapabilities } from './capabilities.ts'
 import { createHash, randomUUID } from 'node:crypto'
+import { chatMetadataFields, type ChatMetadataVersions } from '../shared/chat-snapshot.ts'
+import { projectHistoryMessages } from '../shared/history-wire.ts'
 import { realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
@@ -509,9 +511,11 @@ export class WebChannel extends AbstractChannel {
         const sessionId = `${this.name}:${chatId}`
         // A draft has no session until prepare/send. Never preview a missing,
         // deleted or other-Project ID as though it were a real conversation.
-        if (!this.sessionManager!.getSessionState(sessionId)) {
+        const initialState = this.sessionManager!.getSessionState(sessionId)
+        if (!initialState) {
           return c.json({ error: 'session_not_found' }, 404)
         }
+        const initialPhysicalId = physicalSessionId(initialState)
         const { systemPrompt, tools } = await this.sessionManager!.getContext({
           sessionId,
           channel: this.name,
@@ -526,7 +530,9 @@ export class WebChannel extends AbstractChannel {
         const segmentIndex = state?.segmentIndex ?? 0
         const identity = state ?? { sessionId, segmentIndex }
         if (!state) return c.json({ error: 'session_not_found' }, 404)
-        const data = { chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools,
+        // Do not label context read before an awaited rollover with the new segment.
+        if (physicalSessionId(state) !== initialPhysicalId) return c.json({ error: 'session_segment_changed' }, 409)
+        const data = { chatId, systemPrompt, history: projectHistoryMessages(history || []), commandResults, decisionRecords, tools,
           segmentIndex, currentPhysicalId: physicalSessionId(identity),
           previousPhysicalId: segmentIndex > 0 ? physicalSessionId(identity, segmentIndex - 1) : null,
         }
@@ -541,17 +547,21 @@ export class WebChannel extends AbstractChannel {
           const revision = etag.slice(1, -1)
           // Bind the history validator to its logical and physical identity, not
           // mutable context/tools/receipts. Hash the exact serialized prefix.
-          const { history: messages, ...metadata } = data
+          const { history: messages } = data
+          const identity = { chatId, segmentIndex, currentPhysicalId: data.currentPhysicalId, previousPhysicalId: data.previousPhysicalId }
           const historyHash = (prefix: typeof messages) => createHash('sha256').update(JSON.stringify({
             chatId, currentPhysicalId: data.currentPhysicalId, segmentIndex, history: prefix,
           })).digest('hex')
           const historyRevision = historyHash(messages)
-          // Metadata includes logical/physical identity, so a segment rollover can
-          // never authorize reuse of the preceding segment's context.
-          const metadataRevision = createHash('sha256').update(JSON.stringify(metadata)).digest('hex')
-          const baseMetadataRevision = c.req.query('metadataRevision')
-          const metadataPayload = baseMetadataRevision === metadataRevision
-            ? { baseMetadataRevision } : { metadata }
+          // Four bounded validators; no client data or server snapshot retention.
+          // Each hash includes identity, preventing reuse across segment rollover.
+          const metadataVersions = {} as ChatMetadataVersions
+          const metadataPatch: Record<string, unknown> = {}
+          for (const field of chatMetadataFields) {
+            const version = createHash('sha256').update(JSON.stringify({ identity, field, value: data[field] })).digest('hex')
+            metadataVersions[field] = version
+            if (c.req.query(`${field}Revision`) !== version) metadataPatch[field] = data[field]
+          }
           const countText = c.req.query('historyCount')
           const count = countText !== undefined && /^(0|[1-9]\d*)$/.test(countText) ? Number(countText) : NaN
           if (c.req.query('snapshot') === revision && (countText === undefined || count === data.history.length)) {
@@ -561,30 +571,19 @@ export class WebChannel extends AbstractChannel {
           const baseSnapshot = c.req.query('snapshot')
           if (baseSnapshot && /^[a-f0-9]{64}$/.test(baseSnapshot)
             && baseHistoryRevision && /^[a-f0-9]{64}$/.test(baseHistoryRevision)
-            && Number.isSafeInteger(count) && count > 0 && count <= messages.length) {
+            && Number.isSafeInteger(count) && count >= 0 && count <= messages.length) {
             // Bounded contiguous reuse: context may be prepended as well as appended.
             // Never reuse a partially matching or rewritten middle block.
             for (let offset = 0; offset <= Math.min(16, messages.length - count); offset++) {
               if (historyHash(messages.slice(offset, offset + count)) !== baseHistoryRevision) continue
-              return c.json({ revision, historyRevision, metadataRevision, delta: {
+              return c.json({ revision, historyRevision, metadataVersions, delta: {
                 baseRevision: baseSnapshot, baseHistoryRevision, baseCount: count,
                 historyOffset: offset, leadingHistory: messages.slice(0, offset),
-                history: messages.slice(offset + count), count: messages.length, ...metadataPayload,
+                history: messages.slice(offset + count), count: messages.length, identity, metadataPatch,
               } })
             }
           }
-          // Reconstruct the old complete representation without retaining server snapshots.
-          // Only an exact prefix AND unchanged metadata may authorize an append.
-          const baseRevision = c.req.query('snapshot')
-          if (baseRevision && /^[a-f0-9]{64}$/.test(baseRevision)
-            && Number.isSafeInteger(count) && count >= 0 && count < data.history.length) {
-            const prefix = JSON.stringify({ ...data, history: data.history.slice(0, count) })
-            if (createHash('sha256').update(prefix).digest('hex') === baseRevision) {
-              return c.json({ revision, delta: { baseRevision, baseCount: count,
-                history: data.history.slice(count), count: data.history.length } })
-            }
-          }
-          return c.body(`{"revision":"${revision}","historyRevision":"${historyRevision}","metadataRevision":"${metadataRevision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
+          return c.body(`{"revision":"${revision}","historyRevision":"${historyRevision}","metadataVersions":${JSON.stringify(metadataVersions)},"data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
         }
         c.header('ETag', etag)
         c.header('Cache-Control', 'private, no-cache')

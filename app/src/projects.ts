@@ -187,9 +187,13 @@ export async function fetchProjectConversations(base: string, projectId: string,
     projectJson(scope, '/api/sessions/stages', { signal }, request).then(parseSessionStages),
   ])
   const error = (reason: unknown) => reason instanceof Error ? reason.message : t('Could not load project activity. Retry.')
+  const stages = results[1].status === 'fulfilled' ? results[1].value : undefined
   return {
     sessions: results[0].status === 'fulfilled' ? results[0].value : [],
-    stages: results[1].status === 'fulfilled' ? results[1].value : {},
+    stages: stages ? results[0].status === 'fulfilled'
+      ? Object.fromEntries(results[0].value.map(session => [session.sessionId,
+        Object.hasOwn(stages, session.sessionId) ? stages[session.sessionId] : 'inactive']))
+      : stages : {},
     sessionsError: results[0].status === 'rejected' ? error(results[0].reason) : '',
     stagesError: results[1].status === 'rejected' ? error(results[1].reason) : '',
   }

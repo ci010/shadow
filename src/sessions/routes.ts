@@ -4,6 +4,7 @@ import { conditionalSessionJson } from './conditional-json.ts'
 import { createSummaryResponder } from './summary-delta.ts'
 import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
+import { projectHistoryMessages } from '../shared/history-wire.ts'
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
@@ -22,7 +23,7 @@ import { WorkConflict } from '../initiatives/work-contract.ts'
 import { applyHumanWorkAction, humanWorkActionSchema } from '../projects/work-routes.ts'
 import { parseYieldReference } from './yield-contract.ts'
 import { SessionResumeError } from './recovery.ts'
-import type { SessionRecovery } from './session-store.ts'
+import { sessionActivitySnapshot } from './activity-snapshot.ts'
 import { FolderError } from '../folders/registry.ts'
 import { RemoteWorkdirIdentityError } from '../execution/remote-workdir-identity-client.ts'
 import { isLearningAutomationSession } from './session-purpose.ts'
@@ -1052,18 +1053,9 @@ export function sessionsApiPlugin(
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const list = await sessions.listSessions()
-      const stages: Record<string, 'idle' | 'llm' | 'tool' | 'inactive' | 'waiting' | 'rate-limit'> = {}
-      const waitingForCalls: Record<string, boolean> = {}
-      const activeRequestIds: Record<string, string> = {}
-      const recoveries: Record<string, SessionRecovery> = {}
-      for (const s of list) {
-        const model = sessionActivityReadModel(sessions, s.sessionId)
-        waitingForCalls[s.sessionId] = model.waitingForCall
-        stages[s.sessionId] = model.stage
-        if (model.activeRequestId !== null) activeRequestIds[s.sessionId] = model.activeRequestId
-        if (model.recovery !== null) recoveries[s.sessionId] = model.recovery
-      }
-      return conditionalSessionJson(c, sessions.projectId, { stages, waitingForCalls, activeRequestIds, recoveries })
+      const snapshot = sessionActivitySnapshot(list.map(s =>
+        [s.sessionId, sessionActivityReadModel(sessions, s.sessionId)] as const))
+      return conditionalSessionJson(c, sessions.projectId, snapshot)
     })
 
     app.get('/api/sessions/:key/stage', async (c) => {
@@ -1145,7 +1137,7 @@ export function sessionsApiPlugin(
           total,
           offset,
           pageSize,
-          messages,
+          messages: projectHistoryMessages(messages),
           commandResults: await sessions.getCommandResults(key),
           decisionRecords: await sessions.getYieldRecords(key),
           segmentIndex,
@@ -1186,7 +1178,7 @@ export function sessionsApiPlugin(
           total,
           offset,
           pageSize,
-          messages,
+          messages: projectHistoryMessages(messages),
           commandResults: await sessions.getCommandResults(key, key),
           decisionRecords: owner ? await sessions.getYieldRecords(owner.sessionId, key) : [],
           previousPhysicalId,

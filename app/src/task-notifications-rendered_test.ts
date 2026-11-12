@@ -66,7 +66,7 @@ async function renderTaskNotifications(web: boolean) {
             const path = new URL(String(input)).pathname;
             if (path === '/api/projects') return Response.json({projects:[{id:'release',name:'Release Project',createdAt:''}]});
             if (path.endsWith('/summary')) return Response.json({sessions:[{sessionId:'web:check',mode:'session',name:'Release check'}],nodes:[]});
-            if (path.endsWith('/stages')) return Response.json({stages:{'web:check':'idle'}});
+            if (path.endsWith('/stages')) return Response.json({activity:{'web:check':{stage:'idle'}}});
             throw new Error('Unexpected fixture request: ' + path);
           }});
           let observedLease;
