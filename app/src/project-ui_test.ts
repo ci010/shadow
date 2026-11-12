@@ -265,7 +265,7 @@ test('canonical topics take precedence over legacy names and admin fallback labe
 test('Project session invalidation also refreshes its folder catalog for agent-registered folders', async t => {
   let invalidate: (() => void) | undefined
   t.mock.method(globalThis, 'fetch', async (url: URL) => Response.json(url.pathname.endsWith('/summary')
-    ? { sessions: [], nodes: [] } : { stages: {} }))
+    ? { sessions: [], nodes: [] } : { activity: {} }))
   const state = mountScript(t, 'ProjectGroup.vue', {
     apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '' },
     navigationKey: '/projects/a/chat/web:chat-admin', selectedProjectId: 'a',
@@ -300,7 +300,7 @@ test('bot sidebar names stay Project-scoped and late catalogs cannot replace ano
     const projectId = url.pathname.split('/')[2]!
     const sessionId = `bot:${projectId}:shared:qq:dm%3Aone`
     if (url.pathname.endsWith('/summary')) return Response.json({ sessions: [{ sessionId, projectId }], nodes: [] })
-    if (url.pathname.endsWith('/stages')) return Response.json({ stages: { [sessionId]: 'tool' } })
+    if (url.pathname.endsWith('/stages')) return Response.json({ activity: { [sessionId]: { stage: 'tool' } } })
     assert.ok(url.pathname.endsWith('/channels'))
     if (projectId === 'a') {
       oldSignal = init?.signal
@@ -636,7 +636,7 @@ test('run ownership is canonicalized only from a known graph row and reidentifie
   const association = { jobId: 'daily', name: 'Daily review', runId: 'run', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh' }
   t.mock.method(globalThis, 'fetch', async (input: URL) => Response.json(input.pathname.endsWith('/summary')
     ? { sessions: [{ sessionId: 'cron:run', automation: association }, { sessionId: 'web:chat-normal' }], nodes: [] }
-    : { stages: {} }))
+    : { activity: {} }))
   const events: Array<[string, string | undefined]> = []
   const props = reactive({
     apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '2026-09-16' },
@@ -862,7 +862,7 @@ test('a failed project exposes a real retry and refreshes only its own conversat
     assert.ok(input.pathname.startsWith('/projects/a/'))
     if (!ready) return new Response('', { status: 503 })
     return Response.json(input.pathname.endsWith('/summary')
-      ? { sessions: [{ sessionId: 'web:chat-a' }], nodes: [] } : { stages: {} })
+      ? { sessions: [{ sessionId: 'web:chat-a' }], nodes: [] } : { activity: {} })
   })
   const state = mountScript(t, 'ProjectGroup.vue', {
     apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '2026-09-14' },

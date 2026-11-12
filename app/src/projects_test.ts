@@ -62,7 +62,7 @@ test('failed org resources do not block concurrent graphs or erase their indepen
     const url = new URL(String(input))
     if (url.pathname === '/projects/a/api/sessions/summary') return new Response('', { status: 503 })
     if (url.pathname.endsWith('/summary')) return Response.json({ sessions: [{ sessionId: 'web:chat-same' }], nodes: [] })
-    return Response.json({ stages: { 'web:chat-same': 'llm' } })
+    return Response.json({ activity: { 'web:chat-same': { stage: 'llm' } } })
   }
   const [a, b] = await Promise.all(['a', 'b'].map(id => fetchProjectConversations('http://fixture', id, new AbortController().signal, request)))
   assert.match(a.sessionsError, /503/)

@@ -5,7 +5,7 @@ import { isRecord } from './folders-sidebar.ts'
 interface AuthorMessage {
   role: string
   name?: string
-  content: string | ReadonlyArray<{ type: string; text?: string }> | null
+  content?: string | ReadonlyArray<{ type: string; text?: string }> | null
 }
 
 function decodeAttribute(value: string): string {

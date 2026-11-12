@@ -65,7 +65,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
       { sessionId: 'sub:task', mode: 'task', parentSessionId: 'web:root', name: 'Internal check' },
       ...botIds.filter(sessionId => id === 'a' || !sessionId.startsWith('bot:')).map(sessionId => ({ sessionId, mode: 'session' })),
     ], nodes: [] })
-    if (path.endsWith('/stages')) return Response.json(invalid ? { stages: { 'web:root': 123 } } : { stages: { 'web:root': stages[id], ...Object.fromEntries(botIds.map(id => [id, botStage])) } })
+    if (path.endsWith('/stages')) return Response.json(invalid ? { activity: { 'web:root': { stage: 123 } } } : { activity: { 'web:root': { stage: stages[id] }, ...Object.fromEntries(botIds.map(id => [id, { stage: botStage }])) } })
     if (path.endsWith('/ask')) { assert.ok(path.includes('/web%3Aroot/'), 'Bot questions must not be fetched'); return Response.json({ request: {
       id: questionIds[id], sessionId: 'web:root', question: 'Continue?', options: ['Yes', 'No'], defaultOption: 'No',
       recipient: { kind: parent ? 'parent' : 'user', sessionId: parent ? 'web:owner' : 'web:root' },

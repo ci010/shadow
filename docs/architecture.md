@@ -590,8 +590,11 @@ temporary generated output may be replaced during reconciliation. Reconnecting
 the UI never re-admits a command or implicitly resumes interrupted execution.
 The host-wide `projects` topic invalidates the project catalog after committed
 creation or rename. Session phase transitions, blocking-call waits and yield
-changes publish `activity` invalidations on the owning `sessions` topic; these
-refresh only the lightweight stages snapshot, not the session summary. Committed
+changes publish complete per-session `activity` replacements on the owning
+`sessions` topic. Valid replacements update the shared activity state locally;
+malformed or unhinted notifications revalidate the lightweight stages snapshot.
+Unknown session IDs revalidate the summary directory, never infer existence from
+activity. Committed
 session creation, metadata/configuration changes and deletion invalidate the summary.
 Runtime startup also resets affected subscriptions once its HTTP routes are ready.
 The renderer's `project-live-state.ts` shares one catalog per host and one logical session summary
@@ -604,16 +607,46 @@ follow-up. Reset/disposal abort obsolete reads. There is no periodic HTTP pollin
 of `projects`, `summary` or `stages`, including when a notification monitor keeps
 the shared state alive on another page. Snapshot failures remain visible until
 retry, a new event or reset; they are not presented as empty successful state.
+`GET /api/sessions/stages` returns a full sparse `{activity: { [sessionId]:
+{stage?, waitingForCall?, activeRequestId?, recovery?} }}` replacement. Default
+`inactive`, `false`, and absent request/recovery fields are omitted; a session
+with only default activity has no entry. `idle` remains explicit and distinct
+from `inactive`. The logical summary is the existence directory: only its rows
+receive missing-entry defaults, regardless of which initial HTTP read finishes
+first. Summary insertion/deletion updates that projection without requiring an
+activity-body change. Missing entries in a successful activity replacement clear
+old busy/request/recovery state; failed reads retain errors and prior state.
+Per-read SSE overlays win over in-flight HTTP responses, including 304 cache
+reuse. The HTTP cache remains the server representation, not the SSE overlay.
+Frontend and backend deploy together; there is no old four-map wire fallback.
 Summary revalidation optionally negotiates row deltas with
 `Accept: application/vnd.shadow.session-summary-delta+json` and an exact
 `If-None-Match` base. An unchanged representation returns 304. Otherwise Main
-returns either the legacy `{sessions}` body or `{delta:1, base, upsert, removed,
-order}`; `order` enumerates the complete resulting session IDs, and `upsert`
-replaces whole rows (including removed fields). The response ETag always identifies
-the complete result, not the patch. Readers validate the base and reconstructed
-inventory before replacing their own cache. Generation checks prevent concurrent
-or aborted reads from overwriting newer cached bases. Reconnects revalidate the
-same authoritative endpoint, including deletion recovery.
+returns either the full `{sessions}` body or `{delta:1, base, upsert, removed}`.
+The inventory is a set keyed by sessionId; deltas never carry `order`, including
+insertions and deletions. Main canonicalizes rows by sessionId before hashing and
+serializing, so enumeration-only changes return 304, not spurious patches.
+`upsert` replaces whole rows (including removed fields). Frontend/backend deploy
+together; readers reject the retired `order` field rather than maintain a second
+protocol. The response ETag identifies the complete result, not the patch.
+Readers validate the request's captured base and reconstructed inventory before
+replacing their cache. Generation checks prevent concurrent or aborted reads from
+overwriting newer cached bases. Reconnects revalidate the same authoritative
+endpoint, including deletion recovery. Duplicate/blank removal IDs, unknown
+removals, duplicate upserts and overlapping removal/upsert IDs are rejected
+without replacing the validated base.
+
+The frontend normalizes both full and patched summaries by lastActivityAt descending
+(missing/invalid times use zero), then sessionId in code-unit order. Sorting precedes
+`folders-sidebar.ts` tree projection, making roots, siblings and cycle fallback
+deterministic while keeping parent/child adjacency and field-based ownership.
+Bot/automation groups, Discord history/label projection, service-group first-match
+and reference menus therefore consume client-normalized order, not wire positions.
+Existing explicit sidebar draft/folder sorting, quick-open Project/title ranking
+and Discord post sorting remain unchanged. Chat restoration, workbench and history
+lookups retain their ID-based selection. Deletion, recreation and relationship
+upserts rebuild the projection from the complete resulting set.
+
 Each sessions API plugin retains at most eight historical representations with a
 16 MiB serialized-body budget; history is scoped by Project and exact URL. A
 missing/evicted base, runtime restart, legacy client, or patch larger than the full
@@ -765,6 +798,42 @@ counting, with an ASCII fast path and no additional full JSON string. Oversized/
 remain displayable but uncached. Compressed `Content-Length` is never used as the
 decoded cache-size budget. Cached bases stay isolated from caller mutation.
 
+HTTP display-history messages use one shallow wire projection in direct-chat
+`/api/chat/session` and readonly `/api/sessions/:key` (including shallow,
+paginated and physical-ID reads). Top-level message fields whose value is `null`
+are omitted before serialization and all full/history/prefix revision hashes.
+This includes absent assistant content/reasoning; tool-only assistants retain
+`tool_calls`. Empty strings, false, zero and empty arrays remain. Nested user
+content, tool arguments/results and opaque provider payloads retain their nulls.
+Envelope navigation nulls are unchanged. This is not a storage/provider rewrite
+or recursive JSON cleanup. Each history item is a complete message replacement:
+omission clears an old value only on whole-message replacement, never a field
+patch. Thus null versus absence cannot manufacture a history rewrite; changing
+non-null content to absent still invalidates the old prefix and returns full data.
+
+Direct-chat snapshot requests send the complete `snapshot` revision, exact
+`historyRevision`/`historyCount`, and four fixed-size field validators:
+`systemPromptRevision`, `toolsRevision`, `commandResultsRevision`, and
+`decisionRecordsRevision`. First reads and history rewrites/segment switches
+return full `data`; exact unchanged reads return `unchanged`. A delta returns
+`metadataVersions`, an explicit small `identity`, and `metadataPatch` alongside
+history prefix/suffix reuse. Each field hash includes logical/physical identity
+and segment navigation. Patch values replace whole fields (including `''`/`[]`);
+omitted fields reuse only the request's captured base with an equal field
+version. Missing or incorrect request field validators cause that field to be
+resent; missing/invalid response validators or mismatched bases fail closed.
+An exact history block may be reused with at most 16 prepended messages, also
+supporting an empty base. No historical server cache is retained. Receipt or
+decision changes do not resend unchanged tool descriptions/schema or prompt.
+The loader rejects cross-identity deltas, keeps caller objects separate, and
+prevents late concurrent responses from regressing its cache. A segment rollover
+during the awaited server read returns 409 rather than mixing segment context.
+This is the direct-chat protocol, not an old-client negotiation branch;
+readonly `/api/sessions/:key` uses its separate loader/protocol unchanged.
+Synthetic integration tests compare uncompressed JSON response bytes, not
+production bandwidth or end-to-end latency; serialization/hashing still occurs
+on the server for each validated read.
+
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
 admission, streaming and cancellation. The Send button becomes Stop in the same
 position while a request is busy, remains disabled while cancellation is pending,
@@ -775,7 +844,7 @@ short JSON `{requestId,chatId}` acknowledgement. It does not keep a per-request
 SSE response open or automatically retry an uncertain admission. Omitting
 `stream` also returns the admission JSON; `stream:true` fails before submission.
 Restored activity gets the same identity from
-`/api/sessions/stages`'s `activeRequestIds`. The UI always captures and submits
+`/api/sessions/stages`'s `activity[sessionId].activeRequestId`. The UI always captures and submits
 that ID, failing closed if it is unavailable. `POST /api/sessions/:key/cancel` uses a URL-encoded
 logical session ID and an optional `{requestId}` body. A supplied ID must match
 the active input's reply-address message ID (or its input/event ID); a mismatch returns
@@ -787,7 +856,7 @@ is cooperative, preserves queued inputs and does not kill unrelated background
 tasks or roll back completed side effects.
 
 The composer also exposes an explicit Continue action from
-`/api/sessions/stages`'s `recoveries`. `SessionState.recovery` stores a recovery ID
+`/api/sessions/stages`'s `activity[sessionId].recovery`. `SessionState.recovery` stores a recovery ID
 and stopped/interrupted/failed reason through JSONL and SQLite, including their
 migration path. Provider failures also retain a validated, credential-free
 category (authentication, proxy, network, rate limit, availability, storage, or

@@ -567,7 +567,7 @@ test('history HTTP pagination defaults offset and validates both logical and phy
     readSessionState: async () => ({ sessionId: 'logical', segmentIndex: 0 }),
     getHistory: async (key: string, query: { offset?: number; pageSize?: number }) => {
       calls.push({ key, query })
-      const history = ['a', 'b', 'c']
+      const history = ['a', 'b', 'c'].map(content => ({ role: 'user', content }))
       const start = query.offset! < 0 ? Math.max(0, history.length + query.offset!) : query.offset
       return { messages: query.pageSize == null ? history : history.slice(start, start! + query.pageSize), total: 3 }
     },
@@ -579,7 +579,7 @@ test('history HTTP pagination defaults offset and validates both logical and phy
       const response = await app.request(`/api/sessions/${key}?${query}`)
       assert.equal(response.status, 200)
       const body = await response.json()
-      assert.deepEqual(body.messages, expected)
+      assert.deepEqual(body.messages, expected.map(content => ({ role: 'user', content })))
       assert.equal(body.total, 3)
       assert.deepEqual(body.commandResults, ['command'])
       if (query === 'pageSize=1') assert.equal(body.offset, 0)
@@ -747,7 +747,9 @@ for (const endpoint of ['graph', 'stages']) test(`${endpoint} GET revalidates fr
       readSessionState: async () => ({ sessionId: 'web:one', segmentIndex: 0 }),
       getFirstUserMessage: async () => null,
       getSessionInferenceDefaults: () => ({}),
-      getActiveSession: () => undefined,
+      // Inventory changes alone do not change sparse activity; make this
+      // fixture's new session loaded/idle so its activity representation changes.
+      getActiveSession: () => changed ? { phase: 'idle' } : undefined,
       yields: new Map(), inputs: new Map(),
     } as unknown as SessionManager
     const app = new Hono()
@@ -877,4 +879,34 @@ test('summary reuses rows without N+1 reads and refreshes live dependencies with
   assert.equal((await load())[0].contextParentSessionId, undefined, 'owner deletion clears context edge')
   states.push({ sessionId: 'created', segmentIndex: 0, name: 'New' })
   assert.equal((await load()).at(-1).title, 'New')
+})
+
+
+test('readonly logical, shallow, paginated and physical history share null omission', async () => {
+  let messages: Record<string, unknown>[] = [{ role: 'assistant', content: null, reasoning_content: null,
+    reasoning_text: null, tool_calls: [{ id: 'call', function: { name: 'read', arguments: '{"value":null}' } }] }]
+  const app = new Hono()
+  testSessionsApiPlugin({
+    listHistorySessions: async () => [{ sessionId: 'logical' }],
+    listHistoryStates: async () => [], readFirstRecord: async () => null,
+    readSessionState: async () => ({ sessionId: 'logical', segmentIndex: 0 }),
+    getHistory: async () => ({ messages, total: messages.length }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager)(app)
+  const read = async (path: string) => (await app.request(`/api/sessions/${path}`)).json()
+  const base = await read('logical?shallow=true&snapshot=')
+  assert.equal('content' in base.data.messages[0], false)
+  assert.equal(messages[0].content, null)
+  for (const path of ['logical', 'logical?shallow=true', 'logical?pageSize=1', 'physical-0', 'physical-0?shallow=true', 'physical-0?pageSize=1']) {
+    assert.deepEqual((await read(path)).messages, base.data.messages, path)
+  }
+  messages = base.data.messages
+  const query = `shallow=true&snapshot=${base.revision}&historyCount=1&historyRevision=${base.historyRevision}&metadataRevision=${base.metadataRevision}`
+  assert.equal((await read(`logical?${query}`)).unchanged, true, 'null vs absent cannot cause a rewrite')
+  messages.push({ role: 'tool', content: [{ type: 'text', text: '', value: null }], reasoning_text: null })
+  const delta = await read(`logical?${query}`)
+  const fresh = await read('logical?shallow=true&snapshot=')
+  assert.equal(delta.revision, fresh.revision)
+  assert.equal(delta.historyRevision, fresh.historyRevision)
+  assert.deepEqual(delta.delta.messages, [{ role: 'tool', content: [{ type: 'text', text: '', value: null }] }])
 })

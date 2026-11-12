@@ -94,7 +94,7 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
               result.headers.forEach((value, key) => response.setHeader(key, value))
               response.end(await result.text())
             } else if (path.endsWith('/api/sessions/summary')) json({ sessions: [], nodes: [] })
-            else if (path.endsWith('/api/sessions/stages')) json({ stages: {} })
+            else if (path.endsWith('/api/sessions/stages')) json({ activity: {} })
             else if (path === '/projects/p/api/work') {
               const references = f.service.references()
               json({ items: f.works.workRecords().map(work => ({

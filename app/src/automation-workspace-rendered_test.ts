@@ -119,7 +119,7 @@ test('automations open ordinary conversations and navigate run history without a
             sessionId: run.sessionId, title: run.title, mode: 'session',
             automation: { contextMode: 'fresh', jobId: automation.id, name: automation.name, runId: run.id, startedAt: run.startedAt },
           })), { sessionId: 'web:ordinary', title: 'Ordinary conversation', mode: 'session' }], nodes: [] })
-          else if (path === '/api/sessions/stages') json({ stages: {}, activeRequestIds: {}, recoveries: {} })
+          else if (path === '/api/sessions/stages') json({ activity: {} })
           else if (path === '/api/folders') json({ folders: [] })
           else if (path === '/api/channels') json({ channels: [] })
           else if (path === '/api/config') json({ agent: { model: 'fixture:model', workspace: 'synthetic', temperature: 0.7 } })

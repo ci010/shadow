@@ -90,7 +90,7 @@ test('rendered channel and automation settings switch models, isolate sessions a
               for (const [name,value] of Object.entries(patch)) {if(value===null) delete config[name];else config[name]=value;}
               return json({key,config});
             }
-            if (url.pathname.endsWith('/stages')) return json({stages:{[sessionId]:fixture.question?'waiting':'idle'}});
+            if (url.pathname.endsWith('/stages')) return json({activity:{[sessionId]:{stage:fixture.question?'waiting':'idle'}}});
             if (url.pathname.endsWith('/ask')) {
               if (init.method === 'POST') {
                 const body=JSON.parse(init.body); fixture.answers.push(body);

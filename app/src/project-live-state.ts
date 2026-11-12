@@ -6,7 +6,7 @@ import { shallowReactive, shallowReadonly } from 'vue'
 import { hostBase, projectBase } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { createConditionalProjectJson, createProjectsClient, projectJson } from './projects.ts'
-import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages, recoveredSessionStage } from './session-activity.ts'
+import { parseSessionActivity, recoveredSessionStage } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../../src/sessions/activity-read-model.ts'
@@ -120,39 +120,50 @@ export function createProjectLiveState(
   function createProject(base: string, projectId: string) {
     const scope = projectBase(base, projectId)
     const summaryLoader = createSessionSummaryLoader(scope, projectId, request)
-    const sessions = createSnapshot(signal => summaryLoader.load(signal), delay, { initialLoading: true })
-    type Activity = { stages: ReturnType<typeof parseSessionStages>; activeRequestIds: Record<string, string>; recoveries: ReturnType<typeof parseSessionRecoveries> }
+    type Activity = ReturnType<typeof parseSessionActivity>
+    const unknownActivity = new Set<string>()
+    let directory: Set<string> | undefined
+    let latestActivity: Activity | undefined
+    function projectActivity(value: Activity): Activity {
+      const next: Activity = { stages: {}, activeRequestIds: {}, recoveries: {} }
+      for (const id of directory ?? []) {
+        Object.defineProperty(next.stages, id, { value: Object.hasOwn(value.stages, id) ? value.stages[id] : 'inactive', enumerable: true })
+        if (Object.hasOwn(value.activeRequestIds, id)) Object.defineProperty(next.activeRequestIds, id, { value: value.activeRequestIds[id], enumerable: true })
+        if (Object.hasOwn(value.recoveries, id)) Object.defineProperty(next.recoveries, id, { value: value.recoveries[id], enumerable: true })
+      }
+      return next
+    }
+    const sessions = createSnapshot(signal => summaryLoader.load(signal), delay, { initialLoading: true, reconcile(value) {
+      directory = new Set(value.map(session => session.sessionId))
+      if ([...unknownActivity].some(id => !directory!.has(id))) sessions.invalidate()
+      unknownActivity.clear()
+      if (latestActivity) activity.update(() => projectActivity(latestActivity!))
+      return value
+    } })
     // Each read owns its overlay. Events arriving after HTTP started must win,
     // even if the response was captured before a fast tool finished.
     let overlay = new Map<string, SessionActivityReadModel>()
     function applyActivity(value: Activity, id: string, model: SessionActivityReadModel): Activity {
-      if (!Object.hasOwn(value.stages, id)) return value
       const next = { stages: { ...value.stages, [id]: model.waitingForCall ? 'waiting-for-call' as const : recoveredSessionStage(model.stage, model.recovery) },
         activeRequestIds: { ...value.activeRequestIds }, recoveries: { ...value.recoveries } }
       delete next.activeRequestIds[id]
       delete next.recoveries[id]
-      if (model.activeRequestId !== null) next.activeRequestIds[id] = model.activeRequestId
-      if (model.recovery !== null) next.recoveries[id] = model.recovery
+      if (model.activeRequestId !== null) Object.defineProperty(next.activeRequestIds, id, { value: model.activeRequestId, enumerable: true })
+      if (model.recovery !== null) Object.defineProperty(next.recoveries, id, { value: model.recovery, enumerable: true })
       return next
     }
-    const activityReader = createConditionalProjectJson<Activity>(scope, '/api/sessions/stages', value => ({
-      stages: parseSessionStages(value),
-      activeRequestIds: parseActiveRequestIds(value),
-      recoveries: parseSessionRecoveries(value),
-    }), request)
+    const activityReader = createConditionalProjectJson<Activity>(scope, '/api/sessions/stages', parseSessionActivity, request)
     const activity = createSnapshot<Activity>(async signal => {
       overlay = new Map()
       return activityReader.load(signal)
     }, delay, { initialLoading: true, reconcile(result: Activity) {
-      let unknownSession = false
-      for (const [id, model] of overlay) {
-        if (!Object.hasOwn(result.stages, id)) unknownSession = true
-        result = applyActivity(result, id, model)
-      }
+      for (const [id, model] of overlay) result = applyActivity(result, id, model)
       overlay.clear()
-      // A new session may have appeared after the initial inventory was captured.
-      if (unknownSession) activity.invalidate()
-      return result
+      latestActivity = result
+      const ids = Object.keys(result.stages)
+      if (!directory && sessions.state.loading) for (const id of ids) unknownActivity.add(id)
+      else if (ids.some(id => !directory?.has(id))) sessions.invalidate()
+      return projectActivity(result)
     } })
     const work = createSnapshot(async signal =>
       projectWorkOverviewSchema.parse(await projectJson(scope, '/api/work', { signal }, request)), delay)
@@ -183,13 +194,14 @@ export function createProjectLiveState(
         if (model && isRecord(payload) && typeof payload.sessionId === 'string') {
           const id = payload.sessionId
           if (activity.state.loading) overlay.set(id, model)
-          if (activity.state.value && Object.hasOwn(activity.state.value.stages, id)) {
-            activity.update(value => applyActivity(value, id, model))
-          } else if (activity.state.value !== undefined || !activity.state.loading) {
-            // Unknown sessions (including after a failed initial read) require
-            // an inventory read; never invent inventory or resurrect a delete.
-            activity.invalidate()
-          }
+          if (latestActivity) {
+            latestActivity = applyActivity(latestActivity, id, model)
+            activity.update(() => projectActivity(latestActivity!))
+          } else if (!activity.state.loading) activity.invalidate()
+          // Activity is not an existence directory. Recover unknown IDs through
+          // summary, retaining the event until that independently arriving read.
+          if (!directory && sessions.state.loading) unknownActivity.add(id)
+          else if (!directory?.has(id)) sessions.invalidate()
         } else if (!isRecord(payload) || payload.event !== 'invalidate'
           || affectsSessionResource(payload, undefined, 'activity')) activity.invalidate()
         if (usage.work && (isRecord(event.payload) && event.payload.event === 'activity'

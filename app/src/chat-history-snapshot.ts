@@ -1,3 +1,5 @@
+import { chatMetadataFields, isChatMetadataVersions, isRecord, isRevision, validChatMetadata, type ChatMetadataVersions } from '../../src/shared/chat-snapshot.ts'
+
 /** Successful reads transfer an independently owned parsed body to the caller.
  * Non-2xx responses are not parsed and never fall back to a cached body. */
 export type ChatHistorySnapshotResult =
@@ -59,14 +61,19 @@ function jsonSize(value: unknown, limit: number, lowerBound: boolean, depth = 0)
   return size
 }
 
-interface Snapshot { revision: string; historyRevision?: string; metadataRevision?: string; body: Record<string, unknown>; bytes: number }
+interface Snapshot { revision: string; historyRevision: string; metadataVersions: ChatMetadataVersions; body: Record<string, unknown>; bytes: number }
 interface Pool { onDispose(callback: () => void): () => void }
 const pools = new WeakMap<Pool, ReturnType<typeof createChatHistorySnapshots>>()
+const messages = (value: unknown): value is Record<string, unknown>[] => Array.isArray(value)
+  && value.every(message => isRecord(message) && typeof message.role === 'string')
+const identityFields = ['chatId', 'currentPhysicalId', 'previousPhysicalId', 'segmentIndex'] as const
 
-/** Memory only, bounded per authenticated app lifetime. Every read validates
- * against Main; cached history is never served on a network or access error. */
+/** Bounded memory only. Each request captures its own base; a late response may
+ * return its own result but cannot replace a newer cache entry. */
 export function createChatHistorySnapshots(request: typeof fetch = fetch, maxBytes = 16 * 1024 * 1024, maxEntries = 8) {
   const entries = new Map<string, Snapshot>()
+  // In-flight tokens are removed on settlement (no unbounded URL generation map).
+  const latest = new Map<string, object>()
   let bytes = 0
   let disposed = false
   function remove(key: string) {
@@ -75,119 +82,86 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
   }
   return {
     async read(url: string | URL, signal: AbortSignal): Promise<ChatHistorySnapshotResult> {
-      if (disposed) throw new Error('History snapshots disposed')
+      if (disposed || signal.aborted) throw new Error('History read cancelled or disposed')
       const target = new URL(url)
       const key = target.toString()
       const cached = entries.get(key)
+      const token = {}
+      latest.set(key, token)
+      const current = () => latest.get(key) === token
       target.searchParams.set('snapshot', cached?.revision ?? '')
-      target.searchParams.delete('historyCount')
-      target.searchParams.delete('historyRevision')
-      target.searchParams.delete('metadataRevision')
-      if (cached?.metadataRevision) target.searchParams.set('metadataRevision', cached.metadataRevision)
-      if (cached?.historyRevision) target.searchParams.set('historyRevision', cached.historyRevision)
-      if (cached && Array.isArray(cached.body.history)) target.searchParams.set('historyCount', String(cached.body.history.length))
-      const response = await request(target.toString(), { signal, cache: 'no-store' }).catch(error => { remove(key); throw error })
-      if (signal.aborted || disposed) throw new Error('History read cancelled')
-      if (!response.ok) { remove(key); return { ok: false, status: response.status, response } }
-      const envelope: unknown = await response.json().catch(error => { remove(key); throw error })
-      if (signal.aborted || disposed) throw new Error('History read cancelled')
-      if (!envelope || typeof envelope !== 'object' || !('revision' in envelope)
-        || typeof envelope.revision !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.revision)) {
-        remove(key)
-        throw new Error('Invalid history snapshot')
+      for (const name of ['historyCount', 'historyRevision', ...chatMetadataFields.map(field => `${field}Revision`)]) target.searchParams.delete(name)
+      if (cached) {
+        target.searchParams.set('historyCount', String((cached.body.history as unknown[]).length))
+        target.searchParams.set('historyRevision', cached.historyRevision)
+        for (const field of chatMetadataFields) target.searchParams.set(`${field}Revision`, cached.metadataVersions[field])
       }
-      if ('unchanged' in envelope && envelope.unchanged === true) {
-        if (!cached || cached.revision !== envelope.revision || 'delta' in envelope || 'data' in envelope) {
-          remove(key)
-          throw new Error('History snapshot unavailable')
+      try {
+        const response = await request(target.toString(), { signal, cache: 'no-store' })
+        if (signal.aborted || disposed) throw new Error('History read cancelled')
+        if (!response.ok) { if (current()) remove(key); return { ok: false, status: response.status, response } }
+        const envelope: unknown = await response.json()
+        if (signal.aborted || disposed) throw new Error('History read cancelled')
+        if (!isRecord(envelope) || !isRevision(envelope.revision)) throw new Error('Invalid history snapshot')
+        if (envelope.unchanged === true) {
+          if (!cached || cached.revision !== envelope.revision || 'delta' in envelope || 'data' in envelope) throw new Error('History snapshot unavailable')
+          if (current() && entries.get(key) === cached) { entries.delete(key); entries.set(key, cached) }
+          return { ok: true, status: response.status, data: structuredClone(cached.body) }
         }
-        // Refresh LRU only after successful validation. Never expose the private base.
-        entries.delete(key)
-        entries.set(key, cached)
-        return { ok: true, status: response.status, data: structuredClone(cached.body) }
-      }
-      const historyRevision = 'historyRevision' in envelope ? envelope.historyRevision : undefined
-      if (historyRevision !== undefined && (typeof historyRevision !== 'string' || !/^[a-f0-9]{64}$/.test(historyRevision))) {
-        remove(key)
-        throw new Error('Invalid history revision')
-      }
-      const metadataRevision = 'metadataRevision' in envelope ? envelope.metadataRevision : undefined
-      if (metadataRevision !== undefined && (typeof metadataRevision !== 'string' || !/^[a-f0-9]{64}$/.test(metadataRevision))) {
-        remove(key)
-        throw new Error('Invalid metadata revision')
-      }
-      let body: Record<string, unknown>
-      if ('delta' in envelope) {
-        const delta = envelope.delta
-        const reference = delta && typeof delta === 'object' && 'baseMetadataRevision' in delta ? delta.baseMetadataRevision : undefined
-        const hasReference = !!delta && typeof delta === 'object' && 'baseMetadataRevision' in delta
-        const hasMetadata = !!delta && typeof delta === 'object' && 'metadata' in delta
-        const { history: _history, ...cachedMetadata } = cached?.body ?? {}
-        const metadata = hasReference ? cachedMetadata
-          : delta && typeof delta === 'object' && 'metadata' in delta ? delta.metadata : undefined
-        const leading = delta && typeof delta === 'object' && 'leadingHistory' in delta ? delta.leadingHistory : []
-        const historyOnly = hasMetadata || hasReference || (delta && typeof delta === 'object' && 'baseHistoryRevision' in delta)
-        if ((hasReference && (hasMetadata || !metadataRevision || reference !== metadataRevision
-            || reference !== cached?.metadataRevision))
-          || (metadataRevision !== undefined && !hasReference && !hasMetadata)
-          || !cached || !Array.isArray(cached.body.history) || !delta || typeof delta !== 'object' || Array.isArray(delta)
-          || !('baseRevision' in delta) || delta.baseRevision !== cached.revision
-          || !('baseCount' in delta) || delta.baseCount !== cached.body.history.length
-          || !('history' in delta) || !Array.isArray(delta.history) || (!historyOnly && delta.history.length === 0)
-          || !delta.history.every(message => message && typeof message === 'object' && !Array.isArray(message)
-            && typeof message.role === 'string')
-          || !('count' in delta) || !Number.isSafeInteger(delta.count)
-          || delta.count !== cached.body.history.length + delta.history.length + (Array.isArray(leading) ? leading.length : 0)
-          || (!historyOnly && ('leadingHistory' in delta || 'historyOffset' in delta))
-          || (historyOnly && (!historyRevision || !cached.historyRevision
-            || !Array.isArray(leading) || leading.length > 16
-            || !leading.every(message => message && typeof message === 'object' && !Array.isArray(message) && typeof message.role === 'string')
-            || !('historyOffset' in delta) || delta.historyOffset !== leading.length
-            || !('baseHistoryRevision' in delta) || delta.baseHistoryRevision !== cached.historyRevision
-            || !metadata || typeof metadata !== 'object' || Array.isArray(metadata)
-            || 'history' in metadata
-            || !('systemPrompt' in metadata) || typeof metadata.systemPrompt !== 'string'
-            || !('tools' in metadata) || !Array.isArray(metadata.tools)
-            || !('commandResults' in metadata) || !Array.isArray(metadata.commandResults)
-            || !('decisionRecords' in metadata) || !Array.isArray(metadata.decisionRecords)
-            || !('previousPhysicalId' in metadata)
-            || (metadata.previousPhysicalId !== null && typeof metadata.previousPhysicalId !== 'string')
-            || !('chatId' in metadata) || metadata.chatId !== cached.body.chatId
-            || !('currentPhysicalId' in metadata) || typeof metadata.currentPhysicalId !== 'string'
-            || metadata.currentPhysicalId !== cached.body.currentPhysicalId
-            || !('segmentIndex' in metadata) || metadata.segmentIndex !== cached.body.segmentIndex))
-          || 'data' in envelope || 'unchanged' in envelope) {
-          remove(key)
-          throw new Error('Invalid history delta')
+        if (!isRevision(envelope.historyRevision) || !isChatMetadataVersions(envelope.metadataVersions)
+          || 'unchanged' in envelope) throw new Error('Invalid history validators')
+        const versions = envelope.metadataVersions
+        let body: Record<string, unknown>
+        if ('delta' in envelope) {
+          const delta = envelope.delta
+          const identity = isRecord(delta) ? delta.identity : undefined
+          if (!cached || !isRecord(delta) || 'data' in envelope
+            || delta.baseRevision !== cached.revision || delta.baseHistoryRevision !== cached.historyRevision
+            || !Array.isArray(cached.body.history) || delta.baseCount !== cached.body.history.length
+            || !messages(delta.history) || !messages(delta.leadingHistory) || delta.leadingHistory.length > 16
+            || delta.historyOffset !== delta.leadingHistory.length
+            || delta.count !== cached.body.history.length + delta.leadingHistory.length + delta.history.length
+            || !isRecord(identity) || Object.keys(identity).length !== identityFields.length
+            || !identityFields.every(field => identity[field] === cached.body[field])
+            || !isRecord(delta.metadataPatch)
+            || Object.keys(delta.metadataPatch).some(field => !(chatMetadataFields as readonly string[]).includes(field))) throw new Error('Invalid history delta')
+          // Omission is a reference to the captured base, never deletion. Every
+          // omitted field must have the exact matching response/base validator.
+          body = { ...identity }
+          for (const field of chatMetadataFields) {
+            if (Object.hasOwn(delta.metadataPatch, field)) body[field] = delta.metadataPatch[field]
+            else {
+              if (versions[field] !== cached.metadataVersions[field]) throw new Error('Invalid metadata reference')
+              body[field] = cached.body[field]
+            }
+          }
+          body.history = [...delta.leadingHistory, ...cached.body.history, ...delta.history]
+        } else {
+          if (!isRecord(envelope.data)) throw new Error('Invalid history snapshot')
+          body = envelope.data
         }
-        body = { ...(historyOnly ? metadata as Record<string, unknown> : cached.body), history: [...(leading as unknown[]), ...cached.body.history, ...delta.history] }
-      } else {
-        if ('unchanged' in envelope || !('data' in envelope) || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
+        if (!messages(body.history) || !validChatMetadata(body) || typeof body.chatId !== 'string'
+          || (target.searchParams.has('chatId') && body.chatId !== target.searchParams.get('chatId'))
+          || typeof body.currentPhysicalId !== 'string' || !body.currentPhysicalId
+          || (body.previousPhysicalId !== null && typeof body.previousPhysicalId !== 'string')
+          || !Number.isSafeInteger(body.segmentIndex) || (body.segmentIndex as number) < 0) throw new Error('Invalid history identity or metadata')
+        const size = maxEntries > 0 ? jsonBytes(body, maxBytes) : Infinity
+        if (current()) {
           remove(key)
-          throw new Error('Invalid history snapshot')
+          if (size <= maxBytes && maxEntries > 0) {
+            entries.set(key, { revision: envelope.revision, historyRevision: envelope.historyRevision, metadataVersions: versions,
+              body: 'delta' in envelope ? body : structuredClone(body), bytes: size })
+            bytes += size
+            while (entries.size > maxEntries || bytes > maxBytes) remove(entries.keys().next().value!)
+          }
         }
-        body = envelope.data as Record<string, unknown>
-      }
-      if (metadataRevision !== undefined && (!historyRevision || !Array.isArray(body.history)
-        || typeof body.chatId !== 'string'
-        || (target.searchParams.has('chatId') && body.chatId !== target.searchParams.get('chatId'))
-        || typeof body.currentPhysicalId !== 'string' || !body.currentPhysicalId
-        || !Number.isSafeInteger(body.segmentIndex) || (body.segmentIndex as number) < 0)) {
-        remove(key)
-        throw new Error('Invalid history identity')
-      }
-      const size = maxEntries > 0 ? jsonBytes(body, maxBytes) : Infinity
-      remove(key)
-      if (size <= maxBytes && maxEntries > 0) {
-        // Full responses belong to the caller; deltas may share the private base.
-        entries.set(key, { revision: envelope.revision, historyRevision, metadataRevision,
-          body: 'delta' in envelope ? body : structuredClone(body), bytes: size })
-        bytes += size
-        while (entries.size > maxEntries || bytes > maxBytes) remove(entries.keys().next().value!)
-      }
-      return { ok: true, status: response.status, data: 'delta' in envelope ? structuredClone(body) : body }
+        return { ok: true, status: response.status, data: 'delta' in envelope ? structuredClone(body) : body }
+      } catch (error) {
+        if (current() && !signal.aborted && !disposed) remove(key)
+        throw error
+      } finally { if (current()) latest.delete(key) }
     },
-    dispose() { disposed = true; entries.clear(); bytes = 0 },
+    dispose() { disposed = true; entries.clear(); latest.clear(); bytes = 0 },
   }
 }
 

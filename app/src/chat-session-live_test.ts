@@ -227,6 +227,12 @@ test('live and restored tool images stay attached to the tool result rather than
     ] },
   ]
   const restored = state.collapseHistory(raw)
+  const projected = [{ role: 'assistant', tool_calls: [call] }, raw[1]]
+  assert.deepEqual(state.collapseHistory(projected), restored, 'omitted assistant content renders the identical tool call/result')
+  state.messages = state.collapseHistory(projected)
+  await Vue.nextTick()
+  assert.equal(state.messages[0].event, 'tool_call')
+  assert.equal(state.toolActivity.get(0).entries[0].name, 'read')
   assert.equal(restored.length, 2)
   assert.equal(restored[1].event, 'tool_result')
   assert.equal(restored[1].toolCallId, call.id)
@@ -276,7 +282,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   await settle()
   assert.equal(f.requests.length, 4)
   for (const request of f.requests) request.finish(request.path.endsWith('/summary') ? graph()
-    : { stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: false } })
+    : { activity: { [root]: { stage: 'idle' }, [task]: { stage: 'waiting' } } })
   await settle()
   const stage = (view: typeof a) => sessionActivity(view.state().inlineExecutions.entries.get(0).stage).label
   assert.equal(stage(a), 'Waiting for a response')
@@ -287,14 +293,14 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   assert.match(f.requests[4].path, /^\/projects\/a\/api\/sessions\/summary$/)
   f.requests[4].finish(graph())
   await settle()
-  f.requests[5].finish({ stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: true } })
+  f.requests[5].finish({ activity: { [root]: { stage: 'idle' }, [task]: { stage: 'waiting', waitingForCall: true } } })
   await settle()
   assert.equal(stage(a), 'Waiting for call', 'The same mounted reducer observes a metadata-only change')
   assert.equal(stage(b), 'Waiting for a response')
   assert.equal(a.state().inputText, 'Keep this exact unsent draft')
   const poll = a.state().refreshSessionActivity()
   await settle()
-  f.requests[6].finish({ stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: false } })
+  f.requests[6].finish({ activity: { [root]: { stage: 'idle' }, [task]: { stage: 'waiting' } } })
   await poll
   assert.equal(stage(a), 'Waiting for a response', 'Clearing call-wait metadata cannot retain a stale graph flag')
   f.invalidate('a')
@@ -315,7 +321,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   const state = a.state()
   a.unmount()
   assert.equal(f.requests[10].signal.aborted, true)
-  f.requests[10].finish({ stages: { [task]: 'waiting' }, waitingForCalls: { [task]: true } })
+  f.requests[10].finish({ activity: { [task]: { stage: 'waiting', waitingForCall: true } } })
   await settle()
   assert.equal(state.allSessions.find((session: { sessionId: string }) => session.sessionId === task).waitingForCall, false)
   b.props.visible = false
@@ -337,7 +343,7 @@ test('admin uses the ordinary writable chat and SSE-discovered topics navigate i
       createdBySessionId: 'web:chat-admin', topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } },
   ] })
   await settle()
-  f.requests[1]!.finish({ stages: {} })
+  f.requests[1]!.finish({ activity: {} })
   await settle()
   assert.equal(a.state().allSessions[1].label, 'Installer')
   assert.equal(b.state().allSessions.length, 0, 'Same admin ID never shares Project graph state')
@@ -643,7 +649,7 @@ test('navigation selection callback ensures shared snapshots while explicit relo
   const graphRead = f.requests.find(request => request.path.endsWith('/summary'))!
   const stagesRead = f.requests.find(request => request.path.endsWith('/stages'))!
   graphRead.finish(graph())
-  stagesRead.finish({ stages: { [root]: 'idle', [task]: 'idle' } })
+  stagesRead.finish({ activity: { [root]: { stage: 'idle' }, [task]: { stage: 'idle' } } })
   await settle()
   const count = (suffix: string) => f.requests.filter(request => request.path.endsWith(suffix)).length
   assert.equal(count('/summary'), 1)
@@ -661,7 +667,7 @@ test('navigation selection callback ensures shared snapshots while explicit relo
   assert.equal(count('/summary'), 2, 'explicit reload retains force semantics')
   assert.equal(count('/stages'), 2)
   f.requests.filter(request => request.path.endsWith('/summary')).at(-1)!.finish(graph())
-  f.requests.filter(request => request.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
+  f.requests.filter(request => request.path.endsWith('/stages')).at(-1)!.finish({ activity: {} })
   await reload
 })
 

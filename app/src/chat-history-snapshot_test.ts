@@ -80,13 +80,17 @@ test('history revalidation works through gateway no-store without readable ETag 
 })
 
 const revision = 'a'.repeat(64)
+const defaultMetadata = { chatId: 'x', currentPhysicalId: 'web:x', previousPhysicalId: null, segmentIndex: 0,
+  systemPrompt: '', tools: [], commandResults: [], decisionRecords: [] }
+const full = (body: Record<string, unknown>) => ({ revision, historyRevision: revision,
+  metadataVersions: { systemPrompt: revision, tools: revision, commandResults: revision, decisionRecords: revision }, data: body })
 test('snapshots are bounded, URL/project isolated and never used on network failures', async () => {
   const validators: string[] = []
   let fail = false
   const cache = createChatHistorySnapshots((async url => {
     if (fail) throw new Error('offline')
     validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-    return Response.json({ revision, data: { history: [] } })
+    return Response.json(full({ ...defaultMetadata, history: [] }))
   }) as typeof fetch, 1024, 1)
   const signal = new AbortController().signal
   await cache.read('http://main/projects/a/api/chat/session?chatId=x', signal)
@@ -106,7 +110,7 @@ test('oversize snapshots and aborted reads never populate cache', async () => {
   const controller = new AbortController()
   const cache = createChatHistorySnapshots((async url => {
     validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-    return Response.json({ revision, data: { history: ['large history'] } })
+    return Response.json(full({ ...defaultMetadata, history: [{ role: 'user', content: 'large history' }] }))
   }) as typeof fetch, 1)
   await cache.read('http://main/history', controller.signal)
   await cache.read('http://main/history', controller.signal)
@@ -125,66 +129,10 @@ test('invalid envelopes and late responses cannot resurrect a disposed snapshot 
   const pending = createChatHistorySnapshots((() => new Promise<Response>(resolve => { finish = resolve })) as typeof fetch)
   const result = pending.read('http://main/history', signal)
   pending.dispose()
-  finish(Response.json({ revision, data: { history: [] } }))
+  finish(Response.json(full({ ...defaultMetadata, history: [] })))
   await assert.rejects(result, /cancelled/)
 })
 
-
-test('append merges system and tool messages exactly; malformed bases evict without stitching', async () => {
-  const base = [{ role: 'user', content: 'hello' }]
-  const suffix = [
-    { role: 'system', content: 'context event' },
-    { role: 'assistant', tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
-    { role: 'tool', tool_call_id: 'tool-1', content: 'result' },
-  ]
-  for (const invalid of [null, { baseRevision: 'b'.repeat(64) }, { baseCount: 0 }, { count: 99 }, { history: {} }]) {
-    let calls = 0
-    const cache = createChatHistorySnapshots((async url => {
-      calls++
-      if (calls === 1 || calls === 3) {
-        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
-        return Response.json({ revision, data: { history: base, systemPrompt: 'prompt' } })
-      }
-      assert.equal(new URL(String(url)).searchParams.get('historyCount'), '1')
-      return Response.json({ revision: 'c'.repeat(64), delta: {
-        baseRevision: revision, baseCount: 1, count: 4, history: suffix, ...invalid,
-      } })
-    }) as typeof fetch)
-    const signal = new AbortController().signal
-    await cache.read('http://main/history', signal)
-    if (invalid) {
-      await assert.rejects(cache.read('http://main/history', signal), /Invalid history delta/)
-      await cache.read('http://main/history', signal)
-    } else {
-      assert.deepEqual(data(await cache.read('http://main/history', signal)), {
-        history: [...base, ...suffix], systemPrompt: 'prompt',
-      })
-    }
-    cache.dispose()
-  }
-})
-
-
-test('aborted late append never replaces the validated cached base', async () => {
-  let finish!: (response: Response) => void
-  let calls = 0
-  const cache = createChatHistorySnapshots((async url => {
-    calls++
-    if (calls === 2) return new Promise<Response>(resolve => { finish = resolve })
-    if (calls === 3) assert.equal(new URL(String(url)).searchParams.get('snapshot'), revision)
-    return Response.json({ revision, data: { history: [{ role: 'user', content: 'base' }] } })
-  }) as typeof fetch)
-  const abort = new AbortController()
-  await cache.read('http://main/history', abort.signal)
-  const pending = cache.read('http://main/history', abort.signal)
-  abort.abort()
-  finish(Response.json({ revision: 'd'.repeat(64), delta: {
-    baseRevision: revision, baseCount: 1, count: 2, history: [{ role: 'assistant', content: 'late' }],
-  } }))
-  await assert.rejects(pending, /cancelled/)
-  await cache.read('http://main/history', new AbortController().signal)
-  cache.dispose()
-})
 
 test('history block reuse updates metadata with append, prepend and metadata alone; rejects rewrites and rollover', async () => {
   const app = new Hono()
@@ -217,7 +165,7 @@ test('history block reuse updates metadata with append, prepend and metadata alo
       assert.deepEqual(body.history, history)
       assert.equal(body.systemPrompt, systemPrompt)
       assert.equal('metadata' in wire.delta, false)
-      assert.equal(wire.delta.baseMetadataRevision, wire.metadataRevision)
+      assert.deepEqual(wire.delta.metadataPatch, {})
       assert.ok(wires.at(-1)!.length < 1000, '48KB metadata is not repeated')
     }
     systemPrompt = 'new'; tools = [{ name: 'read' }]; decisions = ['decision']
@@ -243,7 +191,7 @@ test('history block reuse updates metadata with append, prepend and metadata alo
     assert.deepEqual(cleared.tools, [])
     assert.deepEqual(cleared.decisionRecords, [])
     assert.equal(cleared.systemPrompt, '')
-    assert.ok(JSON.parse(wires.at(-1)!).delta.metadata, 'metadata-only removal is sent')
+    assert.ok(JSON.parse(wires.at(-1)!).delta.metadataPatch, 'metadata-only removal is sent')
     history[1] = { role: 'user', content: 'rewritten' }
     assert.deepEqual((await read()).history, history)
     assert.ok(JSON.parse(wires.at(-1)!).data, 'rewritten middle falls back to full')
@@ -253,150 +201,15 @@ test('history block reuse updates metadata with append, prepend and metadata alo
   } finally { cache.dispose(); await channel.stop() }
 })
 
-test('malformed block deltas evict rather than splice', async () => {
-  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
-    previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
-  for (const patch of [
-    { baseHistoryRevision: 'b'.repeat(64) }, { metadata: { ...metadata, currentPhysicalId: 'other' } },
-    { metadata: { ...metadata, segmentIndex: 1 } }, { metadata: { ...metadata, chatId: 'other' } },
-    { metadata: { ...metadata, history: [] } },
-    { metadata: {} }, { count: 99 }, { historyOffset: 1 }, { leadingHistory: [null] },
-  ]) {
-    let calls = 0
-    const cache = createChatHistorySnapshots((async url => {
-      calls++
-      if (calls !== 2) {
-        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
-        return Response.json({ revision, historyRevision: revision, data: { ...metadata, history: [{ role: 'user' }] } })
-      }
-      assert.equal(new URL(String(url)).searchParams.get('historyRevision'), revision)
-      return Response.json({ revision: 'c'.repeat(64), historyRevision: revision, delta: {
-        baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
-        history: [], leadingHistory: [], historyOffset: 0, metadata, ...patch,
-      } })
-    }) as typeof fetch)
-    const read = () => cache.read('http://main/history', new AbortController().signal)
-    await read()
-    await assert.rejects(read(), /Invalid history delta/)
-    await read()
-    cache.dispose()
-  }
-})
-
-test('metadata references require an exact cached base and reject ambiguous shapes', async () => {
-  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
-    previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
-  for (const patch of [
-    { baseMetadataRevision: null }, { baseMetadataRevision: 'b'.repeat(64) },
-    { metadata }, { baseMetadataRevision: undefined },
-    { metadata: { ...metadata, chatId: 'other' } },
-  ]) {
-    let calls = 0
-    const cache = createChatHistorySnapshots((async url => {
-      calls++
-      if (calls !== 2) {
-        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
-        return Response.json({ revision, historyRevision: revision, metadataRevision: revision,
-          data: { ...metadata, history: [{ role: 'user' }] } })
-      }
-      assert.equal(new URL(String(url)).searchParams.get('metadataRevision'), revision)
-      return Response.json({ revision: 'c'.repeat(64), historyRevision: revision, metadataRevision: revision, delta: {
-        baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
-        history: [], leadingHistory: [], historyOffset: 0, baseMetadataRevision: revision, ...patch,
-      } })
-    }) as typeof fetch)
-    const read = () => cache.read('http://main/history', new AbortController().signal)
-    await read()
-    await assert.rejects(read(), /Invalid history delta/)
-    await read()
-    cache.dispose()
-  }
-})
-
-test('metadata reference cannot bootstrap a missing validator or disagree with response revision', async () => {
-  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
-    previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
-  for (const [baseMetadataRevision, nextMetadataRevision] of [
-    [undefined, revision], [revision, 'b'.repeat(64)], [revision, 'malformed'],
-  ]) {
-    let calls = 0
-    const cache = createChatHistorySnapshots((async url => {
-      calls++
-      if (calls !== 2) {
-        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
-        return Response.json({ revision, historyRevision: revision, metadataRevision: baseMetadataRevision,
-          data: { ...metadata, obsolete: true, history: [{ role: 'user' }] } })
-      }
-      return Response.json({ revision: 'c'.repeat(64), historyRevision: revision, metadataRevision: nextMetadataRevision,
-        delta: { baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
-          history: [], leadingHistory: [], historyOffset: 0, baseMetadataRevision: revision } })
-    }) as typeof fetch)
-    const read = () => cache.read('http://main/history', new AbortController().signal)
-    await read()
-    await assert.rejects(read(), /Invalid/)
-    await read()
-    cache.dispose()
-  }
-})
-
-test('complete changed metadata replaces rather than overlays removed fields', async () => {
-  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
-    previousPhysicalId: null, systemPrompt: '', tools: [], commandResults: [], decisionRecords: [] }
-  let calls = 0
-  const cache = createChatHistorySnapshots((async () => Response.json(++calls === 1
-    ? { revision, historyRevision: revision, metadataRevision: revision,
-      data: { ...metadata, obsolete: 'removed by next response', history: [{ role: 'user' }] } }
-    : { revision: 'c'.repeat(64), historyRevision: revision, metadataRevision: 'b'.repeat(64), delta: {
-      baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
-      history: [], leadingHistory: [], historyOffset: 0, metadata,
-    } })) as typeof fetch)
-  const read = async () => data(await cache.read('http://main/history', new AbortController().signal))
-  assert.equal((await read()).obsolete, 'removed by next response')
-  assert.equal('obsolete' in await read(), false)
-  cache.dispose()
-})
-
-
-test('returned full, unchanged and delta bodies cannot mutate the private revision base', async () => {
-  let calls = 0
-  const cache = createChatHistorySnapshots((async () => {
-    calls++
-    if (calls === 1) return Response.json({ revision, data: {
-      history: [{ role: 'user', content: { nested: ['original'] } }], tools: [{ name: 'read' }],
-    } })
-    if (calls === 3) return Response.json({ revision: 'b'.repeat(64), delta: {
-      baseRevision: revision, baseCount: 1, count: 2, history: [{ role: 'assistant', content: 'next' }],
-    } })
-    return Response.json({ revision: calls > 3 ? 'b'.repeat(64) : revision, unchanged: true })
-  }) as typeof fetch)
-  const read = async () => data(await cache.read('http://main/history', new AbortController().signal))
-  const expected = { history: [{ role: 'user', content: { nested: ['original'] } }], tools: [{ name: 'read' }] }
-  const mutate = (body: Record<string, unknown>) => {
-    const history = body.history as Array<{ content: { nested: string[] } }>
-    history[0].content.nested[0] = 'polluted'
-    history.pop()
-    ;(body.tools as Array<{ name: string }>)[0].name = 'polluted'
-  }
-  mutate(await read())
-  const unchanged = await read()
-  assert.deepEqual(unchanged, expected)
-  mutate(unchanged)
-  const delta = await read()
-  const merged = { ...expected, history: [...expected.history, { role: 'assistant', content: 'next' }] }
-  assert.deepEqual(delta, merged)
-  mutate(delta)
-  assert.deepEqual(await read(), merged)
-})
-
 test('UTF-8 budget includes escaping, non-ASCII and lone surrogates, ignoring compressed length headers', async () => {
   for (const content of ['ascii', '中文😀', '\u0000\b\t\n\f\r"\\', '\ud800x\udfff', 'é'.repeat(128)]) {
-    const body = { history: [{ role: 'user', content }], number: 1e30, bool: false, nil: null }
+    const body = { ...defaultMetadata, history: [{ role: 'user', content }], number: 1e30, bool: false, nil: null }
     const exact = Buffer.byteLength(JSON.stringify(body))
     for (const budget of [exact - 1, exact]) {
       const validators: string[] = []
       const cache = createChatHistorySnapshots((async url => {
         validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-        return Response.json({ revision, data: body }, { headers: { 'Content-Length': '1', 'Content-Encoding': 'gzip' } })
+        return Response.json(full(body), { headers: { 'Content-Length': '1', 'Content-Encoding': 'gzip' } })
       }) as typeof fetch, budget)
       await cache.read('http://main/history', new AbortController().signal)
       await cache.read('http://main/history', new AbortController().signal)
@@ -413,7 +226,7 @@ test('validated unchanged reads refresh LRU, access errors preserve the original
     const validator = new URL(String(url)).searchParams.get('snapshot')!
     validators.push(validator)
     if (fail) return denied
-    return Response.json(validator ? { revision, unchanged: true } : { revision, data: { history: [] } })
+    return Response.json(validator ? { revision, unchanged: true } : full({ ...defaultMetadata, history: [] }))
   }) as typeof fetch, 1024, 2)
   const read = (key: string) => cache.read(`http://main/${key}`, new AbortController().signal)
   await read('a'); await read('b'); await read('a'); await read('c'); await read('a'); await read('b')
@@ -435,11 +248,11 @@ test('18MiB parsed history bypasses cache without serialization, encoding or a s
   let encodeCalls = 0
   let contentReads = 0
   const content = 'x'.repeat(18 * 1024 * 1024)
-  const body = { history: [{ role: 'user', get content() { contentReads++; return content } }] }
+  const body = { ...defaultMetadata, history: [{ role: 'user', get content() { contentReads++; return content } }] }
   const validators: string[] = []
   const cache = createChatHistorySnapshots((async url => {
     validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-    return { ok: true, status: 200, json: async () => { jsonCalls++; return { revision, data: body } } } as Response
+    return { ok: true, status: 200, json: async () => { jsonCalls++; return full(body) } } as Response
   }) as typeof fetch)
   const stringify = JSON.stringify
   const encode = TextEncoder.prototype.encode
@@ -460,11 +273,11 @@ test('18MiB parsed history bypasses cache without serialization, encoding or a s
 
 
 test('aggregate UTF-8 bytes evict LRU even when each entry fits individually', async () => {
-  const body = { history: [{ role: 'user', content: '中文😀'.repeat(10) }] }
+  const body = { ...defaultMetadata, history: [{ role: 'user', content: '中文😀'.repeat(10) }] }
   const validators: string[] = []
   const cache = createChatHistorySnapshots((async url => {
     validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-    return Response.json({ revision, data: body })
+    return Response.json(full(body))
   }) as typeof fetch, Buffer.byteLength(JSON.stringify(body)) * 2 - 1, 8)
   for (const key of ['a', 'b', 'a']) await cache.read(`http://main/${key}`, new AbortController().signal)
   assert.deepEqual(validators, ['', '', ''], 'byte budget, not entry count, evicts the prior entry')
@@ -475,14 +288,14 @@ test('multi-image 17.86/18MiB trees fail the length-only screen before any conte
   for (const mib of [17.86, 18]) {
     const total = Math.floor(mib * 1024 * 1024)
     const imageSizes = [5, 4, 3, 2, 1].map(n => n * 1024 * 1024)
-    const body = {
+    const body = { ...defaultMetadata,
       history: imageSizes.map(size => ({ role: 'user', content: [{ type: 'image', data: 'a'.repeat(size) }] })),
       metadata: { prompt: 'p'.repeat(total - imageSizes.reduce((a, b) => a + b, 0)), tools: ['read'] },
     }
     const validators: string[] = []
     const cache = createChatHistorySnapshots((async url => {
       validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-      return { ok: true, status: 200, json: async () => ({ revision, data: body }) } as Response
+      return { ok: true, status: 200, json: async () => (full(body)) } as Response
     }) as typeof fetch)
     const charCodeAt = String.prototype.charCodeAt
     const stringify = JSON.stringify
@@ -511,20 +324,163 @@ test('large ASCII images fit exact boundary while escaped keys, emoji and deep o
   let deep: unknown = 'leaf'
   for (let i = 0; i < 105; i++) deep = { child: deep }
   for (const body of [
-    { history: [1, 2, 3].map(() => ({ image: 'a'.repeat(1024 * 1024) })) },
-    { 'escaped"\\\nkey': ['😀'.repeat(1024), '\ud800', '\u0000', '\\', '"'] },
-    { deep },
+    { ...defaultMetadata, history: [1, 2, 3].map(() => ({ role: 'user', image: 'a'.repeat(1024 * 1024) })) },
+    { ...defaultMetadata, history: [], 'escaped"\\\nkey': ['😀'.repeat(1024), '\ud800', '\u0000', '\\', '"'] },
+    { ...defaultMetadata, history: [], deep },
   ]) {
     const exact = Buffer.byteLength(JSON.stringify(body))
     for (const budget of [exact - 1, exact]) {
       const validators: string[] = []
       const cache = createChatHistorySnapshots((async url => {
         validators.push(new URL(String(url)).searchParams.get('snapshot')!)
-        return { ok: true, status: 200, json: async () => ({ revision, data: body }) } as Response
+        return { ok: true, status: 200, json: async () => (full(body)) } as Response
       }) as typeof fetch, budget)
       for (let i = 0; i < 2; i++) await cache.read('http://main/history', new AbortController().signal)
       assert.equal(validators[1], budget === exact && !('deep' in body) ? revision : '')
       cache.dispose()
     }
   }
+})
+
+/** Real responder + loader fixture; all payloads are synthetic. */
+async function fixture() {
+  const app = new Hono()
+  const state = { segmentIndex: 0, systemPrompt: 'prompt'.repeat(4000),
+    tools: [{ name: 'synthetic', description: 'large description '.repeat(12000), schema: { type: 'object' } }],
+    commandResults: [] as unknown[], decisionRecords: [] as unknown[], history: [{ role: 'user', content: 'hello' }] }
+  let rolloverDuringRead = false
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:x', segmentIndex: state.segmentIndex }),
+    getContext: async () => { if (rolloverDuringRead) state.segmentIndex++; return { systemPrompt: state.systemPrompt, tools: state.tools } },
+    getHistory: async () => ({ messages: state.history }),
+    getCommandResults: async () => state.commandResults, getYieldRecords: async () => state.decisionRecords,
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const wires: any[] = [], urls: string[] = []
+  let corrupt: ((wire: any) => void) | undefined
+  let delay = false
+  const held: (() => void)[] = []
+  const cache = createChatHistorySnapshots((async (url, init) => {
+    urls.push(String(url))
+    const response = await app.request(String(url), init)
+    const wire = await response.json()
+    corrupt?.(wire)
+    wires.push(wire)
+    if (delay) await new Promise<void>(resolve => held.push(resolve))
+    return Response.json(wire, { status: response.status })
+  }) as typeof fetch)
+  const url = 'http://main/api/chat/session?chatId=x'
+  const read = (signal = new AbortController().signal) => cache.read(url, signal)
+  return { app, state, wires, urls, cache, read, held,
+    corrupt: (fn?: (wire: any) => void) => { corrupt = fn }, delay: (value: boolean) => { delay = value },
+    rollover: () => { rolloverDuringRead = true }, close: async () => { cache.dispose(); await channel.stop() } }
+}
+
+test('field patches replace receipts, decisions, schemas and prompt independently, including empty fields', async t => {
+  const f = await fixture()
+  try {
+    await f.read()
+    for (const [field, value] of [
+      ['commandResults', [{ id: 'receipt' }]], ['decisionRecords', [{ id: 'decision' }]],
+      ['tools', [{ ...f.state.tools[0], schema: { type: 'string' } }]], ['systemPrompt', 'changed'],
+      ['commandResults', []], ['decisionRecords', []], ['tools', []], ['systemPrompt', ''],
+    ] as const) {
+      Object.assign(f.state, { [field]: value })
+      const body = data(await f.read())
+      assert.deepEqual(body[field], value)
+      const wire = f.wires.at(-1)
+      assert.deepEqual(Object.keys(wire.delta.metadataPatch), [field])
+      assert.deepEqual(wire.delta.history, [])
+      assert.ok(f.urls.at(-1)!.length < 650, 'bounded request contains only six hashes and count')
+      if (field === 'commandResults' && value.length) {
+        const { history: _, ...metadata } = body
+        // Same history delta with the previous whole-metadata representation.
+        const { metadataPatch: __, identity: ___, ...oldDelta } = wire.delta
+        const { metadataVersions: ____, ...oldEnvelope } = wire
+        const oldBytes = Buffer.byteLength(JSON.stringify({ ...oldEnvelope, metadataRevision: revision, delta: { ...oldDelta, metadata } }))
+        const newBytes = Buffer.byteLength(JSON.stringify(wire))
+        t.diagnostic(`synthetic receipt-only JSON bytes: whole-metadata=${oldBytes}, field-patch=${newBytes}, saved=${oldBytes - newBytes} (${((1 - newBytes / oldBytes) * 100).toFixed(2)}%)`)
+        assert.ok(newBytes < oldBytes / 100)
+      }
+    }
+    // Empty history is also a legitimate exact base, including metadata-only updates.
+    f.state.history = []
+    await f.read()
+    f.state.decisionRecords = ['new']
+    assert.deepEqual(data(await f.read()).decisionRecords, ['new'])
+    assert.equal(f.wires.at(-1).delta.baseCount, 0)
+    f.state.segmentIndex++
+    assert.equal(data(await f.read()).segmentIndex, 1)
+    assert.ok(f.wires.at(-1).data)
+    f.rollover()
+    assert.equal((await f.read()).status, 409, 'mid-read rollover never labels old context as new segment')
+  } finally { await f.close() }
+})
+
+test('invalid response versions, omitted changed fields and identity changes fail closed and evict', async () => {
+  for (const corrupt of [
+    (w: any) => { delete w.metadataVersions.tools },
+    (w: any) => { w.metadataVersions.tools = 'bad' },
+    (w: any) => { w.metadataVersions.extra = revision },
+    (w: any) => { delete w.delta.metadataPatch.decisionRecords },
+    (w: any) => { w.delta.identity.chatId = 'other' },
+    (w: any) => { w.delta.identity.currentPhysicalId = 'other' },
+    (w: any) => { w.delta.identity.segmentIndex++ },
+    (w: any) => { w.delta.metadataPatch.tools = null },
+    (w: any) => { w.delta.metadataPatch.history = [] },
+    (w: any) => { w.delta.baseRevision = revision },
+    (w: any) => { w.delta.baseHistoryRevision = revision },
+    (w: any) => { w.delta.baseCount = 99 },
+    (w: any) => { w.delta.historyOffset = 1 },
+    (w: any) => { w.delta.leadingHistory = [null] },
+  ]) {
+    const f = await fixture()
+    try {
+      await f.read()
+      f.state.decisionRecords = ['changed']
+      f.corrupt(corrupt)
+      await assert.rejects(f.read(), /Invalid/)
+      f.corrupt()
+      assert.deepEqual(data(await f.read()).decisionRecords, ['changed'])
+      assert.equal(new URL(f.urls.at(-1)!).searchParams.get('snapshot'), '')
+    } finally { await f.close() }
+  }
+})
+
+test('concurrent and aborted real responses use captured bases without regressing cache or leaking caller mutations', async () => {
+  const f = await fixture()
+  const waitHeld = async (n: number) => { for (let i = 0; f.held.length < n && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 1)); assert.equal(f.held.length, n) }
+  try {
+    const first = data(await f.read())
+    ;(first.tools as any[])[0].schema.type = 'polluted'
+    f.delay(true)
+    f.state.decisionRecords = ['older']
+    const old = f.read()
+    await waitHeld(1)
+    f.state.decisionRecords = ['newer']
+    f.state.tools[0].schema.type = 'number'
+    const newer = f.read()
+    await waitHeld(2)
+    f.held[1]()
+    const latest = data(await newer)
+    assert.deepEqual(latest.decisionRecords, ['newer'])
+    const latestRevision = f.wires.at(-1).revision
+    f.held[0]()
+    assert.deepEqual(data(await old).decisionRecords, ['older'])
+    f.delay(false)
+    ;(latest.tools as any[])[0].schema.type = 'polluted again'
+    assert.equal((data(await f.read()).tools as any[])[0].schema.type, 'number')
+    assert.equal(new URL(f.urls.at(-1)!).searchParams.get('snapshot'), latestRevision)
+    assert.equal(f.wires.at(-1).unchanged, true)
+    f.delay(true)
+    const controller = new AbortController()
+    f.state.commandResults = ['aborted']
+    const aborted = f.read(controller.signal)
+    await waitHeld(3)
+    controller.abort(); f.held[2]()
+    await assert.rejects(aborted, /cancelled/)
+    f.delay(false)
+    assert.deepEqual(data(await f.read()).commandResults, ['aborted'])
+    assert.equal(new URL(f.urls.at(-1)!).searchParams.get('snapshot'), latestRevision)
+  } finally { await f.close() }
 })
