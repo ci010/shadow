@@ -1,3 +1,4 @@
+import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { parseSessionFocus } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
@@ -60,7 +61,7 @@ function parseStoredState(raw: string): SessionState {
   if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
   if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
   Object.assign(state, parseTopicSessionFields(state))
-  return state
+  return normalizeWorkExecutorMetadata(state)
 }
 
 /**

@@ -124,10 +124,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(workerSessions.size, 2)
       assert.equal(dispatchInferences, 4)
       assert.equal(workerInferences, 2)
+      const runs = await manager.querySessionHistoryStates({ jobId: WORK_DISPATCH_ID })
+      assert.equal(runs.total, 2)
+      assert.deepEqual(new Set(runs.states.map(state => state.sessionId)), dispatcherSessions,
+        'the runs page (including latest) must contain dispatcher rounds, never their durable workers')
+      for (const id of workerSessions) {
+        const worker = manager.getSessionState(id)!
+        assert.equal(worker.automation, undefined)
+        assert.equal(worker.mode, 'session')
+        assert.equal(worker.agentType, 'general')
+      }
       for (const id of dispatcherSessions) {
         assert.equal(manager.getSessionState(id), null, 'fresh automation is finalized rather than reused')
         const archived = await store.readArchivedState!(id)
         assert.equal(archived?.agentType, 'dispatcher')
+        assert.equal(archived?.automation?.jobId, WORK_DISPATCH_ID)
         assert.equal(archived?.config?.reasoningEffort, 'high')
         await assert.rejects(agent.execute({ action: 'snapshot' }, { sessionId: id, signal } as ExecutionContext), /active host-created fresh dispatcher round/)
       }
