@@ -1,3 +1,4 @@
+import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { parseSessionFocus } from './session-metadata.ts'
@@ -375,13 +376,13 @@ export class SqliteSessionStore implements SessionStore {
       }
     }
     parseChannelSource(metadata.channelSource, row.key, metadata.projectId)
-    return {
+    return normalizeWorkExecutorMetadata({
       sessionId: row.key,
       segmentIndex: row.segment_count ?? 0,
       lastActivityAt: row.last_activity_at ?? undefined,
       lastKnownTokens: row.last_known_tokens ?? undefined,
       ...metadata,
-    }
+    })
   }
 
   async getState(sessionKey: string): Promise<SessionState | null> {

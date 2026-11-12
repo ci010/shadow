@@ -266,11 +266,12 @@ export class WorkDispatcher {
     signal.throwIfAborted()
     let state = this.deps.sessions.getSessionState(sessionId)
     if (!state) {
+      // Only the dispatcher round is an automation run. Its Work executor is an
+      // ordinary root conversation; automaticWork retains host admission/budgets.
       await this.deps.sessions.buildSession(sessionId, undefined, { mode: 'session', agentType: 'general',
         config: { ...(config.model ? { model: config.model } : {}), ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}) },
         folderId: prepared?.folderId, workdir: prepared ? prepared.workdir ?? localFolderWorkdirRef(prepared.folderId) : undefined, automaticWork: { key: candidate.key, jobId: WORK_DISPATCH_ID, limits: config, ...(!config.folderId ? { phase: 'bootstrap' as const } : {}) },
-        automation: { jobId: job.id, name: job.name ?? 'Work auto-dispatch', runId: sessionId, startedAt: new Date().toISOString(), contextMode: 'fresh',
-          config: { source: 'cron', schedule: job.schedule, agentType: 'general' } } })
+      })
       state = this.deps.sessions.getSessionState(sessionId)
     }
     if (!state || state.projectId && state.projectId !== this.deps.projectId || state.automaticWork?.key !== candidate.key) throw new WorkConflict('Automatic session identity conflict.')

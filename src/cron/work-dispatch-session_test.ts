@@ -1,3 +1,5 @@
+import { groupFolderSessions, type SidebarSession } from '../../app/src/folders-sidebar.ts'
+import { isRegularQuickOpenSession } from '../../app/src/session-quick-open.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdir } from 'node:fs/promises'
@@ -105,7 +107,28 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const subscription = bus.on('session.turn.finished', fact => dispatcher.finished(fact))
     const admissions = bus.on('session.input.accepted', () => { accepted++ })
     try {
+      const legacyId = 'work-executor:historical'
+      await store.saveState(legacyId, { sessionId: legacyId, projectId: 'fixture', segmentIndex: 0,
+        mode: 'session', agentType: 'general', folderId: 'isolated', workdir: localFolderWorkdirRef('isolated'),
+        automaticWork: { key: 'work:historical', jobId: WORK_DISPATCH_ID, limits: config },
+        automation: { jobId: WORK_DISPATCH_ID, name: 'Work auto-dispatch', runId: legacyId,
+          startedAt: new Date().toISOString(), contextMode: 'fresh', config: { source: 'cron', schedule: 'every 60s', agentType: 'general' } },
+      })
       await manager.start()
+      assert.equal(manager.getSessionState(legacyId)?.automation, undefined)
+      assert.equal((await manager.querySessionHistoryStates({ jobId: WORK_DISPATCH_ID })).total, 0)
+      const assertOrdinaryNavigation = (id: string) => {
+        const summary = manager.listSessions().find(state => state.sessionId === id)!
+        assert.ok(summary)
+        assert.equal(summary.automation, undefined)
+        const row = { ...summary, projectId: 'fixture', label: id, isDirectChat: false, isCurrent: false,
+          parentSessionId: null, depth: 0 } satisfies SidebarSession
+        assert.equal(isRegularQuickOpenSession(row), true)
+        const groups = groupFolderSessions([], [row])
+        assert.deepEqual(groups.unified.map(state => state.sessionId), [id])
+        assert.deepEqual(groups.automations, [])
+      }
+      assertOrdinaryNavigation(legacyId)
       const job = { ...WORK_DISPATCH_AUTOMATION, program: config, id: WORK_DISPATCH_ID, createdAt: new Date().toISOString() }
       await dispatcher.dispatch(job, new AbortController().signal)
       assert.equal(inferences, 0)
@@ -150,6 +173,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(executions, 2)
       assert.match(final.workflow!.blockedReason!, /maximum number of iterations/)
       const state = manager.getSessionState(id)!
+      assert.equal(state.mode, 'session')
+      assert.equal(state.agentType, 'general')
+      assert.equal(state.parentSessionId, null)
+      assert.equal(state.automaticWork?.key, work.key)
+      assertOrdinaryNavigation(id)
+      assert.equal((await manager.querySessionHistoryStates({ jobId: WORK_DISPATCH_ID })).total, 0)
       assert.deepEqual(state.workdir, localFolderWorkdirRef('isolated'))
       const locations = resolveSessionLocations(home, state, undefined, manager.workdirLookup)
       assert.ok(locations.workdir.available && locations.workdir.locality === 'local')
