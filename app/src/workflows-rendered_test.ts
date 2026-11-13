@@ -43,6 +43,8 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.equal(await run(()=>document.querySelectorAll('.graph-node').length),12);
     assert.equal(await run(()=>document.querySelectorAll('.graph-group').length),5);
     assert.equal(await run(()=>document.querySelectorAll('.vue-flow').length),1);
+    assert.deepEqual(await run(()=>Array.from(document.querySelectorAll('.graph-column-heading')).map(el=>el.textContent)),['Cron','Automation','BOT']);
+    assert.ok(await run(()=>{const cols=Array.from(document.querySelectorAll('.graph-column-heading')).map(el=>el.getBoundingClientRect());return cols[0].right<cols[1].left && cols[1].right<cols[2].left}));
     assert.equal(await run(()=>document.querySelectorAll('.workflow-inventory').length),0);
     const sharedDots=async(selector)=>{
       assert.equal(await win.webContents.executeJavaScript('('+((selector)=>{let el=document.querySelector(selector);if(!el)return false;while(el&&el!==document.body){const s=getComputedStyle(el);if(s.backgroundColor!=='rgba(0, 0, 0, 0)'||s.backgroundImage!=='none')return false;el=el.parentElement}const body=getComputedStyle(document.body);return body.backgroundImage.includes('radial-gradient')&&body.backgroundSize==='20px 20px'&&document.querySelectorAll('.vue-flow__background').length===0}).toString()+')('+JSON.stringify(selector)+')'),true,'Reuse the single chat body dot layer');
@@ -66,7 +68,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Daily at 03:00')));
 
     assert.ok(await run(()=>document.querySelector('.graph-group[data-enabled=false]').textContent.includes('Paused')));
-    if(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')})require('node:fs').writeFileSync(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')},(await win.webContents.capturePage()).toPNG());
+
     const transform=()=>run(()=>document.querySelector('.vue-flow__transformationpane').style.transform);
     const dragEmpty=async(button)=>{
       const before=await transform();
@@ -80,8 +82,10 @@ test('workflow visualization renders durable revisions, safe controls, real reso
       await wait(); // Let the browser finish the drag's native click-suppression turn.
     };
     const clickRendered=async(selector)=>{
+      await run(()=>document.querySelectorAll('.graph-toolbar button')[2].click());await wait();
       const point=await win.webContents.executeJavaScript('('+((selector)=>{const el=document.querySelector(selector),r=el.getBoundingClientRect(),canvas=document.querySelector('.graph-canvas').getBoundingClientRect();const x=Math.round((Math.max(r.left,canvas.left)+Math.min(r.right,canvas.right))/2),y=Math.round((Math.max(r.top,canvas.top)+Math.min(r.bottom,canvas.bottom))/2);if(!el.contains(document.elementFromPoint(x,y)))throw new Error('Click target occluded: '+selector+' '+JSON.stringify({r:r.toJSON(),canvas:canvas.toJSON(),x,y,hit:document.elementFromPoint(x,y)?.outerHTML}));return {x,y}}).toString()+')('+JSON.stringify(selector)+')');
       const before=await transform();
+      win.webContents.sendInputEvent({type:'mouseMove',...point});await wait(); // Let a relocated tooltip finish moving away from its trigger.
       win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...point});
       win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});await wait();
       assert.equal(await transform(),before,'Inspector clicks must not pan');
@@ -243,6 +247,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.equal(await run(()=>window.controls.length),controlsBefore);
     await run(()=>{window.data.definitions.find(flow=>flow.id==='schedule:daily').nodes[0].action='program';window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{}});document.querySelector('.workflow-heading button').click()});await wait();
     assert.equal(await run(()=>document.querySelector('.group-conversation').textContent.trim()),'Open latest conversation');
+    assert.equal(await run(()=>document.querySelector('.graph-group[data-workflow="schedule:daily"]').dataset.column),'automation');
     await clickRendered('.graph-group[data-workflow="schedule:daily"] .group-conversation');
     assert.equal(await run(()=>window.router.currentRoute.value.query.automation),'cron:legacy');
     assert.equal(await run(()=>window.router.currentRoute.value.params.sessionId),undefined);
@@ -257,13 +262,15 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.equal(await run(()=>Array.from(document.querySelectorAll('a')).some(a=>a.getAttribute('href').includes('/chat/flow-run-not-session'))),false);
     assert.equal(await run(()=>/Revision [0-9]|revision gate|at this revision/i.test(document.querySelector('.workflow-layout').innerText)),false);
     await run(()=>{window.data.definitions.find(d=>d.id==='schedule:daily').nodes[0].job.schedule='every 1800000ms';window.i18n.global.locale.value='zh-CN';document.querySelector('.workflow-heading button').click()});await wait();
+    assert.deepEqual(await run(()=>Array.from(document.querySelectorAll('.graph-column-heading')).map(el=>el.textContent)),['Cron 定时任务','Automation 自动化','BOT']);
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('每30分钟')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('每天03:00')));
     await run(()=>{window.i18n.global.locale.value='en';window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'github:fixture'}})});await wait();
+    if(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')}){await run(()=>document.querySelectorAll('.graph-toolbar button')[2].click());await wait();require('node:fs').writeFileSync(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')},(await win.webContents.capturePage()).toPNG());}
     await run(()=>{window.mode='error';document.querySelector('.workflow-heading button').click()});await wait();
     assert.ok(await run(()=>document.querySelector('[role=alert]')));assert.ok(await run(()=>!document.body.textContent.includes('DO-NOT-DISPLAY')));assert.equal(await run(()=>document.querySelector('.workflow-title button').disabled),true);
     await run(()=>{window.mode='normal';document.querySelector('.workflow-heading button').click()});await wait();
-    for(const dark of [false,true]){await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+')');await sharedDots('.vue-flow__pane');await sharedDots('.graph-group[data-enabled=false]');for(const width of [1200,390]){win.setSize(width,850);await wait();assert.ok(await run(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok(await run(()=>document.querySelector('.workflow-heading').getBoundingClientRect().height<160));assert.equal(await run(()=>document.querySelectorAll('input,textarea,form,[draggable=true]').length),0)}}
+    for(const dark of [false,true]){await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+')');await sharedDots('.vue-flow__pane');await sharedDots('.graph-group[data-enabled=false]');for(const width of [1200,390]){win.setSize(width,850);await wait();assert.ok(await run(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok(await run(()=>{const cols=Array.from(document.querySelectorAll('.graph-column-heading')).map(el=>el.getBoundingClientRect());return cols.length===3&&cols[0].right<cols[1].left&&cols[1].right<cols[2].left}));assert.ok(await run(()=>document.querySelector('.workflow-heading').getBoundingClientRect().height<160));assert.equal(await run(()=>document.querySelectorAll('input,textarea,form,[draggable=true]').length),0)}}
     if(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')})require('node:fs').writeFileSync(${JSON.stringify((process.env.SHADOW_WORKFLOW_SCREENSHOT || '') + '.narrow.png')},(await win.webContents.capturePage()).toPNG());
     await run(()=>document.querySelector('.inspector-toolbar button').click());await wait();
     assert.equal(await run(()=>document.querySelector('.workflow-inspector')),null);

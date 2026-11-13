@@ -4356,5 +4356,8 @@
   "BOT projection unavailable. Refresh to retry.": "BOT 投影不可用，请刷新重试。",
   "BOT inventory is incomplete. Some entries are unavailable or limited.": "BOT 清单不完整，部分条目不可用或已达扫描上限。",
   "Validated package": "已验证的包",
-  "Quarantined package": "已隔离的包"
+  "Quarantined package": "已隔离的包",
+  "Cron workflows": "Cron 定时任务",
+  "Automation workflows": "Automation 自动化",
+  "BOT workflows": "BOT"
 }

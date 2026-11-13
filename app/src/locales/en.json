@@ -4356,5 +4356,8 @@
   "BOT projection unavailable. Refresh to retry.": "BOT projection unavailable. Refresh to retry.",
   "BOT inventory is incomplete. Some entries are unavailable or limited.": "BOT inventory is incomplete. Some entries are unavailable or limited.",
   "Validated package": "Validated package",
-  "Quarantined package": "Quarantined package"
+  "Quarantined package": "Quarantined package",
+  "Cron workflows": "Cron",
+  "Automation workflows": "Automation",
+  "BOT workflows": "BOT"
 }
