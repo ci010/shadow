@@ -11,20 +11,20 @@ import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
-test('automation dispatch model selection saves, resets and remains in bottom dock at desktop and mobile widths', { timeout: 90_000 }, async t => {
+test('automation history projection links Workflow without configuration controls at desktop and mobile widths', { timeout: 90_000 }, async t => {
   const directory = resolve(root, '.test-artifacts', `automation-detail-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const chatSource = await readFile(resolve(root, 'app/src/components/ChatTab.vue'), 'utf8')
   const chatStyles = chatSource.split('<style scoped>')[1]!.split('</style>')[0]!
-  assert.ok(chatSource.indexOf('<AutomationConversationSettings') > chatSource.indexOf('ref="composerDock"'))
+  assert.ok(chatSource.indexOf('<AutomationConversationProjection') > chatSource.indexOf('ref="composerDock"'))
   const detail = await readFile(resolve(root, 'app/src/components/AutomationDetail.vue'), 'utf8')
-  assert.ok(detail.indexOf('<AutomationConversationSettings') > detail.indexOf('<slot />'))
+  assert.ok(detail.indexOf('<AutomationConversationProjection') > detail.indexOf('<slot />'))
   assert.match(detail, /!selectedSessionId/)
   const server = await createServer({ configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'cache'), optimizeDeps: { noDiscovery: true, include: ['vue'] }, plugins: [vue(), {
     name: 'automation-workspace-fixture', resolveId: id => id === '/automation-detail-entry.ts' ? '\0automation-detail-entry' : undefined,
     load(id) { if (id !== '\0automation-detail-entry') return; return `
-      import {createApp,h,ref} from 'vue'; import Settings from '/src/components/AutomationConversationSettings.vue'; import {provideModelSelection} from '/src/model-selection.ts'; import '/src/styles.css';
+      import {createApp,h,ref} from 'vue'; import Settings from '/src/components/AutomationConversationProjection.vue'; import {provideModelSelection} from '/src/model-selection.ts'; import '/src/styles.css';
       const job=ref({id:'system:work-organizer',name:'Organization',source:'system',schedule:'Event driven',enabled:true,canConfigureModel:true,defaultModel:'quick@provider'});
       window.patches=[];window.saved=0;window.fail=false;
       window.fetch=async (url,init)=>{if(init?.method==='PATCH'){const body=JSON.parse(init.body);window.patches.push({url:String(url),body}); if(window.fail)return new Response('{}',{status:403});job.value={...job.value,model:body.model??undefined};return Response.json({automation:job.value})}return Response.json({profile:{usage:{providerCalls:2,inputTokens:120,outputTokens:30,totalTokens:150},frequency:{description:'Event driven',scope:'runtime'},runs:{total:1},window:{from:'2026-10-11T00:00:00Z',asOf:'2026-10-12T00:00:00Z'},coverage:'complete',limitations:[]}})};
@@ -35,31 +35,17 @@ test('automation dispatch model selection saves, resets and remains in bottom do
   const main=resolve(directory,'main.cjs')
   await writeFile(main, `const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict'); app.setPath('userData',${JSON.stringify(directory)});app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1100,height:800,webPreferences:{contextIsolation:true,nodeIntegration:false}});const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');const wait=()=>new Promise(r=>setTimeout(r,400));try{
     await win.loadURL(${JSON.stringify(new URL('__automation_detail',server.resolvedUrls!.local[0]).href)});
-    for(let i=0;i<100;i++){if(await run(()=>document.querySelector('.model-label')))break;await wait()}
-    assert.ok(await run(()=>document.querySelector('.model-label').textContent.includes('quick')));
-    assert.equal(await run(()=>document.querySelector('.settings-row button').disabled),false);
+    for(let i=0;i<100;i++){if(await run(()=>document.querySelector('.automation-projection .automation-profile')))break;await wait()}
+    assert.ok(await run(()=>document.querySelector('.automation-projection').textContent.includes('Configure workflows in chat')));
+    assert.equal(await run(()=>document.querySelector('.automation-projection a').getAttribute('href')),'/projects/fixture/workflows?workflow=internal%3Awork-organizer');
+    assert.equal(await run(()=>document.querySelectorAll('.automation-projection form,.automation-projection input,.automation-projection select,.model-label').length),0);
     for(const width of [1100,390]){win.setSize(width,800);await wait();
       assert.ok(await run(()=>document.documentElement.scrollWidth<=innerWidth));
-      assert.ok(await run(()=>{const header=document.querySelector('.automation-profile header');const title=header.querySelector('strong');const button=header.querySelector('button');return getComputedStyle(title).whiteSpace==='nowrap' && getComputedStyle(button).whiteSpace==='nowrap' && title.getBoundingClientRect().right<button.getBoundingClientRect().left && !header.querySelector('.frequency')}));
-      assert.ok(await run(()=>{const box=document.querySelector('.automation-settings-box');const css=getComputedStyle(box);return css.backgroundColor!=='rgba(0, 0, 0, 0)' && parseFloat(css.borderTopWidth)>0 && css.borderTopLeftRadius===getComputedStyle(document.documentElement).getPropertyValue('--radius-overlay').trim() && css.paddingRight==='12px'}));
-      assert.ok(await run(()=>{const card=document.querySelector('.automation-conversation-settings').getBoundingClientRect();return card.left>0 && card.right<innerWidth && !!document.querySelector('.automation-settings-box .settings-row') && !!document.querySelector('.automation-settings-box .automation-profile')}));
       assert.ok(await run(()=>{const stats=document.querySelector('.automation-profile').getBoundingClientRect();const transcript=document.querySelector('.chat-messages').getBoundingClientRect();return stats.top>=transcript.bottom && stats.bottom<=innerHeight+1}));
+      await run(()=>document.querySelector('.automation-projection a').focus());
+      assert.ok(await run(()=>document.activeElement===document.querySelector('.automation-projection a')));
     }
-    await run(()=>document.querySelector('.settings-row button').click());await wait();
-    await run(()=>Array.from(document.querySelectorAll('.model-option')).find(e=>e.textContent.includes('chosen')).click());await wait();
-    assert.equal(await run(()=>window.saved),1);
-    assert.deepEqual(await run(()=>window.patches[0].body),{model:'chosen@provider'});
-    assert.ok(await run(()=>window.patches[0].url.endsWith('/api/automations/system%3Awork-organizer')));
-    assert.ok(await run(()=>document.querySelector('.model-label').textContent.includes('chosen')));
-    await run(()=>document.querySelector('.settings-row button').click());await wait();
-    await run(()=>document.querySelector('.model-option').click());await wait();
-    assert.deepEqual(await run(()=>window.patches[1].body),{model:null});
-    assert.ok(await run(()=>document.querySelector('.model-label').textContent.includes('quick')));
-    await run(()=>{window.fail=true;document.querySelector('.settings-row button').click()});await wait();
-    await run(()=>Array.from(document.querySelectorAll('.model-option')).find(e=>e.textContent.includes('chosen')).click());await wait();
-    assert.equal(await run(()=>window.saved),2);
-    assert.ok(await run(()=>document.querySelector('[role=alert]').textContent.includes('denied')));
-    assert.ok(await run(()=>document.querySelector('.model-label').textContent.includes('quick')));
+    assert.deepEqual(await run(()=>window.patches),[]);
     console.log('AUTOMATION_DETAIL_REAL_OK');app.exit(0);
   }catch(e){console.error(e);app.exit(1)}});`)
   const env:NodeJS.ProcessEnv={}

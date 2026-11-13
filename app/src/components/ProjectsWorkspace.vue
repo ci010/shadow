@@ -54,7 +54,12 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <AutomationDetail :enabled="!!automation"
+      <WorkflowManager v-if="workflowProjectId" :api-base="projectBase(apiBase, workflowProjectId)" :project-id="workflowProjectId" :active="visible" />
+      <nav v-if="automation" class="workflow-projection-link" :aria-label="t('Workflow execution')">
+        <RouterLink :to="`/projects/${encodeURIComponent(automation.projectId)}/workflows`">{{ t('View workflow execution') }}</RouterLink>
+        <span>{{ t('This conversation is a model execution, not the workflow run.') }}</span>
+      </nav>
+      <AutomationDetail v-show="!workflowProjectId" :enabled="!!automation"
         :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
         :selected-session-id="selected?.sessionId"
         @open="openAutomationRun">
@@ -103,6 +108,7 @@ import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
 import SessionQuickOpen from './SessionQuickOpen.vue'
 import { isSessionQuickOpenShortcut } from '../session-quick-open.ts'
+import WorkflowManager from './WorkflowManager.vue'
 import AutomationDetail from './AutomationDetail.vue'
 import { projectBase } from '../api-url.ts'
 import { createProjectsClient, projectChatLocation, type ProjectRecord } from '../projects.ts'
@@ -136,8 +142,9 @@ const { automation, syncAutomationRoute, showAutomation, openAutomationRun, iden
   openSession: session => publish(registry.session(session)),
   closeSidebar,
 })
+const workflowProjectId = computed(() => route.name === 'project-workflows' && typeof route.params.projectId === 'string' ? route.params.projectId : '')
 const dashboardProject = computed(() => route.name === 'project-dashboard' ? projects.value.find(project => project.id === route.params.projectId) : undefined)
-const selectedProjectId = computed(() => dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? '')
+const selectedProjectId = computed(() => workflowProjectId.value || (dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? ''))
 const selectedProjectName = computed(() => projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
 const localSidebarOpen = ref(false)
@@ -275,7 +282,7 @@ function publish(resource: ConversationResource) {
   closeSidebar()
 }
 function syncRoute() {
-  if (!props.visible || !['chat', 'project-dashboard', 'project-settings', 'agents'].includes(String(route.name))) return
+  if (!props.visible || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
@@ -283,7 +290,7 @@ function syncRoute() {
     if (projectId && !loading.value) error.value = t('This project is unavailable. Refresh the catalog or choose another project.')
     return
   }
-  if (route.name === 'project-dashboard') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
+  if (route.name === 'project-dashboard' || route.name === 'project-workflows') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
   let resource: ConversationResource
@@ -353,7 +360,7 @@ const keyboardActive = ref(true)
 const newConversationShortcut = createNewConversationShortcut({
   context() {
     if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-      || !['chat', 'project-dashboard', 'project-settings', 'agents'].includes(String(route.name))) return
+      || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
     // Ctrl+N matches the sidebar's explicit Start from scratch action, never inherits a workdir.
@@ -505,6 +512,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.workflow-projection-link { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; font-size: 12px; color: var(--c-text-secondary); border-bottom: 1px solid var(--c-border); }
+.workflow-projection-link a { color: var(--c-primary); }
 .session-search-trigger { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .session-search-trigger:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .session-search-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

@@ -4,7 +4,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { workspacePath } from '../utils/paths.ts'
 import { managedSessionWorkdirId } from '../execution/managed-workdir.ts'
-import { CronService, parseStoredCronJobs } from './service.ts'
+import { TestCronService as CronService } from './testing.ts'
+import { parseStoredCronJobs } from './service.ts'
 
 const legacy = { version: 1, nodeId: 'child', capabilityId: 'exact%2Flegacy' }
 const job = { id: 'persisted', session: 'fresh', enabled: false, task: 'test', schedule: 'every 1h', createdAt: '2026-01-01T00:00:00.000Z', workdir: legacy }

@@ -5,7 +5,7 @@ import test from 'node:test'
 import { Cron } from 'croner'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { workspacePath } from '../utils/paths.ts'
-import { CronService } from './service.ts'
+import { TestCronService as CronService } from './testing.ts'
 import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 const mondayJob = {
@@ -30,7 +30,7 @@ test('legacy cron jobs are rejected without scheduling or rewriting them', async
     const nextRun = t.mock.method(Cron.prototype, 'nextRun')
     const service = new CronService(workspace)
     try {
-      await assert.rejects(service.start(), /Legacy jobs file:.*recreate the jobs/)
+      await assert.rejects(service.start(), /Legacy cron schedules.*recreate/)
       assert.equal(nextRun.mock.callCount(), 0)
       assert.deepEqual(service.listJobs(), [])
       assert.equal(await readFile(path, 'utf8'), raw)
@@ -201,6 +201,8 @@ test('automation mutations and admitted run lifecycle notify, reads and no-op co
       assert.equal(changes, 3, 'Run admission notifies before completion')
       const duplicate = service.runNow(id)
       assert.equal(changes, 3, 'Overlapping admission does not notify twice')
+      for (let i = 0; i < 100 && !finish; i++) await new Promise(resolve => setTimeout(resolve, 5))
+      assert.equal(typeof finish, 'function')
       finish()
       await Promise.all([run, duplicate])
       assert.equal(changes, 4)

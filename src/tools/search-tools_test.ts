@@ -300,7 +300,7 @@ test('root reads list only name/description entries; opaque sources stay in the 
     ['layerfs', { factory: async () => { initialized++; return plain } }],
     ['chrome-devtools', { config: { name: 'chrome-devtools', transport: 'stdio', command: 'never-run' } }],
   ]))
-  registerCronTools(f.importer, {} as CronService, {} as Parameters<typeof registerCronTools>[2], () => true)
+  registerCronTools(f.importer, {} as CronService, {} as Parameters<typeof registerCronTools>[2], () => true, async () => { throw new Error('Discovery cannot execute') })
   const root = await f.read('v:tools')
   const entries = root.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line))
   assert.deepEqual(entries.map(entry => entry.name).sort(), ['cron_add', 'cron_list', 'cron_remove', 'mail__SearchMessages', 'plain'])

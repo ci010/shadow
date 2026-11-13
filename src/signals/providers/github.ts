@@ -10,19 +10,19 @@ export const normalizeGithubDemand = (demand: unknown): unknown => z.object({ re
 
 export const githubDefinition: ProviderDefinition = {
   id: 'github-issues', version: 1, stateVersion: 'snapshot-v1',
-  description: 'GraphQL repository issue snapshots; exact repository demands deduplicated and up to four connections batched. Silent initial snapshot. Requires metadata/issues read PAT. Bounded to 500 issues/repository; larger repositories fail closed. No PRs, comments, deletions or live guarantees.',
+  description: 'GraphQL repository issue snapshots; exact repository demands deduplicated and up to four connections batched. Each Workflow explicitly selects initial emit or baseline. Requires metadata/issues read PAT. Bounded to 500 issues/repository; larger repositories fail closed. No PRs, comments, deletions or live guarantees.',
   consumer: {
     summary: 'Observe new and updated repository issues.',
     unsupported: 'No PRs, comments, deletions, guaranteed transitions or live guarantees; at most 500 issues/repository.',
     capabilities: ['Repository issue revisions with number, title, URL, state, update time and stable issue ID.'],
-    limitations: ['No pull requests, comments, deletions or live guarantees.', 'At most 500 issues per repository; larger sources fail without advancing the baseline.', 'Observed revisions are not a guaranteed history of state transitions; intermediate changes between polls may be missed.'],
-    semantics: ['An occurrence ID combines issue ID and updatedAt. An observed new revision emits once relative to the preceding successful snapshot.'],
+    limitations: ['No pull requests, comments, deletions or live guarantees.', 'At most 500 issues per repository; larger sources fail without admitting observations.', 'Observed revisions are not a guaranteed history of state transitions; intermediate changes between polls may be missed.'],
+    semantics: ['An occurrence ID combines issue ID and updatedAt. Each Workflow independently dedupes revision IDs in a bounded window; initial emit or silent baseline is explicitly selected.'],
   },
   demandSchema: { type: 'object', required: ['repository'], additionalProperties: false, properties: { repository: { type: 'string', description: 'owner/name; owner uses letters, digits, underscore or hyphen; name also permits dots. Normalized to lowercase.' } } },
   signalSchema: { type: 'object', required: ['id', 'number', 'title', 'url', 'state', 'updatedAt'], additionalProperties: false, properties: {
     id: { type: 'string' }, number: { type: 'integer', minimum: 1 }, title: { type: 'string' }, url: { type: 'string' }, state: { enum: ['OPEN', 'CLOSED'] }, updatedAt: { type: 'string' },
   } },
-  examples: [{ demand: { repository: 'owner/repo' }, signal: { id: 'issue-1:2026-01-01T00:00:00Z', data: { id: 'issue-1', number: 1, title: 'Example issue', url: 'https://github.com/owner/repo/issues/1', state: 'OPEN', updatedAt: '2026-01-01T00:00:00Z' } } }],
+  examples: [{ demand: { repository: 'owner/repo' }, signal: { id: 'issue-1:2026-01-01T00:00:00Z', item: 'issue-1', data: { id: 'issue-1', number: 1, title: 'Example issue', url: 'https://github.com/owner/repo/issues/1', state: 'OPEN', updatedAt: '2026-01-01T00:00:00Z' } } }],
   // This trusted GitHub-owned assertion is constrained by an exact static query.
   http: { origin: 'https://api.github.com', credential: { header: 'Authorization', prefix: 'Bearer ' },
     routes: [{ method: 'POST', path: '/graphql', effect: 'read', querySchema: { type: 'object', additionalProperties: false },
@@ -50,7 +50,7 @@ export const githubDefinition: ProviderDefinition = {
           if(!connection || !Array.isArray(connection.nodes) || !connection.pageInfo) throw new Error('incomplete repository');
           for(const node of connection.nodes) {
             if(!node || typeof node.id!=='string' || typeof node.updatedAt!=='string' || !Number.isInteger(node.number) || node.number<1 || typeof node.title!=='string' || typeof node.url!=='string' || !['OPEN','CLOSED'].includes(node.state) || seen[i].has(node.id)) throw new Error('invalid or overlapping page');
-            seen[i].add(node.id); signals[i].push({id:node.id+':'+node.updatedAt,data:{id:node.id,number:node.number,title:node.title,url:node.url,state:node.state,updatedAt:node.updatedAt}});
+            seen[i].add(node.id); signals[i].push({id:node.id+':'+node.updatedAt,item:node.id,data:{id:node.id,number:node.number,title:node.title,url:node.url,state:node.state,updatedAt:node.updatedAt}});
           }
           if(signals[i].length>500) throw new Error('snapshot bound exceeded');
           const info=connection.pageInfo;

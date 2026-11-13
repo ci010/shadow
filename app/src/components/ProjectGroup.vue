@@ -12,6 +12,12 @@
       <button type="button" class="project-entry" :class="{ selected: selectedProjectId === project.id && dashboardSelected }" :aria-current="selectedProjectId === project.id && dashboardSelected ? 'page' : undefined" :title="t('{name} dashboard', { name: project.name })" @click="$emit('dashboard')">{{ project.name }}</button>
     </template>
     <template #project-actions>
+      <HoverInfo :text="t('Workflows')"><template #default="{ triggerProps }">
+        <RouterLink class="project-settings" v-bind="triggerProps" :aria-label="t('Workflows')"
+          :to="`/projects/${encodeURIComponent(project.id)}/workflows`">
+          <span class="i-lucide-workflow w-3.5 h-3.5" aria-hidden="true" />
+        </RouterLink>
+      </template></HoverInfo>
       <button class="project-settings" :aria-label="t('{name} knowledge', { name: project.name })" :title="t('{name} knowledge', { name: project.name })"
         @click="$emit('knowledge')">
         <span class="i-lucide-book-open w-3.5 h-3.5" aria-hidden="true" />
@@ -30,6 +36,7 @@
 import { t } from '../i18n.ts'
 import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useServiceGroups, projectGroupConversations, observedGroupId } from '../service-groups.ts'
+import HoverInfo from './HoverInfo.vue'
 import FoldersSidebar from './FoldersSidebar.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'

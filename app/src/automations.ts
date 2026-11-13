@@ -8,6 +8,7 @@ export function automationChatLocation(projectId: string, id: string, sessionId 
 }
 
 export interface AutomationSummary {
+  workflow?: { id: string; pending: number; blocked: number }
   id: string
   name: string
   source: 'cron' | 'learning' | 'system'
@@ -170,11 +171,13 @@ export async function fetchAutomations(
         || !optionalText(item.model) || !optionalText(item.defaultModel)
         || ['canConfigureModel', 'configuredEnabled', 'editable', 'canToggle', 'toggleEnabled', 'disabledByGlobal'].some(key => item[key] !== undefined && typeof item[key] !== 'boolean')
         || (item.toggleId !== undefined && !identifier(item.toggleId))
+        || (item.workflow !== undefined && (!record(item.workflow) || !identifier(item.workflow.id) || !count(item.workflow.pending) || !count(item.workflow.blocked)))
         || !optionalText(item.task) || !optionalText(item.agentType) || !optionalText(item.notice)) throw invalid()
       ids.add(item.id)
       return {
         id: item.id, name: item.name, source: item.source, session: 'fresh', schedule: item.schedule,
         enabled: item.enabled,
+        ...(item.workflow !== undefined ? { workflow: item.workflow as AutomationSummary['workflow'] } : {}),
         ...(item.intervalMs !== undefined ? { intervalMs: item.intervalMs as number } : {}),
         ...(item.model !== undefined ? { model: item.model as string } : {}),
         ...(item.defaultModel !== undefined ? { defaultModel: item.defaultModel as string } : {}),

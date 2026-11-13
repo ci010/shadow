@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { SignalProviderRuntime } from './runtime.ts'
+import { TestSignalProviderRuntime as SignalProviderRuntime } from './testing.ts'
 import { CapabilityBroker, CapabilityError } from '../../execution/grants.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import type { ProviderBrowserAccess } from '../../browser/provider-fetch.ts'
@@ -10,7 +10,7 @@ const transport = { kind: 'browser' as const, instance: '0ad04ff9-9b91-4b9f-8830
 const definition = { id: 'feed', version: 1, description: 'fixture', http: { origin: 'https://api.example.org', routes: [{ method: 'GET' as const, path: '/feed', querySchema: { type: 'object', additionalProperties: false } }] },
   code: `import {call} from '@shadow/fetch'; export async function run({demands}) { const result = {}; for(const d of demands) { const r = await call({method:'GET',path:'/feed'}); result[d.key] = {signals:[{id:'one',data:r.body}],checkpoint:null}; } return result; }` }
 const { version: _version, ...reloadDefinition } = definition
-const subscription = { id: 'watch', instance: 'feed-watch', demand: {}, processor: 'export function run(){return []}' }
+const subscription = { id: 'watch', instance: 'feed-watch', demand: {}, first: 'baseline', action: { kind: 'notify', processor: 'export function run(){return []}' } }
 
 async function setup(workspace: string, browser: ProviderBrowserAccess, authored: unknown = definition) {
   let native = 0
@@ -143,8 +143,8 @@ test('browser HTML string fixture parses locally then subscriber extracts struct
       result[d.key]={mode:'snapshot',signals:[{id:title,data:{title}}],checkpoint:null};}return result}`
   runtime.publish('owner',{...definition,code})
   runtime.create('owner',{id:'feed-watch',provider:'feed',version:1,transport},access)
-  runtime.subscribe('owner',{...subscription,processor:`import {parseHtml} from '@shadow/html';
-    export function run({signal}){return [{content:parseHtml('<p>'+signal.data.title+'</p>').querySelector('p').textContent}]}`})
+  runtime.subscribe('owner',{...subscription,first: 'baseline', action: { kind: 'notify', processor:`import {parseHtml} from '@shadow/html';
+    export function run({signal}){return [{content:parseHtml('<p>'+signal.data.title+'</p>').querySelector('p').textContent}]}` }})
   await runtime.run();assert.deepEqual(messages,[])
   await runtime.reload('owner',{...reloadDefinition,code})
   title='changed';now+=60001;await runtime.run();assert.deepEqual(messages,['changed & local'])

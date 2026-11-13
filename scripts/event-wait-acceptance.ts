@@ -1,3 +1,4 @@
+import { scheduleAuthoring } from '../src/workflows/schedule-authoring.ts'
 import { projectStoragePath } from '../src/utils/data-paths.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -47,7 +48,7 @@ import { ReplyTool } from '../src/tools/reply.ts'
 import { SubagentTool } from '../src/tools/subagent.ts'
 import { MessageTool } from '../src/tools/message.ts'
 import { registerCronTools } from '../src/tools/cron.ts'
-import { CronService } from '../src/cron/service.ts'
+import { TestCronService as CronService } from '../src/cron/testing.ts'
 import { CronDispatcher } from '../src/cron/dispatch.ts'
 import { VirtualFs } from '../src/vfs/virtual-fs.ts'
 import { createBgTasksHandler, createEventsHandler, createSkillsHandler } from '../src/vfs/mounts.ts'
@@ -266,7 +267,7 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
       })
     })
     cron.setHandler(async (job, signal) => { await dispatcher.dispatch(job, signal) })
-    registerCronTools(importer, cron, manager, name => agentTypes.resolve(name) !== null)
+    registerCronTools(importer, cron, manager, name => agentTypes.resolve(name) !== null, scheduleAuthoring(cron.workflow, cron, manager, name => agentTypes.resolve(name) !== null))
     tools.register(new ContinuationTool(background, manager))
     tools.register(new CancelTool(manager, undefined, background))
     tools.register(new AskTool(manager.yields, manager.inputs))
