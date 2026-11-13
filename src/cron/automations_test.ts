@@ -493,13 +493,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
         await until(() => f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
         const initialCount = (await runtime.sources(new AbortController().signal))[0].end
         await f.cron.runNow('learning:reflector')
-        assert.equal(f.requests.length, 3)
+        // A successful learning_result is terminal: no extra model inference follows the receipt.
+        assert.equal(f.requests.length, 2)
         assert.equal(learning.status().pipelines.reflector.pending, true)
         assert.equal(learning.status().pipelines.encapsulator.pending, true)
         assert.equal(learning.status().pipelines.soulReflector.pending, true)
         await f.cron.runNow('learning:encapsulator')
         await f.cron.runNow('learning:soul-reflector')
-        assert.equal(f.requests.length, 3)
+        assert.equal(f.requests.length, 2)
         const learningRuns = f.manager.listSessions().map(row => f.manager.getSessionState(row.sessionId)!)
           .filter(state => state.automation?.config?.source === 'learning')
         assert.equal(learningRuns.length, 1)
@@ -516,9 +517,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
         const command = createLearnCommand(f.manager, pipeline => learning.trigger(pipeline))
         const ctx = {} as Parameters<typeof command.execute>[0]
         assert.match(await command.execute(ctx, 'reflector'), /No new activity/)
-        assert.equal(f.requests.length, 3)
+        assert.equal(f.requests.length, 2)
         await f.manager.deliver('web:origin', input('More user activity'))
-        await until(() => f.requests.length === 4 && f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
+        await until(() => f.requests.length === 3 && f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
         assert.match(await command.execute(ctx, 'reflector'), /Session: cron:/)
         await until(() => !learning.status().pipelines.reflector.dispatching)
         assert.match(JSON.stringify(f.requests.at(-1)!.messages), new RegExp(`messages \\[${initialCount},`))

@@ -13,6 +13,7 @@ test('real Git worktree starts at committed HEAD, not dirty index/files, and ret
   await mkdir(source)
   await mkdir(data)
   await isolationGit(source, ['init'], signal())
+  await isolationGit(source, ['config', 'core.autocrlf', 'false'], signal())
   await isolationGit(source, ['config', 'user.name', 'Synthetic Work Test'], signal())
   await isolationGit(source, ['config', 'user.email', 'work-test@example.invalid'], signal())
   await writeFile(join(source, 'tracked.txt'), 'committed\n')

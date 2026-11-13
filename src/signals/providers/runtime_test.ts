@@ -224,8 +224,9 @@ test('source edit+reload requires direct user input; permissions and filesystem 
     await assert.rejects(tool.execute({ action: 'create', input_json: JSON.stringify({ id: 'x', provider: 'authored', version: 2, secretRef: 'pat' }) }, { ...context, inputSource: 'event' }), /direct user/)
     await assert.rejects(tool.execute({ action: 'reload', path: 'manifest.json' }, { ...context, projectId: 'other' }), /Wrong Project/)
     await writeFile(join(workspace, 'outside.ts'), 'export function run(){return {}}')
-    await symlink(join(workspace, 'outside.ts'), join(cwd, 'escape.ts'))
-    await writeFile(join(cwd, 'manifest.json'), JSON.stringify({ ...manifest, code_file: 'escape.ts' }))
+    // Directory junctions exercise the same realpath escape on Windows without symlink privileges.
+    await symlink(workspace, join(cwd, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+    await writeFile(join(cwd, 'manifest.json'), JSON.stringify({ ...manifest, code_file: 'escape/outside.ts' }))
     await assert.rejects(tool.execute({ action: 'reload', path: 'manifest.json' }, context), /inside local cwd/)
     assert.equal(runtime.snapshot('owner').providers.at(-1)?.version, 2)
     await runtime.stop()

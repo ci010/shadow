@@ -70,8 +70,8 @@ test('exact write previews are required, reject remote/Work changes and publish 
     assert.equal(f.remote.comments[0].body, `${input.body}\n\n<!-- shadow-operation:${next.id} -->`)
     assert.equal(f.works.workEffects().length, 0)
     const stale = await f.service.prepare(input)
-    await f.alignment.execute({ kind: 'user' }, 'update', f.work.key, 1,
-      { definition: { ...githubDefinition, objective: 'New agreement' }, change: 'goal', reason: 'User revised scope', paused: false })
+    await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
+      { definition: { ...githubDefinition, objective: 'New agreement' } })
     await assert.rejects(f.service.execute(stale.id), /Work changed/)
     assert.equal(f.remote.comments.length, 1)
   } finally { await f.close() }
@@ -90,12 +90,17 @@ test('unknown writes block duplicate publication and Work completion until marke
     assert.equal(f.works.workEffects()[0].status, 'unknown')
     await assert.rejects(f.service.execute(preview.id), /cannot be replayed/)
     await assert.rejects(f.service.prepare(input), /unresolved/)
-    await assert.rejects(f.alignment.execute({ kind: 'user' }, 'progress', f.work.key, 1,
-      { expectedSequence: 1, status: 'done', result: { summary: 'Verified', evidence: [] } }), /effect|operation|unresolved/i)
+    await assert.rejects(f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
+      { status: 'done', notes: { summary: 'Verified' } }), /effect|operation|unresolved/i)
+    assert.equal(f.alignment.get(f.work.key).sequence, 1, 'Rejected completion must not mutate the note')
+    assert.notEqual(f.alignment.get(f.work.key).workflow?.status, 'done')
     const reconciled = await f.service.reconcile(preview.id)
     assert.equal(reconciled.status, 'reconciled')
     assert.equal(f.remote.comments.length, 1)
     assert.equal(f.works.workEffects().length, 0)
+    await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
+      { status: 'done', notes: { summary: 'Verified after reconciliation' } })
+    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'done')
     f.store.update(state => { state.operations[0].status = 'sending' })
     assert.equal(new GitHubStore(home).read().operations[0].status, 'unknown')
   } finally { await f.close() }
@@ -132,8 +137,8 @@ test('Issue closure observes local completion and never cancels or finishes Work
     await f.service.link(f.remote.issue.html_url, f.work.key)
     const close = { kind: 'close_issue' as const, resourceId: 'I_1', workKey: f.work.key, reason: 'completed' as const }
     await assert.rejects(f.service.prepare(close), /completion gate/)
-    await f.alignment.execute({ kind: 'user' }, 'progress', f.work.key, 1,
-      { expectedSequence: 1, status: 'done', result: { summary: 'Acceptance verified', evidence: [] } })
+    await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
+      { status: 'done', notes: { summary: 'Acceptance verified' } })
     const preview = await f.service.prepare(close)
     await f.service.execute(preview.id)
     assert.equal(f.remote.issue.state_reason, 'completed')
@@ -218,8 +223,8 @@ test('closing rechecks all linked Work and existing previews cannot bypass an un
   try {
     await f.service.configureRepository('octo/demo', true, true)
     await f.service.link(f.remote.issue.html_url, f.work.key)
-    await f.alignment.execute({ kind: 'user' }, 'progress', f.work.key, 1,
-      { expectedSequence: 1, status: 'done', result: { summary: 'Acceptance verified', evidence: [] } })
+    await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
+      { status: 'done', notes: { summary: 'Acceptance verified' } })
     const closure = await f.service.prepare({ kind: 'close_issue', resourceId: 'I_1', workKey: f.work.key, reason: 'completed' })
     await f.alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
       { title: 'Additional required work', assignee: null, definition: githubDefinition, reason: 'Additional acceptance is now required' })

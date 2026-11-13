@@ -117,3 +117,24 @@ test('historical Work decisions fail closed and cannot become ordinary approval 
   }
   assert.deepEqual(parseYieldQuestion(question), question)
 })
+
+
+test('completion is atomic with unresolved effect checks for current and legacy writes', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    const work = await f.create('Reconcile external outcome')
+    const done = { ...work, sequence: 2, workflow: { ...work.workflow!, status: 'done' as const }, notes: { ...work.notes!, summary: 'Verified' } }
+    f.store.startWorkEffect('effect', 'owner', 'http', [{ key: work.key, revision: work.revision }])
+    for (const uncertain of [false, true]) {
+      if (uncertain) f.store.finishWorkEffect('effect', true)
+      assert.throws(() => f.store.saveWork(done, 1, 'owner', 'legacy'), /unresolved external effects/)
+      await assert.rejects(f.alignment.editNote(actor('owner'), work.key, 1,
+        { status: 'done', notes: { summary: 'Verified' } }), /unresolved external effects/)
+      assert.equal(f.alignment.get(work.key).sequence, 1)
+      assert.equal(f.store.workHistory(work.key).length, 1)
+    }
+    f.store.finishWorkEffect('effect', false)
+    await f.alignment.editNote(actor('owner'), work.key, 1, { status: 'done', notes: { summary: 'Reconciled' } })
+    assert.equal(f.alignment.get(work.key).workflow?.status, 'done')
+  } finally { f.store.close() }
+}))

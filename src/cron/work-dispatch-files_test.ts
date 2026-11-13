@@ -194,14 +194,22 @@ test('reads and writes refuse symlink and hard-link aliases to other Project dat
   await writeFile(protectedFile, 'untouched synthetic Project B data')
   await mkdir(join(home, 'state', 'work-dispatch'), { recursive: true })
   for (const alias of ['symlink', 'hardlink']) {
-    if (alias === 'symlink') await symlink(protectedFile, stored(instructionName))
-    else await link(protectedFile, stored(instructionName))
-    await assert.rejects(service.instructions(), /symlinks|hard links/)
-    await assert.rejects(async () => handlers.read(instructionName, context), /symlinks|hard links/)
-    await assert.rejects(async () => handlers.list(context), /symlinks|hard links/)
-    await assert.rejects(async () => handlers.write(instructionName, { content: 'bad' }, context), /symlinks|hard links/)
-    assert.equal(await readFile(protectedFile, 'utf8'), 'untouched synthetic Project B data')
-    await rm(stored(instructionName))
+    await t.test(alias, async t => {
+      if (alias === 'symlink') {
+        try { await symlink(protectedFile, stored(instructionName)) }
+        catch (error) {
+          if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error
+          t.skip('File symlinks require Windows Developer Mode or symlink privilege')
+          return
+        }
+      } else await link(protectedFile, stored(instructionName))
+      await assert.rejects(service.instructions(), /symlinks|hard links/)
+      await assert.rejects(async () => handlers.read(instructionName, context), /symlinks|hard links/)
+      await assert.rejects(async () => handlers.list(context), /symlinks|hard links/)
+      await assert.rejects(async () => handlers.write(instructionName, { content: 'bad' }, context), /symlinks|hard links/)
+      assert.equal(await readFile(protectedFile, 'utf8'), 'untouched synthetic Project B data')
+      await rm(stored(instructionName))
+    })
   }
   await rm(join(home, 'state', 'work-dispatch'), { recursive: true })
   await symlink(other, join(home, 'state', 'work-dispatch'), process.platform === 'win32' ? 'junction' : 'dir')

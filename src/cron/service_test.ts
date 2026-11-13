@@ -96,11 +96,10 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
     try {
       await service.start()
       const id = service.addJob({ schedule: '0 9 * * SUN', task: 'Sunday task', target: { sessionId: 'web:test' } })
-      await t.waitFor(async () => {
-        const raw = await readFile(workspacePath(workspace, '.cron', 'jobs.json'), 'utf8')
-        assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: service.listJobs() })
-        return true
-      })
+      // Await the persistence boundary rather than racing a Windows open handle against rename.
+      await service.flush()
+      const raw = await readFile(workspacePath(workspace, '.cron', 'jobs.json'), 'utf8')
+      assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: service.listJobs() })
 
       await service.stop()
       await reloaded.start()
