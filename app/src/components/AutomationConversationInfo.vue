@@ -29,13 +29,8 @@
         <p v-if="run">{{ t('Execution:') }} {{ statusLabel(run.status) }}</p>
         <button class="btn btn-sm" :disabled="conversation.loading.value" @click="conversation.refresh()">{{ t('Refresh history') }}</button>
       </div>
-    <div v-if="run && automation?.source === 'learning'" class="learning-outcome" role="status">
-      <template v-if="run.learning">
-        <strong>{{ learningOutcomeLabel(run.learning) }}</strong>
-        <p>{{ run.learning.summary }}</p>
-        <small>{{ t('Execution:') }} {{ statusLabel(run.status) }} · {{ t(run.learning.status === 'applied' ? '{count} verified artifacts' : '{count} recorded artifacts', { count: run.learning.artifacts }, run.learning.artifacts) }} · {{ t('{count} logs', { count: run.learning.events }, run.learning.events) }} · {{ t('{count} decisions evaluated', { count: run.learning.evaluated }, run.learning.evaluated) }}</small>
-      </template>
-      <p v-else>{{ run.status === 'running' ? t('Learning is in progress. Its outcome has not been verified.') : t('No verified learning receipt is available for this run. Execution status alone does not confirm learning.') }}</p>
+    <div v-if="run && !run.learning && automation?.source === 'learning'" class="learning-outcome" role="status">
+      <p>{{ run.status === 'running' ? t('Learning is in progress. Its outcome has not been verified.') : t('No verified learning receipt is available for this run. Execution status alone does not confirm learning.') }}</p>
     </div>
     </MessagePreviewCard>
   </div>
@@ -46,7 +41,7 @@ import MessagePreviewCard from './MessagePreviewCard.vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed } from 'vue'
 import type { AutomationConversation } from '../composables/useAutomationConversation.ts'
-import { learningOutcomeLabel, type AutomationRunSummary } from '../automations.ts'
+import { type AutomationRunSummary } from '../automations.ts'
 
 const props = defineProps<{ conversation: AutomationConversation }>()
 const automation = computed(() => props.conversation.automation.value)

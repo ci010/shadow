@@ -1,4 +1,7 @@
 {
+  "Execution result": "执行结果",
+  "Source: saved run metadata": "来源：已保存的运行元数据",
+  "Source: final execution response": "来源：执行最终回复",
   "Share": "占比",
   "{count} calls · {kinds} categories": "{count} 次调用 · {kinds} 类",
   "Show top 10": "收起至前 10 项",
