@@ -27,12 +27,12 @@ export function createSummaryResponder(maxBytes = 16 * 1024 * 1024, maxEntries =
       ? { scope, refs: [...sessions], body, etag } : undefined
     c.header('Cache-Control', 'no-store')
     c.header('ETag', etag)
-    c.header('Vary', 'Accept')
+    c.header('Vary', 'Accept, Accept-Encoding')
     const validators = c.req.header('If-None-Match')?.match(/(?:W\/)?"[^"\r\n]*"|\*/g) ?? []
     if (validators.some(v => v === '*' || v.replace(/^W\//, '') === etag)) return c.body(null, 304)
     const rows = new Map(sessions.map(row => [row.sessionId, encode(row)]))
     const baseTag = c.req.header('If-None-Match')
-    const base = baseTag ? history.get(baseTag) : undefined
+    const base = baseTag ? history.get(baseTag.replace(/^W\//, '')) : undefined
     let output = body
     if (c.req.header('Accept') === 'application/vnd.shadow.session-summary-delta+json' && base?.scope === scope) {
       const delta = JSON.stringify({ delta: 1, base: baseTag,

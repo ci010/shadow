@@ -1,6 +1,8 @@
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
+import { compress } from 'hono/compress'
+import { navigationSummary } from './summary-navigation.ts'
 import { createSummaryResponder } from './summary-delta.ts'
 import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
@@ -282,11 +284,14 @@ export function sessionsApiPlugin(
       return c.json({ sessionId, tasks })
     })
 
+    app.use('/api/sessions/summary', compress({ encoding: 'gzip' }))
     for (const path of ['/api/sessions/summary', '/api/sessions/graph']) app.get(path, async (c) => {
       const summary = c.req.path.endsWith('/summary')
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
+      const scope = c.req.query('scope')
+      if (summary && scope !== undefined && scope !== 'navigation' && scope !== 'full') return c.json({ error: 'invalid_summary_scope' }, 400)
       const rawIds = c.req.query('sessionIds')
       let requestedIds: string[] | undefined
       if (rawIds !== undefined) {
@@ -390,7 +395,34 @@ export function sessionsApiPlugin(
         const cached = summary ? summaryRows.get(session.sessionId, fingerprint) : undefined
         if (cached) { enrichedSessions.push(cached); continue }
         const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId, state ?? undefined) ?? undefined)
-        const row = {
+        const row = summary ? {
+          // Explicit navigation DTO: never spread persisted/history metadata.
+          sessionId: session.sessionId,
+          channelSource: session.channelSource,
+          folderId: session.folderId,
+          mode: execution.mode,
+          agentType: execution.agentType,
+          sessionKind: execution.sessionKind,
+          createdBySessionId: execution.createdBySessionId,
+          parentSessionId: execution.parentSessionId,
+          parentToolCallId: execution.parentToolCallId,
+          executionStatus: execution.executionStatus,
+          waitingForCall: execution.waitingForCall,
+          automation: navigationAutomation,
+          discordChannel,
+          completed: state?.completed ?? false,
+          hasCron: cronTargets.has(session.sessionId),
+          hasBackgroundTasks: backgroundOwners.has(session.sessionId),
+          // Topic is semantic metadata, not a title alias. Preserve it exactly;
+          // send a display fallback only when the topic is empty.
+          topic: state ? sessionTopic(state) : undefined,
+          title: (state && sessionTopic(state).trim()) ? undefined : graphTitle(session.name)?.trim() ? graphTitle(session.name) : title,
+          focus: state?.focus,
+          description: execution.description,
+          inferenceOverrides, inferenceDefaults,
+          lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ?? null,
+          contextParentSessionId,
+        } : {
           ...session,
           ...execution,
           // The renderer prioritizes name over title, so bound both preview fields.
@@ -434,7 +466,7 @@ export function sessionsApiPlugin(
       }
 
       if (summary) {
-        return summaryResponse(c, sessions.projectId, { sessions: enrichedSessions })
+        return summaryResponse(c, sessions.projectId, { sessions: scope === 'navigation' && !selected ? navigationSummary(enrichedSessions) : enrichedSessions })
       }
       return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions, nodes,
         ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),

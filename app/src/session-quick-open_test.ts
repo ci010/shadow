@@ -43,7 +43,7 @@ test('project order matches sidebar even when other projects have newer or prefi
   assert.deepEqual(searchQuickOpenSessions(rows, '', ['other', 'default']).map(s => s.sessionId), ['new', 'newer', 'old'])
 })
 
-test('quick open excludes tasks, calls, child sessions, spawned agents and automation even for exact title matches', () => {
+test('quick open keeps ordinary defaults and searches automation without admitting unrelated tasks or children', () => {
   const base = { projectId: 'default', label: 'Review' }
   const rows = [
     { ...base, sessionId: 'regular', mode: 'session' as const, parentSessionId: null },
@@ -54,9 +54,8 @@ test('quick open excludes tasks, calls, child sessions, spawned agents and autom
     { ...base, sessionId: 'spawned', mode: 'session' as const, createdBySessionId: 'regular' },
     { ...base, sessionId: 'automation', automation: { jobId: 'job' } },
   ]
-  for (const query of ['', 'review']) {
-    assert.deepEqual(searchQuickOpenSessions(rows, query).map(s => s.sessionId), ['legacy', 'regular'])
-  }
+  assert.deepEqual(searchQuickOpenSessions(rows, '').map(s => s.sessionId), ['legacy', 'regular'])
+  assert.deepEqual(searchQuickOpenSessions(rows, 'review').map(s => s.sessionId), ['automation', 'legacy', 'regular'])
 })
 
 test('project filter combines with title search and regular-session filtering', () => {

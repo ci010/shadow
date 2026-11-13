@@ -8,7 +8,7 @@ export function parseSessionSummary(value: unknown, projectId?: string) {
   const rows: Array<Record<string, unknown>> = value.sessions.map(row => {
     if (!isRecord(row) || (row.contextParentSessionId !== undefined
       && (typeof row.contextParentSessionId !== 'string' || !row.contextParentSessionId))) throw new Error('Invalid session summary')
-    return { ...row, config: row.inferenceOverrides }
+    return { ...row, projectId: row.projectId === undefined ? projectId : row.projectId, config: row.inferenceOverrides }
   })
   // Sort before tree projection: roots, siblings and malformed-cycle fallback
   // all have the same client-owned ordering, independent of full/delta wire order.
@@ -25,8 +25,8 @@ export function parseSessionSummary(value: unknown, projectId?: string) {
   }))
 }
 
-export function createSessionSummaryLoader(base: string, projectId: string, request: typeof fetch = fetch) {
-  const reader = createConditionalProjectJson(base, '/api/sessions/summary', value => {
+export function createSessionSummaryLoader(base: string, projectId: string, request: typeof fetch = fetch, scope: 'full' | 'navigation' = 'full') {
+  const reader = createConditionalProjectJson(base, scope === 'navigation' ? '/api/sessions/summary?scope=navigation' : '/api/sessions/summary', value => {
     parseSessionSummary(value, projectId)
     return value as { sessions: Array<Record<string, unknown>> }
   }, request, {

@@ -598,7 +598,7 @@ activity. Committed
 session creation, metadata/configuration changes and deletion invalidate the summary.
 Runtime startup also resets affected subscriptions once its HTTP routes are ready.
 The renderer's `project-live-state.ts` shares one catalog per host and one logical session summary
-and activity snapshot per Project across chat panes, sidebars and notification
+and activity snapshot per Project/scope across chat panes, sidebars and notification
 sounds. Reads start on subscription and subsequently on invalidation, explicit
 refresh or reset; reconnect recovery also refreshes these snapshots even when
 the cursor is replayable, so failed HTTP reads cannot leave them stale.
@@ -651,8 +651,30 @@ Each sessions API plugin retains at most eight historical representations with a
 16 MiB serialized-body budget; history is scoped by Project and exact URL. A
 missing/evicted base, runtime restart, legacy client, or patch larger than the full
 body falls back to full JSON. Legacy servers ignore the Accept preference and
-continue to work, without a new CORS request-header requirement. Initial loads still
-transfer the complete inventory.
+continue to work, without a new CORS request-header requirement. Gzip responses use
+weak validators; a single weak base also selects its corresponding delta history.
+Both 200 and 304 responses vary on `Accept` and `Accept-Encoding`.
+
+`GET /api/sessions/summary` (also `?scope=full`) remains a complete inventory for
+unparameterized callers. The shared navigation reader explicitly requests
+`?scope=navigation`: it omits terminal historical fresh-automation branches, not
+ordinary tasks/calls or chats. It retains the latest run per job, nonterminal or
+waiting/background-active rows, and transitive delegation/context ancestors of
+all retained rows. Unknown statuses stay visible. A `sessionIds` selection is
+exact (at most 32 IDs), even with navigation scope; it does not apply lazy filtering.
+Unknown scope values return 400. Scope/query URLs bind validators and delta bases
+independently, so a full baseline cannot patch a navigation inventory or vice versa.
+
+Historical runs remain browsable through the existing automation catalog and
+Conversation history menu. `GET /api/automations/:id/runs?offset=0&limit=30`
+returns `{runs,total,offset}` (limit 1–100); the existing history reader loads pages
+on demand and locates deep-linked old runs without retargeting them. Quick Open
+acquires an independent full-summary lease only while its dialog is mounted. Blank
+queries retain ordinary-root results; nonempty title searches also include explicitly
+labeled automation runs, opening their saved session with its automation owner.
+Unrelated task/call results remain excluded. Each Project keeps independent
+loading/errors/retry; close/project changes abort obsolete requests and full
+results never replace the reduced navigation cache.
 
 The summary endpoint reads archive pages once rather than re-reading each archived
 state during enrichment (including the unnamed-title fallback). Its manager-local
@@ -689,10 +711,10 @@ This is not an O(1) inventory API: every request still scans projected metadata,
 resolves defaults and context ownership, and checks runtime dependencies.
 An actual archive revision change still rereads archive pages;
 oversized archives safely bypass caching. Changed responses still join/hash the full
-body, and the renderer still reconciles the complete ordered inventory. Pagination
-or separate historical search would require a distinct product/API contract, not
-silent history truncation. The delta includes all IDs, so its size is linear
-in row count even for a single-row change.
+body for the requested scope, and the renderer still reconciles that complete
+ordered view. Navigation filtering reduces initial rows and transfer bytes, not
+archive scanning complexity. Full historical search intentionally still loads the
+full inventory on demand. Deltas contain changed/removed IDs only, not an order list.
 
 Not every other resource has push hooks: Nodes still use visible-only polling,
 and provider configuration uses ordinary bounded HTTP reads.
@@ -775,7 +797,7 @@ to find its previous segment. `GET /api/sessions/:key` history pagination requir
 a positive integer `pageSize`; omitted `offset` defaults to zero, negative offsets
 count from the end, and offset-only or malformed numeric queries return 400.
 `shallow=true` selects the current physical segment; it is not a metadata-only
-or automatically small response. Direct-chat history responses negotiate gzip
+or automatically small response. Direct-chat history and logical-summary responses negotiate gzip
 through Hono's route-scoped compression middleware. Compressed responses vary on
 `Accept-Encoding` and use weak HTTP ETags; snapshot revisions continue to hash
 the uncompressed representation. Realtime streams and media/range routes are not
@@ -787,7 +809,7 @@ compressed inner responses; older/unknown Child versions retain identity bytes.
 This signal is encoding negotiation, never authentication or device authority.
 Because Child's Node fetch decodes the Main response, Child removes the upstream
 encoding/length/framing headers and separately negotiates gzip for the final
-history-response hop. CORS merges `Vary: Origin` with existing encoding validators
+history/summary-response hop. CORS merges `Vary: Origin` with existing encoding validators
 instead of replacing them. Both Main and Child backends need updated builds and
 restarts for the complete compression path. The frontend snapshot layer
 returns an owned parsed object rather than serializing it through an intermediate

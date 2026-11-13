@@ -13,7 +13,7 @@ import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import { isQuickOpenBackdropPoint, searchQuickOpenSessions } from '../session-quick-open.ts'
 
 const props = defineProps<{ apiBase: string; projects: ProjectRecord[] }>()
-const emit = defineEmits<{ close: []; select: [projectId: string, sessionId: string] }>()
+const emit = defineEmits<{ close: []; select: [projectId: string, sessionId: string, automationId?: string] }>()
 const live = useProjectLiveState()
 const leases = shallowRef<Array<{ projectId: string; lease: ProjectLiveLease }>>([])
 const dialog = ref<HTMLDialogElement>()
@@ -50,7 +50,7 @@ watch(() => [props.apiBase, ...props.projects.map(project => project.id)], (_, _
   folderCatalogs.value = {}
   for (const { lease } of leases.value) lease.release()
   leases.value = [...new Set(props.projects.map(project => project.id))].map(projectId => ({
-    projectId, lease: live.acquireProject(props.apiBase, projectId),
+    projectId, lease: live.acquireProject(props.apiBase, projectId, undefined, false, 'full'),
   }))
   for (const { projectId, lease } of leases.value) {
     void lease.read()
@@ -91,7 +91,7 @@ function close() {
 function choose(index = selected.value) {
   const session = results.value[index]
   if (!session) return
-  emit('select', session.projectId, session.sessionId)
+  emit('select', session.projectId, session.sessionId, session.automation?.jobId)
   close()
 }
 function keydown(event: KeyboardEvent) {
@@ -164,6 +164,7 @@ onBeforeUnmount(() => {
         <span class="session-icon" aria-hidden="true"><SessionListItem part="icon" :session="session" :stage="stageFor(session)" :subagents="delegatedFor(session)" /></span>
         <span class="session-copy">
           <SessionListItem part="title" :session="session" />
+          <span v-if="session.automation" class="automation-label">{{ t('Automation') }} · {{ session.automation.name }}</span>
           <SessionListItem part="metadata" :session="session" :metadata="metadataFor(session)" :project-label="!projectFilter ? projectLabel(session.projectId) : undefined" />
         </span>
       </li>
@@ -195,4 +196,5 @@ button:disabled { cursor: default; opacity: .6; }
 .session-copy { flex: 1; min-width: 0; }
 .session-copy :deep(.session-metadata) { font-size: 11px; color: var(--c-text-secondary); }
 @media (max-width: 700px), (pointer: coarse) { button { min-height: 44px; } input { font-size: 16px; min-height: 44px; } .results li { min-height: 44px; box-sizing: border-box; } }
+.automation-label { display: block; color: var(--c-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 </style>

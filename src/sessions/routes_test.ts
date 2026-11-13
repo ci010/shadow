@@ -809,6 +809,8 @@ test('navigation summary omits physical nodes and arbitrary config while preserv
   const body = await response.json()
   assert.equal(body.nodes, undefined)
   assert.equal(body.sessions.length, 3)
+  body.sessions = ['web:root', 'web:fork', 'task:child'].map(id => body.sessions.find((row: { sessionId: string }) => row.sessionId === id))
+  assert.deepEqual(Object.keys(body.sessions[0]).sort(), ['sessionId', 'mode', 'agentType', 'parentSessionId', 'executionStatus', 'waitingForCall', 'completed', 'hasCron', 'hasBackgroundTasks', 'topic', 'inferenceOverrides', 'inferenceDefaults', 'lastActivityAt'].sort())
   assert.equal(body.sessions[0].config, undefined)
   assert.deepEqual(body.sessions[0].inferenceOverrides, { model: 'chosen', contextWindow: 1234 })
   assert.equal(JSON.stringify(body).includes('must not transfer'), false)
@@ -867,7 +869,7 @@ test('summary reuses rows without N+1 reads and refreshes live dependencies with
   inputs.clear(); assert.notEqual((await load())[0].executionStatus, 'waiting')
   defaults = 'new-default'; assert.equal((await load())[0].inferenceDefaults.model, defaults)
   states[0].config = { model: 'override' }; assert.equal((await load())[0].inferenceOverrides.model, 'override')
-  states[0].name = 'Renamed'; assert.equal((await load())[0].title, 'Renamed')
+  states[0].name = 'Renamed'; assert.equal((await load())[0].topic, 'Renamed')
   const beforeRecreation = messageReads
   states[1] = { ...states[1] }
   await load(); assert.equal(messageReads, beforeRecreation + 1, 'recreated state identity cannot inherit an old log title')
@@ -878,7 +880,7 @@ test('summary reuses rows without N+1 reads and refreshes live dependencies with
   states.shift(); assert.equal((await load()).length, 19)
   assert.equal((await load())[0].contextParentSessionId, undefined, 'owner deletion clears context edge')
   states.push({ sessionId: 'created', segmentIndex: 0, name: 'New' })
-  assert.equal((await load()).at(-1).title, 'New')
+  assert.equal((await load()).find((row: { sessionId: string }) => row.sessionId === 'created').topic, 'New')
 })
 
 

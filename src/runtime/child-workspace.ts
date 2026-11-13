@@ -21,7 +21,7 @@ export function childWorkspacePlugin(options: {
   // Upstream fetch decodes the tunnel response. Negotiate the last loopback hop
   // independently; do not compress realtime or binary/range media responses.
   const plugin: GatewayPlugin = app => app.all('*', async (c, next) => {
-    if (c.req.method === 'GET' && /^\/(?:projects\/[^/]+\/)?api\/chat\/session$/.test(c.req.path)) {
+    if (c.req.method === 'GET' && /^\/(?:projects\/[^/]+\/)?api\/(?:chat\/session|sessions\/summary)$/.test(c.req.path)) {
       return compressHistory(c, next)
     }
     return next()
