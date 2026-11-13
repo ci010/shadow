@@ -2103,6 +2103,8 @@
   "Open a folder or select a conversation to browse files.": "打开文件夹或选择会话以浏览文件。",
   "Open app": "打开应用",
   "Open automation {name}": "打开工作流 {name}",
+  "Configure BOT connection": "配置机器人连接",
+  "The requested connection is unavailable in this Project. Choose another connection or refresh status.": "此项目中找不到请求的连接。请选择其他连接或刷新状态。",
   "Open conversation": "打开会话",
   "Open conversation {id}": "打开会话 {id}",
   "Open conversation {recipient}{value2}": "打开会话 {recipient}{value2}",

@@ -31,6 +31,7 @@
         </section>
         <div v-if="section === 'agents'" class="settings-agents"><AgentsTab :api-base="apiBase" /></div>
         <ChannelsView v-if="botsOpened" v-show="section === 'bots' || section === 'connections'" :section="section === 'connections' ? 'connections' : 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="(section === 'bots' || section === 'connections') && route.name === 'project-settings' && route.params.projectId === projectId"
+          :requested-connection-id="section === 'connections' && route.query.connectionId !== undefined ? (typeof route.query.connectionId === 'string' ? route.query.connectionId : '') : undefined"
           :review-bot-id="typeof route.query.discordBot === 'string' ? route.query.discordBot : undefined"
           :requested-review-id="typeof route.query.discordReview === 'string' ? route.query.discordReview : undefined" />
       </div>

@@ -32,7 +32,7 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
       return `import {createApp,h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router'; import Workspace from '/src/components/ProjectsWorkspace.vue'; import {setLocalePreference} from '/src/i18n.ts'; import '/src/styles.css'; import 'virtual:uno.css'; setLocalePreference('en');
         const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}},{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>null}},{path:'/projects/:projectId/workflows',name:'project-workflows',component:{render:()=>null}},{path:'/projects/:projectId/settings/:section?',name:'project-settings',component:{render:()=>null}},{path:'/projects/:projectId/agents',name:'agents',component:{render:()=>null}},{path:'/settings/:section?',name:'settings',component:{render:()=>null}}]});
         window.fixture={router};
-        const app=createApp({render:()=>h(Workspace,{apiBase:location.origin,visible:true})});app.use(router);router.push({name:'project-workflows',params:{projectId:'a'},query:{workflow:'schedule:a',run:'run:a'}});router.isReady().then(()=>app.mount('#app'));`
+        const app=createApp({render:()=>h(Workspace,{apiBase:location.origin,visible:true})});app.use(router);router.push(new URLSearchParams(location.search).get('fixtureRoute') || {name:'project-workflows',params:{projectId:'a'},query:{workflow:'schedule:a',run:'run:a'}});router.isReady().then(()=>app.mount('#app'));`
     },
     configureServer(server) { server.middlewares.use((req, res, next) => {
       const path = new URL(req.url!, 'http://127.0.0.1').pathname
@@ -44,8 +44,9 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
       if (path === '/api/projects') { json({ projects }); return }
       if (path.endsWith('/api/workflows')) {
         const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'existing', target: { sessionId: 'web:ordinary' }, task: `Reminder ${projectId}` } }] }
-        json({ projectId, bots: { connections: [{ id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:ordinary' } }] }); return
+        json({ projectId, bots: { connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:ordinary' } }] }); return
       }
+      if (path.endsWith('/api/channels')) { json({ channels: (projectId === 'a' ? ['isolated-one', 'isolated-two'] : ['other']).map(id => ({ id, projectId, displayName: id, platform: 'qq', label: 'QQ', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { appId: 'fixture' }, secrets: { secret: true } })) }); return }
       if (path.endsWith('/api/automations')) { json({ automations: [] }); return }
       if (/\/status$/.test(path)) { json({ state: 'ready' }); return }
       if (path.endsWith('/api/work')) { json({ items: [], sessions: [], requests: [], effects: [] }); return }
@@ -136,6 +137,30 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     assert.equal((await route()).query.bot,'bot-binding:two');
     await run('('+visible('.inspector-toolbar button')+').click()');
     await wait('!window.fixture.router.currentRoute.value.query.bot');
+    // Ellipsis is direct, precise, Project-scoped navigation into the existing settings form.
+    assert.equal(await run('!!document.querySelector('+JSON.stringify('[data-workflow="bot-deployment:isolated-two"] .group-connection')+')'),false);
+    for (const id of ['isolated-one','isolated-two']) {
+      await sidebar('a');
+      const selector='[data-workflow="bot-connection:'+id+'"] .group-connection';
+      await wait('document.querySelector('+JSON.stringify(selector)+')');
+      assert.equal(await run('document.querySelector('+JSON.stringify(selector)+').getAttribute("aria-label")'),'Configure BOT connection');
+      await run('document.querySelector('+JSON.stringify(selector)+').click()');
+      await wait('window.fixture.router.currentRoute.value.name==="project-settings"');
+      assert.equal((await route()).params.section,'connections');assert.equal((await route()).params.projectId,'a');assert.equal((await route()).query.connectionId,id);
+      await wait('document.querySelector(".connection-id")?.textContent==='+JSON.stringify(id));
+    }
+    // A cold URL load and real renderer reload recover the precise connection.
+    await win.loadURL(${JSON.stringify(url)}+'?fixtureRoute='+encodeURIComponent('/projects/a/settings/connections?connectionId=isolated-two'));
+    await wait('document.querySelector(".connection-id")?.textContent==="isolated-two"');
+    win.reload();await delay(200);
+    await wait('document.querySelector(".connection-id")?.textContent==="isolated-two"');
+    await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a",section:"connections"},query:{connectionId:"missing"}})');
+    await wait('document.body.innerText.includes("The requested connection is unavailable")');
+    assert.equal(await run('!!document.querySelector(".selected-connection")'),false);
+    await run('window.fixture.router.push({name:"project-settings",params:{projectId:"b",section:"connections"},query:{connectionId:"isolated-two"}})');
+    await wait('document.body.innerText.includes("The requested connection is unavailable")');
+    assert.equal(await run('!!document.querySelector(".selected-connection")'),false);
+    await sidebar('a');
     // Narrow panes retain the tab shell and bounded graph rather than replacing the UI.
     win.setSize(650,844);await delay(200);await wait(visible('.workflow-manager'));assert.equal(await run('document.documentElement.scrollWidth<=window.innerWidth'),true);
     await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`

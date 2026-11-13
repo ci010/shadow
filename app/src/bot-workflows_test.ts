@@ -33,3 +33,13 @@ test('BOT projection is distinct from Workflow runtime definitions and shares th
   assert.throws(() => parseBotProjection({ ...bots, deployments: [{ id: 'bad', state: 'running' }] }))
   assert.equal(parseWorkflows({ projectId: 'p', definitions: [], runs: [], botsUnavailable: true }, 'p').botsUnavailable, true)
 })
+
+test('only isolated connector groups expose exact connection configuration, not deployments or binding conversations', () => {
+  const flows = botCanvas(parseBotProjection({ ...bots, connections: [...bots.connections,
+    { ...bots.connections[0], id: 'one /?#', displayName: 'First' },
+    { ...bots.connections[0], id: 'second', displayName: 'Second' }], deployments: [...bots.deployments, { id: 'second', state: 'valid' }] }))
+  const groups = workflowCanvas(flows).nodes.filter(n => n.type === 'group')
+  assert.deepEqual(groups.filter(n => n.data.configureConnectionId).map(n => n.data.configureConnectionId), ['one /?#', 'second'])
+  assert.equal(groups.find(n => n.data.definition.id === 'bot-deployment:second')?.data.configureConnectionId, undefined)
+  assert.deepEqual(groups.find(n => n.data.definition.id === 'bot-binding:two')?.data.conversation, { kind: 'fixed', sessionId: 'qq:existing' })
+})
