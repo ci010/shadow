@@ -76,12 +76,9 @@ test('automation statistics uses one scroll container for metrics and expanded l
 // A standalone statistics header has nothing above it to separate.
 test('history projection keeps navigation but statistics live only in the workflow inspector', () => {
   const profile = parse(readFileSync(new URL('./components/AutomationProfile.vue', import.meta.url), 'utf8')).descriptor
-  const settings = parse(readFileSync(new URL('./components/AutomationConversationProjection.vue', import.meta.url), 'utf8')).descriptor
+  const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
   assert.doesNotMatch(profile.styles.map(style => style.content).join('\n'), /border-top\s*:/)
-  const css = settings.styles.map(style => style.content).join('\n')
-  assert.match(css, /border-top:\s*1px solid var\(--c-border-soft\)/)
-  assert.doesNotMatch(settings.template!.content, /<form|<input|ModelSelector|AutomationProfile/)
-  assert.match(settings.template!.content, /Open Workflow/)
+  assert.doesNotMatch(chat, /AutomationConversationProjection|<AutomationProfile/)
   const manager = parse(readFileSync(new URL('./components/WorkflowManager.vue', import.meta.url), 'utf8')).descriptor
   assert.match(manager.template!.content, /<WorkflowAutomationProfile/)
   const wrapper = parse(readFileSync(new URL('./components/WorkflowAutomationProfile.vue', import.meta.url), 'utf8')).descriptor

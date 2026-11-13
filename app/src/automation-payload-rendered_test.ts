@@ -53,8 +53,7 @@ test('organizer reuses chat bubbles and bounded conversation disclosures at desk
     await run(()=>document.querySelector('.automation-payload summary').click());await wait();
     assert.ok(await run(()=>document.querySelector('.automation-payload .tool-payload').textContent.includes('SECRET')));
     assert.ok(await run(()=>document.querySelector('.automation-payload .tool-payload').clientHeight<=300));
-    await run(()=>document.querySelector('.automation-info .message-preview-toggle').click());await wait();
-    assert.equal(await run(()=>document.querySelector('.automation-info').dataset.expanded),'true');
+    assert.equal(await run(()=>document.querySelector('.automation-info, .automation-context')),null);
     console.log('AUTOMATION_DETAIL_REAL_OK');app.exit(0);
   }catch(e){console.error(e);app.exit(1)}});`)
   const env:NodeJS.ProcessEnv={}

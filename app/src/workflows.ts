@@ -89,6 +89,14 @@ export function workflowTargetSession(node: WorkflowNode, definition: WorkflowDe
   if (node.kind === 'schedule-action' && node.action === 'session' && isRecord(node.job) && isRecord(node.job.target)) return recordedText(node.job.target.sessionId)
   return undefined
 }
+/** Navigate only to a declared destination or a retained execution receipt, never a run ID. */
+export function workflowConversation(definition: WorkflowDefinition, runs: WorkflowRun[]) {
+  const fixed = definition.nodes.map(node => workflowTargetSession(node, definition)).find(Boolean)
+  if (fixed) return { sessionId: fixed, kind: 'fixed' as const }
+  const latest = runs.filter(run => run.workflow === definition.id && recordedText(run.output?.sessionId))
+    .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp) || b.id.localeCompare(a.id))[0]
+  return latest ? { sessionId: latest.output!.sessionId!, kind: 'latest' as const } : undefined
+}
 export function workflowGraph(definition: WorkflowDefinition, run?: WorkflowRun) {
   const status = (index: number) => !run ? 'ready' as const : index < run.cursor ? 'completed' as const
     : index > run.cursor ? 'waiting' as const : run.status

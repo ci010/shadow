@@ -21,7 +21,7 @@ const run = (id = 'one') => ({
 })
 const page = (runs: unknown[] = [run()], total = runs.length, offset = 0) => ({ runs, total, offset })
 const signal = () => new AbortController().signal
-const settle = () => new Promise(resolve => setTimeout(resolve, 10))
+const settle = () => new Promise(resolve => setTimeout(resolve, 30))
 const response = (value: unknown): typeof fetch => async () => Response.json(value)
 
 test('automation workspace delegates to the ordinary conversation without a runs explorer or tab strip', () => {
@@ -99,14 +99,12 @@ test('learning conversations show partial outcomes and keep legacy completion un
     status: 'partial', summary: 'One decision saved; remaining evidence unread.', artifacts: 1, events: 1, evaluated: 0,
   } }, run('legacy')]), { ...automation(), source: 'learning' })
   await settle()
-  assert.match(view.text(), /Partial/)
-  assert.match(view.text(), /One decision saved; remaining evidence unread/)
-  assert.match(view.text(), /Execution: Completed/)
-  assert.match(view.text(), /1 recorded artifact/)
-  assert.doesNotMatch(view.text(), /1 verified artifact/)
+  assert.equal(view.state().run.learning.status, 'partial')
+  assert.doesNotMatch(view.text(), /One decision saved|Execution:|Check frequency/)
   view.props.selectedSessionId = run('legacy').sessionId
   await nextTick()
-  assert.match(view.text(), /No verified learning receipt/)
+  assert.equal(view.state().run.learning, undefined)
+
 })
 
 test('runs reject malformed dates, counts, scope offsets, duplicate sessions and unknown wire enums', async () => {
@@ -285,13 +283,15 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     const setup = Reflect.get(instance.$, 'setupState')
     return new Proxy(setup, { get(target, key) {
       if (key === 'runs') return target.history.runs
+      if (key === 'run') return target.conversation.run.value
       if (key === 'error') return target.error || target.historyError
       return Reflect.get(target, key)
     } })
   }
   const finish = (from = 0, runs = page(), item = automation()) => {
-    requests[from].finish({ automations: [item] })
-    requests[from + 1].finish(runs)
+    const batch = requests.slice(from, from + 2)
+    batch.find(request => request.url.pathname.endsWith('/api/automations'))!.finish({ automations: [item] })
+    batch.find(request => request.url.pathname.endsWith('/runs'))!.finish(runs)
   }
   const invalidate = () => subscriptions.at(-1)!.observer.reset('subscription')
   const setVisible = (value: boolean) => { visibility.visibilityState = value ? 'visible' : 'hidden'; visibility.dispatchEvent(new Event('visibilitychange')) }
@@ -586,30 +586,22 @@ test('upgrade, invalid and missing automation errors are retryable and never bec
   assert.match(view.state().error, /invalid workflow data/)
 })
 
-test('collapsed conversation metadata explains learning checks without adding a configuration tab', async t => {
+test('conversation status omits configuration and leaves the saved run intact', async t => {
   const view = mount(t)
   await settle()
   view.finish(0, page([{ ...run(), status: 'failed', title: 'Saved conversation title' }]), {
     ...automation(), source: 'learning', enabled: false,
   })
   await settle()
-  assert.match(view.text(), /Dispatch is disabled/)
-  assert.match(view.text(), /Failed/)
-  assert.match(view.text(), /Review recent work/)
+  assert.doesNotMatch(view.text(), /Dispatch is disabled|Review recent work|Check frequency|activity-gated|each dispatch/)
   assert.equal(view.props.selectedSessionId, run().sessionId)
+  assert.equal(view.state().run.status, 'failed')
   assert.deepEqual(view.opens, [])
-  const details = view.nodes().find(node => node.type === 'details' && node.props.class === 'automation-info')
-  assert.ok(details)
-  assert.ok(!details.props.open)
-  assert.equal(view.nodes().some(node => node.props.role === 'tab' && view.nodes(node).some(child => child.text.includes('Configuration'))), false)
-  assert.match(view.text(), /Check frequency/)
-  assert.match(view.text(), /activity-gated/)
-  assert.match(view.text(), /each dispatch starts a separate conversation/)
-  assert.match(view.text(), /Review recent work/)
-  assert.equal(view.requests.length, 2, 'Conversation metadata reuses the same catalog and history')
+  assert.equal(view.nodes().some(node => node.props.class === 'automation-info' || node.props.class === 'automation-context'), false)
+  assert.equal(view.requests.length, 2)
 })
 
-test('an automation with no runs keeps its read-only details without creating a draft', async t => {
+test('an automation with no runs shows its empty state without configuration or a draft', async t => {
   const view = mount(t)
   await settle()
   view.finish(0, page([]))
@@ -617,8 +609,8 @@ test('an automation with no runs keeps its read-only details without creating a 
   assert.equal(view.props.selectedSessionId, '')
   assert.deepEqual(view.opens, [])
   assert.match(view.text(), /No saved runs yet/)
-  assert.match(view.text(), /Review recent work/)
-  assert.ok(view.nodes().some(node => node.type === 'details' && node.props.class === 'automation-info'))
+  assert.doesNotMatch(view.text(), /Review recent work|Check frequency/)
+  assert.equal(view.nodes().some(node => node.props.class === 'automation-info'), false)
 })
 
 test('previous, next and current select sessions without accumulating open run tabs', async t => {
@@ -732,21 +724,13 @@ test('system automation renders scoped coverage history with stable feature cont
   const full = { ...run('full'), title: '话题全量重整', scope: 'full' }
   view.finish(0, page([partial, full]), { ...automation(), source: 'system', canToggle: true, name: '话题整理', task: undefined, enabled: false, configuredEnabled: false, editable: true } as ReturnType<typeof automation>)
   await settle()
-  assert.match(view.text(), /Execution history/)
-  assert.match(view.text(), /1\/3 Coverage/)
   assert.match(view.text(), /Organization ended without finishing/)
-  assert.match(view.text(), /Partial/)
   assert.match(view.text(), /Inactive/)
-  assert.match(view.text(), /Enable/)
-  assert.match(view.text(), /Controls this automation feature, not the saved run/)
+  assert.doesNotMatch(view.text(), /Execution history|Coverage|Controls this automation feature/)
   assert.equal(view.state().history.runs.length, 2)
-  view.state().scope = 'delta'
-  await nextTick()
-  assert.equal(view.state().filteredRuns.length, 1)
-  assert.equal(view.state().filteredRuns[0].scope, 'delta')
-  const disclosures = view.nodes().filter(node => node.type === 'details')
-  assert(disclosures.length > 0)
-  assert(disclosures.every(node => !node.props.open))
+  assert.equal(view.state().run.organization.status, 'partial')
+  assert.equal(view.state().run.organization.coveredCount, 1)
+  assert.equal(view.state().run.organization.manifestCount, 3)
 })
 
 

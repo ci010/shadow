@@ -92,7 +92,7 @@ import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { t, formatDateTime } from '../i18n.ts'
-import { createWorkflowClient, recentWorkflowRuns, workflowGraph, workflowHint, workflowStatus, type WorkflowRun, type WorkflowSnapshot } from '../workflows.ts'
+import { createWorkflowClient, recentWorkflowRuns, workflowConversation, workflowGraph, workflowHint, workflowStatus, type WorkflowRun, type WorkflowSnapshot } from '../workflows.ts'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; active?: boolean }>(), { active: true })
 const route = useRoute(), router = useRouter()
 const snapshot = shallowRef<WorkflowSnapshot>(), loading = ref(false), error = ref(''), operationError = ref(''), busy = ref(false), confirmation = ref(''), notice = ref('')
@@ -115,7 +115,7 @@ const inspectorOpen = computed(() => typeof route.query.workflow === 'string' &&
 async function closeInspector() { inspectedNode.value = undefined; await router.replace({ query: {} }); await nextTick(); graphView.value?.focusCanvas() }
 const canvasFlows = computed(() => (snapshot.value?.definitions ?? []).map(flow => {
   const selected = selectedRun.value?.workflow === flow.id ? selectedRun.value : undefined
-  return { definition: selected?.definition ?? flow, enabled: flow.enabled, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
+  return { definition: selected?.definition ?? flow, conversation: workflowConversation(flow, snapshot.value!.runs), enabled: flow.enabled, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
 }))
 async function inspectFlow(id: string, nodeId?: string) {
   inspectedNode.value = nodeId

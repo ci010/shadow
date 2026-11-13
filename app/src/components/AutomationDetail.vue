@@ -11,7 +11,6 @@
       <AutomationConversationInfo v-if="automation && !error && !history.error" :conversation="conversation" />
     </div>
     <slot />
-    <AutomationConversationProjection v-if="automation && enabled && !selectedSessionId" :api-base="apiBase" :job="automation" :active="active && enabled" />
   </section>
 </template>
 
@@ -23,7 +22,6 @@ import { createAutomationConversation, automationRunPosition } from '../automati
 import { createAutomationRunHistory, emptyAutomationRunHistory } from '../automation-run-history.ts'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'
-import AutomationConversationProjection from './AutomationConversationProjection.vue'
 
 const props = withDefaults(defineProps<{ apiBase: string; automationId: string; active: boolean; enabled?: boolean; selectedSessionId?: string }>(), { enabled: true })
 const emit = defineEmits<{ open: [sessionId: string, replace: boolean] }>()

@@ -1,4 +1,8 @@
 {
+  "Open latest conversation": "打开最近对话",
+  "Open the most recent retained run with a recorded session.": "打开保留运行记录中最近有关联会话的对话。",
+  "Open the configured target session.": "打开已配置的固定目标会话。",
+  "No associated session recorded. This does not start a workflow or conversation.": "暂无关联会话记录；此操作不会启动工作流或创建对话。",
   "Execution result": "执行结果",
   "Source: saved run metadata": "来源：已保存的运行元数据",
   "Source: final execution response": "来源：执行最终回复",

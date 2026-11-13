@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createWorkflowClient, parseWorkflows, recentWorkflowRuns, workflowGraph, workflowHint, type WorkflowDefinition, type WorkflowRun } from './workflows.ts'
+import { createWorkflowClient, parseWorkflows, recentWorkflowRuns, workflowConversation, workflowGraph, workflowHint, type WorkflowDefinition, type WorkflowRun } from './workflows.ts'
 
 const definition: WorkflowDefinition = { id: 'external:issues', name: 'Issue intake', revision: 2, enabled: true, source: { kind: 'external', id: 'issues' }, gate: { kind: 'revision-dedupe', first: 'baseline' }, nodes: [{ kind: 'record' }] }
 const run: WorkflowRun = { id: 'run-only', workflow: definition.id, definition: { ...definition, revision: 1 }, timestamp: '2026-11-12T12:00:00Z', status: 'blocked', cursor: 0, attempts: 1, started: true, nextAt: 0, error: 'interrupted_effect' }
@@ -32,4 +32,19 @@ test('workflow controls use Project-scoped authenticated API with explicit repla
   const client = createWorkflowClient('https://fixture.test/projects/p', 'p', request)
   await client.control('run-only', 'retry', true, new AbortController().signal)
   assert.deepEqual(requests, [{ url: 'https://fixture.test/projects/p/api/workflows/control', body: { id: 'run-only', action: 'retry', acknowledgeReplay: true } }])
+})
+
+test('group conversation chooses fixed targets or latest real receipt across revisions, never owner/run guesses', () => {
+  const old = { ...run, output: { sessionId: 'web:old' } }
+  const latest = { ...old, id: 'new', timestamp: '2026-11-13T00:00:00Z', output: { sessionId: 'web:latest' } }
+  const empty = { ...run, id: 'no-session', timestamp: '2026-11-14T00:00:00Z' }
+  for (const action of ['agent', 'program']) {
+    const flow = { ...definition, owner: 'web:not-a-target', nodes: [{ kind: 'schedule-action', action }] }
+    assert.deepEqual(workflowConversation(flow, [empty, old, latest]), { sessionId: 'web:latest', kind: 'latest' })
+    assert.equal(workflowConversation(flow, [empty, { ...latest, workflow: 'other' }]), undefined)
+  }
+  for (const node of [{ kind: 'inbox' }, { kind: 'github-notify', subscription: { sessionId: 'web:fixed' } }, { kind: 'schedule-action', action: 'session', job: { target: { sessionId: 'web:fixed' } } }]) {
+    assert.deepEqual(workflowConversation({ ...definition, owner: 'web:fixed', nodes: [node] }, [latest]), { sessionId: 'web:fixed', kind: 'fixed' })
+  }
+  assert.equal(workflowConversation(definition, [empty]), undefined)
 })
