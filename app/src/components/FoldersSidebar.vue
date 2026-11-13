@@ -113,7 +113,7 @@
             :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
-      <AutomationSidebar :api-base="apiBase" :active="resizeActive && (!grouped || groupExpanded)" :rail="isRail"
+      <AutomationSidebar :project-id="projectId" :api-base="apiBase" :active="resizeActive && (!grouped || groupExpanded)" :rail="isRail"
         :groups="groups.automations" :stages="stages" :selected-id="selectedAutomationId || activeAutomation?.jobId"
         @select="$emit('automation', $event)" />
       <div v-if="cloneStatus.state === 'unknown' || cloneStatus.state === 'failed'" class="sidebar-error" role="alert">

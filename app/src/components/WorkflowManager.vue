@@ -11,15 +11,12 @@
       <h2>{{ t('No workflows yet') }}</h2><p>{{ t('Ask an Agent to create a workflow with a signal source, an explicit first-batch policy and typed actions. Its saved definition will appear here.') }}</p>
       <RouterLink class="btn" :to="chatLocation">{{ t('Open chat') }}</RouterLink>
     </div>
-    <div v-else-if="snapshot" class="workflow-layout">
-      <nav class="workflow-inventory" :aria-label="t('Workflow definitions')">
-        <button v-for="flow in snapshot.definitions" :key="flow.id" class="workflow-choice" :class="{ selected: definition?.id === flow.id }"
-          :aria-current="definition?.id === flow.id ? 'page' : undefined" @click="selectFlow(flow.id)">
-          <strong>{{ flow.name || flow.id }}</strong><span>{{ flow.source.kind }} · {{ flow.enabled ? t('Enabled') : t('Paused') }}</span>
-        </button>
-      </nav>
+    <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
+      <WorkflowGraph ref="graphView" :flows="canvasFlows" :selected-id="inspectorOpen ? definition?.id : undefined" @inspect="inspectFlow" @clear="closeInspector" />
       <p v-if="!definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
-      <div v-if="definition && displayed" class="workflow-inspector">
+      <aside v-if="inspectorOpen && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
+        <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
+        <div class="inspector-toolbar"><span>{{ t('Workflow details') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
         <header class="workflow-title">
           <div><h2>{{ definition.name || definition.id }}</h2><p>{{ t('Workflow ID') }} <code>{{ definition.id }}</code> · {{ t('Revision {revision}', { revision: definition.revision }) }}</p></div>
           <button class="btn btn-sm" :disabled="busy || !!error" @click="operate(definition.enabled ? 'pause' : 'resume', definition.id)">{{ definition.enabled ? t('Pause') : t('Resume') }}</button>
@@ -37,21 +34,18 @@
         </div>
         <p v-if="selectedRun && selectedRun.definition.revision !== definition.revision" class="workflow-explanation">{{ t('This run retains its admitted definition. Later edits apply to future runs.') }}</p>
         <p v-if="!selectedRun" class="workflow-explanation">{{ t('Node states use the latest retained run at this revision.') }}</p>
-        <ol class="workflow-graph" :aria-label="t('Read-only workflow graph')">
-          <li v-for="(node, index) in graph" :key="node.id" class="workflow-graph-step">
-            <svg v-if="index" class="workflow-connector" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h18m-6-6 6 6-6 6" /></svg>
-            <details class="workflow-node" :data-state="node.status">
-              <summary><span>{{ node.label }}</span><small>{{ node.detail }}</small><span class="workflow-state" :data-state="node.status">{{ workflowStatus(node.status) }}</span></summary>
-              <pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
-            </details>
-          </li>
-        </ol>
+        <details class="graph-text" :open="!!inspectedNode"><summary>{{ t('Node details') }}</summary>
+          <ol><li v-for="node in graph" :key="node.id"><details class="workflow-node" :data-state="node.status" :open="inspectedNode === node.id">
+            <summary>{{ node.label }} · {{ node.detail }} · {{ workflowStatus(node.status) }}</summary>
+            <p v-if="node.description">{{ node.description }}</p><pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
+          </details></li></ol>
+        </details>
         <p v-if="githubTarget" class="workflow-explanation">
           <RouterLink :to="{ name: 'chat', params: { projectId, sessionId: githubTarget.sessionId } }">{{ t('Target session') }}: {{ githubTarget.sessionId }}</RouterLink>
           · <RouterLink :to="{ name: 'project-dashboard', params: { projectId }, query: { work: githubTarget.workKey } }">{{ t('Open Work') }}: {{ githubTarget.workKey }}</RouterLink>
           · {{ t('Inbox acceptance is not user visibility or completed Work.') }}
         </p>
-        <p class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection emits actions for unseen revisions.') }} {{ t('Revision deduplication is bounded; external effects are not exactly-once.') }}</p>
+        <p v-if="displayed.source.kind !== 'schedule'" class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection emits actions for unseen revisions.') }} {{ t('Revision deduplication is bounded; external effects are not exactly-once.') }}</p>
         <details class="workflow-definition">
           <summary>{{ t('Source and definition details') }}</summary>
           <dl><dt>{{ t('Source ID') }}</dt><dd><code>{{ displayed.source.id }}</code></dd><dt>{{ t('Owner session') }}</dt><dd><code>{{ displayed.owner || t('Host managed') }}</code></dd></dl>
@@ -85,13 +79,15 @@
           </button></li></ol>
         </section>
         <footer class="workflow-footer"><RouterLink :to="chatLocation">{{ t('Create or edit in chat') }}</RouterLink><p>{{ t('Pause, resume, retry and cancel are operational controls, not configuration edits. Pausing does not roll back accepted effects.') }}</p></footer>
-      </div>
+      </aside>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
+import WorkflowGraph from './WorkflowGraph.vue'
+import SidebarResizer from './SidebarResizer.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { t, formatDateTime } from '../i18n.ts'
 import { createWorkflowClient, recentWorkflowRuns, workflowGraph, workflowHint, workflowStatus, type WorkflowRun, type WorkflowSnapshot } from '../workflows.ts'
@@ -111,6 +107,20 @@ const githubTarget = computed(() => {
 const selectedRun = computed(() => snapshot.value?.runs.find(r => r.workflow === definition.value?.id && r.id === route.query.run))
 const displayed = computed(() => selectedRun.value?.definition ?? definition.value)
 const graph = computed(() => displayed.value ? workflowGraph(displayed.value, selectedRun.value ?? runs.value.find(r => r.definition.revision === displayed.value?.revision)) : [])
+const inspector = ref<HTMLElement>(), inspectedNode = ref<string>(), graphView = ref<InstanceType<typeof WorkflowGraph>>()
+const inspectorId = useId(), inspectorWidth = ref(380)
+const inspectorOpen = computed(() => typeof route.query.workflow === 'string' && !!definition.value)
+async function closeInspector() { inspectedNode.value = undefined; await router.replace({ query: {} }); await nextTick(); graphView.value?.focusCanvas() }
+const canvasFlows = computed(() => (snapshot.value?.definitions ?? []).map(flow => {
+  const selected = selectedRun.value?.workflow === flow.id ? selectedRun.value : undefined
+  return { definition: selected?.definition ?? flow, enabled: flow.enabled, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
+}))
+async function inspectFlow(id: string, nodeId?: string) {
+  inspectedNode.value = nodeId
+  await router.replace({ query: { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
+  confirmation.value = ''; operationError.value = ''; notice.value = ''
+  await nextTick(); inspector.value?.focus({ preventScroll: true })
+}
 const chatLocation = computed(() => ({ name: 'chat', params: { projectId: props.projectId } }))
 let timer: ReturnType<typeof setTimeout> | undefined, reader: AbortController | undefined, mutation: AbortController | undefined
 function stopRead() { clearTimeout(timer); reader?.abort(); reader = undefined; loading.value = false }
@@ -127,7 +137,6 @@ async function refresh() {
     if (reader === controller) { reader = undefined; loading.value = false; if (enabled.value) timer = setTimeout(refresh, 30_000) }
   }
 }
-function selectFlow(id: string) { confirmation.value = ''; operationError.value = ''; notice.value = ''; void router.replace({ query: { workflow: id } }) }
 function selectRun(id?: string) { confirmation.value = ''; void router.replace({ query: { workflow: definition.value?.id, ...(id ? { run: id } : {}) } }) }
 function requestRetry(run: WorkflowRun) { if (run.status === 'blocked') confirmation.value = run.id; else void operate('retry', run.id) }
 async function operate(action: 'pause' | 'resume' | 'retry' | 'cancel', id: string, acknowledgeReplay = false) {
@@ -155,19 +164,14 @@ onUnmounted(() => { activated.value = false; stopRead(); mutation?.abort(); docu
 .workflow-heading { display: flex; gap: 16px; justify-content: space-between; align-items: start; padding: 18px 20px; border-bottom: 1px solid var(--c-border); }
 h1, h2, h3, p { margin: 0; } h1 { font-size: 18px; font-weight: 600; } h2 { font-size: 16px; font-weight: 600; } h3 { font-size: 14px; font-weight: 600; }
 .workflow-heading p, .workflow-explanation, .workflow-footer p { margin-top: 6px; color: var(--c-text-secondary); line-height: 1.6; max-width: 75ch; }
-.workflow-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; flex: 1; }
-.workflow-inventory { overflow: auto; border-right: 1px solid var(--c-border); padding: 8px; }
-.workflow-choice { display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 12px 10px; text-align: start; border: 0; background: transparent; color: var(--c-text); cursor: pointer; overflow-wrap: anywhere; }
-.workflow-choice span { color: var(--c-text-secondary); font-size: 12px; } .workflow-choice strong { font-weight: 500; }
-.workflow-choice:hover, .workflow-run-choice:hover { background: var(--c-bg-muted); } .workflow-choice.selected, .workflow-run-choice.selected { background: var(--c-selection-bg); color: var(--c-primary); }
-.workflow-inspector { overflow: auto; min-width: 0; padding: 20px; }
-.workflow-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }.workflow-title p { margin-top: 8px; font-size: 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.workflow-layout { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
+.workflow-layout.has-inspector { grid-template-columns: minmax(0, 1fr) var(--workflow-inspector-width); }
+.workflow-inspector { position: relative; min-width: 0; overflow: auto; padding: 16px; border-left: 1px solid var(--c-border); background: var(--c-bg-card); }
+.inspector-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; color: var(--c-text-secondary); }
+.workflow-inspector:focus { outline: none; }.workflow-inspector:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.graph-text { margin-top: 12px; border-bottom: 1px solid var(--c-border); }.graph-text summary { padding: 10px 0; cursor: pointer; overflow-wrap: anywhere; }
+.workflow-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }.workflow-title>div, .workflow-heading>div { min-width: 0; flex: 1; }.workflow-title h2 { overflow-wrap: anywhere; }.workflow-title>.btn, .workflow-heading>.btn { flex-shrink: 0; white-space: nowrap; }.workflow-title p { margin-top: 8px; font-size: 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .workflow-map-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 24px 0 12px; }.workflow-map-heading>span { color: var(--c-text-secondary); font-size: 12px; }
-.workflow-graph { list-style: none; display: flex; margin: 0; padding: 0 0 8px; overflow-x: auto; align-items: start; }
-.workflow-graph-step { display: flex; align-items: start; min-width: 0; flex: 1 0 150px; }
-.workflow-connector { flex: 0 0 24px; width: 24px; height: 24px; margin-top: 28px; stroke: var(--c-text-muted); stroke-width: 1.5; fill: none; }
-.workflow-node { flex: 1; min-width: 0; background: var(--c-bg-card); border: 1px solid var(--c-border); }.workflow-node[data-state=running] { border-color: var(--c-info); }.workflow-node[data-state=blocked] { border-color: var(--c-warn); }
-.workflow-node summary { display: flex; flex-direction: column; gap: 8px; padding: 12px; cursor: pointer; overflow-wrap: anywhere; }.workflow-node summary>span:first-child { font-weight: 500; }.workflow-node small { color: var(--c-text-secondary); }.workflow-node pre { min-width: 180px; max-width: 300px; }
 .workflow-state { font-size: 12px; color: var(--c-text-secondary); font-weight: 400; }.workflow-state[data-state=completed] { color: var(--c-success); }.workflow-state[data-state=blocked], .workflow-run-hint[data-state=blocked] { color: var(--c-warn); }.workflow-state[data-state=retry], .failure { color: var(--c-error); }.workflow-state[data-state=running] { color: var(--c-info); }
 .workflow-definition { margin-top: 18px; border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); }.workflow-definition summary { padding: 12px 0; cursor: pointer; }.workflow-definition>p { margin: 10px 0; overflow-wrap: anywhere; }
 pre { margin: 0; padding: 12px; max-height: 280px; overflow: auto; background: var(--c-bg-soft); color: var(--c-text-body); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; } code { font-size: 12px; overflow-wrap: anywhere; }
@@ -178,6 +182,6 @@ dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; m
 .workflow-run-choice { width: 100%; padding: 12px 0; background: transparent; border: 0; border-bottom: 1px solid var(--c-border-soft); color: var(--c-text); display: grid; grid-template-columns: minmax(0, 1fr) auto; text-align: start; gap: 6px 16px; cursor: pointer; }.workflow-run-choice>span:last-child { font-size: 12px; color: var(--c-text-secondary); }.workflow-run-choice code { color: var(--c-text-secondary); }
 .workflow-message { padding: 12px 20px; }.workflow-message p { margin-bottom: 8px; }.workflow-empty { padding: 40px 24px; }.workflow-empty p { margin: 12px 0 20px; max-width: 65ch; line-height: 1.6; color: var(--c-text-secondary); }.workflow-footer { padding: 24px 0 8px; }.workflow-footer a { color: var(--c-primary); }.workflow-footer p { font-size: 12px; }
 button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-@container (max-width: 760px) { .workflow-layout { grid-template-columns: minmax(0, 1fr); overflow: auto; display: block; }.workflow-inventory { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--c-border); }.workflow-choice { flex: 0 0 170px; }.workflow-inspector { overflow: visible; padding: 16px; }.workflow-heading { padding: 16px; }.workflow-graph { flex-direction: column; overflow: visible; }.workflow-graph-step { width: 100%; flex: none; flex-direction: column; align-items: center; }.workflow-node { width: 100%; }.workflow-node summary { display: grid; grid-template-columns: 1fr auto; }.workflow-node small { grid-row: 2; }.workflow-node .workflow-state { grid-column: 2; grid-row: 1 / 3; align-self: center; }.workflow-connector { transform: rotate(90deg); margin: 0; }.workflow-node pre { max-width: none; min-width: 0; } }
-@media (max-width: 700px), (pointer: coarse) { .workflow-choice, .workflow-run-choice, summary, .btn { min-height: 44px; } }
+@container (max-width: 900px) { .workflow-layout.has-inspector { grid-template-columns: minmax(0, 1fr); }.workflow-inspector { position: absolute; inset: 0 0 0 auto; width: min(380px, 100%); box-sizing: border-box; z-index: 5; box-shadow: -8px 0 24px var(--c-shadow-soft); }.workflow-inspector :deep(.sidebar-resizer) { display: none; }.workflow-heading { padding: 16px; } }
+@media (max-width: 700px), (pointer: coarse) { .workflow-run-choice, summary, .btn { min-height: 44px; } }
 </style>

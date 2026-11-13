@@ -317,18 +317,35 @@ Work realignment events keep their agent-facing instructions and JSON in the sha
 
 Automations use the ordinary conversation workbench, opening the latest run by default. Reuse the compacted-history Previous / Next / Current controls to navigate independent run sessions, loading older pages on demand. Do not introduce a runs explorer, per-run tab strip, or secondary conversation pane. Keep read-only automation metadata behind the collapsed Automation details disclosure in the conversation, not a permanent Configuration tab. Preserve learning receipts separately from execution status. Do not add a standalone File changes workbench: retain write history as data for future context-specific detail views, without turning every write into another navigation surface.
 
-Workflow inspection is distinct from the automation conversation projection. The
-Project Workflow page shows persistent definitions and bounded recent execution
-runs, not another model-conversation pane. Use a quiet inventory beside a
-read-only connected sequence of source, revision gate and typed action nodes.
-Node disclosures show escaped configuration; no forms, draggable nodes or manual
-flow editor. Configuration authoring belongs to chat/Agent tools. Explicitly
-label definition revisions, run snapshots and Workflow/run/session identities;
-only recorded session outputs receive model-session links. Pause/resume and
-non-active retry/cancel are operational controls. An uncertain retry requires
-visible acknowledgement of possible duplicate effects. Below 760px of pane
-width, the inventory scrolls horizontally and the connected sequence becomes
-vertical, retaining native keyboard disclosures and semantic state text.
+Workflow is the first-class Project automation concept. The Workflows sidebar
+section keeps a visible definitions entry even without saved conversation runs;
+legacy run conversations and their details remain accessible in that section.
+The Project Workflow page uses one shared Vue Flow canvas for all definitions,
+not a nested inventory sidebar or one canvas per selected flow. Each flow has
+its own neutral section boundary, title, revision and state; its source, revision
+gate and action nodes connect only within that group. Shared zoom, fit and pan
+controls affect the viewport only. The focused canvas supports V selection,
+H hand mode, Space temporary pan, middle-button drag, wheel pan, Ctrl/Cmd-wheel
+zoom, Shift+1 fit-all, Shift+2 fit-selection and Escape to clear. These shortcuts
+never intercept input fields or act as global editing/running shortcuts.
+Schedule nodes show saved cron/interval and timezone when recorded; action nodes
+show fixed targets, fresh-session policy, programs or actual task summaries from
+the admitted definition, never guesses from names. Missing metadata is explicit;
+current session destinations and timezones must not overwrite historical evidence. Initially show approximately three to four
+flows at a readable 100% zoom rather than fitting the full inventory; Fit diagram
+is an explicit overview action. Enabled groups have a solid boundary; paused
+groups use a dashed boundary and muted surface, with explicit text and icons.
+Only recorded running execution animates edges, and reduced motion disables it.
+Nodes cannot be dragged, connected, deleted or edited. Selecting a group or node
+opens the existing resizable right-inspector pattern, including ordered native
+Node details disclosures and bounded recent runs; it is not a second flow list.
+Configuration authoring belongs to chat/Agent tools. Explicitly label definition
+revisions, run snapshots and Workflow/run/session identities; only recorded
+session outputs receive model-session links. Existing pause/resume and non-active
+retry/cancel controls retain their authority boundaries. An uncertain retry
+requires visible acknowledgement of possible duplicate effects. Narrow panes
+keep one bounded, pannable canvas with an overlaid right inspector that can be
+closed with its visible control or Escape, without forcing page overflow.
 
 The composer is `calc(100% - 40px)` wide, capped at (860px), changing to `calc(100% - 24px)` on narrow viewports. It owns a measured trailing history allowance through `--composer-height`. Preserve stable scrollbar gutters and the scroll container's own geometry; do not use the prose measure as the workbench's outer width.
 
