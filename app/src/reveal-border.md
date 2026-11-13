@@ -97,3 +97,12 @@ were made for this optimization.
 Conversation chips (`.chat-working`, `.context-chip`, and `.session-work-triggers > button`)
 also opt in. Their resting border uses `--c-border`; waiting and expanded task
 chips retain semantic/state boundaries and suppress Reveal.
+
+## Timeline paint containment
+
+`ChatTab.vue` keeps `content-visibility: auto` on timeline rows for long-history
+rendering, with `overflow-clip-margin: 24px` to preserve the execution card's
+22px breathing halo beyond the row's paint bounds. Without this allowance,
+top/left/bottom halos are clipped while the unused row width exposes the right
+halo. The rendered fixture samples all four outside edges of a card inside the
+actual timeline-row CSS. This does not bypass ancestor scrollport clipping.

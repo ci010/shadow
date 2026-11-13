@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,6 +50,8 @@ test('rendered Reveal proximity, state preservation, accessibility, lifecycle an
   await server.listen()
   t.after(() => server.close())
   const url = new URL('__reveal', server.resolvedUrls!.local[0]).href
+  const chatSource = await readFile(resolve(root, 'app/src/components/ChatTab.vue'), 'utf8')
+  const rowStyle = chatSource.match(/\.chat-message-entry \{[^}]+\}/)![0]
   const main = resolve(runtime, 'main.cjs')
   await writeFile(main, `const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict');const fs=require('node:fs/promises');
     app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});
@@ -61,6 +63,17 @@ test('rendered Reveal proximity, state preservation, accessibility, lifecycle an
         window.opacity=el=>el.classList.contains('reveal-border-target')?Number(getComputedStyle(el,'::after').opacity):0;
         window.originalBorder=getComputedStyle(a).borderColor;window.originalRect=a.getBoundingClientRect().toJSON();\`);
     const screenshot=async name=>{await fs.writeFile(${JSON.stringify(directory)}+'/'+name+'.png',(await win.webContents.capturePage()).toPNG())};
+    // Match the real timeline row: card touches the top/left/bottom paint bounds,
+    // while unused row width formerly left only the right-hand halo visible.
+    await run(${JSON.stringify(`window.haloFixture=document.createElement('div');haloFixture.style.cssText='position:fixed;inset:0;background:#141414;z-index:100';haloFixture.innerHTML=${JSON.stringify('<style>' + rowStyle + '</style><div class="chat-message-entry" style="position:absolute;left:100px;top:100px;width:650px"><article style="box-sizing:border-box;width:90%;height:100px;background:#202020;box-shadow:0 0 0 1px #8bb7ff,0 0 22px #8bb7ff"></article></div>')};document.body.append(haloFixture);wait(100)`)});
+    const haloImage=await win.webContents.capturePage();
+    const haloPixels=haloImage.toBitmap();const haloSize=haloImage.getSize();
+    const scale=haloSize.width/900;
+    for(const [side,x,y] of [['top',390,96],['left',96,150],['bottom',390,204],['right',689,150]]){
+      const offset=(Math.round(y*scale)*haloSize.width+Math.round(x*scale))*4;
+      assert.ok(haloPixels[offset]>30,'contained timeline row preserves '+side+' halo');
+    }
+    await run('haloFixture.remove()');
     for(const theme of ['light','dark']){await run(\`document.documentElement.classList.toggle('dark', '\${theme}'==='dark');document.dispatchEvent(new Event('pointerleave'));wait(240)\`);await screenshot(theme+'-before');const baseBorder=await run('getComputedStyle(a).borderColor');
       await run('near();wait(240)');assert.equal(await run('getComputedStyle(a).borderColor'),baseBorder,'Reveal preserves original border in '+theme);assert.equal(await run('opacity(a)>0.4 && opacity(b)>0.4'),true,'outside proximity lights adjacent targets');await screenshot(theme+'-near');}
     assert.equal(await run('getComputedStyle(a).borderColor===originalBorder'),false,'dark theme updates base border');
