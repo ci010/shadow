@@ -1,3 +1,4 @@
+import type { WorkflowAuthorAdapters } from '../workflows/management.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { cronContextMode, type CronService } from '../cron/service.ts'
 import type { EventDelivery, EventUrgency } from '../events/types.ts'
@@ -10,7 +11,7 @@ const URGENCIES: EventUrgency[] = ['steering', 'next-step', 'queue', 'debounce',
 export class CronAddTool implements Tool {
   readonly name = 'cron_add'
   readonly description =
-    'Schedule a task. existing sends events to a durable session in this Project (default: current session); fresh starts an independent logical session per run. Create a topic first if recurring work needs its own conversation.'
+    'Create a Schedule Signal Source for Workflow execution. Inspect v:workflows for durable run/retry state (not model sessions). Uncertain effects block rather than automatically replay. existing sends events to a durable session in this Project (default: current session); fresh starts an independent logical session per run. Create a topic first if recurring work needs its own conversation.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -30,7 +31,7 @@ export class CronAddTool implements Tool {
         type: 'string',
         description: 'existing only: an existing durable session in this Project; defaults to the current session. Scheduling a peer requires messaging permission. The target keeps its own agent, tools and workdir.',
       },
-      once: { type: 'boolean', description: 'Delete job after first run.' },
+      once: { type: 'boolean', description: 'Delete job after first successful run.' },
       urgency: {
         type: 'string',
         description: 'existing only: steering (interrupt), next-step (next inference without aborting work), queue (default, after current turn), debounce (coalesce burst), silent (record only).',
@@ -49,6 +50,7 @@ export class CronAddTool implements Tool {
     private cronService: CronService,
     private sessions?: SessionManager,
     private resolveAgentType?: (name: string) => boolean,
+    private authoring?: WorkflowAuthorAdapters['schedule'],
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -56,6 +58,11 @@ export class CronAddTool implements Tool {
   }
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+    if (!this.authoring) throw new Error('Schedule authoring adapter required')
+    return JSON.stringify(await this.authoring('schedule-create', args, context))
+  }
+
+  async save(args: Record<string, unknown>, context: ExecutionContext, updateId?: string): Promise<string> {
     context.signal?.throwIfAborted()
     const schedule = args.schedule
     const task = args.task
@@ -103,7 +110,7 @@ export class CronAddTool implements Tool {
       if (typeof args.debounce_ms === 'number') delivery.debounceMs = args.debounce_ms
       event = { type: 'cron-tick', source: 'cron', content: task, delivery }
     }
-    const id = this.cronService.addJob({
+    const definition: import('../cron/service.ts').CronJobDef = {
       schedule,
       task,
       deleteAfterRun: args.once === true,
@@ -117,9 +124,10 @@ export class CronAddTool implements Tool {
       } : {}),
       target: mode === 'existing' ? { sessionId: targetSessionId } : undefined,
       event,
-    })
+    }
+    const id = updateId ? await this.cronService.updateJob(updateId, definition) : this.cronService.addJob(definition)
     await this.cronService.flush()
-    return `Created job ${id} with schedule "${schedule}" (${
+    return `${updateId ? 'Updated' : 'Created'} job ${id} with schedule "${schedule}" (${
       mode === 'fresh' ? 'fresh session per run' : `existing session: ${targetSessionId}`
     })`
   }
@@ -142,7 +150,8 @@ export class CronListTool implements Tool {
       const detail = job.event
         ? `${job.event.type} (${job.event.source ?? 'cron'})`
         : `"${job.task ?? ''}"`
-      return `- ${job.id}: ${detail} @ ${job.schedule} -> ${target}`
+      const workflow = this.cronService.workflowStatus(job.id)
+      return `- ${job.id}: ${detail} @ ${job.schedule} -> ${target}${workflow ? ` [Workflow ${workflow.id}: ${workflow.pending} pending, ${workflow.blocked} blocked; v:workflows]` : ''}`
     }).join('\n')
   }
 }
@@ -152,12 +161,12 @@ export class CronRemoveTool implements Tool {
   readonly description = 'Remove a scheduled job in this Project by its ID. Existing session history is retained.'
   readonly parameters: ToolParameters = {
     type: 'object',
-    properties: { id: { type: 'string', description: 'Job ID returned by cron_add or cron_list.' } },
-    required: ['id'],
+    properties: { id: { type: 'string', description: 'Job ID returned by cron_add or cron_list.' }, expectedRevision: { type: 'number', description: 'Current Workflow revision; inspect v:workflows.' } },
+    required: ['id', 'expectedRevision'],
     additionalProperties: false,
   }
 
-  constructor(private cronService: CronService) {}
+  constructor(private authoring: WorkflowAuthorAdapters['schedule']) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
     return `Remove scheduled job ${String(args.id ?? '')}`
@@ -166,9 +175,7 @@ export class CronRemoveTool implements Tool {
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     context.signal?.throwIfAborted()
     if (typeof args.id !== 'string' || !args.id.trim()) return 'Error: id is required'
-    const ok = this.cronService.removeJob(args.id)
-    await this.cronService.flush()
-    return ok ? `Removed job ${args.id}` : `Job ${args.id} not found`
+    return JSON.stringify(await this.authoring('schedule-remove', args, context))
   }
 }
 
@@ -177,8 +184,17 @@ export function registerCronTools(
   cron: CronService,
   sessions: SessionManager,
   resolveAgentType: (name: string) => boolean,
+  authoring: WorkflowAuthorAdapters['schedule'],
+  canManage?: (id: string) => boolean,
 ): void {
-  const tools = [new CronAddTool(cron, sessions, resolveAgentType), new CronListTool(cron), new CronRemoveTool(cron)]
+  const tools = [new CronAddTool(cron, sessions, resolveAgentType, authoring), new CronListTool(cron), new CronRemoveTool(authoring)]
+  if (canManage) for (const tool of tools) {
+    const execute = tool.execute.bind(tool)
+    tool.execute = async (args, context) => {
+      if (!canManage(context.sessionId) || tool.name !== 'cron_list' && context.inputSource !== 'user') throw new Error('Schedule management requires direct user input and a Project owner')
+      return execute(args, context)
+    }
+  }
   for (const tool of tools) importer.registerBuiltin(tool.name, tool)
   importer.registerBuiltin('cron', { contracts: tools, factory: async () => tools })
 }

@@ -12,7 +12,7 @@ import vue from '@vitejs/plugin-vue'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
-test('actual folder sidebar hover maps inactive historical system controllers to authorized feature preferences', { timeout: 90_000 }, async t => {
+test('actual folder sidebar shows automation history without a second configuration surface', { timeout: 90_000 }, async t => {
   const directory = resolve(root, '.test-artifacts', `automation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
@@ -70,20 +70,13 @@ test('actual folder sidebar hover maps inactive historical system controllers to
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
       for(const id of ['system:work-organizer','historical-organizer']){
-        const before=id==='historical-organizer'?'Enable':'Disable';const after=before==='Disable'?'Enable':'Disable';
         await win.webContents.executeJavaScript("document.querySelector("+JSON.stringify('[data-automation-id="'+id+'"]')+").parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}))");await wait();
-        await wait();
-        assert.equal(await run(()=>document.querySelector('.shared-hover-info')?.getAttribute('role')),'dialog');
-        assert.equal(await run(()=>document.querySelector('.shared-hover-info .automation-action')?.textContent.trim()),before);
+        assert.equal(await run(()=>document.querySelector('.shared-hover-info')?.getAttribute('role')),'tooltip');
+        assert.equal(await run(()=>document.querySelector('.shared-hover-info .automation-action')),null);
         assert.equal(await run(()=>document.querySelector('.automation-history')?.textContent.trim()),'Inactive');
-        await run(()=>document.querySelector('.shared-hover-info .automation-action').click());await wait();
-        assert.equal(await run(()=>document.querySelector('.shared-hover-info .automation-action')?.textContent.trim()),after);
-        await run(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})));await wait();
-        await win.webContents.executeJavaScript("document.querySelector("+JSON.stringify('[data-automation-id="'+id+'"]')+").parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}))");await wait();
-        assert.equal(await run(()=>document.querySelector('.shared-hover-info .automation-action')?.textContent.trim()),after);
         await run(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})));await wait();
       }
-      assert.deepEqual(await run(()=>window.patches),['system:work-organizer','system:work-organizer'].map((id,i)=>({path:'/projects/fixture/api/automations/'+encodeURIComponent(id),body:{enabled:i===1}})));
+      assert.deepEqual(await run(()=>window.patches),[]);
       await win.loadURL(${JSON.stringify(new URL('__automation?denied', server.resolvedUrls!.local[0]).href)});
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');

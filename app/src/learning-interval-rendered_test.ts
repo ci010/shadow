@@ -17,7 +17,7 @@ test('interval client validates whole minutes and sends only the selected interv
 })
 
 test('bottom card saves one job, exposes failures, and ignores stale/unmounted mutations', async () => {
-  const file = new URL('./components/AutomationConversationSettings.vue', import.meta.url)
+  const file = new URL('./components/AutomationConversationProjection.vue', import.meta.url)
   const source = compileScript(parse(readFileSync(file, 'utf8')).descriptor, { id: 'interval', inlineTemplate: true }).content
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const pending: { base: string; id: string; minutes: number; signal: AbortSignal; resolve: () => void; reject: (error: Error) => void }[] = []

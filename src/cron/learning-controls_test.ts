@@ -16,7 +16,7 @@ test('explicit enable converts legacy pause without enabling siblings; interval 
   await store.init()
   await store.update(raw => ({ ...raw, learning: { ...(raw.learning as object), enabled: false } }))
   const initial = store.current().learning
-  const cron = { listJobs: () => ['reflector', 'encapsulator', 'soul-reflector'].map(name => ({ id: `learning:${name}`, source: 'learning', session: 'fresh', schedule: 'every 1h', enabled: false })) } as unknown as CronService
+  const cron = { workflowStatus: () => undefined, listJobs: () => ['reflector', 'encapsulator', 'soul-reflector'].map(name => ({ id: `learning:${name}`, source: 'learning', session: 'fresh', schedule: 'every 1h', enabled: false })) } as unknown as CronService
   const sessions = { automationFeatureStates: async () => [] } as unknown as SessionManager
   const app = new Hono()
   registerAutomationRoutes(app, cron, sessions, 'fixture', undefined, undefined, {

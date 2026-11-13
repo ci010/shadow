@@ -11,20 +11,19 @@
       <AutomationConversationInfo v-if="automation && !error && !history.error" :conversation="conversation" />
     </div>
     <slot />
-    <AutomationConversationSettings v-if="automation && enabled && !selectedSessionId" :api-base="apiBase" :job="automation" :active="active && enabled" @saved="catalog.refresh()" />
+    <AutomationConversationProjection v-if="automation && enabled && !selectedSessionId" :api-base="apiBase" :job="automation" :active="active && enabled" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { canToggleAutomation, setAutomationEnabled } from '../automations.ts'
-import { computed, provide, reactive, ref, watch } from 'vue'
+import { computed, provide, reactive, watch } from 'vue'
 import { automationConversationKey, type AutomationConversation } from '../composables/useAutomationConversation.ts'
 import { createAutomationConversation, automationRunPosition } from '../automation-conversation.ts'
 import { createAutomationRunHistory, emptyAutomationRunHistory } from '../automation-run-history.ts'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'
-import AutomationConversationSettings from './AutomationConversationSettings.vue'
+import AutomationConversationProjection from './AutomationConversationProjection.vue'
 
 const props = withDefaults(defineProps<{ apiBase: string; automationId: string; active: boolean; enabled?: boolean; selectedSessionId?: string }>(), { enabled: true })
 const emit = defineEmits<{ open: [sessionId: string, replace: boolean] }>()
@@ -41,16 +40,6 @@ const historyCache = new Map<string, ReturnType<typeof emptyAutomationRunHistory
 let identity = ''
 let runHistory: ReturnType<typeof createAutomationRunHistory> | undefined
 let navigation: ReturnType<typeof createAutomationConversation> | undefined
-const updating = ref(false), updateError = ref('')
-async function toggle() {
-  const job = automation.value
-  if (!job || !canToggleAutomation(job) || updating.value) return
-  const base = props.apiBase
-  updating.value = true; updateError.value = ''
-  try { await setAutomationEnabled(base, job.id, !(job.source === 'learning' ? job.enabled : (job.configuredEnabled ?? job.enabled)), new AbortController().signal) }
-  catch (cause) { if (base === props.apiBase) updateError.value = cause instanceof Error ? cause.message : t('Automations are unavailable. Retry.') }
-  finally { updating.value = false; if (base === props.apiBase) catalog.refresh() }
-}
 function refresh() { catalog.refresh(); runHistory?.refresh() }
 
 const conversation: AutomationConversation = {
@@ -62,7 +51,6 @@ const conversation: AutomationConversation = {
   next: () => navigation?.next(),
   current: () => navigation?.current(),
   refresh,
-  updating: computed(() => updating.value), updateError: computed(() => updateError.value), toggle,
   retry: () => runHistory?.retry(),
   history, loadMore: () => runHistory?.loadMore(),
   select: sessionId => emit('open', sessionId, false),

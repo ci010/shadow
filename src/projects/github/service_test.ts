@@ -161,14 +161,16 @@ test('subscriptions deliver changed snapshots only to their bound session and st
     f.remote.reviews[0].state = 'CHANGES_REQUESTED'
     await f.service.refresh('PR_2'); await f.service.refresh('PR_2')
     assert.equal(f.delivered.length, 2)
-    assert.equal(f.service.state().notifications.at(-1)?.status, 'unknown')
-    await f.service.resolveNotification(f.service.state().notifications.at(-1)!.id, false)
+    assert.equal(f.service.state().notifications.length, 0, 'No duplicate business outbox')
+    const blocked = f.workflows.inspect().runs.at(-1)!
+    assert.equal(blocked.status, 'blocked')
+    f.workflows.manage(blocked.id, 'cancel')
     f.remote.failDelivery = false
-    await f.alignment.execute({ kind: 'user' }, 'assign', f.work.key, 1, { expectedSequence: 1, assignee: null, reason: 'Reassigned before starting' })
+    await f.alignment.assignNote({ kind: 'user' }, f.work.key, f.alignment.get(f.work.key).sequence, null)
     f.remote.pull.body = 'Changed externally'
     await f.service.refresh('PR_2')
     assert.equal(f.delivered.length, 2, 'Old assignment never wakes a new executor')
-    assert.match(f.service.state().notifications.at(-1)?.error ?? '', /assignment changed/)
+    assert.equal(f.workflows.inspect().runs.at(-1)?.error, 'authority_unavailable')
     await f.service.configureRepository('octo/demo', false, false)
     assert.equal(f.service.state().subscriptions[0].enabled, false)
     assert.equal(f.service.virtualEntries().length, 0)
@@ -244,7 +246,7 @@ test('durable receipts settle only their matching connector effects; uncertain w
     f.works.startWorkEffect(preview.id, 'human:github', 'github.comment', [{ key: f.work.key, revision: 1 }])
     f.works.startWorkEffect(unrelated, 'worker', 'exec', [{ key: f.work.key, revision: 1 }])
     f.works.recoverWorkEffects()
-    const restored = new GitHubService(new GitHubStore(home), f.client, { alignment: f.alignment, durableSession: () => true,
+    const restored = new GitHubService(new GitHubStore(home), f.client, { workflows: f.workflows, alignment: f.alignment, durableSession: () => true,
       emit: async () => { assert.fail('Recovery must not replay a delivery') }, changed: () => {} })
     assert.deepEqual(f.works.workEffects().map(effect => effect.id), [unrelated])
     await restored.stop()
@@ -304,7 +306,9 @@ test('expired/cancelled previews never publish, and explicit no-effect and inter
     await f.service.subscribe({ resourceId: 'I_1', workKey: f.work.key, sessionId: 'worker', enabled: true, mode: 'silent', events: ['source'] })
     f.remote.failDelivery = true; f.remote.issue.body = 'A new source observation'
     await f.service.refresh('I_1')
-    f.store.update(state => { state.notifications[0].status = 'sending' })
+    assert.equal(f.workflows.inspect().runs.at(-1)?.status, 'blocked')
+    // Historical external receipt recovery remains inspectable, but is never auto-admitted.
+    f.store.update(state => { state.notifications.push({ id: randomUUID(), subscription: state.subscriptions[0], fingerprint: state.resources[0].fingerprint, summary: 'Historical uncertain receipt', createdAt: new Date().toISOString(), status: 'sending' }) })
     assert.equal(new GitHubStore(home).read().notifications[0].status, 'unknown')
     assert.equal(f.delivered.length, 1)
   } finally { await f.close() }

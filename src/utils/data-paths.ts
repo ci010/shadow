@@ -37,6 +37,7 @@ export const PROJECT_STORAGE_ENTRIES: Readonly<Record<string, readonly string[]>
   '.events': ['state', 'events'],
   '.channel-stream': ['state', 'channel-stream'],
   '.cron': ['state', 'cron'],
+  '.workflows': ['state', 'workflows'],
   '.learning': ['state', 'learning'],
   '.eval': ['state', 'eval'],
   '.a2a': ['state', 'a2a'],

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { workspacePath } from '../utils/paths.ts'
-import { CronService } from './service.ts'
+import { TestCronService as CronService } from './testing.ts'
 
 test('cron rejects legacy planning metadata instead of silently importing it', async () => {
   await withTempWorkspace(async home => {

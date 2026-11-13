@@ -6,7 +6,7 @@ import type { SignalProviderRuntime } from './runtime.ts'
 export function createProviderSignalsHandler(runtime: SignalProviderRuntime, projectId: string,
   internal: { read: VirtualFsHandler; list: VirtualFsListHandler }) {
   const categories = ['providers', 'authoring', 'instances', 'subscriptions']
-  const reserved = (path: string) => categories.includes(path.split('/')[0]) || path === 'status.json'
+  const reserved = (path: string) => categories.includes(path.split('/')[0]) || path === 'status.json' || path === 'schedule' || path === 'github-resources'
   const check = (ctx: ExecutionContext) => {
     ctx.signal.throwIfAborted()
     if (ctx.projectId !== projectId) throw new Error('Wrong Project')
@@ -15,7 +15,8 @@ export function createProviderSignalsHandler(runtime: SignalProviderRuntime, pro
     check(ctx)
     if (optional && !runtime.canRead(ctx.sessionId)) return []
     const state = runtime.snapshot(ctx.sessionId)
-    const result: VirtualEntry[] = []
+    const result: VirtualEntry[] = [{ name: 'schedule', content: '# Schedule Signal Source\nSchedule admits ticks into the shared Workflow executor. Configure workflow schedule-create/update/remove in chat; cron_add / cron_list / cron_remove are shortcuts via v:tools/cron. Removal requires expectedRevision. Existing-session actions append authorized events; fresh-agent actions use normal SessionManager lifecycle. Inspect v:workflows for durable runs and uncertain-effect recovery. No catch-up of missed wall-clock ticks; overlapping/pending runs coalesce ticks. This source needs no HTTP credential binding. For deterministic external checks without an agent use an external provider with a record or notify Workflow action.' }]
+    result.push({ name: 'github-resources', content: '# GitHub resource Signal Source\nAuthorized repository/resource snapshot comparison is deterministic. Workbench subscriptions bind a resource, exact Work assignment revision, assignee/manager target session, event kinds and silent/queue mode. Typed github-resource → revision gate → github-notify flows appear in v:workflows. Cached evidence: v:github. No new GitHub business outbox or model processor; pending/retry/unknown effects belong to Workflow. Repository, link, subscription and target authority are rechecked at inbox acceptance. Acceptance is not user visibility or completed Work. Historical unknown delivery receipts and manual preview/execute/reconcile external-write receipts remain separate domain capabilities. Work Organizer is an internal session-metadata delta → Agent workflow, not this observer.' })
     const json = (name: string, value: unknown) => result.push({ name, content: JSON.stringify(value, null, 2) })
     for (const id of new Set(state.providers.map(p => p.id))) {
       const revisions = state.providers.filter(p => p.id === id).sort((a, b) => a.version - b.version)
@@ -26,10 +27,10 @@ export function createProviderSignalsHandler(runtime: SignalProviderRuntime, pro
         const info = p.consumer ?? { summary: 'Consumer capabilities not documented; inspect schemas and confirm suitability before subscribing.', capabilities: [], limitations: ['Provider-specific limitations not documented.'], semantics: [] }
         const available = instances.filter(i => i.version === p.version).map(i => ({ id: i.id, purpose: i.purpose ?? `Shared ${id} instance`, availability: !i.enabled ? 'paused — ask to resume before relying on delivery' : state.errors[i.id] ? 'attention needed — check instance status before relying on delivery' : 'enabled — baseline/live delivery not verified by this view' }))
         const example = p.examples[0]
-        const subscribe = available.length && example ? { name: 'signal_provider', args: { action: 'subscribe', input_json: JSON.stringify({ id: 'my-watch', instance: available[0].id, demand: example.demand, processor: 'export function run({signal}) { return [{content: JSON.stringify(signal.data)}] }' }) } } : null
-        return `## Contract version ${p.version}\n${info.summary}\nCapabilities: ${info.capabilities.join(' ') || 'Not documented.'}\nUnsupported / limitations: ${info.limitations.join(' ') || 'Not documented.'}\n${info.semantics.join('\n')}\n\nDemand schema:\n${JSON.stringify(p.demandSchema, null, 2)}\nSignal data schema (signal envelope is {id: string, data: <this schema>}):\n${JSON.stringify(p.signalSchema, null, 2)}\nExamples:\n${JSON.stringify(p.examples, null, 2)}\nAvailable instances for this contract:\n${JSON.stringify(available, null, 2)}\nSubscribe via invoke_tool (direct user input required):\n${subscribe ? JSON.stringify(subscribe, null, 2) : 'No executable example available: an enabled instance and an authored demand example are required. Ask for instance setup or a demand example; do not guess.'}`
+        const subscribe = available.length && example ? { name: 'signal_provider', args: { action: 'subscribe', input_json: JSON.stringify({ id: 'my-watch', instance: available[0].id, demand: example.demand, first: 'baseline', action: { kind: 'notify', processor: 'export function run({signal}) { return [{content: JSON.stringify(signal.data)}] }' } }) } } : null
+        return `## Contract version ${p.version}\n${info.summary}\nCapabilities: ${info.capabilities.join(' ') || 'Not documented.'}\nUnsupported / limitations: ${info.limitations.join(' ') || 'Not documented.'}\n${info.semantics.join('\n')}\n\nDemand schema:\n${JSON.stringify(p.demandSchema, null, 2)}\nSignal data schema (signal envelope is {id: revision string, item?: entity key, data: <this schema>}):\n${JSON.stringify(p.signalSchema, null, 2)}\nExamples:\n${JSON.stringify(p.examples, null, 2)}\nAvailable instances for this contract:\n${JSON.stringify(available, null, 2)}\nSubscribe via invoke_tool (direct user input required):\n${subscribe ? JSON.stringify(subscribe, null, 2) : 'No executable example available: an enabled instance and an authored demand example are required. Ask for instance setup or a demand example; do not guess.'}`
       })
-      result.push({ name: `providers/${id}`, content: `# ${id}\n${sections.join('\n\n')}\n\n## Delivery semantics\nThe first successful collection for an instance + normalized demand establishes a silent baseline (not historical delivery). Later unseen occurrence IDs are delivered to subscribers of that demand. Snapshot sources compare against the preceding successful snapshot; delta sources remember the last 4096 IDs, so evicted IDs may repeat. Reappearing snapshot IDs may repeat too. Delivery retries are at-least-once, not exactly-once; make follow-up actions idempotent. Shared demands may already have a baseline when you subscribe. Processors receive {signal} and return 0..16 {content} drafts, with no IO.\n\nAuthoring/setup (only if needed): v:signals/authoring/providers/${id}/\n` })
+      result.push({ name: `providers/${id}`, content: `# ${id}\n${sections.join('\n\n')}\n\n## Delivery semantics\nEach subscription creates a Workflow. Select first: baseline (silent first successful batch) or emit (process initial observations). Each Workflow remembers the last 4096 revision IDs, independent of shared collection; evicted IDs may repeat. Delivery retries are at-least-once, not exactly-once; make follow-up actions idempotent. Notify actions transform {signal} to 0..16 {content} drafts without IO. Record actions materialize observations deterministically without waking an agent. Run history and state: v:workflows.\n\nAuthoring/setup (only if needed): v:signals/authoring/providers/${id}/\n` })
       for (const { code, ...manifest } of revisions) {
         const path = `authoring/providers/${id}/revisions/${manifest.version}`
         json(`${path}/manifest.json`, manifest)
@@ -42,13 +43,14 @@ export function createProviderSignalsHandler(runtime: SignalProviderRuntime, pro
       json(`instances/${instance.id}/status.json`, { enabled, nextAt, error: state.errors[instance.id] ?? null,
         pending: state.pending.filter(j => state.subscriptions.some(s => s.id === j.subscription && s.instance === instance.id)).length })
     }
-    for (const { processor, ...config } of state.subscriptions) {
-      const path = `subscriptions/${config.id}`
-      json(`${path}/config.json`, config)
-      result.push({ name: `${path}/processor.ts`, content: processor })
+    for (const { nodes, ...config } of state.subscriptions) {
+      const path = `subscriptions/${encodeURIComponent(config.id)}`
+      json(`${path}/config.json`, { ...config, nodes: nodes.map(n => ({ kind: n.kind })), workflow: config.workflow })
+      const transform = nodes.find(n => n.kind === 'transform')
+      if (transform?.kind === 'transform') result.push({ name: `${path}/processor.ts`, content: transform.code })
       const pending = state.pending.filter(j => j.subscription === config.id)
       json(`${path}/status.json`, { pending: pending.length, action: pending.length ? 'Delivery or processing is pending; verify processor output and instance status if it persists. Do not treat this as completed delivery.' : 'No queued delivery; this does not verify a baseline or live change.' })
-      json(`authoring/subscriptions/${config.id}/diagnostics.json`, { pending })
+      json(`authoring/subscriptions/${encodeURIComponent(config.id)}/diagnostics.json`, { pending })
     }
     json('status.json', { errors: state.errors, pending: state.pending.length })
     return result
@@ -61,7 +63,7 @@ export function createProviderSignalsHandler(runtime: SignalProviderRuntime, pro
       const id = e.name.slice('providers/'.length)
       const p = runtime.snapshot(ctx.sessionId).providers.filter(p => p.id === id).sort((a,b) => b.version-a.version)[0]
       return `- ${id}: ${p.consumer?.summary ?? 'Consumer capabilities not documented.'} Unsupported: ${p.consumer?.unsupported || 'See contract for limitations (not summarized).'} → v:signals/${e.name}`
-    }).join('\n') || 'No provider views available for this session.'}\n\nInternal runtime events (not external signals), sources/subscriptions: v:signals/internal/\nAuthoring/setup: v:signals/authoring/; management: v:signals/instances/, v:signals/subscriptions/.`
+    }).join('\n') || 'No provider views available for this session.'}\n\nGitHub resource Signal Source: v:signals/github-resources.\nSchedule Signal Source: v:signals/schedule; execution and recovery: v:workflows.\nInternal runtime events (not external signals), sources/subscriptions: v:signals/internal/\nAuthoring/setup: v:signals/authoring/; management: v:signals/instances/, v:signals/subscriptions/.`
   }
   const children = (all: VirtualEntry[], path: string) => [...new Set(all.filter(e => !path || e.name.startsWith(`${path}/`)).map(e => {
     const rest = path ? e.name.slice(path.length + 1) : e.name
@@ -97,7 +99,7 @@ export function createProviderSignalsHandler(runtime: SignalProviderRuntime, pro
       return (await internal.list(ctx, { ...options, subpath: internalPath(path) })).map(e => ({ ...e, name: prefix + e.name }))
     }
     // Root recursive search is consumption-only. Explicit authoring/management scopes opt in.
-    const selected = entries(ctx, !path).filter(e => path ? e.name === path || e.name.startsWith(`${path}/`) : e.name.startsWith('providers/'))
+    const selected = entries(ctx, !path).filter(e => path ? e.name === path || e.name.startsWith(`${path}/`) : e.name === 'schedule' || e.name === 'github-resources' || e.name.startsWith('providers/'))
     if (path && !selected.length && !categories.includes(path)) throw new Error('Unknown signal view path')
     return selected.map(e => options?.content === false ? { ...e, content: '' } : e)
   }

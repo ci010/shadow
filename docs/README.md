@@ -41,6 +41,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Audio streaming backend](audio-streaming-backend.md)
 - [Image input optimization](image-input-optimization.md)
 - [Provider Flash support](providers-flash.md)
+- [Unified Workflows and recovery](workflows.md), [external Signal Sources](signal-source-providers.md)
 - [Fresh automation state persistence](fresh-automation-state.md)
 - [Encapsulation candidates and acceptance](encapsulation-automation.md), including the [tested script-tool draft](encapsulation-tool-handoff.md)
 

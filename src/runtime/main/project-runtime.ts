@@ -1,3 +1,7 @@
+import { scheduleAuthoring } from '../../workflows/schedule-authoring.ts'
+import { workMapper } from '../../workflows/work-mapping.ts'
+import { WorkflowRuntime } from '../../workflows/runtime.ts'
+import { WorkflowTool, createWorkflowHandler, registerWorkflowRoutes } from '../../workflows/management.ts'
 import { validateServiceAssignments } from '../../bots/assignment-validation.ts'
 import { publishBotChange } from '../../bots/publication.ts'
 import { parseChannelSource } from '../../channels/passive-contract.ts'
@@ -958,10 +962,11 @@ export async function createProjectRuntime(
       const result=await sessions.getExecutionResult(id)
       if(result?.status!=='completed') { problem='execution_failed'; throw organizationExecutionError(result?.error) }
       if(workOrganizer.status()?.status!=='completed') { problem='unfinished'; throw new Error('Organization ended without explicit finish; saved patches retained') }
+      return { sessionId: id }
     } finally { workOrganizer.end(); await sessions.updateAutomationOrganization(sessionId,workOrganizer.status(),problem); await sessions.finalizeAutomation(sessionId) }
   }
   const organizationController = new OrganizationController({
-    scope, organize: runOrganization, hasDelta: async () => workOrganizer.hasDelta(await organizationTopics()), organizationStatus: () => workOrganizer.status(),
+    scope, organize: (mode, signal) => workflows.signalHost('work-organizer', { id: randomUUID(), data: { mode } }, 'confirm', signal), hasDelta: async () => workOrganizer.hasDelta(await organizationTopics()), organizationStatus: () => workOrganizer.status(),
     changed: () => realtime.invalidateResource?.('organization'),
   }, config.organization.enabled)
   cleanup.push(() => organizationController.stop())
@@ -987,8 +992,14 @@ export async function createProjectRuntime(
   cleanup.push(() => { for (const subscription of organizationSubscriptions) bus.off(subscription) })
   organizationTopicChanged = id => hintOrganization(id)
   cleanup.push(() => { organizationTopicChanged = undefined; organizationHints.clear() })
+  const workflows = new WorkflowRuntime(workspace, project.id, {
+    work: workMapper(alignment),
+    canUse: id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
+    deliver: (id, input) => deliverInput(id, input),
+  })
+  cleanup.push(() => workflows.stop())
   const github = new GitHubService(new GitHubStore(workspace), new GitHubClient(), {
-    alignment,
+    workflows, alignment,
     durableSession: id => {
       const state = sessions.getSessionState(id)
       return !!state && (state.mode ?? 'session') === 'session'
@@ -1255,8 +1266,19 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('workspace_fork', new WorkspaceForkTool(derivedWorkspaces, project.id, canAuthor, folderRegistry, createLayerFSWorkspace))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
+  workflows.bindHost('work-organizer', {
+    current: () => organizationController.status().enabled,
+    execute: async (observation, signal) => {
+      const mode = (observation.data as { mode?: unknown })?.mode
+      if (mode !== 'full' && mode !== 'delta') throw new Error('Invalid organization source input')
+      return runOrganization(mode, signal)
+    },
+  })
+  const workflowVfs = createWorkflowHandler(workflows)
+  vfs.mount('v:workflows', 'Project Workflow definitions, durable runs and deterministic records; runs are not model sessions', workflowVfs.read, workflowVfs.list)
+  registerWorkflowRoutes(app, workflows, dependencies.authorize)
   const signalProviders = new SignalProviderRuntime(
-    workspace, capabilityBroker, (id, input) => deliverInput(id, input),
+    workspace, capabilityBroker, workflows,
     id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
     ref => agentCredentials.names().includes(ref),
   )
@@ -1264,7 +1286,7 @@ export async function createProjectRuntime(
   const signalsVfs = createProviderSignalsHandler(signalProviders, project.id, createEventsHandler(events))
   vfs.mount(
     'v:signals',
-    'read external signal providers, instances and subscriptions; internal/ is a separate runtime event view',
+    'read Schedule and external Signal Sources, instances and subscriptions; internal/ is a separate runtime event view',
     signalsVfs.read,
     signalsVfs.list,
     undefined,
@@ -1311,7 +1333,7 @@ export async function createProjectRuntime(
   tools.register(new ContinuationTool(backgroundTasks, sessions))
 
   // ── Cron service ──────────────────────────────────────────────────
-  const cronService = new CronService(workspace, config.cron.timezone)
+  const cronService = new CronService(workspace, workflows, config.cron.timezone)
   let workDispatchReady = false
   const validateWorkProgram = async (settings: WorkDispatchConfig, signal: AbortSignal) => {
     signal.throwIfAborted()
@@ -1462,7 +1484,7 @@ export async function createProjectRuntime(
   cronService.setHandler(async (job, signal) => {
     if (job.program) { if (workDispatchReady) await workDispatcher.dispatch(job, signal); return }
     if (job.botWake) { await botWakes.dispatch(job, signal); return }
-    await cronDispatcher.dispatch(job, signal)
+    return { sessionId: await cronDispatcher.dispatch(job, signal) }
   })
   cronService.setOnChanged(reason => {
     if (reason === 'inventory') realtime.invalidateSessions()
@@ -1521,7 +1543,11 @@ export async function createProjectRuntime(
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
-  registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
+  const authorSchedule = scheduleAuthoring(workflows, cronService, sessions, name => !!agentTypes.resolve(name))
+  registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name), authorSchedule, canAuthor)
+  importTool.registerBuiltin('workflow', new WorkflowTool(workflows, {
+    source: signalProviderTool, schedule: authorSchedule,
+  }))
   registerInternalEventTools(importTool, events)
   registerSignalTools(importTool, signalProviderTool)
   // Clean up event subscriptions linked to one-shot cron jobs when they are
@@ -1852,6 +1878,7 @@ export async function createProjectRuntime(
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
       () => knowledgeMaintenance.stop(),
+      () => workflows.stop(),
       () => signalProviders.stop(),
       () => github.stop(),
       () => cronService.stop(),
@@ -1885,6 +1912,7 @@ export async function createProjectRuntime(
   console.info('[main] Starting all services...')
 
   const startAgent = startup.measure('agent', () => agent.start(startup)).finally(startupStates.close)
+  workflows.start(true)
   const startCron = startup.measure('cron', () => cronService.start())
   cleanup.push(() => cronService.stop())
   cleanup.push(() => agent.shutdown())
@@ -1907,9 +1935,10 @@ export async function createProjectRuntime(
   await workDispatcher.recover()
   await sessions.recoverWorkNotifications()
   workDispatchReady = true
+  signalProviders.start()
+  workflows.activate()
   const workJob = cronService.listJobs().find(job => job.program && job.enabled !== false)
   if (workJob) await cronService.runNow(workJob.id)
-  signalProviders.start()
   events.registerManagedSource({ source: 'github', kind: 'custom', description: 'Explicit Project GitHub resource subscriptions' })
   github.start()
   a2a.validate()

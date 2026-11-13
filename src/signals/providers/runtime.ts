@@ -1,12 +1,13 @@
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
-import { collectionInput, definitionInput, stateInput, processorInput, providerStatePath, legacyDefinitionWire } from './legacy-compat.ts'
+import { projectStoragePath } from '../../utils/data-paths.ts'
+import type { WorkflowRuntime } from '../../workflows/runtime.ts'
+import { ExternalAction, FirstBatch, type Definition as WorkflowDefinition } from '../../workflows/contracts.ts'
 import { writePrivateFile } from '../../config/store.ts'
 import { CapabilityBroker, CapabilityError, validateJsonSchema } from '../../execution/grants.ts'
 import { executeGrantedScript } from '../../script-runtime/granted-script.ts'
-import type { DeliverInput } from '../../sessions/input.ts'
-import { Collection, Definition, Drafts, Name, HttpDeclaration, validateDefinition, canonical, digest, type SignalSourceProvider, type ProviderDefinition } from './contracts.ts'
+import { Collection, Definition, Name, HttpDeclaration, validateDefinition, canonical, digest, type SignalSourceProvider, type ProviderDefinition } from './contracts.ts'
 import { githubProvider } from './github.ts'
 import type { ProviderBrowserAccess } from '../../browser/provider-fetch.ts'
 
@@ -19,25 +20,24 @@ export const ProviderTransport = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('browser'), instance: z.string().uuid(), targetId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) }).strict(),
 ]).default({ kind: 'native' })
 const Origin = z.string().url().refine(value => { const url = new URL(value); return url.protocol === 'https:' && url.origin === value && !url.username && !url.password }, 'Canonical HTTPS origin required')
-const Instance = z.object({ id: Name, owner: z.string(), provider: Name, purpose: z.string().min(1).max(240).optional(), version: z.number().int(), secretRef: Name.optional(), transport: ProviderTransport, origin: Origin, binding: HttpDeclaration.optional(), enabled: z.boolean(), nextAt: z.number() }).strict()
-const Subscription = z.object({ id: Name, instance: Name, owner: z.string(), demand: z.unknown(), processor: z.string().max(64000) }).strict()
-const Demand = z.object({ mode: z.enum(['snapshot', 'delta']).default('snapshot'), checkpoint: z.unknown(), seen: z.array(z.string()).max(4096), baseline: z.boolean() }).strict()
-const Job = z.object({ id: z.string(), subscription: Name, signal: z.object({ id: z.string(), data: z.unknown() }), attempts: z.number(), nextAt: z.number(), drafts: Drafts.optional(), delivered: z.number(), timestamp: z.string() }).strict()
-const State = z.object({ format: z.literal(2), definitions: z.array(Definition).max(64), instances: z.array(Instance).max(32), subscriptions: z.array(Subscription).max(128), demands: z.record(Demand), jobs: z.array(Job).max(2000), legacyRevisions: z.record(z.string()).default({}) }).strict()
+const Instance = z.object({ id: Name, owner: z.string(), provider: Name, purpose: z.string().min(1).max(240).optional(), version: z.number().int(), secretRef: Name.optional(), transport: ProviderTransport, origin: Origin, binding: HttpDeclaration.optional(), enabled: z.boolean(), nextAt: z.number(), error: z.enum(['collection_failed', 'browser_context_unavailable', 'browser_fetch_failed', 'browser_cleanup_unconfirmed']).optional() }).strict()
+const Demand = z.object({ mode: z.enum(['snapshot', 'delta']), checkpoint: z.unknown() }).strict()
+const State = z.object({ format: z.literal(4), projectId: z.string().min(1), definitions: z.array(Definition).max(64), instances: z.array(Instance).max(32), demands: z.record(Demand) }).strict()
 type StateData = z.infer<typeof State>
 type InstanceData = z.infer<typeof Instance>
 
 /** Project-local, single writer runtime. Atomic snapshots separate collection, transform and inbox acceptance. */
 export class SignalProviderRuntime {
-  private state: StateData = { format: 2, definitions: [], instances: [], subscriptions: [], demands: {}, jobs: [], legacyRevisions: {} }
+  private state: StateData = { format: 4, projectId: 'unbound', definitions: [], instances: [], demands: {} }
   private path: string
+  private legacyPath: string
+  private reservedInstances = new Set<string>()
   private timer?: ReturnType<typeof setInterval>
   private active?: Promise<void>
   private controller = new AbortController()
   private stopped = true
   private reloading = false
   private reloadDone?: Promise<void>
-  private accepted = new Map<string, number>()
   private errors = new Map<string, string>()
   private browsers = new Map<string, ProviderBrowserAccess>()
   private browserCleanupFailure?: CapabilityError
@@ -49,24 +49,41 @@ export class SignalProviderRuntime {
     access.assertCurrent()
     this.browsers.set(id, access)
   }
-  constructor(workspace: string, private broker: Pick<CapabilityBroker, 'execute'>, private deliver: DeliverInput,
+  constructor(workspace: string, private broker: Pick<CapabilityBroker, 'execute'>, private workflows: WorkflowRuntime,
     private canUse: (sessionId: string) => boolean, private hasCredential: (ref: string) => boolean) {
-    this.path = providerStatePath(workspace)
+    this.state.projectId = workflows.projectId
+    this.path = projectStoragePath(workspace, '.signals', 'sources-v4.json')
+    this.legacyPath = projectStoragePath(workspace, '.signals', 'sources-v3.json')
+    workflows.bindSourceStatus(() => this.state.instances.map(i => ({ kind: 'external', id: i.id, enabled: !this.stopped && i.enabled, error: i.error, nextAt: i.nextAt })))
+    workflows.bindSourceAuthorizer((owner, definition) => {
+      this.authorize(owner)
+      const instance = this.state.instances.find(i => i.id === definition.source.id)
+      if (!instance || !this.member(instance, owner)) throw new Error('Source binding not authorized in this Project')
+      this.current(instance, this.controller)
+      const demand = this.provider(instance).normalize(definition.binding?.demand)
+      if (Buffer.byteLength(canonical(demand)) > 8192) throw new Error('Demand too large')
+      return { ...definition, binding: { demand } }
+    })
+    workflows.bindExternal(definition => this.workflowCurrent(definition))
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
   }
   start(): void {
     if (!this.stopped) return
     try {
       const stored = JSON.parse(readFileSync(this.path, 'utf8'))
-      // Retire only the obsolete instance gate, not similarly named user demand data.
-      if (Array.isArray(stored.instances)) for (const instance of stored.instances) delete instance.allowedSubscribers
-      this.state = State.parse(stateInput(stored))
-      if (stored.format === 1) for (const definition of this.state.definitions) {
-        this.state.legacyRevisions[`${definition.id}:${definition.version}`] = digest(legacyDefinitionWire(definition))
-      }
+      this.state = State.parse(stored)
+      if (this.state.projectId !== this.workflows.projectId) throw new Error('Source state belongs to another Project')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
+    // Reserve identities only. Never load old code, credentials, checkpoints or subscriptions.
+    try {
+      const raw = readFileSync(this.legacyPath, 'utf8')
+      if (Buffer.byteLength(raw) > 16 * 1024 * 1024) throw new Error('Legacy source state too large; inspect it manually')
+      const legacy = z.object({ instances: z.array(z.object({ id: Name }).passthrough()) }).passthrough().parse(JSON.parse(raw))
+      this.reservedInstances = new Set(legacy.instances.map(i => i.id))
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    for (const instance of this.state.instances) if (instance.error) this.errors.set(instance.id, instance.error)
     for (const definition of this.state.definitions) this.validate(definition)
     if (this.state.instances.some(i => !i.binding)) this.update(state => {
       for (const instance of state.instances) instance.binding ??= this.policy(this.definition(instance.provider, instance.version))
@@ -81,15 +98,10 @@ export class SignalProviderRuntime {
     clearInterval(this.timer)
     this.controller.abort()
     await this.active?.catch(() => undefined)
+    await this.workflows.settle(this.subscriptions().map(s => s.workflow))
     await this.reloadDone?.catch(() => undefined)
     this.browsers.clear()
-    this.flushAccepted()
     if (this.browserCleanupFailure) throw this.browserCleanupFailure
-  }
-  private flushAccepted(): void {
-    if (!this.accepted.size) return
-    this.update(state => { for (const [id, delivered] of this.accepted) { const job = state.jobs.find(j => j.id === id); if (job) job.delivered = Math.max(job.delivered, delivered) } })
-    this.accepted.clear()
   }
   private update(change: (state: StateData) => void): void {
     const next = structuredClone(this.state)
@@ -132,13 +144,13 @@ export class SignalProviderRuntime {
     // Reading immutable state neither invokes capabilities nor changes reload lifecycle.
     if (!this.canRead(owner)) throw new Error('Provider views require an available durable local session in this Project')
     return structuredClone({ providers: [...builtinDefinitions, ...this.state.definitions],
-      instances: this.state.instances, subscriptions: this.state.subscriptions,
-      pending: this.state.jobs.map(j => ({ id: j.id, subscription: j.subscription, attempts: j.attempts, stage: j.drafts ? 'delivery' : 'processor', nextAt: j.nextAt })),
+      instances: this.state.instances, subscriptions: this.subscriptions(),
+      pending: this.subscriptions().flatMap(s => this.workflows.pending(s.workflow).map(r => ({ ...r, subscription: s.id }))),
       errors: Object.fromEntries(this.errors) })
   }
   publish(owner: string, raw: unknown): void {
     this.authorize(owner)
-    const definition = Definition.parse(definitionInput(raw))
+    const definition = Definition.parse(raw)
     this.validate(definition)
     if ([...builtinDefinitions, ...this.state.definitions].some(d => d.id === definition.id && d.version === definition.version)) throw new Error('Immutable provider revision already exists')
     // Publishing is project-wide discovery only, never a credential grant.
@@ -147,11 +159,11 @@ export class SignalProviderRuntime {
   /** Edit code then reload: host drains the old generation, probes restricted code, and atomically repins all matching Project instances. */
   reload(owner: string, raw: unknown): Promise<void> {
     this.authorize(owner)
-    const candidateInput = Definition.omit({ version: true }).parse(definitionInput(raw))
+    const candidateInput = Definition.omit({ version: true }).parse(raw)
     const input = candidateInput
     this.validate({ ...input, version: 1 })
     const instances = this.state.instances.filter(i => i.provider === input.id)
-    if (instances.some(i => this.definition(i.provider, i.version).stateVersion !== input.stateVersion)) throw new Error('Checkpoint stateVersion incompatible; create a new instance/provider ID for a fresh silent baseline')
+    if (instances.some(i => this.definition(i.provider, i.version).stateVersion !== input.stateVersion)) throw new Error('Checkpoint stateVersion incompatible; create a new instance/provider ID and explicitly select the Workflow first-batch policy')
     for (const instance of instances) this.assertBound(this.policy({ ...input, version: 1 }), this.bound(instance))
     const version = Math.max(0, ...[...builtinDefinitions, ...this.state.definitions].filter(d => d.id === input.id).map(d => d.version)) + 1
     const candidate = Definition.parse({ ...input, version })
@@ -160,10 +172,8 @@ export class SignalProviderRuntime {
     const operation = (async () => {
       try {
         await this.active?.catch(() => undefined)
+        await this.workflows.settle(this.subscriptions().map(s => s.workflow))
         if (this.browserCleanupFailure) throw this.browserCleanupFailure
-        // Host-owned receipts from already-started inbox calls are reconciled after draining,
-        // not committed by stale provider code. Graceful reload must not replay accepted drafts.
-        this.flushAccepted()
         if (this.stopped) throw new Error('Runtime stopped during reload')
         this.controller = new AbortController()
         const probe = await executeGrantedScript({ code: candidate.code, args: { demands: [] }, signal: this.controller.signal,
@@ -203,33 +213,39 @@ export class SignalProviderRuntime {
     if (binding.credential && !input.secretRef) throw new Error('Credential binding requires secretRef')
     if (!binding.credential && input.secretRef) throw new Error('Public binding must not include secretRef')
     if (input.secretRef && !this.hasCredential(input.secretRef)) throw new Error('Provision this credential reference with credential_request first')
+    if (this.reservedInstances.has(input.id) || this.workflows.inspect().definitions.some(d => d.source.kind === 'external' && d.source.id === input.id)) throw new Error('Source identity reserved by historical Workflow/state; create a new instance ID')
     if (this.state.instances.some(i => i.id === input.id)) throw new Error('Instance ID already exists')
     this.update(state => { state.instances.push({ ...input, origin: binding.origin, binding, owner, enabled: true, nextAt: 0 }) })
     if (browser) this.browsers.set(input.id, browser)
   }
   subscribe(owner: string, raw: unknown): void {
     this.authorize(owner)
-    const input = z.object({ id: Name, instance: Name, demand: z.unknown(), processor: z.string().min(1).max(64000) }).strict().parse(raw)
+    const input = z.object({ id: Name, instance: Name, demand: z.unknown(), first: FirstBatch, action: ExternalAction }).strict().parse(raw)
     const instance = this.state.instances.find(i => i.id === input.instance)
     if (!instance || !this.member(instance, owner)) throw new Error('Instance subscription not authorized')
-    if (this.state.subscriptions.some(s => s.id === input.id)) throw new Error('Subscription ID already exists; revisions require a new ID')
-    const demand = this.provider(instance).normalize(input.demand)
-    if (Buffer.byteLength(canonical(demand)) > 8192) throw new Error('Demand too large')
-    this.update(state => { state.subscriptions.push({ ...input, demand, owner }) })
+    // This shortcut is the same versioned authoring boundary, never a second store.
+    this.workflows.author(owner, { id: `external:${input.id}`, name: input.id, source: { kind: 'external', id: input.instance },
+      binding: { demand: input.demand }, gate: { kind: 'revision-dedupe', first: input.first }, enabled: true,
+      nodes: input.action.kind === 'notify' ? [{ kind: 'transform', code: input.action.processor }, { kind: 'inbox' }] : [input.action] })
+  }
+  private subscriptions() {
+    return this.workflows.inspect().definitions.filter(d => d.source.kind === 'external' && d.owner && d.binding).map(d => ({
+      id: d.id, workflow: d.id, instance: d.source.id, owner: d.owner!,
+      demand: d.binding!.demand, first: d.gate.first, nodes: d.nodes,
+    }))
   }
   private member(instance: InstanceData, owner: string): boolean {
     return this.state.instances.some(i => i.id === instance.id) && this.canUse(owner)
   }
   /** Project collection uses an available subscriber as invocation provenance, not the creator. */
   private invocationSession(instance: InstanceData): string {
-    const subscriber = this.state.subscriptions.find(s => s.instance === instance.id && this.canUse(s.owner))
+    const subscriber = this.subscriptions().find(s => s.instance === instance.id && this.canUse(s.owner))
     if (!subscriber) throw new Error('No available Project subscriber')
     return subscriber.owner
   }
-  unsubscribe(owner: string, id: string): void {
+  unsubscribe(owner: string, id: string, expectedRevision: number): void {
     this.authorize(owner)
-    if (!this.state.subscriptions.some(s => s.id === id && s.owner === owner)) throw new Error('Subscription not owned by this session')
-    this.update(state => { state.subscriptions = state.subscriptions.filter(s => s.id !== id); state.jobs = state.jobs.filter(j => j.subscription !== id) })
+    this.workflows.retire(owner, `external:${id}`, expectedRevision)
   }
   pause(owner: string, id: string, enabled: boolean): void {
     this.authorize(owner)
@@ -269,7 +285,7 @@ export class SignalProviderRuntime {
           await Promise.allSettled([...pending])
           if (this.browserCleanupFailure) throw this.browserCleanupFailure
         }
-        return z.record(z.preprocess(collectionInput, Collection)).parse(output)
+        return z.record(Collection).parse(output)
       } }
   }
   run(): Promise<void> {
@@ -293,12 +309,12 @@ export class SignalProviderRuntime {
     const generation = this.controller
     this.current(instance, generation)
     const provider = this.provider(instance)
-    const subscriptions = this.state.subscriptions.filter(s => s.instance === instance.id && this.member(instance, s.owner))
+    const subscriptions = this.subscriptions().filter(s => s.instance === instance.id && this.member(instance, s.owner))
     for (const subscription of subscriptions) provider.normalize(subscription.demand)
     const unique = new Map(subscriptions.map(s => { const key = digest([instance.id, s.demand]); return [key, { key, demand: s.demand, checkpoint: this.state.demands[key]?.checkpoint ?? null }] }))
     if (!unique.size) return
     // Reserve capacity before external IO. Backpressure never advances a cursor.
-    if (this.state.jobs.length > 1500) throw new Error('Processing backlog full')
+    this.workflows.assertCapacity()
     let requests = 0
     const output = await provider.collect([...unique.values()], async (input, callSignal) => {
       this.current(instance, generation)
@@ -310,7 +326,7 @@ export class SignalProviderRuntime {
       const grant = { ...network, id: 'fetch', kind: 'http' as const,
         ...(credential && instance.secretRef ? { credential: { ...credential, secretRef: instance.secretRef } } : {}) }
       const response = await this.broker.execute(grant, input, {
-        sessionId: this.invocationSession(instance), inputId: `provider:${instance.id}`, toolCallId: `provider:${instance.id}`, bindingKey: `provider:${instance.id}`, revision: this.state.legacyRevisions[`${provider.definition.id}:${provider.definition.version}`] ?? digest(provider.definition),
+        sessionId: this.invocationSession(instance), inputId: `provider:${instance.id}`, toolCallId: `provider:${instance.id}`, bindingKey: `provider:${instance.id}`, revision: digest(provider.definition),
         signal: AbortSignal.any([generation.signal, callSignal]), assertCurrent: () => this.current(instance, generation),
         ...(instance.transport.kind === 'browser' ? { browserRequest: this.browsers.get(instance.id)!.request } : {}),
       }) as { status: number; body: unknown }
@@ -319,80 +335,43 @@ export class SignalProviderRuntime {
     }, generation.signal)
     this.current(instance, generation)
     if (canonical(Object.keys(output).sort()) !== canonical([...unique.keys()].sort())) throw new Error('Provider must return every exact demand and no others')
+    // Validate the complete collector result before admitting any subscriber batch.
+    for (const [key, data] of Object.entries(output)) {
+      if (Buffer.byteLength(canonical(data)) > 1024 * 1024 || Buffer.byteLength(canonical(data.checkpoint)) > 65536) throw new Error('Collection output bound exceeded')
+      for (const signal of data.signals) validateJsonSchema(provider.definition.signalSchema, signal.data)
+      if (new Set(data.signals.map(e => e.id)).size !== data.signals.length) throw new Error('Duplicate signal IDs')
+      if (this.state.demands[key] && this.state.demands[key].mode !== data.mode) throw new Error('Collection semantics changed; use a new instance/stateVersion')
+    }
+    this.workflows.admit(subscriptions.filter(s => this.subscriptions().some(live => live.workflow === s.workflow && live.instance === s.instance && live.owner === s.owner && canonical(live.demand) === canonical(s.demand)) && this.member(instance, s.owner)).map(s => ({
+      workflow: s.workflow, source: { kind: 'external', id: instance.id }, observations: output[digest([instance.id, s.demand])].signals,
+    })))
+    // Source checkpoint is only protocol state. A crash here may recollect; Workflow dedupes it.
     this.update(state => {
-      for (const [key, data] of Object.entries(output)) {
-        if (Buffer.byteLength(canonical(data)) > 1024 * 1024 || Buffer.byteLength(canonical(data.checkpoint)) > 65536) throw new Error('Collection output bound exceeded')
-        for (const signal of data.signals) validateJsonSchema(provider.definition.signalSchema, signal.data)
-        const ids = data.signals.map(e => e.id)
-        if (new Set(ids).size !== ids.length) throw new Error('Duplicate signal IDs')
-        const old = state.demands[key]
-        if (old && old.mode !== data.mode) throw new Error('Collection semantics changed; use a new instance/stateVersion')
-        if (old?.baseline) for (const signal of data.signals.filter(e => !old.seen.includes(e.id))) {
-          for (const subscription of subscriptions.filter(s => state.subscriptions.some(live => live.id === s.id) && this.member(instance, s.owner) && digest([instance.id, s.demand]) === key)) {
-            const id = digest([instance.id, subscription.id, signal.id])
-            if (!state.jobs.some(j => j.id === id)) state.jobs.push({ id, subscription: subscription.id, signal, attempts: 0, nextAt: 0, delivered: 0, timestamp: new Date().toISOString() })
-          }
-        }
-        // Delta retains a bounded FIFO ID window across polls/restarts. Evicted IDs may replay;
-        // sources must provide monotonic cursors and stable revision IDs, not unlimited history replay.
-        const seen = data.mode === 'delta' ? [...new Set([...(old?.seen ?? []), ...ids])].slice(-4096) : ids
-        state.demands[key] = { mode: data.mode, checkpoint: data.checkpoint, seen, baseline: true }
-      }
+      for (const [key, data] of Object.entries(output)) state.demands[key] = { mode: data.mode, checkpoint: data.checkpoint }
     })
   }
-  private async process(): Promise<void> {
-    const generation = this.controller
-    for (const pending of [...this.state.jobs].filter(j => j.nextAt <= Date.now()).slice(0, 64)) {
-      const subscription = this.state.subscriptions.find(s => s.id === pending.subscription)
-      const instance = this.state.instances.find(i => i.id === subscription?.instance)
-      if (!subscription || !instance || !this.member(instance, subscription.owner) || (!!instance.secretRef && !this.hasCredential(instance.secretRef))) {
-        this.update(state => { state.jobs = state.jobs.filter(j => j.id !== pending.id) }); continue
-      }
-      if (!instance.enabled) continue
-      const authorized = () => {
-        this.current(instance, generation)
-        if (!this.member(instance, subscription.owner) || !this.state.subscriptions.some(s => s.id === subscription.id) || !this.state.jobs.some(j => j.id === pending.id)) throw new Error('Subscription revoked')
-      }
-      try {
-        authorized()
-        let job = this.state.jobs.find(j => j.id === pending.id)!
-        if (!job.drafts) {
-          const drafts = Drafts.parse(await executeGrantedScript({ code: subscription.processor, args: processorInput(structuredClone(job.signal)), signal: generation.signal,
-            imports: ['@shadow/html'], allowedModules: ['@shadow/html'], callModule: async () => { throw new Error('Processors have no capabilities') } }))
-          authorized()
-          this.update(state => { state.jobs.find(j => j.id === job.id)!.drafts = drafts })
-          job = this.state.jobs.find(j => j.id === pending.id)!
-        }
-        for (let index = job.delivered; index < job.drafts!.length; index++) {
-          authorized()
-          const id = digest([job.id, index])
-          const receipt = await this.deliver(subscription.owner, { id, kind: 'message', timestamp: job.timestamp, policy: 'queue', content: job.drafts![index].content,
-            source: { kind: 'event', eventId: job.signal.id, type: 'provider.message', source: `provider:${instance.id}` } })
-          if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.sessionId !== subscription.owner || receipt.inputId !== id) throw new Error('Inbox acceptance not confirmed')
-          this.accepted.set(job.id, index + 1)
-          authorized()
-          this.flushAccepted()
-        }
-        authorized()
-        this.update(state => { state.jobs = state.jobs.filter(j => j.id !== job.id) })
-      } catch {
-        if (this.stopped || this.reloading || this.controller.signal.aborted) return
-        // Persisted failures are metadata only. External error bodies may contain secrets.
-        this.update(state => { const job = state.jobs.find(j => j.id === pending.id); if (!job) return; job.attempts++; job.nextAt = Date.now() + Math.min(3600000, 15000 * 2 ** Math.min(job.attempts, 8)) })
-      }
-    }
+  private workflowCurrent(definition: WorkflowDefinition): boolean {
+    if (this.stopped || this.reloading) return false
+    const subscription = this.subscriptions().find(s => s.workflow === definition.id && s.owner === definition.owner && s.instance === definition.source.id)
+    const instance = this.state.instances.find(i => i.id === subscription?.instance)
+    if (!subscription || !instance || !this.member(instance, subscription.owner)) return false
+    try { this.current(instance, this.controller); return true } catch { return false }
   }
   private async cycle(): Promise<void> {
-    this.flushAccepted()
     for (const instance of [...this.state.instances]) {
       if (this.stopped || this.reloading || this.controller.signal.aborted) return
       if (!instance.enabled || instance.nextAt > Date.now()) continue
       // Persist rate reservation even on failure/restart; no catch-up bursts.
       this.update(state => { state.instances.find(i => i.id === instance.id)!.nextAt = Date.now() + 60000 })
-      try { await this.collect(instance); this.errors.delete(instance.id) } catch (error) {
-        this.errors.set(instance.id, error instanceof CapabilityError && ['browser_context_unavailable', 'browser_fetch_failed', 'browser_cleanup_unconfirmed'].includes(error.code) ? error.code : 'collection_failed')
+      try {
+        await this.collect(instance); this.errors.delete(instance.id)
+        if (instance.error) this.update(state => { delete state.instances.find(i => i.id === instance.id)!.error })
+      } catch (error) {
+        const code = error instanceof CapabilityError && ['browser_context_unavailable', 'browser_fetch_failed', 'browser_cleanup_unconfirmed'].includes(error.code) ? error.code as NonNullable<InstanceData['error']> : 'collection_failed'
+        this.errors.set(instance.id, code)
+        this.update(state => { state.instances.find(i => i.id === instance.id)!.error = code })
       }
     }
-    await this.process()
+    await Promise.all(this.subscriptions().map(s => this.workflows.drain(s.workflow, this.controller.signal)))
   }
 }

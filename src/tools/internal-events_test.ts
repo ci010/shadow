@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import { EventService } from '../events/service.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { SignalProviderRuntime } from '../signals/providers/runtime.ts'
+import { TestSignalProviderRuntime as SignalProviderRuntime } from '../signals/providers/testing.ts'
 import { SignalProviderTool } from './signal-provider.ts'
 import { registerInternalEventTools } from './internal-events.ts'
 import { registerSignalTools } from './signal-tools.ts'
@@ -13,7 +13,7 @@ import { ReadTool } from './read.ts'
 import { Tools, SessionTools } from './registry.ts'
 import type { ExecutionContext } from './context.ts'
 
-test('signals discovery is separate from internal events and legacy invocation resolves without public aliases', async () => withTempWorkspace(async workspace => {
+test('signals discovery is separate from internal events and obsolete provider alias is neither resolved nor advertised', async () => withTempWorkspace(async workspace => {
   const deliveries: string[] = []
   const events = new EventService(workspace, new Bus(), async (id, input) => {
     deliveries.push(id)
@@ -51,10 +51,11 @@ test('signals discovery is separate from internal events and legacy invocation r
     assert.equal(tools.hasDynamic('event_subscribe'), true)
     await events.emit({ type: 'cron-tick', source: 'cron', content: 'Internal tick', targetSessionId: 'owner' })
     assert.deepEqual(deliveries, ['owner'])
-    assert.match(String(await invoke.execute({ name: 'event_provider', args: { action: 'run' } }, context)), /Saved\/completed/)
+    assert.match(String(await invoke.execute({ name: 'event_provider', args: { action: 'run' } }, context)), /not active and could not be imported/)
+    assert.match(String(await invoke.execute({ name: 'signal_provider', args: { action: 'run' } }, context)), /Saved\/completed/)
     assert.equal(tools.hasDynamic('signal_provider'), true)
     assert.equal(tools.hasDynamic('event_provider'), false)
-    const blocked = new SessionTools(base, workspace, undefined, ['event_provider'])
+    const blocked = new SessionTools(base, workspace, undefined, ['signal_provider', 'event_provider'])
     assert.equal(blocked.canUseDynamic('signal_provider'), false)
     assert.equal(blocked.canUseDynamic('event_provider'), false)
     for (const name of ['signal_provider', 'event_provider']) assert.match(String(await invoke.execute({ name, args: { action: 'run' } }, { ...context, tools: blocked })), /not active and could not be imported/)

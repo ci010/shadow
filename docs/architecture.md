@@ -1948,6 +1948,7 @@ Local append uses append mode rather than rewriting previously read contents.
 - `v:tools`: dynamic tool and MCP source discovery without starting servers or
   revealing commands, environment values, URLs, or authentication headers;
 - `v:memory`: shared file-backed knowledge;
+- `v:workflows`: Project definitions, durable runs and deterministic records; runs are not model sessions.
 - `v:signals`: external signal providers, instances and subscriptions; `internal/` separately exposes runtime event subscriptions.
 - `v:github`: read-only cached GitHub snapshots for this Project's enabled
   repositories, including source timestamps and refresh errors; unpublished
@@ -2351,7 +2352,7 @@ Three internal mechanisms must not be conflated:
    external `signal_provider` is in the separate `signals` catalog, not the base prompt.
    Internal subscriptions and sources are visible at `v:signals/internal/`;
    external acquisition uses SignalSourceProviders, with independent persisted
-   instances, checkpoints and processor deliveries (see [provider reference](signal-source-providers.md)).
+   source instances/protocol checkpoints; business dedupe, transformation and delivery belong to Workflows (see [provider reference](signal-source-providers.md)).
 3. **Memory log:** model-curated daily knowledge in `memory/events`, not
    the transport log of every Bus event.
 
@@ -2364,11 +2365,27 @@ processes from these records. Session-bound tasks use turn facts rather than UI
 `continuation` annotates running tasks only. Terminal tasks report no change,
 without replaying an already queued/delivered callback or retrying failed delivery.
 
-`CronService` persists user definitions in `.cron/jobs.json` and schedules them
+The Project host binds `CronService` as the Schedule Signal Source for
+[`WorkflowRuntime`](../src/workflows/runtime.ts). It admits durable Workflow runs
+before invoking host actions (including managed learning/program preflights); it
+does not equate runs with model sessions. External subscriptions enter the same
+engine. Source checkpoints and Workflow business state are separate. See
+[Workflows](workflows.md) for bounded dedupe, recovery, at-least-once delivery and
+operator-acknowledged retry of uncertain schedule side effects. Existing automation
+profiles are schedule/model-session projections; `/api/workflows` and `v:workflows`
+expose actual runs. The Project Workflows page renders a read-only connected map,
+revision snapshots, node/run/source status and real Work/session links. Chat-only
+`workflow` authoring validates bounded definitions with optimistic revisions;
+typed work-map nodes retain Project-local entity mappings and existing Work
+permissions. Work Organizer reacts to internal session-metadata delta Signals and enters a trusted internal Agent node; it is not the GitHub observer. GitHub resource observations use typed github-resource Sources and github-notify inbox actions, showing exact resource, Work and target session in the graph. New notifications have only the Workflow outbox; old unresolved notification receipts require explicit resolution. Both CronService and GitHubService require Workflow dependencies, with no direct action fallback. Specialized evidence/repository/manual-write protocols remain domain adapters, not arbitrary authorable host actions. No general DAG
+editor or arbitrary tool execution is added.
+
+`CronService` persists source definitions in `.cron/jobs.json` and schedules them
 only while the backend is running. `cron_add`, `cron_list` and `cron_remove`
 are separate dynamically loaded tools, discoverable individually or via the
-`cron` catalog source. No action-dispatch tool is exposed and no scheduling
-tools are added to the base prompt. `cron_add` exposes `existing` (append to
+`cron` catalog source. The unified `workflow` tool exposes schedule-create/update/remove
+through the same validation; mutations require direct user input and a Project
+owner. No scheduling tools are added to the base prompt. `cron_add` exposes `existing` (append to
 an explicit `targetSessionId`, defaulting to the creating session) and `fresh`
 (an independent context per run). Existing jobs require durable source/target
 sessions in the current Project and messaging permission for a peer target.

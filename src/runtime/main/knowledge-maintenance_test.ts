@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { CronService } from '../../cron/service.ts'
+import { TestCronService as CronService } from '../../cron/testing.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import type { KnowledgeMaintenanceStatus } from '../../knowledge/maintenance-contracts.ts'
 import { scheduleKnowledgeMaintenance, KNOWLEDGE_MAINTENANCE_JOB_ID, KNOWLEDGE_MAINTENANCE_CHECK_MS } from './knowledge-maintenance.ts'

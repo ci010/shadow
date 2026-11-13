@@ -1,3 +1,5 @@
+import type { WorkflowRuntime } from '../workflows/runtime.ts'
+import { canonical } from '../workflows/json.ts'
 import { Cron } from 'croner'
 import { WORK_DISPATCH_ID, workDispatchConfigSchema, type WorkDispatchConfig } from './work-dispatch-contract.ts'
 import { BotWakeSchema, type BotWake } from '../bots/host-contract.ts'
@@ -48,7 +50,7 @@ export interface CronJob extends CronJobDef {
 }
 
 export interface CronJobHandler {
-  (job: CronJob, signal: AbortSignal): Promise<void>
+  (job: CronJob, signal: AbortSignal): Promise<void | { sessionId: string }>
 }
 
 function isCronJob(value: unknown): value is CronJob {
@@ -131,8 +133,8 @@ export function cronContextMode(job: CronJobDef): CronContextMode {
  * - Interval shorthand (e.g., "every 5m", "every 1h") — always UTC, no shift.
  * - One-time schedules (`deleteAfterRun: true`)
  *
- * Jobs are persisted to `.cron/jobs.json` in the workspace and
- * execute through the agent via the message bus.
+ * Source definitions are Project-local; the host attaches the shared Workflow
+ * executor as a required constructor dependency. No standalone action fallback exists.
  *
  */
 export class CronService {
@@ -143,6 +145,7 @@ export class CronService {
   private onJobRemovedCb: ((jobId: string) => void) | null = null
   private timezone: string
   private stopped = false
+  private lifecycleGeneration = 0
   private running = new Map<Promise<void>, AbortController>()
   private persistenceTail: Promise<void> = Promise.resolve()
   private persistenceError: unknown
@@ -155,11 +158,13 @@ export class CronService {
 
   constructor(
     private workspace: string,
+    private workflows: WorkflowRuntime,
     timezone = 'UTC',
     private scope: ProjectScope | undefined = getProjectScope(),
   ) {
     this.jobsPath = workspacePath(workspace, JOBS_FILE)
     this.timezone = timezone
+    this.bindWorkflow()
   }
 
   setHandler(handler: CronJobHandler): void {
@@ -176,6 +181,7 @@ export class CronService {
     if (!isCronJob(job) || this.jobs.has(id) || this.maintenance.has(id)) throw new TypeError('Invalid managed cron job')
     const previous = this.managed.get(id)
     this.managed.set(id, { job, intervalMs, handler })
+    this.syncWorkflow(job)
     if (!previous || previous.intervalMs !== intervalMs || previous.job.enabled !== job.enabled) this.scheduleManaged(id)
     this.onChanged?.('inventory')
   }
@@ -220,6 +226,43 @@ export class CronService {
     }, intervalMs))
   }
 
+  /** Schedule is an input adapter; only the Project host installs the action implementation. */
+  private bindWorkflow(): void {
+    const workflows = this.workflows
+    if (this.scope && this.scope.projectId !== workflows.projectId) throw new Error('Schedule and Workflow must belong to the same Project')
+    workflows.bindSchedule({
+      current: raw => {
+        if (this.stopped || !isCronJob(raw)) return false
+        const live = this.managed.get(raw.id)?.job ?? this.jobs.get(raw.id)
+        if (!live) return false
+        // Disabling controls future ticks; it does not revoke an already admitted run.
+        const config = ({ enabled: _enabled, ...rest }: CronJob) => {
+          // Managed source registration time changes across process starts, not its identity/config.
+          const value = JSON.parse(JSON.stringify(rest))
+          if (this.managed.has(raw.id)) delete value.createdAt
+          return value
+        }
+        return canonical(config(live)) === canonical(config(raw))
+      },
+      execute: async (raw, signal) => {
+        if (!isCronJob(raw)) throw new Error('Invalid schedule action')
+        const handler = this.managed.get(raw.id)?.handler ?? this.handler
+        if (!handler) throw new Error('Schedule handler unavailable')
+        const execute = async () => {
+          let output: void | { sessionId: string }
+          if (this.executing.has(raw.id)) output = await handler(raw, signal)
+          else {
+            // Recovered/retried Workflow runs still participate in cron cancellation/projection.
+            await this.runOwned(raw.id, async abort => { output = await handler(raw, abort) }, signal)
+          }
+          if (raw.deleteAfterRun && !this.stopped) { this.removeJob(raw.id); await this.flush() }
+          return output!
+        }
+        return await (this.scope ? this.scope.run(execute) : execute())
+      },
+    })
+  }
+
   /** Manual and timer admissions share overlap protection, scope, abort and cleanup. */
   runNow(id: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
@@ -248,11 +291,23 @@ export class CronService {
 
   /** Install a normal persisted default once; user removal and preferences survive reload. */
   async ensureDefaultJob(key: string, def: CronJobDef): Promise<void> {
+    if (this.stopped) throw new Error('CronService is stopped')
     if (!key || key.length > 100) throw new TypeError('Invalid automation default key')
     if (this.initializedDefaults.has(key)) return
     // A stable installation identity also deduplicates a restart between the job and marker writes.
     const id = `default:${key}`
-    if (!this.jobs.has(id)) this.addJob(def, id)
+    if (!this.jobs.has(id)) {
+      const flow = this.workflows.inspect().definitions.find(d => d.id === `schedule:${id}`)
+      const node = flow?.nodes[0]
+      if (flow && flow.enabled && flow.source.kind === 'schedule' && flow.source.id === id && node?.kind === 'schedule-action'
+        && isCronJob(node.job) && !Object.hasOwn(this.workflows.inspect().dedupe, flow.id)
+        && canonical(node.job) === canonical({ ...def, id, createdAt: node.job.createdAt })) {
+        // Resume only an identical default installation whose Workflow committed
+        // before jobs.json. Retired/admitted/changed identities are never revived.
+        this.jobs.set(id, structuredClone(node.job))
+        this.scheduleCron(this.jobs.get(id)!)
+      } else this.addJob(def, id)
+    }
     this.initializedDefaults.add(key)
     await this.saveJobs()
   }
@@ -267,18 +322,23 @@ export class CronService {
   }
 
   async start(): Promise<void> {
+    if (!this.workflows.available) throw new Error('Schedule requires an active Workflow runtime')
+    const generation = ++this.lifecycleGeneration
     await this.flush()
     await this.loadJobs()
+    if (generation !== this.lifecycleGeneration || !this.workflows.available) throw new Error('Schedule startup superseded or Workflow stopped')
     this.stopped = false
     for (const job of this.jobs.values()) {
+      this.syncWorkflow(job)
       this.scheduleCron(job)
     }
-    for (const id of this.managed.keys()) this.scheduleManaged(id)
+    for (const [id, { job }] of this.managed) { this.syncWorkflow(job); this.scheduleManaged(id) }
     for (const [id, task] of this.maintenance) this.scheduleInterval(id, task.intervalMs, true)
     console.info(`[cron] Cron service started (${this.jobs.size} jobs)`)
   }
 
   async stop(): Promise<void> {
+    this.lifecycleGeneration++
     this.stopped = true
     for (const scheduled of this.scheduledJobs.values()) {
       scheduled.stop()
@@ -294,7 +354,7 @@ export class CronService {
 
   addJob(def: CronJobDef, id = globalThis.crypto.randomUUID().slice(0, 8)): string {
     if (this.stopped) throw new Error('CronService is stopped')
-    if (this.jobs.has(id) || this.managed.has(id) || this.maintenance.has(id)) throw new TypeError('Duplicate cron job ID')
+    if (this.workflows.inspect().definitions.some(d => d.id === `schedule:${id}`) || Object.hasOwn(this.workflows.inspect().dedupe, `schedule:${id}`) || this.jobs.has(id) || this.managed.has(id) || this.maintenance.has(id)) throw new TypeError('Duplicate cron job ID')
     const job: CronJob = {
       ...structuredClone(def),
       id,
@@ -304,6 +364,7 @@ export class CronService {
     const validation = new Cron(this.normalizeSchedule(job.schedule), { paused: true, timezone: this.timezone })
     validation.stop()
     this.jobs.set(id, job)
+    this.syncWorkflow(job)
     this.scheduleCron(job)
     this.saveJobs().catch((error) => console.error('[cron] Failed to save jobs', error))
     this.onChanged?.('inventory')
@@ -322,6 +383,7 @@ export class CronService {
     }
     const removed = this.jobs.delete(id)
     if (removed) {
+      if (this.workflows.available && this.workflows.enabled(`schedule:${id}`) !== undefined) this.workflows.manage(`schedule:${id}`, 'pause')
       this.saveJobs().catch((error) => console.error('[cron] Failed to save jobs', error))
       console.info(`[cron] Removed cron job: ${id}`)
       this.onJobRemovedCb?.(id)
@@ -342,12 +404,14 @@ export class CronService {
     this.scheduledJobs.delete(id)
     this.scheduleCron(job)
     await this.saveJobs()
+    this.syncWorkflow(job)
     this.onChanged?.('inventory')
     return true
   }
 
   /** Same persistence/timer lifecycle as ordinary jobs; only host API can configure programs. */
   async configureProgram(id: string, program: WorkDispatchConfig, schedule?: string): Promise<void> {
+    if (this.stopped) throw new Error('CronService is stopped')
     const prior = this.jobs.get(id)
     if (!prior?.program) throw new TypeError('Unknown program automation')
     const next = { ...prior, program, ...(schedule ? { schedule } : {}) }
@@ -359,9 +423,38 @@ export class CronService {
     this.scheduledJobs.delete(id)
     this.scheduleCron(next)
     await this.saveJobs()
+    this.syncWorkflow(next)
     this.onChanged?.('inventory')
   }
 
+  private syncWorkflow(job: CronJob): void {
+    if (this.stopped || !this.workflows.available) return
+    const id = `schedule:${job.id}`
+    const old = this.workflows.inspect().definitions.find(d => d.id === id)
+    const node = { kind: 'schedule-action' as const, action: job.program || job.source === 'learning' ? 'program' as const : cronContextMode(job) === 'fresh' ? 'agent' as const : 'session' as const, job: JSON.parse(JSON.stringify(job)) }
+    const changed = !old || canonical(old.nodes) !== canonical([node])
+    this.workflows.define({ id, name: job.name ?? job.task?.slice(0, 160) ?? job.id, owner: job.originSessionId ?? job.target?.sessionId,
+      revision: old ? old.revision + Number(changed) : 1, source: { kind: 'schedule', id: job.id }, gate: { kind: 'revision-dedupe', first: 'emit' }, enabled: old?.enabled ?? true, nodes: [node] })
+  }
+  async updateJob(id: string, definition: CronJobDef): Promise<string> {
+    const old = this.jobs.get(id)
+    if (this.stopped || !old || old.program || old.botWake || old.source === 'learning') throw new Error('Only user schedule jobs can be revised')
+    const job = { ...structuredClone(definition), id, createdAt: old.createdAt, enabled: old.enabled }
+    if (!isCronJob(job)) throw new TypeError('Invalid cron job')
+    const validation = new Cron(this.normalizeSchedule(job.schedule), { paused: true, timezone: this.timezone }); validation.stop()
+    this.jobs.set(id, job)
+    this.scheduledJobs.get(id)?.stop(); this.scheduledJobs.delete(id)
+    await this.saveJobs()
+    if (this.stopped || this.jobs.get(id) !== job) return id
+    this.syncWorkflow(job)
+    this.scheduleCron(job)
+    this.onChanged?.('inventory')
+    return id
+  }
+  workflowStatus(id: string) {
+    const pending = this.workflows.pending(`schedule:${id}`)
+    return { id: `schedule:${id}`, pending: pending.length, blocked: pending.filter(r => r.status === 'blocked').length }
+  }
   isRunning(id: string): boolean { return this.executing.has(id) }
 
   listJobs(): CronJob[] {
@@ -375,6 +468,7 @@ export class CronService {
   // ── Internal ──────────────────────────────────────────────────────────
 
   private scheduleCron(job: CronJob): void {
+    if (this.stopped || this.jobs.get(job.id) !== job) return
     if (job.enabled === false) return
     try {
       this.scheduledJobs.get(job.id)?.stop()
@@ -433,9 +527,21 @@ export class CronService {
     )
     try {
       signal.throwIfAborted()
-      await handler(job, signal)
+      {
+        await this.flush() // Admit only after user Schedule configuration is durable.
+        const workflow = `schedule:${job.id}`
+        if (this.workflows.enabled(workflow) === false) return
+        // Drop overlapping ticks, including durable blocked/retry state after restart. No catch-up burst.
+        if (!this.workflows.pending(workflow).length) {
+          this.syncWorkflow(job)
+          this.workflows.admit([{ workflow, source: { kind: 'schedule', id: job.id }, observations: [{ id: crypto.randomUUID(), data: { scheduledAt: new Date().toISOString() } }] }])
+        }
+        await this.workflows.drain(workflow, signal)
+        if (this.workflows.pending(workflow).length) throw new Error('Workflow action pending or blocked; inspect v:workflows')
+      }
     } catch (err) {
       console.error(`[cron] Cron job execution failed: ${job.id}`, err)
+      return // Keep one-shot sources when admission/effect did not complete.
     }
 
     if (job.deleteAfterRun && !this.stopped) {

@@ -44,6 +44,7 @@ for (const protocol of ['http:', 'file:'] as const) {
     for (const path of [
       '/projects',
       '/projects/owner%20one/dashboard',
+      '/projects/owner%20one/workflows?workflow=external%3Aissues&run=run-not-session',
       '/projects/owner%20one/chat/web%3Achat-same?automation=daily&child=task%3Aone#message-2',
       '/projects/other/chat/web%3Achat-same',
       '/projects/owner%20one/settings/bots',

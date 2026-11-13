@@ -1,13 +1,14 @@
 import { z } from 'zod'
 import { CapabilityGrantSchema } from '../../execution/grant-contract.ts'
 import { assertSupportedJsonSchema } from '../../execution/grants.ts'
-import { createHash } from 'node:crypto'
+export { canonical, digest } from '../../workflows/json.ts'
+export { Drafts } from '../../workflows/contracts.ts'
+import { Observation } from '../../workflows/contracts.ts'
 
 export const Name = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
-export const SignalRecord = z.object({ id: z.string().min(1).max(256), data: z.unknown() }).strict()
+export const SignalRecord = Observation
 export type SourceSignal = z.infer<typeof SignalRecord>
 export const Collection = z.object({ mode: z.enum(['snapshot', 'delta']).default('snapshot'), signals: z.array(SignalRecord).max(500), checkpoint: z.unknown() }).strict()
-export const Drafts = z.array(z.object({ content: z.string().min(1).max(32768) }).strict()).max(16)
 export const HttpDeclaration = CapabilityGrantSchema.options[0].omit({ id: true, kind: true, credential: true }).extend({
   credential: z.object({ header: z.string().regex(/^[A-Za-z][A-Za-z0-9-]*$/), prefix: z.string().max(64).default('') }).strict().optional(),
 }).strict()
@@ -35,17 +36,6 @@ export interface SignalSourceProvider {
   collect(demands: Array<{ key: string; demand: unknown; checkpoint: unknown }>,
     request: (input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>, signal: AbortSignal): Promise<Record<string, z.infer<typeof Collection>>>
 }
-export function canonical(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    const result = JSON.stringify(value)
-    if (result === undefined || (typeof value === 'number' && !Number.isFinite(value))) throw new Error('Expected finite JSON')
-    return result
-  }
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(',')}}`
-}
-export function digest(value: unknown): string { return createHash('sha256').update(canonical(value)).digest('hex') }
-
 export function validateDefinition(definition: ProviderDefinition): void {
   assertSupportedJsonSchema(definition.demandSchema)
   assertSupportedJsonSchema(definition.signalSchema)

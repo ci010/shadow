@@ -61,10 +61,11 @@ test('automation statistics uses one scroll container for metrics and expanded l
 })
 
 // A standalone statistics header has nothing above it to separate.
-test('automation statistics divider only appears below model settings', () => {
+test('automation statistics remain in a read-only history projection without model settings', () => {
   const profile = parse(readFileSync(new URL('./components/AutomationProfile.vue', import.meta.url), 'utf8')).descriptor
-  const settings = parse(readFileSync(new URL('./components/AutomationConversationSettings.vue', import.meta.url), 'utf8')).descriptor
+  const settings = parse(readFileSync(new URL('./components/AutomationConversationProjection.vue', import.meta.url), 'utf8')).descriptor
   assert.doesNotMatch(profile.styles.map(style => style.content).join('\n'), /border-top\s*:/)
   const css = settings.styles.map(style => style.content).join('\n')
-  assert.match(css, /\.automation-settings-box:has\(\.settings-row\)\s+:deep\(\.automation-profile\)\s*\{\s*border-top:\s*1px solid var\(--c-border-soft\);\s*\}/)
+  assert.match(css, /border-top:\s*1px solid var\(--c-border-soft\)/)
+  assert.doesNotMatch(settings.template!.content, /<form|<input|ModelSelector/)
 })

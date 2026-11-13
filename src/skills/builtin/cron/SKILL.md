@@ -5,6 +5,16 @@ metadata:
   category: scheduling
 ---
 
+# Schedule Signal Sources
+
+Schedule is a Signal Source for the shared Workflow executor. The cron tools manage
+schedule configuration; `v:workflows` shows durable runs independently of model
+sessions. The `workflow` tool manages owned pause/resume and retry/cancel. Uncertain
+schedule effects block instead of automatically replaying; explicit retry requires
+inspecting effects and acknowledging possible duplication. Source checks, dedupe
+and record actions do not call a model. Use external Signal Sources + a deterministic
+Workflow action for no-change checks, rather than scheduling an agent to poll.
+
 # Cron Scheduling
 
 Use `search(query="**", handler="glob", path="v:tools/cron")` to discover scheduling tools;
@@ -25,7 +35,7 @@ Use `invoke_tool({name: "cron_add", args: {...}})` to schedule a task:
 | `targetSessionId` | string | no | Existing durable session in this Project; existing mode only, defaults to current session |
 | `name` | string | no | Readable job name; defaults to the task |
 | `agentType` | string | no | Agent type for fresh runs, default `general` |
-| `once` | boolean | no | Delete after first run |
+| `once` | boolean | no | Delete after first successful run |
 | `urgency` | string | no | `steering`, `next-step`, `queue`, `debounce`, or `silent`; existing mode only. `next-step` joins the next inference without aborting an active request or tool. |
 | `debounce_ms` | number | no | Debounce duration when `urgency` is `debounce` |
 
@@ -39,7 +49,7 @@ Use `invoke_tool({name: "cron_add", args: {...}})` to schedule a task:
 
 - **Cron expression**: `"0 9 * * *"` (daily at 9 AM), `"*/30 * * * *"` (every 30 min)
 - **Interval shorthand**: `"every 5m"`, `"every 1h"`, `"every 30s"`
-- **One-time**: set `once: true` to auto-delete after first run
+- **One-time**: set `once: true` to auto-delete after first successful run
 
 ## Add a Job
 
@@ -91,3 +101,7 @@ The former `origin`/`isolated` modes and `isolated` boolean are not supported.
 - One-shot reminder: `schedule="0 14 * * *"` task="Remind about meeting" once="true"
 - Background sweep with retained context: `schedule="every 30m"` task="Process pending items" session="existing" targetSessionId="<existing topic ID>"
 - Independent check: `schedule="every 1h"` task="Check service health" session="fresh" name="Service health"
+
+Unified authoring: discover `workflow`, then read `v:workflows/authoring`. `schedule-create/update/remove` use the same schedule/target validation; updates require the Workflow revision. The Project Workflows page is a read-only connected graph with run and node state. Its operational pause/retry controls are not configuration forms. Existing cron tools are schedule-focused convenience projections, not another executor.
+
+cron_remove requires {id,expectedRevision}; inspect the schedule Workflow revision in v:workflows first (the example revision is illustrative). Both cron shortcuts and workflow schedule-* use the same authorized serialized authoring adapter. Automation is the time-signal → Fresh Agent preset. Its old page/sidebar are history projections, not configuration editors; configure in chat. Schedule requires Workflow execution; no separate cron action engine exists.

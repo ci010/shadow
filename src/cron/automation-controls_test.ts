@@ -2,7 +2,7 @@ import { automationDispatchModel, automationModelSettings } from './automation-m
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Hono } from 'hono'
-import { CronService } from './service.ts'
+import { TestCronService as CronService } from './testing.ts'
 import { registerAutomationRoutes } from './routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -60,7 +60,7 @@ test('learning preferences persist while master is off and inventory distinguish
     try {
       const result = await app.request('/api/automations/learning:reflector', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) })
       assert.equal(result.status, 200)
-      assert.deepEqual((await result.json()).automation, { id: 'learning:reflector', name: 'learning:reflector', source: 'learning', session: 'fresh', schedule: 'every 1h', enabled: false, configuredEnabled: true, editable: true, disabledByGlobal: true })
+      assert.deepEqual((await result.json()).automation, { id: 'learning:reflector', name: 'learning:reflector', source: 'learning', session: 'fresh', schedule: 'every 1h', enabled: false, configuredEnabled: true, editable: true, disabledByGlobal: true, workflow: { id: 'schedule:learning:reflector', pending: 0, blocked: 0 } })
       const restarted = new ProjectConfigStore(options)
       await restarted.init()
       assert.equal(restarted.current().learning.pipelines?.reflector, true)

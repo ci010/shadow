@@ -317,6 +317,19 @@ Work realignment events keep their agent-facing instructions and JSON in the sha
 
 Automations use the ordinary conversation workbench, opening the latest run by default. Reuse the compacted-history Previous / Next / Current controls to navigate independent run sessions, loading older pages on demand. Do not introduce a runs explorer, per-run tab strip, or secondary conversation pane. Keep read-only automation metadata behind the collapsed Automation details disclosure in the conversation, not a permanent Configuration tab. Preserve learning receipts separately from execution status. Do not add a standalone File changes workbench: retain write history as data for future context-specific detail views, without turning every write into another navigation surface.
 
+Workflow inspection is distinct from the automation conversation projection. The
+Project Workflow page shows persistent definitions and bounded recent execution
+runs, not another model-conversation pane. Use a quiet inventory beside a
+read-only connected sequence of source, revision gate and typed action nodes.
+Node disclosures show escaped configuration; no forms, draggable nodes or manual
+flow editor. Configuration authoring belongs to chat/Agent tools. Explicitly
+label definition revisions, run snapshots and Workflow/run/session identities;
+only recorded session outputs receive model-session links. Pause/resume and
+non-active retry/cancel are operational controls. An uncertain retry requires
+visible acknowledgement of possible duplicate effects. Below 760px of pane
+width, the inventory scrolls horizontally and the connected sequence becomes
+vertical, retaining native keyboard disclosures and semantic state text.
+
 The composer is `calc(100% - 40px)` wide, capped at (860px), changing to `calc(100% - 24px)` on narrow viewports. It owns a measured trailing history allowance through `--composer-height`. Preserve stable scrollbar gutters and the scroll container's own geometry; do not use the prose measure as the workbench's outer width.
 
 The composer toolbar keeps its send/stop action beside the model and attachment controls. When the submit area has at most (320px) available, visually hide the shortcut/status hint rather than wrapping the toolbar; keep its live status available to assistive technology. Use the available pane space, not the window width, so sidebars and long model labels do not push the action onto a second row.

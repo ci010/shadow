@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { SignalProviderRuntime } from './runtime.ts'
+import { TestSignalProviderRuntime as SignalProviderRuntime } from './testing.ts'
 import { createProviderSignalsHandler } from './vfs.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { createEventsHandler } from '../../vfs/mounts.ts'
@@ -21,7 +21,7 @@ test('real VFS read/list/search/paging exposes generated Project provider files 
   runtime.start(); t.after(() => runtime.stop())
   runtime.publish('a', definition)
   runtime.create('a', { id: 'watch', provider: definition.id, version: 1, purpose: 'Public change feed for this Project' })
-  runtime.subscribe('b', { id: 'reader', instance: 'watch', demand: {}, processor: 'export function run(){return []}' })
+  runtime.subscribe('b', { id: 'reader', instance: 'watch', demand: {}, first: 'baseline', action: { kind: 'notify', processor: 'export function run(){return []}' } })
   const events = new EventService(workspace, new Bus(), async (id, input) => ({ status: 'accepted', sessionId: id, inputId: input.id }))
   events.registerSource({source:'fixture-source', kind:'custom', description:'Internal fixture source'})
   const old = events.subscribe({sessionId: 'b', event: 'fixture.changed'})
@@ -32,6 +32,7 @@ test('real VFS read/list/search/paging exposes generated Project provider files 
   const read = new ReadTool(workspace, vfs), search = new SearchTool(workspace, undefined, vfs, false)
   const get = async (path: string) => String(await read.execute({ path: `v:signals/${path}` }, ctx))
   assert.match(await get(''), /providers/)
+  assert.match(await get('schedule'), /shared Workflow executor/)
   assert.ok((await get('')).length < 1200)
   assert.match(await get('providers/public-feed'), /Public change feed for this Project/)
   assert.doesNotMatch(await get('providers/public-feed'), /example.org|secretRef|binding|checkpoint/)
@@ -42,9 +43,9 @@ test('real VFS read/list/search/paging exposes generated Project provider files 
   assert.match(await get('authoring/providers/public-feed/revisions/1/source.ts'), /export async function run/)
   assert.match(await get('authoring/providers/github-issues/revisions/1/source.ts'), /query/)
   assert.match(await get('instances/watch/config.json'), /binding|native/)
-  assert.match(await get('subscriptions/reader/processor.ts'), /return \[\]/)
-  assert.match(await get('subscriptions/reader/config.json'), /"owner": "b"/)
-  assert.match(await get('subscriptions/reader/status.json'), /pending/)
+  assert.match(await get('subscriptions/external%3Areader/processor.ts'), /return \[\]/)
+  assert.match(await get('subscriptions/external%3Areader/config.json'), /"owner": "b"/)
+  assert.match(await get('subscriptions/external%3Areader/status.json'), /pending/)
   assert.match(String(await read.execute({ path: 'v:signals/authoring/providers/public-feed/revisions/1/manifest.json', offset: 2, limit: 2 }, ctx)), /id|version/)
   const consumer = await get('providers/github-issues')
   assert.match(consumer, /number|updatedAt/)

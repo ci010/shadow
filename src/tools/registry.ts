@@ -1,4 +1,3 @@
-import { legacySignalToolName } from '../signals/providers/legacy-compat.ts'
 import { isWorkTool } from './work-names.ts'
 import { executionTargetParameters, workspaceArguments } from './execution-target.ts'
 import { UseProjectTool } from './use-project.ts'
@@ -377,14 +376,13 @@ export class SessionTools extends Tools {
     readonly allowedModules?: readonly string[],
   ) {
     super(workspace)
-    this.allowed = allowedTools !== undefined ? new Set(allowedTools.map(legacySignalToolName)) : undefined
-    this.blocked = blockedTools?.length ? new Set(blockedTools.map(legacySignalToolName)) : undefined
+    this.allowed = allowedTools !== undefined ? new Set(allowedTools) : undefined
+    this.blocked = blockedTools?.length ? new Set(blockedTools) : undefined
     this.allowedModules = allowedModules === undefined ? undefined : Object.freeze([...allowedModules])
   }
 
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
-    name = legacySignalToolName(name)
     if (name === 'ask' && !this.askAvailable) return false
     if (!executionModeAllowsTool(this.scope?.mode, name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
@@ -520,7 +518,6 @@ export class SessionTools extends Tools {
   }
 
   private isDynamicToolAllowed(name: string): boolean {
-    name = legacySignalToolName(name)
     if (name === 'ask' && !this.askAvailable) return false
     if (!executionModeAllowsTool(this.scope?.mode, name)) return false
     if (isWorkTool(name)) return this.allowed

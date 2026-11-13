@@ -8,7 +8,7 @@ import { CapabilityBroker, validateJsonSchema } from '../../execution/grants.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { githubDefinition } from './github.ts'
-import { SignalProviderRuntime } from './runtime.ts'
+import { TestSignalProviderRuntime as SignalProviderRuntime } from './testing.ts'
 import type { SessionInput } from '../../sessions/input.ts'
 
 const processor = 'export function run({signal}) { return [{content:signal.data.title},{content:"second"}] }'
@@ -35,9 +35,9 @@ test('GraphQL aggregate exact demands, silent baseline, persisted independent pr
     }, id => id === 'owner', ref => ref === 'pat')
     let runtime = make(); runtime.start()
     runtime.create('owner', { id: 'issues', provider: 'github-issues', version: 1, secretRef: 'pat' })
-    runtime.subscribe('owner', { id: 'a', instance: 'issues', demand: { repository: 'Test/Repo' }, processor })
-    runtime.subscribe('owner', { id: 'bad', instance: 'issues', demand: { repository: 'test/repo' }, processor: 'export function run(){throw new Error("fixture")}' })
-    assert.throws(() => runtime.subscribe('stranger', { id: 'x', instance: 'issues', demand: {}, processor }), /durable/)
+    runtime.subscribe('owner', { id: 'a', instance: 'issues', demand: { repository: 'Test/Repo' }, first: 'baseline', action: { kind: 'notify', processor } })
+    runtime.subscribe('owner', { id: 'bad', instance: 'issues', demand: { repository: 'test/repo' }, first: 'baseline', action: { kind: 'notify', processor: 'export function run(){throw new Error("fixture")}' } })
+    assert.throws(() => runtime.subscribe('stranger', { id: 'x', instance: 'issues', demand: {}, first: 'baseline', action: { kind: 'notify', processor } }), /durable/)
     await runtime.run(); assert.equal(calls, 1); assert.equal(accepted.length, 0)
     await runtime.run(); assert.equal(calls, 1, 'persisted rate reservation')
     updated = '2026-01-02'; now += 60001
@@ -45,15 +45,15 @@ test('GraphQL aggregate exact demands, silent baseline, persisted independent pr
     let status = runtime.snapshot('owner')
     assert.equal(status.pending.length, 2)
     assert.deepEqual(status.pending.map(j => j.stage).sort(), ['delivery', 'processor'])
-    const stableId = status.pending.find(j => j.subscription === 'a')!.id
+    const stableId = status.pending.find(j => j.subscription === 'external:a')!.id
     await runtime.stop()
     runtime = make(); runtime.start(); rejectDelivery = false; now += 60001
     await runtime.run()
     assert.equal(accepted.length, 2)
     assert.equal(new Set(accepted.map(i => i.id)).size, 2)
-    status = runtime.snapshot('owner'); assert.deepEqual(status.pending.map(j => j.subscription), ['bad'])
+    status = runtime.snapshot('owner'); assert.deepEqual(status.pending.map(j => j.subscription), ['external:bad'])
     assert.ok(stableId)
-    const stored = await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8')
+    const stored = await readFile(projectStoragePath(workspace, '.signals', 'sources-v4.json'), 'utf8')
     assert.doesNotMatch(stored, /synthetic-only/)
     await runtime.stop()
   })
@@ -77,15 +77,15 @@ test('separate repository connections batch; pagination incomplete or GraphQL pa
       return { status: 200, body: { data: { ...(body.variables.use0 ? { r0: { issues: { nodes: [page ? { ...issue('v1'), id: 'I_2' } : issue('v1')], pageInfo: { hasNextPage: !page, endCursor: page ? null : 'next' } } } } : {}), ...(body.variables.use1 ? { r1: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } } : {}) } } }
     } }, async (id, input) => ({ status: 'accepted', sessionId: id, inputId: input.id }), () => true, () => true)
     runtime.start(); runtime.create('owner', { id: 'batch', provider: 'github-issues', version: 1, secretRef: 'pat' })
-    for (const [id, repository] of [['one', 'a/repo'], ['two', 'b/repo']]) runtime.subscribe('owner', { id, instance: 'batch', demand: { repository }, processor })
+    for (const [id, repository] of [['one', 'a/repo'], ['two', 'b/repo']]) runtime.subscribe('owner', { id, instance: 'batch', demand: { repository }, first: 'baseline', action: { kind: 'notify', processor } })
     await runtime.run(); assert.equal(requests, 1)
-    let saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8'))
+    let saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'sources-v4.json'), 'utf8'))
     assert.deepEqual(saved.demands, {})
     mode = 'stuck'; now += 60001; await runtime.run()
-    saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8')); assert.deepEqual(saved.demands, {})
+    saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'sources-v4.json'), 'utf8')); assert.deepEqual(saved.demands, {})
     mode = 'good'; now += 60001; await runtime.run()
-    saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8'))
-    assert.equal(Object.keys(saved.demands).length, 2); assert.equal(saved.jobs.length, 0, 'successful first complete baseline remains silent after failed collections')
+    saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'sources-v4.json'), 'utf8'))
+    assert.equal(Object.keys(saved.demands).length, 2); assert.equal(runtime.workflow.inspect().runs.length, 0, 'successful first complete baseline remains silent after failed collections'); assert.equal(saved.jobs, undefined)
     assert.equal(variables.at(-1)?.use1, false, 'completed connection excluded on later pages')
     assert.equal(variables.at(-1)?.c0, 'next')
     await runtime.stop()
@@ -104,7 +104,7 @@ test('custom provider immutable revision and explicit HTTP policy', async () => 
     runtime.create('owner', { id: 'custom-instance', provider: 'custom', version: 2, secretRef: 'pat', origin: 'https://api.github.com' })
     assert.equal(runtime.snapshot('owner').instances[0].origin, 'https://api.github.com')
     assert.throws(() => runtime.create('owner', { id: 'wrong-origin', provider: 'github-issues', version: 1, secretRef: 'pat', origin: 'https://graphql.example.com' }), /origin must match/)
-    runtime.subscribe('owner', { id: 'custom-sub', instance: 'custom-instance', demand: { id: 'node' }, processor: 'export function run(){return []}' })
+    runtime.subscribe('owner', { id: 'custom-sub', instance: 'custom-instance', demand: { id: 'node' }, first: 'baseline', action: { kind: 'notify', processor: 'export function run(){return []}' } })
     await runtime.run()
     assert.equal(runtime.snapshot('owner').pending.length, 0)
     assert.equal(runtime.snapshot('owner').providers.length, 3)
@@ -153,29 +153,29 @@ test('reload aborts/drains collection, revokes stale generation, preserves old v
     } }, async () => { throw new Error('must not deliver') }, () => true, () => true)
     runtime.start()
     runtime.create('owner', { id: 'watch', provider: 'github-issues', version: 1, secretRef: 'pat' })
-    runtime.subscribe('owner', { id: 'sub', instance: 'watch', demand: { repository: 'test/repo' }, processor })
+    runtime.subscribe('owner', { id: 'sub', instance: 'watch', demand: { repository: 'test/repo' }, first: 'baseline', action: { kind: 'notify', processor } })
     const running = runtime.run(); await waiting
     const candidate = { id: 'github-issues', description: 'edited builtin extension', stateVersion: 'snapshot-v1', http: githubDefinition.http,
       code: 'export function run({demands}){ const r={}; for(const d of demands) r[d.key]={signals:[],checkpoint:null}; return r; }' }
     await runtime.reload('owner', candidate); await running
-    assert.equal(aborted, 1); assert.equal(intervals, 1, 'reload reuses the one host scheduler')
+    assert.equal(aborted, 1); assert.equal(intervals, 2, 'reload reuses the source and Workflow schedulers')
     assert.throws(() => staleCheck!(), /abort|Stale/i)
     assert.equal(runtime.snapshot('owner').instances[0].version, 2)
-    let saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8'))
+    let saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'sources-v4.json'), 'utf8'))
     assert.deepEqual(saved.demands, {}, 'cancelled generation cannot commit baseline/cursor')
     await assert.rejects(runtime.reload('owner', { ...candidate, code: 'export function run( broken' }))
     assert.equal(runtime.snapshot('owner').instances[0].version, 2, 'invalid reload restores coherent old revision')
     assert.throws(() => staleCheck!(), /abort|Stale/i, 'failed reload never reauthorizes old capabilities')
     assert.throws(() => runtime.reload('owner', { ...candidate, stateVersion: 'incompatible' }), /incompatible/)
     now += 60001; await runtime.run()
-    saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8'))
+    saved = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'sources-v4.json'), 'utf8'))
     assert.equal(Object.keys(saved.demands).length, 1, 'old valid revision remains usable after failed reload')
     assert.equal(requests, 1, 'old builtin code was not scheduled again')
     // Reload a network-using revision, then stop during an active request.
     await runtime.reload('owner', { ...candidate, code: `import {call} from '@shadow/fetch'; export async function run({demands}) { if(!demands.length)return {}; await call({method:'POST',path:'/graphql',body:{query:'fixture',variables:{}}}); return {}; }` })
     waiting = new Promise<void>(resolve => { entered = resolve }); now += 60001
     const stoppingRun = runtime.run(); await waiting; await runtime.stop(); await stoppingRun
-    assert.equal(aborted, 2); assert.equal(clears, 1)
+    assert.equal(aborted, 2); assert.equal(clears, 2)
     assert.throws(() => staleCheck!(), /abort|Stale/i)
     await assert.rejects(runtime.run(), /stopped/)
   })
@@ -188,25 +188,25 @@ test('reload cancels restricted child processing without committing stale drafts
     const runtime = new SignalProviderRuntime(workspace, { execute: async () => ({ status: 200, body: { data: { r0: { issues: { nodes: [issue(revision)], pageInfo: { hasNextPage: false } } } } } }) },
       async (id, input) => { deliveries++; return { status: 'accepted', sessionId: id, inputId: input.id } }, () => true, () => true)
     runtime.start(); runtime.create('owner', { id: 'watch', provider: 'github-issues', version: 1, secretRef: 'pat' })
-    runtime.subscribe('owner', { id: 'spin', instance: 'watch', demand: { repository: 'test/repo' }, processor: 'export function run(){while(true){} }' })
+    runtime.subscribe('owner', { id: 'spin', instance: 'watch', demand: { repository: 'test/repo' }, first: 'baseline', action: { kind: 'notify', processor: 'export function run(){while(true){} }' } })
     await runtime.run(); revision = 'v2'; now += 60001
     const running = runtime.run()
     // Wait for collection to atomically persist its job, not for the hanging processor to finish.
     for (let attempt=0;attempt<100;attempt++) {
-      const state = JSON.parse(await readFile(projectStoragePath(workspace, '.signals', 'providers-v2.json'), 'utf8'))
-      if(state.jobs.length) break
+      const state = runtime.workflow.inspect()
+      if(state.runs.length) break
       await new Promise(resolve => setTimeout(resolve, 10))
     }
     await runtime.reload('owner', { id: 'github-issues', description: 'edited', http: githubDefinition.http, code: 'export function run({demands}) { const r={};for(const d of demands)r[d.key]={signals:[],checkpoint:null};return r; }' })
     await running
     const pending = runtime.snapshot('owner').pending
-    assert.equal(pending.length, 1); assert.equal(pending[0].stage, 'processor'); assert.equal(pending[0].attempts, 0)
+    assert.equal(pending.length, 1); assert.equal(pending[0].stage, 'processor'); assert.equal(pending[0].attempts, 1)
     assert.equal(deliveries, 0)
     await runtime.stop()
   })
 })
 
-test('agent edit+reload from local files needs no direct-user code gate; permissions and filesystem scope remain enforced', async () => {
+test('source edit+reload requires direct user input; permissions and filesystem scope remain enforced', async () => {
   await withTempWorkspace(async workspace => {
     const cwd = join(workspace, 'authoring'); await mkdir(cwd)
     const manifest = { id: 'authored', description: 'fixture', code_file: 'provider.ts', http: githubDefinition.http }
@@ -214,13 +214,14 @@ test('agent edit+reload from local files needs no direct-user code gate; permiss
     await writeFile(join(cwd, 'provider.ts'), 'export function run({demands}){const r={};for(const d of demands)r[d.key]={signals:[],checkpoint:null};return r}')
     const runtime = new SignalProviderRuntime(workspace, { execute: async () => { throw new Error('no external IO authorized') } }, async () => { throw new Error('no delivery') }, id => id === 'owner', () => true)
     runtime.start(); const tool = new SignalProviderTool(runtime, 'fixture')
-    const context = { sessionId: 'owner', projectId: 'fixture', inputSource: 'event', cwd, signal: new AbortController().signal } as ExecutionContext
+    const context = { sessionId: 'owner', projectId: 'fixture', inputSource: 'user', cwd, signal: new AbortController().signal } as ExecutionContext
+    await assert.rejects(tool.execute({ action: 'reload', path: 'manifest.json' }, { ...context, inputSource: 'event' }), /direct user/)
     await tool.execute({ action: 'reload', path: 'manifest.json' }, context)
     assert.equal(runtime.snapshot('owner').providers.at(-1)?.version, 1)
     await writeFile(join(cwd, 'provider.ts'), 'export function run({demands}){const r={};for(const d of demands)r[d.key]={signals:[],checkpoint:{revision:2}};return r}')
     await tool.execute({ action: 'reload', path: 'manifest.json' }, context)
     assert.equal(runtime.snapshot('owner').providers.at(-1)?.version, 2)
-    await assert.rejects(tool.execute({ action: 'create', input_json: JSON.stringify({ id: 'x', provider: 'authored', version: 2, secretRef: 'pat' }) }, context), /direct user/)
+    await assert.rejects(tool.execute({ action: 'create', input_json: JSON.stringify({ id: 'x', provider: 'authored', version: 2, secretRef: 'pat' }) }, { ...context, inputSource: 'event' }), /direct user/)
     await assert.rejects(tool.execute({ action: 'reload', path: 'manifest.json' }, { ...context, projectId: 'other' }), /Wrong Project/)
     await writeFile(join(workspace, 'outside.ts'), 'export function run(){return {}}')
     await symlink(join(workspace, 'outside.ts'), join(cwd, 'escape.ts'))
@@ -240,14 +241,14 @@ test('reload drains in-flight inbox acceptance and reconciles host receipt witho
     const runtime = new SignalProviderRuntime(workspace, { execute: async () => ({ status: 200, body: { data: { r0: { issues: { nodes: [issue(revision)], pageInfo: { hasNextPage: false } } } } } }) },
       async (id, input) => { deliveries++; entered(); await released; return { status: 'accepted', sessionId: id, inputId: input.id } }, () => true, () => true)
     runtime.start(); runtime.create('owner', { id: 'watch', provider: 'github-issues', version: 1, secretRef: 'pat' })
-    runtime.subscribe('owner', { id: 'sub', instance: 'watch', demand: { repository: 'test/repo' }, processor: 'export function run(){return [{content:"fixture"}]}' })
+    runtime.subscribe('owner', { id: 'sub', instance: 'watch', demand: { repository: 'test/repo' }, first: 'baseline', action: { kind: 'notify', processor: 'export function run(){return [{content:"fixture"}]}' } })
     await runtime.run(); revision = 'v2'; now += 60001
     const running = runtime.run(); await entering
     let swapped = false
     const reload = runtime.reload('owner', { id: 'github-issues', description: 'edited', http: githubDefinition.http, code: 'export function run({demands}) { const r={};for(const d of demands)r[d.key]={signals:[],checkpoint:null};return r; }' }).then(() => { swapped = true })
     await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(swapped, false, 'reload must drain already-started delivery')
     release(); await Promise.all([running, reload])
-    assert.equal(runtime.snapshot('owner').pending.length, 1, 'accepted receipt retained until cleanup cycle')
+    assert.equal(runtime.snapshot('owner').pending.length, 0, 'Workflow commits completed acceptance independently of source reload')
     await runtime.run()
     assert.equal(deliveries, 1); assert.equal(runtime.snapshot('owner').pending.length, 0)
     await runtime.stop()
@@ -270,37 +271,38 @@ test('Project sessions aggregate demands without sharing and survive creator dis
     }, id => id === 'b' || (id === 'owner' && creatorAvailable), () => true)
     runtime.start()
     runtime.create('owner', { id: 'shared', provider: 'github-issues', version: 1, secretRef: 'pat' })
-    for (const owner of ['owner', 'b']) runtime.subscribe(owner, {id: owner, instance: 'shared', demand: {repository: 'test/repo'}, processor: `export function run({signal}){return [{content:${JSON.stringify(owner)}+':'+signal.data.title}]}`})
-    assert.throws(() => runtime.subscribe('foreign', {id:'x',instance:'shared',demand:{},processor}), /durable/)
+    for (const owner of ['owner', 'b']) runtime.subscribe(owner, {id: owner, instance: 'shared', demand: {repository: 'test/repo'}, first: 'baseline', action: { kind: 'notify', processor: `export function run({signal}){return [{content:${JSON.stringify(owner)}+':'+signal.data.title}]}` }})
+    assert.throws(() => runtime.subscribe('foreign', {id:'x',instance:'shared',demand:{},first: 'baseline', action: { kind: 'notify', processor }}), /durable/)
     runtime.pause('b', 'shared', false); runtime.pause('b', 'shared', true)
     await runtime.run(); assert.equal(calls, 1); assert.equal(deliveries.length, 0)
     revision = 'v2'; now += 60001; await runtime.run()
     assert.deepEqual(deliveries.map(d => d.session).sort(), ['b','owner'])
     creatorAvailable = false; revision = 'v3'; now += 60001; await runtime.run()
     assert.equal(calls, 3); assert.equal(deliveries.at(-1)?.session, 'b')
-    assert.throws(() => runtime.unsubscribe('b', 'owner'), /not owned/)
+    assert.throws(() => runtime.unsubscribe('b', 'owner', 1), /ownership or revision conflict/)
     await runtime.stop()
   })
 })
 
-test('obsolete persisted instance allowlists are stripped, not interpreted as access gates or user demand fields', async () => {
+test('new source storage rejects obsolete fields while leaving legitimate user demand fields intact', async () => {
   await withTempWorkspace(async workspace => {
     const make = () => new SignalProviderRuntime(workspace, { execute: async () => { throw Error('unused') } }, async (id, input) => ({ status: 'accepted', sessionId: id, inputId: input.id }), id => ['a', 'b'].includes(id), () => true)
     let runtime = make(); runtime.start()
     runtime.publish('a', { id: 'public', version: 1, description: 'fixture', http: { origin: 'https://example.org', routes: [{method:'GET',path:'/feed'}] }, code: 'export function run(){return {}}' })
     runtime.create('a', {id:'watch', provider:'public', version:1})
     assert.throws(() => runtime.create('a', {id:'obsolete', provider:'public', version:1, allowedSubscribers:[]}), /Unrecognized/)
-    runtime.subscribe('a', {id:'first', instance:'watch', demand:{allowedSubscribers:['user-data']}, processor:'export function run(){return []}'})
+    runtime.subscribe('a', {id:'first', instance:'watch', demand:{allowedSubscribers:['user-data']}, first: 'baseline', action: { kind: 'notify', processor:'export function run(){return []}' }})
     await runtime.stop()
-    const path = projectStoragePath(workspace, '.signals', 'providers-v2.json')
+    const path = projectStoragePath(workspace, '.signals', 'sources-v4.json')
     const stored = JSON.parse(await readFile(path, 'utf8'))
     stored.instances[0].allowedSubscribers = []
     await writeFile(path, JSON.stringify(stored))
+    runtime = make(); assert.throws(() => runtime.start(), /Unrecognized/)
+    await runtime.stop()
+    delete stored.instances[0].allowedSubscribers
+    await writeFile(path, JSON.stringify(stored))
     runtime = make(); runtime.start()
-    runtime.subscribe('b', {id:'second',instance:'watch',demand:{},processor:'export function run(){return []}'})
-    assert.equal('allowedSubscribers' in runtime.snapshot('b').instances[0], false)
-    assert.deepEqual(runtime.snapshot('b').subscriptions[0].demand, {allowedSubscribers:['user-data']})
-    assert.equal('allowedSubscribers' in JSON.parse(await readFile(path, 'utf8')).instances[0], false)
+    assert.deepEqual(runtime.snapshot('a').subscriptions[0].demand, {allowedSubscribers:['user-data']})
     await runtime.stop()
   })
 })
@@ -320,7 +322,7 @@ test('GitHub consumer schema and collector reject missing or malformed promised 
         async (id, input) => ({status:'accepted',sessionId:id,inputId:input.id}), () => true, () => true)
       runtime.start()
       runtime.create('owner', {id:'invalid',provider:'github-issues',version:1,secretRef:'fixture'})
-      runtime.subscribe('owner', {id:'check',instance:'invalid',demand:{repository:'test/repo'},processor})
+      runtime.subscribe('owner', {id:'check',instance:'invalid',demand:{repository:'test/repo'},first: 'baseline', action: { kind: 'notify', processor }})
       await runtime.run()
       assert.equal(runtime.snapshot('owner').errors.invalid, 'collection_failed')
       await runtime.stop()

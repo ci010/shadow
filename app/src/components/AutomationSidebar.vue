@@ -6,13 +6,12 @@
       <span v-else class="i-lucide-folder" aria-hidden="true" />
     </button>
     <div v-if="expanded" class="automations-items">
-    <p v-if="updateError && !rail" class="automations-note" role="alert">{{ updateError }}</p>
     <div v-if="error" class="automations-error" role="alert">
       <p v-if="!rail">{{ error }}</p>
       <button type="button" class="text-action" :aria-label="t('Retry automations')" @click="refresh">{{ t('Retry') }}</button>
     </div>
     <p v-if="initialLoading && !error && !rail" class="automations-note" role="status">{{ t('Loading automations…') }}</p>
-    <HoverInfo v-for="job in jobs" :key="job.id" :interactive="canToggleAutomation(job)" :text="t('{name} · Fresh context per run', { name: job.name })"><template #default="{ triggerProps }">
+    <HoverInfo v-for="job in jobs" :key="job.id" :text="t('{name} · Fresh context per run', { name: job.name })"><template #default="{ triggerProps }">
       <button type="button" class="automation-entry" v-bind="triggerProps" :class="{ selected: selectedId === job.id, 'is-rail': rail }"
         :aria-label="t('Open automation {name}', { name: job.name })" :aria-current="selectedId === job.id ? 'page' : undefined"
         :data-automation-id="job.id" @click="$emit('select', job.id)">
@@ -22,13 +21,6 @@
         <span v-else-if="!job.enabled && !rail" class="automation-history">{{ t('Inactive') }}</span>
       </button>
     </template>
-      <template #content>
-        <p class="hover-info-text">{{ t('{name} · Fresh context per run', { name: job.name }) }}</p>
-        <button v-if="canToggleAutomation(currentJob(job))" type="button" class="automation-action" :disabled="updating.has(job.id)"
-          :aria-busy="updating.has(job.id)" @click="toggle(job.id, job.toggleId ?? job.id, !preference(job))">
-          {{ preference(job) ? t('Disable') : t('Enable') }}
-        </button>
-      </template>
     </HoverInfo>
     </div>
   </section>
@@ -36,8 +28,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, reactive, ref } from 'vue'
-import { canToggleAutomation, setAutomationEnabled, type AutomationSummary } from '../automations.ts'
+import { computed, ref } from 'vue'
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
@@ -51,22 +42,6 @@ const props = defineProps<{
 defineEmits<{ select: [id: string] }>()
 const { jobs, error, loading, loaded, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
 const expanded = ref(false)
-const updating = reactive(new Set<string>())
-const updateError = ref('')
-// Shared hover content can outlive the row's snapshot after catalog refresh.
-const currentJob = (job: AutomationSummary) => jobs.value.find(current => current.id === job.id) ?? job
-const preference = (job: AutomationSummary) => { const current = currentJob(job); return current.source === 'learning' ? current.enabled : (current.toggleEnabled ?? current.configuredEnabled ?? current.enabled) }
-async function toggle(id: string, toggleId: string, enabled: boolean) {
-  if (updating.has(id)) return
-  const base = props.apiBase
-  updating.add(id)
-  updateError.value = ''
-  try {
-    await setAutomationEnabled(base, toggleId, enabled, new AbortController().signal)
-  } catch (cause) {
-    if (props.apiBase === base) updateError.value = cause instanceof Error ? cause.message : t('Automations are unavailable. Retry.')
-  } finally { updating.delete(id); if (props.apiBase === base) refresh() }
-}
 const initialLoading = computed(() => loading.value && !loaded.value)
 function working(id: string) {
   return prominentWorkingStage(props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]) ?? [])

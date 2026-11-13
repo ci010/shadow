@@ -1,4 +1,3 @@
-import { legacySignalToolName } from '../signals/providers/legacy-compat.ts'
 import type { ExecutionContext } from './context.ts'
 import type { SessionTools } from './registry.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
@@ -64,7 +63,7 @@ export class InvokeTool implements Tool<ToolResult> {
       return await this.importer?.initializeSource?.(args.source, args.args as Record<string, unknown>, context, true)
         ?? 'Error: unknown or unavailable source; read v:tools/@sources__ for initialization metadata.'
     }
-    const name = typeof args.name === 'string' ? legacySignalToolName(args.name) : ''
+    const name = typeof args.name === 'string' ? args.name : ''
     if (!name) return 'Error: name is required (or use source with args: {} for initialization)'
     if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {
       return 'Error: remote workdirs support only built-in Project-Home session and Work tools through invoke_tool.'

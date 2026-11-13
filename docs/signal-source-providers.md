@@ -1,7 +1,7 @@
 # Programmable SignalSourceProviders
 
 `signal_provider` is the general authored provider path, separate from internal
-`event_subscribe`, cron and EventService. A provider is restricted
+`event_subscribe` and EventService. External collection and Schedule inputs share the [Workflow executor](workflows.md). A provider is restricted
 code plus a self-describing manifest, not a GraphQL transport abstraction.
 REST, GraphQL and public HTML/text acquisition are implementation choices.
 Project runtime constructs, starts/stops the runtime and registers the lazy tool.
@@ -129,9 +129,11 @@ On an actual direct-user turn, create using `action:"create", input_json`:
 ```
 Then each authorized subscribing session uses `action:"subscribe", input_json`:
 ```json
-{"id":"change-messages","instance":"changes-watch","demand":{},"processor":"export function run({signal}) { return [{content:signal.data.title}] }"}
+{"id":"change-messages","instance":"changes-watch","demand":{},"first":"baseline","action":{"kind":"notify","processor":"export function run({signal}) { return [{content:signal.data.title}] }"}}
 ```
-The destination is always that session, not a supplied arbitrary session ID.
+For notify actions the destination is always that session, not a supplied arbitrary session ID.
+Use `action:{kind:"record"}` to materialize observations in arrival order without a model or inbox delivery. For timestamp ordering, typed Work mapping and editable plans, use the unified `workflow` tool; see [Workflows](workflows.md).
+Every subscription requires `first:"baseline"|"emit"`; this is a per-Workflow business policy, not source protocol state.
 Processors have no IO capabilities; they may import the pure local `@shadow/html`
 module and return 0–16 `{content}` drafts.
 Conditional `[]` filters; multiple drafts fan out. Their persisted failures and
@@ -170,7 +172,7 @@ export async function run({ demands }) {
 }
 ```
 Reload, create `{id:"news-watch",provider:"headline",version:1}`, and subscribe
-with `{id:"headlines",instance:"news-watch",demand:{},processor:"export function run({signal}) { return [{content:signal.data.title}] }"}`.
+with `{id:"headlines",instance:"news-watch",demand:{},first:"baseline",action:{kind:"notify",processor:"export function run({signal}) { return [{content:signal.data.title}] }"}}`.
 No `secretRef` or credential is needed. External text remains untrusted data,
 not instructions. This parses static HTML strings (including strings acquired
 through an independently authorized browser/native acquisition); it does not
@@ -254,105 +256,73 @@ demand normalization is finite canonical JSON: object keys sorted for identity,
 array order/case/numeric values preserved. It does not execute custom host
 normalizers. GitHub additionally lowercases its validated repository demand.
 Return a map with every requested key and no others. Each value is:
-`{mode:"snapshot"|"delta",signals:[{id,data}],checkpoint}`. Omitted mode is legacy
-snapshot. IDs are stable occurrence/entity-revision strings, not random poll IDs.
-Duplicate IDs in one collection fail; deduplicate overlapping pages in code.
+`{mode:"snapshot"|"delta",signals:[{id,item?,data}],checkpoint}`. Omitted mode defaults
+to snapshot. IDs are stable revision/occurrence strings, not random poll IDs; the
+optional item key identifies the entity for deterministic record materialization.
+Duplicate IDs in one collection fail; deduplicate overlapping pages in source code.
 
-- Snapshot: every poll must return the entire bounded current set (max 500).
-  Compare against the previous snapshot. Removed IDs reappearing can emit again.
-- Delta: return only the acquired incremental batch plus its resume checkpoint.
-  The host remembers the most recent 4096 unique IDs across polls and restarts,
-  evicting oldest first. Previously evicted IDs can replay; providers must use
-  monotonic cursors and stable IDs, not repeatedly rescan unlimited history.
-- First successful batch of either mode establishes a silent baseline. A failed
-  initial attempt does not establish one. A new demand gets its own baseline;
-  a new subscription to an existing demand sees future observations only.
-- Changing collection mode for an existing demand fails. `stateVersion` is the
-  author's checkpoint/demand/ID compatibility assertion. Reload with owned
-  instances rejects changes; use a new instance/provider ID for incompatible state.
+- Snapshot returns the entire bounded current set (max 500).
+- Delta returns the acquired incremental batch and its resume checkpoint.
+- Both modes feed the same per-Workflow 4096-revision dedupe window. Evicted
+  revisions may replay; monotonically advancing source cursors remain important.
+- `first:"baseline"` silently remembers the first successful batch, including empty;
+  `first:"emit"` processes initial observations. Shared demands do not share this
+  business state. A new subscriber to an existing delta demand sees only subsequent
+  collector batches, not history already passed by the source checkpoint.
+- Changing collection mode fails. `stateVersion` describes protocol checkpoint
+  compatibility; changing it requires a new instance/provider ID.
 
-Checkpoints (64 KiB), dedup state and **all** subscriber jobs commit atomically
-only after all outputs validate. Failed requests, malformed output, full backlog
-or state limits do not advance any cursor. Provider-specific checkpoint is data,
-not authority. Processors and outbox have persisted independent retries; drafts
-are saved before delivery. A 15-second host timer runs cycles; each instance
-reserves at least 60 seconds between collections, persisted before IO. Limits:
-500 signals/demand/batch, 1 MiB output/demand, 32 instances, 128 subscriptions,
-64 custom revisions, 2000 jobs, 16 MiB saved state; at most 64 due jobs/cycle.
+All collection output is validated before atomic multi-subscriber Workflow admission.
+Workflow commits dedupe and pending runs first; only then does Source commit the
+checkpoint (max 64 KiB). A crash between files recollects an already admitted batch,
+which the revision node dedupes. Backpressure or invalid output does not advance
+source state. No cross-store exactly-once claim is made. See [Workflow recovery](workflows.md).
+
+A 15-second Source timer reserves at least 60 seconds between collections, persisted
+before IO. Source limits: 500 observations/demand/batch, 1 MiB output/demand,
+32 instances, 64 custom revisions, 16 MiB source state; there is no separate Source subscription store; generic Workflow definitions share the runtime limit of 512 definitions.
+Workflow holds business state, pending actions and bounded history separately.
 Collection caps 40 requests and 32 KiB request input; restricted execution
 (default 15 seconds, 32 bridge calls) and HTTP limits may fail earlier.
 
-New private state is `projectStoragePath(ProjectHome,'.signals','providers-v2.json')`,
-not the selected workdir. One Project runtime is the sole supported writer; atomic
-private-file replacement is used. Legacy query-only custom definitions must be
-reauthored with an explicit HTTP declaration before loading. Obsolete bindings using
-the removed query-allowlist contract must be recreated under an explicit HTTP policy;
-unsupported persisted state fails closed rather than silently dropping constraints. Do not edit runtime
-state manually. The four latest authored revisions and all pinned revisions are
-retained on reload; all matching Project instances are coherently repinned.
+Private source state is `projectStoragePath(ProjectHome,'.signals','sources-v4.json')`
+(format 4 with Project identity, collector state only); Workflow state is
+`projectStoragePath(ProjectHome,'.workflows','state.json')`. One host per Project is
+the supported writer. The old `.signals/providers-v2.json` / `.events/providers-v1.json`
+files are **not imported, executed, modified or deleted**. Recreate intended bindings
+explicitly; old pending jobs are not claimed as migrated. Old `events` output,
+`eventSchema` manifests and `{event}` processor arguments are no longer accepted.
+The `event_provider` tool alias and its allow/block normalization are removed; use `signal_provider`. Old `.signals/sources-v3.json` is untouched: only instance IDs are read to reserve identities, never provider code or subscriptions. Recreate with new instance IDs; historical Workflow bindings also reserve source IDs. The four latest authored revisions
+and all pinned revisions are retained on reload. Do not manually edit runtime state.
 
-## Naming and compatibility boundary
+## Naming boundary
 
-External providers collect **signals** (`{id,data}`); a subscription processor
-receives `{signal}` and produces session-input content drafts. This is separate
-from the internal EventService, Bus events, session-input provenance and browser
-`AbortSignal`/`EventSource` APIs. `v:signals/internal/` is navigation to internal
-runtime events, **not** another external signal provider.
-
-Current names are `src/signals/providers/`, `SignalProviderRuntime`,
-`SignalSourceProvider`, `SourceSignal`, `SignalRecord`, `signalSchema`,
-`Collection.signals`, `examples[].signal`, `signal_provider`, the
-`v:tools/signals` catalog, and the `signal-sources` skill. Provider consumer files
-are `v:signals/providers/<id>`. There is no active `v:events` mount or legacy
-external-provider tool in discovery.
-
-Compatibility is isolated in `src/signals/providers/legacy-compat.ts`:
-
-- A fresh Project uses `.signals/providers-v2.json` (format 2). If an existing
-  `.events/providers-v1.json` is present, that exact file remains the storage
-  location: it is not moved, deleted, or replaced by an empty new state. Format 1
-  is decoded in memory; subsequent ordinary atomic saves write format 2 to the
-  same file. This is forward compatibility, not an old-binary downgrade promise.
-  If both files exist, startup fails closed for explicit reconciliation.
-- Format-1 manifests (`eventSchema`, `examples[].event`) and pending jobs (`event`)
-  are decoded to current names. Instance IDs, subscription IDs/owners, demands,
-  checkpoints, seen IDs, silent baselines, pending draft content, delivery offsets,
-  attempt counts and timestamps are retained. The immutable authored code and
-  processor source are not text-rewritten. Old custom provider revision hashes
-  are retained privately as `legacyRevisions` to preserve broker mutation-receipt
-  identities; new revisions use the current definition hash.
-- Old authored collectors may still return `events`; the collection boundary
-  normalizes it to `signals`. Old processor modules may still destructure `event`;
-  the processor invocation boundary supplies that alias alongside `signal`.
-  Old manifests are accepted at publish/reload boundaries. Conflicting old and
-  new schema/envelope keys are rejected instead of silently choosing one.
-- Historical `invoke_tool` calls naming `event_provider` resolve to
-  `signal_provider` before permission and argument checks. Old role tool allow/
-  block names are normalized as well; an old blacklist cannot accidentally grant
-  the renamed capability. Only the current tool is advertised. This does not
-  rewrite historical messages or user configuration.
-
-No startup process scans or migrates unrelated runtime data. Existing older
-query-only/unsupported HTTP contracts still fail closed as described above.
+External observations are Signals; Schedule is another Signal Source. Workflow
+owns processing and notification. Integration is a use of these pieces, not a new
+executor. Internal EventService, Bus, `AbortSignal` and browser `EventSource` remain
+distinct; `v:signals/internal/` exposes internal events, not an external source.
 
 ## Project scope and host lifecycle
 
 Instances belong to the Project runtime. Any eligible available durable local
 session in the same Project can create/use instances, subscribe itself, pause,
 resume, reload matching instances, or request exact-identity browser rebinding.
-Creator metadata is provenance, not an access gate. There is no sharing allowlist
-or revocation action; obsolete stored instance allowlists are ignored on loading.
+All source mutations, including publication/reload, require direct user input and the eligible Project-owner boundary. Creator metadata is provenance, not an access gate. There is no sharing allowlist
+or revocation action; obsolete instance fields fail new-format validation.
 Cross-Project access remains rejected. Remote sessions remain unsupported.
 Exact demands deduplicate within an instance, never across credential/instance
-boundaries. Each subscription has an independent processor, outbox, and self
-destination. Only its subscriber may unsubscribe; this discards its pending work.
+boundaries. Each subscription is an independent Workflow definition; its binding is the only demand fact. Subscribe calls versioned authoring in create-only mode; unsubscribe calls the same revision-checked retirement boundary as workflow remove. Generic and shortcut IDs share tombstones. VFS subscription management paths use the encoded full Workflow ID (for example `external%3Amy-feed`). Only its subscriber
+may unsubscribe, supplying the current Workflow `expectedRevision`; pending runs are cancelled, with history retained and no rollback.
+Retired Workflow IDs cannot be reused.
 Eligibility and credential availability are rechecked at collection, fanout,
 processing and delivery boundaries. Native collection uses an available subscriber
 as invocation provenance and does not depend on the creator remaining available.
 An already-started delivery may be accepted and cannot be recalled.
 `pause` retains jobs/checkpoints and suspends collection/delivery; `resume` honors
-the reserved deadline. There is no instance deletion, credential rebinding,
-interval customization or processor replacement; use a new instance/subscription.
+the reserved deadline. There is no instance deletion, credential rebinding or interval customization.
+Use `workflow` create/update/validate for typed plans and processor replacement with
+optimistic revisions and immutable in-flight snapshots; source/demand changes require
+a new identity and explicit first policy. See [Workflow authoring](workflows.md).
 
 Project access does **not** confer managed-browser authority. The caller binding
 or rebinding a browser must independently hold the existing explicit managed
@@ -366,7 +336,7 @@ and any already-started inbox call, probes candidate empty-demand behavior and
 atomically swaps definitions/pins. Stale generations cannot invoke capabilities
 or commit state. Host-owned acceptance receipts are reconciled after draining.
 Failure preserves old pins/state and resumes scheduling with a fresh generation.
-Stop aborts/drains work/probes and clears the sole host timer. No code-owned
+Stop aborts/drains source work/probes and clears its timer; the Project host separately drains Workflow actions and their retry timer. No code-owned
 scheduler is exposed. Source code may change its behavior within the binding;
 the manifest is not a guarantee of application-level read semantics.
 
