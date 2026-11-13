@@ -300,7 +300,7 @@ export class CronService {
       const flow = this.workflows.inspect().definitions.find(d => d.id === `schedule:${id}`)
       const node = flow?.nodes[0]
       if (flow && flow.enabled && flow.source.kind === 'schedule' && flow.source.id === id && node?.kind === 'schedule-action'
-        && isCronJob(node.job) && !Object.hasOwn(this.workflows.inspect().dedupe, flow.id)
+        && isCronJob(node.job) && !this.workflows.hasAdmitted(flow.id)
         && canonical(node.job) === canonical({ ...def, id, createdAt: node.job.createdAt })) {
         // Resume only an identical default installation whose Workflow committed
         // before jobs.json. Retired/admitted/changed identities are never revived.
@@ -354,7 +354,7 @@ export class CronService {
 
   addJob(def: CronJobDef, id = globalThis.crypto.randomUUID().slice(0, 8)): string {
     if (this.stopped) throw new Error('CronService is stopped')
-    if (this.workflows.inspect().definitions.some(d => d.id === `schedule:${id}`) || Object.hasOwn(this.workflows.inspect().dedupe, `schedule:${id}`) || this.jobs.has(id) || this.managed.has(id) || this.maintenance.has(id)) throw new TypeError('Duplicate cron job ID')
+    if (this.workflows.inspect().definitions.some(d => d.id === `schedule:${id}`) || Object.hasOwn(this.workflows.inspect().dedupe, `schedule:${id}`) || this.workflows.hasAdmitted(`schedule:${id}`) || this.jobs.has(id) || this.managed.has(id) || this.maintenance.has(id)) throw new TypeError('Duplicate cron job ID')
     const job: CronJob = {
       ...structuredClone(def),
       id,
@@ -432,9 +432,9 @@ export class CronService {
     const id = `schedule:${job.id}`
     const old = this.workflows.inspect().definitions.find(d => d.id === id)
     const node = { kind: 'schedule-action' as const, action: job.program || job.source === 'learning' ? 'program' as const : cronContextMode(job) === 'fresh' ? 'agent' as const : 'session' as const, job: JSON.parse(JSON.stringify(job)) }
-    const changed = !old || canonical(old.nodes) !== canonical([node])
+    const changed = !old || old.gate !== undefined || canonical(old.nodes) !== canonical([node])
     this.workflows.define({ id, name: job.name ?? job.task?.slice(0, 160) ?? job.id, owner: job.originSessionId ?? job.target?.sessionId,
-      revision: old ? old.revision + Number(changed) : 1, source: { kind: 'schedule', id: job.id }, gate: { kind: 'revision-dedupe', first: 'emit' }, enabled: old?.enabled ?? true, nodes: [node] })
+      revision: old ? old.revision + Number(changed) : 1, source: { kind: 'schedule', id: job.id }, enabled: old?.enabled ?? true, nodes: [node] })
   }
   async updateJob(id: string, definition: CronJobDef): Promise<string> {
     const old = this.jobs.get(id)

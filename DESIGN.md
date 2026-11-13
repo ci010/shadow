@@ -322,8 +322,11 @@ section keeps a visible definitions entry even without saved conversation runs;
 legacy run conversations and their details remain accessible in that section.
 The Project Workflow page uses one shared Vue Flow canvas for all definitions,
 not a nested inventory sidebar or one canvas per selected flow. Each flow has
-its own neutral section boundary, title, revision and state; its source, revision
-gate and action nodes connect only within that group. Shared zoom, fit and pan
+its own neutral section boundary, title, revision and state; its source, optional revision
+gate and action nodes connect only within that group. Render the gate only when
+the selected definition snapshot actually contains it; this is a fixed leading
+stage, not a source-kind display exception or arbitrary node placement. New
+Schedule definitions connect their time signal directly to the real action. Shared zoom, fit and pan
 controls affect the viewport only. The focused canvas supports V selection,
 H hand mode, Space temporary pan, middle-button drag, wheel pan, Ctrl/Cmd-wheel
 zoom, Shift+1 fit-all, Shift+2 fit-selection and Escape to clear. These shortcuts

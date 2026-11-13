@@ -66,3 +66,16 @@ test('schedule semantics use saved jobs: fixed targets, fresh sessions, maintena
   assert.equal(workflowGraph(current)[2]!.detail, 'web:new-target')
   assert.equal(workflowGraph(fixed)[2]!.detail, 'web:old-target')
 })
+
+test('canvas reflects optional leading deduplication from the definition, not a source-kind display exception', async () => {
+  const { parseWorkflowDefinition, workflowGraph } = await import('./workflows.ts')
+  const { gate: _gate, ...plain } = definition('schedule:no-gate')
+  assert.equal(parseWorkflowDefinition(plain).gate, undefined)
+  assert.throws(() => parseWorkflowDefinition({ ...plain, gate: null }), /invalid/)
+  assert.deepEqual(workflowGraph(plain).map(node => node.id), ['source', 'node-0', 'node-1'])
+  assert.deepEqual(workflowGraph({ ...plain, source: { kind: 'external', id: 'feed' } }).map(node => node.id), ['source', 'node-0', 'node-1'])
+  const historic = definition('schedule:no-gate')
+  assert.deepEqual(workflowGraph(historic).map(node => node.id), ['source', 'gate', 'node-0', 'node-1'])
+  assert.equal(workflowCanvas([{ definition: plain }]).edges.length, 2)
+  assert.equal(workflowCanvas([{ definition: historic }]).edges.length, 3)
+})

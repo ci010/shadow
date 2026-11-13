@@ -22,10 +22,10 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     load(id) { if (id !== '\0workflow-entry') return; return `
       import {createApp,h,reactive} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router'; import WorkflowManager from '/src/components/WorkflowManager.vue'; import AutomationSidebar from '/src/components/AutomationSidebar.vue'; import '/src/styles.css';
       const source={id:'external:issue-intake',name:'Issue intake',revision:1,enabled:true,owner:'web:owner',source:{kind:'external',id:'synthetic-source'},binding:{demand:{repository:'synthetic/repo'}},gate:{kind:'revision-dedupe',first:'emit'},nodes:[{kind:'work-map',objective:'Review external issues; no execution authority',titleField:'title',revisionField:'updatedAt',ownership:'exclusive-until-local-edit'}]};
-      const schedule={id:'schedule:daily',name:'Daily review',revision:1,enabled:false,source:{kind:'schedule',id:'daily'},gate:{kind:'revision-dedupe',first:'emit'},nodes:[{kind:'schedule-action',action:'agent',job:{task:'Synthetic task',schedule:'every 1h',timezone:'UTC',session:'fresh',agentType:'general'}}]};
+      const schedule={id:'schedule:daily',name:'Daily review',revision:2,enabled:false,source:{kind:'schedule',id:'daily'},nodes:[{kind:'schedule-action',action:'agent',job:{task:'Synthetic task',schedule:'every 1h',timezone:'UTC',session:'fresh',agentType:'general'}}]};
       const run={id:'flow-run-not-session',workflow:source.id,definition:structuredClone(source),timestamp:'2026-11-12T10:00:00Z',status:'blocked',cursor:0,attempts:1,nextAt:0,started:true,error:'interrupted_effect',output:{workKey:'work:synthetic'}};
       const github={id:'github:fixture',name:'https://github.com/synthetic/repo/pull/2',revision:1,enabled:true,source:{kind:'github-resource',id:'PR_fixture'},gate:{kind:'revision-dedupe',first:'emit'},nodes:[{kind:'github-notify',subscription:{resourceId:'PR_fixture',workKey:'work:github',sessionId:'web:github-target',assignmentRevision:7,enabled:true,mode:'silent',events:['ci']}}]};
-      window.data={projectId:'fixture',sources:[{kind:'external',id:'synthetic-source',enabled:true,nextAt:1794481200000,error:'collection_failed'}],definitions:[source,schedule,github,{...schedule,id:'schedule:fixed',name:'Fixed-session reminder',enabled:true,nodes:[{kind:'schedule-action',action:'session',job:{schedule:'0 9 * * 1',session:'existing',target:{sessionId:'web:fixed-target'},task:'Deliver the weekly reminder'}}]},{...schedule,id:'schedule:cleanup',name:'Session cleanup',nodes:[{kind:'schedule-action',action:'agent',job:${JSON.stringify(SESSION_CLEANUP_AUTOMATION)}}]}],runs:[run,{...run,id:'schedule-run',workflow:schedule.id,definition:schedule,status:'completed',cursor:1,error:undefined,output:{sessionId:'web:actual-model-session'}}]};
+      window.data={projectId:'fixture',sources:[{kind:'external',id:'synthetic-source',enabled:true,nextAt:1794481200000,error:'collection_failed'}],definitions:[source,schedule,github,{...schedule,id:'schedule:fixed',name:'Fixed-session reminder',enabled:true,nodes:[{kind:'schedule-action',action:'session',job:{schedule:'0 9 * * 1',session:'existing',target:{sessionId:'web:fixed-target'},task:'Deliver the weekly reminder'}}]},{...schedule,id:'schedule:cleanup',name:'Session cleanup',nodes:[{kind:'schedule-action',action:'agent',job:${JSON.stringify(SESSION_CLEANUP_AUTOMATION)}}]}],runs:[run,{...run,id:'schedule-run',workflow:schedule.id,definition:{...schedule,revision:1,gate:{kind:'revision-dedupe',first:'emit'}},status:'completed',cursor:1,error:undefined,output:{sessionId:'web:actual-model-session'}}]};
       window.requests=[];window.mode='normal';window.controls=[];window.fixture=reactive({active:true,projectId:'fixture',apiBase:location.origin+'/projects/fixture'});
       window.fetch=async(input,init)=>{const url=new URL(String(input),location.href);window.requests.push(url.pathname);if(url.pathname.endsWith('/control')){window.controls.push(JSON.parse(init.body));return Response.json({saved:true})}if(window.mode==='error')return Response.json({secret:'DO-NOT-DISPLAY'}, {status:403});return Response.json(window.mode==='empty'?{...window.data,definitions:[],runs:[]}:window.data)};
       const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/workflows',name:'project-workflows',component:WorkflowManager},{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>h('div','Chat')}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>h('div','Work')}}]});window.router=router;await router.push('/projects/fixture/workflows');await router.isReady();
@@ -38,19 +38,20 @@ test('workflow visualization renders durable revisions, safe controls, real reso
   const main = resolve(directory, 'main.cjs')
   await writeFile(main, `const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict');app.setPath('userData',${JSON.stringify(directory)});app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1200,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.webContents.on('console-message',event=>console.log(event.message));const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');const wait=()=>new Promise(r=>setTimeout(r,250));try{
     await win.loadURL(${JSON.stringify(new URL('__workflows',server.resolvedUrls!.local[0]).href)});
-    for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('.graph-node').length===15))break;await wait()}
-    assert.equal(await run(()=>document.querySelectorAll('.graph-node').length),15);
+    for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('.graph-node').length===12))break;await wait()}
+    assert.equal(await run(()=>document.querySelectorAll('.graph-node').length),12);
     assert.equal(await run(()=>document.querySelectorAll('.graph-group').length),5);
     assert.equal(await run(()=>document.querySelectorAll('.vue-flow').length),1);
     assert.equal(await run(()=>document.querySelectorAll('.workflow-inventory').length),0);
     assert.ok(await run(()=>Array.from(document.querySelectorAll('.vue-flow__edge')).every(edge=>{const id=JSON.parse(edge.dataset.id);return window.data.definitions.some(flow=>flow.id===id[0])})));
     assert.ok(await run(()=>Array.from(document.querySelectorAll('.graph-group')).every(group=>{const box=group.getBoundingClientRect();return Array.from(document.querySelectorAll('.graph-node')).filter(node=>node.dataset.flow===group.dataset.workflow).every(node=>{const n=node.getBoundingClientRect();return n.left>=box.left && n.right<=box.right+1 && n.top>=box.top && n.bottom<=box.bottom+1})})));
 
-    assert.equal(await run(()=>document.querySelectorAll('.vue-flow__edge').length),10);
+    assert.equal(await run(()=>document.querySelectorAll('.vue-flow__edge').length),7);
     assert.equal(await run(()=>document.querySelectorAll('.vue-flow__node.draggable,.vue-flow__node.connectable').length),0);
     await wait();
     assert.ok(await run(()=>document.querySelector('.vue-flow__transformationpane').style.transform.includes('scale(1)')));
     assert.equal(await run(()=>document.querySelectorAll('.workflow-inspector').length),0);
+    assert.equal(await run(()=>Array.from(document.querySelectorAll('.graph-node')).filter(node=>node.dataset.flow==='schedule:daily').length),2);
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('every 1h')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Timezone: UTC')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('web:fixed-target')));
@@ -126,6 +127,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.equal(await run(()=>document.querySelectorAll('.workflow-node img').length),0);assert.ok(await run(()=>document.querySelector('.graph-text pre').textContent.length>0));
     await run(()=>document.querySelectorAll('.group-heading')[1].click());await wait();await run(()=>document.querySelector('.workflow-run-choice').click());await wait();
     assert.ok(await run(()=>document.querySelector('a[href*="actual-model-session"]')));
+    assert.equal(await run(()=>Array.from(document.querySelectorAll('.graph-node')).filter(node=>node.dataset.flow==='schedule:daily').length),3,'Legacy run snapshot still displays its actual gate');
     assert.ok(await run(()=>window.requests.every(p=>p.startsWith('/projects/fixture/api/workflows'))));
     await run(()=>document.querySelectorAll('.group-heading')[2].click());await wait();
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('github-resource · PR_fixture')));

@@ -1,12 +1,21 @@
 # Unified Workflows
 
-Workflow is the durable execution unit; a **run is not a model session**. Signal Sources admit observations into a bounded typed node plan. Schedule is one Signal Source. Automation is the time-signal → fresh-Agent preset; Cron's existing-session preset sends into an already authorized conversation. Integration describes a purpose, not another execution engine.
+Workflow is the durable execution unit; a **run is not a model session**. Signal Sources admit observations into a bounded typed node plan. Schedule is one Signal Source. The former Automation preset is a time-signal → fresh-Agent workflow; an existing-session schedule delivers into an already authorized conversation. Integration describes a purpose, not another execution engine.
 
 ## Product surface
 
-Open **Project → Workflows** (`/projects/:projectId/workflows`). The read-only graph connects Source → revision gate → action nodes, with current or historical definition revision, node/run status, latest 30 retained runs, sanitized errors and recovery guidance. Source availability, persisted collector error and next reserved collection check are separate from run status. A baseline or idle deterministic check may create no run. A run exposes a conversation link only when the executor returned a real `output.sessionId`; Work mapping returns a separate `output.workKey`.
+Open **Project → Workflows** (`/projects/:projectId/workflows`). One shared Vue Flow canvas groups all workflows, with properties and run history in a resizable right inspector rather than a nested flow list. Each graph connects Source → optional revision gate → action nodes, with current or historical definition revision, node/run status, latest 30 retained runs, sanitized errors and recovery guidance. Source availability, persisted collector error and next reserved collection check are separate from run status. A baseline or idle deterministic check may create no run. A run exposes a conversation link only when the executor returned a real `output.sessionId`; Work mapping returns a separate `output.workKey`.
 
 Configuration is edited through chat, not fields or drag handles. The page retains pause/resume/retry/cancel operational controls; blocked retry requires explicit confirmation after inspecting effects. It does not create schedules, subscribe sources, register accounts or send messages by merely opening the page. Automation conversation pages and sidebar are read-only session-history projections with Workflow links; model/interval/enable configuration controls have been removed from these pages. Existing domain host configuration APIs (learning, organizer and Work dispatcher) remain host-authorized capabilities, not a second Workflow executor. Generic schedule configuration is chat-authored.
+
+The initial viewport remains at readable 100% scale (roughly three workflows on a
+typical desktop pane); Fit diagram is an explicit overview action. Focus the
+canvas for V selection, H hand mode, Space temporary pan, middle-button drag,
+wheel pan, Ctrl/Cmd-wheel zoom, Shift+1 fit-all, Shift+2 fit-selection and Escape.
+These controls never edit or execute nodes. Paused flows use dashed boundaries
+and edges with explicit text; only real running state animates edges, respecting
+reduced motion. Nodes show saved schedules, session policies, targets and task
+summaries; unavailable timezone/target metadata is marked unrecorded.
 
 ## Chat authoring
 
@@ -40,7 +49,13 @@ Example external definition:
 }
 ```
 
-`first:"baseline"` silently records the first successful batch, even empty. `emit` admits its unseen revisions. This is explicit per-Workflow business state, never inferred from a shared collector checkpoint. Source instance/demand and first-batch policy are immutable identities: changing them requires a new ID and explicit first policy, rather than quietly replaying or skipping another feed. Mutable names, enabled state and plans use optimistic definition revisions. Admitted runs retain their own immutable definition snapshot. A work-map configuration becomes immutable once a mapping run is admitted, so a new template cannot silently take ownership of already mapped Work.
+`gate` is optional. It is an explicit **fixed leading** revision-deduplication
+stage, not an action that can be placed arbitrarily in the node sequence. Omit it
+only when repeat observation admissions should create independent runs. The
+absence of a gate is not an implicit `emit` dedupe policy. Source shortcuts that
+request `first` continue to create an explicit gate.
+
+When a gate is present, `first:"baseline"` silently records the first successful batch, even empty. `emit` admits its unseen revisions. This is explicit per-Workflow business state, never inferred from a shared collector checkpoint. Source instance/demand, gate presence and first-batch policy are immutable identities: changing them requires a new ID and explicit first policy, rather than quietly replaying or skipping another feed. Mutable names, enabled state and plans use optimistic definition revisions. Admitted runs retain their own immutable definition snapshot. A work-map configuration becomes immutable once a mapping run is admitted, so a new template cannot silently take ownership of already mapped Work.
 
 ## Typed actions and Work ownership
 
@@ -69,15 +84,44 @@ GitHub manual Issue import and preview/execute/reconcile write APIs are **domain
 
 ## Persistence and recovery
 
-One host is the supported writer per Project. Private atomic Workflow JSON snapshots carry the Project ID. Dedupe + run admission commit together; collector checkpoint commits only **after** admission. A source write failure can recollect but admitted revisions dedupe. The 4096-revision window is bounded; very old unmapped revisions can repeat. Each materialized flow is bounded to 4096 records/mappings, all state to 16 MiB; pending runs are never evicted to make room for history. Completed history retains a bounded tail independently of dedupe.
+One host is the supported writer per Project. Private atomic Workflow JSON snapshots carry the Project ID. When a gate is present, dedupe + run admission commit together; collector checkpoint commits only **after** admission. A source write failure can recollect, and the explicit gate prevents duplicate revision admission. Without a gate, each admission has a new run ID, including repeated observation IDs; recollection after a checkpoint failure can therefore create another run. The opt-in 4096-revision window is bounded; very old unmapped revisions can repeat. Each materialized flow is bounded to 4096 records/mappings, all state to 16 MiB; pending runs are never evicted to make room for history. Completed history retains a bounded tail independently of dedupe.
 
 Different flow lanes run concurrently; each flow is serial and blocked revisions cannot be overtaken. Nodes record start before an effect. Transform drafts and accepted inbox progress persist. Record effect and cursor share one snapshot. Work creation uses the existing transactional key; updates use Work sequence checks and value-based replay detection. None of this promises cross-store or external **exactly-once** execution.
 
-Safe actions use bounded exponential retry. Started/failed or crash-interrupted unsafe schedule/internal host effects block with an inspect-first hint. Pausing prevents new execution, but external observations still advance the revision window; it is not rollback or buffered catch-up. Cancellation is cooperative: accepted effects may remain. Workflow/source errors are safe codes, never raw provider bodies or credentials. Source collection errors persist without advancing the failed batch checkpoint.
+Safe actions use bounded exponential retry. Started/failed or crash-interrupted unsafe schedule/internal host effects block with an inspect-first hint. Pausing prevents new execution, but gated external observations still advance the revision window; it is not rollback or buffered catch-up. Cancellation is cooperative: accepted effects may remain. Workflow/source errors are safe codes, never raw provider bodies or credentials. Source collection errors persist without advancing the failed batch checkpoint.
 
 All mutations require direct user input and an eligible durable Project-owner session. Read/validate do not grant permission or execute effects. HTTP operational controls use the existing Project host authorization. Source/owner/Work authority is revalidated at execution. Browser transport must retain the exact explicitly authorized identity; no remote-to-Main or browser-to-native fallback exists.
 
 Storage is Project-local `.workflows/state.json` and `.signals/sources-v4.json` through the standard data-path resolver. Old source-state formats are not imported, executed, modified or deleted. v3 instance identifiers alone are read to reserve identities; old code, credentials, subscriptions and checkpoints are not loaded into the runtime. Use new instance IDs and recreate intended bindings explicitly. Existing historical Workflow source references also reserve their instance IDs. Existing session JSONL/SQLite schemas and real user data are unchanged.
+
+### Schedule compatibility and run identity
+
+New fixed/fresh/program Schedule definitions contain no gate: a tick is not a
+business revision. Synchronizing an existing Schedule removes its old gate from
+only the current definition, increments the definition revision once, and clears
+that active identity's obsolete seen window. Unchanged restarts do not repeatedly
+increment the revision. Old admitted runs keep their gate/revision snapshots and
+remain visible as recorded. Existing external gates and first-batch policies are
+not changed or removed; omitting a gate in an update to such a flow is rejected.
+Retirement tombstones remain independent of whether the retired flow used a gate.
+A separate persistent `admitted` identity map commits atomically with the first
+admission. It prevents default Schedule installation from reviving an identity
+whose terminal runs have aged out; it never suppresses repeated observations.
+Old retained runs and legacy Schedule emit-window receipts conservatively seed
+that identity map, while unused definitions receive no receipt. These markers
+are not evicted with run history or silently garbage-collected. They share the
+16 MiB total-state ceiling; capacity/write failure rejects the atomic admission
+without leaving a false receipt.
+
+No-gate admissions use independent run IDs; a duplicate observation in a later
+admission is allowed. Recovery always drains the same persisted run, preserving
+cursor, start/accepted effects, retries and uncertainty blocks. Schedule pending
+and overlapping-tick suppression remain in the source adapter; removing its
+revision window does not enable catch-up bursts or replay a blocked effect.
+
+The new reader accepts old snapshots. Deploy the matching frontend/backend;
+older binaries that require a gate cannot read newly persisted no-gate definitions.
+This is not a reversible runtime-data rollback or a migration of old Source stores.
 
 ## Validation scope and limits
 
@@ -97,4 +141,4 @@ Retained deliberately:
 - Automation session history/usage projections and host-authorized learning/organizer/Work-dispatch configuration APIs remain; the old Automation pages no longer author configuration. These APIs are not separate executors, nor arbitrary Workflow host-node authoring.
 - EventService/internal subscriptions still route directed session inputs. They are not the removed external provider subscription store.
 
-No automatic migration, execution, deletion or successful reconciliation of all historical data is claimed. Unknown external effects still need explicit human inspection; inbox acceptance and model-session completion remain distinct from Work acceptance.
+Apart from the compatibility normalization described above, no automatic migration, execution, deletion or successful reconciliation of historical data is claimed. Unknown external effects still need explicit human inspection; inbox acceptance and model-session completion remain distinct from Work acceptance.
