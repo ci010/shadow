@@ -98,14 +98,16 @@ import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
 import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, sessionDisplayFocus, type SessionDetails } from '../session-details.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; name: string; runTitle?: string; projectName?: string; topic?: string; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; name: string; runTitle?: string; hideFocus?: boolean; projectName?: string; topic?: string; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']]; renamed: [name: string] }>()
 const mobile = useMobileChrome()
 const mobileLayout = computed(() => !!mobile?.enabled.value)
 const detailsPopover = ref<InstanceType<typeof ComposerPopover>>()
 defineExpose({ showDetails: () => detailsPopover.value?.show(), startRename })
 const details = ref<SessionDetails | null>(null)
-const currentFocus = computed(() => details.value ? sessionDisplayFocus(details.value) : '')
+// Dedicated run outcomes belong to the timeline, not the heading/details preview.
+// Do not wait for the result/catalog: doing so flashes persisted focus on refresh.
+const currentFocus = computed(() => !props.hideFocus && details.value ? sessionDisplayFocus(details.value) : '')
 const loading = ref(false)
 const error = ref('')
 const topic = computed(() => details.value?.topic ?? props.topic)

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { dedicatedRunTitle } from './conversation-title.ts'
+import { dedicatedRunTitle, isDedicatedRun } from './conversation-title.ts'
 import type { AutomationSessionRef } from '../../src/cron/contracts.ts'
 
 const association: AutomationSessionRef = { jobId: 'learning:encapsulator', name: 'Encapsulation', runId: 'batch', startedAt: '2026-11-13T00:00:00Z', contextMode: 'fresh' }
@@ -14,4 +14,13 @@ test('ordinary, fixed-delivery, missing and malformed associations retain the or
   assert.equal(dedicatedRunTitle({ sessionId: 'web:custom-title' }), undefined)
   assert.equal(dedicatedRunTitle({ sessionId: 'fixed', automation: { ...association, contextMode: 'existing' } as unknown as AutomationSessionRef }), undefined)
   assert.equal(dedicatedRunTitle({ sessionId: 'opaque', automation: { ...association, name: ' ' } }), undefined)
+})
+
+test('focus ownership uses run identity even without a usable display name, never a prefix or title', () => {
+  assert.equal(isDedicatedRun({ automation: association }), true)
+  assert.equal(isDedicatedRun({ automation: { ...association, name: ' ' } }), true)
+  assert.equal(isDedicatedRun(undefined), false)
+  assert.equal(isDedicatedRun({}), false)
+  assert.equal(isDedicatedRun({ automation: { ...association, runId: '' } }), false)
+  assert.equal(isDedicatedRun({ automation: { ...association, contextMode: 'existing' } as unknown as AutomationSessionRef }), false)
 })
