@@ -106,7 +106,7 @@
           </div>
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
-          <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
+          <div v-else-if="!loadingHistory && messages.length === 0 && !runResult && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
@@ -133,7 +133,8 @@
           </div>
           <template v-for="{ msg, idx } in mountedHistoryRows" :key="msg.timelineKey ?? `${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
           <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx" :data-timeline-key="msg.timelineKey" :data-history-row-key="historyRowKey({ msg, idx })">
-            <div v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
+            <AutomationResultMessage v-if="runResult?.replaceIndex === idx" :key="runResult.key" :result="runResult" :render-content="renderMarkdown" />
+            <div v-else-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
               class="chat-bubble automation-bubble" :class="msg.role === 'user' ? 'chat-user' : 'chat-assistant'" :data-msg-idx="idx"
               role="article" :aria-label="t(msg.role === 'user' ? 'User message' : 'Assistant message')">
               <AutomationPayload class="chat-content" :source="msg.content" :input="msg.role === 'user'" :automation-id="automationConversation?.automation.value?.id" />
@@ -224,6 +225,7 @@
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </div>
           </template>
+          <AutomationResultMessage v-if="runResult && runResult.replaceIndex === undefined" :key="runResult.key" :result="runResult" :render-content="renderMarkdown" />
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">{{ t('Retry decision history') }}</button>
           </p>
@@ -578,6 +580,8 @@ import AutomationConversationProjection from './AutomationConversationProjection
 import { automationChatLocation } from '../automations.ts'
 import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'
+import AutomationResultMessage from './AutomationResultMessage.vue'
+import { automationResult } from '../automation-result.ts'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
@@ -1580,6 +1584,8 @@ async function revealHistoryIndex(index: number, signal?: AbortSignal): Promise<
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 const automationConversation = useAutomationConversation(() => activeSessionId.value, () => !!props.automationRun)
+const runResult = computed(() => automationResult(automationConversation.value?.run.value,
+  activeSessionId.value, displayMessages.value, !!viewingPhysicalId.value, loadingHistory.value || !!composerError.value, timelinePrefixLength.value))
 const conversationTitle = computed(() => dedicatedRunTitle(activeSession.value) || activeSessionName.value)
 watch(() => [props.automationRun, props.visible] as const, ([run, visible]) => {
   if (run && visible) {

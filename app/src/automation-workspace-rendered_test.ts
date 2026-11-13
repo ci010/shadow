@@ -24,9 +24,12 @@ test('automations open ordinary conversations and navigate run history without a
   const automation = { id: 'cron:weekly', name: 'Encapsulation', source: 'learning', session: 'fresh', schedule: '0 9 * * 1', task: 'Review recent work', enabled: true }
   const runs = Array.from({ length: 65 }, (_, index) => ({
     id: `run-${index}`, sessionId: `cron:run-${index}`, startedAt: new Date(Date.UTC(2026, 8, 30, 0, -index)).toISOString(),
-    status: 'completed', title: `Saved conversation ${index} ${'Long prompt text '.repeat(20)}`,
-    ...(index === 0 ? { learning: { status: 'partial', summary: 'One conditional decision persisted; a source page still needs review.', artifacts: 1, events: 1, evaluated: 0 } } : {}),
+    status: index === 2 ? 'failed' : index === 3 ? 'running' : index === 9 ? 'cancelled' : 'completed', title: `Saved conversation ${index} ${'Long prompt text '.repeat(20)}`,
+    ...(index === 0 ? { learning: { status: 'partial', summary: 'One conditional decision persisted; a source page still needs review.\n\n' + 'Evidence remains conditional; preserve the full summary.\n'.repeat(100) + '\nEND OF LONG SUMMARY', artifacts: 1, events: 1, evaluated: 0 } } : {}),
   }))
+  for (const [index, status] of [[4, 'applied'], [5, 'no_change'], [6, 'blocked'], [7, 'draft_only']] as const) {
+    runs[index]!.learning = { status, summary: `Synthetic run result cron:run-${index}`, artifacts: 0, events: 0, evaluated: 0 }
+  }
   const offsets: number[] = []
   const fileRequests: string[] = []
   const changeRequests: string[] = []
@@ -62,22 +65,29 @@ test('automations open ordinary conversations and navigate run history without a
           import { createApp, h } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import ProjectsWorkspace from '/src/components/ProjectsWorkspace.vue';
+
           import { ioBridgeKey, createIoBridge } from '/src/io/bridge.ts';
           const router = createRouter({history:createMemoryHistory(),routes:[
             {name:'chat',path:'/projects/:projectId/chat/:sessionId?',component:{}},
             {name:'projects',path:'/projects',component:{}},
             {name:'project-settings',path:'/projects/:projectId/settings/:section?',component:{}},
             {name:'agents',path:'/projects/:projectId/agents',component:{}},
+            {name:'project-workflows',path:'/projects/:projectId/workflows',component:{}},
             {name:'settings',path:'/settings/:section?',component:{}},
           ]});
           await router.push({name:'chat',params:{projectId:'fixture'},query:{automation:'cron:weekly'}});
           const app = createApp({render:() => h(ProjectsWorkspace,{apiBase:location.origin,visible:true})});
-          app.provide(Symbol.for('shadow.live-client-pool'),{observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
+          const disposers = new Set();
+          const pool = {onDispose(callback){disposers.add(callback);return()=>disposers.delete(callback);},dispose(){for(const callback of disposers)callback();disposers.clear();},observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
-          })});
+          })};
+          app.provide(Symbol.for('shadow.live-client-pool'), pool);
+          window.__disposeFixture = () => { app.unmount(); pool.dispose(); };
           app.provide(ioBridgeKey, createIoBridge());
           app.use(router).mount('#app');
-          window.__automationRouter = router;`
+          window.__automationRouter = router;
+          window.__copied = '';
+          Object.defineProperty(navigator, 'clipboard', {value:{writeText:async text => {window.__copied=text;}}});`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
@@ -122,6 +132,9 @@ test('automations open ordinary conversations and navigate run history without a
           else if (path === '/api/sessions/stages') json({ activity: {} })
           else if (path === '/api/folders') json({ folders: [] })
           else if (path === '/api/channels') json({ channels: [] })
+          else if (path === '/api/service-groups') json({ revision: 'fixture', agents: [], groups: [] })
+          else if (path === '/api/bot-chat-setup/request') json({ request: null })
+          else if (path.endsWith('/scheduled-tasks')) json({ sessionId: decodeURIComponent(path.split('/').at(-2)!), tasks: [] })
           else if (path === '/api/config') json({ agent: { model: 'fixture:model', workspace: 'synthetic', temperature: 0.7 } })
           else if (path === '/api/models') json({ models: ['fixture:model'] })
           else if (path.endsWith('/details')) {
@@ -133,8 +146,8 @@ test('automations open ordinary conversations and navigate run history without a
             json({ error: 'Write history has no standalone UI consumer' }, 500)
           } else if (/\/api\/sessions\/[^/]+$/.test(path)) {
             const sessionId = decodeURIComponent(path.split('/').at(-1)!)
-            const segment = sessionId === 'compact:run-1'
-            const send = () => json({ currentPhysicalId: 'segment', previousPhysicalId: !segment && sessionId === 'cron:run-1' ? 'compact:run-1' : null, messages: [
+            const segment = sessionId.startsWith('compact:')
+            const send = () => json({ currentPhysicalId: 'segment', previousPhysicalId: !segment && ['cron:run-1', 'cron:run-8'].includes(sessionId) ? sessionId.replace('cron:', 'compact:') : null, messages: sessionId === 'cron:run-8' ? [] : [
               { role: 'user', content: `Synthetic run input ${sessionId}` }, { role: 'assistant', content: `Synthetic run result ${sessionId}` },
             ] })
             if (holdHistory) pendingHistory.push(send)
