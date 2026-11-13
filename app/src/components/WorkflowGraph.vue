@@ -58,7 +58,7 @@ const canvas = computed(() => workflowCanvas(props.flows))
             <div class="group-header">
             <button class="group-heading nodrag nopan" @click="inspect(data.definition.id)">
               <strong><span :class="data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
-              <span>{{ data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
+              <span>{{ data.projection ? t('BOT topology') : data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
             </button>
             <div class="group-actions nodrag nopan" @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop @click.stop>
             <button v-if="data.control" class="btn btn-sm group-toggle" :disabled="data.control.disabled" :aria-busy="data.control.busy"
@@ -83,7 +83,7 @@ const canvas = computed(() => workflowCanvas(props.flows))
         </template>
         <template #node-workflow="{ data }">
           <Handle type="target" :position="Position.Left" :connectable="false" />
-          <div class="graph-node-shell" :class="{ 'has-target': data.targetSessionId }"><button class="graph-node nodrag nopan" :data-state="data.status" :data-flow="data.flowId" :data-enabled="data.enabled" @click="inspect(data.flowId, data.id)"><strong>{{ data.label }}</strong><small>{{ data.detail }}</small><small v-if="data.description" class="node-description">{{ data.description }}</small><span :data-state="data.status">{{ workflowStatus(data.status) }}</span></button>
+          <div class="graph-node-shell" :class="{ 'has-target': data.targetSessionId }"><button class="graph-node nodrag nopan" :data-state="data.status" :data-flow="data.flowId" :data-enabled="data.enabled" @click="inspect(data.flowId, data.id)"><strong>{{ data.label }}</strong><small>{{ data.detail }}</small><small v-if="data.description" class="node-description">{{ data.description }}</small><span v-if="!data.projection" :data-state="data.status">{{ workflowStatus(data.status) }}</span></button>
             <RouterLink v-if="data.targetSessionId" class="node-session-link nodrag nopan" :to="{ name: 'chat', params: { projectId, sessionId: data.targetSessionId } }" @pointerdown.stop @mousedown.stop @click.stop @keydown.stop>{{ t('Target session') }}: {{ data.targetSessionId }}</RouterLink>
           </div>
           <Handle type="source" :position="Position.Right" :connectable="false" />

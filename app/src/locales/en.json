@@ -4340,5 +4340,21 @@
   "Open the latest automation run and its conversation history.": "Open the latest automation run and its conversation history.",
   "{action} workflow {name}": "{action} workflow {name}",
   "Learning is disabled globally. This control saves the workflow preference only.": "Learning is disabled globally. This control saves the workflow preference only.",
-  "Workflow controls are unavailable. Refresh to retry.": "Workflow controls are unavailable. Refresh to retry."
+  "Workflow controls are unavailable. Refresh to retry.": "Workflow controls are unavailable. Refresh to retry.",
+  "BOT connection": "BOT connection",
+  "Connection unavailable": "Connection unavailable",
+  "Conversation binding": "Conversation binding",
+  "Host owner ingress": "Host owner ingress",
+  "Subscribed": "Subscribed",
+  "Not subscribed": "Not subscribed",
+  "Listener projected": "Listener projected",
+  "No listener": "No listener",
+  "Published BOT / Agent": "Published BOT / Agent",
+  "No existing session recorded": "No existing session recorded",
+  "BOT topology": "BOT topology",
+  "Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.": "Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.",
+  "BOT projection unavailable. Refresh to retry.": "BOT projection unavailable. Refresh to retry.",
+  "BOT inventory is incomplete. Some entries are unavailable or limited.": "BOT inventory is incomplete. Some entries are unavailable or limited.",
+  "Validated package": "Validated package",
+  "Quarantined package": "Quarantined package"
 }

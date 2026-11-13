@@ -1,3 +1,4 @@
+import { parseBotProjection, type BotProjection } from './bot-workflows.ts'
 import { t, type MessageKey } from './i18n.ts'
 import { formatWorkflowSchedule } from './workflow-schedule.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -18,7 +19,7 @@ export interface WorkflowRun {
   output?: { sessionId?: string; workKey?: string; stale?: boolean }
 }
 export interface WorkflowSourceStatus { kind: string; id: string; enabled: boolean; error?: string; nextAt?: number }
-export interface WorkflowSnapshot { sources?: WorkflowSourceStatus[]; projectId: string; definitions: WorkflowDefinition[]; runs: WorkflowRun[]; runtimeError?: string }
+export interface WorkflowSnapshot { bots?: BotProjection; botsUnavailable?: boolean; sources?: WorkflowSourceStatus[]; projectId: string; definitions: WorkflowDefinition[]; runs: WorkflowRun[]; runtimeError?: string }
 const statuses = ['queued', 'running', 'retry', 'blocked', 'completed', 'cancelled'] as const
 function invalid(): never { throw new Error(t('Workflow state is invalid. Refresh or check Main.')) }
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0
@@ -47,7 +48,7 @@ export function parseWorkflows(raw: unknown, projectId: string): WorkflowSnapsho
   if (new Set(definitions.map(d => d.id)).size !== definitions.length || new Set(runs.map(r => r.id)).size !== runs.length) return invalid()
   const sources = raw.sources === undefined ? [] : raw.sources
   if (!Array.isArray(sources) || sources.some(s => !isRecord(s) || !text(s.kind) || !text(s.id) || typeof s.enabled !== 'boolean' || s.error !== undefined && !text(s.error) || s.nextAt !== undefined && (typeof s.nextAt !== 'number' || !Number.isFinite(s.nextAt)))) return invalid()
-  return { projectId, definitions, runs, sources: sources as WorkflowSourceStatus[], runtimeError: typeof raw.runtimeError === 'string' ? raw.runtimeError : undefined }
+  return { projectId, definitions, runs, bots: raw.bots === undefined ? undefined : parseBotProjection(raw.bots), botsUnavailable: raw.botsUnavailable === true, sources: sources as WorkflowSourceStatus[], runtimeError: typeof raw.runtimeError === 'string' ? raw.runtimeError : undefined }
 }
 export function workflowStatus(status: WorkflowStatus | 'paused' | 'ready' | 'waiting' | 'received' | 'accepted') {
   const labels: Record<typeof status, MessageKey> = { queued: 'Queued', running: 'Running', retry: 'Retry pending', blocked: 'Blocked', completed: 'Completed', cancelled: 'Cancelled', paused: 'Paused', ready: 'Ready', waiting: 'Waiting', received: 'Received', accepted: 'Accepted' }

@@ -1,6 +1,7 @@
 import { scheduleAuthoring } from '../../workflows/schedule-authoring.ts'
 import { workMapper } from '../../workflows/work-mapping.ts'
 import { WorkflowRuntime } from '../../workflows/runtime.ts'
+import { botWorkflowProjection } from '../../bots/workflow-projection.ts'
 import { WorkflowTool, createWorkflowHandler, registerWorkflowRoutes } from '../../workflows/management.ts'
 import { validateServiceAssignments } from '../../bots/assignment-validation.ts'
 import { publishBotChange } from '../../bots/publication.ts'
@@ -1526,7 +1527,11 @@ export async function createProjectRuntime(
     },
   }, automationProfiles, { validateAdmission: validateWorkProgram, validate: (settings, signal) => settings.folderId ? validateWorkTarget(settings, signal) : validateWorkProgram(settings, signal), running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
     resume: (key, version, signal, acknowledgeToolReplay) => workDispatcher.resume(key, version, signal, acknowledgeToolReplay) })
-  registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled)
+  registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled, () => botWorkflowProjection({
+    projectId: project.id, store: botStore, channels, directory: directoryBots,
+    sessionIds: sessions.listSessions().map(session => session.sessionId),
+    personalListeners: sessionInputListeners(project.id, sessions, botStore),
+  }))
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }

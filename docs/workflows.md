@@ -22,6 +22,44 @@ and edges with explicit text; only real running state animates edges, respecting
 reduced motion. Nodes show saved schedules, session policies, targets and task
 summaries; unavailable timezone/target metadata is marked unrecorded.
 
+## BOT topology (read-only first stage)
+
+The existing Project Workflow tab and shared canvas also show the live BOT topology:
+**connection → conversation binding/listener → published BOT/Agent → existing Session**.
+These are inspection entries, **not saved Workflow definitions or Workflow runs**.
+`GET /api/workflows` adds an optional `bots` DTO under the same authenticated,
+Project-scoped route. `botWorkflowProjection` reads `BotInstanceStore` IDs,
+`ChannelManager.botStatus`, pure `DirectoryBots.inspect` verification and its
+canonical `botInputListeners` projection. There is no new binding database or
+persisted topology cache. Connections are one inventory object referenced by all
+bindings; one QQ account can serve different groups with different deployed BOTs
+and deterministic published Agent identities.
+
+The inspector keeps transport health/connection enablement, binding enablement,
+subscription selection, projected listener presence and package validity separate.
+A valid package is lazy-validated data, not a running process or successful message.
+Routing is not probed and processing success is unknown; overlapping subscribers,
+current admission checks or broken sibling storage can still prevent delivery.
+Disabled and unsubscribed bindings, unbound connections and quarantined/unavailable
+packages remain visible. Missing or bounded inventories show a warning (up to 1000
+connection IDs, 1024 deployment directory entries and 5000 binding rows).
+
+Only IDs already present in SessionManager receive conversation links. QQ/Feishu
+and exact Discord channel bindings use the host channel-session identity helper,
+including legacy connection identities. Discord DM/observation/descendant-thread
+sessions are not guessed. Personal BOTs show the host-owner ingress and selected
+ordinary Agent, using host Session listeners; private owner topics are omitted.
+No existing-session link prepares, restores or sends to a session. The BOT inspector
+selection is retained with the Project's existing Workflow document tab.
+
+The DTO is an explicit allowlist: no credentials/config, prompts, tools, grants,
+allowlists, parameters, source paths, exception bodies or message content. URL-bearing
+labels are redacted. BOT entries have no pause/resume/retry/deploy controls; ordinary
+Workflow controls cannot address them. InputRouter, SessionManager, platform security,
+precise publication confirmation and all message execution remain unchanged. Reading
+never imports BOT tool modules, deploys, repairs quarantine state, replays messages,
+restarts adapters or writes runtime configuration. Execution migration is deferred.
+
 ## Chat authoring
 
 Discover `workflow` through `v:tools`; `v:workflows/authoring` provides examples and contracts. `read` returns standard JSON; the VFS exposes `definitions/<encoded-id>.json`, `runs/<run-id>.json`, `records/<encoded-flow>.json`, and `mappings/<encoded-flow>.json`.

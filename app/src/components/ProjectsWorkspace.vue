@@ -302,7 +302,7 @@ function syncRoute() {
   const nextDocumentRoute = `${String(route.name)}:${projectId}`
   const workflowQuery = workflowQueries.get(projectId)
   if (route.name === 'project-workflows' && documentRoute !== nextDocumentRoute
-    && !Object.keys(route.query).length && workflowQuery?.workflow) {
+    && !Object.keys(route.query).length && (workflowQuery?.workflow || workflowQuery?.bot)) {
     void router.replace({ query: workflowQuery })
   }
   documentRoute = nextDocumentRoute
@@ -441,6 +441,7 @@ watch(() => route.fullPath, () => {
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (route.name === 'project-workflows' && projectId) {
     const query: Record<string, string> = {}
+    if (typeof route.query.bot === 'string') query.bot = route.query.bot
     if (typeof route.query.workflow === 'string') query.workflow = route.query.workflow
     if (typeof route.query.run === 'string') query.run = route.query.run
     workflowQueries.set(projectId, query)

@@ -5,16 +5,28 @@
       <button class="btn btn-sm" :disabled="loading || busy" @click="refreshAll">{{ t('Refresh') }}</button>
     </header>
     <div v-if="error" class="workflow-message failure" role="alert"><p>{{ error }}</p><button class="btn btn-sm" :disabled="loading || busy" @click="refreshAll">{{ t('Retry') }}</button></div>
+    <p v-if="snapshot?.botsUnavailable" class="workflow-message failure" role="alert">{{ t('BOT projection unavailable. Refresh to retry.') }}</p>
+    <p v-if="snapshot?.bots?.warnings.length" class="workflow-message" role="status">{{ t('BOT inventory is incomplete. Some entries are unavailable or limited.') }}</p>
     <p v-if="snapshot?.runtimeError" class="workflow-message failure" role="alert">{{ t('Workflow persistence or execution needs attention. Check Main before retrying effects.') }}</p>
     <p v-if="loading && !snapshot" class="workflow-message" role="status">{{ t('Loading workflows…') }}</p>
-    <div v-else-if="snapshot && !snapshot.definitions.length" class="workflow-empty">
+    <div v-else-if="snapshot && !snapshot.definitions.length && !botFlows.length" class="workflow-empty">
       <h2>{{ t('No workflows yet') }}</h2><p>{{ t('Ask an Agent to create a workflow with a signal source, an explicit first-batch policy and typed actions. Its saved definition will appear here.') }}</p>
       <RouterLink class="btn" :to="chatLocation">{{ t('Open chat') }}</RouterLink>
     </div>
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
-      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="inspectorOpen ? definition?.id : undefined" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
-      <p v-if="!definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
-      <aside v-if="inspectorOpen && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
+      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
+      <p v-if="route.query.bot && !selectedBot || route.query.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
+      <aside v-if="selectedBot" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
+        <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
+        <div class="inspector-toolbar"><span>{{ t('BOT topology') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
+        <header class="workflow-title"><h2>{{ selectedBot.definition.name }}</h2></header>
+        <p class="workflow-explanation">{{ t('Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.') }}</p>
+        <details v-for="node in selectedBot.graph" :key="node.id" class="workflow-node" :open="!inspectedNode || inspectedNode === node.id">
+          <summary>{{ node.label }} · {{ node.detail }}</summary><pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
+          <RouterLink v-if="node.targetSessionId" :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Open conversation') }}</RouterLink>
+        </details>
+      </aside>
+      <aside v-if="inspectorOpen && !selectedBot && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
         <div class="inspector-toolbar"><span>{{ t('Workflow details') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
         <header class="workflow-title">
@@ -88,6 +100,7 @@
 <script setup lang="ts">
 import { computed, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
 import WorkflowGraph from './WorkflowGraph.vue'
+import { botCanvas } from '../bot-workflows.ts'
 import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -117,9 +130,11 @@ const displayed = computed(() => selectedRun.value?.definition ?? definition.val
 const graph = computed(() => displayed.value ? workflowGraph(displayed.value, selectedRun.value ?? runs.value.find(r => r.definition.revision === displayed.value?.revision)) : [])
 const inspector = ref<HTMLElement>(), inspectedNode = ref<string>(), graphView = ref<InstanceType<typeof WorkflowGraph>>()
 const inspectorId = useId(), inspectorWidth = ref(380)
-const inspectorOpen = computed(() => typeof route.query.workflow === 'string' && !!definition.value)
+const botFlows = computed(() => botCanvas(snapshot.value?.bots))
+const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === route.query.bot))
+const inspectorOpen = computed(() => !!selectedBot.value || typeof route.query.workflow === 'string' && !!definition.value)
 async function closeInspector() { inspectedNode.value = undefined; await router.replace({ query: {} }); await nextTick(); graphView.value?.focusCanvas() }
-const canvasFlows = computed(() => (snapshot.value?.definitions ?? []).map(flow => {
+const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(flow => {
   const selected = selectedRun.value?.workflow === flow.id ? selectedRun.value : undefined
   const job = workflowAutomation(catalog.jobs.value, flow.id)
   const schedule = flow.nodes.find(node => node.kind === 'schedule-action')
@@ -135,11 +150,11 @@ const canvasFlows = computed(() => (snapshot.value?.definitions ?? []).map(flow 
     notice: job?.disabledByGlobal ? t('Learning is disabled globally. This control saves the workflow preference only.') : !available ? t('Workflow controls are unavailable. Refresh to retry.') : undefined,
   }
   return { definition: selected?.definition ?? flow, conversation: workflowConversation(flow, snapshot.value!.runs, available ? catalog.jobs.value : []), enabled: effective, control, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
-}))
+}), ...botFlows.value])
 const selectedControl = computed(() => canvasFlows.value.find(flow => flow.definition.id === definition.value?.id)?.control)
 async function inspectFlow(id: string, nodeId?: string) {
   inspectedNode.value = nodeId
-  await router.replace({ query: { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
+  await router.replace({ query: botFlows.value.some(flow => flow.definition.id === id) ? { bot: id } : { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
   confirmation.value = ''; operationError.value = ''; notice.value = ''
   await nextTick(); inspector.value?.focus({ preventScroll: true })
 }

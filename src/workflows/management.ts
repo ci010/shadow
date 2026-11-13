@@ -88,10 +88,14 @@ export function createWorkflowHandler(runtime: WorkflowRuntime) {
 
 /** Project router + explicit existing host authentication; external payloads never become executable plans. */
 export function registerWorkflowRoutes(app: Hono, runtime: WorkflowRuntime, authorize: (request: Request) => boolean | Promise<boolean>,
-  setFeatureEnabled?: (workflowId: string, enabled: boolean, request: Request) => Promise<void>) {
+  setFeatureEnabled?: (workflowId: string, enabled: boolean, request: Request) => Promise<void>,
+  inspectBots?: () => import('../bots/workflow-projection.ts').BotWorkflowProjection) {
   app.get('/api/workflows', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)
-    return c.json(runtime.inspect())
+    const snapshot = runtime.inspect()
+    if (!inspectBots) return c.json(snapshot)
+    try { return c.json({ ...snapshot, bots: inspectBots() }) }
+    catch { return c.json({ ...snapshot, botsUnavailable: true }) }
   })
   app.post('/api/workflows/control', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)
