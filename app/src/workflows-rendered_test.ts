@@ -43,6 +43,11 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.equal(await run(()=>document.querySelectorAll('.graph-group').length),5);
     assert.equal(await run(()=>document.querySelectorAll('.vue-flow').length),1);
     assert.equal(await run(()=>document.querySelectorAll('.workflow-inventory').length),0);
+    const sharedDots=async(selector)=>{
+      assert.equal(await win.webContents.executeJavaScript('('+((selector)=>{let el=document.querySelector(selector);if(!el)return false;while(el&&el!==document.body){const s=getComputedStyle(el);if(s.backgroundColor!=='rgba(0, 0, 0, 0)'||s.backgroundImage!=='none')return false;el=el.parentElement}const body=getComputedStyle(document.body);return body.backgroundImage.includes('radial-gradient')&&body.backgroundSize==='20px 20px'&&document.querySelectorAll('.vue-flow__background').length===0}).toString()+')('+JSON.stringify(selector)+')'),true,'Reuse the single chat body dot layer');
+    };
+    await sharedDots('.vue-flow__pane');
+    await sharedDots('.graph-group');
     assert.ok(await run(()=>Array.from(document.querySelectorAll('.vue-flow__edge')).every(edge=>{const id=JSON.parse(edge.dataset.id);return window.data.definitions.some(flow=>flow.id===id[0])})));
     assert.ok(await run(()=>Array.from(document.querySelectorAll('.graph-group')).every(group=>{const box=group.getBoundingClientRect();return Array.from(document.querySelectorAll('.graph-node')).filter(node=>node.dataset.flow===group.dataset.workflow).every(node=>{const n=node.getBoundingClientRect();return n.left>=box.left && n.right<=box.right+1 && n.top>=box.top && n.bottom<=box.bottom+1})})));
 
@@ -61,16 +66,41 @@ test('workflow visualization renders durable revisions, safe controls, real reso
 
     assert.ok(await run(()=>document.querySelector('.graph-group[data-enabled=false]').textContent.includes('Paused')));
     if(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')})require('node:fs').writeFileSync(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')},(await win.webContents.capturePage()).toPNG());
-    await run(()=>document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'h',bubbles:true,cancelable:true})));
-    assert.equal(await run(()=>Array.from(document.querySelectorAll('.graph-toolbar button')).find(e=>e.textContent.includes('(H)')).getAttribute('aria-pressed')),'false');
-    await run(()=>{const pane=document.querySelector('.graph-canvas');pane.focus();pane.dispatchEvent(new KeyboardEvent('keydown',{key:'h',bubbles:true,cancelable:true}))});await wait();
-    assert.equal(await run(()=>document.querySelector('.graph-canvas').classList.contains('hand-mode')),true);
-    await run(()=>document.querySelector('.graph-canvas').dispatchEvent(new KeyboardEvent('keydown',{key:'v',bubbles:true,cancelable:true})));await wait();
+    const transform=()=>run(()=>document.querySelector('.vue-flow__transformationpane').style.transform);
+    const dragEmpty=async(button)=>{
+      const before=await transform();
+      const point=await run(()=>{const r=document.querySelector('.graph-canvas').getBoundingClientRect();return {x:Math.round(r.right-40),y:Math.round(r.top+100)}});
+      assert.equal(await win.webContents.executeJavaScript('document.elementFromPoint('+point.x+','+point.y+').classList.contains("vue-flow__pane")'),true);
+      win.webContents.sendInputEvent({type:'mouseDown',button,clickCount:1,...point});
+      win.webContents.sendInputEvent({type:'mouseMove',button,x:point.x-50,y:point.y+20,movementX:-50,movementY:20});
+      win.webContents.sendInputEvent({type:'mouseUp',button,clickCount:1,x:point.x-50,y:point.y+20});
+      for(let i=0;i<20 && await transform()===before;i++)await wait();
+      assert.notEqual(await transform(),before);
+      await wait(); // Let the browser finish the drag's native click-suppression turn.
+    };
+    const clickRendered=async(selector)=>{
+      const point=await win.webContents.executeJavaScript('('+((selector)=>{const el=document.querySelector(selector),r=el.getBoundingClientRect(),canvas=document.querySelector('.graph-canvas').getBoundingClientRect();const x=Math.round((Math.max(r.left,canvas.left)+Math.min(r.right,canvas.right))/2),y=Math.round((Math.max(r.top,canvas.top)+Math.min(r.bottom,canvas.bottom))/2);if(!el.contains(document.elementFromPoint(x,y)))throw new Error('Click target occluded: '+selector);return {x,y}}).toString()+')('+JSON.stringify(selector)+')');
+      const before=await transform();
+      win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...point});
+      win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});await wait();
+      assert.equal(await transform(),before,'Inspector clicks must not pan');
+    };
+    // No activation key: real pointer drag pans immediately, real node clicks still inspect.
+    await dragEmpty('left');
+    await clickRendered('.graph-node');
+    assert.equal(await run(()=>document.querySelector('.graph-text').open),true);
+    assert.equal(await run(()=>document.querySelector('.workflow-node').open),true);
+    await run(()=>document.querySelector('.inspector-toolbar button').click());await wait();
+    assert.equal(await run(()=>document.querySelectorAll('.graph-toolbar button[aria-pressed]').length),0);
+    assert.equal(await run(()=>{const pane=document.querySelector('.graph-canvas');pane.focus();return ['v','h','V','H',' '].every(key=>{const event=new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});pane.dispatchEvent(event);return !event.defaultPrevented})}),true);
     assert.equal(await run(()=>document.querySelector('.graph-canvas').classList.contains('hand-mode')),false);
-    await run(()=>document.querySelector('.graph-canvas').dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true})));await wait();
-    assert.equal(await run(()=>document.querySelector('.graph-canvas').classList.contains('hand-mode')),true);
-    await run(()=>document.querySelector('.graph-canvas').dispatchEvent(new KeyboardEvent('keyup',{key:' ',bubbles:true,cancelable:true})));await wait();
-    assert.equal(await run(()=>document.querySelector('.graph-canvas').classList.contains('hand-mode')),false);
+    await dragEmpty('left');
+    await clickRendered('.group-heading');
+    assert.ok(await run(()=>document.querySelector('.workflow-inspector')));
+    assert.equal(await run(()=>{const pane=document.querySelector('.graph-canvas');pane.focus();const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});pane.dispatchEvent(event);return event.defaultPrevented}),true);await wait();
+    assert.equal(await run(()=>document.querySelector('.workflow-inspector')),null);
+    assert.equal(await run(()=>{const pane=document.querySelector('.graph-canvas');return ['input','textarea','select','div'].every(tag=>{const field=document.createElement(tag);if(tag==='div')field.contentEditable='true';pane.append(field);field.focus();const events=[new KeyboardEvent('keydown',{key:'!',code:'Digit1',shiftKey:true,bubbles:true,cancelable:true}),new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}),new WheelEvent('wheel',{deltaY:50,bubbles:true,cancelable:true})];for(const event of events)field.dispatchEvent(event);field.remove();return events.every(event=>!event.defaultPrevented)})}),true);
+    await run(()=>document.querySelector('.graph-canvas').focus());
     const beforeWheel=await run(()=>document.querySelector('.vue-flow__transformationpane').style.transform);
     assert.equal(await run(()=>{const event=new WheelEvent('wheel',{deltaY:80,bubbles:true,cancelable:true});document.querySelector('.graph-canvas').dispatchEvent(event);return event.defaultPrevented}),true);
     for(let i=0;i<20 && await run(()=>document.querySelector('.vue-flow__transformationpane').style.transform)===beforeWheel;i++)await wait();
@@ -92,6 +122,8 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     await run(()=>{const pane=document.querySelector('.graph-canvas');pane.focus();pane.dispatchEvent(new WheelEvent('wheel',{deltaY:90,ctrlKey:true,clientX:100,clientY:300,bubbles:true,cancelable:true}))});
     for(let i=0;i<20 && await run(()=>document.querySelector('.vue-flow__transformationpane').style.transform)===beforeZoomWheel;i++)await wait();
     assert.notEqual(await run(()=>document.querySelector('.vue-flow__transformationpane').style.transform),beforeZoomWheel);
+    await sharedDots('.vue-flow__pane');
+    await sharedDots('.graph-group');
     assert.equal(await run(()=>{const pane=document.querySelector('.graph-canvas');const event=new KeyboardEvent('keydown',{key:'!',code:'Digit1',shiftKey:true,bubbles:true,cancelable:true});pane.dispatchEvent(event);return event.defaultPrevented}),true);
     await run(()=>document.querySelector('.group-heading').click());await wait();
     assert.ok(await run(()=>document.querySelector('aside.workflow-inspector')));
@@ -143,7 +175,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     await run(()=>{window.mode='error';document.querySelector('.workflow-heading button').click()});await wait();
     assert.ok(await run(()=>document.querySelector('[role=alert]')));assert.ok(await run(()=>!document.body.textContent.includes('DO-NOT-DISPLAY')));assert.equal(await run(()=>document.querySelector('.workflow-title button').disabled),true);
     await run(()=>{window.mode='normal';document.querySelector('.workflow-heading button').click()});await wait();
-    for(const dark of [false,true]){await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+')');for(const width of [1200,390]){win.setSize(width,850);await wait();assert.ok(await run(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok(await run(()=>document.querySelector('.workflow-heading').getBoundingClientRect().height<160));assert.equal(await run(()=>document.querySelectorAll('input,textarea,form,[draggable=true]').length),0)}}
+    for(const dark of [false,true]){await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+')');await sharedDots('.vue-flow__pane');await sharedDots('.graph-group[data-enabled=false]');for(const width of [1200,390]){win.setSize(width,850);await wait();assert.ok(await run(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok(await run(()=>document.querySelector('.workflow-heading').getBoundingClientRect().height<160));assert.equal(await run(()=>document.querySelectorAll('input,textarea,form,[draggable=true]').length),0)}}
     if(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')})require('node:fs').writeFileSync(${JSON.stringify((process.env.SHADOW_WORKFLOW_SCREENSHOT || '') + '.narrow.png')},(await win.webContents.capturePage()).toPNG());
     await run(()=>document.querySelector('.inspector-toolbar button').click());await wait();
     assert.equal(await run(()=>document.querySelector('.workflow-inspector')),null);
@@ -152,6 +184,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.equal(await run(()=>document.querySelector('.workflow-node').open),true);
     await run(()=>{document.querySelector('.workflow-heading button').focus()});assert.equal(await run(()=>document.activeElement.textContent.trim()),'Refresh');
     await run(()=>{window.mode='empty';document.querySelector('.workflow-heading button').click()});await wait();assert.ok(await run(()=>document.querySelector('.workflow-empty').textContent.includes('No workflows yet')));
+    for(const dark of [false,true]){await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+')');await sharedDots('.workflow-empty')}
     await run(()=>{window.fixture.active=false});await wait();const count=await run(()=>window.requests.length);await run(()=>document.querySelector('.workflow-heading button').click());await wait();assert.equal(await run(()=>window.requests.length),count);
     await run(()=>{window.fixture.projectId='other';window.fixture.apiBase=location.origin+'/projects/other';window.data={projectId:'other',definitions:[],runs:[]};window.fixture.active=true});await wait();assert.ok(await run(()=>window.requests.at(-1).startsWith('/projects/other/')));
     await run(()=>{window.sidebar.show=true});await wait();

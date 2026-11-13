@@ -327,17 +327,21 @@ gate and action nodes connect only within that group. Render the gate only when
 the selected definition snapshot actually contains it; this is a fixed leading
 stage, not a source-kind display exception or arbitrary node placement. New
 Schedule definitions connect their time signal directly to the real action. Shared zoom, fit and pan
-controls affect the viewport only. The focused canvas supports V selection,
-H hand mode, Space temporary pan, middle-button drag, wheel pan, Ctrl/Cmd-wheel
+controls affect the viewport only. Left- or middle-button drag on empty canvas
+pans by default; clicking a node or flow title opens its inspector, without a
+selection/hand mode switch. The focused canvas supports wheel pan, Ctrl/Cmd-wheel
 zoom, Shift+1 fit-all, Shift+2 fit-selection and Escape to clear. These shortcuts
-never intercept input fields or act as global editing/running shortcuts.
+never intercept input fields or act as global editing/running shortcuts. The canvas,
+including group interiors and the empty state, stays transparent over the same
+20px body dot grid as chat; dots remain stationary during pan/zoom, with no second
+graph background layer.
 Schedule nodes show saved cron/interval and timezone when recorded; action nodes
 show fixed targets, fresh-session policy, programs or actual task summaries from
 the admitted definition, never guesses from names. Missing metadata is explicit;
 current session destinations and timezones must not overwrite historical evidence. Initially show approximately three to four
 flows at a readable 100% zoom rather than fitting the full inventory; Fit diagram
 is an explicit overview action. Enabled groups have a solid boundary; paused
-groups use a dashed boundary and muted surface, with explicit text and icons.
+groups use a dashed boundary and muted node surfaces, with explicit text and icons.
 Only recorded running execution animates edges, and reduced motion disables it.
 Nodes cannot be dragged, connected, deleted or edited. Selecting a group or node
 opens the existing resizable right-inspector pattern, including ordered native

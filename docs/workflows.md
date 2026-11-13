@@ -9,9 +9,12 @@ Open **Project → Workflows** (`/projects/:projectId/workflows`). One shared Vu
 Configuration is edited through chat, not fields or drag handles. The page retains pause/resume/retry/cancel operational controls; blocked retry requires explicit confirmation after inspecting effects. It does not create schedules, subscribe sources, register accounts or send messages by merely opening the page. Automation conversation pages and sidebar are read-only session-history projections with Workflow links; model/interval/enable configuration controls have been removed from these pages. Existing domain host configuration APIs (learning, organizer and Work dispatcher) remain host-authorized capabilities, not a second Workflow executor. Generic schedule configuration is chat-authored.
 
 The initial viewport remains at readable 100% scale (roughly three workflows on a
-typical desktop pane); Fit diagram is an explicit overview action. Focus the
-canvas for V selection, H hand mode, Space temporary pan, middle-button drag,
-wheel pan, Ctrl/Cmd-wheel zoom, Shift+1 fit-all, Shift+2 fit-selection and Escape.
+typical desktop pane); Fit diagram is an explicit overview action. Drag empty
+canvas with the left or middle mouse button to pan; click a node or workflow title
+to inspect it. There are no selection/hand modes. Focus the canvas for wheel pan,
+Ctrl/Cmd-wheel zoom, Shift+1 fit-all, Shift+2 fit-selection and Escape. The canvas
+and empty state reveal the same theme-aware body dot grid as chat, stationary
+under viewport pan/zoom rather than adding another graph background layer.
 These controls never edit or execute nodes. Paused flows use dashed boundaries
 and edges with explicit text; only real running state animates edges, respecting
 reduced motion. Nodes show saved schedules, session policies, targets and task
