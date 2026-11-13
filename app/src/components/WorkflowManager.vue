@@ -2,9 +2,9 @@
   <section class="workflow-manager" :aria-label="t('Workflows')" :aria-busy="loading">
     <header class="workflow-heading">
       <div><h1>{{ t('Workflows') }}</h1><p>{{ t('Read-only execution map. Create and edit workflows in chat.') }}</p></div>
-      <button class="btn btn-sm" :disabled="loading || busy" @click="refresh">{{ t('Refresh') }}</button>
+      <button class="btn btn-sm" :disabled="loading || busy" @click="refreshAll">{{ t('Refresh') }}</button>
     </header>
-    <div v-if="error" class="workflow-message failure" role="alert"><p>{{ error }}</p><button class="btn btn-sm" :disabled="loading || busy" @click="refresh">{{ t('Retry') }}</button></div>
+    <div v-if="error" class="workflow-message failure" role="alert"><p>{{ error }}</p><button class="btn btn-sm" :disabled="loading || busy" @click="refreshAll">{{ t('Retry') }}</button></div>
     <p v-if="snapshot?.runtimeError" class="workflow-message failure" role="alert">{{ t('Workflow persistence or execution needs attention. Check Main before retrying effects.') }}</p>
     <p v-if="loading && !snapshot" class="workflow-message" role="status">{{ t('Loading workflows…') }}</p>
     <div v-else-if="snapshot && !snapshot.definitions.length" class="workflow-empty">
@@ -12,14 +12,14 @@
       <RouterLink class="btn" :to="chatLocation">{{ t('Open chat') }}</RouterLink>
     </div>
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
-      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="inspectorOpen ? definition?.id : undefined" @inspect="inspectFlow" @clear="closeInspector" />
+      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="inspectorOpen ? definition?.id : undefined" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
       <p v-if="!definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="inspectorOpen && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
         <div class="inspector-toolbar"><span>{{ t('Workflow details') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
         <header class="workflow-title">
           <div><h2>{{ definition.name || definition.id }}</h2><p>{{ t('Workflow ID') }} <code>{{ definition.id }}</code></p></div>
-          <button class="btn btn-sm" :disabled="busy || !!error" @click="operate(definition.enabled ? 'pause' : 'resume', definition.id)">{{ definition.enabled ? t('Pause') : t('Resume') }}</button>
+          <button class="btn btn-sm" :disabled="selectedControl?.disabled ?? true" @click="operate(selectedControl?.enabled ? 'pause' : 'resume', definition.id)">{{ selectedControl?.busy ? t('Saving…') : selectedControl?.enabled ? t('Pause') : t('Resume') }}</button>
         </header>
         <p v-if="sourceStatus" class="workflow-explanation">{{ t('Signal source') }}: {{ sourceStatus.enabled ? t('Enabled') : t('Paused') }}<span v-if="sourceStatus.nextAt"> · {{ t('Next collection check') }}: {{ formatDateTime(sourceStatus.nextAt) }}</span></p>
         <p v-if="sourceStatus?.error" class="workflow-run-hint failure" role="alert">{{ t('Source collection failed. Inspect its authorized binding and source status in chat; no collector checkpoint was advanced for this failure.') }} <code>{{ sourceStatus.error }}</code></p>
@@ -91,6 +91,10 @@ import WorkflowGraph from './WorkflowGraph.vue'
 import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
+import { workflowAutomation } from '../workflow-automation.ts'
+import { canToggleAutomation } from '../automations.ts'
+import { isRecord } from '../folders-sidebar.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { createWorkflowClient, recentWorkflowRuns, workflowConversation, workflowGraph, workflowHint, workflowStatus, type WorkflowRun, type WorkflowSnapshot } from '../workflows.ts'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; active?: boolean }>(), { active: true })
@@ -98,6 +102,8 @@ const route = useRoute(), router = useRouter()
 const snapshot = shallowRef<WorkflowSnapshot>(), loading = ref(false), error = ref(''), operationError = ref(''), busy = ref(false), confirmation = ref(''), notice = ref('')
 const activated = ref(true), pageVisible = ref(typeof document === 'undefined' || !document.hidden)
 const enabled = computed(() => props.active && activated.value && pageVisible.value)
+const catalog = useAutomationCatalog(() => props.apiBase, () => enabled.value)
+const operationId = ref('')
 const definition = computed(() => typeof route.query.workflow === 'string' ? snapshot.value?.definitions.find(d => d.id === route.query.workflow) : snapshot.value?.definitions[0])
 const sourceStatus = computed(() => snapshot.value?.sources?.find(s => s.kind === definition.value?.source.kind && s.id === definition.value?.source.id))
 const runs = computed(() => definition.value && snapshot.value ? recentWorkflowRuns(snapshot.value, definition.value.id) : [])
@@ -115,8 +121,22 @@ const inspectorOpen = computed(() => typeof route.query.workflow === 'string' &&
 async function closeInspector() { inspectedNode.value = undefined; await router.replace({ query: {} }); await nextTick(); graphView.value?.focusCanvas() }
 const canvasFlows = computed(() => (snapshot.value?.definitions ?? []).map(flow => {
   const selected = selectedRun.value?.workflow === flow.id ? selectedRun.value : undefined
-  return { definition: selected?.definition ?? flow, conversation: workflowConversation(flow, snapshot.value!.runs), enabled: flow.enabled, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
+  const job = workflowAutomation(catalog.jobs.value, flow.id)
+  const schedule = flow.nodes.find(node => node.kind === 'schedule-action')
+  const configured = job ? (job.toggleEnabled ?? job.configuredEnabled ?? job.enabled) : isRecord(schedule?.job) ? schedule.job.enabled !== false : true
+  const source = snapshot.value?.sources?.find(source => source.kind === flow.source.kind && source.id === flow.source.id)
+  const effective = flow.enabled && (job ? job.enabled : source?.enabled ?? configured)
+  const available = !catalog.error.value && catalog.loaded.value && !catalog.loading.value
+  const control = {
+    enabled: flow.enabled && configured,
+    disabled: busy.value || loading.value || !!error.value || !available || !!job && !canToggleAutomation(job),
+    busy: busy.value && operationId.value === flow.id,
+    error: operationId.value === flow.id ? operationError.value : undefined,
+    notice: job?.disabledByGlobal ? t('Learning is disabled globally. This control saves the workflow preference only.') : !available ? t('Workflow controls are unavailable. Refresh to retry.') : undefined,
+  }
+  return { definition: selected?.definition ?? flow, conversation: workflowConversation(flow, snapshot.value!.runs, available ? catalog.jobs.value : []), enabled: effective, control, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
 }))
+const selectedControl = computed(() => canvasFlows.value.find(flow => flow.definition.id === definition.value?.id)?.control)
 async function inspectFlow(id: string, nodeId?: string) {
   inspectedNode.value = nodeId
   await router.replace({ query: { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
@@ -126,6 +146,7 @@ async function inspectFlow(id: string, nodeId?: string) {
 const chatLocation = computed(() => ({ name: 'chat', params: { projectId: props.projectId } }))
 let timer: ReturnType<typeof setTimeout> | undefined, reader: AbortController | undefined, mutation: AbortController | undefined
 function stopRead() { clearTimeout(timer); reader?.abort(); reader = undefined; loading.value = false }
+function refreshAll() { catalog.refresh(); void refresh() }
 async function refresh() {
   if (!enabled.value || loading.value || busy.value) return
   clearTimeout(timer)
@@ -143,14 +164,14 @@ function selectRun(id?: string) { confirmation.value = ''; void router.replace({
 function requestRetry(run: WorkflowRun) { if (run.status === 'blocked') confirmation.value = run.id; else void operate('retry', run.id) }
 async function operate(action: 'pause' | 'resume' | 'retry' | 'cancel', id: string, acknowledgeReplay = false) {
   if (busy.value) return
-  stopRead(); busy.value = true; operationError.value = ''; notice.value = ''
+  stopRead(); busy.value = true; operationId.value = id; operationError.value = ''; notice.value = ''
   const controller = mutation = new AbortController(), base = props.apiBase, project = props.projectId
   try {
     await createWorkflowClient(base, project).control(id, action, acknowledgeReplay, controller.signal)
     if (!controller.signal.aborted) { notice.value = t('Control saved. Accepted effects are not rolled back.'); confirmation.value = '' }
   } catch {
     if (!controller.signal.aborted) operationError.value = t('Control was not confirmed. Refresh and inspect the current state before trying again; the request may have been applied.')
-  } finally { if (mutation === controller) { mutation = undefined; busy.value = false; void refresh() } }
+  } finally { if (mutation === controller) { mutation = undefined; busy.value = false; catalog.refresh(); void refresh() } }
 }
 function visibility() { pageVisible.value = !document.hidden }
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)

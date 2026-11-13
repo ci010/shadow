@@ -211,6 +211,7 @@ function mount(t: TestContext, active = true, withSidebar = false) {
           ])
         },
       }) }
+      if (id === 'vue-router') return { RouterLink: defineComponent({ props: ['to'], setup: (props, { slots }) => () => h('a', { 'data-route': JSON.stringify(props.to) }, slots.default?.()) }) }
       if (id.endsWith('/TreeRow.vue')) return { default: component('TreeRow.vue') }
       if (id.endsWith('/AutomationConversationInfo.vue')) return { default: component('AutomationConversationInfo.vue') }
       if (id === '../composables/useAutomationConversation.ts') return automationConversationModule
@@ -242,7 +243,7 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     },
   })
   const sidebar = withSidebar ? component('AutomationSidebar.vue') : undefined
-  const sidebarProps = reactive({ apiBase: base, active, groups: [], stages: {} })
+  const sidebarProps = reactive({ projectId: 'a', apiBase: base, active, groups: [], stages: {} })
   interface TreeNode { type: string; text: string; style: Record<string, string>; props: Record<string, unknown>; children: TreeNode[]; parent: TreeNode | null }
   const node = (type: string, text = ''): TreeNode => ({ type, text, style: {}, props: {}, children: [], parent: null })
   const root = node('root')
@@ -300,145 +301,23 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   return { props, sidebarProps, requests, subscriptions, state, invalidate, unmount, finish, intervals, setVisible, opens, nodes, text }
 }
 
-test('concurrent sidebar and detail share one catalog request, subscription and polling timer', async t => {
+test('single Workflow navigation does not own catalog polling or depend on automation history', async t => {
   const view = mount(t, true, true)
   await settle()
-  assert.equal(view.requests.filter(request => request.url.pathname.endsWith('/api/automations')).length, 1)
-  assert.equal(view.requests.length, 2, 'One catalog and one run-page read, rather than two catalog reads and a page')
-  assert.equal(view.subscriptions.length, 1)
-  assert.equal(view.intervals.size, 1)
+  assert.equal(view.requests.length, 2, 'Only the open conversation owns catalog/run reads')
+  assert.equal(view.nodes().filter(node => node.type === 'nav' && node.props['aria-label'] === 'Workflows').length, 1)
+  assert.ok(view.nodes().some(node => node.type === 'a' && String(node.props['data-route']).includes('project-workflows')))
+  assert.equal(view.nodes().filter(node => node.props['data-automation-id']).length, 0)
   view.finish()
   await settle()
   view.props.active = false
   await nextTick()
-  assert.equal(view.subscriptions[0].closed, false, 'Hiding detail must not release the sidebar resource')
-  view.invalidate()
-  await settle()
-  assert.equal(view.requests.length, 3, 'Sidebar-only invalidation does not fetch hidden run pages')
-  view.requests[2].finish({ automations: [automation()] })
-  await settle()
-  view.props.active = true
-  await nextTick()
-  await settle()
-  assert.equal(view.requests.length, 4, 'Reactivating detail reuses the loaded catalog')
-  view.requests[3].finish(page())
-  await settle()
-  view.props.apiBase = 'http://fixture/projects/b'
-  await nextTick()
-  await settle()
-  assert.equal(view.subscriptions.length, 2)
-  assert.equal(view.subscriptions[0].closed, false, 'Project A sidebar still owns its subscription')
-  assert.equal(view.state().automation, null)
-  view.finish(4, page([run('b')]), { ...automation(), name: 'B review' })
-  await settle()
-  assert.equal(view.state().automation.name, 'B review')
-  view.sidebarProps.active = false
-  await nextTick()
-  assert.equal(view.subscriptions[0].closed, true)
-  assert.equal(view.subscriptions[1].closed, false)
-  view.unmount()
+  assert.ok(view.subscriptions.every(subscription => subscription.closed), 'Navigation does not retain a catalog lease')
   assert.equal(view.intervals.size, 0)
-  assert.ok(view.subscriptions.every(subscription => subscription.closed))
-})
-
-test('empty workflow sidebar stays available after loading without hiding errors', async t => {
-  const view = mount(t, true, true)
-  await settle()
-  assert.ok(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'))
-  assert.match(view.text(), /Loading workflows/)
-  view.requests[0].finish({ automations: [] })
-  view.requests[1].finish(page([]))
-  await settle()
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
-  assert.doesNotMatch(view.text(), /Fresh-context tasks appear here/)
-  view.invalidate()
-  await settle()
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true,
-    'Refreshing an empty catalog must retain workflow navigation')
-  assert.doesNotMatch(view.text(), /Loading workflows/)
-  const refresh = view.requests.find((request, index) => index > 1 && request.url.pathname.endsWith('/api/automations'))
-  assert.ok(refresh)
-  refresh.finish({ error: 'unavailable' }, 503)
-  await settle()
-  assert.ok(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'))
-  assert.ok(view.nodes().some(node => node.type === 'button' && node.props['aria-label'] === 'Retry workflows'))
-})
-
-test('empty workflow sidebar remains available while visibility resumes and the catalog refreshes', async t => {
-  const view = mount(t, true, true)
-  await settle()
-  view.requests[0].finish({ automations: [] })
-  view.requests[1].finish(page([]))
-  await settle()
-  for (let cycle = 0; cycle < 2; cycle++) {
-    view.setVisible(false)
-    await nextTick()
-    assert.equal(view.intervals.size, 0)
-    assert.ok(view.subscriptions.every(subscription => subscription.closed))
-    view.setVisible(true)
-    await nextTick()
-    await settle()
-    assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
-    assert.doesNotMatch(view.text(), /Loading workflows/)
-  }
-  assert.ok(view.requests.slice(2, 4).every(request => request.signal.aborted))
-  view.requests[2].finish({ automations: [automation()] })
-  view.requests[4].finish({ automations: [] })
-  await settle()
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
-})
-
-test('automation rows survive resumed refreshes and failures but never cross project boundaries', async t => {
-  const view = mount(t, true, true)
-  await settle()
-  view.finish()
-  await settle()
-  const entry = () => view.nodes().find(node => node.props['data-automation-id'] === automation().id)
-  const original = entry()
-  assert.ok(original)
-  view.setVisible(false)
+  assert.equal(view.nodes().filter(node => node.type === 'nav' && node.props['aria-label'] === 'Workflows').length, 1)
+  view.sidebarProps.projectId = 'b'
   await nextTick()
-  view.setVisible(true)
-  await nextTick()
-  await settle()
-  assert.equal(entry(), original, 'The existing row must stay mounted during a resumed fetch')
-  assert.doesNotMatch(view.text(), /Loading workflows/)
-  view.requests[2].finish({}, 503)
-  view.requests[3].finish(page())
-  await settle()
-  assert.equal(entry(), original)
-  const retry = view.nodes().find(node => node.props['aria-label'] === 'Retry workflows')
-  assert.ok(retry)
-  ;(retry.props.onClick as () => void)()
-  await settle()
-  assert.equal(entry(), original)
-  view.requests[4].finish({ automations: [{ ...automation(), name: 'Updated review' }] })
-  view.requests[5].finish(page())
-  await settle()
-  assert.equal(entry(), original)
-  assert.match(view.text(), /Updated review/)
-  view.setVisible(false)
-  await nextTick()
-  view.sidebarProps.apiBase = 'http://fixture/projects/b'
-  view.props.apiBase = view.sidebarProps.apiBase
-  await nextTick()
-  assert.equal(entry(), undefined)
-  assert.doesNotMatch(view.text(), /Updated review/)
-  view.setVisible(true)
-  await nextTick()
-  assert.match(view.text(), /Loading workflows/)
-  assert.equal(entry(), undefined)
-  await settle()
-  view.finish(6)
-  await settle()
-  assert.ok(entry())
-  view.invalidate()
-  await settle()
-  view.requests[8].finish({ automations: [] })
-  view.requests[9].finish(page([]))
-  await settle()
-  assert.equal(entry(), undefined, 'A successful empty response replaces retained rows')
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
+  assert.ok(view.nodes().some(node => node.type === 'a' && String(node.props['data-route']).includes('"projectId":"b"')))
 })
 
 test('component uses shared sessions, coalesces invalidations and renders authoritative unknown status', async t => {
@@ -659,47 +538,16 @@ test('history refresh failures preserve the selected conversation and expose ret
   assert.equal(view.props.selectedSessionId, run().sessionId)
 })
 
-test('sidebar preference actions live only in the popup and work under master suppression', async t => {
+test('Workflow entry stays navigation-only under master suppression', async t => {
   const view = mount(t, true, true)
   await settle()
   view.finish(0, page(), { ...automation(), enabled: false, configuredEnabled: true, editable: true, disabledByGlobal: true })
   await settle()
-  const sidebarNodes = () => view.nodes(view.nodes().find(node => node.type === 'section' && node.props['aria-label'] === 'Workflows')!)
-  const action = () => sidebarNodes().find(node => node.props.class === 'automation-action')
-  assert.equal(sidebarNodes().some(node => node.type === 'input'), false)
-  assert.equal(action(), undefined, 'No inline enable/disable control')
-  assert.doesNotMatch(view.text(), /Paused by global switch/)
-  const hover = sidebarNodes().find(node => node.props.class === 'hover-info-test')!
-  ;(hover.props.onPointerenter as () => void)()
-  await nextTick()
-  assert.equal(action()!.text, 'Disable', 'Action uses configured rather than effective state')
-  assert.equal(action()!.props.disabled, false)
-  ;(action()!.props.onClick as () => void)()
-  await nextTick()
-  assert.equal(action()!.props.disabled, true)
-  assert.equal(action()!.props['aria-busy'], true)
-  const patch = view.requests.at(-1)!
-  assert.equal(patch.init.method, 'PATCH')
-  assert.deepEqual(JSON.parse(String(patch.init.body)), { enabled: false })
-  ;(action()!.props.onClick as () => void)()
-  assert.equal(view.requests.at(-1), patch, 'Busy actions cannot submit duplicate updates')
-  patch.finish({ automation: { id: automation().id } })
-  await settle()
-  view.requests.findLast(request => request.url.pathname.endsWith('/api/automations'))!.finish({ automations: [{ ...automation(), enabled: false, configuredEnabled: false, editable: true, disabledByGlobal: true }] })
-  await settle()
-  assert.equal(action()!.text, 'Enable')
-  ;(action()!.props.onClick as () => void)()
-  await nextTick()
-  assert.deepEqual(JSON.parse(String(view.requests.at(-1)!.init.body)), { enabled: true })
-  view.requests.at(-1)!.finish({}, 503)
-  await settle()
-  assert.equal(action()!.props.disabled, false)
-  assert.ok(sidebarNodes().some(node => node.props.role === 'alert'))
-  view.requests.findLast(request => request.url.pathname.endsWith('/api/automations'))!.finish({ automations: [{ ...automation(), enabled: false }] })
-  await settle()
-  assert.equal(action(), undefined, 'Historical entries have no controls in the popup')
-  assert.doesNotMatch(view.text(), /Paused by global switch/)
-  assert.equal(sidebarNodes().some(node => node.type === 'input'), false)
+  const nav = view.nodes().find(node => node.type === 'nav' && node.props['aria-label'] === 'Workflows')!
+  assert.ok(nav)
+  assert.equal(view.nodes(nav).filter(node => node.type === 'a').length, 1)
+  assert.equal(view.nodes(nav).filter(node => node.type === 'button' || node.type === 'input').length, 0)
+  assert.ok(view.requests.every(request => request.init.method !== 'PATCH'))
 })
 
 test('automation updates use scoped PATCH and only send the item preference', async () => {
@@ -725,7 +573,7 @@ test('system automation renders scoped coverage history with stable feature cont
   view.finish(0, page([partial, full]), { ...automation(), source: 'system', canToggle: true, name: '话题整理', task: undefined, enabled: false, configuredEnabled: false, editable: true } as ReturnType<typeof automation>)
   await settle()
   assert.match(view.text(), /Organization ended without finishing/)
-  assert.match(view.text(), /Inactive/)
+  assert.doesNotMatch(view.text(), /Inactive/, 'Removed sidebar automation rows do not duplicate runtime state')
   assert.doesNotMatch(view.text(), /Execution history|Coverage|Controls this automation feature/)
   assert.equal(view.state().history.runs.length, 2)
   assert.equal(view.state().run.organization.status, 'partial')
@@ -750,15 +598,18 @@ test('internal prompts and semantic execution output are disclosed, never defaul
 
 for (const feature of ['system:work-organizer']) {
   for (const enabled of [true, false]) {
-    test(`system feature ${feature} exposes ${enabled ? 'disable' : 'enable'} in popup`, async t => {
+    test(`system feature ${feature} keeps preference controls in the Workflow graph, not navigation`, async t => {
       const view = mount(t, true, true)
       view.props.automationId = feature
       await settle()
       view.finish(0, page(), { ...automation(feature), source: 'system', canToggle: true, enabled, configuredEnabled: enabled, editable: true } as ReturnType<typeof automation>)
       await settle()
-      assert.match(view.text(), enabled ? /Disable/ : /Enable/)
+      assert.doesNotMatch(view.text(), /Disable|Enable/)
+      assert.equal(view.nodes().filter(node => node.type === 'nav' && node.props['aria-label'] === 'Workflows').length, 1)
       const sidebar = readFileSync(new URL('./components/AutomationSidebar.vue', import.meta.url), 'utf8')
-      assert.match(sidebar, /toggle\(job.id, job.toggleId \?\? job.id, !preference\(job\)\)/)
+      assert.doesNotMatch(sidebar, /data-automation-id|useAutomationCatalog|group-toggle/)
+      const graph = readFileSync(new URL('./components/WorkflowGraph.vue', import.meta.url), 'utf8')
+      assert.match(graph, /emit\('toggle', data.definition.id, !data.control.enabled\)/)
       assert.doesNotMatch(sidebar, /job.source !== 'system'/)
     })
   }

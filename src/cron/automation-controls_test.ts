@@ -170,3 +170,92 @@ test('historical system snapshots expose authorized controller capability withou
   const publicJobs = (await (await app.request('/api/automations')).json()).automations
   assert.equal(publicJobs.find((job: { id: string }) => job.id === 'system:work-organizer').canConfigureModel, false)
 }))
+
+
+test('Workflow controls persist config-owned preferences and schedule state together across reconstruction', async () => withTempWorkspace(async workspace => {
+  const { registerWorkflowRoutes } = await import('../workflows/management.ts')
+  const options = { configPath: join(workspace, 'project.json'), home: workspace, getSharedConfig: () => ConfigSchema.parse({}) }
+  const store = new ProjectConfigStore(options); await store.init()
+  let cron = new CronService(workspace), globallyEnabled = true
+  const registerLearning = () => cron.registerManagedJob('learning:reflector', { session: 'fresh', source: 'learning', schedule: 'every 1h', enabled: globallyEnabled && store.current().learning.pipelines?.reflector !== false }, 3600000, async () => {})
+  await cron.start(); registerLearning()
+  const ordinary = cron.addJob({ session: 'existing', target: { sessionId: 'web:fixed' }, schedule: 'every 1h', task: 'fixed delivery' })
+  let fail = false
+  const app = new Hono()
+  const setFeature = registerAutomationRoutes(app, cron, sessions, 'fixture', undefined, undefined, {
+    preference: () => store.current().learning.pipelines?.reflector !== false, globallyEnabled: () => globallyEnabled,
+    update: async (_id, enabled) => {
+      if (fail) throw new Error('synthetic config write failure')
+      await store.update(raw => ({ ...raw, learning: { ...(raw.learning as object), pipelines: { reflector: enabled } } }))
+      registerLearning()
+    },
+  }, { authorize: request => request.headers.get('x-owner') === 'yes', preference: () => true, update: async () => {} })
+  registerWorkflowRoutes(app, cron.workflow, request => request.headers.get('x-owner') === 'yes', setFeature)
+  const control = (id: string, action: string, owner = 'yes') => app.request('/api/workflows/control', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-owner': owner }, body: JSON.stringify({ id, action }) })
+  const flow = 'schedule:learning:reflector'
+  try {
+    assert.equal((await control(flow, 'pause', 'no')).status, 403)
+    assert.equal(store.current().learning.pipelines?.reflector, undefined)
+    fail = true
+    assert.equal((await control(flow, 'pause')).status, 409)
+    assert.equal(cron.workflow.enabled(flow), true)
+    assert.notEqual(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, false)
+    fail = false
+    assert.equal((await control(flow, 'pause')).status, 200)
+    assert.equal(store.current().learning.pipelines?.reflector, false)
+    assert.equal(cron.workflow.enabled(flow), false)
+    assert.equal(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, false)
+    assert.equal((await control(`schedule:${ordinary}`, 'pause')).status, 200)
+    assert.equal(cron.listJobs().find(job => job.id === ordinary)!.enabled, false)
+    assert.equal(cron.workflow.enabled(`schedule:${ordinary}`), false)
+    assert.equal((await control(flow, 'resume')).status, 200)
+    assert.equal(store.current().learning.pipelines?.reflector, true)
+    assert.equal(cron.workflow.enabled(flow), true)
+    assert.equal(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, true)
+    globallyEnabled = false; registerLearning()
+    assert.equal((await control(flow, 'resume')).status, 200)
+    assert.equal(store.current().learning.pipelines?.reflector, true, 'Preference saves without overriding the master switch')
+    assert.equal(cron.workflow.enabled(flow), true)
+    assert.equal(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, false)
+    globallyEnabled = true; registerLearning()
+    assert.equal(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, true)
+    assert.equal((await control(flow, 'pause')).status, 200)
+    await cron.stop()
+    const restored = new ProjectConfigStore(options); await restored.init()
+    assert.equal(restored.current().learning.pipelines?.reflector, false)
+    cron = new CronService(workspace); await cron.start(); registerLearning()
+    assert.equal(cron.workflow.enabled(flow), false)
+    assert.equal(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, false)
+    assert.equal(cron.listJobs().find(job => job.id === ordinary)!.enabled, false)
+  } finally { await cron.stop() }
+}))
+
+
+test('Workflow host controls use the authorized system config owner and retain failures without false success', async () => withTempWorkspace(async workspace => {
+  const { registerWorkflowRoutes } = await import('../workflows/management.ts')
+  const cron = new CronService(workspace)
+  const options = { configPath: join(workspace, 'project.json'), home: workspace, getSharedConfig: () => ConfigSchema.parse({}) }
+  const store = new ProjectConfigStore(options); await store.init()
+  const id = 'internal:work-organizer'
+  cron.workflow.define({ id, revision: 1, source: { kind: 'internal', id: 'organizer' }, nodes: [{ kind: 'host-action', handler: 'organizer', replay: 'confirm' }], enabled: true })
+  const app = new Hono(), calls: string[] = []
+  const feature = registerAutomationRoutes(app, cron, sessions, 'fixture', undefined, undefined, undefined, {
+    authorize: request => request.headers.get('x-owner') === 'yes', preference: () => store.current().organization.enabled,
+    update: async (job, enabled) => { calls.push(job); await store.update(raw => ({ ...raw, organization: { ...(raw.organization as object), enabled } })) },
+  })
+  registerWorkflowRoutes(app, cron.workflow, () => true, feature)
+  const control = (action: string, owner: string) => app.request('/api/workflows/control', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-owner': owner }, body: JSON.stringify({ id, action }) })
+  try {
+    assert.equal((await control('pause', 'no')).status, 409, 'Feature owner authorization cannot be bypassed by the Workflow adapter')
+    assert.deepEqual(calls, [])
+    assert.equal(cron.workflow.enabled(id), true)
+    assert.equal((await control('pause', 'yes')).status, 200)
+    assert.deepEqual(calls, ['system:work-organizer'])
+    assert.equal(cron.workflow.enabled(id), false)
+    const restored = new ProjectConfigStore(options); await restored.init()
+    assert.equal(restored.current().organization.enabled, false)
+    assert.equal((await control('resume', 'yes')).status, 200)
+    assert.equal(store.current().organization.enabled, true)
+    assert.equal(cron.workflow.enabled(id), true)
+  } finally { await cron.stop() }
+}))

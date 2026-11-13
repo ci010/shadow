@@ -2,6 +2,8 @@ import { t, type MessageKey } from './i18n.ts'
 import { formatWorkflowSchedule } from './workflow-schedule.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { projectJson } from './projects.ts'
+import { automationChatLocation, type AutomationSummary } from './automations.ts'
+import { workflowAutomation } from './workflow-automation.ts'
 
 export type WorkflowStatus = 'queued' | 'running' | 'retry' | 'blocked' | 'completed' | 'cancelled'
 export interface WorkflowNode { kind: string; [key: string]: unknown }
@@ -89,10 +91,18 @@ export function workflowTargetSession(node: WorkflowNode, definition: WorkflowDe
   if (node.kind === 'schedule-action' && node.action === 'session' && isRecord(node.job) && isRecord(node.job.target)) return recordedText(node.job.target.sessionId)
   return undefined
 }
-/** Navigate only to a declared destination or a retained execution receipt, never a run ID. */
-export function workflowConversation(definition: WorkflowDefinition, runs: WorkflowRun[]) {
+export type WorkflowConversation = { sessionId: string; kind: 'fixed' | 'latest' } | { automationId: string; kind: 'automation' }
+export function workflowConversationLocation(projectId: string, conversation: WorkflowConversation) {
+  return conversation.kind === 'automation' ? automationChatLocation(projectId, conversation.automationId)
+    : { name: 'chat', params: { projectId, sessionId: conversation.sessionId } }
+}
+/** Fixed delivery stays ordinary chat; fresh/managed runs reuse sidebar latest-run navigation. */
+export function workflowConversation(definition: WorkflowDefinition, runs: WorkflowRun[], jobs: readonly AutomationSummary[] = []): WorkflowConversation | undefined {
   const fixed = definition.nodes.map(node => workflowTargetSession(node, definition)).find(Boolean)
   if (fixed) return { sessionId: fixed, kind: 'fixed' as const }
+  const automation = workflowAutomation(jobs, definition.id)
+  if (automation) return { automationId: automation.id, kind: 'automation' }
+  if (definition.source.kind === 'schedule' || definition.source.kind === 'internal') return undefined
   const latest = runs.filter(run => run.workflow === definition.id && recordedText(run.output?.sessionId))
     .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp) || b.id.localeCompare(a.id))[0]
   return latest ? { sessionId: latest.output!.sessionId!, kind: 'latest' as const } : undefined

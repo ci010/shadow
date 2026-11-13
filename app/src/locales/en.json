@@ -4336,5 +4336,9 @@
   "Deduplicate observations": "Deduplicate observations",
   "Skip observations already seen": "Skip observations already seen",
   "First successful collection acts on observations not seen before.": "First successful collection acts on observations not seen before.",
-  "An older observation was ignored; the stored data is retained.": "An older observation was ignored; the stored data is retained."
+  "An older observation was ignored; the stored data is retained.": "An older observation was ignored; the stored data is retained.",
+  "Open the latest automation run and its conversation history.": "Open the latest automation run and its conversation history.",
+  "{action} workflow {name}": "{action} workflow {name}",
+  "Learning is disabled globally. This control saves the workflow preference only.": "Learning is disabled globally. This control saves the workflow preference only.",
+  "Workflow controls are unavailable. Refresh to retry.": "Workflow controls are unavailable. Refresh to retry."
 }

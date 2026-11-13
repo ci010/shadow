@@ -4336,5 +4336,9 @@
   "Deduplicate observations": "观测去重",
   "Skip observations already seen": "跳过已处理的观测",
   "First successful collection acts on observations not seen before.": "首次成功采集会处理此前未见的观测。",
-  "An older observation was ignored; the stored data is retained.": "已忽略较旧的观测，保留已存储的数据。"
+  "An older observation was ignored; the stored data is retained.": "已忽略较旧的观测，保留已存储的数据。",
+  "Open the latest automation run and its conversation history.": "打开自动化的最近运行及其会话历史。",
+  "{action} workflow {name}": "{action}工作流 {name}",
+  "Learning is disabled globally. This control saves the workflow preference only.": "学习已全局停用。此控件仅保存该工作流的启停偏好。",
+  "Workflow controls are unavailable. Refresh to retry.": "工作流控制暂不可用，请刷新重试。"
 }

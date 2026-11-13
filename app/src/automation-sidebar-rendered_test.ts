@@ -9,22 +9,23 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
-test('actual folder sidebar shows automation history without a second configuration surface', { timeout: 90_000 }, async t => {
+test('actual folder sidebar keeps one icon-bearing Workflow route and ordinary chats', { timeout: 90_000 }, async t => {
   const directory = resolve(root, '.test-artifacts', `automation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router'] },
-    plugins: [vue(), {
+    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'automation-fixture',
       resolveId: id => id === '/automation-entry.ts' ? '\0automation-entry' : undefined,
       load(id) {
         if (id !== '\0automation-entry') return
-        return `import {createApp,h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
+        return `import 'uno.css';import '/src/styles.css';import {createApp,h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
           import FoldersSidebar from '/src/components/FoldersSidebar.vue';
           window.patches=[];window.allowed=!location.search.includes('denied');
           const jobs=['work-organizer'].map(kind=>({id:'system:'+kind,name:'话题整理',source:'system',session:'fresh',schedule:'Event-driven / manual',enabled:false,configuredEnabled:true,editable:false,canToggle:true,toggleId:'system:'+kind,toggleEnabled:true}));
@@ -41,8 +42,8 @@ test('actual folder sidebar shows automation history without a second configurat
             if(url.pathname.endsWith('/api/folders'))return Response.json({folders:[]});
             return Response.json({});
           };
-          const app=createApp({render:()=>h(FoldersSidebar,{apiBase:location.origin+'/projects/fixture/',projectId:'fixture',sessions:[],activeSessionId:'',collapsed:new Set(),stages:{},sessionsLoading:false,sessionsError:'',resizeActive:true})});
-          const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/workflows',component:{render:()=>null}}]});await router.push('/projects/fixture/workflows');app.use(router);window.app=app;app.mount('#app');`
+          const app=createApp({render:()=>h(FoldersSidebar,{apiBase:location.origin+'/projects/fixture/',projectId:'fixture',sessions:[{sessionId:'web:ordinary',label:'Ordinary conversation',title:'Ordinary conversation',isDirectChat:true,isCurrent:true,parentSessionId:null,depth:0,mode:'session'}],activeSessionId:'',collapsed:new Set(),stages:{},sessionsLoading:false,sessionsError:'',resizeActive:true})});
+          const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/workflows',name:'project-workflows',component:{render:()=>null}},{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>null}}]});await router.push('/projects/fixture/chat/web:ordinary');window.router=router;app.use(router);window.app=app;app.mount('#app');`
       },
       configureServer(server) { server.middlewares.use((req,res,next) => {
         if (!req.url?.startsWith('/__automation')) return next()
@@ -62,34 +63,20 @@ test('actual folder sidebar shows automation history without a second configurat
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       const wait=()=>new Promise(r=>setTimeout(r,250));
       await win.loadURL(${JSON.stringify(new URL('__automation', server.resolvedUrls!.local[0]).href)});
-      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
-      assert.ok(await run(()=>document.querySelector('a[href="/projects/fixture/workflows"]')));
-      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
-      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
-      for(const id of ['system:work-organizer','historical-organizer']){
-        await win.webContents.executeJavaScript("document.querySelector("+JSON.stringify('[data-automation-id="'+id+'"]')+").parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}))");await wait();
-        assert.equal(await run(()=>document.querySelector('.shared-hover-info')?.getAttribute('role')),'tooltip');
-        assert.equal(await run(()=>document.querySelector('.shared-hover-info .automation-action')),null);
-        assert.equal(await run(()=>document.querySelector('.automation-history')?.textContent.trim()),'Inactive');
-        await run(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})));await wait();
-      }
+      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-sidebar a')))break;await wait()}
+      assert.equal(await run(()=>document.querySelectorAll('.automations-sidebar a').length),1);
+      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id],.automations-heading').length),0);
+      assert.equal(await run(()=>document.querySelector('.automations-sidebar a').textContent.trim()),'Workflows');
+      assert.ok(await run(()=>{const icon=document.querySelector('.automations-sidebar .i-lucide-workflow');return icon&&getComputedStyle(icon).maskImage!=='none'&&icon.getBoundingClientRect().width===16}));
+      assert.ok(await run(()=>document.body.textContent.includes('Ordinary conversation')));
+      await run(()=>document.querySelector('.automations-sidebar a').click());await wait();
+      assert.equal(await run(()=>window.router.currentRoute.value.name),'project-workflows');
       assert.deepEqual(await run(()=>window.patches),[]);
       await win.loadURL(${JSON.stringify(new URL('__automation?denied', server.resolvedUrls!.local[0]).href)});
-      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
-      assert.ok(await run(()=>document.querySelector('a[href="/projects/fixture/workflows"]')));
-      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
-      await run(()=>document.querySelector('[data-automation-id]').parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'})));await wait();
-      assert.equal(await run(()=>document.querySelectorAll('.shared-hover-info .automation-action').length),0);
-      assert.equal(await run(()=>document.querySelector('.shared-hover-info')?.getAttribute('role')),'tooltip');
-      await run(()=>document.querySelector('.automations-heading').click());await wait();
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
+      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-sidebar a')))break;await wait()}
+      assert.equal(await run(()=>document.querySelectorAll('.automations-sidebar a').length),1);
+      assert.ok(await run(()=>{const icon=document.querySelector('.automations-sidebar .i-lucide-workflow');return icon&&getComputedStyle(icon).maskImage!=='none'&&icon.getBoundingClientRect().width===16}));
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
-      await run(()=>document.querySelector('.automations-heading').click());await wait();
-      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
       console.log('AUTOMATION_REAL_HOVER_OK');app.exit(0);
     }).catch(error=>{console.error(error);app.exit(1)});
   `)

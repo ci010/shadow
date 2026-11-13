@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createWorkflowClient, parseWorkflows, recentWorkflowRuns, workflowConversation, workflowGraph, workflowHint, type WorkflowDefinition, type WorkflowRun } from './workflows.ts'
+import { createWorkflowClient, parseWorkflows, recentWorkflowRuns, workflowConversation, workflowConversationLocation, workflowGraph, workflowHint, type WorkflowDefinition, type WorkflowRun } from './workflows.ts'
 
 const definition: WorkflowDefinition = { id: 'external:issues', name: 'Issue intake', revision: 2, enabled: true, source: { kind: 'external', id: 'issues' }, gate: { kind: 'revision-dedupe', first: 'baseline' }, nodes: [{ kind: 'record' }] }
 const run: WorkflowRun = { id: 'run-only', workflow: definition.id, definition: { ...definition, revision: 1 }, timestamp: '2026-11-12T12:00:00Z', status: 'blocked', cursor: 0, attempts: 1, started: true, nextAt: 0, error: 'interrupted_effect' }
@@ -47,4 +47,22 @@ test('group conversation chooses fixed targets or latest real receipt across rev
     assert.deepEqual(workflowConversation({ ...definition, owner: 'web:fixed', nodes: [node] }, [latest]), { sessionId: 'web:fixed', kind: 'fixed' })
   }
   assert.equal(workflowConversation(definition, [empty]), undefined)
+})
+
+
+test('managed/fresh conversation navigation reuses the sidebar automation route including no-run fallback', async () => {
+  const { automationChatLocation } = await import('./automations.ts')
+  const flow = { ...definition, id: 'schedule:learning:reflector', source: { kind: 'schedule', id: 'learning:reflector' }, nodes: [{ kind: 'schedule-action', action: 'program' }] }
+  const job = { id: 'learning:reflector', name: 'Self reflection', source: 'learning' as const, session: 'fresh' as const, schedule: 'every 1h', enabled: true, editable: true, workflow: { id: flow.id, pending: 0, blocked: 0 } }
+  for (const runs of [[], [{ ...run, workflow: flow.id, output: { sessionId: 'old-retained' } }]]) {
+    const target = workflowConversation(flow, runs, [job])!
+    assert.deepEqual(target, { kind: 'automation', automationId: job.id })
+    assert.deepEqual(workflowConversationLocation('p', target), automationChatLocation('p', job.id))
+  }
+  assert.equal(workflowConversation(flow, [], []), undefined)
+  assert.equal(workflowConversation(flow, [], [job, { ...job, id: 'ambiguous' }]), undefined)
+  const fixed = workflowConversation({ ...flow, nodes: [{ kind: 'schedule-action', action: 'session', job: { target: { sessionId: 'fixed' } } }] }, [], [job])!
+  assert.deepEqual(workflowConversationLocation('p', fixed), { name: 'chat', params: { projectId: 'p', sessionId: 'fixed' } })
+  const host = { ...flow, id: 'internal:work-organizer', source: { kind: 'internal', id: 'organizer' } }
+  assert.deepEqual(workflowConversation(host, [], [{ ...job, id: 'system:work-organizer', workflow: undefined }]), { kind: 'automation', automationId: 'system:work-organizer' })
 })
