@@ -12,13 +12,13 @@
       <RouterLink class="btn" :to="chatLocation">{{ t('Open chat') }}</RouterLink>
     </div>
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
-      <WorkflowGraph ref="graphView" :flows="canvasFlows" :selected-id="inspectorOpen ? definition?.id : undefined" @inspect="inspectFlow" @clear="closeInspector" />
+      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="inspectorOpen ? definition?.id : undefined" @inspect="inspectFlow" @clear="closeInspector" />
       <p v-if="!definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="inspectorOpen && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
         <div class="inspector-toolbar"><span>{{ t('Workflow details') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
         <header class="workflow-title">
-          <div><h2>{{ definition.name || definition.id }}</h2><p>{{ t('Workflow ID') }} <code>{{ definition.id }}</code> · {{ t('Revision {revision}', { revision: definition.revision }) }}</p></div>
+          <div><h2>{{ definition.name || definition.id }}</h2><p>{{ t('Workflow ID') }} <code>{{ definition.id }}</code></p></div>
           <button class="btn btn-sm" :disabled="busy || !!error" @click="operate(definition.enabled ? 'pause' : 'resume', definition.id)">{{ definition.enabled ? t('Pause') : t('Resume') }}</button>
         </header>
         <p v-if="sourceStatus" class="workflow-explanation">{{ t('Signal source') }}: {{ sourceStatus.enabled ? t('Enabled') : t('Paused') }}<span v-if="sourceStatus.nextAt"> · {{ t('Next collection check') }}: {{ formatDateTime(sourceStatus.nextAt) }}</span></p>
@@ -28,15 +28,15 @@
         <p v-if="notice" class="workflow-message" role="status">{{ notice }}</p>
         <p v-if="operationError" class="workflow-message failure" role="alert">{{ operationError }}</p>
         <div class="workflow-map-heading">
-          <h3>{{ selectedRun ? t('Run snapshot') : t('Current definition') }}</h3>
-          <span>{{ t('Revision {revision}', { revision: displayed.revision }) }}</span>
-          <button v-if="selectedRun" class="btn btn-sm" @click="selectRun()">{{ t('Current definition') }}</button>
+          <h3>{{ selectedRun ? t('This run configuration') : t('Current configuration') }}</h3>
+          <button v-if="selectedRun" class="btn btn-sm" @click="selectRun()">{{ t('Current configuration') }}</button>
         </div>
         <p v-if="selectedRun && selectedRun.definition.revision !== definition.revision" class="workflow-explanation">{{ t('This run retains its admitted definition. Later edits apply to future runs.') }}</p>
-        <p v-if="!selectedRun" class="workflow-explanation">{{ t('Node states use the latest retained run at this revision.') }}</p>
+        <p v-if="!selectedRun" class="workflow-explanation">{{ t('Latest retained run state') }}</p>
         <details class="graph-text" :open="!!inspectedNode"><summary>{{ t('Node details') }}</summary>
           <ol><li v-for="node in graph" :key="node.id"><details class="workflow-node" :data-state="node.status" :open="inspectedNode === node.id">
             <summary>{{ node.label }} · {{ node.detail }} · {{ workflowStatus(node.status) }}</summary>
+            <p v-if="node.targetSessionId"><RouterLink :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Target session') }}: {{ node.targetSessionId }}</RouterLink></p>
             <p v-if="node.description">{{ node.description }}</p><pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
           </details></li></ol>
         </details>
@@ -45,8 +45,7 @@
           · <RouterLink :to="{ name: 'project-dashboard', params: { projectId }, query: { work: githubTarget.workKey } }">{{ t('Open Work') }}: {{ githubTarget.workKey }}</RouterLink>
           · {{ t('Inbox acceptance is not user visibility or completed Work.') }}
         </p>
-        <p v-if="displayed.gate" class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection emits actions for unseen revisions.') }} {{ t('Revision deduplication is bounded; external effects are not exactly-once.') }}</p>
-        <p v-else class="workflow-explanation">{{ t('No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.') }}</p>
+        <p v-if="displayed.gate" class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection acts on observations not seen before.') }}</p>
         <details class="workflow-definition">
           <summary>{{ t('Source and definition details') }}</summary>
           <dl><dt>{{ t('Source ID') }}</dt><dd><code>{{ displayed.source.id }}</code></dd><dt>{{ t('Owner session') }}</dt><dd><code>{{ displayed.owner || t('Host managed') }}</code></dd></dl>
@@ -58,7 +57,7 @@
           <dl><dt>{{ t('Run ID') }}</dt><dd><code>{{ selectedRun.id }}</code></dd><dt>{{ t('Admitted') }}</dt><dd>{{ formatDateTime(selectedRun.timestamp) }}</dd><dt>{{ t('Current node attempts') }}</dt><dd>{{ selectedRun.attempts }}</dd><template v-if="selectedRun.output?.sessionId"><dt>{{ t('Session ID') }}</dt><dd><code>{{ selectedRun.output.sessionId }}</code></dd></template></dl>
           <p v-if="selectedRun.error" class="workflow-run-hint" :data-state="selectedRun.status">{{ workflowHint(selectedRun.error) }}</p>
           <p v-if="selectedRun.status === 'retry' && selectedRun.nextAt">{{ t('Next eligible retry') }}: {{ formatDateTime(selectedRun.nextAt) }}</p>
-          <p v-if="selectedRun.output?.stale">{{ t('An older or equal revision was ignored; newer materialized data is retained.') }}</p>
+          <p v-if="selectedRun.output?.stale">{{ t('An older observation was ignored; the stored data is retained.') }}</p>
           <div class="workflow-actions">
             <RouterLink v-if="selectedRun.output?.sessionId" class="btn btn-sm" :to="{ name: 'chat', params: { projectId, sessionId: selectedRun.output.sessionId } }">{{ t('Open model session') }}</RouterLink>
             <RouterLink v-if="selectedRun.output?.workKey" class="btn btn-sm" :to="{ name: 'project-dashboard', params: { projectId }, query: { work: selectedRun.output.workKey } }">{{ t('Open Work') }}</RouterLink>
@@ -76,8 +75,8 @@
           <h3>{{ t('Recent workflow runs') }} <small>{{ t('Latest 30 retained runs') }}</small></h3>
           <p v-if="!runs.length">{{ t('No runs have been admitted yet. A baseline or idle source may produce no run.') }}</p>
           <ol v-else><li v-for="run in runs" :key="run.id"><button class="workflow-run-choice" :class="{ selected: selectedRun?.id === run.id }" :aria-pressed="selectedRun?.id === run.id" @click="selectRun(run.id)">
-            <time :datetime="run.timestamp">{{ formatDateTime(run.timestamp) }}</time><span class="workflow-state" :data-state="run.status">{{ workflowStatus(run.status) }}</span><code>{{ run.id }}</code><span>{{ t('Revision {revision}', { revision: run.definition.revision }) }}</span>
-          </button></li></ol>
+            <time :datetime="run.timestamp">{{ formatDateTime(run.timestamp) }}</time><span class="workflow-state" :data-state="run.status">{{ workflowStatus(run.status) }}</span><code>{{ run.id }}</code>
+          </button><RouterLink v-if="run.output?.sessionId" class="run-session-link" :to="{ name: 'chat', params: { projectId, sessionId: run.output.sessionId } }">{{ t('Open model session') }}: {{ run.output.sessionId }}</RouterLink><p v-else class="workflow-explanation">{{ t('No model session was recorded for this run.') }}</p></li></ol>
         </section>
         <footer class="workflow-footer"><RouterLink :to="chatLocation">{{ t('Create or edit in chat') }}</RouterLink><p>{{ t('Pause, resume, retry and cancel are operational controls, not configuration edits. Pausing does not roll back accepted effects.') }}</p></footer>
       </aside>

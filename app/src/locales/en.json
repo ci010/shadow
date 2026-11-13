@@ -4315,5 +4315,18 @@
   "Workflow canvas": "Workflow canvas",
   "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.",
   "Select": "Select",
-  "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run."
+  "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.",
+  "Every {count} days": "Every {count} day | Every {count} days",
+  "Every {count} hours": "Every {count} hour | Every {count} hours",
+  "Every {count} minutes": "Every {count} minute | Every {count} minutes",
+  "Every {count} seconds": "Every {count} second | Every {count} seconds",
+  "Every {count} milliseconds": "Every {count} millisecond | Every {count} milliseconds",
+  "Daily at {time}": "Daily at {time}",
+  "Latest retained run state": "Latest retained run state",
+  "This run configuration": "This run configuration",
+  "Current configuration": "Current configuration",
+  "Deduplicate observations": "Deduplicate observations",
+  "Skip observations already seen": "Skip observations already seen",
+  "First successful collection acts on observations not seen before.": "First successful collection acts on observations not seen before.",
+  "An older observation was ignored; the stored data is retained.": "An older observation was ignored; the stored data is retained."
 }

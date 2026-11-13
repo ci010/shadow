@@ -20,17 +20,17 @@ test('workflow visualization renders durable revisions, safe controls, real reso
   const server = await createServer({ configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'cache'), optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', '@vue-flow/core'] }, plugins: [vue(), {
     name: 'workflow-fixture', resolveId: id => id === '/workflow-entry.ts' ? '\0workflow-entry' : undefined,
     load(id) { if (id !== '\0workflow-entry') return; return `
-      import {createApp,h,reactive} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router'; import WorkflowManager from '/src/components/WorkflowManager.vue'; import AutomationSidebar from '/src/components/AutomationSidebar.vue'; import '/src/styles.css';
+      import {createApp,h,reactive} from 'vue'; import {i18n} from '/src/i18n.ts'; window.i18n=i18n; import {createRouter,createMemoryHistory} from 'vue-router'; import WorkflowManager from '/src/components/WorkflowManager.vue'; import SessionHeading from '/src/components/SessionHeading.vue'; import {dedicatedRunTitle} from '/src/conversation-title.ts'; import AutomationSidebar from '/src/components/AutomationSidebar.vue'; import '/src/styles.css';
       const source={id:'external:issue-intake',name:'Issue intake',revision:1,enabled:true,owner:'web:owner',source:{kind:'external',id:'synthetic-source'},binding:{demand:{repository:'synthetic/repo'}},gate:{kind:'revision-dedupe',first:'emit'},nodes:[{kind:'work-map',objective:'Review external issues; no execution authority',titleField:'title',revisionField:'updatedAt',ownership:'exclusive-until-local-edit'}]};
       const schedule={id:'schedule:daily',name:'Daily review',revision:2,enabled:false,source:{kind:'schedule',id:'daily'},nodes:[{kind:'schedule-action',action:'agent',job:{task:'Synthetic task',schedule:'every 1h',timezone:'UTC',session:'fresh',agentType:'general'}}]};
       const run={id:'flow-run-not-session',workflow:source.id,definition:structuredClone(source),timestamp:'2026-11-12T10:00:00Z',status:'blocked',cursor:0,attempts:1,nextAt:0,started:true,error:'interrupted_effect',output:{workKey:'work:synthetic'}};
       const github={id:'github:fixture',name:'https://github.com/synthetic/repo/pull/2',revision:1,enabled:true,source:{kind:'github-resource',id:'PR_fixture'},gate:{kind:'revision-dedupe',first:'emit'},nodes:[{kind:'github-notify',subscription:{resourceId:'PR_fixture',workKey:'work:github',sessionId:'web:github-target',assignmentRevision:7,enabled:true,mode:'silent',events:['ci']}}]};
       window.data={projectId:'fixture',sources:[{kind:'external',id:'synthetic-source',enabled:true,nextAt:1794481200000,error:'collection_failed'}],definitions:[source,schedule,github,{...schedule,id:'schedule:fixed',name:'Fixed-session reminder',enabled:true,nodes:[{kind:'schedule-action',action:'session',job:{schedule:'0 9 * * 1',session:'existing',target:{sessionId:'web:fixed-target'},task:'Deliver the weekly reminder'}}]},{...schedule,id:'schedule:cleanup',name:'Session cleanup',nodes:[{kind:'schedule-action',action:'agent',job:${JSON.stringify(SESSION_CLEANUP_AUTOMATION)}}]}],runs:[run,{...run,id:'schedule-run',workflow:schedule.id,definition:{...schedule,revision:1,gate:{kind:'revision-dedupe',first:'emit'}},status:'completed',cursor:1,error:undefined,output:{sessionId:'web:actual-model-session'}}]};
       window.requests=[];window.mode='normal';window.controls=[];window.fixture=reactive({active:true,projectId:'fixture',apiBase:location.origin+'/projects/fixture'});
-      window.fetch=async(input,init)=>{const url=new URL(String(input),location.href);window.requests.push(url.pathname);if(url.pathname.endsWith('/control')){window.controls.push(JSON.parse(init.body));return Response.json({saved:true})}if(window.mode==='error')return Response.json({secret:'DO-NOT-DISPLAY'}, {status:403});return Response.json(window.mode==='empty'?{...window.data,definitions:[],runs:[]}:window.data)};
+      window.fetch=async(input,init)=>{const url=new URL(String(input),location.href);window.requests.push(url.pathname);if(url.pathname.endsWith('/details'))return Response.json({sessionId:window.titleFixture.session.sessionId,name:'Normal custom name',workdir:{kind:'local',displayPath:'C:\\synthetic'},usage:null,usageScope:'session',context:{usedTokens:null,windowTokens:null}});if(url.pathname.endsWith('/control')){window.controls.push(JSON.parse(init.body));return Response.json({saved:true})}if(window.mode==='error')return Response.json({secret:'DO-NOT-DISPLAY'}, {status:403});return Response.json(window.mode==='empty'?{...window.data,definitions:[],runs:[]}:window.data)};
       const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/workflows',name:'project-workflows',component:WorkflowManager},{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>h('div','Chat')}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>h('div','Work')}}]});window.router=router;await router.push('/projects/fixture/workflows');await router.isReady();
       window.sidebar=reactive({show:false,jobs:[{id:'cron:legacy',name:'Legacy review',source:'cron',session:'fresh',enabled:true,schedule:'daily'}],selected:''});
-      const app=createApp({render:()=>window.sidebar.show?h(AutomationSidebar,{projectId:'fixture',apiBase:window.fixture.apiBase,active:true,groups:[],stages:{},onSelect:id=>window.sidebar.selected=id}):h(WorkflowManager,window.fixture)});
+      window.titleFixture=reactive({show:false,session:{sessionId:'cron:learning',automation:{contextMode:'fresh',jobId:'learning',runId:'actual-run',name:'Encapsulation'}},prompt:'Learning batch UUID. Only consume the supplied evidence'}); const app=createApp({render:()=>window.titleFixture.show?h(SessionHeading,{key:window.titleFixture.session.sessionId,apiBase:window.fixture.apiBase,sessionId:window.titleFixture.session.sessionId,name:window.titleFixture.prompt,runTitle:dedicatedRunTitle(window.titleFixture.session),projectName:'Fixture project',physicalId:null,revision:0,active:true}):window.sidebar.show?h(AutomationSidebar,{projectId:'fixture',apiBase:window.fixture.apiBase,active:true,groups:[],stages:{},onSelect:id=>window.sidebar.selected=id}):h(WorkflowManager,window.fixture)});
       app.provide(Symbol.for('shadow.automation-catalog'),{acquire:()=>({state:reactive({get jobs(){return window.sidebar.jobs},loading:false,loaded:true,error:'',revision:0}),refresh:()=>{},release:()=>{}})});app.use(router).mount('#app');`
     }, configureServer(server) { server.middlewares.use((req,res,next)=>{if(!req.url?.startsWith('/__workflows'))return next();res.setHeader('Content-Type','text/html');res.end('<html><body style="margin:0"><div id="app" style="display:flex;width:100%;height:100vh"></div><script type="module" src="/workflow-entry.ts"></script></body></html>')}) },
   }], server: { host: '127.0.0.1', port: 0, watch: null, hmr: false } })
@@ -57,12 +57,12 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.ok(await run(()=>document.querySelector('.vue-flow__transformationpane').style.transform.includes('scale(1)')));
     assert.equal(await run(()=>document.querySelectorAll('.workflow-inspector').length),0);
     assert.equal(await run(()=>Array.from(document.querySelectorAll('.graph-node')).filter(node=>node.dataset.flow==='schedule:daily').length),2);
-    assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('every 1h')));
+    assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Every 1 hour')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Timezone: UTC')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('web:fixed-target')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Fresh session each run')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Perform recoverable session cleanup')));
-    assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('0 3 * * *')));
+    assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Daily at 03:00')));
 
     assert.ok(await run(()=>document.querySelector('.graph-group[data-enabled=false]').textContent.includes('Paused')));
     if(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')})require('node:fs').writeFileSync(${JSON.stringify(process.env.SHADOW_WORKFLOW_SCREENSHOT || '')},(await win.webContents.capturePage()).toPNG());
@@ -79,7 +79,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
       await wait(); // Let the browser finish the drag's native click-suppression turn.
     };
     const clickRendered=async(selector)=>{
-      const point=await win.webContents.executeJavaScript('('+((selector)=>{const el=document.querySelector(selector),r=el.getBoundingClientRect(),canvas=document.querySelector('.graph-canvas').getBoundingClientRect();const x=Math.round((Math.max(r.left,canvas.left)+Math.min(r.right,canvas.right))/2),y=Math.round((Math.max(r.top,canvas.top)+Math.min(r.bottom,canvas.bottom))/2);if(!el.contains(document.elementFromPoint(x,y)))throw new Error('Click target occluded: '+selector);return {x,y}}).toString()+')('+JSON.stringify(selector)+')');
+      const point=await win.webContents.executeJavaScript('('+((selector)=>{const el=document.querySelector(selector),r=el.getBoundingClientRect(),canvas=document.querySelector('.graph-canvas').getBoundingClientRect();const x=Math.round((Math.max(r.left,canvas.left)+Math.min(r.right,canvas.right))/2),y=Math.round((Math.max(r.top,canvas.top)+Math.min(r.bottom,canvas.bottom))/2);if(!el.contains(document.elementFromPoint(x,y)))throw new Error('Click target occluded: '+selector+' '+JSON.stringify({r:r.toJSON(),canvas:canvas.toJSON(),x,y,hit:document.elementFromPoint(x,y)?.outerHTML}));return {x,y}}).toString()+')('+JSON.stringify(selector)+')');
       const before=await transform();
       win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...point});
       win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});await wait();
@@ -150,10 +150,10 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.deepEqual(await run(()=>window.controls[0]),{id:'flow-run-not-session',action:'retry',acknowledgeReplay:true});
     await run(()=>{window.data.definitions[0].revision=2;window.data.definitions[0].name='Edited in chat';window.data.definitions[0].nodes=[{kind:'record',label:'<img src=x onerror=alert(1)>'}];document.querySelector('.workflow-heading button').click()});await wait();
     assert.ok(await run(()=>document.querySelector('.workflow-title').textContent.includes('Edited in chat')));
-    assert.ok(await run(()=>document.querySelector('.workflow-map-heading').textContent.includes('Revision 1')));
+    assert.ok(await run(()=>document.querySelector('.workflow-map-heading').textContent.includes('This run configuration')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Map to Work')));
-    await run(()=>Array.from(document.querySelectorAll('.workflow-map-heading button')).find(e=>e.textContent.trim()==='Current definition').click());await wait();
-    assert.ok(await run(()=>document.querySelector('.workflow-map-heading').textContent.includes('Revision 2')));
+    await run(()=>Array.from(document.querySelectorAll('.workflow-map-heading button')).find(e=>e.textContent.trim()==='Current configuration').click());await wait();
+    assert.ok(await run(()=>document.querySelector('.workflow-map-heading').textContent.includes('Current configuration')));
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('Record')));
     await run(()=>{document.querySelector('.graph-text > summary').click();document.querySelectorAll('.workflow-node summary')[2].click()});await wait();
     assert.equal(await run(()=>document.querySelectorAll('.workflow-node img').length),0);assert.ok(await run(()=>document.querySelector('.graph-text pre').textContent.length>0));
@@ -164,7 +164,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     await run(()=>document.querySelectorAll('.group-heading')[2].click());await wait();
     assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('github-resource · PR_fixture')));
     assert.ok(await run(()=>document.querySelector('.graph-text').textContent.includes('web:github-target')));
-    assert.ok(await run(()=>document.querySelector('.graph-text').textContent.includes('work:github · r7')));
+    assert.ok(await run(()=>document.querySelector('.graph-text').textContent.includes('work:github')));
     assert.ok(await run(()=>document.querySelector('a[href*="github-target"]')));
     assert.ok(await run(()=>document.body.textContent.includes('Inbox acceptance is not user visibility or completed Work.')));
     await run(()=>{const flow=window.data.definitions[3];window.data.runs.push({...window.data.runs[0],id:'fixed-running',workflow:flow.id,definition:flow,status:'running',cursor:0,error:undefined});document.querySelector('.workflow-heading button').click()});await wait();
@@ -172,6 +172,28 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await wait();
     assert.equal(await run(()=>getComputedStyle(document.querySelector('.vue-flow__edge.animated path')).animationName),'none');
     win.webContents.debugger.detach();
+    // Real link clicks use the existing chat route, never the workflow/run identity.
+    win.setSize(1200,850);
+    await run(()=>window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'schedule:fixed'}}));await wait();
+    await run(()=>{window.data.definitions.sort((a,b)=>(b.id==='schedule:fixed')-(a.id==='schedule:fixed'));document.querySelector('.workflow-heading button').click()});await wait();
+    await clickRendered('.graph-node-shell .node-session-link[href*="fixed-target"]');
+    assert.equal(await run(()=>window.router.currentRoute.value.name),'chat');
+    assert.equal(await run(()=>window.router.currentRoute.value.params.sessionId),'web:fixed-target');
+    assert.equal(await run(()=>window.router.currentRoute.value.query.workflow),undefined,'Link must not also inspect');
+    await run(()=>{const old=window.data.runs.find(r=>r.id==='schedule-run');window.data.runs.push({...old,id:'schedule-run-two',timestamp:'2026-11-12T11:00:00Z',output:{sessionId:'web:second-model-session'}});window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'schedule:daily'}});document.querySelector('.workflow-heading button').click()});await wait();
+    assert.equal(await run(()=>document.querySelectorAll('.workflow-runs .run-session-link').length),2);
+    for(const sessionId of ['web:actual-model-session','web:second-model-session']){
+      const point=await win.webContents.executeJavaScript('('+((sessionId)=>{const link=Array.from(document.querySelectorAll('.workflow-runs a')).find(a=>decodeURIComponent(a.getAttribute('href')).endsWith(sessionId));link.scrollIntoView({block:'center'});const r=link.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}}).toString()+')('+JSON.stringify(sessionId)+')');
+      win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...point});win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});await wait();
+      assert.equal(await run(()=>window.router.currentRoute.value.params.sessionId),sessionId);
+      await run(()=>window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'schedule:daily'}}));await wait();
+    }
+    assert.equal(await run(()=>Array.from(document.querySelectorAll('a')).some(a=>a.getAttribute('href').includes('/chat/flow-run-not-session'))),false);
+    assert.equal(await run(()=>/Revision [0-9]|revision gate|at this revision/i.test(document.querySelector('.workflow-layout').innerText)),false);
+    await run(()=>{window.data.definitions.find(d=>d.id==='schedule:daily').nodes[0].job.schedule='every 1800000ms';window.i18n.global.locale.value='zh-CN';document.querySelector('.workflow-heading button').click()});await wait();
+    assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('每30分钟')));
+    assert.ok(await run(()=>document.querySelector('.workflow-graph').textContent.includes('每天03:00')));
+    await run(()=>{window.i18n.global.locale.value='en';window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'github:fixture'}})});await wait();
     await run(()=>{window.mode='error';document.querySelector('.workflow-heading button').click()});await wait();
     assert.ok(await run(()=>document.querySelector('[role=alert]')));assert.ok(await run(()=>!document.body.textContent.includes('DO-NOT-DISPLAY')));assert.equal(await run(()=>document.querySelector('.workflow-title button').disabled),true);
     await run(()=>{window.mode='normal';document.querySelector('.workflow-heading button').click()});await wait();
@@ -196,6 +218,14 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.ok(await run(()=>document.querySelector('a[href="/projects/fixture/workflows"]')));
     await run(()=>document.querySelector('.automations-heading').click());await wait();
     assert.equal(await run(()=>document.querySelector('.automations-heading').getAttribute('aria-expanded')),'false');
+    await run(()=>{window.titleFixture.show=true});await wait();
+    assert.equal(await run(()=>document.querySelector('.heading-name').textContent),'Fixture project / Encapsulation');
+    await run(()=>{window.titleFixture.session={sessionId:'cron:historical',automation:{contextMode:'fresh',jobId:'daily',runId:'old-run',name:'Original daily review'}}});await wait();
+    assert.equal(await run(()=>document.querySelector('.heading-name').textContent),'Fixture project / Original daily review');
+    await run(()=>{window.titleFixture.session={sessionId:'web:ordinary'}});await wait();
+    assert.equal(await run(()=>document.querySelector('.heading-name').textContent),'Fixture project / Normal custom name');
+    await run(()=>{window.titleFixture.session={sessionId:'web:fixed-target'}});await wait();
+    assert.equal(await run(()=>document.querySelector('.heading-name').textContent),'Fixture project / Normal custom name');
     console.log('WORKFLOW_RENDERED_OK');app.exit(0);
   }catch(error){console.error(error);app.exit(1)}});`)
   const env: NodeJS.ProcessEnv = {}

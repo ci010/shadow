@@ -6,7 +6,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import { t } from '../i18n.ts'
 import { workflowStatus } from '../workflows.ts'
 import { workflowCanvas, type WorkflowCanvasEntry } from '../workflow-canvas.ts'
-const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string }>()
+const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string; projectId: string }>()
 const emit = defineEmits<{ inspect: [id: string, nodeId?: string]; clear: [] }>()
 const id = useId()
 const { fitView, zoomIn, zoomOut, setViewport, viewport } = useVueFlow(id)
@@ -54,13 +54,15 @@ const canvas = computed(() => workflowCanvas(props.flows))
           <div class="graph-group" :class="{ selected: selectedId === data.definition.id }" :data-workflow="data.definition.id" :data-enabled="data.enabled">
             <button class="group-heading nodrag nopan" @click="inspect(data.definition.id)">
               <strong><span :class="data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
-              <span>{{ data.enabled ? t('Enabled') : t('Paused') }} · {{ t('Revision {revision}', { revision: data.definition.revision }) }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('Run snapshot') }}</template></span>
+              <span>{{ data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
             </button>
           </div>
         </template>
         <template #node-workflow="{ data }">
           <Handle type="target" :position="Position.Left" :connectable="false" />
-          <button class="graph-node nodrag nopan" :data-state="data.status" :data-flow="data.flowId" :data-enabled="data.enabled" @click="inspect(data.flowId, data.id)"><strong>{{ data.label }}</strong><small>{{ data.detail }}</small><small v-if="data.description" class="node-description">{{ data.description }}</small><span :data-state="data.status">{{ workflowStatus(data.status) }}</span></button>
+          <div class="graph-node-shell" :class="{ 'has-target': data.targetSessionId }"><button class="graph-node nodrag nopan" :data-state="data.status" :data-flow="data.flowId" :data-enabled="data.enabled" @click="inspect(data.flowId, data.id)"><strong>{{ data.label }}</strong><small>{{ data.detail }}</small><small v-if="data.description" class="node-description">{{ data.description }}</small><span :data-state="data.status">{{ workflowStatus(data.status) }}</span></button>
+            <RouterLink v-if="data.targetSessionId" class="node-session-link nodrag nopan" :to="{ name: 'chat', params: { projectId, sessionId: data.targetSessionId } }" @pointerdown.stop @mousedown.stop @click.stop @keydown.stop>{{ t('Target session') }}: {{ data.targetSessionId }}</RouterLink>
+          </div>
           <Handle type="source" :position="Position.Right" :connectable="false" />
         </template>
       </VueFlow>
@@ -83,6 +85,7 @@ const canvas = computed(() => workflowCanvas(props.flows))
 .graph-group.selected { border-color: var(--c-selection-border); }
 .group-heading { display: flex; flex-direction: column; gap: 6px; padding: 14px 24px; text-align: start; background: transparent; border: 0; color: var(--c-text); cursor: pointer; font: inherit; max-width: 100%; }
 .group-heading strong { max-width: 760px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.group-heading span { color: var(--c-text-secondary); font-size: 12px; }
+.graph-node-shell { position: relative; width: 240px; height: 120px; }.has-target .graph-node { padding-bottom: 28px; }.node-session-link { position: absolute; bottom: 5px; left: 12px; right: 12px; font-size: 12px; color: var(--c-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.node-session-link:focus-visible { outline: 2px solid var(--c-blue); }
 .graph-node { box-sizing: border-box; width: 240px; height: 120px; padding: 12px; text-align: start; font: inherit; background: var(--c-bg-card); border: 1px solid var(--c-border); color: var(--c-text); display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
 .graph-node strong, .graph-node .node-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }.graph-node small { color: var(--c-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 15px; }.graph-node span { font-size: 12px; color: var(--c-text-secondary); }
 .graph-node:hover, .group-heading:hover { background: var(--c-bg-muted); }

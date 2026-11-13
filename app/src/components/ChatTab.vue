@@ -71,7 +71,7 @@
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
-            :name="conversationTitle" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :name="conversationTitle" :run-title="dedicatedRunTitle(activeSession)" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="true" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="viewingPhysicalId ? !!previousPhysicalId : canLoadOlder || !!automationConversation?.hasPrevious.value"
@@ -593,7 +593,7 @@ import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import AutomationPayload from './AutomationPayload.vue'
-import { readableAutomationTitle } from '../automation-presentation.ts'
+import { dedicatedRunTitle } from '../conversation-title.ts'
 import type { SessionDetails } from '../session-details.ts'
 import { imageAttachmentReference, insertAttachmentReference, namePastedChatImages, assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
@@ -1580,7 +1580,7 @@ async function revealHistoryIndex(index: number, signal?: AbortSignal): Promise<
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 const automationConversation = useAutomationConversation(() => activeSessionId.value, () => !!props.automationRun)
-const conversationTitle = computed(() => (automationConversation.value?.automation.value?.source === 'system' ? readableAutomationTitle(automationConversation.value?.run.value?.title) : undefined) || automationConversation.value?.automation.value?.name || activeSessionName.value)
+const conversationTitle = computed(() => dedicatedRunTitle(activeSession.value) || activeSessionName.value)
 watch(() => [props.automationRun, props.visible] as const, ([run, visible]) => {
   if (run && visible) {
     void nextTick(() => workbench.value?.showConversation())

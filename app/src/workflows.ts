@@ -1,4 +1,5 @@
 import { t, type MessageKey } from './i18n.ts'
+import { formatWorkflowSchedule } from './workflow-schedule.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { projectJson } from './projects.ts'
 
@@ -57,7 +58,7 @@ export function workflowHint(error?: string): string {
   return t('The action failed. Inspect the source and node configuration in chat. Safe retries use bounded backoff.')
 }
 export function nodeLabel(kind: string): string {
-  const labels: Record<string, MessageKey> = { 'github-notify': 'GitHub → Session inbox', transform: 'Transform', inbox: 'Session inbox', record: 'Record', 'work-map': 'Map to Work', 'schedule-action': 'Schedule action', 'host-action': 'Host action', 'revision-dedupe': 'Revision gate' }
+  const labels: Record<string, MessageKey> = { 'github-notify': 'GitHub → Session inbox', transform: 'Transform', inbox: 'Session inbox', record: 'Record', 'work-map': 'Map to Work', 'schedule-action': 'Schedule action', 'host-action': 'Host action', 'revision-dedupe': 'Deduplicate observations' }
   return labels[kind] ? t(labels[kind]) : kind
 }
 const recordedText = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined
@@ -74,7 +75,7 @@ function actionPresentation(node: WorkflowNode, definition: WorkflowDefinition) 
     }
     return { label: t('Schedule action'), detail: t('Session policy not recorded'), description: task }
   }
-  if (node.kind === 'github-notify' && isRecord(node.subscription)) return { label: nodeLabel(node.kind), detail: recordedText(node.subscription.sessionId) ?? t('Target not recorded'), description: `${node.subscription.workKey} · r${node.subscription.assignmentRevision}` }
+  if (node.kind === 'github-notify' && isRecord(node.subscription)) return { label: nodeLabel(node.kind), detail: recordedText(node.subscription.sessionId) ?? t('Target not recorded'), description: recordedText(node.subscription.workKey) }
   if (node.kind === 'inbox') return { label: t('Deliver to owner inbox'), detail: definition.owner ?? t('Target not recorded') }
   if (node.kind === 'host-action') return { label: t('Host action'), detail: recordedText(node.handler) ?? t('Handler not recorded') }
   if (node.kind === 'work-map') return { label: nodeLabel(node.kind), detail: t('Project Work records'), description: recordedText(node.objective) }
@@ -82,19 +83,25 @@ function actionPresentation(node: WorkflowNode, definition: WorkflowDefinition) 
   if (node.kind === 'transform') return { label: nodeLabel(node.kind), detail: t('Transform observations without I/O') }
   return { label: nodeLabel(node.kind), detail: node.kind }
 }
+export function workflowTargetSession(node: WorkflowNode, definition: WorkflowDefinition): string | undefined {
+  if (node.kind === 'inbox') return recordedText(definition.owner)
+  if (node.kind === 'github-notify' && isRecord(node.subscription)) return recordedText(node.subscription.sessionId)
+  if (node.kind === 'schedule-action' && node.action === 'session' && isRecord(node.job) && isRecord(node.job.target)) return recordedText(node.job.target.sessionId)
+  return undefined
+}
 export function workflowGraph(definition: WorkflowDefinition, run?: WorkflowRun) {
   const status = (index: number) => !run ? 'ready' as const : index < run.cursor ? 'completed' as const
     : index > run.cursor ? 'waiting' as const : run.status
   const scheduleNode = definition.nodes.find(node => node.kind === 'schedule-action')
   const job = isRecord(scheduleNode?.job) ? scheduleNode.job : undefined
   const source = definition.source.kind === 'schedule'
-    ? { label: t('Time signal'), detail: recordedText(job?.schedule) ?? t('Schedule not recorded'), description: recordedText(job?.timezone) ? t('Timezone: {zone}', { zone: String(job?.timezone) }) : t('Timezone not recorded') }
+    ? { label: t('Time signal'), detail: recordedText(job?.schedule) ? formatWorkflowSchedule(String(job!.schedule)) : t('Schedule not recorded'), description: recordedText(job?.timezone) ? t('Timezone: {zone}', { zone: String(job?.timezone) }) : undefined }
     : { label: t('Signal source'), detail: `${definition.source.kind} · ${definition.source.id}`, description: undefined }
   return [
     { id: 'source', ...source, status: run ? 'received' as const : 'ready' as const, config: definition.source },
-    ...(definition.gate ? [{ id: 'gate', label: nodeLabel(definition.gate.kind), detail: definition.gate.first === 'baseline' ? t('First collection: baseline only') : t('First collection: emit unseen revisions'), description: t('Skip previously seen revisions'), status: run ? 'accepted' as const : 'ready' as const, config: definition.gate }] : []),
-    ...definition.nodes.map((node, i) => ({ id: `node-${i}`, ...actionPresentation(node, definition), status: status(i), config: node })),
-  ]
+    ...(definition.gate ? [{ id: 'gate', label: nodeLabel(definition.gate.kind), detail: definition.gate.first === 'baseline' ? t('First collection: baseline only') : t('First collection: emit unseen revisions'), description: t('Skip observations already seen'), status: run ? 'accepted' as const : 'ready' as const, config: definition.gate }] : []),
+    ...definition.nodes.map((node, i) => ({ id: `node-${i}`, ...actionPresentation(node, definition), status: status(i), config: node, targetSessionId: workflowTargetSession(node, definition) })),
+  ].map(node => ({ targetSessionId: undefined as string | undefined, ...node }))
 }
 export const recentWorkflowRuns = (snapshot: WorkflowSnapshot, id: string) => snapshot.runs.filter(r => r.workflow === id).sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id)).slice(0, 30)
 export function createWorkflowClient(base: string, projectId: string, request: typeof fetch = fetch) {

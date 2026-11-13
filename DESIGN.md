@@ -322,7 +322,7 @@ section keeps a visible definitions entry even without saved conversation runs;
 legacy run conversations and their details remain accessible in that section.
 The Project Workflow page uses one shared Vue Flow canvas for all definitions,
 not a nested inventory sidebar or one canvas per selected flow. Each flow has
-its own neutral section boundary, title, revision and state; its source, optional revision
+its own neutral section boundary, title and state; its source, optional observation
 gate and action nodes connect only within that group. Render the gate only when
 the selected definition snapshot actually contains it; this is a fixed leading
 stage, not a source-kind display exception or arbitrary node placement. New
@@ -346,9 +346,12 @@ Only recorded running execution animates edges, and reduced motion disables it.
 Nodes cannot be dragged, connected, deleted or edited. Selecting a group or node
 opens the existing resizable right-inspector pattern, including ordered native
 Node details disclosures and bounded recent runs; it is not a second flow list.
-Configuration authoring belongs to chat/Agent tools. Explicitly label definition
-revisions, run snapshots and Workflow/run/session identities; only recorded
-session outputs receive model-session links. Existing pause/resume and non-active
+Configuration authoring belongs to chat/Agent tools. Distinguish current configuration,
+run configuration and Workflow/run/session identities without routine revision-number
+labels; internal concurrency revisions remain intact. Only recorded session outputs
+receive run-session links; explicit fixed destinations also receive target-session links.
+Dedicated fresh-run conversation headings use their persisted automation name, not
+the first task prompt or a later catalog rename. Fixed delivery keeps ordinary session titles. Existing pause/resume and non-active
 retry/cancel controls retain their authority boundaries. An uncertain retry
 requires visible acknowledgement of possible duplicate effects. Narrow panes
 keep one bounded, pannable canvas with an overlaid right inspector that can be
