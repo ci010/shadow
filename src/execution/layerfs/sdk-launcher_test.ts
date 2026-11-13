@@ -47,3 +47,25 @@ for (const [host, executable] of [['Node', process.execPath], ['Electron run-as-
     } finally { await rm(dir, { recursive: true, force: true }) }
   })
 }
+
+// GUI-subsystem electron.exe must be explicitly waited for by PowerShell.
+// A pipeline is the documented native invocation (preserves each argument).
+for (const shell of ['powershell.exe', 'pwsh.exe']) {
+  test(`SDK launcher exit status survives a waiting ${shell} Electron invocation`, { skip: process.platform !== 'win32' || !electron }, async () => {
+    const dir = await mkdtemp(join(process.env.SHADOW_SESSION_DATA_DIR ?? process.cwd(), '.sdk-powershell-test-'))
+    try {
+      const launcher = join(dir, 'launcher.mjs'), script = join(dir, 'tiny throw.mjs')
+      await writeFile(launcher, sdkLauncher({ port: 1, token: 'synthetic', sdkModule: 'unused' }))
+      const quote = (s: string) => "'" + s.replaceAll("'", "''") + "'"
+      const command = `$env:ELECTRON_RUN_AS_NODE = '1'; & ${quote(electron!)} ${quote(launcher)} ${quote(script)} | Out-Host; exit $LASTEXITCODE`
+      for (const [source, code] of [["export default async()=>{await Promise.resolve();throw Error('tiny awaited failure')}", 1], ["export default()=>{console.log('tiny success')}", 0], ['export default()=>{process.exitCode=7}', 7]] as const) {
+        await writeFile(script, source)
+        const result = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 15000 })
+        assert.equal(result.error, undefined)
+        assert.equal(result.status, code, result.stderr)
+        if (code === 1) assert.match(result.stderr, /tiny awaited failure/)
+        if (code === 0) assert.match(result.stdout, /tiny success/)
+      }
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+}

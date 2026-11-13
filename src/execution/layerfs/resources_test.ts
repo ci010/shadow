@@ -25,10 +25,21 @@ test('official exec entry -> two projects/images -> registration -> fork and ord
       await writeFile(join(dir, 'api', name, 'package.json'), JSON.stringify({ name: '@layerfs/' + name, type: 'module' }))
     }
     const storage = `import {readFileSync,writeFileSync} from 'node:fs';const path=${JSON.stringify(state)};const read=()=>JSON.parse(readFileSync(path));const save=s=>writeFileSync(path,JSON.stringify(s));`
-    await writeFile(join(dir, 'api/runtime/src/index.js'), storage + `
+    // Model the pinned Windows host's prepare predicate before worker dispatch.
+    // Synthetic existence/stat only: no real WSL source is accessed by this test.
+    const hostSource = (linux: string) => '\\\\wsl.localhost\\Fixture' + linux.replaceAll('/', '\\')
+    const sourceDirectory = nativeSourceRoot('one', 'test') + '/source'
+    const otherDirectory = nativeSourceRoot('one', 'test') + '/other'
+    const hostPrelude = `import {win32} from 'node:path';
+const hostDirectories = new Set(${JSON.stringify([hostSource(sourceDirectory), hostSource(otherDirectory)])});
+const existsSync = path => hostDirectories.has(path);
+const statSync = path => ({isDirectory:()=>hostDirectories.has(path)});
+const prepareSource = folder => {if(typeof folder !== 'string' || !win32.isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw Error('not an absolute directory');};
+`
+    await writeFile(join(dir, 'api/runtime/src/index.js'), storage + hostPrelude + `
 export const LayerFSRuntime={open:async settings=>({
  worker:{start:async()=>{}},status:async()=>({worker:{state:'running',answering:true},docker:{level:'ok'}}),close:async()=>{},
- project:{list:async()=>read().projects,start_init:async(name,source,options)=>{const s=read();s.projects.push({name,source,image:options.image,volume:'volume-'+name,initialized:true});save(s);if(name==='lost')throw Object.assign(Error('lost init receipt'),{code:'Unknown'});return {id:name}},get_init:async id=>({step:'done',project:read().projects.find(p=>p.name===id)})},
+ project:{list:async()=>read().projects,start_init:async(name,source,options)=>{prepareSource(source);const s=read();s.projects.push({name,source,image:options.image,volume:'volume-'+name,initialized:true});save(s);if(name==='lost')throw Object.assign(Error('lost init receipt'),{code:'Unknown'});return {id:name}},get_init:async id=>({step:'done',project:read().projects.find(p=>p.name===id)})},
  volume:{list:async()=>read().projects.map(p=>({name:p.volume,owner:p.name==='foreign'?'other':'this',project:p.name,live:true}))}
 })};`)
     await writeFile(join(dir, 'api/agent/src/index.js'), storage + `
@@ -37,7 +48,6 @@ export const LayerFS={open:async project=>({
  project:{list_sandboxes:async()=>({items:[],hasMore:false}),list_branches:async()=>({items:[{name:'main',base:'aa'}],hasMore:false})},branch:{fork:async(branch,ref)=>{const s=read();s.branches[project+':'+branch]=ref;save(s);return {kind:'Forked',branch,base:ref}}},close:async()=>{}
 })};`)
     const installation = { apiRoot: dir, bundle: '/fixture', node: '/bin/node', distribution: 'Fixture', image }
-    const sourceDirectory = nativeSourceRoot('one', 'test') + '/source'
     let allowed = true, inode = '1', linked = false, filesystem = '61267'
     service = new LayerFSResources('one', join(dir, 'home'), { installation: async () => installation, runtime: home => {
       const runtime = new ManagedLayerFS('one', home, undefined, 'win32')
@@ -71,7 +81,16 @@ export const LayerFS={open:async project=>({
     const result = await promisify(execFile)(entry.executable, [entry.launcher, script], { env: { ...process.env, ...entry.env }, windowsHide: true, timeout: 10000 })
     assert.equal(result.stdout.trim().split('\n').length, 2)
     assert.match(result.stderr, /lost init receipt/); assert.match(result.stderr, /ImportAlreadyAttempted/)
-    assert.equal(JSON.parse(await readFile(state, 'utf8')).projects.filter((p: any) => p.name === 'lost').length, 1)
+    const projects = JSON.parse(await readFile(state, 'utf8')).projects
+    assert.equal(projects.filter((p: any) => p.name === 'lost').length, 1)
+    assert.equal(projects.find((p: any) => p.name === 'first').source, hostSource(sourceDirectory))
+    assert.equal(projects.find((p: any) => p.name === 'second').source, hostSource(otherDirectory))
+    // Transport aliases, normalized variants, and other distros are never caller scopes.
+    const injected = join(dir, 'injected.mjs')
+    for (const source of [hostSource(sourceDirectory), hostSource(sourceDirectory).replace('Fixture', 'Other'), sourceDirectory + '/', sourceDirectory + '/../source']) {
+      await writeFile(injected, `export default async({runtime})=>{await runtime.project.start_init('injected',${JSON.stringify(source)},{image:${JSON.stringify(image)},timeout:1000})}`)
+      await assert.rejects(promisify(execFile)(entry.executable, [entry.launcher, injected], { env: { ...process.env, ...entry.env }, windowsHide: true }), /SourceScopeMismatch/)
+    }
     const guarded = join(dir, 'guarded.mjs')
     await writeFile(guarded, `export default async({runtime})=>{await runtime.project.start_init('guarded',${JSON.stringify(sourceDirectory)},{image:${JSON.stringify(image)},timeout:1000})}`)
     const runGuarded = () => promisify(execFile)(entry.executable, [entry.launcher, guarded], { env: { ...process.env, ...entry.env }, windowsHide: true })

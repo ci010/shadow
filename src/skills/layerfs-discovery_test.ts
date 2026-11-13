@@ -25,7 +25,7 @@ test('LayerFS skills expose executable official SDK path, not pipeline tools or 
       assert.match(bodies['layerfs-worker'], /even on nonzero command exit/)
       assert.match(bodies['layerfs-manager'], /source:"EXACT_RESOURCE_ID"/)
       assert.match(bodies['layerfs-manager'], /Publish updates LayerFS\s+main only, never host source files/)
-      for (const term of ['layerfs_runtime_context', 'layerfs_resource_register', 'allowRootWorker', 'allowDownloads', 'ELECTRON_RUN_AS_NODE', 'exit $LASTEXITCODE', 'git -C', 'lfs checkout', 'lfs fsck', 'sourceName', 'sourceRoot', 'ext4', 'docker build', 'standalone', '127.0.0.1']) assert.ok(setup.includes(term), term)
+      for (const term of ['layerfs_runtime_context', 'layerfs_resource_register', 'allowRootWorker', 'allowDownloads', 'ELECTRON_RUN_AS_NODE', 'exit $LASTEXITCODE', 'git -C', 'lfs checkout', 'lfs fsck', 'sourceName', 'sourceRoot', 'ext4', 'docker build', 'self-contained', '127.0.0.1', '| Out-Host', 'Caller-provided UNC paths are still refused']) assert.ok(setup.includes(term), term)
       assert.match(script, /runtime.project.start_init/)
       assert.match(script, /runtime.project.get_init/)
       assert.match(script, /client.project.list_branches/)
