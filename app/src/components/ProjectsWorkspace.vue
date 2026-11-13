@@ -147,9 +147,12 @@ const sidebarOpen = computed({
 })
 const sessionSearchOpen = ref(false)
 function openSessionSearch() { sessionSearchOpen.value = true }
-function quickOpenSession(projectId: string, sessionId: string) {
+function quickOpenSession(projectId: string, sessionId: string, automationId?: string) {
   sessionSearchOpen.value = false
-  selectSession(projectId, sessionId)
+  if (automationId) {
+    automation.value = { projectId, id: automationId }
+    openAutomationRun(sessionId)
+  } else selectSession(projectId, sessionId)
 }
 function sessionSearchKeydown(event: KeyboardEvent) {
   if (!props.visible || !keyboardActive.value || !isSessionQuickOpenShortcut(event)) return

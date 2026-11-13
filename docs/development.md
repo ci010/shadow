@@ -473,19 +473,28 @@ recovery remain available. Channel-manager spontaneous connection transitions do
 not yet have a complete notification source; silently changed channel connection
 status may require manual refresh or live recovery rather than being real-time.
 
-Ordinary navigation uses `GET /api/sessions/summary`, not the physical
+Ordinary navigation uses `GET /api/sessions/summary?scope=navigation`, not the physical
 `/api/sessions/graph` representation. The existing `/api/sessions` inventory
 lacks the execution, automation, defaults and logical-parent enrichment required
 by chat, sidebar, quick-open and notification consumers, so it is not reused.
-The summary shares the graph endpoint's enrichment and bounded label/automation
-previews, but never enumerates historical segment nodes or transfers arbitrary
-session `config`. It sends only model/thinking/reasoning/context-window overrides
+The summary explicitly whitelists navigation fields instead of spreading history
+records. It omits `executionId`, `segmentIndex`, `initiativeId`, and redundant
+per-row `projectId` (the client supplies its validated Project scope). It keeps
+semantic `topic`/`focus`; `title` is only a display fallback for empty topics,
+so no duplicate `name` alias is needed. It retains the graph endpoint's bounded
+label/automation previews, but never enumerates historical segment nodes or
+transfers arbitrary session `config`. It sends only model/thinking/reasoning/context-window overrides
 as `inferenceOverrides`, plus resolved `inferenceDefaults`, preserving composer
 settings and execution-card labels. Context-fork parents are resolved to logical
 IDs without building physical nodes; delegation parents retain their own field.
 
 The shared Project live reader owns one conditional summary and one activity
-snapshot. Initialization, scoped/global invalidations, manual refresh and
+snapshot per scope. Full/unparameterized summary access remains compatible;
+Quick Open loads that full scope on demand, while automation history uses its
+existing paginated run endpoint and history expansion control. Navigation omits
+only terminal historical fresh-automation branches, preserving the newest run
+per job, active/waiting work and context/delegation ancestors. Ordinary chat,
+task/call and service-group inventories are not globally truncated. Initialization, scoped/global invalidations, manual refresh and
 reconnect all revalidate the summary; activity-only updates still avoid inventory
 reads. Invalidations during a read retain a serialized follow-up. Consumers
 share reads; releasing the last consumer aborts pending requests. This still

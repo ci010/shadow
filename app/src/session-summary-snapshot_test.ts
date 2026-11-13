@@ -13,6 +13,13 @@ test('logical summaries preserve fork, delegation, channel defaults and bounded 
   assert.equal(rows.find(row => row.sessionId === 'web:fork')?.contextParentSessionId, 'web:root')
   assert.equal(rows.find(row => row.sessionId === 'web:root')?.config?.model, 'selected')
   assert.equal(rows.find(row => row.sessionId === 'web:root')?.inferenceDefaults?.model, 'default')
+  // System automation names were graph title fallbacks, never overrides of a
+  // nonempty semantic topic in sessionDisplayTitle. Lean DTO preserves that.
+  const legacy = parseSessionSummary({ sessions: [{ sessionId: 'run', topic: 'Saved topic', name: 'Old name', title: 'System automation' }] }, 'a')
+  const lean = parseSessionSummary({ sessions: [{ sessionId: 'run', topic: 'Saved topic' }] }, 'a')
+  assert.equal(legacy[0]!.title, lean[0]!.title)
+  assert.equal(lean[0]!.title, 'Saved topic')
+  assert.throws(() => parseSessionSummary({ sessions: [{ sessionId: 'web:bad', projectId: null }] }, 'a'))
   assert.throws(() => parseSessionSummary({ sessions: [{ sessionId: 'web:bad', projectId: 'b' }] }, 'a'))
   assert.throws(() => parseSessionSummary({ sessions: [{ sessionId: 'web:bad', contextParentSessionId: 12 }] }))
 })
@@ -177,7 +184,7 @@ test('permuted full baselines and multi-row patches yield the identical final se
   const upsert = [{ sessionId: 'parent', lastActivityAt: '2026-01-01' },
     { sessionId: 'a', mode: 'task', parentSessionId: 'parent', lastActivityAt: '2026-01-02' },
     { sessionId: 'new', lastActivityAt: '2026-01-03' }]
-  const expected = parseSessionSummary({ sessions: upsert })
+  const expected = parseSessionSummary({ sessions: upsert }, 'a')
   for (const reverseBase of [false, true]) for (const reversePatch of [false, true]) {
     let calls = 0
     const loader = createSessionSummaryLoader('http://main/a', 'a', async () => ++calls === 1

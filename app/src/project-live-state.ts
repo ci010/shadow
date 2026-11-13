@@ -117,9 +117,9 @@ export function createProjectLiveState(
     gate.attach(subscription)
     return { snapshot: { ...snapshot, read: async () => { await gate.getPromise(); await snapshot.read() } }, users: 0, dispose() { gate.dispose(); subscription.close(); snapshot.dispose() } }
   }
-  function createProject(base: string, projectId: string) {
+  function createProject(base: string, projectId: string, summaryScope: 'full' | 'navigation') {
     const scope = projectBase(base, projectId)
-    const summaryLoader = createSessionSummaryLoader(scope, projectId, request)
+    const summaryLoader = createSessionSummaryLoader(scope, projectId, request, summaryScope)
     type Activity = ReturnType<typeof parseSessionActivity>
     const unknownActivity = new Set<string>()
     let directory: Set<string> | undefined
@@ -239,12 +239,12 @@ export function createProjectLiveState(
         },
       }
     },
-    acquireProject(base: string, projectId: string, observer?: Partial<LiveObserver>, includeWork = false) {
+    acquireProject(base: string, projectId: string, observer?: Partial<LiveObserver>, includeWork = false, summaryScope: 'full' | 'navigation' = 'navigation') {
       if (disposed) throw new Error(t('Project live state has been disposed.'))
       const host = hostBase(base)
-      const key = JSON.stringify([host, projectId])
+      const key = JSON.stringify([host, projectId, summaryScope])
       let entry = projects.get(key)
-      if (!entry) { entry = createProject(host, projectId); projects.set(key, entry) }
+      if (!entry) { entry = createProject(host, projectId, summaryScope); projects.set(key, entry) }
       const current = entry
       current.users++
       if (includeWork && current.usage.work++ === 0) void current.ready().then(() => { if (current.usage.work) void current.work.refresh() })

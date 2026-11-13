@@ -35,7 +35,7 @@ export function searchQuickOpenSessions<T extends QuickOpenSession>(sessions: re
     return Number.isFinite(time) ? time : 0
   }
   return sessions.filter(session => (!projectFilter || session.projectId === projectFilter)
-    && isRegularQuickOpenSession(session) && matchesSessionTitle(session, query)).sort((a, b) =>
+    && (isRegularQuickOpenSession(session) || !!query.trim() && !!session.automation) && matchesSessionTitle(session, query)).sort((a, b) =>
     rank(a) - rank(b) || a.projectId.localeCompare(b.projectId) || Number(isPrefix(b)) - Number(isPrefix(a)) || recency(b) - recency(a)
     || a.sessionId.localeCompare(b.sessionId))
 }

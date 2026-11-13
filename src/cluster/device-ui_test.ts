@@ -8,6 +8,7 @@ import { createServer, get as httpGet } from 'node:http'
 import { gunzipSync } from 'node:zlib'
 import { WebChannel } from '../channels/web.ts'
 import { Bus } from '../bus/bus.ts'
+import { sessionsApiPlugin } from '../sessions/routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import WebSocket, { WebSocketServer } from 'ws'
 import { ChildLocalControlService } from '../runtime/child-local-control.ts'
@@ -242,6 +243,13 @@ test('history gzip survives real Main/Child HTTP hops without double decoding or
     getCommandResults: async () => [], getYieldRecords: async () => [],
   } as unknown as SessionManager })
   await channel.start(project); t.after(() => channel.stop())
+  const summaryStates = Array.from({ length: 60 }, (_, i) => ({ sessionId: `s${i}`, segmentIndex: 0, name: `Summary fixture ${i}` }))
+  sessionsApiPlugin({ projectId: 'test',
+    listSummaryStates: async () => summaryStates,
+    historySessionSummary: (state: unknown) => state,
+    getSessionInferenceDefaults: () => ({ model: 'default' }),
+    isWaitingForCall: () => false, yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager)(project)
   f.main.all('/projects/test/*', c => {
     const url = new URL(c.req.url); url.pathname = url.pathname.slice('/projects/test'.length)
     const request = new Request(url, c.req.raw)
@@ -270,7 +278,7 @@ test('history gzip survives real Main/Child HTTP hops without double decoding or
     status: number; headers: import('node:http').IncomingHttpHeaders; bytes: Buffer
   }>((resolve, reject) => {
     // Native HTTP deliberately does NOT auto-decompress: assert actual wire bytes.
-    const request = httpGet(base + path, { headers: { Origin: base, 'Accept-Encoding': encoding,
+    const request = httpGet(base + path, { headers: { Origin: base, 'Accept-Encoding': encoding, Accept: 'application/vnd.shadow.session-summary-delta+json',
       ...(authorized ? { Authorization: 'Bearer child-private' } : {}), ...(etag ? { 'If-None-Match': etag } : {}),
     } }, response => {
       const chunks: Buffer[] = []; response.on('data', chunk => chunks.push(Buffer.from(chunk)))
@@ -290,6 +298,25 @@ test('history gzip survives real Main/Child HTTP hops without double decoding or
     assert.equal(legacy.headers.get('content-encoding'), null, 'old/unknown Child keeps identity responses despite Node fetch defaults')
     assert.equal((await legacy.json()).history[0].content, 'history fixture '.repeat(20_000))
   }
+  const summaryPath = '/projects/test/api/sessions/summary?scope=navigation'
+  const summaryGzip = await read('gzip', undefined, summaryPath)
+  assert.equal(transportEncodings.at(-1), 'gzip', 'Main compresses summary independently')
+  assert.equal(summaryGzip.headers['content-encoding'], 'gzip', 'Child recompresses decoded summary')
+  assert.match(String(summaryGzip.headers.vary), /Accept-Encoding/i)
+  assert.match(String(summaryGzip.headers.vary), /Accept/i)
+  const summaryPlain = await read('identity', undefined, summaryPath)
+  assert.equal(summaryPlain.headers['content-encoding'], undefined)
+  assert.deepEqual(gunzipSync(summaryGzip.bytes), summaryPlain.bytes)
+  assert.equal(JSON.parse(summaryPlain.bytes.toString()).sessions.length, 60)
+  const summary304 = await read('gzip', String(summaryGzip.headers.etag), summaryPath)
+  assert.equal(summary304.status, 304); assert.equal(summary304.bytes.length, 0)
+  assert.match(String(summary304.headers.vary), /Accept-Encoding/i)
+  assert.equal((await read('gzip', String(summaryGzip.headers.etag), '/projects/test/api/sessions/summary')).status, 200)
+  summaryStates[0]!.name = 'Updated summary'
+  const summaryDelta = await read('gzip', String(summaryGzip.headers.etag), summaryPath)
+  const patch = JSON.parse(gunzipSync(summaryDelta.bytes).toString())
+  assert.equal(patch.delta, 1); assert.equal(patch.base, summaryGzip.headers.etag)
+  assert.equal(patch.upsert[0].topic, 'Updated summary')
   const compressed = await read('gzip, deflate, br')
   assert.equal(compressed.status, 200)
   assert.equal(transportEncodings.at(-1), 'gzip', 'Main history is compressed across the network tunnel')
