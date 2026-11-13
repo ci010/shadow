@@ -72,7 +72,7 @@
           </button>
           <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
             :name="conversationTitle" :run-title="dedicatedRunTitle(activeSession)" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
-            :can-rename="true" @renamed="loadSessionList()"
+            :hide-focus="hideRunFocus" :can-rename="true" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="viewingPhysicalId ? !!previousPhysicalId : canLoadOlder || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
@@ -594,7 +594,7 @@ import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import AutomationPayload from './AutomationPayload.vue'
-import { dedicatedRunTitle } from '../conversation-title.ts'
+import { dedicatedRunTitle, isDedicatedRun } from '../conversation-title.ts'
 import type { SessionDetails } from '../session-details.ts'
 import { imageAttachmentReference, insertAttachmentReference, namePastedChatImages, assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
@@ -1581,6 +1581,12 @@ async function revealHistoryIndex(index: number, signal?: AbortSignal): Promise<
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 const automationConversation = useAutomationConversation(() => activeSessionId.value, () => !!props.automationRun)
+// Summary association is available before catalog/details fetches settle. For
+// legacy run links, defer focus while resolving history, then require a matching
+// run receipt (a route/query alone must not classify an ordinary conversation).
+const hideRunFocus = computed(() => isDedicatedRun(activeSession.value)
+  || !!automationConversation.value && (automationConversation.value.loading.value
+    || automationConversation.value.run.value?.sessionId === activeSessionId.value))
 const runResult = computed(() => automationResult(automationConversation.value?.run.value,
   activeSessionId.value, displayMessages.value, !!viewingPhysicalId.value, loadingHistory.value || !!composerError.value, timelinePrefixLength.value))
 const conversationTitle = computed(() => dedicatedRunTitle(activeSession.value) || activeSessionName.value)

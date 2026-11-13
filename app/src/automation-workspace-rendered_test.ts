@@ -25,7 +25,7 @@ test('automations open ordinary conversations and navigate run history without a
   const runs = Array.from({ length: 65 }, (_, index) => ({
     id: `run-${index}`, sessionId: `cron:run-${index}`, startedAt: new Date(Date.UTC(2026, 8, 30, 0, -index)).toISOString(),
     status: index === 2 ? 'failed' : index === 3 ? 'running' : index === 9 ? 'cancelled' : 'completed', title: `Saved conversation ${index} ${'Long prompt text '.repeat(20)}`,
-    ...(index === 0 ? { learning: { status: 'partial', summary: 'One conditional decision persisted; a source page still needs review.\n\n' + 'Evidence remains conditional; preserve the full summary.\n'.repeat(100) + '\nEND OF LONG SUMMARY', artifacts: 1, events: 1, evaluated: 0 } } : {}),
+    ...(index === 0 ? { learning: { status: 'partial', summary: 'Reviewed both assigned Wiki pages. One conditional decision persisted; a source page still needs review.\n\n' + 'Evidence remains conditional; preserve the full summary.\n'.repeat(100) + '\nEND OF LONG SUMMARY', artifacts: 1, events: 1, evaluated: 0 } } : {}),
   }))
   for (const [index, status] of [[4, 'applied'], [5, 'no_change'], [6, 'blocked'], [7, 'draft_only']] as const) {
     runs[index]!.learning = { status, summary: `Synthetic run result cron:run-${index}`, artifacts: 0, events: 0, evaluated: 0 }
@@ -139,7 +139,9 @@ test('automations open ordinary conversations and navigate run history without a
           else if (path === '/api/models') json({ models: ['fixture:model'] })
           else if (path.endsWith('/details')) {
             const sessionId = decodeURIComponent(path.split('/').at(-2)!)
-            json({ sessionId, name: 'Saved run', workdir: { kind: 'local', displayPath: 'C:\\synthetic' }, usage: null,
+            json({ sessionId, name: 'Saved run', focus: sessionId === 'web:ordinary'
+              ? 'partial: Ordinary authored focus must remain visible'
+              : `partial: ${runs[0]!.learning!.summary.slice(0, 3900)}`, workdir: { kind: 'local', displayPath: 'C:\\synthetic' }, usage: null,
               usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
           } else if (path.endsWith('/file-changes')) {
             changeRequests.push(path)
