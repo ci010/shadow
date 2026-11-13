@@ -1,3 +1,4 @@
+import { parseWorkspaceLineage, type WorkspaceLineage } from './lineage.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
@@ -99,7 +100,7 @@ function parseRecords(value: unknown): FolderRecord[] {
     if (ids.has(item.id.toLowerCase()) || paths.has(pathKey(path))) throw invalid()
     ids.add(item.id.toLowerCase())
     paths.add(pathKey(path))
-    return { id: item.id, name: item.name, path, createdAt: item.createdAt,
+    return { ...(item.lineage !== undefined ? { lineage: parseWorkspaceLineage(item.lineage) } : {}), id: item.id, name: item.name, path, createdAt: item.createdAt,
       ...(item.description !== undefined ? { description: item.description as string } : {}) }
   })
 }
@@ -168,6 +169,27 @@ export class FolderRegistry {
     this.#assertReady()
     if (this.scope) return this.scope.catalog.folders(this.scope.projectId)
     return this.#records.map((record) => ({ ...record }))
+  }
+
+  archived(): FolderRecord[] {
+    this.#assertReady()
+    return this.scope ? this.scope.catalog.archivedFolders(this.scope.projectId) : []
+  }
+
+  async recordLineage(id: string, value: WorkspaceLineage): Promise<void> {
+    this.#assertReady()
+    if (this.scope) return this.scope.catalog.recordLineage(this.scope.projectId, id, value)
+    const lineage = parseWorkspaceLineage(value)
+    const folder = this.get(id)
+    if (!folder || id === lineage.parentId || !this.get(lineage.parentId)) throw new Error('Invalid Workspace parent')
+    if (folder.lineage && JSON.stringify(folder.lineage) !== JSON.stringify(lineage)) throw new Error('Workspace lineage cannot change')
+    for (let parent = this.get(lineage.parentId), seen = new Set<string>(); parent; parent = parent.lineage ? this.get(parent.lineage.parentId) : undefined) {
+      if (parent.id === id || seen.has(parent.id)) throw new Error('Workspace lineage cycle')
+      seen.add(parent.id)
+    }
+    const next = this.#records.map(item => item.id === id ? { ...item, lineage } : item)
+    await this.#persist(next)
+    this.#records = next
   }
 
   get(id: string): FolderRecord | undefined {

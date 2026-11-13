@@ -19,6 +19,7 @@ import { DerivedWorkspaces } from '../../folders/derived-workspace.ts'
 import { RemoteDerivedWorkspaceBackend } from '../../folders/remote-derived-workspace.ts'
 import { DERIVED_WORKSPACE_OPERATION } from '../../execution/derived-workspace-contract.ts'
 import { WorkspaceCreateTool } from '../../tools/workspace-create.ts'
+import { WorkspaceForkTool } from '../../tools/workspace-fork.ts'
 import { WorkspaceRegisterTool } from '../../tools/workspace-register.ts'
 import { prepareWorktree, isolationGit } from '../../cron/work-isolation.ts'
 import { WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_ID, type WorkDispatchConfig } from '../../cron/work-dispatch-contract.ts'
@@ -1235,18 +1236,23 @@ export async function createProjectRuntime(
     validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
   })
   let layerfsWorkspaces: import('../../execution/layerfs/workspace-create.ts').LayerFSWorkspaces | undefined
-  importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor, async (args, context) => {
+  const createLayerFSWorkspace = async (args: Record<string, unknown>, context: import('../../tools/context.ts').ExecutionContext, sourceBinding?: string) => {
     const { LayerFSWorkspaces } = await import('../../execution/layerfs/workspace-create.ts')
     const { LayerFSTool } = await import('../../tools/layerfs.ts')
     const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
     layerfsWorkspaces ??= new LayerFSWorkspaces({ projectId: project.id, directory: resolve(workspace, 'layerfs-workspaces'),
       identity: async () => process.env.SHADOW_LAYERFS_CONFIG ? `operator:${process.env.SHADOW_LAYERFS_CONFIG}` : `managed:${(await managedLayerFS(project.id, workspace).namespaceInfo()).namespace}`,
+      bindingProject: async () => process.env.SHADOW_LAYERFS_CONFIG
+        ? (await import('../../execution/layerfs/bridge.ts')).layerfsName(project.id)
+        : (await managedLayerFS(project.id, workspace).namespaceInfo()).project,
       run: (request, ctx) => new LayerFSTool(project.id, workspace).execute(request, ctx),
       register: (mount, ctx, description) => folderRegistry.registerLayerFS(mount, ctx.signal, description),
       validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
     })
-    return layerfsWorkspaces.create(args, context)
-  }))
+    return layerfsWorkspaces.create(args, context, sourceBinding)
+  }
+  importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor, createLayerFSWorkspace))
+  importTool.registerBuiltin('workspace_fork', new WorkspaceForkTool(derivedWorkspaces, project.id, canAuthor, folderRegistry, createLayerFSWorkspace))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
   const signalProviders = new SignalProviderRuntime(

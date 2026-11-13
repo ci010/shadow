@@ -31,12 +31,13 @@ export class LayerFSWorkspaces {
     projectId: string
     directory: string
     identity: () => Promise<string>
+    bindingProject?: () => Promise<string>
     run: (args: Record<string, unknown>, context: ExecutionContext) => Promise<ToolResult>
     register: (mount: string, context: ExecutionContext, description?: string) => Promise<{ id: string }>
     validateWork?: (key: string) => void
   }) {}
 
-  async create(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+  async create(args: Record<string, unknown>, context: ExecutionContext, sourceBinding?: string): Promise<string> {
     if (context.projectId !== this.options.projectId || context.remoteWorkdir || context.recoveringToolCall || context.scriptInvocation) throw new ToolNoEffectError('LayerFS workspace creation requires a direct local invocation; no fallback or replay.')
     for (const [key, value] of Object.entries(args)) {
       if (!['source', 'branch', 'idempotencyKey', 'description', 'name', 'workKey'].includes(key) || typeof value !== 'string' || (!value && key !== 'description') || value.length > 2000 || /[\x00-\x1f\x7f]/.test(value)) throw new ToolNoEffectError('Invalid LayerFS workspace creation parameters. Use source (an imported LayerFS branch), optional branch and idempotencyKey only.')
@@ -52,7 +53,7 @@ export class LayerFSWorkspaces {
     }
     const recoveryKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : randomUUID()
     const file = join(this.options.directory, createHash('sha256').update(recoveryKey).digest('hex') + '.json')
-    const fingerprint = createHash('sha256').update(JSON.stringify([this.options.projectId, source, args.branch ?? null, args.name ?? null, args.description ?? null, args.workKey ?? null])).digest('hex')
+    const fingerprint = createHash('sha256').update(JSON.stringify([this.options.projectId, source, args.branch ?? null, args.name ?? null, args.description ?? null, args.workKey ?? null, ...(sourceBinding === undefined ? [] : [sourceBinding])])).digest('hex')
     const prior = queues.get(file) ?? Promise.resolve()
     const pending = prior.catch(() => {}).then(async () => {
       let lock: DatabaseSync | undefined
@@ -65,6 +66,13 @@ export class LayerFSWorkspaces {
       try {
         context.signal.throwIfAborted()
         const identity = await this.options.identity()
+        const validateBinding = async () => {
+          if (sourceBinding === undefined) return
+          if (!this.options.bindingProject) throw new ToolNoEffectError('LayerFS binding validation is unavailable; no dispatch.')
+          const binding = parseBranchWorkspace(sourceBinding, await this.options.bindingProject())
+          if (binding.branch !== source || await this.options.identity() !== identity) throw new ToolNoEffectError('LayerFS source binding/connection changed; no redirection.')
+        }
+        await validateBinding()
         await mkdir(this.options.directory, { recursive: true })
         lock = new DatabaseSync(toNamespacedPath(`${file}.lock.sqlite`))
         lock.exec('BEGIN IMMEDIATE')
@@ -80,6 +88,7 @@ export class LayerFSWorkspaces {
         const run = async (request: Record<string, unknown>) => {
           context.signal.throwIfAborted()
           if (await this.options.identity() !== identity) throw new ToolNoEffectError('LayerFS namespace changed during creation; retained resources were not redirected.')
+          await validateBinding()
           const result = await this.options.run({ ...request, ...(identity.startsWith('managed:') ? { namespace: identity.slice('managed:'.length) } : {}) }, context)
           const receipt = JSON.parse(toolResultText(result))
           if (isCompletedToolFailure(result) || receipt.ok !== true) {
@@ -104,6 +113,7 @@ export class LayerFSWorkspaces {
         if (!record.workspace?.startsWith('layerfs:')) throw new ToolOutcomeUnknownError('Invalid retained LayerFS branch binding receipt; no mutation was replayed.')
         if (parseBranchWorkspace(record.workspace).branch !== record.branch) throw new ToolOutcomeUnknownError('Retained LayerFS branch identity differs from the creation journal; no registration or replay.')
         const description = `${args.description ? String(args.description) + '\n' : ''}LayerFS workspace from ${record.source} (${record.branch})${args.workKey ? `; Work ${String(args.workKey)}` : ''}`
+        await validateBinding()
         const registered = await this.options.register(record.workspace, context, description)
         return JSON.stringify({ backend: 'layerfs', source: record.source, branch: record.branch, workspaceId: registered.id,
           idempotencyKey: recoveryKey, description, ...(args.workKey ? { workKey: args.workKey } : {}), registered: true, location: { backend: 'layerfs', mount: record.workspace },

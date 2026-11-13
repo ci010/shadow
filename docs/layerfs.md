@@ -28,7 +28,7 @@ Start at `v:skills/layerfs` for navigation:
   no installation management.
 - `v:skills/layerfs-manager`: create/register independent branch workspaces, assign
   work and inspect/test/integrate results.
-- `v:skills/layerfs-setup`: authorized owner lifecycle, reviewed imports, baselines
+- `v:skills/layerfs-setup`: authorized owner lifecycle, Git-aware imports, baselines
   and guarded recovery. Its canonical resource remains `v:skills/layerfs/setup.md`.
 
 These scenarios guide discovery, not role permissions or separate tool sources.
@@ -160,28 +160,30 @@ old mount IDs cannot alias a newly imported Store. `create` explicitly calls `La
 operations call `LayerFS.open` and never reacquire/overwrite source. Source is
 resolved only through the host's authorized registered local workspace selector
 with the existing `filesystem.read` operation. This authorizes selecting the source
-workspace, not a new remote grant. Init recursively reads the entire selected tree,
-including dotfiles and untracked files: use a curated credential-free source. This
-adapter does not implement ignore rules or a content credential scanner.
-`import_preview` enforces a metadata/name preflight before `create` with an explicit
-`importPolicy`: `curated` (default) rejects VCS/dependency/build entries as outside
-its scope, not as secrets; `whole_tree` includes and recursively reviews those
-entries, with warnings. Neither policy filters the source: any blocked or incomplete
-scan refuses import, because upstream Init reads the entire tree with no ignores.
-Use `whole_tree` on both preview and create to include `.git`, `node_modules`, etc.
-Git history, configuration and dependencies require human content review too.
-Both policies block symlinks, private runtime/credential/key artifacts (including
-`.shadow`, `.ssh`, `.env` and key material), unreadable entries and unbounded scans.
-Credential-related source directories such as `src/credentials` warn and are
-traversed, not skipped. Code/docs/assets inside can be reviewed; non-code data inside
-those directories remains blocked, as do explicit credential artifacts anywhere.
-Names are not a content scanner. Review a separate curated baseline if the original
-contains blocked artifacts; never silently omit files from preview then import them.
-The owner must pass the single-use `sourceReview` plus `sourceReviewed:true` after
-content review. Tokens bind session, resolved source and policy, expire in 15 minutes,
-and require a matching metadata rescan. Repeat the preview policy on create;
-changing it (including omitting `whole_tree`) requires a new preview. A preview is not a secret-free certification or immutable snapshot; the
-original checkout must not be deleted/modified merely to make preview pass.
+workspace, not a new remote grant. Import uses one Git-aware selection: tracked
+working-tree files (even matching ignore rules), nonignored untracked files, and
+standalone `.git` metadata. Git enumerates names with `ls-files --cached --others
+--exclude-standard`; no manual ignore parser or directory/credential-name blacklist.
+`dist` and `build` follow those same rules. Dependency reuse exception for the Linux
+target: source OS comes from the actual source execution device (the Windows staging
+helper passes `win32` explicitly, never its WSL host OS). Linux-source `node_modules`
+are included even when Git-ignored, to reuse installed dependencies; all other ignored
+entries remain excluded. Non-Linux or unknown-source `node_modules` are excluded even
+when tracked; the unchanged index can therefore show working-tree deletions. This is a
+dependency-specific compatibility rule, not a general directory blacklist. Symlinks
+remain refused, including local dependency links; no external dependency dereferencing
+and no automatic installs. Linux-to-Linux does not guarantee matching CPU architecture
+or ABI. This is not an exact clone: local changes and nonignored untracked files enter,
+and working-tree deletions remain deleted. Non-Git folders include every safe entry;
+`.gitignore` is not interpreted there. Preview is advisory; no manual content review,
+token or acknowledgement is required. Legacy `curated`/`whole_tree` are aliases for
+`git`; old review fields are ignored. Standalone Git metadata is retained unchanged;
+external `.git` pointers, linked worktrees and alternate object stores are refused.
+Symlink, containment, authorized workspace and scan-limit checks remain. No automatic
+dependency installation; cross-OS native dependencies may be incompatible. Setup/install
+permissions remain separate. The original source and index are not modified; staging is
+filtered before SDK Init. A mutable source still requires stability during copy, not a
+secret-free certification.
 Remote targets fail without fallback. SDK home ownership checks remain upstream.
 
 ## Fresh-session automatic bootstrap
@@ -321,10 +323,10 @@ imports currently fail closed; explicit operator/native routes are unchanged.
 
 The fixed helper runs the approved Node executable as the distribution's default
 user (which may be root), never a model-selected command or shell. That user must
-be able to execute this Node binary and read the reviewed source. An inaccessible
+be able to execute this Node binary and read the selected source. An inaccessible
 binary, non-ext4 staging location or failed/unknown copy blocks Init, with no
 fallback to reading DrvFS. It copies every approved entry under the exact consumed
-review source and policy, including `whole_tree` dependencies/VCS/build data;
+inspect advisory Git-aware source preview;
 credential-name rules remain enforced. Links, special files, hardlinked regular
 files and unsupported permission bits are refused. Per-file identity/size/mtime
 checks and a second whole-tree content-hash pass detect instability; only atime
@@ -462,9 +464,8 @@ source-read and destination-write routes. Git hooks/fsmonitor and inherited Git
 configuration are disabled for this inventory. The plan selects tracked working-tree
 regular files (not committed versions), excludes untracked files, VCS/dependency
 and build trees and known credential artifacts, and reports bounded exclusions/warnings/counts.
-This fixed curated scope is not a full clone. Source modules under `src/credentials`
-are retained with warnings; nested non-code data remains excluded. To include VCS or
-dependencies, use `importPolicy:"whole_tree"` on a separately content-reviewed tree.
+This is a selected-file snapshot, not a repository import: Git metadata is not copied and repository identity is not preserved. Source modules under `src/credentials`
+are retained with warnings; nested non-code data remains excluded. To preserve Git identity, import the registered source tree directly with Git-aware selection, not baseline preparation.
 Source and destination must not overlap. It performs no copying or registration.
 
 After its exact human approval, `baseline_prepare` runs as owner-session background
@@ -515,6 +516,13 @@ After approved setup and source import:
 ```text
 workspace_create {backend:"layerfs",source:"main",idempotencyKey:"task-stable-key"}
 ```
+
+Once registered, prefer workspace_fork {source:"<registered-workspace-selector>",
+idempotencyKey:"next-task-stable-key"}. Its default backend=auto inherits the exact
+LayerFS branch binding; optional newBranch names the new branch. Unlike the legacy
+workspace_create contract, source is always a registered Workspace, not "main".
+baseRef overrides are refused for LayerFS. Foreign/quarantined namespace bindings
+fail closed; no Git fallback, setup or import is implicit.
 
 This forks a new branch and registers it **without a persistent mount**. Optional
 branch names the new branch; source names an imported LayerFS branch, not a host

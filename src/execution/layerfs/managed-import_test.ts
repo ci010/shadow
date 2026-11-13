@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 // Exercise the SDK job loop independently of Windows staging. The staging
 // helper has separate synthetic filesystem tests; never invoke real WSL here.
 const nativeFixtureDriver = () => spawnManagedDriver({ requestTimeoutMs: 2000, launch: ((command: any, args: any, options: any) =>
-  spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("process.platform !== 'win32'", 'true') : arg), options)) as typeof spawn })
+  spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("if (process.platform !== 'win32') fail('UnsupportedManagedImportPlatform');", 'return source;') : arg), options)) as typeof spawn })
 import { ManagedLayerFS, ManagedRuntimeError, spawnManagedDriver } from './managed.ts'
 import { layerfsName } from './bridge.ts'
 import { ToolOutcomeUnknownError } from '../../tools/tool.ts'
@@ -153,7 +153,7 @@ for (const stage of ['success', 'failed', 'unknown', 'invalid-receipt'] as const
       if(command!=='wsl.exe'||args[0]!=='--distribution'||args[1]!=='Fixture'||args[2]!=='--exec'||args[3]!=='/trusted/node'||args.at(-1)!=='whole_tree'||args.at(-3)!=='C:\\\\reviewed'||options.timeout!==615000)throw Error('wrong fixed launch');
       ${stage === 'failed' || stage === 'unknown' ? "throw Error('private copy result unavailable')" : `return {stdout:${JSON.stringify(JSON.stringify({ destination: stage === 'invalid-receipt' ? '/private/other-source' : destination }))}};`}
     }\n`
-    const driver = spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? fake + arg.replace("process.platform !== 'win32'", 'false').replace('await promisify(execFile)', 'await fakeExec') : arg), options)) as typeof spawn })
+    const driver = spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? fake + arg.replace("process.platform !== 'win32'", 'false').replaceAll('await promisify(execFile)', 'await fakeExec') : arg), options)) as typeof spawn })
     try {
       await driver.request('open', { runtimeModule: sdk, project: 'fixture', settings: { wsl: { home: '/var/lib/shadow-layerfs/' + 'a'.repeat(32), distribution: 'Fixture', node: '/trusted/node' } } }, signal())
       const attempt = driver.request('create', { source: 'C:\\reviewed', importPolicy: 'whole_tree' }, signal())

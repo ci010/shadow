@@ -1426,6 +1426,31 @@ For a separate LayerFS baseline destination, use this tool and then the automate
 
 ### Derived Workspaces
 
+Prefer builtin `workspace_fork` (`v:tools/workspace_fork`) for a stable registered-source
+contract across backends. `source` is always a registered current-Project Workspace
+selector, never a host path or raw LayerFS branch. `backend` defaults to `auto`:
+a LayerFS source inherits LayerFS; local and remote sources use `git-worktree`,
+including native Windows Git. There is no backend fallback.
+
+- Git: supply `baseRef` (existing local or remote-tracking branch). The service
+  generates the independent new branch; `newBranch` is refused for Git.
+- LayerFS: the exact registered branch binding is inherited and checked against
+  the active Project namespace/connection. Optional `newBranch` names the new branch;
+  `baseRef` overrides, legacy mounts and quarantined/foreign bindings are refused.
+  A local/remote source cannot be forked with explicit `backend: "layerfs"` until
+  separately prepared/imported and registered as a LayerFS Workspace. No setup,
+  download or import is implicit.
+- Both accept `description`, `workKey`, `name` and `idempotencyKey`. The operation
+  requires an owner session, does not switch the session, and uses the existing
+  backend creation journals, reservations and registration permissions. Reuse an
+  idempotency key with identical parameters; unknown mutations are not replayed.
+  LayerFS checkpoints do not export to the original checkout. Dynamic `layerfs_*`
+  tools remain discoverable/lazily loaded for setup, import and maintenance.
+
+The older `workspace_create` contract remains unchanged: its `source` means a
+registered Workspace for Git but an imported branch name for LayerFS; `branch`
+means a Git base branch or a new LayerFS branch respectively.
+
 Import `workspace_create` from `v:tools/workspace_create`, then invoke it with
 `source` (a registered Workspace selector in the current Project) and `branch`
 (a local branch or existing remote-tracking ref). Optional fields are `description`,
@@ -1444,7 +1469,8 @@ and commit, independent branch, and visible description. User descriptions retai
 the generated source/worktree identity. Optional Work association is recorded in
 the creation receipt and description; it neither claims Work nor changes assignees.
 No dirty files are copied, no source checkout/reset occurs, and no fetch/pull runs.
-Remote execution and LayerFS are not implemented by this backend.
+Remote Git creation is delegated to the paired execution backend without Main
+filesystem fallback. LayerFS uses its separate committed-branch creation service.
 
 Automatic Work admission calls the same service and binds the returned Workspace
 to its executor. Old Project-Home `work-executions` worktrees remain in place and
@@ -1483,3 +1509,6 @@ sessions use only these built-in Project-Home Work operations, never remote file
 or a different Project database.
 
 Current Work defaults to the unique unfinished assignee record, not management or links. Pending, in_progress, blocked and paused occupy one slot; done/cancelled retain history without occupying it. Conflicting assignments are rejected transactionally with the existing key. Legacy duplicates can be completed/released without losing history, but cannot grow. Temporary task/call bindings remain explicit context, not durable assignments.
+
+Workspace parent hierarchy, archive lookup, and the explicit boundary between lifecycle
+assessment and physical cleanup are documented in [Workspace lineage](workspace-lineage.md).

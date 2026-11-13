@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 const stageScript = ${JSON.stringify(importStageScript)};
 const refusal = ${importRefusal.toString()};
 async function stageSource(source, policy) {
- if (process.platform !== 'win32') return source;
+ if (process.platform !== 'win32') fail('UnsupportedManagedImportPlatform');
  const s = deployment.settings;
  const namespace = /^\/var\/lib\/shadow-layerfs\/([a-f0-9]{32})$/.exec(s.wsl.home)?.[1];
  if (!namespace || !/^[A-Za-z]:[\\/]/.test(source)) fail('StageRefused');

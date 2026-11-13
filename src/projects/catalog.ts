@@ -1,3 +1,4 @@
+import { parseWorkspaceLineage, type WorkspaceLineage } from '../folders/lineage.ts'
 import { randomUUID } from 'node:crypto'
 import { parseBranchWorkspace } from '../execution/layerfs/workspace-identity.ts'
 import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
@@ -16,7 +17,7 @@ function onlyFields(value: object, fields: readonly string[]): boolean {
   return !Array.isArray(value) && Object.keys(value).every(key => fields.includes(key))
 }
 
-const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity', 'mount']
+const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity', 'mount', 'lineage']
 const claimFields = ['projectId', 'workdir', 'identity']
 
 interface CatalogData {
@@ -141,6 +142,7 @@ export class ProjectCatalog {
           (folder.kind !== 'remote' && folder.kind !== 'layerfs' && (!isAbsolute(folder.path) || (folder.kind !== undefined && folder.kind !== 'local'))) ||
           (folder.description !== undefined && typeof folder.description !== 'string') ||
           typeof folder.name !== 'string' || typeof folder.createdAt !== 'string') throw new Error('Invalid project folders')
+        if (folder.lineage !== undefined) parseWorkspaceLineage(folder.lineage)
         if (folder.kind === 'layerfs') {
           validateLayerFSFolder(folder)
         } else if (folder.kind === 'remote') {
@@ -172,6 +174,7 @@ export class ProjectCatalog {
             if ((record.description !== undefined && typeof record.description !== 'string') ||
               typeof record.id !== 'string' || typeof record.path !== 'string' ||
               (record.kind !== 'remote' && record.kind !== 'layerfs' && !isAbsolute(record.path))) throw new Error('Invalid retired folder')
+            if (record.lineage !== undefined) parseWorkspaceLineage(record.lineage)
             if (record.kind === 'layerfs') {
               validateLayerFSFolder(record)
             } else if (record.kind === 'remote') {
@@ -330,6 +333,25 @@ export class ProjectCatalog {
 
   folders(projectId?: string): FolderRecord[] {
     return this.#current().folders.filter(record => !projectId || record.projectId === projectId).map(record => structuredClone(record))
+  }
+
+  archivedFolders(projectId: string): FolderRecord[] {
+    return (this.#current().retiredFolders ?? []).filter(record => record.projectId === projectId).map(record => structuredClone(record))
+  }
+
+  recordLineage(projectId: string, id: string, value: WorkspaceLineage): Promise<void> {
+    return this.#transaction(() => {
+      const lineage = parseWorkspaceLineage(value)
+      const folders = this.folders(projectId)
+      const folder = folders.find(item => item.id === id)
+      if (!folder || id === lineage.parentId || !folders.some(item => item.id === lineage.parentId)) throw new Error('Workspace lineage requires distinct current-Project registrations')
+      if (folder.lineage && JSON.stringify(folder.lineage) !== JSON.stringify(lineage)) throw new Error('Workspace lineage cannot change')
+      for (let parent = folders.find(item => item.id === lineage.parentId), seen = new Set<string>(); parent; parent = folders.find(item => item.id === parent?.lineage?.parentId)) {
+        if (parent.id === id || seen.has(parent.id)) throw new Error('Workspace lineage cycle')
+        seen.add(parent.id)
+      }
+      this.#commit({ ...this.#current(), folders: this.#current().folders.map(item => item.id === id ? { ...item, lineage } : item) })
+    })
   }
 
   configureFolderLifecycle(projectId: string, lifecycle: FolderLifecycle): () => void {

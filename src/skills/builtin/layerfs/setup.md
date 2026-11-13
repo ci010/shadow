@@ -151,7 +151,7 @@ The original checkout and Git index are not edited. Known credential artifacts,
 VCS/dependency/build trees and linked/unsafe paths cannot be copied through this path.
 This fixed curated scope is not a full clone. Credential-named source modules are
 retained with warnings; non-code data inside those directories remains excluded.
-Use `importPolicy:"whole_tree"` on a separately reviewed tree to include dependencies. Unknown embedded secrets remain possible: review contents and then run
+Git ignore selection controls dependencies; content review is not an import gate. Then run
 `layerfs_import_preview` on the returned workspace before `layerfs_import`.
 
 Plans are source/owner-bound, single-use and expire after 15 minutes. Traversal,
@@ -238,11 +238,7 @@ package version alone is not evidence of compatibility.
 4. Check the returned `ready`, `answering`, `docker`, and `sandboxVerified` fields.
    `ready:true` means the worker answers and Docker is reachable; it is **not** a
    passing import/mount/isolation/merge test. `sandboxVerified` remains false.
-5. Run `layerfs_import_preview {workspace:"registered-curated-baseline"}` and review the
-   source contents for credentials. Do not remove anything from the original
-   checkout to satisfy preview. `layerfs_import` requires its `sourceReview` token plus
-   `sourceReviewed:true`; missing, expired, changed, foreign-session or reused
-   tokens fail before import. Managed layerfs_import returns a `bg:` task and uses the
+5. Optionally run `layerfs_import_preview {workspace:"registered-source"}`. Preview is advisory, not content approval. `layerfs_import` needs only the authorized workspace, not a review token. Managed import returns a `bg:` task and uses the
    official Runtime initialization job to allocate its own labeled plain Docker
    volume and import once. Background import admission requires the direct durable
    owning session, not a task, leaf call, nested script or recovered invocation.
@@ -308,21 +304,26 @@ as `v:skills/layerfs/setup.md` without a source checkout.
 
 ## Before importing a repository
 
-`layerfs_import` recursively imports **all** files, including dotfiles, ignored and
-untracked files. There are no import ignore rules or content credential scanner.
-`layerfs_import_preview` adds an enforced metadata/name preflight. `importPolicy:"curated"`
-(default) rejects VCS/dependency/build entries as out of scope, not secrets.
-`importPolicy:"whole_tree"` includes `.git`, `.venv`, `node_modules` and build data
-and traverses them recursively with warnings; it does not bypass credential checks.
-Both policies block symlinks, private runtime/credential artifacts and unreadable or
-unbounded trees. Source directories such as `src/credentials` warn and are traversed;
-code/docs/assets are reviewable, while nested non-code data, `.env` and keys remain
-protected. Counts/findings are bounded; no incomplete or blocked scan permits import.
-Neither policy silently excludes files that Init will read. Review tokens bind source,
-session and policy, last 15 minutes and are consumed once after a matching metadata
-rescan. Repeat the exact `importPolicy` on layerfs_import; a different scope needs new review. A successful preview is not proof of no embedded secrets and cannot
-eliminate races in a mutable source tree. Use a separate, content-reviewed,
-credential-free registered baseline and preserve the original source.
-Do not treat `.gitignore` as a security boundary or import auth files for a test.
-A clean sandbox close retains branches and checkpoints. LayerFS is disposable
-working state, not a backup or an automatic merge-back to the host repository.
+Import uses one Git-aware selection: tracked working-tree files (even matching ignore
+rules), nonignored untracked files, and standalone `.git` metadata. Git enumerates names
+with `ls-files --cached --others --exclude-standard`; no manual ignore parser or
+directory/credential-name blacklist. `dist` and `build` follow those same rules.
+Dependency reuse exception for the Linux target: source OS comes from the actual source
+execution device (the Windows staging helper passes `win32` explicitly, never its WSL
+host OS). Linux-source `node_modules` are included even when Git-ignored, to reuse
+installed dependencies; all other ignored entries remain excluded. Non-Linux or
+unknown-source `node_modules` are excluded even when tracked; the unchanged index can
+therefore show working-tree deletions. This is a dependency-specific compatibility rule,
+not a general directory blacklist. Symlinks remain refused, including local dependency
+links; no external dependency dereferencing and no automatic installs. Linux-to-Linux
+does not guarantee matching CPU architecture or ABI. This is not an exact clone: local
+changes and nonignored untracked files enter, and working-tree deletions remain deleted.
+Non-Git folders include every safe entry; `.gitignore` is not interpreted there. Preview
+is advisory; no manual content review, token or acknowledgement is required. Legacy
+`curated`/`whole_tree` are aliases for `git`; old review fields are ignored. Standalone
+Git metadata is retained unchanged; external `.git` pointers, linked worktrees and
+alternate object stores are refused. Symlink, containment, authorized workspace and
+scan-limit checks remain. No automatic dependency installation; cross-OS native
+dependencies may be incompatible. Setup/install permissions remain separate. The
+original source and index are not modified; staging is filtered before SDK Init. A
+mutable source still requires stability during copy, not a secret-free certification.

@@ -3,12 +3,12 @@ import { createHash, randomBytes } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
 import { access, lstat, mkdir, open, type FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { classifyLayerFSName } from './import-review.ts'
+import { classifyLayerFSName } from './baseline-classification.ts'
 
 const TTL = 15 * 60_000
 const PLAN_BUDGET_MS = 120_000
 const PREPARE_BUDGET_MS = 15 * 60_000
-const GUIDANCE = 'Only selected Git-tracked WORKING-TREE regular files are copied, not committed versions. Untracked files are excluded. This fixed curated scope also excludes VCS/dependency/build trees and known private artifacts; credential-named source modules are retained with warnings, while nested non-code data remains excluded. To include VCS/dependencies, review a separate stable registered tree with importPolicy whole_tree instead; baseline preparation is not a full checkout clone. Exclusions are name-based, not a secret scanner or credential-free certification; human content review is required. Metadata checks cannot eliminate filesystem races or detect every content change (Windows read-induced change time and all access times are excluded). Plans expire after 15 minutes; expiry is checked after pre-copy revalidation and before destination creation. Planning and pre-copy metadata revalidation each have a 120-second runtime limit. Once admitted, preparation has a separate runtime limit of up to 15 minutes; plan expiry does not interrupt an admitted copy. Do not mutate the source or destination during preparation. Failed/partial destinations are retained, never returned as ready. The original source is never edited or cleaned.'
+const GUIDANCE = 'Only selected Git-tracked WORKING-TREE regular files are copied, not committed versions. Untracked files are excluded. This file-snapshot contract does not copy Git metadata or preserve repository identity; it is not a repository import. It also excludes other VCS/dependency/build trees and known private artifacts; credential-named source modules are retained with warnings, while nested non-code data remains excluded. To preserve Git identity, import the registered source tree directly with Git-aware selection; do not use baseline preparation as a repository import. Exclusions are name-based, not a secret scanner or credential-free certification; human content review is required. Metadata checks cannot eliminate filesystem races or detect every content change (Windows read-induced change time and all access times are excluded). Plans expire after 15 minutes; expiry is checked after pre-copy revalidation and before destination creation. Planning and pre-copy metadata revalidation each have a 120-second runtime limit. Once admitted, preparation has a separate runtime limit of up to 15 minutes; plan expiry does not interrupt an admitted copy. Do not mutate the source or destination during preparation. Failed/partial destinations are retained, never returned as ready. The original source is never edited or cleaned.'
 export interface LayerFSBaselineFinding { path: string; reason: string }
 export interface LayerFSBaselinePlan {
   plan: string
@@ -297,7 +297,8 @@ export class LayerFSBaseline {
     for (const path of paths) {
       budget.check()
       const parts = path.split('/')
-      let blocker: string | undefined, warning: string | undefined
+      let blocker: string | undefined = parts.some(part => part.toLowerCase() === '.git') ? 'git_metadata_outside_file_snapshot_contract' : undefined
+      let warning: string | undefined
       let credentialAncestor = classifyLayerFSName(basename(source), true).warning === 'credential_related_name_requires_content_review'
       for (let i = 0; i < parts.length; i++) {
         const classification = classifyLayerFSName(parts[i], i < parts.length - 1, 'curated', credentialAncestor)

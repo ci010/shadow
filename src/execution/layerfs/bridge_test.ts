@@ -69,7 +69,7 @@ test('create accepts a registered source selector and SDK refusals are completed
   assert.equal(receipt.ok,true)
   assert.equal(receipt.result.kind,'Initialized')
   assert.equal(receipt.result.timeout,300000, 'Shared default reaches the SDK unchanged')
-  assert.equal(receipt.result.source,dir)
+  assert.notEqual(receipt.result.source,dir); assert.match(receipt.result.source,/shadow-layerfs-stage-/)
   assert.equal(receipt.result.project,layerfsName('one'))
   const workspace = Buffer.from(JSON.stringify({project:layerfsName('one'),sandbox:'1',path:'/workspaces/1'})).toString('base64url')
   for (const [args,code] of [[{action:'close',workspace},'Dirty'],[{action:'fork',branch:'bad'},'InvalidInput']] as const) {

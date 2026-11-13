@@ -73,7 +73,6 @@ test('setup gates code execution; persists approval without env/restart and reus
       const importContext: ExecutionContext = { ...context, resolveToolTarget: async (_, operation) => {
         assert.equal(operation, 'filesystem.read'); resolved = true; return { cwd: source, fileChangeTarget: { nodeId: 'main', workdirId: 'registered' } }
       } }
-      await assert.rejects(tool.execute({ action: 'create', workspace: 'registered' }, importContext), ToolNoEffectError)
       const preview = JSON.parse(toolResultText(await tool.execute({ action: 'import_preview', workspace: 'registered' }, importContext))).result
       await tool.execute({ action: 'create', workspace: 'registered', sourceReview: preview.reviewToken, sourceReviewed: true }, importContext)
       assert.equal(resolved, true); assert.equal(calls.filter(c => c === 'create').length, 1)
@@ -157,7 +156,7 @@ test('real managed IPC helper runs the public runtime contract against synthetic
     `)
     await writeFile(join(dir, 'api', 'agent', 'src', 'index.js'), `export const LayerFS={open:async()=>({project:{list_branches:async()=>({volume:process.env.LAYERFS_VOLUME,home:process.env.LAYERFS_HOME}),list_sandboxes:async()=>({items:[],hasMore:false})},fs:{stat:async()=>({type:'file',size:14,root:'r'}),read:async()=>({text:'managed-route\\n',root:'r',truncated:false,lineTruncated:false})},close:async()=>{}})}`)
     const home = join(dir, 'home')
-    const service = managedLayerFS('one', home, () => new ManagedLayerFS('one', home, () => spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("process.platform !== 'win32'", 'true') : arg), options)) as typeof spawn }), 'win32'))
+    const service = managedLayerFS('one', home, () => new ManagedLayerFS('one', home, () => spawnManagedDriver({ launch: ((command: any, args: any, options: any) => spawn(command, args.map((arg: string) => arg.includes("process.platform !== 'win32'") ? arg.replace("if (process.platform !== 'win32') fail('UnsupportedManagedImportPlatform');", 'return source;') : arg), options)) as typeof spawn }), 'win32'))
     const tool = new LayerFSTool('one', home), context = owner(dir)
     try {
       const connected = await service.setup(installation, signal())

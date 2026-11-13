@@ -86,7 +86,7 @@ test('supported synthetic workflow: exact approvals -> quarantined namespace -> 
     for (const name of ['.env', '.git', 'node_modules', 'untracked.ts']) await assert.rejects(lstat(join(baseline, name)), { code: 'ENOENT' })
     for (const [path, content] of f.sourceFiles) assert.equal(await readFile(join(f.source, path), 'utf8'), content)
     const preview = await f.invoke({ action: 'import_preview', workspace: 'curated', namespace: recovered.namespace })
-    assert.equal(preview.status, 'review_required'); assert.ok(preview.warnings.length >= 2)
+    assert.equal(preview.status, 'ready')
     const created = await f.invoke({ action: 'create', workspace: 'curated', namespace: recovered.namespace, sourceReview: preview.reviewToken, sourceReviewed: true })
     assert.equal(created.kind, 'Initialized'); assert.equal(created.project, recovered.project)
     assert.equal(f.activity().importedSource, baseline); assert.equal(f.activity().starts, 1)
