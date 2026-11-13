@@ -3384,6 +3384,9 @@ function resendLastMessage() {
   min-width: 0;
   flex-shrink: 0;
   content-visibility: auto;
+  /* Paint containment must not cut off execution-card breathing/reveal halos.
+   * Keep the layout/visibility optimization, allowing the 22px glow on all sides. */
+  overflow-clip-margin: 24px;
   contain-intrinsic-block-size: auto 160px;
 }
 @media print { .chat-message-entry { content-visibility: visible; } }
