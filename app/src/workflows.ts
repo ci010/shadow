@@ -117,9 +117,9 @@ export function workflowGraph(definition: WorkflowDefinition, run?: WorkflowRun)
     ? { label: t('Time signal'), detail: recordedText(job?.schedule) ? formatWorkflowSchedule(String(job!.schedule)) : t('Schedule not recorded'), description: recordedText(job?.timezone) ? t('Timezone: {zone}', { zone: String(job?.timezone) }) : undefined }
     : { label: t('Signal source'), detail: `${definition.source.kind} · ${definition.source.id}`, description: undefined }
   return [
-    { id: 'source', ...source, status: run ? 'received' as const : 'ready' as const, config: definition.source },
-    ...(definition.gate ? [{ id: 'gate', label: nodeLabel(definition.gate.kind), detail: definition.gate.first === 'baseline' ? t('First collection: baseline only') : t('First collection: emit unseen revisions'), description: t('Skip observations already seen'), status: run ? 'accepted' as const : 'ready' as const, config: definition.gate }] : []),
-    ...definition.nodes.map((node, i) => ({ id: `node-${i}`, ...actionPresentation(node, definition), status: status(i), config: node, targetSessionId: workflowTargetSession(node, definition) })),
+    { id: 'source', nodeType: 'source' as const, ...source, status: run ? 'received' as const : 'ready' as const, config: definition.source },
+    ...(definition.gate ? [{ id: 'gate', nodeType: 'gate' as const, label: nodeLabel(definition.gate.kind), detail: definition.gate.first === 'baseline' ? t('First collection: baseline only') : t('First collection: emit unseen revisions'), description: t('Skip observations already seen'), status: run ? 'accepted' as const : 'ready' as const, config: definition.gate }] : []),
+    ...definition.nodes.map((node, i) => ({ id: `node-${i}`, nodeType: 'action' as const, ...actionPresentation(node, definition), status: status(i), config: node, targetSessionId: workflowTargetSession(node, definition) })),
   ].map(node => ({ targetSessionId: undefined as string | undefined, ...node }))
 }
 export const recentWorkflowRuns = (snapshot: WorkflowSnapshot, id: string) => snapshot.runs.filter(r => r.workflow === id).sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id)).slice(0, 30)

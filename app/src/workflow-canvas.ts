@@ -2,7 +2,8 @@ import { MarkerType, type Node, type Edge } from '@vue-flow/core'
 import { workflowGraph, type WorkflowDefinition, type WorkflowRun, type WorkflowConversation } from './workflows.ts'
 
 export interface WorkflowCanvasControl { enabled: boolean; disabled: boolean; busy: boolean; error?: string; notice?: string }
-type ProjectionGraph = Array<{ id: string; label: string; detail: string; config: unknown; status: 'ready'; description?: string; targetSessionId?: string }>
+export type WorkflowNodeType = 'connection' | 'binding' | 'deployment' | 'session' | 'source' | 'gate' | 'action'
+type ProjectionGraph = Array<{ id: string; nodeType?: WorkflowNodeType; label: string; detail: string; config: unknown; status: 'ready'; description?: string; targetSessionId?: string }>
 export type WorkflowCanvasEntry = ({ definition: WorkflowDefinition; graph?: never; projection?: false } |
   { definition: Pick<WorkflowDefinition, 'id' | 'name' | 'enabled'>; graph: ProjectionGraph; projection: true }) &
   { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl }
@@ -43,7 +44,7 @@ export function workflowCanvas(flows: WorkflowCanvasEntry[]): { nodes: Node[]; e
     const { definition, run, enabled = definition.enabled, snapshot = false, conversation, control } = entry
     const row = rows[column]++
     const groupId = nodeId(definition.id, 'group')
-    nodes.push({ id: groupId, type: 'group', position: { x: positions[column], y: 48 + row * 260 }, data: { definition, run, enabled, snapshot, conversation, control, projection: entry.projection, column },
+    nodes.push({ id: groupId, type: 'group', position: { x: positions[column], y: 48 + row * 260 }, data: { definition, run, enabled, snapshot, conversation, control, projection: entry.projection, projectionType: entry.projection ? graph.find(node => node.nodeType === 'binding')?.nodeType ?? graph[0]?.nodeType : undefined, column },
       style: { width: `${graph.length * 280 + 24}px`, height: '240px' },
       draggable: false, selectable: false, connectable: false, deletable: false, focusable: false, zIndex: -1 })
     for (const [index, node] of graph.entries()) {

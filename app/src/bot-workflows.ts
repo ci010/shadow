@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { t } from './i18n.ts'
 import { channelStateLabel } from './channel-settings.ts'
-import type { WorkflowCanvasEntry } from './workflow-canvas.ts'
+import type { WorkflowCanvasEntry, WorkflowNodeType } from './workflow-canvas.ts'
 
 const text = z.string().max(512)
 const health = z.enum(['disabled', 'unconfigured', 'connecting', 'connected', 'disconnected', 'error', 'running', 'restart-required'])
@@ -26,7 +26,7 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
   ]
   return rows.map(({ id, binding, connection, deployment }) => {
     const enabled = !!connection?.enabled && deployment?.state === 'valid' && !!binding?.enabled && binding.subscribed
-    const node = (id: string, label: string, detail: string, config: unknown, targetSessionId?: string) => ({ id, label, detail, config, status: 'ready' as const, targetSessionId })
+    const node = (id: WorkflowNodeType, label: string, detail: string, config: unknown, targetSessionId?: string) => ({ id, nodeType: id, label, detail, config, status: 'ready' as const, targetSessionId })
     const graph = connection || binding ? [node('connection', t('BOT connection'), connection ? `${connection.displayName} · ${connection.platform} · ${healthLabel(connection.health)} · ${connection.enabled ? t('Enabled') : t('Disabled')}` : t('Connection unavailable'), connection ?? { id: binding?.connectionId })] : []
     if (binding) graph.push(node('binding', t('Conversation binding'), `${binding.topic ?? t('Host owner ingress')} · ${binding.enabled ? t('Enabled') : t('Disabled')} · ${binding.subscribed ? t('Subscribed') : t('Not subscribed')} · ${binding.listener ? t('Listener projected') : t('No listener')}`, binding))
     if (deployment) graph.push(node('deployment', t('Published BOT / Agent'), `${deployment.id} · ${deployment.agent ?? t('Unavailable')} · ${deploymentLabel(deployment.state)}`, deployment))

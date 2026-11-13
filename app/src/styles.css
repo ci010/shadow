@@ -36,6 +36,14 @@
   --trace-row-height: 40px;
 
   /* ── Core surfaces ─────────────────────────────── */
+  /* Graph object categories, never execution or connectivity state. */
+  --c-graph-connection-bg: #dfeaf1;
+  --c-graph-binding-bg: #e9e1f1;
+  --c-graph-deployment-bg: #efdfe6;
+  --c-graph-session-bg: #e1e7eb;
+  --c-graph-source-bg: #e2ece9;
+  --c-graph-gate-bg: #ece8da;
+  --c-graph-action-bg: #e5e3ef;
   --c-bg: #f3f3f3;
   --c-bg-card: #ffffff;
   --c-bg-soft: #f7f7f7;
@@ -134,6 +142,13 @@
 .dark {
   color-scheme: dark;
 
+  --c-graph-connection-bg: #283a46;
+  --c-graph-binding-bg: #393047;
+  --c-graph-deployment-bg: #45303b;
+  --c-graph-session-bg: #303940;
+  --c-graph-source-bg: #2e3d39;
+  --c-graph-gate-bg: #403c2e;
+  --c-graph-action-bg: #343346;
   --c-bg: #141414;
   --c-bg-card: #202020;
   --c-bg-soft: #1a1a1a;
