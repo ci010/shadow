@@ -39,7 +39,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
       if (cronContextMode(job) !== 'fresh') continue
       jobs.set(job.id, {
         id: job.id, name: job.name ?? job.task ?? job.id, source: job.source ?? 'cron',
-        session: 'fresh', schedule: job.schedule, task: job.task, agentType: job.agentType,
+        session: 'fresh', schedule: job.schedule, task: job.task, agentType: job.agentType, workflow: cron.workflowStatus(job.id),
         ...(job.program ? { program: job.program, running: cron.isRunning(job.id) || programControls?.running?.() === true,
           configurationError: undefined, // Project dispatch can bootstrap without a default Workspace.
           notice: !job.program.folderId ? 'Project dispatch is ready without a default Workspace. Eligible Work starts an unbound bootstrap worker, which must acquire an authorized source and bind its prepared isolated worktree before implementation.' : 'Fresh dispatcher rounds select Work, models and devices; idle ticks do not call a model. Workers use isolated local or supported Child Git worktrees.' } : {}),

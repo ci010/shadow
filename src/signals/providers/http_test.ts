@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { CapabilityBroker } from '../../execution/grants.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
-import { SignalProviderRuntime } from './runtime.ts'
+import { TestSignalProviderRuntime as SignalProviderRuntime } from './testing.ts'
 
 const processor = 'export function run({signal}){return [{content:signal.data.title}]}'
 const http = { origin: 'https://public.example', routes: [{ method: 'GET' as const, path: '/items', querySchema: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string' } } } }] }
@@ -39,8 +39,8 @@ test('REST JSON pages: silent delta baseline, cursor plus jobs, bounded dedup su
   const make=()=>new SignalProviderRuntime(workspace,broker,async(id,input)=>{messages.push(input.kind === 'message' ? input.content : '');return {status:'accepted',sessionId:id,inputId:input.id}},()=>true,()=>false)
   let runtime=make();runtime.start();runtime.publish('owner',rest)
   runtime.create('owner',{id:'watch',provider:'rest',version:1})
-  runtime.subscribe('owner',{id:'sub',instance:'watch',demand:{},processor})
-  assert.throws(()=>runtime.subscribe('owner',{id:'bad',instance:'watch',demand:{unknown:true},processor}))
+  runtime.subscribe('owner',{id:'sub',instance:'watch',demand:{},first: 'baseline', action: { kind: 'notify', processor }})
+  assert.throws(()=>runtime.subscribe('owner',{id:'bad',instance:'watch',demand:{unknown:true},first: 'baseline', action: { kind: 'notify', processor }}))
   await runtime.run();assert.deepEqual(messages,[])
   stage=1;now+=60001;await runtime.run();assert.deepEqual(messages,['b','c']);assert.deepEqual(cursors,['','base','page2'])
   await runtime.stop();runtime=make();runtime.start();now+=60001;await runtime.run();assert.deepEqual(messages,['b','c'])
@@ -61,7 +61,7 @@ test('public HTML acquisition and pure local HTML extraction fan out to subscrib
   const broker=new CapabilityBroker({projectId:'fixture',directory:join(workspace,'receipts'),resolveSecret:async()=>{throw new Error('no credential')},deliver:async()=>undefined,canDeliver:()=>false,request:async()=>new Response('<html><h1>'+headline+'</h1></html>',{headers:{'content-type':'text/html'}})})
   const runtime=new SignalProviderRuntime(workspace,broker,async(id,input)=>{messages.push(input.kind === 'message' ? input.content : '');return {status:'accepted',sessionId:id,inputId:input.id}},()=>true,()=>false)
   runtime.start();runtime.publish('owner',{id:'html',version:1,description:'public HTML',http:{origin:http.origin,routes:[{method:'GET',path:'/news'}]},...schemas,code:`import {call} from '@shadow/fetch';import {parseHtml} from '@shadow/html';export async function run({demands}){const r={};for(const d of demands){const response=await call({method:'GET',path:'/news'});if(response.status!==200||typeof response.body!=='string')throw new Error('HTML expected');const title=parseHtml(response.body).querySelector('h1')?.textContent;if(!title)throw new Error('missing title');r[d.key]={mode:'snapshot',signals:[{id:title,data:{title}}],checkpoint:null}}return r}`})
-  runtime.create('owner',{id:'news',provider:'html',version:1});runtime.subscribe('reader',{id:'headlines',instance:'news',demand:{},processor:`import {parseHtml} from '@shadow/html';export function run({signal}){return [{content:parseHtml('<p>'+signal.data.title+'</p>').querySelector('p').textContent}]}`})
+  runtime.create('owner',{id:'news',provider:'html',version:1});runtime.subscribe('reader',{id:'headlines',instance:'news',demand:{},first: 'baseline', action: { kind: 'notify', processor:`import {parseHtml} from '@shadow/html';export function run({signal}){return [{content:parseHtml('<p>'+signal.data.title+'</p>').querySelector('p').textContent}]}` }})
   await runtime.run();headline='new';now+=60001;await runtime.run();assert.deepEqual(messages,['new']);await runtime.stop()
  })
 })
@@ -87,7 +87,7 @@ test('REST broker requests abort on reload/stop; restricted looping collector is
   const broker=new CapabilityBroker({projectId:'fixture',directory:join(workspace,'receipts'),resolveSecret:async()=>{throw new Error('no secret')},deliver:async()=>undefined,canDeliver:()=>false,
    request:async(_url,options)=>{entered();return new Promise<Response>((_resolve,reject)=>{options?.signal?.addEventListener('abort',()=>{aborted++;reject(new Error('aborted'))},{once:true})})}})
   const runtime=new SignalProviderRuntime(workspace,broker,async()=>{throw new Error('no delivery')},()=>true,()=>false)
-  runtime.start();runtime.publish('owner',rest);runtime.create('owner',{id:'watch',provider:'rest',version:1});runtime.subscribe('owner',{id:'sub',instance:'watch',demand:{},processor})
+  runtime.start();runtime.publish('owner',rest);runtime.create('owner',{id:'watch',provider:'rest',version:1});runtime.subscribe('owner',{id:'sub',instance:'watch',demand:{},first: 'baseline', action: { kind: 'notify', processor }})
   const {version:_version,...manifest}=rest
   let run=runtime.run();await entering
   await runtime.reload('owner',manifest);await run;assert.equal(aborted,1)

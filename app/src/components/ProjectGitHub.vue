@@ -1,6 +1,7 @@
 <template>
   <section class="project-github" :aria-label="t('Project GitHub integration')">
     <p class="github-intro">{{ t('Issues are sources. PRs are delivery evidence. Neither changes Work assignments or acceptance automatically.') }}</p>
+    <p>{{ t('GitHub observations run as typed Signals in Workflow. Work Organizer handles internal session metadata, not GitHub notifications.') }} <a :href="`/projects/${encodeURIComponent(projectId)}/workflows`">{{ t('Open Workflow') }}</a></p>
     <p v-if="error || snapshot.state.error" role="alert">{{ error || snapshot.state.error }}</p>
     <button :disabled="busy || snapshot.state.loading" @click="snapshot.refresh()">{{ t('Reload integration') }}</button>
     <p v-if="!state && snapshot.state.loading" role="status">{{ t('Loading GitHub connections…') }}</p>
@@ -145,10 +146,10 @@
         </article>
       </details>
       <details v-if="state.notifications.length" class="github-section">
-        <summary>{{ t('Follow-up deliveries ·') }} {{ state.notifications.length }}</summary>
+        <summary>{{ t('Historical delivery receipts ·') }} {{ state.notifications.length }}</summary>
         <article v-for="item in state.notifications.toReversed()" :key="item.id" class="github-receipt">
           <p>{{ enumLabel(item.status) }} → {{ item.subscription.sessionId }}</p><pre>{{ item.summary }}</pre><p v-if="item.error">{{ item.error }}</p>
-          <template v-if="canWrite && item.status === 'unknown'">
+          <template v-if="canWrite && ['unknown', 'pending'].includes(item.status)">
             <p>{{ t('Delivery may already have reached the session. Retrying can start a duplicate turn.') }}</p>
             <label class="check"><input v-model="duplicateRisk" type="checkbox" />{{ t('I checked the session and accept this risk.') }}</label>
             <button :disabled="busy" @click="run(`/notifications/${item.id}`, { retry: false, acceptDuplicateRisk: true })">{{ t('Dismiss delivery') }}</button>

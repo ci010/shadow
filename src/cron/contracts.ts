@@ -20,6 +20,8 @@ export interface AutomationSessionRef {
   legacy?: boolean
 }
 export interface AutomationSummary {
+  /** Schedule-focused projection; durable execution details are at /api/workflows. */
+  workflow?: { id: string; pending: number; blocked: number }
   /** Program actions have no model inference on idle scans. */
   program?: import('./work-dispatch-contract.ts').WorkDispatchConfig
   running?: boolean

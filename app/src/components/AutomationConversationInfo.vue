@@ -22,9 +22,6 @@
             <dt>{{ t('Session mode') }}</dt><dd>{{ t('Fresh — each dispatch starts a separate conversation.') }}</dd>
             <dt>{{ t('Prompt') }}</dt><dd>{{ automation.task || t('No prompt is available for this automation.') }}</dd>
           </dl>
-          <button v-if="canToggleAutomation(automation) && conversation.toggle" class="btn btn-sm" :disabled="conversation.updating?.value" @click="conversation.toggle()">{{ (automation.source === 'learning' ? automation.enabled : (automation.configuredEnabled ?? automation.enabled)) ? t('Disable') : t('Enable') }}</button>
-          <p v-if="conversation.updateError?.value" role="alert">{{ conversation.updateError.value }}</p>
-          <p v-if="automation.source === 'system'">{{ t('Controls this automation feature, not the saved run. Disabling cancels its active execution; saved results remain available.') }}</p>
           <p v-if="automation.source === 'learning'">{{ t('Checks are activity-gated. A check does not necessarily start a run.') }}</p>
           <p v-if="!automation.enabled">{{ t('Dispatch is disabled. Saved conversations remain available.') }}</p>
         </template>
@@ -49,7 +46,7 @@ import MessagePreviewCard from './MessagePreviewCard.vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed } from 'vue'
 import type { AutomationConversation } from '../composables/useAutomationConversation.ts'
-import { canToggleAutomation, learningOutcomeLabel, type AutomationRunSummary } from '../automations.ts'
+import { learningOutcomeLabel, type AutomationRunSummary } from '../automations.ts'
 
 const props = defineProps<{ conversation: AutomationConversation }>()
 const automation = computed(() => props.conversation.automation.value)

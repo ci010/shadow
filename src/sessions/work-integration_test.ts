@@ -1,3 +1,4 @@
+import { WorkflowRuntime } from '../workflows/runtime.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -660,8 +661,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: GitHub observations preserve silent delivery and cannot approve or finish notes`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
     const remote = await createGitHubFixture(join(workspace, 'github-fixture'))
+    const workflows = new WorkflowRuntime(workspace, 'fixture', { canUse: () => true, deliver: async () => { throw new Error('Unexpected generic delivery') } }); workflows.start()
     const github = new GitHubService(new GitHubStore(workspace), remote.client, {
-      alignment: f.alignment, durableSession: target => f.sessions.getSessionState(target)?.mode === 'session',
+      workflows, alignment: f.alignment, durableSession: target => f.sessions.getSessionState(target)?.mode === 'session',
       emit: event => f.events.emit(event), changed: () => {},
     })
     try {
@@ -690,7 +692,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         kind: 'tool', id: 'github-read', quote: 'External GitHub snapshot' })
       assert.deepEqual(f.alignment.get(work.key).definition, definition)
       assert.equal(f.alignment.get(work.key).workflow?.status, 'pending')
-    } finally { await github.stop(); await remote.close(); await f.close(); store.close?.() }
+    } finally { await github.stop(); await workflows.stop(); await remote.close(); await f.close(); store.close?.() }
   }))
 
   test(`${Store.name}: Project preferences still require an attributable source, not a Work record`, async () => withTempWorkspace(async workspace => {

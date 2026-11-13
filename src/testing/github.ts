@@ -1,3 +1,4 @@
+import { WorkflowRuntime } from '../workflows/runtime.ts'
 import { Hono } from 'hono'
 import { InitiativeStore } from '../initiatives/store.ts'
 import { workRecordSchema } from '../initiatives/work-contract.ts'
@@ -79,7 +80,8 @@ export async function createGitHubFixture(home: string) {
   }
   const delivered: SystemEvent[] = []
   const client = new GitHubClient(transport), store = new GitHubStore(home)
-  const service = new GitHubService(store, client, { alignment, durableSession: id => states.get(id)?.mode === 'session',
+  const workflows = new WorkflowRuntime(home, 'fixture', { canUse: () => true, deliver: async () => { throw new Error('GitHub notifications must not call the generic agent delivery') } }); workflows.start()
+  const service = new GitHubService(store, client, { workflows, alignment, durableSession: id => states.get(id)?.mode === 'session',
     changed: () => {}, emit: async event => { delivered.push(event); if (remote.failDelivery) throw new Error('Synthetic uncertain delivery') } })
   const app = new Hono()
   githubPlugin(service, request => request.headers.get('x-fixture-owner') === 'yes')(app)
@@ -87,6 +89,6 @@ export async function createGitHubFixture(home: string) {
     method: body === undefined ? 'GET' : 'POST', headers: { ...(authorized ? { 'x-fixture-owner': 'yes' } : {}), 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
-  return { service, store, client, app, request, remote, requests, work, alignment, works, states, delivered,
-    async close() { await service.stop(); works.close() } }
+  return { workflows, service, store, client, app, request, remote, requests, work, alignment, works, states, delivered,
+    async close() { await service.stop(); await workflows.stop(); works.close() } }
 }

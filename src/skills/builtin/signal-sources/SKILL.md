@@ -16,7 +16,7 @@ Read only this contract for consumption; do not fetch implementation/configurati
 just to subscribe. A version section applies only to its listed instances, not
 blindly the latest revision. No available instance means setup is needed; do not
 invent one or promise monitoring. Discover `signal_provider` under `v:tools/signals`
-and read its live contract. Subscriptions require direct user input and deliver to self.
+and read its live contract. Subscriptions require direct user input and create Workflows. Required `first` selects `baseline` (silent first batch) or `emit`, independently per subscription. Use `action:{kind:"notify",processor:"..."}` to transform `{signal}` without IO into 0..16 `{content}` drafts delivered to self, or `action:{kind:"record"}` to deterministically materialize observations without waking an agent. Sources own protocol checkpoints, not business seen/processing state. Use `workflow` for unified read/create/update/validate/remove, source and schedule configuration plus owned operational controls; read `v:workflows/authoring` for typed Work mapping, ordering and examples. Inspect `v:workflows` for durable runs; a run is not a model session.
 
 # Explicit authoring and management
 
@@ -35,15 +35,14 @@ disclosure, not an access boundary. Views are read-only generated runtime snapsh
 not new persistence. Use ordinary read offset/limit paging.
 Provider discover/inspect/share actions are removed. All eligible local sessions
 in the same Project can use existing instances and manage pause/resume/reload;
-subscriptions always deliver to self and only their subscriber may unsubscribe.
+notify subscriptions deliver to self and only their owner may unsubscribe with the current Workflow expectedRevision. Subscribe calls the same create-only Workflow author method; Source stores no subscription configuration. Use workflow update/remove for versioned plans. VFS subscriptions use encoded full Workflow IDs (external%3Aid for shortcut IDs). Record actions do not deliver to a session.
 Native collection does not depend on creator availability. Existing explicit
 managed-browser authority is still required for browser bind/rebind and collection;
 Project visibility does not grant cookies or another session's browser authority. See
 `docs/signal-source-providers.md` in the Shadow source for complete working REST
 cursor and public HTML examples. Write a local JSON manifest and adjacent `.ts`
 module, then `signal_provider({action:"reload",path:"providers/source.json"})`.
-Code edit/reload needs no extra approval; actual instance/network/credential and
-subscription bindings retain the tool's direct-user authority checks. Definitions
+All source mutations, including code publication/reload and instance/subscription changes, require direct user input and the Project-owner boundary. Network/credential/browser bindings retain their independent checks. Definitions
 alone grant no IO. Instances retain immutable HTTP permissions across reload;
 a new origin, route, method, query/body schema or credential header requires a
 separately authorized instance. Public sources need no secret. Scripts import
@@ -66,3 +65,5 @@ For cron, channel and background-task events, read `v:signals/internal/sources`
 and `v:signals/internal/` for registered runtime sources and your subscriptions.
 Discover `event_subscribe` under `v:tools/events` and invoke its live contract.
 These EventService subscriptions are separate from external signal subscriptions.
+
+Old event_provider alias is removed. sources-v4.json persists collectors only; old files are preserved, and v3 instance IDs are reserved rather than reactivated. Use new instance IDs when recreating old bindings.

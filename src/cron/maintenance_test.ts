@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { CronService } from './service.ts'
+import { TestCronService as CronService } from './testing.ts'
 import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 
