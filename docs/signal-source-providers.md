@@ -133,7 +133,7 @@ Then each authorized subscribing session uses `action:"subscribe", input_json`:
 ```
 For notify actions the destination is always that session, not a supplied arbitrary session ID.
 Use `action:{kind:"record"}` to materialize observations in arrival order without a model or inbox delivery. For timestamp ordering, typed Work mapping and editable plans, use the unified `workflow` tool; see [Workflows](workflows.md).
-Every subscription requires `first:"baseline"|"emit"`; this is a per-Workflow business policy, not source protocol state.
+The `subscribe` shortcut requires `first:"baseline"|"emit"` and creates an explicit leading deduplication gate; this is per-Workflow business policy, not source protocol state. Full `workflow` authoring may omit that gate when each observation admission should run independently. Existing gated definitions keep their policy.
 Processors have no IO capabilities; they may import the pure local `@shadow/html`
 module and return 0–16 `{content}` drafts.
 Conditional `[]` filters; multiple drafts fan out. Their persisted failures and
@@ -268,7 +268,7 @@ Duplicate IDs in one collection fail; deduplicate overlapping pages in source co
 
 - Snapshot returns the entire bounded current set (max 500).
 - Delta returns the acquired incremental batch and its resume checkpoint.
-- Both modes feed the same per-Workflow 4096-revision dedupe window. Evicted
+- For workflows with an explicit gate, both modes feed the same per-Workflow 4096-revision dedupe window. Without a gate, repeat observation admissions are independent and can create duplicate effects after recollection. Evicted
   revisions may replay; monotonically advancing source cursors remain important.
 - `first:"baseline"` silently remembers the first successful batch, including empty;
   `first:"emit"` processes initial observations. Shared demands do not share this
@@ -278,7 +278,7 @@ Duplicate IDs in one collection fail; deduplicate overlapping pages in source co
   compatibility; changing it requires a new instance/provider ID.
 
 All collection output is validated before atomic multi-subscriber Workflow admission.
-Workflow commits dedupe and pending runs first; only then does Source commit the
+Workflow commits its optional dedupe state and pending runs first; only then does Source commit the
 checkpoint (max 64 KiB). A crash between files recollects an already admitted batch,
 which the revision node dedupes. Backpressure or invalid output does not advance
 source state. No cross-store exactly-once claim is made. See [Workflow recovery](workflows.md).

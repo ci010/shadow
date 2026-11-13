@@ -5,6 +5,7 @@ export const Drafts = z.array(z.object({ content: z.string().min(1).max(32768) }
 export const WorkflowId = z.string().min(1).max(256).refine(value => !Object.hasOwn(Object.prototype, value) && value !== 'prototype', 'Reserved identity')
 export const Observation = z.object({ id: WorkflowId, item: WorkflowId.optional(), data: z.unknown() }).strict()
 export const FirstBatch = z.enum(['baseline', 'emit'])
+/** Optional fixed leading stage; action nodes are still an ordered typed plan. */
 export const RevisionGate = z.object({ kind: z.literal('revision-dedupe'), first: FirstBatch }).strict()
 const Field = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/).refine(v => !['constructor', 'prototype'].includes(v))
 /** Only descriptive fields may be source-owned. Goals, assignment, status and acceptance remain local. */
@@ -28,10 +29,10 @@ export const WorkflowDefinition = z.object({
   id: WorkflowId, owner: z.string().min(1).optional(), revision: z.number().int().positive().default(1), name: z.string().trim().min(1).max(160).optional(),
   source: z.object({ kind: z.enum(['external', 'schedule', 'internal', 'github-resource']), id: WorkflowId }).strict(),
   binding: z.object({ demand: z.unknown() }).strict().optional(),
-  gate: RevisionGate, nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
+  gate: RevisionGate.optional(), nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
 }).strict().superRefine((d, ctx) => {
   const invalid = d.source.kind === 'external' && (!d.owner || d.nodes.some(n => ['schedule-action', 'host-action', 'github-notify'].includes(n.kind))) ||
-    d.source.kind === 'schedule' && (d.gate.first !== 'emit' || d.nodes.length !== 1 || d.nodes[0].kind !== 'schedule-action') ||
+    d.source.kind === 'schedule' && (d.gate && d.gate.first !== 'emit' || d.nodes.length !== 1 || d.nodes[0].kind !== 'schedule-action') ||
     d.source.kind === 'github-resource' && (d.nodes.length !== 1 || d.nodes[0].kind !== 'github-notify' || d.nodes[0].subscription.resourceId !== d.source.id) ||
     d.source.kind === 'internal' && (d.nodes.length !== 1 || d.nodes[0].kind !== 'host-action') ||
     d.nodes.some((n, i) => n.kind === 'inbox' && (i === 0 || d.nodes[i - 1].kind !== 'transform')) ||
@@ -40,7 +41,7 @@ export const WorkflowDefinition = z.object({
 })
 export const AuthorDefinition = z.object({ id: WorkflowId.refine(id => !/^(schedule|internal|github):/.test(id), 'Host source namespace is reserved'), name: z.string().trim().min(1).max(160),
   source: z.object({ kind: z.literal('external'), id: WorkflowId }).strict(), binding: z.object({ demand: z.unknown() }).strict(),
-  gate: RevisionGate, nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
+  gate: RevisionGate.optional(), nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
 }).strict().refine(d => d.nodes.every(n => !['schedule-action', 'host-action', 'github-notify'].includes(n.kind)), 'Host actions cannot be authored')
 export const Mapping = z.object({ initial: Observation, objective: z.string(), key: z.string().optional(), title: z.string().optional(), summary: z.string().optional(), revision: z.string().optional() }).strict()
 export const WorkflowRun = z.object({
@@ -54,6 +55,8 @@ export const WorkflowRun = z.object({
 export const WorkflowState = z.object({
   format: z.literal(1), projectId: z.string().min(1), definitions: z.array(WorkflowDefinition).max(512),
   dedupe: z.record(z.object({ baseline: z.boolean(), seen: z.array(z.string()).max(4096) }).strict()),
+  // Non-evicting identity receipt, not an observation revision window. Bounded by the total state byte limit.
+  admitted: z.record(WorkflowId, z.literal(true)).default({}),
   runs: z.array(WorkflowRun).max(2500), records: z.record(z.record(Observation)),
   mappings: z.record(z.record(Mapping)).default({}),
 }).strict()

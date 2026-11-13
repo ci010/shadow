@@ -45,7 +45,8 @@
           · <RouterLink :to="{ name: 'project-dashboard', params: { projectId }, query: { work: githubTarget.workKey } }">{{ t('Open Work') }}: {{ githubTarget.workKey }}</RouterLink>
           · {{ t('Inbox acceptance is not user visibility or completed Work.') }}
         </p>
-        <p v-if="displayed.source.kind !== 'schedule'" class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection emits actions for unseen revisions.') }} {{ t('Revision deduplication is bounded; external effects are not exactly-once.') }}</p>
+        <p v-if="displayed.gate" class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection emits actions for unseen revisions.') }} {{ t('Revision deduplication is bounded; external effects are not exactly-once.') }}</p>
+        <p v-else class="workflow-explanation">{{ t('No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.') }}</p>
         <details class="workflow-definition">
           <summary>{{ t('Source and definition details') }}</summary>
           <dl><dt>{{ t('Source ID') }}</dt><dd><code>{{ displayed.source.id }}</code></dd><dt>{{ t('Owner session') }}</dt><dd><code>{{ displayed.owner || t('Host managed') }}</code></dd></dl>

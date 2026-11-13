@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { projectStoragePath } from '../utils/data-paths.ts'
@@ -36,7 +37,7 @@ export class WorkflowRuntime {
     now?: () => number
   }) {
     this.path = projectStoragePath(directory, '.workflows', 'state.json')
-    this.state = { format: 1, projectId, definitions: [], dedupe: {}, runs: [], records: {}, mappings: {} }
+    this.state = { format: 1, projectId, definitions: [], dedupe: {}, admitted: {}, runs: [], records: {}, mappings: {} }
   }
   get available(): boolean { return !this.stopped }
   private now() { return this.host.now?.() ?? Date.now() }
@@ -44,6 +45,7 @@ export class WorkflowRuntime {
   assertCapacity(): void {
     if (this.state.runs.filter(r => !terminal(r)).length > 1500) throw new Error('Workflow backlog full')
   }
+  hasAdmitted(workflow: string): boolean { return this.state.admitted[workflow] === true }
   pending(workflow: string) {
     return this.state.runs.filter(r => r.workflow === workflow && !terminal(r)).map(r => ({
       id: r.id, attempts: r.attempts, status: r.status, nextAt: r.nextAt,
@@ -75,6 +77,11 @@ export class WorkflowRuntime {
       this.state = state
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     this.update(state => {
+      // Old states did not separate admission identity from the optional revision window.
+      for (const run of state.runs) state.admitted[run.workflow] = true
+      for (const flow of state.definitions) {
+        if (flow.source.kind === 'schedule' && flow.gate?.first === 'emit' && state.dedupe[flow.id]?.seen.length) state.admitted[flow.id] = true
+      }
       for (const run of state.runs.filter(r => r.status === 'running')) {
         run.status = run.started && !safe(run) ? 'blocked' : 'retry'
         run.error = run.status === 'blocked' ? 'interrupted_effect' : 'action_failed'
@@ -131,11 +138,15 @@ export class WorkflowRuntime {
     if (definition.owner && definition.source.kind === 'external') this.authorize(definition.owner)
     if (definition.source.kind === 'external' && (!definition.owner || definition.nodes.some(n => n.kind === 'schedule-action'))) throw new Error('External workflow cannot invoke a schedule action')
     const old = this.state.definitions.find(d => d.id === definition.id)
-    if (!old && Object.hasOwn(this.state.dedupe, definition.id)) throw new Error('Retired Workflow ID; create a new subscription ID')
+    if (!old && (Object.hasOwn(this.state.dedupe, definition.id) || this.hasAdmitted(definition.id))) throw new Error('Retired Workflow ID; create a new subscription ID')
     if (old && definition.source.kind === 'external') throw new Error('External Workflow ID already exists; use versioned Workflow authoring to update it')
     if (old && (old.source.kind !== definition.source.kind || old.source.id !== definition.source.id || old.owner !== definition.owner)) throw new Error('Workflow binding cannot change')
     if (old && canonical(old) === canonical(definition)) return
-    this.update(state => { state.definitions = state.definitions.filter(d => d.id !== definition.id); state.definitions.push(definition) })
+    this.update(state => {
+      state.definitions = state.definitions.filter(d => d.id !== definition.id); state.definitions.push(definition)
+      // Clear only an active definition's obsolete window. remove() still creates a retirement tombstone.
+      if (old && !definition.gate) delete state.dedupe[definition.id]
+    })
   }
   /** Direct-user authoring only; binding authorization is supplied by the source runtime. */
   author(owner: string, raw: unknown, expectedRevision?: number, validateOnly = false): Definition {
@@ -143,14 +154,14 @@ export class WorkflowRuntime {
     const input = AuthorDefinition.parse(raw)
     const old = this.state.definitions.find(d => d.id === input.id)
     if (old ? old.owner !== owner || old.source.kind !== 'external' || old.revision !== expectedRevision : expectedRevision !== undefined) throw new Error('Workflow owner or revision conflict')
-    if (!old && Object.hasOwn(this.state.dedupe, input.id)) throw new Error('Retired Workflow identity')
+    if (!old && (Object.hasOwn(this.state.dedupe, input.id) || this.hasAdmitted(input.id))) throw new Error('Retired Workflow identity')
     let definition = WorkflowDefinition.parse({ ...input, owner, revision: (old?.revision ?? 0) + 1 })
     if (!this.sourceAuthorizer) throw new Error('Source authorization unavailable')
     definition = this.sourceAuthorizer(owner, definition)
     if (old && (canonical(old.source) !== canonical(definition.source) || canonical(old.binding ?? this.sourceAuthorizer(owner, old).binding) !== canonical(definition.binding))) {
       throw new Error('Source/demand identity is immutable; create a new Workflow with an explicit first-batch policy')
     }
-    if (old && canonical(old.gate) !== canonical(definition.gate)) throw new Error('First-batch policy cannot be changed after creation')
+    if (old && canonical(old.gate ?? null) !== canonical(definition.gate ?? null)) throw new Error('First-batch policy cannot be changed after creation')
     if (old && (Object.keys(this.state.mappings[old.id] ?? {}).length || this.state.runs.some(r => r.workflow === old.id && r.definition.nodes.some(n => n.kind === 'work-map'))) && canonical(old.nodes.filter(n => n.kind === 'work-map')) !== canonical(definition.nodes.filter(n => n.kind === 'work-map'))) throw new Error('Materialized mapping ownership is immutable; create a new Workflow')
     if (!validateOnly) this.update(state => { state.definitions = state.definitions.filter(d => d.id !== definition.id); state.definitions.push(definition) })
     return structuredClone(definition)
@@ -178,19 +189,23 @@ export class WorkflowRuntime {
         if (definition.source.kind === 'external' && definition.owner && !this.host.canUse(definition.owner)) throw new Error('Workflow owner unavailable')
         const observations = batch.observations.map(value => Observation.parse(value))
         if (observations.length > 500 || new Set(observations.map(o => o.id)).size !== observations.length) throw new Error('Invalid observation batch')
-        const dedupe = state.dedupe[definition.id] ?? { baseline: false, seen: [] }
+        const gate = definition.gate
+        const dedupe = gate ? state.dedupe[definition.id] ?? { baseline: false, seen: [] } : undefined
         for (const observation of observations) {
           if (Buffer.byteLength(canonical(observation)) > 1024 * 1024) throw new Error('Observation too large')
-          if (definition.enabled && (dedupe.baseline || definition.gate.first === 'emit') && !dedupe.seen.includes(observation.id)) {
-            const id = digest([this.projectId, definition.id, observation.id])
+          if (definition.enabled && (!gate || dedupe && (dedupe.baseline || gate.first === 'emit') && !dedupe.seen.includes(observation.id))) {
+            // No gate means each admission is independent, even for an observation seen before.
+            // Recovery drains the persisted run ID; it never re-admits an observation.
+            const id = gate ? digest([this.projectId, definition.id, observation.id]) : randomUUID()
             if (!state.runs.some(r => r.id === id)) {
               state.runs.push({ id, workflow: definition.id, definition: structuredClone(definition), observation,
                 timestamp: new Date(this.now()).toISOString(), status: 'queued', cursor: 0, attempts: 0, nextAt: 0, started: false, delivered: 0 })
+              state.admitted[definition.id] = true
               admitted.push(id)
             }
           }
         }
-        state.dedupe[definition.id] = { baseline: true, seen: [...new Set([...dedupe.seen, ...observations.map(o => o.id)])].slice(-4096) }
+        if (dedupe) state.dedupe[definition.id] = { baseline: true, seen: [...new Set([...dedupe.seen, ...observations.map(o => o.id)])].slice(-4096) }
       }
       if (state.runs.filter(r => !terminal(r)).length > 2000) throw new Error('Workflow backlog full')
     })

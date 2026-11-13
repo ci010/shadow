@@ -66,7 +66,7 @@ export class GitHubService {
     const old = this.deps.workflows.inspect().definitions.find(d => d.id === id)
     if (old) {
       if (old.source.kind !== 'github-resource' || old.source.id !== subscription.resourceId || old.owner !== undefined
-        || old.gate.first !== 'emit' || old.nodes.length !== 1 || old.nodes[0].kind !== 'github-notify'
+        || old.gate?.first !== 'emit' || old.nodes.length !== 1 || old.nodes[0].kind !== 'github-notify'
         || digest(old.nodes[0].subscription) !== digest(subscription)) throw new GitHubError('Workflow identity is occupied by a different source; no subscription saved.', 409)
       return
     }

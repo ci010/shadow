@@ -77,6 +77,7 @@ test('unsafe schedule failure and crash recovery block replay; explicit acknowle
   await Promise.all([cron.runNow(id), cron.runNow(id)])
   let run = runtime.inspect().runs[0]
   assert.equal(calls, 1); assert.equal(run.status, 'blocked')
+  assert.equal(run.definition.gate, undefined); assert.equal(runtime.inspect().dedupe['schedule:job'], undefined)
   await cron.runNow(id)
   assert.equal(calls, 1); assert.equal(runtime.inspect().runs.length, 1, 'blocked schedule coalesces ticks')
   assert.throws(() => runtime.control('owner', run.id, 'retry'), /acknowledgeReplay/)

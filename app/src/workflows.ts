@@ -7,7 +7,7 @@ export interface WorkflowNode { kind: string; [key: string]: unknown }
 export interface WorkflowDefinition {
   id: string; name?: string; owner?: string; revision: number; enabled: boolean
   source: { kind: 'external' | 'schedule' | 'internal' | 'github-resource'; id: string }
-  binding?: { demand?: unknown }; gate: { kind: string; first: 'baseline' | 'emit' }; nodes: WorkflowNode[]
+  binding?: { demand?: unknown }; gate?: { kind: string; first: 'baseline' | 'emit' }; nodes: WorkflowNode[]
 }
 export interface WorkflowRun {
   id: string; workflow: string; definition: WorkflowDefinition; timestamp: string; status: WorkflowStatus
@@ -22,7 +22,7 @@ const text = (value: unknown): value is string => typeof value === 'string' && v
 export function parseWorkflowDefinition(raw: unknown): WorkflowDefinition {
   if (!isRecord(raw) || !text(raw.id) || !Number.isSafeInteger(raw.revision) || Number(raw.revision) < 1 || typeof raw.enabled !== 'boolean'
     || !isRecord(raw.source) || !text(raw.source.id) || !['external', 'schedule', 'internal', 'github-resource'].includes(String(raw.source.kind))
-    || !isRecord(raw.gate) || raw.gate.kind !== 'revision-dedupe' || !['baseline', 'emit'].includes(String(raw.gate.first))
+    || raw.gate !== undefined && (!isRecord(raw.gate) || raw.gate.kind !== 'revision-dedupe' || !['baseline', 'emit'].includes(String(raw.gate.first)))
     || !Array.isArray(raw.nodes) || !raw.nodes.length || raw.nodes.length > 8 || raw.nodes.some(n => !isRecord(n) || !text(n.kind))
     || raw.name !== undefined && !text(raw.name) || raw.owner !== undefined && !text(raw.owner)) return invalid()
   return raw as unknown as WorkflowDefinition
@@ -92,7 +92,7 @@ export function workflowGraph(definition: WorkflowDefinition, run?: WorkflowRun)
     : { label: t('Signal source'), detail: `${definition.source.kind} · ${definition.source.id}`, description: undefined }
   return [
     { id: 'source', ...source, status: run ? 'received' as const : 'ready' as const, config: definition.source },
-    { id: 'gate', label: nodeLabel(definition.gate.kind), detail: definition.gate.first === 'baseline' ? t('First collection: baseline only') : t('First collection: emit unseen revisions'), description: t('Skip previously seen revisions'), status: run ? 'accepted' as const : 'ready' as const, config: definition.gate },
+    ...(definition.gate ? [{ id: 'gate', label: nodeLabel(definition.gate.kind), detail: definition.gate.first === 'baseline' ? t('First collection: baseline only') : t('First collection: emit unseen revisions'), description: t('Skip previously seen revisions'), status: run ? 'accepted' as const : 'ready' as const, config: definition.gate }] : []),
     ...definition.nodes.map((node, i) => ({ id: `node-${i}`, ...actionPresentation(node, definition), status: status(i), config: node })),
   ]
 }

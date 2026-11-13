@@ -231,7 +231,7 @@ export class SignalProviderRuntime {
   private subscriptions() {
     return this.workflows.inspect().definitions.filter(d => d.source.kind === 'external' && d.owner && d.binding).map(d => ({
       id: d.id, workflow: d.id, instance: d.source.id, owner: d.owner!,
-      demand: d.binding!.demand, first: d.gate.first, nodes: d.nodes,
+      demand: d.binding!.demand, ...(d.gate ? { first: d.gate.first } : {}), nodes: d.nodes,
     }))
   }
   private member(instance: InstanceData, owner: string): boolean {

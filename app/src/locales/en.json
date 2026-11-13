@@ -4208,7 +4208,7 @@
   "Accepted": "Accepted",
   "Agent resource": "Agent resource",
   "An older or equal revision was ignored; newer materialized data is retained.": "An older or equal revision was ignored; newer materialized data is retained.",
-  "Ask an Agent to create a workflow with a signal source, an explicit first-batch policy and typed actions. Its saved definition will appear here.": "Ask an Agent to create a workflow with a signal source, an explicit first-batch policy and typed actions. Its saved definition will appear here.",
+  "Ask an Agent to create a workflow with a signal source, an explicit first-batch policy and typed actions. Its saved definition will appear here.": "Ask an Agent to create a workflow with a signal source and typed actions. Add optional leading revision deduplication only when needed. Its saved definition will appear here.",
   "Attempts": "Attempts",
   "Cancel run": "Cancel run",
   "Confirm only after inspecting the destination. Retrying may duplicate an effect that already happened. Cancellation does not undo accepted effects.": "Confirm only after inspecting the destination. Retrying may duplicate an effect that already happened. Cancellation does not undo accepted effects.",
@@ -4314,5 +4314,6 @@
   "Canvas shortcuts": "Canvas shortcuts",
   "Workflow canvas": "Workflow canvas",
   "Focus the canvas: V selects, H pans, Space temporarily pans, and the middle mouse button pans. Scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "Focus the canvas: V selects, H pans, Space temporarily pans, and the middle mouse button pans. Scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.",
-  "Select": "Select"
+  "Select": "Select",
+  "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run."
 }
