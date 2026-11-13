@@ -84,7 +84,13 @@ async function execute(action, input, sourceToken) {
   await mkdir(admissions, {recursive:true,mode:0o700});
   try { await writeFile(join(admissions,name + '.json'), JSON.stringify({project:name}), {flag:'wx',mode:0o600}); }
   catch(error) { if (error.code === 'EEXIST') fail('ImportAlreadyAttempted'); throw error; }
-  return runtime.project.start_init(name,source,options);
+  // Pinned Windows host prepare/scan uses node:fs and host node:path before
+  // dispatching to WSL. Only transport the already-authorized Linux binding;
+  // the official worker maps this same-distro UNC back to the original path.
+  const distro = deployment.settings.wsl.distribution;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(distro) || !/^\/var\/lib\/shadow-layerfs-sources\/[a-f0-9]{64}\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(source)) fail('SourceScopeRequired');
+  const transportSource = '\\\\wsl.localhost\\' + distro + source.replaceAll('/', '\\');
+  return runtime.project.start_init(name,transportSource,options);
  }
  if (action === 'configuration') {
   if (typeof input?.project !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(input.project)) fail('InvalidProject');

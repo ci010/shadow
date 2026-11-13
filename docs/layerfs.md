@@ -91,7 +91,8 @@ secrets. An ordinary local script exports `default async ({runtime,open,args}) =
   Before each Init it rechecks owner/installation plus every ancestor's canonical
   path, device/inode identity, root ownership, protected permissions and ext4 statfs
   type. Linked/rebound directories, DrvFS/9p/unknown filesystems and arbitrary or
-  cross-distro paths fail closed. The SDK receives the exact Linux absolute path.
+  cross-distro paths fail closed. The script scope remains the exact Linux absolute
+  path; only the owner maps it to same-distribution WSL UNC for the Windows host API.
   No volume/import implementation is copied into Shadow.
 - `open(project)` opens the actual agent SDK in that exec process with checked
   configuration, one client/project per process. Scripts close it in finally.
@@ -153,8 +154,17 @@ create/read/write/exec a workspace. Then validate the independent real repositor
 images and actual build commands. Dependency restore/private feeds are separate work.
 The [pinned runtime documentation](https://github.com/Ephemeral-AI-Lab/layerfs/blob/73d974dea8a8d0b056a16dc6b2380d89438ce484/api/docs/runtime.md#L126-L129)
 specifies a WSL2 worker; the [upstream path adapter](https://github.com/Ephemeral-AI-Lab/layerfs/blob/73d974dea8a8d0b056a16dc6b2380d89438ce484/api/runtime/src/worker/server.js#L79-L89)
-accepts Linux absolute paths. Shadow deliberately does not accept UNC or DrvFS Init
-sources, even though upstream also has Windows/UNC translation support.
+accepts Linux absolute paths and same-distribution UNC. However, the
+[pinned host Init API](https://github.com/Ephemeral-AI-Lab/layerfs/blob/73d974dea8a8d0b056a16dc6b2380d89438ce484/api/runtime/src/project/init.js)
+first uses host `isAbsolute`, `existsSync`, `statSync`, then recursively scans with
+`opendir`/`lstat`. Linux-only paths are not sufficient for that Windows host check.
+Shadow maps only the already-authorized Linux binding to `\\wsl.localhost\<bound-distro>\...`
+at the owner-to-official-API boundary; the official worker maps it back to Linux.
+Caller UNC inputs remain refused; there is no workspace/global UNC exception or
+DrvFS fallback. Host scanning over UNC has filesystem-bridge overhead and requires
+the UNC user's Linux read/traverse permissions, independent of the root probe.
+Do not change source permissions or skip upstream scanning to mask a refusal.
+A pre-job failure can leave no official job ID; the consumed admission stays retained.
 
 Source preparation requires the human's authorization for the dedicated runtime
 source area; a sourceName or agent boolean is not initial installation consent.
