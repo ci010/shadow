@@ -87,7 +87,8 @@ export function createWorkflowHandler(runtime: WorkflowRuntime) {
 }
 
 /** Project router + explicit existing host authentication; external payloads never become executable plans. */
-export function registerWorkflowRoutes(app: Hono, runtime: WorkflowRuntime, authorize: (request: Request) => boolean | Promise<boolean>) {
+export function registerWorkflowRoutes(app: Hono, runtime: WorkflowRuntime, authorize: (request: Request) => boolean | Promise<boolean>,
+  setFeatureEnabled?: (workflowId: string, enabled: boolean, request: Request) => Promise<void>) {
   app.get('/api/workflows', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)
     return c.json(runtime.inspect())
@@ -96,7 +97,19 @@ export function registerWorkflowRoutes(app: Hono, runtime: WorkflowRuntime, auth
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)
     const input = Control.safeParse(await c.req.json().catch(() => null))
     if (!input.success) return c.json({ error: 'invalid_workflow_control' }, 400)
-    try { runtime.manage(input.data.id, input.data.action, input.data.acknowledgeReplay); return c.json({ saved: true }) }
+    try {
+      const { id, action, acknowledgeReplay } = input.data
+      if (action === 'pause' || action === 'resume') {
+        const definition = runtime.inspect().definitions.find(flow => flow.id === id)
+        if (!definition) throw new Error('Unknown Workflow')
+        if (definition.source.kind === 'schedule' || definition.source.kind === 'internal') {
+          if (!setFeatureEnabled) throw new Error('Feature controls unavailable')
+          await setFeatureEnabled(id, action === 'resume', c.req.raw)
+        }
+      }
+      runtime.manage(id, action, acknowledgeReplay)
+      return c.json({ saved: true })
+    }
     catch { return c.json({ error: 'workflow_control_rejected' }, 409) }
   })
 }

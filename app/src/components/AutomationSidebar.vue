@@ -1,79 +1,35 @@
 <template>
-  <section class="automations-sidebar" :aria-label="t('Workflows')" :aria-busy="loading">
-    <button type="button" class="automations-heading" :class="{ 'is-rail': rail }" :aria-label="t('Workflows')" :aria-expanded="expanded" @click="expanded = !expanded">
-      <span :class="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="automations-disclosure" aria-hidden="true" />
-      <span v-if="!rail">{{ t('Workflows') }}</span>
-      <span v-else class="i-lucide-folder" aria-hidden="true" />
-    </button>
-    <div v-if="expanded" class="automations-items">
-    <RouterLink v-if="projectId" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }" :to="`/projects/${encodeURIComponent(projectId)}/workflows`" :aria-label="t('Workflow definitions')">
-      <span class="i-lucide-workflow automation-icon" aria-hidden="true" /><span v-if="!rail">{{ t('Workflow definitions') }}</span>
-    </RouterLink>
-    <div v-if="error" class="automations-error" role="alert">
-      <p v-if="!rail">{{ error }}</p>
-      <button type="button" class="text-action" :aria-label="t('Retry automations')" @click="refresh">{{ t('Retry') }}</button>
-    </div>
-    <p v-if="initialLoading && !error && !rail" class="automations-note" role="status">{{ t('Loading automations…') }}</p>
-    <HoverInfo v-for="job in jobs" :key="job.id" :text="t('{name} · Fresh context per run', { name: job.name })"><template #default="{ triggerProps }">
-      <button type="button" class="automation-entry" v-bind="triggerProps" :class="{ selected: selectedId === job.id, 'is-rail': rail }"
-        :aria-label="t('Open automation {name}', { name: job.name })" :aria-current="selectedId === job.id ? 'page' : undefined"
-        :data-automation-id="job.id" @click="$emit('select', job.id)">
-        <span class="i-lucide-repeat-2 automation-icon" aria-hidden="true" />
-        <span v-if="!rail" class="automation-name">{{ job.name }}</span>
-        <SessionActivity v-if="working(job.id)" :stage="working(job.id)" compact :icon-only="rail" :title="undefined" />
-        <span v-else-if="!job.enabled && !rail" class="automation-history">{{ t('Inactive') }}</span>
-      </button>
-    </template>
-    </HoverInfo>
-    </div>
-  </section>
+  <nav v-if="projectId" class="automations-sidebar" :aria-label="t('Workflows')">
+    <HoverInfo :text="t('Workflows')"><template #default="{ triggerProps }">
+      <RouterLink v-bind="triggerProps" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }"
+        :to="{ name: 'project-workflows', params: { projectId } }" :aria-label="t('Workflows')">
+        <span class="i-lucide-workflow automation-icon" aria-hidden="true" /><span v-if="!rail">{{ t('Workflows') }}</span>
+      </RouterLink>
+    </template></HoverInfo>
+  </nav>
 </template>
 
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
 import { t } from '../i18n.ts'
-import { computed, ref } from 'vue'
 import HoverInfo from './HoverInfo.vue'
-import SessionActivity from './SessionActivity.vue'
-import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
-import { prominentWorkingStage } from '../session-activity.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'
 
-const props = defineProps<{
+// Keep the parent contract stable; individual runs now live behind the Workflow page.
+defineProps<{
   projectId?: string; apiBase: string; active: boolean; rail?: boolean; selectedId?: string
   groups: Array<{ id: string; sessions: SidebarSession[] }>; stages: Record<string, string>
 }>()
 defineEmits<{ select: [id: string] }>()
-const { jobs, error, loading, loaded, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
-const expanded = ref(true)
-const initialLoading = computed(() => loading.value && !loaded.value)
-function working(id: string) {
-  return prominentWorkingStage(props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]) ?? [])
-}
 </script>
 
 <style scoped>
 .automations-sidebar { margin-top: var(--sidebar-section-gap); min-width: 0; }
 .automations-sidebar:first-child { margin-top: 0; }
-.automations-heading { display: flex; align-items: center; gap: var(--sidebar-heading-gap); width: 100%; min-height: var(--sidebar-row-height); margin: 0; padding: 2px var(--sidebar-row-inset); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; line-height: 20px; font-weight: 500; text-align: left; cursor: pointer; }
-.automations-heading:hover { background: var(--c-bg-muted); }
-.automations-heading:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.automations-disclosure { width: var(--sidebar-disclosure); height: 14px; flex-shrink: 0; }
-.automations-heading.is-rail { justify-content: center; padding: 8px 2px; }
-.automations-items { margin-top: var(--sidebar-heading-gap); }
-.automation-action { margin-top: 10px; min-height: 32px; padding: 4px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; cursor: pointer; }
-.automation-action:disabled { opacity: .5; cursor: default; }
-.automation-action:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.automation-entry { display: flex; align-items: center; gap: var(--sidebar-icon-gap); width: 100%; min-width: 0; min-height: var(--sidebar-row-height); border: 0; border-radius: var(--radius-control); padding: 2px var(--sidebar-row-inset) 2px calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
-.automation-entry { text-decoration: none; }
+.automation-entry { box-sizing: border-box; display: flex; align-items: center; gap: var(--sidebar-icon-gap); width: 100%; min-width: 0; min-height: var(--sidebar-row-height); border-radius: var(--radius-control); padding: 2px var(--sidebar-row-inset); color: var(--c-text); font: inherit; font-size: 13px; line-height: 20px; text-decoration: none; }
 .automation-entry:hover { background: var(--c-bg-muted); }
 .automation-entry.selected { background: var(--c-selection-bg); color: var(--c-primary); }
 .automation-entry:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .automation-icon { width: 16px; height: 16px; flex-shrink: 0; }
-.automation-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.automation-history { color: var(--c-text-secondary); font-size: 12px; }
-.automations-error, .automations-note { margin: 6px 8px; color: var(--c-text-secondary); font-size: 13px; }
-.automations-error p { margin: 0 0 6px; overflow-wrap: anywhere; }
-.automations-error button { min-height: 32px; padding: 4px 8px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
 .automation-entry.is-rail { width: 44px; min-height: 44px; margin-inline: auto; padding: 8px; justify-content: center; }
 </style>

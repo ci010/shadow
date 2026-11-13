@@ -317,9 +317,11 @@ Work realignment events keep their agent-facing instructions and JSON in the sha
 
 Automations use the ordinary conversation workbench, opening the latest run by default. Reuse the compacted-history Previous / Next / Current controls to navigate independent run sessions, loading older pages on demand. Do not introduce a runs explorer, per-run tab strip, or secondary conversation pane. Keep configuration and statistics in the workflow inspector, not above or below the conversation transcript. Do not add workflow-specific history-only explanation banners; retain actionable errors and actual read-only/permission notices. Preserve learning receipts separately from execution status. Saved execution results belong in the normal message timeline, never in the title-area metadata preview. Learning receipts are explicitly labelled as saved run metadata; other terminal runs project their existing final response in place, without persisting synthetic chat messages. Legacy receipts without a recorded result timestamp use completion order and show time unavailable, never the dispatch time. Full summaries remain readable and copyable without a nested scroller. Do not add a standalone File changes workbench: retain write history as data for future context-specific detail views, without turning every write into another navigation surface.
 
-Workflow is the first-class Project automation concept. The Workflows sidebar
-section keeps a visible definitions entry even without saved conversation runs;
-legacy run conversations and their details remain accessible in that section.
+Workflow is the first-class Project automation concept. The sidebar has one
+icon-bearing Workflows entry, visible even without saved conversation runs. It
+opens the Project Workflow page; individual automation rows are not expanded in
+the sidebar. Ordinary conversation groups remain unchanged. Automation run
+conversations and their existing history controls open from each workflow group.
 The Project Workflow page uses one shared Vue Flow canvas for all definitions,
 not a nested inventory sidebar or one canvas per selected flow. Each flow has
 its own neutral section boundary, title and state; its source, optional observation
@@ -355,11 +357,18 @@ explicitly unavailable, never zero usage. Configuration authoring belongs to cha
 run configuration and Workflow/run/session identities without routine revision-number
 labels; internal concurrency revisions remain intact. Only recorded session outputs
 receive run-session links; explicit fixed destinations also receive target-session links.
-Each group has an upper-right conversation action: open its current fixed target,
-or clearly label the most recent retained run with an actual session receipt.
-Without an association, keep the action unavailable with a keyboard-accessible
-explanation; never create a conversation or execute a workflow. These actions do
-not pan the canvas or open the inspector.
+Each group has upper-right pause/resume and conversation actions. Pause/resume
+persists both the feature-owned configuration and Workflow runtime state for
+managed schedules/controllers, shows pending/error feedback, and respects backend
+authority. A global learning pause remains explicit and is not overridden by a
+per-workflow preference. Conversation actions open the current fixed target, or
+reuse the associated automation's existing latest-run/history/fallback route;
+other sources can open their most recent recorded session receipt. Without an
+association, keep the action unavailable with a keyboard-accessible explanation;
+never create a conversation or execute a workflow. These actions do not pan the
+canvas or open the inspector. Keyboard entry uses the visible canvas toolbar;
+pointer-scoping focus on the canvas itself has no decorative outer outline.
+Buttons, node actions and links retain their visible keyboard focus.
 Dedicated fresh-run conversation headings use their persisted automation name, not
 the first task prompt or a later catalog rename. Fixed delivery keeps ordinary session titles. Existing pause/resume and non-active
 retry/cancel controls retain their authority boundaries. An uncertain retry

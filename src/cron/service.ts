@@ -398,11 +398,13 @@ export class CronService {
     const job = this.jobs.get(id)
     if (!job) return false
     if (typeof enabled !== 'boolean') throw new TypeError('Enabled must be a boolean')
-    if ((job.enabled !== false) === enabled) return true
-    job.enabled = enabled
-    this.scheduledJobs.get(id)?.stop()
-    this.scheduledJobs.delete(id)
-    this.scheduleCron(job)
+    if ((job.enabled !== false) !== enabled) {
+      job.enabled = enabled
+      this.scheduledJobs.get(id)?.stop()
+      this.scheduledJobs.delete(id)
+      this.scheduleCron(job)
+    }
+    // Retry persistence even when memory already reflects a previous failed save.
     await this.saveJobs()
     this.syncWorkflow(job)
     this.onChanged?.('inventory')

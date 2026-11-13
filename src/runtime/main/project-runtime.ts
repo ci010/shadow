@@ -1263,7 +1263,6 @@ export async function createProjectRuntime(
   })
   const workflowVfs = createWorkflowHandler(workflows)
   vfs.mount('v:workflows', 'Project Workflow definitions, durable runs and deterministic records; runs are not model sessions', workflowVfs.read, workflowVfs.list)
-  registerWorkflowRoutes(app, workflows, dependencies.authorize)
   const signalProviders = new SignalProviderRuntime(
     workspace, capabilityBroker, workflows,
     id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
@@ -1492,7 +1491,7 @@ export async function createProjectRuntime(
   const sessionProfiles = new SessionProfileService(sessions, project.id)
   const statsVfs = createStatsHandler(sessions, () => topics, sessionProfiles, automationProfiles)
   vfs.mount('v:stats', 'on-demand Project, conversation and automation usage; read v:stats for paths and scope', statsVfs.read, statsVfs.list)
-  registerAutomationRoutes(app, cronService, sessions, project.id, sessionId => learningRuntime.ledger.outcome(sessionId), jobId => {
+  const setWorkflowFeatureEnabled = registerAutomationRoutes(app, cronService, sessions, project.id, sessionId => learningRuntime.ledger.outcome(sessionId), jobId => {
     const pipeline = jobId === 'learning:reflector' ? 'reflector' : jobId === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
     const status = learning.status().pipelines[pipeline]
     return [status.lastError, status.paused, status.retryAt ? `Retry after ${status.retryAt}.` : ''].filter(Boolean).join(' ') || undefined
@@ -1527,6 +1526,7 @@ export async function createProjectRuntime(
     },
   }, automationProfiles, { validateAdmission: validateWorkProgram, validate: (settings, signal) => settings.folderId ? validateWorkTarget(settings, signal) : validateWorkProgram(settings, signal), running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
     resume: (key, version, signal, acknowledgeToolReplay) => workDispatcher.resume(key, version, signal, acknowledgeToolReplay) })
+  registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled)
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }

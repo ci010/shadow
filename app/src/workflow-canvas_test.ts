@@ -22,7 +22,7 @@ test('shared canvas scopes every node and edge to a separate non-editable workfl
     assert.equal(source.parentNode, target.parentNode); assert.equal(source.data.flowId, target.data.flowId)
     assert.equal(edge.deletable, false)
   }
-  assert.deepEqual(nodes.filter(node => node.type === 'group').map(node => node.position.y), [0, 220, 440])
+  assert.deepEqual(nodes.filter(node => node.type === 'group').map(node => node.position.y), [0, 260, 520])
 })
 test('canvas uses recorded node states; enabled does not imply running or animation', () => {
   const flow = definition('schedule:daily')

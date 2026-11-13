@@ -12,7 +12,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
   learningOutcome?: (sessionId: string) => LearningOutcome | undefined, learningNotice?: (jobId: string) => string | undefined,
   learningControls?: { preference: (jobId: string) => boolean; globallyEnabled: () => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; interval?: (jobId: string) => number; updateInterval?: (jobId: string, intervalMs: number) => Promise<void> },
   systemControls?: { preference: (jobId: string) => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; authorize: (request: Request) => boolean | Promise<boolean>; modelSettings?: (jobId: string) => { model?: string; defaultModel: string }; updateModel?: (jobId: string, model: string | null) => Promise<void> }, profileService?: AutomationProfileService,
-  programControls?: { running?: () => boolean; cancel?: () => Promise<boolean>; validate: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; validateAdmission: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; resume: (key: string, version: number, signal: AbortSignal, acknowledgeToolReplay: boolean) => Promise<void> }): void {
+  programControls?: { running?: () => boolean; cancel?: () => Promise<boolean>; validate: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; validateAdmission: (config: WorkDispatchConfig, signal: AbortSignal) => Promise<void>; resume: (key: string, version: number, signal: AbortSignal, acknowledgeToolReplay: boolean) => Promise<void> }): (workflowId: string, enabled: boolean, request: Request) => Promise<void> {
   const profiler = profileService ?? new AutomationProfileService(cron, sessions, projectId)
   app.get('/api/automations/:id/profile', async c => {
     const id = c.req.param('id')
@@ -174,4 +174,25 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     }))
     return c.json({ runs, total: page.total, offset })
   })
+  // Workflow controls use the same persistent feature owners as automation PATCH.
+  // Never toggle only the derived Workflow flag for a config-owned schedule.
+  return async (workflowId, enabled, request) => {
+    if (systemControls && !await systemControls.authorize(request)) throw new Error('Forbidden')
+    if (workflowId === 'internal:work-organizer') {
+      if (!systemControls) throw new Error('System controls unavailable')
+      await systemControls.update('system:work-organizer', enabled)
+      return
+    }
+    const job = cron.listJobs().find(job => cron.workflowStatus(job.id)?.id === workflowId)
+    if (!job) throw new Error('Current schedule unavailable')
+    if (job.program && !systemControls) throw new Error('Program controls unavailable')
+    if (job.program && enabled) {
+      if (!programControls) throw new Error('Program controls unavailable')
+      await programControls.validateAdmission(job.program, request.signal)
+    }
+    if (job.source === 'learning') {
+      if (!learningControls) throw new Error('Learning controls unavailable')
+      await learningControls.update(job.id, enabled)
+    } else if (!await cron.setJobEnabled(job.id, enabled)) throw new Error('Schedule is not editable')
+  }
 }

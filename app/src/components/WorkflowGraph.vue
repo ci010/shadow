@@ -6,17 +6,17 @@ import '@vue-flow/core/dist/theme-default.css'
 import { t } from '../i18n.ts'
 import { useRouter } from 'vue-router'
 import HoverInfo from './HoverInfo.vue'
-import { workflowStatus } from '../workflows.ts'
+import { workflowStatus, workflowConversationLocation } from '../workflows.ts'
 import { workflowCanvas, type WorkflowCanvasEntry } from '../workflow-canvas.ts'
 const router = useRouter()
 const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string; projectId: string }>()
-const emit = defineEmits<{ inspect: [id: string, nodeId?: string]; clear: [] }>()
+const emit = defineEmits<{ inspect: [id: string, nodeId?: string]; clear: []; toggle: [id: string, enabled: boolean] }>()
 const id = useId()
 const { fitView, zoomIn, zoomOut, setViewport, viewport } = useVueFlow(id)
-const pane = ref<HTMLElement>()
+const pane = ref<HTMLElement>(), controls = ref<HTMLElement>()
 const editable = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input,textarea,select,[contenteditable="true"]')
 function focusCanvas() { pane.value?.focus({ preventScroll: true }) }
-defineExpose({ focusCanvas })
+defineExpose({ focusCanvas: () => controls.value?.querySelector('button')?.focus({ preventScroll: true }) })
 function keydown(event: KeyboardEvent) {
   if (editable(event.target) || event.ctrlKey || event.metaKey || event.altKey) return
   if (event.shiftKey && (event.code === 'Digit1' || event.key === '!')) void fitView({ padding: .1 })
@@ -26,7 +26,7 @@ function keydown(event: KeyboardEvent) {
   event.preventDefault(); event.stopPropagation()
 }
 function wheel(event: WheelEvent) {
-  if (!pane.value?.contains(document.activeElement) || editable(event.target)) return
+  if (!pane.value?.parentElement?.contains(document.activeElement) || editable(event.target)) return
   event.preventDefault(); event.stopPropagation()
   const box = pane.value.getBoundingClientRect(), current = viewport.value
   const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? box.height : 1
@@ -40,14 +40,14 @@ function inspect(flow: string, node?: string) { emit('inspect', flow, node) }
 const canvas = computed(() => workflowCanvas(props.flows))
 </script>
 <template>
-  <section class="workflow-graph" :aria-label="t('Read-only workflow graph')">
-    <div class="graph-toolbar">
+  <section class="workflow-graph" :aria-label="t('Read-only workflow graph')" @keydown="keydown">
+    <div ref="controls" class="graph-toolbar">
       <button class="btn btn-sm" @click="zoomIn()">{{ t('Zoom in') }}</button>
       <button class="btn btn-sm" @click="zoomOut()">{{ t('Zoom out') }}</button>
       <button class="btn btn-sm" @click="fitView({ padding: .1 })">{{ t('Fit diagram') }}</button>
       <details class="canvas-help"><summary>{{ t('Canvas shortcuts') }}</summary><p>{{ t('Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.') }}</p></details>
     </div>
-    <div ref="pane" class="graph-canvas" tabindex="0" :aria-label="t('Workflow canvas')" @keydown="keydown" @wheel="wheel"
+    <div ref="pane" class="graph-canvas" tabindex="-1" :aria-label="t('Workflow canvas')" @wheel="wheel"
       @pointerdown="event => { if (!editable(event.target) && !(event.target as HTMLElement).closest('button')) focusCanvas() }">
       <VueFlow :id="id" :nodes="canvas.nodes" :edges="canvas.edges" :nodes-draggable="false" :nodes-connectable="false"
         :elements-selectable="false" :delete-key-code="null" :connect-on-click="false" :default-viewport="{ x: 20, y: 20, zoom: 1 }"
@@ -60,16 +60,25 @@ const canvas = computed(() => workflowCanvas(props.flows))
               <strong><span :class="data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
               <span>{{ data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
             </button>
-            <HoverInfo :text="data.conversation ? (data.conversation.kind === 'latest' ? t('Open the most recent retained run with a recorded session.') : t('Open the configured target session.')) : t('No associated session recorded. This does not start a workflow or conversation.')">
+            <div class="group-actions nodrag nopan" @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop @click.stop>
+            <button v-if="data.control" class="btn btn-sm group-toggle" :disabled="data.control.disabled" :aria-busy="data.control.busy"
+              :aria-label="t('{action} workflow {name}', { action: data.control.enabled ? t('Pause') : t('Resume'), name: data.definition.name || data.definition.id })"
+              @click="emit('toggle', data.definition.id, !data.control.enabled)">
+              {{ data.control.busy ? t('Saving…') : data.control.enabled ? t('Pause') : t('Resume') }}
+            </button>
+            <HoverInfo :text="data.conversation ? (data.conversation.kind === 'automation' ? t('Open the latest automation run and its conversation history.') : data.conversation.kind === 'latest' ? t('Open the most recent retained run with a recorded session.') : t('Open the configured target session.')) : t('No associated session recorded. This does not start a workflow or conversation.')">
               <template #default="{ triggerProps }">
                 <button v-bind="triggerProps" class="btn btn-sm group-conversation nodrag nopan" :aria-disabled="!data.conversation"
                   @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop
-                  @click.stop="data.conversation && router.push({ name: 'chat', params: { projectId, sessionId: data.conversation.sessionId } })">
-                  {{ data.conversation?.kind === 'latest' ? t('Open latest conversation') : t('Open conversation') }}
+                  @click.stop="data.conversation && router.push(workflowConversationLocation(projectId, data.conversation))">
+                  {{ data.conversation && data.conversation.kind !== 'fixed' ? t('Open latest conversation') : t('Open conversation') }}
                 </button>
               </template>
             </HoverInfo>
             </div>
+            </div>
+            <p v-if="data.control?.error" class="group-feedback failure" role="alert">{{ data.control.error }}</p>
+            <p v-else-if="data.control?.notice" class="group-feedback" role="status">{{ data.control.notice }}</p>
           </div>
         </template>
         <template #node-workflow="{ data }">
@@ -87,7 +96,8 @@ const canvas = computed(() => workflowCanvas(props.flows))
 .workflow-graph { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--c-border); }
 .canvas-help { position: relative; color: var(--c-text-secondary); font-size: 12px; }.canvas-help summary { padding: 8px; cursor: pointer; }.canvas-help p { position: absolute; top: 100%; right: 0; width: min(340px, 75vw); margin: 0; padding: 12px; background: var(--c-bg-card); border: 1px solid var(--c-border); z-index: 10; line-height: 1.6; }
-.graph-canvas:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+/* Pointer focus scopes wheel handling; keyboard entry is through the visible toolbar. */
+.graph-canvas:focus { outline: none; }
 .graph-toolbar span { color: var(--c-text-secondary); font-size: 12px; }
 .graph-canvas { flex: 1; min-height: 0; width: 100%; position: relative; overflow: hidden; }
 /* Keep the shared body dot grid visible, just like the conversation canvas. */
@@ -98,10 +108,13 @@ const canvas = computed(() => workflowCanvas(props.flows))
 .group-heading strong span { display: inline-block; width: 16px; height: 16px; vertical-align: middle; }
 .graph-group.selected { border-color: var(--c-selection-border); }
 .group-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.group-conversation { flex-shrink: 0; white-space: nowrap; margin: 10px 12px 0 0; }
+.group-actions { display: flex; flex-shrink: 0; align-items: center; gap: 6px; margin: 10px 12px 0 0; }
+.group-actions button { white-space: nowrap; }
+.group-feedback { position: absolute; top: 184px; left: 24px; right: 12px; margin: 0; font-size: 11px; color: var(--c-text-secondary); line-height: 14px; }
+.group-feedback.failure { color: var(--c-error); }
 .group-conversation[aria-disabled=true] { color: var(--c-text-muted); cursor: not-allowed; }
-.group-heading { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 14px 24px; text-align: start; background: transparent; border: 0; color: var(--c-text); cursor: pointer; font: inherit; max-width: 100%; }
-.group-heading strong { max-width: 760px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.group-heading span { color: var(--c-text-secondary); font-size: 12px; }
+.group-heading { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 14px 24px; text-align: start; background: transparent; border: 0; color: var(--c-text); cursor: pointer; font: inherit; max-width: 100%; }
+.group-heading strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.group-heading span { color: var(--c-text-secondary); font-size: 12px; }
 .graph-node-shell { position: relative; width: 240px; height: 120px; }.has-target .graph-node { padding-bottom: 28px; }.node-session-link { position: absolute; bottom: 5px; left: 12px; right: 12px; font-size: 12px; color: var(--c-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.node-session-link:focus-visible { outline: 2px solid var(--c-blue); }
 .graph-node { box-sizing: border-box; width: 240px; height: 120px; padding: 12px; text-align: start; font: inherit; background: var(--c-bg-card); border: 1px solid var(--c-border); color: var(--c-text); display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
 .graph-node strong, .graph-node .node-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }.graph-node small { color: var(--c-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 15px; }.graph-node span { font-size: 12px; color: var(--c-text-secondary); }
