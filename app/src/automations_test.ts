@@ -75,7 +75,7 @@ test('automation inventory rejects wrong modes, types, duplicate identities and 
       { source: 'reflector' }, { session: 'existing' }, { enabled: 'true' },
       { id: '..' }, { name: '' }, { schedule: null }, { task: {} }, { agentType: 4 },
     ].map(change => ({ automations: [{ ...automation(), ...change }] })),
-  ]) await assert.rejects(fetchAutomations(base, signal(), response(value)), /invalid automation data/)
+  ]) await assert.rejects(fetchAutomations(base, signal(), response(value)), /invalid workflow data/)
 })
 
 test('learning outcomes remain distinct from session completion and validate receipt data', async () => {
@@ -88,7 +88,7 @@ test('learning outcomes remain distinct from session completion and validate rec
   }
   for (const learning of [null, {}, { status: 'success' }, {
     status: 'applied', summary: 'Invalid count', artifacts: -1, events: 0, evaluated: 0,
-  }]) await assert.rejects(fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page([{ ...run(), learning }]))), /invalid automation data/)
+  }]) await assert.rejects(fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page([{ ...run(), learning }]))), /invalid workflow data/)
   assert.equal((await fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page()))).runs[0].learning, undefined)
 })
 
@@ -118,11 +118,11 @@ test('runs reject malformed dates, counts, scope offsets, duplicate sessions and
       { startedAt: '2026-09-16' }, { startedAt: '2026-09-16T25:00:00Z' },
       { sessionId: '' }, { title: 1 },
     ].map(change => page([{ ...run(), ...change }])),
-  ]) await assert.rejects(fetchAutomationRuns(base, 'weekly', 0, signal(), response(value)), /invalid automation data/)
+  ]) await assert.rejects(fetchAutomationRuns(base, 'weekly', 0, signal(), response(value)), /invalid workflow data/)
   for (const offset of [-1, NaN, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-    await assert.rejects(fetchAutomationRuns(base, 'weekly', offset, signal(), response(page())), /invalid automation data/)
+    await assert.rejects(fetchAutomationRuns(base, 'weekly', offset, signal(), response(page())), /invalid workflow data/)
   }
-  await assert.rejects(fetchAutomationRuns(base, '..', 0, signal(), response(page())), /invalid automation data/)
+  await assert.rejects(fetchAutomationRuns(base, '..', 0, signal(), response(page())), /invalid workflow data/)
   assert.equal((await fetchAutomationRuns(base, 'weekly', 60, signal(), response(page([], 31, 60)))).runs.length, 0)
   const ordered = await fetchAutomationRuns(base, 'weekly', 0, signal(), response(page([
     run('older'), { ...run('newer'), startedAt: '2026-09-16T01:00:00+02:00' },
@@ -135,7 +135,7 @@ test('errors are safe, 404 explicitly requests upgrade, and cancelled reads cann
     [async () => new Response('private upstream body', { status: 404 }), /Update and restart Main/],
     [async () => Response.json({ error: 'private' }, { status: 403 }), /denied/],
     [async () => Response.json({}, { status: 503 }), /Check Main and retry/],
-    [async () => new Response('{invalid'), /invalid automation data/],
+    [async () => new Response('{invalid'), /invalid workflow data/],
     [async () => { throw new TypeError('private host detail') }, /Check Main and retry/],
   ] as const) await assert.rejects(fetchAutomations(base, signal(), request), expected)
   const controller = new AbortController()
@@ -276,13 +276,7 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   }))
   app.provide(Symbol.for('shadow.automation-catalog'), catalog)
   app.mount(root)
-  // These catalog/action tests exercise the expanded contents; the real-renderer
-  // sidebar test separately verifies the default-collapsed disclosure behavior.
-  const expandSidebar = (parent: TreeNode): void => {
-    if (parent.props.class === 'automations-heading') (parent.props.onClick as (() => void))()
-    else for (const child of parent.children) expandSidebar(child)
-  }
-  if (withSidebar) expandSidebar(root)
+  // Workflow navigation is expanded by default, including an empty catalog.
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
   t.after(unmount)
@@ -347,30 +341,30 @@ test('concurrent sidebar and detail share one catalog request, subscription and 
   assert.ok(view.subscriptions.every(subscription => subscription.closed))
 })
 
-test('empty automation sidebar disappears after loading without hiding errors', async t => {
+test('empty workflow sidebar stays available after loading without hiding errors', async t => {
   const view = mount(t, true, true)
   await settle()
-  assert.ok(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'))
-  assert.match(view.text(), /Loading automations/)
+  assert.ok(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'))
+  assert.match(view.text(), /Loading workflows/)
   view.requests[0].finish({ automations: [] })
   view.requests[1].finish(page([]))
   await settle()
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'), false)
+  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
   assert.doesNotMatch(view.text(), /Fresh-context tasks appear here/)
   view.invalidate()
   await settle()
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'), false,
-    'Refreshing an already loaded empty catalog must not flash the section')
-  assert.doesNotMatch(view.text(), /Loading automations/)
+  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true,
+    'Refreshing an empty catalog must retain workflow navigation')
+  assert.doesNotMatch(view.text(), /Loading workflows/)
   const refresh = view.requests.find((request, index) => index > 1 && request.url.pathname.endsWith('/api/automations'))
   assert.ok(refresh)
   refresh.finish({ error: 'unavailable' }, 503)
   await settle()
-  assert.ok(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'))
-  assert.ok(view.nodes().some(node => node.type === 'button' && node.props['aria-label'] === 'Retry automations'))
+  assert.ok(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'))
+  assert.ok(view.nodes().some(node => node.type === 'button' && node.props['aria-label'] === 'Retry workflows'))
 })
 
-test('empty automation sidebar stays hidden while visibility resumes and the catalog refreshes', async t => {
+test('empty workflow sidebar remains available while visibility resumes and the catalog refreshes', async t => {
   const view = mount(t, true, true)
   await settle()
   view.requests[0].finish({ automations: [] })
@@ -384,14 +378,14 @@ test('empty automation sidebar stays hidden while visibility resumes and the cat
     view.setVisible(true)
     await nextTick()
     await settle()
-    assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'), false)
-    assert.doesNotMatch(view.text(), /Loading automations/)
+    assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
+    assert.doesNotMatch(view.text(), /Loading workflows/)
   }
   assert.ok(view.requests.slice(2, 4).every(request => request.signal.aborted))
   view.requests[2].finish({ automations: [automation()] })
   view.requests[4].finish({ automations: [] })
   await settle()
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'), false)
+  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
 })
 
 test('automation rows survive resumed refreshes and failures but never cross project boundaries', async t => {
@@ -408,12 +402,12 @@ test('automation rows survive resumed refreshes and failures but never cross pro
   await nextTick()
   await settle()
   assert.equal(entry(), original, 'The existing row must stay mounted during a resumed fetch')
-  assert.doesNotMatch(view.text(), /Loading automations/)
+  assert.doesNotMatch(view.text(), /Loading workflows/)
   view.requests[2].finish({}, 503)
   view.requests[3].finish(page())
   await settle()
   assert.equal(entry(), original)
-  const retry = view.nodes().find(node => node.props['aria-label'] === 'Retry automations')
+  const retry = view.nodes().find(node => node.props['aria-label'] === 'Retry workflows')
   assert.ok(retry)
   ;(retry.props.onClick as () => void)()
   await settle()
@@ -432,7 +426,7 @@ test('automation rows survive resumed refreshes and failures but never cross pro
   assert.doesNotMatch(view.text(), /Updated review/)
   view.setVisible(true)
   await nextTick()
-  assert.match(view.text(), /Loading automations/)
+  assert.match(view.text(), /Loading workflows/)
   assert.equal(entry(), undefined)
   await settle()
   view.finish(6)
@@ -444,7 +438,7 @@ test('automation rows survive resumed refreshes and failures but never cross pro
   view.requests[9].finish(page([]))
   await settle()
   assert.equal(entry(), undefined, 'A successful empty response replaces retained rows')
-  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Automations'), false)
+  assert.equal(view.nodes().some(node => node.type === 'section' && node.props['aria-label'] === 'Workflows'), true)
 })
 
 test('component uses shared sessions, coalesces invalidations and renders authoritative unknown status', async t => {
@@ -589,7 +583,7 @@ test('upgrade, invalid and missing automation errors are retryable and never bec
   await settle()
   view.finish(6, { ...page(), total: 100 })
   await settle()
-  assert.match(view.state().error, /invalid automation data/)
+  assert.match(view.state().error, /invalid workflow data/)
 })
 
 test('collapsed conversation metadata explains learning checks without adding a configuration tab', async t => {
@@ -678,7 +672,7 @@ test('sidebar preference actions live only in the popup and work under master su
   await settle()
   view.finish(0, page(), { ...automation(), enabled: false, configuredEnabled: true, editable: true, disabledByGlobal: true })
   await settle()
-  const sidebarNodes = () => view.nodes(view.nodes().find(node => node.type === 'section' && node.props['aria-label'] === 'Automations')!)
+  const sidebarNodes = () => view.nodes(view.nodes().find(node => node.type === 'section' && node.props['aria-label'] === 'Workflows')!)
   const action = () => sidebarNodes().find(node => node.props.class === 'automation-action')
   assert.equal(sidebarNodes().some(node => node.type === 'input'), false)
   assert.equal(action(), undefined, 'No inline enable/disable control')
@@ -800,7 +794,7 @@ test('enable failures preserve bounded known validation reasons instead of claim
     assert.deepEqual(JSON.parse(String(init?.body)), { enabled: true })
     return Response.json({ error: 'invalid_work_dispatch_configuration', message: 'Error: Select a registered repository Workspace first.' }, { status: 400 })
   }
-  await assert.rejects(setAutomationEnabled(base, 'default:work-dispatch-v1', true, signal(), request), /Automation could not be updated: Select a registered repository Workspace first\./)
+  await assert.rejects(setAutomationEnabled(base, 'default:work-dispatch-v1', true, signal(), request), /Workflow could not be updated: Select a registered repository Workspace first\./)
   for (const [status, value] of [
     [400, { error: 'unknown', message: 'private upstream diagnostic' }],
     [500, { error: 'invalid_work_dispatch_configuration', message: 'private upstream diagnostic' }],
@@ -810,13 +804,13 @@ test('enable failures preserve bounded known validation reasons instead of claim
     [400, { error: 'invalid_work_dispatch_configuration', message: 'reason', extra: 'x'.repeat(4096) }],
     [400, { error: 'invalid_work_dispatch_configuration', message: {} }],
   ] as const) {
-    await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => Response.json(value, { status })), /^AutomationRequestError: Automation could not be updated\. Check Main and retry\.$/)
+    await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => Response.json(value, { status })), /^AutomationRequestError: Workflow could not be updated\. Check Main and retry\.$/)
   }
   for (const status of [401, 403]) await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => Response.json({}, { status })), /denied/)
   for (const body of ['<html>proxy failure</html>', '{invalid']) {
-    await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => new Response(body, { status: 400, headers: { 'content-type': 'application/json' } })), /Automation could not be updated\. Check Main/)
+    await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => new Response(body, { status: 400, headers: { 'content-type': 'application/json' } })), /Workflow could not be updated\. Check Main/)
   }
-  await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => { throw new TypeError('network') }), /Automation could not be updated\. Check Main/)
+  await assert.rejects(setAutomationEnabled(base, 'work', true, signal(), async () => { throw new TypeError('network') }), /Workflow could not be updated\. Check Main/)
   const controller = new AbortController()
   controller.abort()
   await assert.rejects(setAutomationEnabled(base, 'work', true, controller.signal, request), { name: 'AbortError' })

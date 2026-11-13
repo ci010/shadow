@@ -1,11 +1,14 @@
 <template>
-  <section v-if="jobs.length || initialLoading || error" class="automations-sidebar" :aria-label="t('Automations')" :aria-busy="loading">
-    <button type="button" class="automations-heading" :class="{ 'is-rail': rail }" :aria-label="t('Automations')" :aria-expanded="expanded" @click="expanded = !expanded">
+  <section class="automations-sidebar" :aria-label="t('Workflows')" :aria-busy="loading">
+    <button type="button" class="automations-heading" :class="{ 'is-rail': rail }" :aria-label="t('Workflows')" :aria-expanded="expanded" @click="expanded = !expanded">
       <span :class="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="automations-disclosure" aria-hidden="true" />
-      <span v-if="!rail">{{ t('Automations') }}</span>
+      <span v-if="!rail">{{ t('Workflows') }}</span>
       <span v-else class="i-lucide-folder" aria-hidden="true" />
     </button>
     <div v-if="expanded" class="automations-items">
+    <RouterLink v-if="projectId" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }" :to="`/projects/${encodeURIComponent(projectId)}/workflows`" :aria-label="t('Workflow definitions')">
+      <span class="i-lucide-workflow automation-icon" aria-hidden="true" /><span v-if="!rail">{{ t('Workflow definitions') }}</span>
+    </RouterLink>
     <div v-if="error" class="automations-error" role="alert">
       <p v-if="!rail">{{ error }}</p>
       <button type="button" class="text-action" :aria-label="t('Retry automations')" @click="refresh">{{ t('Retry') }}</button>
@@ -27,6 +30,7 @@
 </template>
 
 <script setup lang="ts">
+import { RouterLink } from 'vue-router'
 import { t } from '../i18n.ts'
 import { computed, ref } from 'vue'
 import HoverInfo from './HoverInfo.vue'
@@ -36,12 +40,12 @@ import { prominentWorkingStage } from '../session-activity.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'
 
 const props = defineProps<{
-  apiBase: string; active: boolean; rail?: boolean; selectedId?: string
+  projectId?: string; apiBase: string; active: boolean; rail?: boolean; selectedId?: string
   groups: Array<{ id: string; sessions: SidebarSession[] }>; stages: Record<string, string>
 }>()
 defineEmits<{ select: [id: string] }>()
 const { jobs, error, loading, loaded, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
-const expanded = ref(false)
+const expanded = ref(true)
 const initialLoading = computed(() => loading.value && !loaded.value)
 function working(id: string) {
   return prominentWorkingStage(props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]) ?? [])
@@ -61,6 +65,7 @@ function working(id: string) {
 .automation-action:disabled { opacity: .5; cursor: default; }
 .automation-action:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .automation-entry { display: flex; align-items: center; gap: var(--sidebar-icon-gap); width: 100%; min-width: 0; min-height: var(--sidebar-row-height); border: 0; border-radius: var(--radius-control); padding: 2px var(--sidebar-row-inset) 2px calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
+.automation-entry { text-decoration: none; }
 .automation-entry:hover { background: var(--c-bg-muted); }
 .automation-entry.selected { background: var(--c-selection-bg); color: var(--c-primary); }
 .automation-entry:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }

@@ -18,13 +18,13 @@ test('actual folder sidebar shows automation history without a second configurat
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
-    optimizeDeps: { noDiscovery: true, include: ['vue'] },
+    optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router'] },
     plugins: [vue(), {
       name: 'automation-fixture',
       resolveId: id => id === '/automation-entry.ts' ? '\0automation-entry' : undefined,
       load(id) {
         if (id !== '\0automation-entry') return
-        return `import {createApp,h} from 'vue';
+        return `import {createApp,h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
           import FoldersSidebar from '/src/components/FoldersSidebar.vue';
           window.patches=[];window.allowed=!location.search.includes('denied');
           const jobs=['work-organizer'].map(kind=>({id:'system:'+kind,name:'话题整理',source:'system',session:'fresh',schedule:'Event-driven / manual',enabled:false,configuredEnabled:true,editable:false,canToggle:true,toggleId:'system:'+kind,toggleEnabled:true}));
@@ -42,7 +42,7 @@ test('actual folder sidebar shows automation history without a second configurat
             return Response.json({});
           };
           const app=createApp({render:()=>h(FoldersSidebar,{apiBase:location.origin+'/projects/fixture/',projectId:'fixture',sessions:[],activeSessionId:'',collapsed:new Set(),stages:{},sessionsLoading:false,sessionsError:'',resizeActive:true})});
-          window.app=app;app.mount('#app');`
+          const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/workflows',component:{render:()=>null}}]});await router.push('/projects/fixture/workflows');app.use(router);window.app=app;app.mount('#app');`
       },
       configureServer(server) { server.middlewares.use((req,res,next) => {
         if (!req.url?.startsWith('/__automation')) return next()
@@ -63,9 +63,8 @@ test('actual folder sidebar shows automation history without a second configurat
       const wait=()=>new Promise(r=>setTimeout(r,250));
       await win.loadURL(${JSON.stringify(new URL('__automation', server.resolvedUrls!.local[0]).href)});
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
-      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
-      await run(()=>document.querySelector('.automations-heading').click());
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
+      assert.ok(await run(()=>document.querySelector('a[href="/projects/fixture/workflows"]')));
       for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
@@ -79,9 +78,8 @@ test('actual folder sidebar shows automation history without a second configurat
       assert.deepEqual(await run(()=>window.patches),[]);
       await win.loadURL(${JSON.stringify(new URL('__automation?denied', server.resolvedUrls!.local[0]).href)});
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
-      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
-      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
-      await run(()=>document.querySelector('.automations-heading').click());
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
+      assert.ok(await run(()=>document.querySelector('a[href="/projects/fixture/workflows"]')));
       for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       await run(()=>document.querySelector('[data-automation-id]').parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'})));await wait();
