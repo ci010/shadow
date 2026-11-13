@@ -85,6 +85,14 @@ test('workflow visualization renders durable revisions, safe controls, real reso
       win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});await wait();
       assert.equal(await transform(),before,'Inspector clicks must not pan');
     };
+    assert.equal(await run(()=>document.querySelectorAll('.group-conversation').length),5);
+    assert.equal(await run(()=>document.querySelector('.group-conversation').getAttribute('aria-disabled')),'true');
+    await clickRendered('.group-conversation');
+    assert.equal(await run(()=>window.router.currentRoute.value.name),'project-workflows');
+    assert.equal(await run(()=>document.querySelector('.workflow-inspector')),null);
+    await run(()=>document.querySelector('.group-conversation').focus());await new Promise(r=>setTimeout(r,800));
+    assert.ok(await run(()=>document.querySelector('[role=tooltip]').textContent.includes('No associated session recorded')));
+    assert.equal(await run(()=>window.controls.length),0);
     // No activation key: real pointer drag pans immediately, real node clicks still inspect.
     await dragEmpty('left');
     await clickRendered('.graph-node');
@@ -138,7 +146,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.ok(await run(()=>document.body.textContent.includes('Next collection check')));
     await run(()=>document.querySelector('.workflow-run-choice').click());await wait();
     assert.ok(await run(()=>document.querySelector('.workflow-run-detail').textContent.includes('flow-run-not-session')));
-    assert.equal(await run(()=>document.querySelector('a[href*="actual-model-session"]')),null);
+    assert.equal(await run(()=>document.querySelector('.workflow-inspector a[href*="actual-model-session"]')),null);
     assert.ok(await run(()=>document.querySelector('a[href*="work=work"]')));
     assert.ok(await run(()=>document.querySelector('.workflow-node[data-state=blocked]')));
     assert.ok(await run(()=>document.querySelector('.graph-node[data-state=blocked]')));
@@ -185,12 +193,26 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     win.setSize(1200,850);
     await run(()=>window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'schedule:fixed'}}));await wait();
     await run(()=>{window.data.definitions.sort((a,b)=>(b.id==='schedule:fixed')-(a.id==='schedule:fixed'));document.querySelector('.workflow-heading button').click()});await wait();
-    await clickRendered('.graph-node-shell .node-session-link[href*="fixed-target"]');
+    await run(()=>window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{}}));await wait();
+    await clickRendered('.graph-group[data-workflow="schedule:fixed"] .group-conversation');
     assert.equal(await run(()=>window.router.currentRoute.value.name),'chat');
     assert.equal(await run(()=>window.router.currentRoute.value.params.sessionId),'web:fixed-target');
     assert.equal(await run(()=>window.router.currentRoute.value.query.workflow),undefined,'Link must not also inspect');
     await run(()=>{const old=window.data.runs.find(r=>r.id==='schedule-run');window.data.runs.push({...old,id:'schedule-run-two',timestamp:'2026-11-12T11:00:00Z',output:{sessionId:'web:second-model-session'}});window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'schedule:daily'}});document.querySelector('.workflow-heading button').click()});await wait();
     assert.equal(await run(()=>document.querySelectorAll('.workflow-runs .run-session-link').length),2);
+    await run(()=>{window.data.definitions.sort((a,b)=>(b.id==='schedule:daily')-(a.id==='schedule:daily'));const old=window.data.runs.find(r=>r.id==='schedule-run');window.data.runs.push({...old,id:'newest-without-session',timestamp:'2026-11-13T00:00:00Z',output:{}});document.querySelector('.workflow-heading button').click();window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{}})});await wait();
+    assert.equal(await run(()=>document.querySelector('.group-conversation').textContent.trim()),'Open latest conversation');
+    const controlsBefore=await run(()=>window.controls.length);
+    await clickRendered('.graph-group[data-workflow="schedule:daily"] .group-conversation');
+    assert.equal(await run(()=>window.router.currentRoute.value.params.sessionId),'web:second-model-session');
+    assert.equal(await run(()=>window.router.currentRoute.value.query.workflow),undefined);
+    assert.equal(await run(()=>window.controls.length),controlsBefore);
+    await run(()=>{window.data.definitions.find(flow=>flow.id==='schedule:daily').nodes[0].action='program';window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{}});document.querySelector('.workflow-heading button').click()});await wait();
+    assert.equal(await run(()=>document.querySelector('.group-conversation').textContent.trim()),'Open latest conversation');
+    await clickRendered('.graph-group[data-workflow="schedule:daily"] .group-conversation');
+    assert.equal(await run(()=>window.router.currentRoute.value.params.sessionId),'web:second-model-session');
+    assert.equal(await run(()=>window.controls.length),controlsBefore);
+    await run(()=>window.router.replace({name:'project-workflows',params:{projectId:'fixture'},query:{workflow:'schedule:daily'}}));await wait();
     for(const sessionId of ['web:actual-model-session','web:second-model-session']){
       const point=await win.webContents.executeJavaScript('('+((sessionId)=>{const link=Array.from(document.querySelectorAll('.workflow-runs a')).find(a=>decodeURIComponent(a.getAttribute('href')).endsWith(sessionId));link.scrollIntoView({block:'center'});const r=link.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}}).toString()+')('+JSON.stringify(sessionId)+')');
       win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...point});win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});await wait();

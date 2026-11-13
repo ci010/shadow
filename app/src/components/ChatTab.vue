@@ -300,8 +300,6 @@
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
 
-        <AutomationConversationProjection v-if="automationConversation?.automation.value"
-          :key="automationConversation.automation.value.id" :api-base="apiBase" :job="automationConversation.automation.value" :active="paneActive" />
         <div v-if="channelConversation && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
           <div class="channel-settings-row">
             <ModelSelector :key="activeSessionId" :settings="reasoningSettings"
@@ -576,7 +574,6 @@ import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatE
 import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
-import AutomationConversationProjection from './AutomationConversationProjection.vue'
 import { automationChatLocation } from '../automations.ts'
 import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'

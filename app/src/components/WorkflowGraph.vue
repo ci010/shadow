@@ -4,8 +4,11 @@ import { VueFlow, Handle, Position, useVueFlow } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { t } from '../i18n.ts'
+import { useRouter } from 'vue-router'
+import HoverInfo from './HoverInfo.vue'
 import { workflowStatus } from '../workflows.ts'
 import { workflowCanvas, type WorkflowCanvasEntry } from '../workflow-canvas.ts'
+const router = useRouter()
 const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string; projectId: string }>()
 const emit = defineEmits<{ inspect: [id: string, nodeId?: string]; clear: [] }>()
 const id = useId()
@@ -52,10 +55,21 @@ const canvas = computed(() => workflowCanvas(props.flows))
         :pan-on-drag="[0, 1]" :pan-activation-key-code="null" :zoom-activation-key-code="null" :selection-key-code="null" :multi-selection-key-code="null">
         <template #node-group="{ data }">
           <div class="graph-group" :class="{ selected: selectedId === data.definition.id }" :data-workflow="data.definition.id" :data-enabled="data.enabled">
+            <div class="group-header">
             <button class="group-heading nodrag nopan" @click="inspect(data.definition.id)">
               <strong><span :class="data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
               <span>{{ data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
             </button>
+            <HoverInfo :text="data.conversation ? (data.conversation.kind === 'latest' ? t('Open the most recent retained run with a recorded session.') : t('Open the configured target session.')) : t('No associated session recorded. This does not start a workflow or conversation.')">
+              <template #default="{ triggerProps }">
+                <button v-bind="triggerProps" class="btn btn-sm group-conversation nodrag nopan" :aria-disabled="!data.conversation"
+                  @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop
+                  @click.stop="data.conversation && router.push({ name: 'chat', params: { projectId, sessionId: data.conversation.sessionId } })">
+                  {{ data.conversation?.kind === 'latest' ? t('Open latest conversation') : t('Open conversation') }}
+                </button>
+              </template>
+            </HoverInfo>
+            </div>
           </div>
         </template>
         <template #node-workflow="{ data }">
@@ -83,7 +97,10 @@ const canvas = computed(() => workflowCanvas(props.flows))
 .graph-node[data-enabled=false] { border-style: dashed; background: var(--c-bg-soft); }
 .group-heading strong span { display: inline-block; width: 16px; height: 16px; vertical-align: middle; }
 .graph-group.selected { border-color: var(--c-selection-border); }
-.group-heading { display: flex; flex-direction: column; gap: 6px; padding: 14px 24px; text-align: start; background: transparent; border: 0; color: var(--c-text); cursor: pointer; font: inherit; max-width: 100%; }
+.group-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.group-conversation { flex-shrink: 0; white-space: nowrap; margin: 10px 12px 0 0; }
+.group-conversation[aria-disabled=true] { color: var(--c-text-muted); cursor: not-allowed; }
+.group-heading { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 14px 24px; text-align: start; background: transparent; border: 0; color: var(--c-text); cursor: pointer; font: inherit; max-width: 100%; }
 .group-heading strong { max-width: 760px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.group-heading span { color: var(--c-text-secondary); font-size: 12px; }
 .graph-node-shell { position: relative; width: 240px; height: 120px; }.has-target .graph-node { padding-bottom: 28px; }.node-session-link { position: absolute; bottom: 5px; left: 12px; right: 12px; font-size: 12px; color: var(--c-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.node-session-link:focus-visible { outline: 2px solid var(--c-blue); }
 .graph-node { box-sizing: border-box; width: 240px; height: 120px; padding: 12px; text-align: start; font: inherit; background: var(--c-bg-card); border: 1px solid var(--c-border); color: var(--c-text); display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
@@ -93,5 +110,6 @@ const canvas = computed(() => workflowCanvas(props.flows))
 :deep(.vue-flow__handle) { opacity: 0; pointer-events: none; }
 :deep(.vue-flow__node-group) { padding: 0; border: 0; border-radius: 0; background: transparent; text-align: start; }
 @media (prefers-reduced-motion: reduce) { :deep(.vue-flow__edge.animated path) { animation: none; } }
+@media (max-width: 700px), (pointer: coarse) { .group-conversation { min-height: 44px; margin-top: 6px; } }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 </style>

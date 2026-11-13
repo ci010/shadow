@@ -1,4 +1,8 @@
 {
+  "Open latest conversation": "Open latest conversation",
+  "Open the most recent retained run with a recorded session.": "Open the most recent retained run with a recorded session.",
+  "Open the configured target session.": "Open the configured target session.",
+  "No associated session recorded. This does not start a workflow or conversation.": "No associated session recorded. This does not start a workflow or conversation.",
   "Execution result": "Execution result",
   "Source: saved run metadata": "Source: saved run metadata",
   "Source: final execution response": "Source: final execution response",

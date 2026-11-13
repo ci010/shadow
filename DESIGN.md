@@ -315,7 +315,7 @@ Compacted-history navigation, unlinked execution traces, and the conversation su
 
 Work realignment events keep their agent-facing instructions and JSON in the shared tool payload renderer, mounted only when expanded: (12px) monospace, secondary text on a muted surface, token-based corners, and wrapping identifiers. Event metadata uses the same chevron disclosure as other trace details, not the browser's default marker. Preserve event content and behavior; these are read-only records, not adoption controls.
 
-Automations use the ordinary conversation workbench, opening the latest run by default. Reuse the compacted-history Previous / Next / Current controls to navigate independent run sessions, loading older pages on demand. Do not introduce a runs explorer, per-run tab strip, or secondary conversation pane. Keep read-only automation metadata behind the collapsed Automation details disclosure in the conversation, not a permanent Configuration tab. Preserve learning receipts separately from execution status. Saved execution results belong in the normal message timeline, never in the title-area metadata preview. Learning receipts are explicitly labelled as saved run metadata; other terminal runs project their existing final response in place, without persisting synthetic chat messages. Legacy receipts without a recorded result timestamp use completion order and show time unavailable, never the dispatch time. Full summaries remain readable and copyable without a nested scroller. Do not add a standalone File changes workbench: retain write history as data for future context-specific detail views, without turning every write into another navigation surface.
+Automations use the ordinary conversation workbench, opening the latest run by default. Reuse the compacted-history Previous / Next / Current controls to navigate independent run sessions, loading older pages on demand. Do not introduce a runs explorer, per-run tab strip, or secondary conversation pane. Keep configuration and statistics in the workflow inspector, not above or below the conversation transcript. Do not add workflow-specific history-only explanation banners; retain actionable errors and actual read-only/permission notices. Preserve learning receipts separately from execution status. Saved execution results belong in the normal message timeline, never in the title-area metadata preview. Learning receipts are explicitly labelled as saved run metadata; other terminal runs project their existing final response in place, without persisting synthetic chat messages. Legacy receipts without a recorded result timestamp use completion order and show time unavailable, never the dispatch time. Full summaries remain readable and copyable without a nested scroller. Do not add a standalone File changes workbench: retain write history as data for future context-specific detail views, without turning every write into another navigation surface.
 
 Workflow is the first-class Project automation concept. The Workflows sidebar
 section keeps a visible definitions entry even without saved conversation runs;
@@ -355,6 +355,11 @@ explicitly unavailable, never zero usage. Configuration authoring belongs to cha
 run configuration and Workflow/run/session identities without routine revision-number
 labels; internal concurrency revisions remain intact. Only recorded session outputs
 receive run-session links; explicit fixed destinations also receive target-session links.
+Each group has an upper-right conversation action: open its current fixed target,
+or clearly label the most recent retained run with an actual session receipt.
+Without an association, keep the action unavailable with a keyboard-accessible
+explanation; never create a conversation or execute a workflow. These actions do
+not pan the canvas or open the inspector.
 Dedicated fresh-run conversation headings use their persisted automation name, not
 the first task prompt or a later catalog rename. Fixed delivery keeps ordinary session titles. Existing pause/resume and non-active
 retry/cancel controls retain their authority boundaries. An uncertain retry

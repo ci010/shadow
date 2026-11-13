@@ -1,16 +1,16 @@
 import { MarkerType, type Node, type Edge } from '@vue-flow/core'
 import { workflowGraph, type WorkflowDefinition, type WorkflowRun } from './workflows.ts'
 
-export interface WorkflowCanvasEntry { definition: WorkflowDefinition; run?: WorkflowRun; enabled?: boolean; snapshot?: boolean }
+export interface WorkflowCanvasEntry { definition: WorkflowDefinition; run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: { sessionId: string; kind: 'fixed' | 'latest' } }
 const nodeId = (flow: string, node: string) => JSON.stringify([flow, node])
 
 /** A read-only projection. IDs and connections are scoped to their owning workflow. */
 export function workflowCanvas(flows: WorkflowCanvasEntry[]): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [], edges: Edge[] = []
-  for (const [row, { definition, run, enabled = definition.enabled, snapshot = false }] of flows.entries()) {
+  for (const [row, { definition, run, enabled = definition.enabled, snapshot = false, conversation }] of flows.entries()) {
     const graph = workflowGraph(definition, run)
     const groupId = nodeId(definition.id, 'group')
-    nodes.push({ id: groupId, type: 'group', position: { x: 0, y: row * 220 }, data: { definition, run, enabled, snapshot },
+    nodes.push({ id: groupId, type: 'group', position: { x: 0, y: row * 220 }, data: { definition, run, enabled, snapshot, conversation },
       style: { width: `${graph.length * 280 + 24}px`, height: '200px' },
       draggable: false, selectable: false, connectable: false, deletable: false, focusable: false, zIndex: -1 })
     for (const [index, node] of graph.entries()) {
