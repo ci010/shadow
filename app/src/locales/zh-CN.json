@@ -4315,5 +4315,18 @@
   "Workflow canvas": "工作流画布",
   "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "鼠标左键或中键拖动空白画布即可平移；点击节点或工作流标题查看详情。聚焦画布后：滚轮平移；Ctrl/Cmd + 滚轮缩放。Shift+1 适应全部工作流；Shift+2 适应选中工作流；Escape 清除选择。这些快捷键不会编辑或运行工作流。",
   "Select": "选择",
-  "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "未配置版本去重。每次接纳观测都可创建新运行；恢复继续执行已保存的运行。"
+  "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "未配置版本去重。每次接纳观测都可创建新运行；恢复继续执行已保存的运行。",
+  "Every {count} days": "每{count}天",
+  "Every {count} hours": "每{count}小时",
+  "Every {count} minutes": "每{count}分钟",
+  "Every {count} seconds": "每{count}秒",
+  "Every {count} milliseconds": "每{count}毫秒",
+  "Daily at {time}": "每天{time}",
+  "Latest retained run state": "最近保留的运行状态",
+  "This run configuration": "本次运行配置",
+  "Current configuration": "当前配置",
+  "Deduplicate observations": "观测去重",
+  "Skip observations already seen": "跳过已处理的观测",
+  "First successful collection acts on observations not seen before.": "首次成功采集会处理此前未见的观测。",
+  "An older observation was ignored; the stored data is retained.": "已忽略较旧的观测，保留已存储的数据。"
 }
