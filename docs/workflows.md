@@ -54,6 +54,8 @@ ordinary Agent, using host Session listeners; private owner topics are omitted.
 No existing-session link prepares, restores or sends to a session. The BOT inspector
 selection is retained with the Project's existing Workflow document tab.
 
+An isolated BOT connection group's ellipsis opens the existing **Project settings → Connections** form at `/projects/:projectId/settings/connections?connectionId=:connectionId`. The authorized Project connection list resolves that exact ID after loading, including on refresh; unavailable/deleted IDs show a notice and never fall back to another connection. Navigation only reads status: it does not save credentials, connect, enable or reconnect. Published BOT/deployment groups do not use this connector shortcut, and complete binding chains retain their existing conversation links.
+
 The DTO is an explicit allowlist: no credentials/config, prompts, tools, grants,
 allowlists, parameters, source paths, exception bodies or message content. URL-bearing
 labels are redacted. BOT entries have no pause/resume/retry/deploy controls; ordinary

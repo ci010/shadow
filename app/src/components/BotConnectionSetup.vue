@@ -8,6 +8,7 @@
         <button type="button" :disabled="busy || loading" @click="refresh">{{ t('Refresh status') }}</button>
       </div>
       <p v-if="loading" role="status">{{ t('Loading channel connections...') }}</p>
+      <p v-if="missingRequestedConnection && !loading && !listError" class="error" role="alert">{{ t('The requested connection is unavailable in this Project. Choose another connection or refresh status.') }}</p>
       <p v-if="listError" class="error" role="alert">{{ listError }}</p>
       <p v-if="platform && !loading && !listError && !matching.length" class="muted">{{ t('No connections for this platform in this Project. Create one to continue.') }}</p>
       <form v-if="selection === 'new'" class="new-connection" @submit.prevent="createConnection">
@@ -93,7 +94,7 @@ import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../cha
 import { botChannel, botConnectionDraft, botConnectionFields, botConnectionPatch, createBotSettingsClient, wechatLoginQr, type BotInstanceStatus } from '../bot-settings.ts'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 
-const props = defineProps<{ apiBase: string; projectId: string; active: boolean; available: boolean; compact?: boolean }>()
+const props = defineProps<{ apiBase: string; projectId: string; active: boolean; available: boolean; compact?: boolean; requestedConnectionId?: string }>()
 const enabled = computed(() => props.active && props.available && !!props.projectId && privateCredentialTransport(props.apiBase))
 const channels = ref<BotInstanceStatus[]>([])
 const platform = ref<ChannelId | ''>('')
@@ -120,6 +121,21 @@ function clearCredentials() { draft.value = platform.value ? botConnectionDraft(
 function resetSelection() { clearCredentials(); challenge.value = ''; qr.value = ''; groups.value = undefined; serviceStatusOpen.value = false; error.value = ''; notice.value = '' }
 watch(platform, () => { selection.value = ''; purpose.value = ''; resetSelection() }, { flush: 'sync' })
 watch(selection, () => { purpose.value = ''; resetSelection() }, { flush: 'sync' })
+const missingRequestedConnection = ref(false)
+function selectRequestedConnection() {
+  missingRequestedConnection.value = false
+  if (props.requestedConnectionId === undefined) return
+  // Resolve only against this Project's authorized list; never pick a default.
+  const target = channels.value.find(bot => bot.id === props.requestedConnectionId)
+  platform.value = target?.platform ?? ''
+  selection.value = target ? `connection:${target.id}` : ''
+  resetSelection()
+  missingRequestedConnection.value = !target
+}
+watch(() => props.requestedConnectionId, () => {
+  platform.value = ''; selection.value = ''; resetSelection()
+  selectRequestedConnection()
+})
 function stop() {
   generation++; read?.abort(); mutation?.abort(); read = mutation = undefined
   channels.value = []; platform.value = ''; selection.value = ''; purpose.value = ''; resetSelection()
@@ -136,6 +152,7 @@ async function refresh() {
     // A lost create response may already have created a connection. Require a
     // fresh choice from the authoritative list, never replay creation blindly.
     if (uncertainCreation || (selection.value && selection.value !== 'new' && !selected.value)) selection.value = ''
+    selectRequestedConnection()
   } catch { if (!controller.signal.aborted) listError.value = t('Could not load connections. Check your Project access and refresh status.') }
   finally { if (read === controller) { read = undefined; loading.value = false } }
 }

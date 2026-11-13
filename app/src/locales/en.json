@@ -2074,6 +2074,8 @@
   "Open a folder or select a conversation to browse files.": "Open a folder or select a conversation to browse files.",
   "Open app": "Open app",
   "Open automation {name}": "Open workflow {name}",
+  "Configure BOT connection": "Configure BOT connection",
+  "The requested connection is unavailable in this Project. Choose another connection or refresh status.": "The requested connection is unavailable in this Project. Choose another connection or refresh status.",
   "Open conversation": "Open conversation",
   "Open conversation {id}": "Open conversation {id}",
   "Open conversation {recipient}{value2}": "Open conversation {recipient}{value2}",

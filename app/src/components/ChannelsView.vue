@@ -8,7 +8,7 @@
       <RouterLink v-if="section === 'bots'" class="related-entry" :to="{ name: 'project-settings', params: { projectId, section: 'connections' } }">{{ t('Manage platform connections') }}</RouterLink>
     </header>
     <p v-if="requestedReviewId" class="review-notice" role="status">{{ t('This link belongs to the retired Discord configuration workflow. No change has been approved or published. Return to chat to inspect the current BOT files and request a new exact deployment confirmation.') }}</p>
-    <BotConnectionSetup v-if="section === 'connections'" :key="projectId" :api-base="apiBase" :project-id="projectId" :available="available" :active="active" />
+    <BotConnectionSetup v-if="section === 'connections'" :key="projectId" :api-base="apiBase" :project-id="projectId" :available="available" :active="active" :requested-connection-id="requestedConnectionId" />
     <section v-else-if="available" class="deployment-inventory">
       <BotPackage v-if="available" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="active" />
     </section>
@@ -19,7 +19,7 @@ import { RouterLink } from 'vue-router'
 import { t } from '../i18n.ts'
 import BotConnectionSetup from './BotConnectionSetup.vue'
 import BotPackage from './BotPackage.vue'
-withDefaults(defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean; section?: 'bots' | 'connections'; reviewBotId?: string; requestedReviewId?: string }>(), { section: 'bots' })
+withDefaults(defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean; section?: 'bots' | 'connections'; requestedConnectionId?: string; reviewBotId?: string; requestedReviewId?: string }>(), { section: 'bots' })
 </script>
 <style scoped>
 .channels-view { min-width: 0; }

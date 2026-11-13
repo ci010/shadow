@@ -69,7 +69,15 @@ const canvas = computed(() => workflowCanvas(props.flows))
               @click="emit('toggle', data.definition.id, !data.control.enabled)">
               {{ data.control.busy ? t('Saving…') : data.control.enabled ? t('Pause') : t('Resume') }}
             </button>
-            <HoverInfo :text="data.conversation ? (data.conversation.kind === 'automation' ? t('Open the latest automation run and its conversation history.') : data.conversation.kind === 'latest' ? t('Open the most recent retained run with a recorded session.') : t('Open the configured target session.')) : t('No associated session recorded. This does not start a workflow or conversation.')">
+            <HoverInfo v-if="data.configureConnectionId" :text="t('Configure BOT connection')">
+              <template #default="{ triggerProps }">
+                <RouterLink v-bind="triggerProps" class="btn btn-sm group-connection nodrag nopan" :aria-label="t('Configure BOT connection')"
+                  :to="{ name: 'project-settings', params: { projectId, section: 'connections' }, query: { connectionId: data.configureConnectionId } }">
+                  <span class="i-lucide-ellipsis" aria-hidden="true" />
+                </RouterLink>
+              </template>
+            </HoverInfo>
+            <HoverInfo v-else :text="data.conversation ? (data.conversation.kind === 'automation' ? t('Open the latest automation run and its conversation history.') : data.conversation.kind === 'latest' ? t('Open the most recent retained run with a recorded session.') : t('Open the configured target session.')) : t('No associated session recorded. This does not start a workflow or conversation.')">
               <template #default="{ triggerProps }">
                 <button v-bind="triggerProps" class="btn btn-sm group-conversation nodrag nopan" :aria-disabled="!data.conversation"
                   @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop
@@ -115,6 +123,9 @@ const canvas = computed(() => workflowCanvas(props.flows))
 .group-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .group-actions { display: flex; flex-shrink: 0; align-items: center; gap: 6px; margin: 10px 12px 0 0; }
 .group-actions button { white-space: nowrap; }
+.group-connection { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; text-decoration: none; }
+.group-connection span { display: block; width: 16px; height: 16px; }
+.group-connection:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .group-feedback { position: absolute; top: 184px; left: 24px; right: 12px; margin: 0; font-size: 11px; color: var(--c-text-secondary); line-height: 14px; }
 .group-feedback.failure { color: var(--c-error); }
 .group-conversation[aria-disabled=true] { color: var(--c-text-muted); cursor: not-allowed; }
@@ -138,6 +149,6 @@ const canvas = computed(() => workflowCanvas(props.flows))
 :deep(.vue-flow__handle) { opacity: 0; pointer-events: none; }
 :deep(.vue-flow__node-group) { padding: 0; border: 0; border-radius: 0; background: transparent; text-align: start; }
 @media (prefers-reduced-motion: reduce) { :deep(.vue-flow__edge.animated path) { animation: none; } }
-@media (max-width: 700px), (pointer: coarse) { .group-conversation { min-height: 44px; margin-top: 6px; } }
+@media (max-width: 700px), (pointer: coarse) { .group-conversation { min-height: 44px; margin-top: 6px; } .group-connection { min-width: 44px; min-height: 44px; } }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 </style>

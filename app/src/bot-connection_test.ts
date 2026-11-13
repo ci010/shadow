@@ -180,3 +180,36 @@ test('WeChat QR stays private and does not bypass personal owner pairing; switch
   await view.click('Generate WeChat login QR code'); view.state.active = false; await settleBotUi()
   assert.equal(view.nodes().some(node => node.tag === 'img'), false)
 })
+
+test('deep-linked connection selects exact ID after load, restores on mount, and never crosses Projects or mutates', async t => {
+  const requests: ReturnType<typeof calls>[] = []
+  let deleted = false
+  t.mock.method(globalThis, 'fetch', async (url: URL | RequestInfo, init?: RequestInit) => {
+    const request = calls(url, init); requests.push(request)
+    const projectId = request.path.includes('/projects/q/') ? 'q' : 'p'
+    return Response.json({ channels: projectId === 'q' ? [fixture({ id: 'other', projectId })] : [fixture(), ...deleted ? [] : [fixture({ id: 'second', displayName: 'Second QQ' })]] })
+  })
+  const view = mountBotUi(t, 'BotConnectionSetup.vue', { ...props, requestedConnectionId: 'second' })
+  await settleBotUi()
+  assert.match(view.text(), /Second QQ/)
+  assert.equal(view.nodes().find(n => n.props.class === 'connection-id')?.text, 'second')
+  view.state.requestedConnectionId = 'qq-bot'; await settleBotUi()
+  assert.equal(view.nodes().find(n => n.props.class === 'connection-id')?.text, 'qq-bot')
+  view.state.requestedConnectionId = 'missing'; await settleBotUi()
+  assert.match(view.text(), /requested connection is unavailable/)
+  assert(!view.nodes().some(n => n.props.class === 'selected-connection'))
+  view.state.requestedConnectionId = 'second'; await settleBotUi()
+  deleted = true; await view.click('Refresh status')
+  assert.match(view.text(), /requested connection is unavailable/)
+  assert(!view.nodes().some(n => n.props.class === 'selected-connection'))
+  deleted = false
+  view.unmount()
+  const restored = mountBotUi(t, 'BotConnectionSetup.vue', { ...props, requestedConnectionId: 'second' })
+  await settleBotUi()
+  assert.equal(restored.nodes().find(n => n.props.class === 'connection-id')?.text, 'second')
+  restored.state.apiBase = 'http://localhost/projects/q'; restored.state.projectId = 'q'; await settleBotUi()
+  assert.match(restored.text(), /requested connection is unavailable/)
+  assert(!restored.nodes().some(n => n.props.class === 'selected-connection'))
+  assert(requests.some(r => r.path === '/projects/q/api/channels'))
+  assert(requests.every(r => r.method === 'GET'))
+})
