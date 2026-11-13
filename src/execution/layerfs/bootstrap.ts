@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, lstat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { BackgroundTaskManager, backgroundExecutionId } from '../../agent/background-task.ts'
@@ -20,8 +20,6 @@ const diagnosticSchema = z.object({ reason: z.enum(['exit', 'timeout', 'cancelle
   signal: z.string().max(40).nullable(), launcherExited: z.boolean(), launcherPid: z.number().int().positive().optional(), osCode: z.string().regex(/^[A-Z0-9_]{1,40}$/).optional(),
 }).strict()
 const probeSteps = new Set(['admitted', 'wsl_ready', 'resolve_paths'])
-const safeProbeFailure = (state: Journal) => ['probe_failed', 'failed', 'uncertain'].includes(state.phase)
-  && probeSteps.has(state.step) && state.provisioningStarted !== true && !state.installation
 const distroName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/)
 const resultSchema = z.object({ bundle: z.string(), node: z.string(), image: z.string().regex(/^sha256:[a-f0-9]{64}$/), revision: z.literal(bootstrapPins.revision) }).strict()
 const journalSchema = z.object({ version: z.literal(1), projectId: z.string(), sessionId: z.string(),
@@ -100,80 +98,13 @@ export class LayerFSBootstrap {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await readFile(path, 'utf8') !== text) throw new ToolNoEffectError('Previous bootstrap evidence could not be archived safely; recovery/admission was refused.')
     }
   }
-  /** Explicit host-only recovery, never a retry of the installer or a journal deletion. */
-  async recover(context: ExecutionContext, executionId: unknown) {
-    this.assertProject(context); assertLayerFSSetupOwner(context)
-    if (this.admitting) throw new ToolNoEffectError('Bootstrap admission/recovery is already in progress.')
-    const lease = this.managed.acquireSetup()
-    this.admitting = true
-    try {
-      const previous = await this.journal()
-      if (!previous || executionId !== previous.executionId || !safeProbeFailure(previous)) throw new ToolNoEffectError('Recovery requires the exact failed execution and a terminal pre-provisioning readiness/path probe. Running or dispatched builds cannot be recovered automatically.')
-      if (process.env.SHADOW_LAYERFS_CONFIG || await this.managed.configured()) throw new ToolNoEffectError('An operator/managed installation already exists; probe recovery cannot replace it.')
-      if (previous.diagnostic?.launcherExited === false) throw new ToolOutcomeUnknownError('The WSL launcher has not confirmed termination; automatic probe recovery is refused.')
-      for (const name of ['api-root', 'build-tail.log', 'source_build.log']) {
-        try { await lstat(join(this.directory, previous.key, name)) }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error }
-        throw new ToolOutcomeUnknownError('Unexpected build artifacts conflict with the early probe journal; preserve state for manual inspection.')
-      }
-      if (!previous.diagnostic && !(previous.step === 'admitted' && previous.provisioningStarted === false)) {
-        // Legacy resolve_paths errors were persisted only after launcher close, but
-        // lacked that receipt. Require a stopped distro as additional evidence.
-        if (previous.step !== 'resolve_paths') throw new ToolOutcomeUnknownError('Legacy probe state has insufficient recovery evidence.')
-        const inventory = await this.run({ file: 'wsl.exe', args: ['--list', '--running', '--quiet'], timeoutMs: 30000 }, context.signal)
-        if (inventory.code !== 0 || decodeInventory(inventory.stdout).split(/\r?\n/).some(name => name.trim().toLowerCase() === previous.distribution.toLowerCase())) throw new ToolOutcomeUnknownError('The legacy failed distribution is running or its state cannot be checked; recovery requires inspection, not termination.')
-      }
-      context.signal.throwIfAborted()
-      const current = await this.journal()
-      if (JSON.stringify(current) !== JSON.stringify(previous)) throw new ToolNoEffectError('Bootstrap state changed during inspection; recovery refused.')
-      await this.archive(previous)
-      this.save({ ...previous, phase: 'recovered', provisioningStarted: false, recoveredBy: context.sessionId, recoveredAt: new Date().toISOString() })
-      return { status: 'recovered', previousExecutionId: previous.executionId, provisioningStarted: false, next: 'bootstrap_plan',
-        message: 'Previous evidence and staging were retained. No WSL startup, download or build was retried. Obtain a fresh plan/approval before another attempt.' }
-    } finally { this.admitting = false; lease.release() }
-  }
-  /** Reuse a completed build only when evidence proves its host runtime never opened.
-   * Explicit owner consent is required, as with advanced setup; never infer it from status.
-   */
-  async recoverConnection(args: Record<string, unknown>, context: ExecutionContext) {
-    this.assertProject(context); assertLayerFSSetupOwner(context)
-    if (args.approved !== true || args.allowRootWorker !== true) throw new ToolNoEffectError('Connection recovery requires explicit owner consent to one root WSL worker connection attempt using the existing installation.')
-    if (this.admitting || process.env.SHADOW_LAYERFS_CONFIG) throw new ToolNoEffectError('Connection recovery is unavailable during admission or with an operator override.')
-    const lease = this.managed.acquireSetup()
-    this.admitting = true
-    let attempted: Journal | undefined
-    try {
-      const previous = await this.journal()
-      if (!previous || args.executionId !== previous.executionId || previous.phase !== 'uncertain'
-        || previous.step !== 'connect_worker' || !previous.installation || previous.provisioningStarted !== true) throw new ToolNoEffectError('Connection recovery requires the exact retained built installation at uncertain/connect_worker, with no previous recovery attempt. Builds/imports and later failures cannot be replayed.')
-      await this.archive(previous)
-      const result = await this.managed.recoverUnstartedConnection(previous.installation, context.signal, lease.token, async () => {
-        if (JSON.stringify(await this.journal()) !== JSON.stringify(previous)) throw new ToolNoEffectError('Bootstrap state changed during inspection; connection recovery refused.')
-        attempted = { ...previous, step: 'recover_connect_worker', recoveredBy: context.sessionId, recoveredAt: new Date().toISOString() }
-        this.save(attempted)
-      }, this.run)
-      const ready = (result as { ready?: boolean }).ready === true
-      this.save({ ...attempted!, phase: ready ? 'ready' : 'blocked', step: ready ? 'ready' : 'worker_not_ready', code: ready ? undefined : 'RUNTIME_NOT_READY' })
-      return { status: ready ? 'ready' : 'not_ready', runtime: result, previousExecutionId: previous.executionId, rebuilt: false, imported: false,
-        message: 'Connected using the existing approved build. Prior failure evidence was archived. No repository was imported; sandbox behavior remains unverified.' }
-    } catch (error) {
-      if (attempted) this.save({ ...attempted, phase: 'uncertain', code: error instanceof ToolOutcomeUnknownError ? 'OUTCOME_UNKNOWN' : 'CONNECTION_RECOVERY_FAILED' })
-      throw error
-    } finally { this.admitting = false; lease.release() }
-  }
   async status(context: ExecutionContext) {
     this.assertProject(context)
     const journal = await this.journal()
     return journal ? { phase: journal.phase, step: journal.step, executionId: journal.executionId,
       code: journal.code, distribution: journal.distribution, lastBootstrapReady: journal.phase === 'ready', runtime: 'not_checked', sandboxVerified: false,
       diagnostic: journal.diagnostic, provisioningStarted: journal.provisioningStarted, evidenceWriteFailed: journal.evidenceWriteFailed,
-      probeRecoveryCandidate: safeProbeFailure(journal),
-      connectionRecoveryCandidate: journal.phase === 'uncertain' && journal.step === 'connect_worker' && journal.provisioningStarted === true && !!journal.installation,
-      connectionRecoveryAttempted: journal.step === 'recover_connect_worker',
-      connectionRecovery: 'If connectionRecoveryCandidate is true, explicit owner approval permits bootstrap_recover_connection with the exact executionId, approved:true and allowRootWorker:true. It verifies an absent SDK runtime directory, no retained managed helper, and a stopped WSL distribution. It never rebuilds or imports source; running workers and existing runtime directories require operator reconciliation.',
-      recovery: journal.phase === 'ready' ? 'connect' : journal.phase === 'recovered' ? 'bootstrap_plan' : safeProbeFailure(journal)
-        ? 'Use bootstrap_recover with this executionId for guarded inspection/archive. Do not clear the journal or replay provisioning.'
-        : 'Inspect the existing execution and retained resources; do not replay bootstrap or clear its journal.' } : { phase: 'not_started', next: 'bootstrap_plan' }
+      recovery: 'Inspect retained resources; do not replay unknown provisioning.' } : { phase: 'not_started', next: 'bootstrap_plan' }
   }
   async plan(context: ExecutionContext, selected?: unknown) {
     this.assertProject(context); assertLayerFSSetupOwner(context)

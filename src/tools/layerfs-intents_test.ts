@@ -1,59 +1,61 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createLayerFSTools, LayerFSTool, layerFSToolContracts } from './layerfs.ts'
+import { createLayerFSResourceTools, layerfsResourceContracts } from './layerfs-resource.ts'
+import type { LayerFSResources } from '../execution/layerfs/resource-service.ts'
 import type { ExecutionContext } from './context.ts'
 
-test('factory exposes 29 narrow intents, not dispatcher or file-operation duplicates', () => {
-  const tools = createLayerFSTools('synthetic-project')
+const projectId = 'synthetic-project'
+const context = { projectId, signal: new AbortController().signal } as ExecutionContext
+
+test('discovery combines installation-only factory and flat explicit template intents without legacy repair aliases', () => {
+  const installation = createLayerFSTools(projectId)
+  assert.deepEqual(installation.map(t => t.name), ['layerfs_doctor', 'layerfs_setup', 'layerfs_bootstrap_plan', 'layerfs_bootstrap', 'layerfs_bootstrap_status'])
+  const templates = createLayerFSResourceTools({ projectId } as LayerFSResources)
+  const tools = [...templates, ...installation]
   assert.deepEqual(tools.map(({ name, description, parameters, supportsLayerFSWorkdir }) => ({ name, description, parameters, supportsLayerFSWorkdir })), layerFSToolContracts())
-  assert.equal(tools.length, 29)
-  assert.equal(new Set(tools.map(t => t.name)).size, 29)
-  for (const name of ['layerfs', 'layerfs_read', 'layerfs_write', 'layerfs_exec']) assert.ok(!tools.some(t => t.name === name))
+  assert.equal(new Set(tools.map(t => t.name)).size, tools.length)
+  for (const name of ['layerfs', 'layerfs_read', 'layerfs_write', 'layerfs_exec', 'layerfs_connect', 'layerfs_import', 'layerfs_mount', 'layerfs_namespace_status', 'layerfs_import_recover']) assert.ok(!tools.some(t => t.name === name))
   for (const tool of tools) {
     assert.equal(tool.parameters.additionalProperties, false)
     assert.ok(!('action' in tool.parameters.properties))
     assert.ok((tool.parameters.required ?? []).every(key => key in tool.parameters.properties))
   }
   const find = (name: string) => tools.find(t => t.name === `layerfs_${name}`)!
-  assert.deepEqual(find('fork').parameters.required, ['branch'])
-  assert.deepEqual(find('mount').parameters.required, ['branch'])
-  assert.deepEqual(find('import').parameters.required, ['workspace'])
-  assert.deepEqual(Object.keys(find('doctor').parameters.properties), ['namespace'])
+  assert.deepEqual(find('runtime_start').parameters.required, ['runtimeId'])
+  for (const contract of layerfsResourceContracts()) assert.ok(!('namespace' in contract.parameters.properties))
   assert.ok(!('allowDownloads' in find('setup').parameters.properties))
   assert.ok(!('installation' in find('bootstrap').parameters.properties))
 })
 
-test('wrappers reject action injection, missing fields and invalid types before dispatch', async () => {
-  const tool = createLayerFSTools('synthetic-project').find(t => t.name === 'layerfs_mount')!
-  const context = {} as ExecutionContext
-  await assert.rejects(tool.execute({ branch: 'test', action: 'publish' }, context), /Unexpected action/)
-  await assert.rejects(tool.execute({}, context), /Missing branch/)
-  await assert.rejects(tool.execute({ branch: 123 }, context), /Invalid branch/)
+test('installation wrappers reject action injection, missing fields and invalid types before dispatch', async () => {
+  const tool = createLayerFSTools(projectId).find(t => t.name === 'layerfs_setup')!
+  await assert.rejects(tool.execute({ installation: {}, approved: true, allowRootWorker: true, action: 'publish' }, context), /Unexpected action/)
+  await assert.rejects(tool.execute({}, context), /Missing installation/)
+  await assert.rejects(tool.execute({ installation: {}, approved: 'yes', allowRootWorker: true }, context), /Invalid approved/)
 })
 
-test('dispatch shares one service and preserves args/context and failure identity', async () => {
+test('installation dispatch shares one service and preserves args/context and failure identity', async () => {
   const original = LayerFSTool.prototype.execute
   const calls: { self: LayerFSTool; args: Record<string, unknown>; context: ExecutionContext }[] = []
   const result = { isError: true, content: [] }
   LayerFSTool.prototype.execute = async function(args, context) { calls.push({ self: this, args, context }); return result }
   try {
-    const tools = createLayerFSTools('synthetic-project')
-    const context = {} as ExecutionContext
-    assert.equal(await tools.find(t => t.name === 'layerfs_fork')!.execute({ branch: 'test', ref: 'base' }, context), result)
-    await tools.find(t => t.name === 'layerfs_mount')!.execute({ branch: 'test' }, context)
+    const tools = createLayerFSTools(projectId)
+    assert.equal(await tools.find(t => t.name === 'layerfs_setup')!.execute({ installation: {}, approved: true, allowRootWorker: true }, context), result)
+    await tools.find(t => t.name === 'layerfs_doctor')!.execute({}, context)
     assert.equal(calls[0].self, calls[1].self)
     assert.equal(calls[0].context, context)
-    assert.deepEqual(calls[0].args, { branch: 'test', ref: 'base', action: 'fork' })
+    assert.deepEqual(calls[0].args, { installation: {}, approved: true, allowRootWorker: true, action: 'setup' })
   } finally { LayerFSTool.prototype.execute = original }
 })
 
-test('intents retain Project, remote and abort enforcement without starting LayerFS', async () => {
-  const tool = createLayerFSTools('synthetic-project').find(t => t.name === 'layerfs_doctor')!
-  await assert.rejects(tool.execute({}, { projectId: 'foreign' } as ExecutionContext), /Project mismatch/)
-  await assert.rejects(tool.execute({}, { projectId: 'synthetic-project', remoteWorkdir: {} } as ExecutionContext), /remote execution is unsupported/)
-  await assert.rejects(tool.execute({}, { projectId: 'synthetic-project', signal: AbortSignal.abort(new Error('synthetic abort')) } as ExecutionContext), /synthetic abort/)
+test('installation intents retain Project, remote and abort enforcement without starting LayerFS', async () => {
+  const tool = createLayerFSTools(projectId).find(t => t.name === 'layerfs_doctor')!
+  await assert.rejects(tool.execute({}, { projectId: 'foreign' } as ExecutionContext), /Current local Project/)
+  await assert.rejects(tool.execute({}, { projectId, remoteWorkdir: {} } as ExecutionContext), /Current local Project/)
+  await assert.rejects(tool.execute({}, { projectId, signal: AbortSignal.abort(new Error('synthetic abort')) } as ExecutionContext), /synthetic abort/)
 })
-
 
 test('LayerFS invocation allows maintenance discovery but refuses unmarked host sources before initialization', async () => {
   const { InvokeTool } = await import('./invoke-tool.ts')

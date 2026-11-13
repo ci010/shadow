@@ -3,13 +3,13 @@ import { join } from 'node:path'
 import { layerfsRoute } from '../../tools/layerfs-route.ts'
 import { branchWorkspace } from './workspace-identity.ts'
 import { layerfsName } from './bridge.ts'
+import { LayerFSResources, layerfsResources, closeLayerFSResources } from './resource-service.ts'
 import { resourceJournal } from './coordination.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
 // Contract fixture, not an installed SDK or sandbox: records positional calls;
 // workspace.exec does not run shell commands. Each bridge gets a fresh process.
 export async function committedFixture() {
  const dir = await mkdtemp(join(process.cwd(), '.layerfs-committed-test-'))
- const prior = process.env.SHADOW_LAYERFS_CONFIG
  const sdkModule = join(dir, 'sdk.mjs'), state = join(dir, 'state.json'), log = join(dir, 'calls.jsonl')
  await writeFile(state, JSON.stringify({ text: 'first\nsecond\n', mode: '' }))
  await writeFile(sdkModule, `import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
@@ -35,17 +35,24 @@ export async function committedFixture() {
    commit:async(...a)=>{call('commit',a);if(state().mode==='commit-unknown')throw Object.assign(Error('lost'),{code:'Unknown'});return state().mode==='bad-receipt'?{kind:'Conflict'}:state().mode==='uptodate'?{kind:'UpToDate',head:null,root:'d'.repeat(64)}:{kind:'Committed',head:'c'.repeat(64),commit:{id:'c'.repeat(64),root:'d'.repeat(64)}}},
    unmount:async(...a)=>{call('unmount',a);await cancelPoint('unmount');return {kind:'Unmounted'}}},close:async()=>{if(state().mode==='close-fail')throw Error('close failed')}
  })};`)
- const config = join(dir, 'config.json')
- await writeFile(config, JSON.stringify({ projects: { one: { sdkModule, env: { LAYERFS_HOME: dir, LAYERFS_STORE_PATH: join(dir, 'store'), LAYERFS_WORKER_ENDPOINT: 'fake' } } } }))
- process.env.SHADOW_LAYERFS_CONFIG = config
- const workspace = branchWorkspace(layerfsName('one'), 'feature')
- const context = { projectId: 'one', sessionId: 'fixture', signal: new AbortController().signal } as ExecutionContext
+ const tools: any = {executionMode:'session'}; tools.dynamicOwner=tools
+ const context = { projectId: 'one', sessionId: 'fixture', signal: new AbortController().signal, tools, admin:true, channel:'web', isGroup:false } as ExecutionContext
+ const image='sha256:'+'a'.repeat(64)
+ const service=layerfsResources('one',dir,()=>new LayerFSResources('one',dir,{
+  installation:async()=>({apiRoot:dir,bundle:'/bundle',node:'/bin/node',distribution:'fixture',image}),
+  runtime:()=>({setup:async()=>({}),status:async()=>({}),close:async()=>{},sourceIdentity: async () => { throw Error('No native source in committed fixture') }, execContext:async()=>{throw Error('not needed')},projectConfiguration:async()=>({sdkModule,env:{}})})
+ }))
+ await service.runtimePlan('fixture',context);await service.runtimeStart('fixture',context)
+ const resource=await service.register({name:'fixture',runtimeId:'fixture',layerfsProject:layerfsName('one'),baselineRef:'aa',image,source:{repository:'https://example.com/repo',commit:'a'.repeat(40)}},context)
+ const binding={ownerProject:'one',runtimeId:'fixture',resourceId:resource.revision}
+ const workspace = branchWorkspace(layerfsName('one'), 'feature',binding)
+ service.catalog.bindWorkspace(workspace)
  const route = (kind: 'read'|'write'|'search'|'exec', args: Record<string, unknown> = {}) => layerfsRoute(kind, { workspace, ...args }, context, dir, {run: fn => fn(context.signal, () => {})})
- return { dir, workspace, context, route,
-  journal: resourceJournal(join(dir, 'layerfs-operations', layerfsName('one') + '.jsonl'), 'feature'),
+ return { dir, workspace, context, route, binding,
+  journal: resourceJournal(join(dir, 'layerfs-catalog', 'operations', 'fixture', layerfsName('one') + '.jsonl'), 'feature'),
   calls: async () => (await readFile(log, 'utf8')).trim().split('\n').map(s => JSON.parse(s)),
   mode: async (mode: string) => {const s=JSON.parse(await readFile(state,'utf8'));await writeFile(state,JSON.stringify({...s,mode}))},
-  close: async () => {if(prior===undefined)delete process.env.SHADOW_LAYERFS_CONFIG;else process.env.SHADOW_LAYERFS_CONFIG=prior;await rm(dir,{recursive:true,force:true})},
+  close: async () => {await closeLayerFSResources('one',dir);await rm(dir,{recursive:true,force:true})},
  }
 }
 

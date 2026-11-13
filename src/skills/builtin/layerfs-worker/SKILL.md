@@ -17,9 +17,12 @@ runtime for an assigned coding task: report the blocker to the owner/manager.
 For branch creation/integration read `v:skills/layerfs-manager`; for lifecycle
 work the authorized owner reads `v:skills/layerfs-setup`.
 
-No LayerFS-specific tool discovery is needed for ordinary work. If diagnostics
-are needed, read `v:tools/layerfs_status` and invoke its exact name through
-`invoke_tool`; reading a skill is guidance, not permission or runtime activation.
+No LayerFS-specific discovery is needed for ordinary work. The assigned version 3
+workspace binds one exact owning Project/runtime/resource/project/branch.
+Do not substitute a raw branch or namespace. For catalog diagnostics, the manager
+uses `layerfs_resource_inspect` with the exact resourceId; reading a skill is guidance,
+not permission or runtime activation. Old mount-status repair tools are not public
+workflow intents.
 
 ## Work, test and checkpoint
 
@@ -42,14 +45,15 @@ lineTruncated markers. Continue search offset=nextPagePos; directory read
 Exec supports sh/bash, args and branch-relative cwd. It creates a sandbox, mounts
 the current branch, runs once, checkpoints changes **even on nonzero command exit**,
 unmounts without discard and closes the sandbox. The command's nonzero exit is
-still a tool failure, with its checkpoint receipt. timeout_ms:0 starts background;
-a positive wait window can transfer the same entire lifecycle to background.
-Do not resubmit. Read v:bg for output. Cancellation or lost receipts retain the
+still a tool failure, with its checkpoint receipt. Follow the live exec contract's
+wait-window and background rules; leaf calls cannot detach work. Where the owning
+session supports background transfer, it retains the same complete lifecycle.
+Do not resubmit. Read v:bg for owned background output. Cancellation or lost receipts retain the
 journal/mount for reconciliation; neither cancellation nor UNKNOWN means rollback.
-No automatic forced cleanup runs on an aborted signal. Node is unsupported.
+No automatic forced cleanup runs on an aborted signal. The tool shell=node runtime is unsupported; installed Node commands inside sh/bash are ordinary sandbox commands.
 
 Independent branches support concurrent file operations and full exec lifetimes.
-Same-branch overlap is refused while reserved. Fork/load reserve source + output;
+Same-branch overlap is refused while reserved. Workspace forks reserve source + output;
 merge reserves both inputs + output; publish reserves source + main. Durable
 branch-scoped reservations/journals survive restart and UNKNOWN without blocking
 unrelated branches. Known unrelated mounts are allowed; matching mounts (even

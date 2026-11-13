@@ -74,7 +74,7 @@ test('fresh-session request reaches automatic plan -> one consent -> async build
     const bootstrap = new LayerFSBootstrap('p', home, bg, m, run, 'win32', 'x64', testConsent), tool = new LayerFSTool('p', home, m, bootstrap)
     try {
       assert.equal(ctx.workUserInput, originalPrompt)
-      const first = JSON.parse(toolResultText(await tool.execute({ action: 'connect' }, ctx))).result
+      const first = JSON.parse(toolResultText(await tool.execute({ action: 'bootstrap_plan' }, ctx))).result
       assert.equal(first.status, 'needs_approval'); assert.equal(first.distribution, 'OfficeAI-WSL')
       assert.equal(rootCalls, 0); assert.deepEqual(events, []); assert.equal(bg.tasks.length, 0)
       assert.match(first.next, /No manual paths/)
@@ -91,7 +91,7 @@ test('fresh-session request reaches automatic plan -> one consent -> async build
       assert.equal(rootCalls, 3); assert.equal(bg.tasks.length, 1)
       assert.equal(bg.tasks[0]!.options.callback?.sessionId, ctx.sessionId)
       assert.match(bg.tasks[0]!.options.callback?.contentPrefix ?? '', /original request/)
-      assert.deepEqual(JSON.parse(toolResultText(await tool.execute({ action: 'connect' }, ctx))).result, ready)
+      assert.deepEqual(await m.status(ctx.signal), ready)
       await assert.rejects(tool.execute(start, ctx), ToolNoEffectError)
       const journal = JSON.parse(await readFile(join(home, 'state', 'layerfs', 'bootstrap', 'bootstrap.json'), 'utf8'))
       assert.equal(journal.phase, 'ready'); assert.equal(journal.installation.apiRoot, hostOutput); assert.equal(journal.key, key)
@@ -102,7 +102,7 @@ test('fresh-session request reaches automatic plan -> one consent -> async build
     try {
       const freshBootstrap = new LayerFSBootstrap('p', home, bg, fresh, async () => { throw Error('must not provision again') }, 'win32', 'x64', testConsent)
       const freshTool = new LayerFSTool('p', home, fresh, freshBootstrap)
-      assert.deepEqual(JSON.parse(toolResultText(await freshTool.execute({ action: 'connect' }, { ...context(home), sessionId: 'web:raw-next' }))).result, ready)
+      assert.equal(JSON.parse(toolResultText(await freshTool.execute({ action: 'doctor' }, { ...context(home), sessionId: 'web:raw-next' }))).result.configured, true)
     } finally { await fresh.close() }
   })
 })
@@ -227,122 +227,6 @@ test('host approval matches only the exact current recorded human choice, not fl
   ]) {
     const changed = structuredClone(record); change(changed); assert.equal(matches([changed]), false)
   }
-})
-
-test('readiness/path timeout retains diagnostics and is explicitly recoverable without dispatching provisioning', async () => {
-  for (const failedStep of ['wsl_ready', 'resolve_paths']) await fixture(async home => {
-    const ctx = context(home), bg = new BackgroundFixture(), events: string[] = [], m = managed(home, events)
-    let builds = 0, probes = 0
-    const b = new LayerFSBootstrap('p', home, bg, m, async command => {
-      if (command.args[0] === '--list') return reply('Ubuntu\n')
-      if (command.input !== undefined) { builds++; throw Error('installer must not run') }
-      probes++
-      if (command.args.includes('/bin/true') && failedStep === 'resolve_paths') return reply('')
-      throw new BootstrapCommandError({ reason: 'timeout', timeoutMs: command.timeoutMs, elapsedMs: command.timeoutMs + 50,
-        exitCode: null, signal: 'SIGTERM', launcherExited: true }, Buffer.from('PRIVATE_STDOUT'), Buffer.from('PRIVATE_STDERR'))
-    }, 'win32', 'x64', testConsent)
-    const p = await b.plan(ctx); assert.ok('plan' in p)
-    const admission = await b.start({ plan: p.plan, approval: decisionReference, approved: true, allowRootWorker: true, allowDownloads: true }, ctx)
-    await assert.rejects(bg.tasks[0]!.promise, /probe_failed.*TIMEOUT.*not dispatched/)
-    assert.equal(builds, 0); assert.deepEqual(events, [])
-    const status = await b.status(ctx)
-    assert.equal(status.phase, 'probe_failed')
-    assert.ok('diagnostic' in status); assert.equal(status.diagnostic?.reason, 'timeout')
-    assert.equal(status.provisioningStarted, false); assert.equal(status.probeRecoveryCandidate, true)
-    assert.doesNotMatch(JSON.stringify(status), /PRIVATE_STD/)
-    const journalPath = join(home, 'state', 'layerfs', 'bootstrap', 'bootstrap.json')
-    const before = await readFile(journalPath, 'utf8'), state = JSON.parse(before)
-    const directory = join(home, 'state', 'layerfs', 'bootstrap')
-    const log = JSON.parse(await readFile(join(directory, state.key, `${failedStep}.log`), 'utf8'))
-    assert.equal(log.stderr, 'PRIVATE_STDERR'); assert.equal(log.diagnostic.reason, 'timeout')
-    await assert.rejects(b.recover(ctx, 'bg:wrong'), ToolNoEffectError)
-    await assert.rejects(b.recover({ ...ctx, admin: false }, admission.executionId), ToolNoEffectError)
-    assert.equal(await readFile(journalPath, 'utf8'), before)
-    const count = probes
-    assert.equal((await b.recover(ctx, admission.executionId)).status, 'recovered')
-    assert.equal(probes, count); assert.equal(bg.tasks.length, 1)
-    assert.equal(JSON.parse(await readFile(join(directory, 'history', `${state.key}-probe_failed.json`), 'utf8')).code, state.code)
-    assert.equal((await b.plan(ctx)).status, 'needs_approval')
-    assert.equal((await b.status(ctx)).phase, 'recovered')
-  })
-})
-
-test('legacy resolve_paths failure requires stopped WSL evidence and retains the original journal in history', async () => {
-  await fixture(async home => {
-    const ctx = context(home), bg = new BackgroundFixture(), m = managed(home, [])
-    const directory = join(home, 'state', 'layerfs', 'bootstrap')
-    await mkdir(directory, { recursive: true })
-    const state = { version: 1, projectId: 'p', sessionId: 'web:previous', phase: 'uncertain', step: 'resolve_paths',
-      key: 'a'.repeat(32), distribution: 'Ubuntu', executionId: 'bg:' + 'b'.repeat(16), code: 'OUTCOME_UNKNOWN', approval: decisionReference }
-    const path = join(directory, 'bootstrap.json'); await writeFile(path, JSON.stringify(state))
-    let running = true, inventory = 0
-    const b = new LayerFSBootstrap('p', home, bg, m, async command => {
-      inventory++; assert.deepEqual(command.args, ['--list', '--running', '--quiet'])
-      assert.equal(command.input, undefined)
-      return { ...reply(''), stdout: Buffer.from(running ? 'Ubuntu\r\n' : '', 'utf16le') }
-    }, 'win32', 'x64', testConsent)
-    await assert.rejects(b.recover(ctx, state.executionId), /running or its state cannot be checked/)
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).phase, 'uncertain')
-    running = false
-    const recovered = await b.recover(ctx, state.executionId)
-    assert.equal(recovered.status, 'recovered'); assert.equal(inventory, 2)
-    assert.deepEqual(JSON.parse(await readFile(join(directory, 'history', `${state.key}-uncertain.json`), 'utf8')), state)
-    assert.equal(bg.tasks.length, 0); assert.equal(await m.configured(), false)
-    await assert.rejects(b.recover(ctx, state.executionId), /terminal pre-provisioning/)
-  })
-})
-
-test('recovery cannot reopen running work, dispatched/uncertain builds, unconfirmed launchers or conflicting artifacts', async () => {
-  for (const kind of ['running', 'build', 'boundary', 'launcher', 'artifact', 'bad-journal']) await fixture(async home => {
-    const ctx = context(home), bg = new BackgroundFixture(), m = managed(home, [])
-    const directory = join(home, 'state', 'layerfs', 'bootstrap'), key = 'a'.repeat(32)
-    await mkdir(join(directory, key), { recursive: true })
-    const state: any = { version: 1, projectId: 'p', sessionId: ctx.sessionId, phase: 'probe_failed', step: 'resolve_paths',
-      key, distribution: 'Ubuntu', executionId: 'bg:' + 'b'.repeat(16), code: 'PATH_MAPPING_TIMEOUT', approval: decisionReference,
-      provisioningStarted: false, diagnostic: { reason: 'timeout', timeoutMs: 30000, elapsedMs: 30001, exitCode: null, signal: 'SIGTERM', launcherExited: true } }
-    if (kind === 'running') state.phase = 'running'
-    if (kind === 'build') { state.phase = 'uncertain'; state.step = 'source_build' }
-    if (kind === 'boundary') state.provisioningStarted = true
-    if (kind === 'launcher') state.diagnostic.launcherExited = false
-    if (kind === 'artifact') await writeFile(join(directory, key, 'build-tail.log'), 'retained build evidence')
-    const path = join(directory, 'bootstrap.json'), raw = kind === 'bad-journal' ? 'invalid' : JSON.stringify(state)
-    await writeFile(path, raw)
-    const b = new LayerFSBootstrap('p', home, bg, m, async () => { throw Error('recovery must not run any native command') }, 'win32', 'x64', testConsent)
-    await assert.rejects(b.recover(ctx, state.executionId))
-    assert.equal(await readFile(path, 'utf8'), raw); assert.equal(bg.tasks.length, 0)
-  })
-})
-
-test('manual setup cannot race a background bootstrap or guarded recovery after their configuration checks', async () => {
-  for (const action of ['bootstrap', 'recover']) await fixture(async home => {
-    const ctx = context(home), bg = new BackgroundFixture(), m = managed(home, [])
-    const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
-    const directory = join(home, 'state', 'layerfs', 'bootstrap')
-    const b = new LayerFSBootstrap('p', home, bg, m, async command => {
-      if (command.args[0] === '--list' && !command.args.includes('--running')) return reply('Ubuntu\n')
-      if (command.args.includes('/bin/true')) return reply('')
-      if (command.args.includes('wslpath')) return reply('/mnt/host/api-root\n')
-      entered.resolve(); await resume.promise
-      return action === 'recover' ? reply('') : reply('SHADOW_LAYERFS_BOOTSTRAP_BLOCKED={"code":"DOCKER_API_148_REQUIRED","phase":"prerequisites","state":"not_started"}', 1)
-    }, 'win32', 'x64', testConsent)
-    let recovering: Promise<unknown> | undefined
-    if (action === 'recover') {
-      await mkdir(directory, { recursive: true })
-      const state = { version: 1, projectId: 'p', sessionId: ctx.sessionId, phase: 'uncertain', step: 'resolve_paths', key: 'a'.repeat(32),
-        distribution: 'Ubuntu', executionId: 'bg:' + 'b'.repeat(16), code: 'OUTCOME_UNKNOWN', approval: decisionReference }
-      await writeFile(join(directory, 'bootstrap.json'), JSON.stringify(state))
-      recovering = b.recover(ctx, state.executionId)
-    } else {
-      const p = await b.plan(ctx); assert.ok('plan' in p)
-      await b.start({ plan: p.plan, approval: decisionReference, approved: true, allowRootWorker: true, allowDownloads: true }, ctx)
-    }
-    await entered.promise
-    try { await assert.rejects(m.setup({}, ctx.signal), /already owned/) } finally { resume.resolve() }
-    if (recovering) await recovering
-    else await assert.rejects(bg.tasks[0]!.promise, /blocked/)
-    await assert.rejects(m.setup({}, ctx.signal), /Invalid LayerFS installation/)
-    assert.equal(await m.configured(), false)
-  })
 })
 
 test('private evidence-write failures never mask probe exit codes or trusted preflight refusals', async () => {
