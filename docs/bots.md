@@ -4,6 +4,16 @@ QQ, Feishu and Discord use one BOT source/configuration/deployment lifecycle.
 Platform authorization is **not** interchangeable: Discord retains live identity,
 role, thread, history, output-audience and conversation-epoch checks.
 
+## Workflow inspection
+
+The existing Project → Workflows workbench includes a read-only live connection,
+binding/listener, published BOT/Agent and existing Session topology. Multiple
+conversations share one connection identity without copying connection configuration.
+Transport health, binding/subscription enablement and package validity are independent;
+this projection is not a delivery probe or execution migration. See
+[Workflow BOT topology](workflows.md#bot-topology-read-only-first-stage) for the
+DTO, bounds, security exclusions and existing-session link limitations.
+
 ## Source and deployment
 
 Register a **local Folder**, then create a BOT directory inside it. Edit that

@@ -4340,5 +4340,21 @@
   "Open the latest automation run and its conversation history.": "打开自动化的最近运行及其会话历史。",
   "{action} workflow {name}": "{action}工作流 {name}",
   "Learning is disabled globally. This control saves the workflow preference only.": "学习已全局停用。此控件仅保存该工作流的启停偏好。",
-  "Workflow controls are unavailable. Refresh to retry.": "工作流控制暂不可用，请刷新重试。"
+  "Workflow controls are unavailable. Refresh to retry.": "工作流控制暂不可用，请刷新重试。",
+  "BOT connection": "BOT 连接",
+  "Connection unavailable": "连接不可用",
+  "Conversation binding": "会话绑定",
+  "Host owner ingress": "宿主所有者入口",
+  "Subscribed": "已订阅",
+  "Not subscribed": "未订阅",
+  "Listener projected": "已有监听投影",
+  "No listener": "无监听器",
+  "Published BOT / Agent": "已发布 BOT / Agent",
+  "No existing session recorded": "尚无已有会话记录",
+  "BOT topology": "BOT 拓扑",
+  "Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.": "只读 BOT 投影。消息仍经由 InputRouter 和 SessionManager 执行。连接健康不代表投递成功；此视图不探测路由。",
+  "BOT projection unavailable. Refresh to retry.": "BOT 投影不可用，请刷新重试。",
+  "BOT inventory is incomplete. Some entries are unavailable or limited.": "BOT 清单不完整，部分条目不可用或已达扫描上限。",
+  "Validated package": "已验证的包",
+  "Quarantined package": "已隔离的包"
 }

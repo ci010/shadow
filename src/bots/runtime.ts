@@ -19,6 +19,8 @@ import type { IntegrationAgent, DiscordBinding } from '../channels/integration-c
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const agentName = (id:string) => `bot_${id.slice(0,40)}_${digest(id).slice(0,16)}`
+/** The deterministic published Service Agent identity; inspecting it grants no policy. */
+export { agentName as publishedBotAgentName }
 const uuid = (id: string) => { const h = digest(['bot', id]); return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
 
 /** Directory-backed BOT policy adapter. No source or release snapshots are persisted in policy JSON. */

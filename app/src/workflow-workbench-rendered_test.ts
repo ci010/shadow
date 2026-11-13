@@ -44,7 +44,7 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
       if (path === '/api/projects') { json({ projects }); return }
       if (path.endsWith('/api/workflows')) {
         const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'existing', target: { sessionId: 'web:ordinary' }, task: `Reminder ${projectId}` } }] }
-        json({ projectId, definitions: [definition], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:ordinary' } }] }); return
+        json({ projectId, bots: { connections: [{ id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:ordinary' } }] }); return
       }
       if (path.endsWith('/api/automations')) { json({ automations: [] }); return }
       if (/\/status$/.test(path)) { json({ state: 'ready' }); return }
@@ -122,6 +122,18 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     await sidebar('a');await run('document.dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true}))');
     await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).query.child,'web:child');
     await sidebar('a');
+    // BOTs are inspection-only rows in the same canvas/tab, with binding-specific
+    // Agent identity and only real existing Session links. No control POST exists.
+    await wait('document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"]')+')');
+    await run('document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"] .group-heading')+').click()');
+    await wait('window.fixture.router.currentRoute.value.query.bot==="bot-binding:two"');
+    await wait(visible('.workflow-inspector'));
+    assert.equal(await run('('+visible('.workflow-inspector')+').textContent.includes("BOT:support")'),true);
+    assert.equal(await run('!!document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"] .group-toggle')+')'),false);
+    await primary();await sidebar('a');await wait(visible('.workflow-inspector'));
+    assert.equal((await route()).query.bot,'bot-binding:two');
+    await run('('+visible('.inspector-toolbar button')+').click()');
+    await wait('!window.fixture.router.currentRoute.value.query.bot');
     // Narrow panes retain the tab shell and bounded graph rather than replacing the UI.
     win.setSize(650,844);await delay(200);await wait(visible('.workflow-manager'));assert.equal(await run('document.documentElement.scrollWidth<=window.innerWidth'),true);
     await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
