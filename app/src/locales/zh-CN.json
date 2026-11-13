@@ -4313,7 +4313,7 @@
   "Hand": "手型",
   "Canvas shortcuts": "画布快捷键",
   "Workflow canvas": "工作流画布",
-  "Focus the canvas: V selects, H pans, Space temporarily pans, and the middle mouse button pans. Scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "聚焦画布后：V 选择，H 平移，空格临时平移，鼠标中键拖动平移。滚轮平移；Ctrl/Cmd + 滚轮缩放。Shift+1 适应全部工作流；Shift+2 适应选中工作流；Escape 清除选择。这些快捷键不会编辑或运行工作流。",
+  "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "鼠标左键或中键拖动空白画布即可平移；点击节点或工作流标题查看详情。聚焦画布后：滚轮平移；Ctrl/Cmd + 滚轮缩放。Shift+1 适应全部工作流；Shift+2 适应选中工作流；Escape 清除选择。这些快捷键不会编辑或运行工作流。",
   "Select": "选择",
   "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "未配置版本去重。每次接纳观测都可创建新运行；恢复继续执行已保存的运行。"
 }

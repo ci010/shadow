@@ -4313,7 +4313,7 @@
   "Hand": "Hand",
   "Canvas shortcuts": "Canvas shortcuts",
   "Workflow canvas": "Workflow canvas",
-  "Focus the canvas: V selects, H pans, Space temporarily pans, and the middle mouse button pans. Scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "Focus the canvas: V selects, H pans, Space temporarily pans, and the middle mouse button pans. Scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.",
+  "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.",
   "Select": "Select",
   "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run."
 }
