@@ -494,7 +494,6 @@ export async function createProjectRuntime(
   loadable.set('agent_tool_test', agentToolTest)
   loadable.set('session_proxy', new SessionProxyTool())
   let layerfsBootstrap: import('../../execution/layerfs/bootstrap.ts').LayerFSBootstrap | undefined
-  let layerfsWorkflow: import('../../execution/layerfs/workflow.ts').LayerFSWorkflow | undefined
   const layerFSMountAvailable = async (mount: string, signal: AbortSignal) => {
     const { LayerFSTool } = await import('../../tools/layerfs.ts')
     const { isCompletedToolFailure, toolResultText } = await import('../../tools/tool.ts')
@@ -504,14 +503,8 @@ export async function createProjectRuntime(
     const receipt = JSON.parse(toolResultText(result))
     if (isCompletedToolFailure(result) || receipt.ok !== true) throw new Error('LayerFS mount is unavailable; no host fallback.')
     const identity = JSON.parse(Buffer.from(mount.slice('layerfs:'.length), 'base64url').toString())
-    if (identity.version === 2) return { path: `layerfs-branch:${identity.branch}`, name: `LayerFS ${identity.branch}` }
-    const listsMount = (value: unknown, depth = 0): boolean => {
-      if (!value || typeof value !== 'object' || depth > 8) return false
-      if (!Array.isArray(value) && (value as Record<string, unknown>).path === identity.path) return true
-      return Object.values(value).some(child => listsMount(child, depth + 1))
-    }
-    if (!listsMount(receipt.result)) throw new Error('The selected LayerFS mount is not listed as active. No host fallback or remount was attempted.')
-    return { path: identity.path as string, name: `LayerFS ${identity.sandbox}:${identity.path}` }
+    if (identity.version !== 3) throw new Error('LayerFS resource-bound workspace required; no legacy mount fallback.')
+    return { path: `layerfs-branch:${identity.branch}`, name: `LayerFS ${identity.branch}` }
   }
   folderRegistry.configureLayerFS({
     authorize: layerFSMountAvailable,
@@ -528,16 +521,20 @@ export async function createProjectRuntime(
       const verify: import('../../execution/layerfs/bootstrap.ts').BootstrapApprovalVerifier = async (question, reference, context) => matchesBootstrapApproval(question, reference,
         await sessions.getYieldRecords(reference.sessionId, reference.physicalId), context.sessionId)
       layerfsBootstrap ??= new LayerFSBootstrap(project.id, workspace, backgroundTasks, managed, undefined, process.platform, process.arch, verify)
-      const { LayerFSWorkflow } = await import('../../execution/layerfs/workflow.ts')
-      layerfsWorkflow ??= new LayerFSWorkflow(project.id, managed, verify,
-        (path, signal) => folderRegistry.register(path, signal, 'Separate LayerFS baseline candidate; original checkout preserved. Content review is required before import.'), backgroundTasks)
-      return createLayerFSTools(project.id, workspace, managed, layerfsBootstrap, backgroundTasks, layerfsWorkflow)
+      const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
+      const { createLayerFSResourceTools } = await import('../../tools/layerfs-resource.ts')
+      const resources = layerfsResources(project.id, workspace)
+      return [...createLayerFSTools(project.id, workspace, managed, layerfsBootstrap),
+        ...createLayerFSResourceTools(resources)]
     },
   })
   // Ordinary LayerFS routes share this Project-owned worker; sessions never close it.
   const closeLayerFS = async () => {
     const { closeManagedLayerFS } = await import('../../execution/layerfs/managed.ts')
-    await closeManagedLayerFS(project.id, workspace)
+    const { closeLayerFSResources } = await import('../../execution/layerfs/resource-service.ts')
+    const settled = await Promise.allSettled([closeManagedLayerFS(project.id, workspace), closeLayerFSResources(project.id, workspace)])
+    const failures = settled.filter(result => result.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'LayerFS runtime shutdown retained unresolved resources.')
   }
   cleanup.push(closeLayerFS)
   // One managed copied-profile browser per Project runtime; adapters remain session-local.
@@ -1246,21 +1243,11 @@ export async function createProjectRuntime(
   const derivedWorkspaces = new DerivedWorkspaces({ projectId: project.id, directory: resolve(workspace, 'derived-workspaces'), folders: folderRegistry, remote: remoteDerived,
     validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
   })
-  let layerfsWorkspaces: import('../../execution/layerfs/workspace-create.ts').LayerFSWorkspaces | undefined
   const createLayerFSWorkspace = async (args: Record<string, unknown>, context: import('../../tools/context.ts').ExecutionContext, sourceBinding?: string) => {
-    const { LayerFSWorkspaces } = await import('../../execution/layerfs/workspace-create.ts')
-    const { LayerFSTool } = await import('../../tools/layerfs.ts')
-    const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
-    layerfsWorkspaces ??= new LayerFSWorkspaces({ projectId: project.id, directory: resolve(workspace, 'layerfs-workspaces'),
-      identity: async () => process.env.SHADOW_LAYERFS_CONFIG ? `operator:${process.env.SHADOW_LAYERFS_CONFIG}` : `managed:${(await managedLayerFS(project.id, workspace).namespaceInfo()).namespace}`,
-      bindingProject: async () => process.env.SHADOW_LAYERFS_CONFIG
-        ? (await import('../../execution/layerfs/bridge.ts')).layerfsName(project.id)
-        : (await managedLayerFS(project.id, workspace).namespaceInfo()).project,
-      run: (request, ctx) => new LayerFSTool(project.id, workspace).execute(request, ctx),
-      register: (mount, ctx, description) => folderRegistry.registerLayerFS(mount, ctx.signal, description),
-      validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
-    })
-    return layerfsWorkspaces.create(args, context, sourceBinding)
+    const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
+    return layerfsResources(project.id, workspace).createWorkspace(args, context,
+      (mount, ctx, description) => folderRegistry.registerLayerFS(mount, ctx.signal, description),
+      key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') }, sourceBinding)
   }
   importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor, createLayerFSWorkspace))
   importTool.registerBuiltin('workspace_fork', new WorkspaceForkTool(derivedWorkspaces, project.id, canAuthor, folderRegistry, createLayerFSWorkspace))

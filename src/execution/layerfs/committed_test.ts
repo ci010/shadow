@@ -67,11 +67,11 @@ test('same-branch exclusion, matching mounts refused, UNKNOWN retains exact life
 test('legacy IDs and main writes refused; project isolation remains enforced',async()=>{
  const f=await fixture();try{
   const legacy='layerfs:'+Buffer.from(JSON.stringify({project:layerfsName('one'),sandbox:'1',path:'/workspaces/1'})).toString('base64url')
-  await assert.rejects(f.route('read',{workspace:legacy,path:'a'}),/Legacy.*checkpoint.*close/)
-  await assert.rejects(f.route('write',{workspace:branchWorkspace(layerfsName('one'),'main'),path:'a',content:'x'}),/readonly/)
-  await assert.rejects(f.route('read',{workspace:branchWorkspace(layerfsName('two'),'feature'),path:'a'}),/another Project/)
+  await assert.rejects(f.route('read',{workspace:legacy,path:'a'}),/Legacy.*not routable/)
+  await assert.rejects(f.route('write',{workspace:branchWorkspace(layerfsName('one'),'main',f.binding),path:'a',content:'x'}),/readonly/)
+  await assert.rejects(f.route('read',{workspace:branchWorkspace(layerfsName('two'),'feature',{...f.binding,ownerProject:'two'}),path:'a'}),/current-Project/)
   const tool=new LayerFSTool('one',f.dir)
-  await assert.rejects(tool.execute({action:'commit',workspace:f.workspace},f.context),/automatically/)
+  await assert.rejects(tool.execute({action:'commit',workspace:f.workspace},f.context),/Unsupported/)
  }finally{await f.close()}
 })
 

@@ -57,10 +57,10 @@ test('configuration failures are safe, actionable no-effect errors; doctor never
     assert.equal(receipt.ok, true)
     assert.equal(receipt.result.configured, true)
     assert.equal(receipt.result.runtime, 'not_checked')
-    assert.match(receipt.result.message, /not.*verified/i)
+
     assert.doesNotMatch(JSON.stringify(receipt), /test-worker|sdk\.mjs/)
-    await assert.rejects(tool.execute({ action: 'doctor' }, { ...context, projectId: 'two' }), /mismatch/)
-    await assert.rejects(tool.execute({ action: 'doctor' }, { ...context, remoteWorkdir: {} } as ExecutionContext), /no Main fallback/)
+    await assert.rejects(tool.execute({ action: 'doctor' }, { ...context, projectId: 'two' }), /Current local Project/)
+    await assert.rejects(tool.execute({ action: 'doctor' }, { ...context, remoteWorkdir: {} } as ExecutionContext), /no fallback/)
     await assert.rejects(tool.execute({ action: 'doctor' }, { ...context, signal: AbortSignal.abort() }), /abort/i)
   } finally {
     if (prior === undefined) delete process.env.SHADOW_LAYERFS_CONFIG

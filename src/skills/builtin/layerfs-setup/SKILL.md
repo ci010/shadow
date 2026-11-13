@@ -1,64 +1,36 @@
 ---
 name: layerfs-setup
-description: "Owner lifecycle workflow for LayerFS connect/bootstrap, Git-aware imports, separate baselines and guarded recovery; exact approvals required."
+description: "Owner workflow: approved LayerFS installation/runtime, standard Git/Docker/SDK exec preparation and immutable resource registration."
 metadata:
   category: tools
 ---
 
-# LayerFS setup, import and recovery
+# LayerFS setup
 
-Read the canonical bundled guide `v:skills/layerfs/setup.md` before any lifecycle
-operation. It retains the exact bootstrap, existing-installation, source-review,
-baseline, quarantine, diagnostic and operator-environment procedures and limits.
-Return to `v:skills/layerfs-manager` after successful import and to
-`v:skills/layerfs-worker` for ordinary assigned branch work.
+Read `v:skills/layerfs/setup.md` for the complete executable sequence. Do not stop at
+installation: register the prepared official resource, create a workspace, run the
+requested checks and continue the original task.
 
-Tools are already flattened under `v:tools`; read the exact contract, for example
-`v:tools/layerfs_connect`, then use `invoke_tool {name:"layerfs_connect",args:{}}`
-when authorized to reuse/connect. No source initialization is required and reading
-this skill does not activate the builtin factory or start a worker. Scenario
-names do not partition sources or grant role-based permissions. Host owner-session,
-workspace and recorded approval checks still govern the operation.
+1. `layerfs_doctor`: inspect installation only, no connectivity claim.
+2. If absent, `layerfs_bootstrap_plan` followed by its exact recorded human
+   installation decision and `layerfs_bootstrap` (`allowDownloads` and root-worker
+   consent remain required). The background job returns an `executionId`; use
+   ordinary background completion/status, never replay uncertain provisioning.
+3. Reuse approved artifacts: `layerfs_runtime_plan`, `layerfs_runtime_start` once.
+   These routine calls require no approval object or recorded decision. The initial
+   installation privilege boundary remains; arbitrary workers cannot start runtimes.
+4. `layerfs_runtime_context` returns executable/launcher and nonsecret WSL parameters.
+   Use ordinary exec, its logs, nonzero exit codes and background lifecycle. The
+   launcher delegates only necessary official runtime APIs to the existing owner;
+   standard agent SDK calls run directly in the exec process. No new worker is started.
+5. Prepare an independent fixed Git checkout with standalone metadata and standard
+   Git LFS commands, using existing local objects where possible. Build/inspect the
+   image with Docker. No tar/archive repair, custom blob hydration or internal recipe
+   engine. Do not read dirty credential files or put private-feed credentials in images.
+6. Explicit official `runtime.project.start_init/get_init` and SDK baseline queries.
+   Register `{name,runtimeId,layerfsProject,baselineRef,image,source:{repository,commit}}`
+   via `layerfs_resource_register`. Ready means registered/identity-checked, not tested.
 
-Reuse the approved installation. A missing installation returns a first-run plan,
-not a request for SDK paths, environment edits or ad hoc shell installers.
-A code-change request is not runtime approval. For `needs_approval`, ask with the
-exact returned approvalRequest and wait for the recorded human answer. Bootstrap
-requires its session-bound plan, approval reference and approved/allowRootWorker/
-allowDownloads flags; flags alone are not consent. This can be a lengthy multi-GiB
-pinned build with root WSL execution, not OS/WSL/Docker installation.
-
-Import uses one Git-aware selection: tracked working-tree files (even matching ignore
-rules), nonignored untracked files, and standalone `.git` metadata. Git enumerates names
-with `ls-files --cached --others --exclude-standard`; no manual ignore parser or
-directory/credential-name blacklist. `dist` and `build` follow those same rules.
-Dependency reuse exception for the Linux target: source OS comes from the actual source
-execution device (the Windows staging helper passes `win32` explicitly, never its WSL
-host OS). Linux-source `node_modules` are included even when Git-ignored, to reuse
-installed dependencies; all other ignored entries remain excluded. Non-Linux or
-unknown-source `node_modules` are excluded even when tracked; the unchanged index can
-therefore show working-tree deletions. This is a dependency-specific compatibility rule,
-not a general directory blacklist. Symlinks remain refused, including local dependency
-links; no external dependency dereferencing and no automatic installs. Linux-to-Linux
-does not guarantee matching CPU architecture or ABI. This is not an exact clone: local
-changes and nonignored untracked files enter, and working-tree deletions remain deleted.
-Non-Git folders include every safe entry; `.gitignore` is not interpreted there. Preview
-is advisory; no manual content review, token or acknowledgement is required. Legacy
-`curated`/`whole_tree` are aliases for `git`; old review fields are ignored. Standalone
-Git metadata is retained unchanged; external `.git` pointers, linked worktrees and
-alternate object stores are refused. Symlink, containment, authorized workspace and
-scan-limit checks remain. No automatic dependency installation; cross-OS native
-dependencies may be incompatible. Setup/install permissions remain separate. The
-original source and index are not modified; staging is filtered before SDK Init. A
-mutable source still requires stability during copy, not a secret-free certification.
-
-Wait for background completion, never poll/replay; then continue the original task.
-Cancellation or unknown receipts do not prove native work stopped or rolled back.
-Retain profiles, journals, staging and Store resources. Bootstrap probe recovery,
-connection recovery and failed-import quarantine have distinct guarded procedures;
-never substitute one for another or clear private state manually.
-
-`layerfs_doctor` checks configuration only; `layerfs_runtime_status` never starts
-a worker. `ready:true` is connectivity, not passing sandbox tests. Session sleep
-does not stop the Project worker. An explicit SHADOW_LAYERFS_CONFIG takes
-precedence without fallback. LayerFS is not a backup or universal security sandbox.
+Do not replace installation with environment edits or ad hoc shell installers.
+Unknown means inspect retained resources and report; it never means try Init again.
+No old catalog migration, namespace switching or resource cleanup is implicit.

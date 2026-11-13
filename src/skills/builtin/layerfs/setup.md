@@ -1,329 +1,269 @@
-# LayerFS setup and connection
+# LayerFS: installation, official exec workflows, registration
 
-## Fresh-session path: layerfs_connect → one consent → automatic layerfs_bootstrap → original task
+Canonical guide: `v:skills/layerfs/setup.md`. Read flattened `v:tools/<name>`
+contracts before invocation. This guide does not grant installation or publication
+permission. Git/Docker/SDK operations below are explicit ordinary exec commands,
+not a Shadow build/import pipeline.
 
-Start with `v:skills/layerfs-setup`. Read `v:tools/layerfs_connect`, then invoke
-`invoke_tool {name:"layerfs_connect",args:{}}` when connection/reuse is authorized.
-The tools are already flattened; no preliminary source initialization is required.
-Skill reads provide guidance, not builtin factory activation or consent.
-An existing approved installation is reused.
-Without one, the owner Web session gets an automatic `layerfs_bootstrap_plan`: WSL distro
-inventory only, no root command, download or worker startup. A unique eligible
-distribution is selected automatically; multiple candidates need a distro choice
-using `layerfs_bootstrap_plan {distribution:"name-from-inventory"}`. Docker Desktop's
-internal distributions are never candidates.
+## 1. Installation and one runtime owner
 
-For `status:"needs_approval"`, invoke ask with the **exact** returned
-`approvalRequest` (kind, question, options, default_option), without rewriting its
-plan-bound question/options. The question explains the pinned official source/images/dependency downloads, potentially
-several GiB and a lengthy native build, root commands within the selected distro,
-private retained resources, and future reuse of the root worker. One question
-covers that scoped layerfs_setup; neither an unanswered question nor `approved:true`
-itself is authorization. A request to change application code is not consent to
-run layerfs_setup on the current PC.
+`layerfs_doctor` reports installation configuration with `runtime:"not_checked"`.
+For missing artifacts, use `layerfs_bootstrap_plan`; pass its exact approvalRequest
+to ask. After human approval, `layerfs_bootstrap` needs the returned plan, recorded
+`approval:{sessionId,physicalId,requestId}`, `approved:true`, `allowRootWorker:true`
+and `allowDownloads:true`. The plan is session-bound and expires after fifteen
+minutes. The pinned installer accepts no arbitrary source URL, script or SDK path.
+Wait for its background completion; inspect `layerfs_bootstrap_status` on failure.
+Do not replay unknown provisioning or silently install OS/WSL/Docker prerequisites.
 
-After approval call:
-Tool: `layerfs_bootstrap`
-```json
-{"plan":"RETURNED_SESSION_BOUND_TOKEN","approval":{"sessionId":"FROM_ANSWER_REFERENCE","physicalId":"FROM_ANSWER_REFERENCE","requestId":"FROM_ANSWER_REFERENCE"},"approved":true,"allowRootWorker":true,"allowDownloads":true}
-```
-Copy `approval` from the ask answer's `reference`; the host checks the persisted
-human answer for this exact question and plan. A timeout, deferred/custom answer,
-parent/foreign answer, invalidated decision or unrelated approval is refused.
-Boolean flags alone cannot authorize root execution.
+For an existing trusted installation, `layerfs_setup` accepts discovered matching
+`installation:{apiRoot,bundle,image,distribution,node}` with initial explicit
+`approved`/`allowRootWorker` consent. Paths refer to the approved installation, never
+arbitrary executable modules. Installation artifacts are separate from source images.
+`SHADOW_LAYERFS_CONFIG` is a historical operator override in the backend's environment;
+do not edit it to select repositories or evade the installation boundary.
 
-No SDK path, image choice, script, URL, JSON file or environment variable is taken
-from the user on this path. The native tool derives them from the bundled recipe.
-The plan is session-bound and expires after fifteen minutes. Setup runs as a
-Project-owned background task and returns a `bg:` execution ID. Wait for its
-completion event; do not poll or manually replay it. `v:bg` and `layerfs_bootstrap_status`
-allow inspection and the normal cancel tool can cancel the owned execution.
-Cancellation does not prove WSL/Docker side effects stopped.
+Reuse the approved artifacts without another routine approval:
+- `layerfs_runtime_plan {runtimeId:"repos-1"}`
+- `layerfs_runtime_start {runtimeId:"repos-1"}` for initial start; after a clean
+  backend close/reopen, the same original owner session may explicitly start this
+  same runtime again only when status reports `phase:"stopped"`, `ready:false`.
+  `recordPhase:"ready"` alone is not live readiness. Do not create another runtime
+  to bypass ownership; foreign sessions cannot take ownership. Running/concurrent,
+  starting/uncertain/unknown and crash-retained starts are refused, not replayed.
+- `layerfs_runtime_context {runtimeId:"repos-1"}` returns inspection access and the
+  dedicated native `sourceRoot`. After authorized source preparation, add
+  `sourceName:"repo-a"` to bind precisely that child directory for Init.
 
-### Startup diagnostics and guarded recovery
+The first bootstrap/setup consent remains unchanged. Runtime plan/start have no
+approval object. Unknown startup is not replayed. Each runtime has a separate home
+and exactly one host-owned official Runtime/worker process. Existing resources and
+old catalogs are retained, not migrated, adopted, overwritten or deleted.
 
-Bootstrap first runs a no-input WSL readiness command with a 120-second startup
-budget, then gives path conversion 30 seconds. Probes ignore stdin; only the
-source-build recipe receives script input. Timeout, cancellation, spawn/stdin
-errors, nonzero exits and signal termination have separate diagnostics, including
-elapsed time and whether the host launcher closed. Bounded native output is
-retained in private per-step logs, not echoed into the conversation.
+`runtime_context` returns `executable`, `launcher`, `env`, `distribution` and
+`linuxNode`. It returns no bearer/worker endpoint secret. Only the owning direct
+session can obtain this launcher. It is a private same-user capability: do not read,
+print, copy to a sandbox or share its contents. No extra network service installation
+is involved. The existing child IPC channel is parent-only and cannot be inherited
+by independently launched ordinary exec processes; the small authenticated loopback
+adapter bridges just `project.list/start_init/get_init` and checked project config.
+It binds 127.0.0.1 on an ephemeral port with per-runtime authentication, accepts no
+module/eval/path-to-code operation, and closes with its runtime owner. It is not an
+OS sandbox for programs already running as the host user.
 
-`probe_failed` with `provisioningStarted:false` means the LayerFS provisioning
-script was not dispatched; it does not claim that starting WSL had no OS/service
-effects. Inspect `layerfs_bootstrap_status`. If it reports `probeRecoveryCandidate`, call
-`layerfs_bootstrap_recover {executionId:"EXACT_FAILED_BG_ID"}`. This owner-only action
-checks the exact attempt, launcher closure, absent build artifacts and absence of
-an installed runtime; it archives the old journal and marks it `recovered`.
-It does not delete evidence, terminate WSL, rerun a probe, download or build.
-Legacy `uncertain/resolve_paths` records without launcher diagnostics additionally
-require a read-only inventory showing the distro stopped. Running attempts,
-unconfirmed launcher termination and any potentially dispatched build remain
-blocked. A successful recovery permits a **new plan and approval**, not replay
-of the old operation. Never emulate this action with file edits.
+A launcher invocation loads **your ordinary local exec script**, not server-side code.
+It provides `{runtime,open,args}`. `runtime.project` forwards the three official
+methods above to the existing owner; `open(name)` opens the actual agent SDK in the
+exec process with host-checked project/volume/image configuration. One client/project
+per exec process preserves the official SDK singleton constraint. Always close it in
+finally. It never opens another Runtime or starts another worker. Do not use a host
+path as a LayerFS cwd, and do not invoke this host launcher from a LayerFS workspace.
 
-A separate, deliberately narrow recovery exists when the build finished but the
-SDK host runtime **never opened**. `layerfs_bootstrap_status.connectionRecoveryCandidate`
-identifies only an original `uncertain/connect_worker` attempt with a saved
-installation. After explicit owner consent to one root worker connection attempt,
-call `layerfs_bootstrap_recover_connection` with its exact `executionId`, `approved:true`
-and `allowRootWorker:true`. Like advanced layerfs_setup, these flags record caller-obtained
-consent; they do not themselves grant permission. The owning tool checks the
-saved installation matches, the SDK runtime directory is absent, no managed
-helper remains, and valid WSL inventories show the selected distro installed and
-stopped. It refuses to kill processes, stop WSL, delete resources, rebuild, or
-recover a possible Init/import. It archives the old records and durably admits
-one connection attempt; another uncertain result stays blocked. Inspection alone
-never grants recovery permission. Existing runtime directories require operator
-reconciliation even if the worker appears down.
+## 2. Fixed source with standard Git and Git LFS
 
-On success, **continue the original request**: layerfs_connect, check source import
-safety, then perform the requested branch/isolation/tests. Do not mark the task
-complete merely because the worker started. A subsequent fresh session reuses the
-saved installation through layerfs_connect with no repeated layerfs_bootstrap or manual layerfs_setup.
+Read the Git skill. The default and only Init input is a native ext4 directory in
+this runtime's bound WSL distribution, outside the Store. Do not register a WSL UNC
+workspace or relax global UNC rules. Host Windows checkouts remain untouched and
+may be explicit Git/LFS object caches only, never DrvFS Init inputs. No automatic
+copy/migration is performed.
 
-### Supported post-import quarantine (not layerfs_bootstrap retry)
+First obtain runtime_context without sourceName. It returns a nonsecret sourceRoot
+`/var/lib/shadow-layerfs-sources/<project-runtime-hash>` plus distribution/linuxNode.
+The human's source-preparation request authorizes ordinary commands in this dedicated
+root; the tool does not create directories, fetch Git or confer arbitrary `/etc`
+access. Initial root-worker consent and direct owner checks still apply. A sourceName
+is one safe child name, not a Linux/UNC/Windows path or distribution override.
 
-When `layerfs_import_status` reports a retained failed/unknown import, use the direct
-owner-session `layerfs_import_recovery_plan`. It creates a 15-minute, session-bound plan
-from a fingerprint of the installed profile and import/worker evidence; no root
-inspection, worker close, pointer mutation or copying is performed by planning.
-Call ask with the exact returned approvalRequest. A deferred, custom, foreign or
-unrelated answer is not approval. After approval, invoke:
+Run a reviewed Bash script using the returned distribution; `$SCRIPT_IN_WSL` is
+that script's discovered WSL-visible path (it may live in local session storage):
 
-Tool: `layerfs_import_recover`
-```json
-{"plan":"RETURNED_PLAN","approval":{"sessionId":"FROM_ANSWER","physicalId":"FROM_ANSWER","requestId":"FROM_ANSWER"},"approved":true,"allowRootWorker":true}
+```powershell
+& wsl.exe --distribution $DIST --user root --exec bash $SCRIPT_IN_WSL
+exit $LASTEXITCODE
 ```
 
-Wait for the background completion event. The action holds Project layerfs_setup ownership
-and a cross-process recovery lock; it rechecks the fingerprint and shutdown state.
-It only gracefully closes an owned worker after a fresh healthy response proves
-zero active calls. Foreign/retained helpers or ambiguous ownership remain blocked;
-absent helpers must be corroborated by complete OS inventories.
-A stopped distro requires no Linux execution; a running distro receives a bounded
-root read-only process census. The approval includes possible WSL startup if its
-inventory races shutdown. No process is force-killed and no distro is terminated.
+Scripts/arguments are ordinary exec, not a new Shadow preparation tool.
+Set the following discovered values explicitly in that script: ROOT is returned
+sourceRoot; NAME is a new safe name; CACHE is the authorized independent Windows
+checkout as a WSL `/mnt/c/...` cache path; LFS_CACHE is its existing Git LFS storage
+directory (the directory containing `objects`); SHA is the full fixed commit already
+present in that cache; URL is credential-free HTTPS. No host config or dirty files
+are copied. Use a separate script for each repository and retain the same runtime.
 
-Success retains the old runtime, journal and Store resources **unchanged** and
-selects a fresh generation with distinct SDK project name, host/Linux home and
-container prefix. It does not repair or retry the old import, rebuild binaries,
-import source or start the new worker. The result returns a `namespace`; pass it
-to the next `layerfs_connect`/`layerfs_import`. `layerfs_namespace_status` lists safe retained history.
-Old mount IDs and in-flight old-namespace requests cannot route to the new Store.
-Missing, malformed or foreign pointers and interrupted generation preparation
-fail closed, including after app restart; never clear their history/locks manually
-or guess which generation to select. A refused/incomplete recovery is not a
-license to repeat the old import.
+```sh
+set -eu
+umask 022
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+export GIT_LFS_SKIP_SMUDGE=1
+# Set ROOT, NAME, CACHE, LFS_CACHE, SHA, URL to the reviewed values above.
+SOURCE="$ROOT/$NAME"
+test ! -e "$SOURCE"
+# These directories must be new or already root-owned, non-linked and protected.
+# Do not chmod/chown an existing user directory to make a failed probe pass.
+[[ "$NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]]
+for DIR in / /var /var/lib /var/lib/shadow-layerfs-sources "$ROOT"; do
+  if test ! -e "$DIR"; then mkdir -m 755 "$DIR"; fi
+  test ! -L "$DIR"
+  test "$(realpath "$DIR")" = "$DIR"
+  test "$(stat -c %u "$DIR")" = 0
+  MODE=$(stat -c %a "$DIR")
+  test "$((8#$MODE & 022))" -eq 0
+  test "$(stat -f -c %t "$DIR")" = ef53
+done
+git -c core.hooksPath=/dev/null init --template= "$SOURCE"
+git -C "$SOURCE" remote add origin "$URL"
+# Local object transfer, not clone, alternates, tar, or copying the host .git/config.
+git -c safe.directory="$CACHE" -c core.hooksPath=/dev/null -C "$SOURCE" fetch --no-tags --depth=1 "$CACHE" "$SHA"
+git -C "$SOURCE" lfs install --local --skip-smudge
+git -c core.hooksPath=/dev/null -C "$SOURCE" checkout --detach "$SHA"
+# Standard LFS, reusing the already prepared object cache. No credential injection
+# or network fallback. Missing/corrupt cache objects stop preparation for review.
+git -C "$SOURCE" -c lfs.storage="$LFS_CACHE" lfs checkout
+git -C "$SOURCE" -c lfs.storage="$LFS_CACHE" lfs fsck --objects "$SHA"
+git -C "$SOURCE" lfs fsck --pointers "$SHA"
+# fsck validates Git pointer blobs, not working-tree materialization. Check both.
+git -C "$SOURCE" lfs ls-files > "$SOURCE/.git/lfs-materialization-check"
+if grep -Eq '^[0-9a-f]+ - ' "$SOURCE/.git/lfs-materialization-check"; then
+  echo 'LFS working tree still contains pointers' >&2; exit 1
+fi
+test "$(git -C "$SOURCE" rev-parse HEAD)" = "$SHA"
+test -d "$SOURCE/.git"
+test ! -s "$SOURCE/.git/objects/info/alternates"
+test -z "$(git -C "$SOURCE" status --porcelain)"
+```
 
-### Planned separate baseline preparation
+For repositories without LFS omit those three LFS commands. `lfs.storage` is a
+temporary command override, not persisted in source config. Materialized files plus
+standalone Git metadata are suitable Init input; this does not make the resulting
+source an offline LFS object database. Future LFS operations need an authorized
+cache/remote. `lfs fsck` can quarantine corrupt cache objects; use only the authorized
+independent prepared cache, not a user's active checkout. Missing Git/LFS objects
+require a separately authorized standard fetch of that fixed SHA, not a full clone,
+a custom hydrator or a silent network/credential fallback. Do not copy global Git
+config, credentials, dirty .env/.npmrc, external worktree pointers or alternates.
 
-If no separate destination Workspace is registered, import
-`v:tools/workspace_register` and invoke `workspace_register` with the explicitly
-user-authorized absolute local destination `path` and `mode:"create_empty"`.
-This creates one empty directory under an existing parent, or reuses an empty
-one, then registers it without switching the session. For an existing directory
-whose contents the user has authorized, use `mode:"existing"`. No UI registration
-step or internal-record editing is needed. Owner local sessions only; never use a
-remote display path. Foreign ownership and linked ancestors fail closed. On
-registration failure, outputs are retained; retry the same path/mode after fixing
-the cause, never delete them merely to retry.
+An independent clean source is not a credential-free attestation. Review authorized
+tracked configuration by scope; never silently embed private feed tokens. Dependency
+restore and private feeds are separate explicit work. Missing authorized access is a
+blocker, not permission to inject credentials into Dockerfiles or logs.
 
-Use the returned `workspaceId` as `destinationWorkspace` in `layerfs_baseline_plan` below.
-Then answer its exact approvalRequest, call `layerfs_baseline_prepare`, and wait for its
-background result. Review and `layerfs_import_preview` the returned baseline Workspace
-before `layerfs_import`. Registration authorizes neither copying nor import, and does not
-replace the exact LayerFS layerfs_bootstrap or baseline-review approvals.
+## 3. Docker image: ordinary commands, separate context
 
-`layerfs_baseline_plan {workspace,destinationWorkspace}` performs only metadata/Git
-inventory reads; copying requires its own exact approvalRequest to be answered. Both selectors
-must resolve through the owning Project's local workspace route (source read,
-destination write). The destination must be separate from the source; Project
-Home is not used as a registered baseline. The plan reports selected file/byte
-counts, exclusions and review warnings. It selects Git-tracked **working-tree**
-regular files, not committed versions; untracked files are excluded.
+Inspect/reuse the selected installed immutable image first:
+`docker image inspect --format '{{.Id}}' "$IMAGE"` in the runtime's returned WSL
+distribution. Source preparation and image building are independent. For a new image,
+create an authorized separate minimal context containing the reviewed Dockerfile
+(and a restrictive .dockerignore), then run:
 
-After human approval use `layerfs_baseline_prepare` with the same selectors, plan,
-`approval` reference and `approved:true`. Preparation is background work; wait for
-its result. It creates a unique exclusive directory in the destination workspace's
-`.layerfs-baselines` and registers it only after successful copying/revalidation.
-The original checkout and Git index are not edited. Known credential artifacts,
-VCS/dependency/build trees and linked/unsafe paths cannot be copied through this path.
-This fixed curated scope is not a full clone. Credential-named source modules are
-retained with warnings; non-code data inside those directories remains excluded.
-Git ignore selection controls dependencies; content review is not an import gate. Then run
-`layerfs_import_preview` on the returned workspace before `layerfs_import`.
+```sh
+set -eu
+docker build --iidfile "$CONTEXT/image.id" --file "$CONTEXT/Dockerfile" "$CONTEXT"
+IMAGE=$(cat "$CONTEXT/image.id")
+docker image inspect --format '{{.Id}}' "$IMAGE"
+```
 
-Plans are source/owner-bound, single-use and expire after 15 minutes. Traversal,
-copying, outputs and bytes are bounded. Source/destination metadata is rechecked;
-these checks are not a hostile-filesystem sandbox or immutable snapshot. Partial
-destinations and uncertain registration are retained for inspection, not cleaned,
-replayed or reported ready. Do not copy into or remove material from the original
-checkout merely to get past import checks.
+Choose dev toolchains from the frozen source requirements. Do not copy the source,
+Git metadata, host credentials or private feeds into a build context accidentally.
+No automatic restore/smoke/build claim is made by resource registration. Use ordinary
+exec background execution for long Git/LFS/Docker commands; preserve nonzero exit codes.
 
-### Supported layerfs_bootstrap and boundaries
+## 4. Official Init through the launcher
 
-The bundled source recipe targets Windows x64, an existing x86-64 WSL2 distro,
-Python ≥3.9, git, FUSE, local rootful Docker API ≥1.48 with the default
-`/var/lib/docker` data root, and a supported Linux local filesystem. The pinned
-Bookworm build conservatively requires glibc ≥2.36. Root-only prerequisites are
-checked after consent and before downloads/resources. OS/WSL/package installation,
-Docker daemon changes, networking/proxy/TLS changes and repository import are not
-part of this recipe. If a prerequisite is missing, report its exact code and ask
-for the separate platform change; do not fall back to manual LayerFS paths/env.
+Read `v:skills/layerfs/sdk-init.mjs` and save that exact script to an absolute local
+session-working `.mjs` path. It calls only official Init/status and baseline queries.
+After preparing `$ROOT/repo-a`, obtain a new runtime_context with `sourceName:"repo-a"`.
+Its returned Linux-absolute `sourcePath` is the exact Init argument, passed unchanged
+to the official SDK. The owner probes that directory through existing controlled IPC
+and a fixed read-only WSL Node command in the runtime's bound distribution.
 
-Bootstrap uses upstream commit `73d974dea8a8d0b056a16dc6b2380d89438ce484` and pinned
-official rust/node image digests, verifies the image/source/sealed bundle identity,
-uses official `tools/worktree.py register/prepare/build`, and extracts its private
-Node from the pinned image instead of installing system Node. It retains MIT/Node
-license notices. Matching API files and resolution shims are staged on the host;
-a byte-identical identity-read mirror accommodates the pinned Windows SDK check
-without changing the sealed Linux bundle or importing a second SDK instance.
+Every Init dispatch rechecks owner/runtime/installation binding and all ancestor
+realpaths, lstat identities, ext4 statfs type, root ownership and non-group/world-write
+permissions. Symlinks, renamed/recreated directories, DrvFS even mounted at a native-
+looking path, unknown filesystems, source substitutions and cross-distro UNC paths
+fail closed. A denied probe never admits Init. Do not move/edit the source during Init.
+This is scoped tool authorization, not an OS sandbox for root or arbitrary host exec;
+there is no atomic lock against a privileged process replacing a path after the probe.
+Upstream's scan/read Stamp checks remain intact. Do not normalize timestamps or relax
+the upstream consistency checks to work around a refusal.
 
-State is private and Project-scoped. The recipe reserves a new Linux build root
-and a new host output leaf; it never replaces old state. A definite **preflight**
-refusal can get a new plan only after the cause is corrected. Failed/uncertain
-builds, crashes or lost receipts remain retained and block automatic replay.
-Do not clear journals or delete/recreate resources to bypass this boundary.
-`layerfs_bootstrap_status` reports saved state, not current runtime health.
+Using the exact executable/launcher returned by runtime_context, run ordinary exec
+with shell=powershell (substitute resolved values, not guessed user paths):
 
-No `SHADOW_LAYERFS_CONFIG`, hand-written JSON or backend restart is needed for
-managed layerfs_setup. Session sleep/reset does not stop the shared worker. Clean Project
-shutdown closes it gracefully and permits later on-demand restart. Persistence of
-running sandboxes across worker/WSL lifetime is not guaranteed. Uncertain worker
-startup or imports still block automatic restart/replay.
+```powershell
+$env:ELECTRON_RUN_AS_NODE = '1'
+& $EXE $LAUNCHER $SCRIPT $OFFICIAL_PROJECT $SOURCE_PATH $IMAGE $REPOSITORY_URL $COMMIT_SHA
+exit $LASTEXITCODE
+```
 
-## Advanced: layerfs_connect an existing operator installation
+`$EXE/$LAUNCHER` are returned fields; `$SCRIPT` is the saved sdk-init.mjs;
+`$OFFICIAL_PROJECT` is a new safe name; `$SOURCE_PATH` is the returned sourcePath.
+The image, URL and SHA come from the independent Git/Docker steps.
+Normal exec owns streaming stdout/stderr, exit code, background ID and cancellation.
+The first output line contains the official job ID; subsequent lines are official
+job states. Save that ID. Lost observation/cancellation is not rollback: inspect the
+job with `runtime.project.get_init(id)` in another launcher script, never rerun Init.
+The owner consumes a durable per-name admission before start_init and refuses replay.
 
-Use this path only when an operator supplies/selects an existing installation;
-it is not the default response to the original parallel-development prompt.
+For a tiny real SDK demonstration, in the same authorized WSL root Bash script:
 
-Supported installation layout: matching Windows JavaScript API tree and sealed
-Linux bundle from upstream commit `73d974dea8a8d0b056a16dc6b2380d89438ce484`.
-The older v1.1.0 release has a different SDK layout and Docker API incompatibility;
-package version alone is not evidence of compatibility.
+```sh
+set -eu
+umask 022
+# ROOT is returned sourceRoot; use a new NAME, e.g. tiny-<unique-suffix>.
+SOURCE="$ROOT/$NAME"
+test ! -e "$SOURCE"
+[[ "$NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]]
+for DIR in / /var /var/lib /var/lib/shadow-layerfs-sources "$ROOT"; do
+  if test ! -e "$DIR"; then mkdir -m 755 "$DIR"; fi
+  test ! -L "$DIR"
+  test "$(realpath "$DIR")" = "$DIR"
+  test "$(stat -c %u "$DIR")" = 0
+  MODE=$(stat -c %a "$DIR")
+  test "$((8#$MODE & 022))" -eq 0
+  test "$(stat -f -c %t "$DIR")" = ef53
+done
+GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git init --template= "$SOURCE"
+printf 'tiny LayerFS fixture\n' > "$SOURCE/README.md"
+git -C "$SOURCE" add README.md
+git -C "$SOURCE" -c user.name=LayerFS-Fixture -c user.email=fixture@example.invalid commit -m fixture
+git -C "$SOURCE" rev-parse HEAD
+```
 
-1. Discover the installed API root, sealed Linux bundle, WSL distribution,
-   absolute Linux Node executable and **installed image ID**. The API root contains
-   `api/agent/src/index.js`, `api/runtime/src/index.js` and their package metadata/
-   resolution shims. Use trusted existing operator installation records when
-   available. Do not sweep unrelated home directories or read credentials. If the
-   installation location cannot be discovered, ask for that existing location,
-   not a JSON configuration or manually set environment variable.
-2. Explain and obtain explicit owner consent to execute this installation,
-   start a **root WSL worker**, allocate private Project resources, and reuse that
-   approved installation across sessions and after clean backend restarts.
-   Approval of a code change or historical test is not runtime approval. The
-   worker can reach its configured distribution's Docker Engine; this is not a
-   universal security sandbox. Never infer consent from `approved:true` itself.
-3. In a durable local owner Web session, call:
-   ```json
-   {
-     "approved": true,
-     "allowRootWorker": true,
-     "installation": {
-       "apiRoot": "ABSOLUTE_HOST_ROOT_OF_MATCHING_API_TREE",
-       "bundle": "/absolute/linux/sealed-bundle",
-       "distribution": "SELECTED_WSL_DISTRIBUTION",
-       "node": "/absolute/linux/node",
-       "image": "sha256:ACTUAL_64_HEX_INSTALLED_IMAGE_ID"
-     }
-   }
-   ```
-   These placeholders are explanatory, never executable defaults. Agents discover
-   real values; do not ask humans to construct this tool payload. Setup rejects
-   an existing different choice rather than overwriting it. It persists approval,
-   allocates private paths and starts the official worker with sweeping disabled.
-   It does not import OfficeAgent, install Docker/WSL/Node, or download/build code.
-4. Check the returned `ready`, `answering`, `docker`, and `sandboxVerified` fields.
-   `ready:true` means the worker answers and Docker is reachable; it is **not** a
-   passing import/mount/isolation/merge test. `sandboxVerified` remains false.
-5. Optionally run `layerfs_import_preview {workspace:"registered-source"}`. Preview is advisory, not content approval. `layerfs_import` needs only the authorized workspace, not a review token. Managed import returns a `bg:` task and uses the
-   official Runtime initialization job to allocate its own labeled plain Docker
-   volume and import once. Background import admission requires the direct durable
-   owning session, not a task, leaf call, nested script or recovered invocation.
-   Wait for the completion event; do not poll or resend. Shadow derives the bridge environment from the
-   official Project record; the user need not supply Store paths or volume names.
-   Ordinary read/write/exec and dedicated LayerFS tools share this same runtime.
+Bind that NAME with runtime_context and use the returned Linux sourcePath in the
+same sdk-init invocation. Use a discovered installed immutable image, a new official
+project name, a clearly labeled fixture HTTPS repository URL and the printed SHA.
+The fixture URL is provenance, not fetched. This is an executable live acceptance
+entry, not a claim that real SDK/WSL ran in unit tests.
 
-Managed profiles are private Project config; they are not user-created workspaces
-or deliverables. Do not edit them or recovery journals with write/exec to bypass
-layerfs_setup approval, replace an installation, clear an uncertain state or force restart.
-`layerfs_runtime_status` inspects the current owned helper or saved state without starting
-one. While the helper is busy it immediately reports `health:"not_checked"` and
-import progress instead of queueing a probe behind Init. `layerfs_import_status` reads
-sanitized current or retained progress; it can recognize older SDK deadline
-failure records without exposing paths, catalog keys or raw native errors.
-A retained `uncertain` marker still blocks another import—diagnostics never clear it.
-`importTimeoutMs` is the single SDK Init budget (1000–1800000 ms, default
-300000), passed unchanged in managed and operator modes. It begins after the
-managed preparatory counting pass and includes native scanning/construction.
-There is no second Shadow import wall-clock cutoff. A 90-second helper-silence
-watchdog renews on managed progress or operator IPC heartbeats; it measures
-liveness, not native progress. Silence/cancellation means unknown effects, not
-native deadline failure. A stalled native operation with a responsive helper can
-remain observed until its own result or explicit cancellation. Neither path retries. On failure, report the safe code and inspect retained
-resources before manual recovery. No force restart, delete or automatic
-reinitialization is exposed.
+## 5. Register and use the immutable resource
 
-## Artifact provenance and OS prerequisites
+The final sdk-init output supplies `layerfsProject`, `baselineRef`, `image` and source
+provenance. Main is a **Layer**; do not infer the baseline from its empty commit history.
+Call `layerfs_resource_register` with those fields plus `runtimeId` and `name`.
+Registration checks official project initialization/image, Docker volume ownership
+and existence via official runtime queries, then resolves the exact immutable Layer
+through the agent SDK. Provenance is supplied metadata, not secretly fetched/attested.
+It returns `revision`, the resource ID. No recipe or approval gate is involved.
 
-Updating Shadow installs the layerfs_bootstrap recipe, **not** LayerFS binaries or Docker
-images. The upstream npm packages are private and the checked releases have no
-prebuilt assets. The approval-gated source build is the normal acquisition route;
-never invent an npm install or substitute an unverified download URL. Immutable
-source/image pins and sealed-file hashes are checked, and license notices retained.
-A sealed manifest alone establishes consistency, not publisher authenticity.
+`workspace_create {backend:"layerfs",source:"RETURNED_REVISION",idempotencyKey:"tiny-1"}`
+forks that baseline and returns a registered workspaceId. Use it with ordinary
+read/write/search/exec; inspect README, write a file, and run `exit 7` to verify nonzero
+execution still checkpoints. Create a second workspace to verify isolation. Use a
+new resource registration for a second official project/image; no active namespace
+switch is needed. Read `v:skills/layerfs-manager` before assignment/publication.
 
-A full fresh-machine installer requires separate platform provisioning. This
-feature automates LayerFS acquisition/configuration on a supported existing WSL
-and Docker environment; it does not install Windows features, a distro or Docker.
-Do not confuse a fresh **session** with a bare operating system.
+A simple inspection script for the same launcher is:
 
-## Diagnostics and operator configuration compatibility
+```js
+export default async ({open,args}) => {
+  const client = await open(args[0]);
+  try { console.log(JSON.stringify(await client.project.list_branches(100, 0))); }
+  finally { await client.close(); }
+}
+```
 
-`layerfs_doctor {}` only reads configuration. It never loads SDK code,
-starts a worker or imports a repository. Managed mode reports saved phase and
-next action; operator mode reports stable codes such as `CONFIG_NOT_SET`.
-Both use `runtime:"not_checked"`; configuration validity is not runtime health.
-No raw configuration values, SDK errors or worker endpoint secrets are returned.
-
-An explicit `SHADOW_LAYERFS_CONFIG` still takes precedence, with no silent fallback
-to managed settings if invalid. It names an absolute operator-owned JSON file
-outside model-editable workspaces, with `projects` keyed by Shadow Project ID.
-Each entry contains `sdkModule` and an allowlisted `env` object. The operator must
-provision private home/Store/volume/runtime/worker resources first. On Windows and
-macOS a worker endpoint is required; Linux needs a supported local filesystem.
-To use this legacy mode, set the variable in the **backend's environment** and
-restart that backend; an agent exec child cannot change its parent's environment.
-Managed layerfs_setup deliberately does not replace this explicit override.
-
-The full contract and compatibility evidence are in the Shadow repository's
-`docs/layerfs.md`, not a bundled `docs/` resource. This guide is always readable
-as `v:skills/layerfs/setup.md` without a source checkout.
-
-## Before importing a repository
-
-Import uses one Git-aware selection: tracked working-tree files (even matching ignore
-rules), nonignored untracked files, and standalone `.git` metadata. Git enumerates names
-with `ls-files --cached --others --exclude-standard`; no manual ignore parser or
-directory/credential-name blacklist. `dist` and `build` follow those same rules.
-Dependency reuse exception for the Linux target: source OS comes from the actual source
-execution device (the Windows staging helper passes `win32` explicitly, never its WSL
-host OS). Linux-source `node_modules` are included even when Git-ignored, to reuse
-installed dependencies; all other ignored entries remain excluded. Non-Linux or
-unknown-source `node_modules` are excluded even when tracked; the unchanged index can
-therefore show working-tree deletions. This is a dependency-specific compatibility rule,
-not a general directory blacklist. Symlinks remain refused, including local dependency
-links; no external dependency dereferencing and no automatic installs. Linux-to-Linux
-does not guarantee matching CPU architecture or ABI. This is not an exact clone: local
-changes and nonignored untracked files enter, and working-tree deletions remain deleted.
-Non-Git folders include every safe entry; `.gitignore` is not interpreted there. Preview
-is advisory; no manual content review, token or acknowledgement is required. Legacy
-`curated`/`whole_tree` are aliases for `git`; old review fields are ignored. Standalone
-Git metadata is retained unchanged; external `.git` pointers, linked worktrees and
-alternate object stores are refused. Symlink, containment, authorized workspace and
-scan-limit checks remain. No automatic dependency installation; cross-OS native
-dependencies may be incompatible. Setup/install permissions remain separate. The
-original source and index are not modified; staging is filtered before SDK Init. A
-mutable source still requires stability during copy, not a secret-free certification.
+History/merge/publish use the real SDK directly. Consult the pinned official agent
+API for signatures; review receipts and conflicts. Do not mutate the same branch
+concurrently through external SDK scripts and ordinary workspace tools. Publish only
+when authorized; it updates LayerFS main, not source Git. No automatic Git merge-back,
+worker reconciliation, old catalog migration or resource deletion is provided.

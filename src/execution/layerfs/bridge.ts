@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { coordinationRunner, operationResources, releaseReservation, resourceJournal } from './coordination.ts'
 import { isAbsolute } from 'node:path'
 import { ToolNoEffectError, ToolOutcomeUnknownError } from '../../tools/tool.ts'
-import { IMPORT_TIMEOUT, importTimeoutMs } from './import-timeout.ts'
+import { validatePublicationReceipt } from './publication-receipt.ts'
 import { committedRunner } from './committed-runner.ts'
 
 export const layerfsName = (project: string) => `shadow-${createHash('sha256').update(project).digest('hex').slice(0, 40)}`
@@ -73,10 +73,6 @@ async function execute(client, ws, command, message, requestedLimit) {
 }
 let input = ''; for await (const chunk of process.stdin) input += chunk;
 const { sdkModule, project, action, args: a } = JSON.parse(input);
-// Liveness only: a heartbeat does not claim that native Init is progressing.
-const beat = () => { if (process.connected) process.send?.({ type: 'layerfs-import-heartbeat' }, () => {}); };
-const heartbeat = action === 'create' ? setInterval(beat, ${IMPORT_TIMEOUT.heartbeatMs}) : undefined;
-if (heartbeat) beat();
 let cancelRequested = false;
 process.on('message', msg => { if (msg?.type === 'cancel') cancelRequested = true; });
 let client, definiteRefusal = () => false;
@@ -84,41 +80,34 @@ const checkCancellation = () => { if (cancelRequested) throw Object.assign(Error
 let ws = ['status', 'read', 'write', 'search', 'exec', 'commit', 'close'].includes(action) ? JSON.parse(Buffer.from(a.workspace.replace(/^layerfs:/, ''), 'base64url').toString()) : undefined;
 ${coordinationRunner}
 ${committedRunner}
+// tsx/esbuild may annotate local function names in toString(); the annotation
+// is cosmetic and scoped here, never an additional runtime dependency.
+const validatePublicationReceipt = (() => { const __name = fn => fn; return ${validatePublicationReceipt.toString()}; })();
 try {
- if (!['list', 'branches', 'history', 'status', 'diff'].includes(action)) await acquireJournal();
+ if (!['list', 'branches', 'history', 'status', 'diff', 'validate_ref'].includes(action)) await acquireJournal();
  const sdk = await import(pathToFileURL(sdkModule).href);
  const { LayerFS } = sdk;
  definiteRefusal = error => sdk.isRefusal?.(error) === true && error.code !== 'Unknown';
  checkCancellation();
- client = action === 'create' ? await LayerFS.init(project, a.source, a.importTimeoutMs) : await LayerFS.open(project);
+ client = await LayerFS.open(project);
  let result;
  if (['fork','load','merge','publish','mount'].includes(action)) await ensureUnmounted();
  if (['fork','load','merge','publish'].includes(action)) await phase(action + '-dispatched');
  switch(action) {
- case 'create': result = client.created; break;
+ case 'validate_ref': await client.fs.stat(a.ref, '/'); result = { ref: a.ref }; break;
  case 'list': result = await client.project.list_sandboxes(100, a.offset || 0); break;
  case 'branches': result = await client.project.list_branches(100, a.offset || 0); break;
  case 'history': result = await client.branch.list_commits(a.branch, 100, a.offset || 0); break;
  case 'fork': case 'load': result = await client.branch.fork(a.branch, a.ref); break;
- case 'mount': {
-   await phase('sandbox-create-dispatched');
-   keepJournal = true;
-   const { sandbox } = await client.sandbox.create();
-   // If mount fails, retain the sandbox for inspection; do not blindly repeat create.
-   await phase('mount-dispatched', {sandbox});
-   const mounted = await client.workspace.mount(sandbox, a.branch);
-   keepJournal = false;
-   result = { ...mounted, workspace: 'layerfs:' + Buffer.from(JSON.stringify({ project, sandbox: mounted.sandbox, path: mounted.path })).toString('base64url'), routing: 'Legacy maintenance ID: use status/checkpoint/close only. Ordinary file/exec tools require workspace_create backend=layerfs from a known branch after closing this mount. Never a host cwd.' }; break;
- }
  case 'branch_workspace': {
    await ensureUnmounted();
    await client.fs.stat(a.branch, '/');
-   result = { workspace: 'layerfs:' + Buffer.from(JSON.stringify({version:2, project, branch:a.branch})).toString('base64url') }; break;
+   result = { workspace: 'layerfs:' + Buffer.from(JSON.stringify({version:a.binding ? 3 : 2, project, branch:a.branch, ...a.binding})).toString('base64url') }; break;
  }
- case 'status': result = ws.version === 2 ? await client.fs.stat(ws.branch, '/') : await client.sandbox.list_workspaces(ws.sandbox, 100, 0); break;
+ case 'status': result = ws.version >= 2 ? await client.fs.stat(ws.branch, '/') : await client.sandbox.list_workspaces(ws.sandbox, 100, 0); break;
  case 'exec': {
    const branch = ws.branch;
-   if (ws.version !== 2) throw Error('Legacy mount exec is unsupported; create a branch-backed workspace');
+   if (ws.version !== 2 && ws.version !== 3) throw Error('Legacy mount exec is unsupported; create a branch-backed workspace');
    if (branch === 'main') throw Error('LayerFS main is readonly; fork a branch');
    await ensureUnmounted();
    keepJournal = true;
@@ -161,8 +150,6 @@ try {
    break;
  }
  case 'read': case 'write': case 'search': result = await committedFile(); break;
- case 'commit': result = await client.workspace.commit(ws, a.message); break;
- case 'close': result = await client.workspace.unmount(ws, false); break;
  case 'diff': result = await client.branch.diff_branches(a.ref, a.branch, 100, a.offset || 0, { hunks: false }); break;
  case 'merge': result = await client.branch.merge(a.ref, a.branch, a.name, a.message); break;
  case 'publish': result = await client.branch.publish(a.branch, a.ref); break;
@@ -174,7 +161,8 @@ try {
    result.operation = size > 65536 ? {journal:a.journal, state:'oversized-evidence'} : {journal:a.journal, phases:(await readFile(a.journal, 'utf8')).trim().split('\n').map(line=>JSON.parse(line))};
   } catch(e) { if(e.code !== 'ENOENT') result.operation = {journal:a.journal, state:'unreadable-evidence'}; }
  }
- await phase('completed');
+ if (action === 'merge' || action === 'publish') validatePublicationReceipt(action, result, a);
+ await phase('completed', action === 'merge' || action === 'publish' ? { receipt: result } : {});
  console.log(JSON.stringify({ ok: true, result, journalDisposition: journalHandle ? 'release' : 'not-owned' }));
 } catch(e) {
  if (e.code === 'Unknown' || keepJournal || (!definiteRefusal(e) && !e.shadowRefusal && !['read', 'search', 'branch_workspace'].includes(action))) keepJournal = true;
@@ -184,16 +172,16 @@ finally {
  try {
   for (const handle of journalHandles) await handle.close(); // Parent releases only after validated receipt AND process close.
   if (client) await client.close();
- } finally { clearInterval(heartbeat); if (process.connected) process.disconnect(); }
+ } finally { if (process.connected) process.disconnect(); }
 }
 `
 
-/** For create, timeoutMs is a helper-silence watchdog, not an Init budget.
+/** One fresh SDK process per ordinary backend operation.
  * Managed ordinary exec has no receipt deadline: ExecTool owns its wait window
  * and BackgroundTaskManager owns the same promise after transfer. Other
  * operations retain their existing wall-clock receipt timeout.
  */
-export function runBridge(config: LayerConfig, project: string, action: string, args: Record<string, unknown>, signal: AbortSignal, timeoutMs = action === 'create' ? IMPORT_TIMEOUT.silenceMs : 330000, lifecycle?: { observe: (text: string) => void }): Promise<string> {
+export function runBridge(config: LayerConfig, project: string, action: string, args: Record<string, unknown>, signal: AbortSignal, timeoutMs = 330000, lifecycle?: { observe: (text: string) => void }): Promise<string> {
   signal.throwIfAborted()
   if (typeof args.journal === 'string') {
     const base = args.journal
@@ -204,10 +192,9 @@ export function runBridge(config: LayerConfig, project: string, action: string, 
     args = { ...args, resources, journals, projectJournal: base, coordination: base + '.sqlite', owner: randomUUID(), journal: statusBranch ? resourceJournal(base, statusBranch) : journals[0] ?? base }
   }
   if (lifecycle) args = { ...args, managedExec: true, execToken: randomUUID() }
-  if (action === 'create') args = { ...args, importTimeoutMs: importTimeoutMs(args.importTimeoutMs) }
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('LAYERFS_')))
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--input-type=module', '-e', runner], { env: { ...env, ...config.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, stdio: action === 'create' || lifecycle ? ['pipe', 'pipe', 'pipe', 'ipc'] : ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, ['--input-type=module', '-e', runner], { env: { ...env, ...config.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, stdio: lifecycle ? ['pipe', 'pipe', 'pipe', 'ipc'] : ['pipe', 'pipe', 'pipe'] })
     let output = '', bytes = 0, settled = false
     const finish = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); signal.removeEventListener('abort', abort); if (error) { child.kill(); reject(error) } else resolve(output) }
     const unknown = (reason: string) => finish(new ToolOutcomeUnknownError(`LayerFS outcome unknown (${reason}); inspect status/history before any manual retry. Daemon work may continue.${typeof args.journal === 'string' ? ` Retained evidence (if admitted): ${args.journal}` : ''}`))
@@ -217,15 +204,13 @@ export function runBridge(config: LayerConfig, project: string, action: string, 
       timer = setTimeout(() => unknown('sandbox cancellation not confirmed'), 10000)
       child.send({ type: 'cancel' }, error => { if (error) unknown('cancellation transport failed') })
     }
-    let timer = lifecycle ? undefined : setTimeout(() => unknown(action === 'create' ? 'import helper heartbeat lost' : 'deadline'), timeoutMs)
+    let timer = lifecycle ? undefined : setTimeout(() => unknown('deadline'), timeoutMs)
     child.on('message', message => {
       if (lifecycle && message && typeof message === 'object') {
         const m = message as { type?: string; text?: string };
         if (m.type === 'output' && typeof m.text === 'string') lifecycle.observe(m.text);
         if (m.type === 'cancel-unknown') unknown('sandbox cancellation marker failed');
       }
-      if (!settled && action === 'create' && message && typeof message === 'object'
-        && Object.keys(message).length === 1 && (message as { type?: unknown }).type === 'layerfs-import-heartbeat') timer?.refresh()
     })
     signal.addEventListener('abort', abort, { once: true })
     for (const stream of [child.stdout!, child.stderr!]) stream.on('data', (data: Buffer) => {
@@ -247,7 +232,7 @@ export function runBridge(config: LayerConfig, project: string, action: string, 
           // Settle observation before releasing exclusion. Cancellation after this
           // point cannot turn a confirmed completed lifecycle into a replayable run.
           settled = true; clearTimeout(timer); signal.removeEventListener('abort', abort)
-          try { releaseReservation(String(args.coordination), String(args.owner), args.journals as string[]); resolve(output) }
+          try { releaseReservation(String(args.coordination), String(args.owner), args.journals as string[], receipt); resolve(output) }
           catch (error) { reject(new ToolOutcomeUnknownError('LayerFS receipt confirmed but journal release failed; retain evidence and reconcile before reuse.', { cause: error })) }
           return
         }
