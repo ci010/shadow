@@ -476,8 +476,12 @@ export class CapabilityBroker {
         } finally { await handle.close() }
         checkpoint(context)
         await rename(stage, filename)
-        const directory = await open(this.directory, 'r')
-        try { await directory.sync() } finally { await directory.close() }
+        // Node cannot fsync directory handles on Windows (EPERM). The staged file
+        // is still synced before atomic rename; POSIX additionally syncs directory metadata.
+        if (process.platform !== 'win32') {
+          const directory = await open(this.directory, 'r')
+          try { await directory.sync() } finally { await directory.close() }
+        }
       }
       return await action(record, save)
     } finally {

@@ -222,6 +222,13 @@ export class InitiativeStore {
       // Legacy duplicate assignments remain readable/editable, but cannot grow.
       const previousAssignment = prior ? parseStoredWorkRecord(JSON.parse(String(prior.data))) : undefined
       const activeAssignee = (item: WorkRecord | undefined) => item?.workflow && !['done', 'cancelled'].includes(item.workflow.status) ? item.workflow.assignee : null
+      // Completion cannot hide a running or uncertain external operation. Check in
+      // the same write transaction as the note CAS, including legacy callers.
+      if (parsed.workflow?.status === 'done' && previousAssignment?.workflow?.status !== 'done') {
+        const unresolved = this.#all('SELECT stamps FROM work_effects').some(row =>
+          parseStoredWorkStamps(JSON.parse(String(row.stamps))).some(stamp => stamp.key === parsed.key))
+        if (unresolved) throw new WorkConflict('Work has unresolved external effects; reconcile the operation before completion.')
+      }
       const target = activeAssignee(parsed)
       if (target && activeAssignee(previousAssignment) !== target) {
         const conflicts = records.filter(item => activeAssignee(item) === target)

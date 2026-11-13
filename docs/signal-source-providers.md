@@ -249,6 +249,11 @@ non-GET requests require a stable idempotency key and use existing conservative
 mutation receipts/uncertain-outcome protection; polling writes are not implicitly
 safe or recommended. No arbitrary fetch or host imports are exposed.
 
+Mutation receipts sync the staged file before atomic replacement. POSIX also
+syncs the containing directory; Node does not support that directory sync on
+Windows. Process-restart no-replay protection is covered by tests, but Windows
+directory-metadata durability across sudden power loss is not guaranteed.
+
 ## Collection contract and persistence
 
 `run({demands})` receives unique `{key,demand,checkpoint}` records. Generic

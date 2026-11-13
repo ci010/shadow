@@ -1,5 +1,5 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { ProviderTransport } from '../signals/providers/runtime.ts'
 import type { ProviderBrowserAccess, ProviderBrowserBinding } from '../browser/provider-fetch.ts'
 import type { SignalProviderRuntime } from '../signals/providers/runtime.ts'
@@ -37,7 +37,7 @@ export class SignalProviderTool implements Tool {
       const readLocal = async (path: string) => {
         const target = await realpath(path)
         const rel = relative(root, target)
-        if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) throw new Error('Provider files must remain inside local cwd')
+        if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Provider files must remain inside local cwd')
         if ((await stat(target)).size > 256000) throw new Error('Provider file too large')
         return readFile(target, 'utf8')
       }
