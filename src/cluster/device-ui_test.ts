@@ -343,3 +343,32 @@ test('approved Child can browse role definitions and context without opening rol
   assert.equal(context.status, 200)
   assert.deepEqual(await context.json(), { systemPrompt: 'Role preview', tools: [], channel: 'web' })
 })
+
+
+test('summary forwarding correlates Main and Child headers before delayed body completion', async t => {
+  const logs: string[] = []
+  t.mock.method(console, 'warn', (value: string) => { if (value.startsWith('API forward ')) logs.push(value) })
+  const f = await fixture()
+  t.after(() => f.bridge.close())
+  const id = '12345678-1234-4123-8123-123456789abc'
+  let output!: ReadableStreamDefaultController<Uint8Array>
+  f.main.get('/projects/p1/api/sessions/summary', () => new Response(new ReadableStream<Uint8Array>({ start(c) { output = c } }), {
+    headers: { 'X-Shadow-Request-Id': id, ETag: 'fixture-summary', 'Content-Type': 'application/json' },
+  }))
+  const response = await f.child.request('/projects/p1/api/sessions/summary?private=never-log', { headers: { Authorization: 'Bearer child-private' } })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('X-Shadow-Request-Id'), id)
+  assert.equal(response.headers.get('ETag'), 'fixture-summary')
+  const rows = () => logs.map(value => JSON.parse(value.slice('API forward '.length)))
+  assert.deepEqual(rows().map(row => [row.side, row.stage]), [['main', 'headers'], ['child', 'headers']])
+  const reading = response.text()
+  output.enqueue(new TextEncoder().encode('{"sessions":[]}'))
+  output.close()
+  assert.equal(await reading, '{"sessions":[]}')
+  const terminal = rows().filter(row => row.stage === 'terminal')
+  assert.equal(terminal.length, 2)
+  for (const row of terminal) {
+    assert.equal(row.id, id); assert.equal(row.bytes, 15); assert.equal(row.completion, 'eof')
+  }
+  assert.ok(!logs.join('').includes('never-log'))
+})

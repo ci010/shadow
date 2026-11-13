@@ -46,7 +46,7 @@ async function projectResponse<T>(base: string, path: string, init: RequestInit 
   let status: number | undefined
   let id: string | undefined
   let stage: 'fetch' | 'headers' | 'consume' = 'fetch'
-  const timeout = AbortSignal.timeout(15_000)
+  const timeout = AbortSignal.timeout(60_000)
   const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout
   try {
     const headers = new Headers(init?.headers)
@@ -84,7 +84,7 @@ async function projectResponse<T>(base: string, path: string, init: RequestInit 
     // or an unrelated network/JSON/HTTP failure that happens near the deadline.
     if (timeout.aborted && signal.reason === timeout.reason
       && (error === timeout.reason || (error instanceof Error && error.name === 'AbortError'))) {
-      throw new Error(t('The project request timed out after 15 seconds. Check Main and retry.'))
+      throw new Error(t('The project request timed out after 60 seconds. Check Main and retry.'))
     }
     throw error
   }

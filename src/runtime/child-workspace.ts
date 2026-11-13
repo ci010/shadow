@@ -1,4 +1,5 @@
 import WebSocket from 'ws'
+import { createForwardDiagnostics } from './forward-diagnostic.ts'
 import { compress } from 'hono/compress'
 import { ChildMicroApps } from './child-microapps.ts'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
@@ -14,6 +15,7 @@ export function childWorkspacePlugin(options: {
   proof: (signal: AbortSignal, path: string) => Promise<string>
   fetch?: typeof fetch
 }): GatewayPlugin & { close(): Promise<void> } {
+  const diagnostics = createForwardDiagnostics('child')
   const microApps = new ChildMicroApps()
   const compressHistory = compress({ encoding: 'gzip' })
   // Upstream fetch decodes the tunnel response. Negotiate the last loopback hop
@@ -27,9 +29,11 @@ export function childWorkspacePlugin(options: {
     const url = new URL(c.req.url)
     const path = `${url.pathname}${url.search}`
     if (!deviceUiRequestPath(path, c.req.method)) return c.json({ error: 'not_found' }, 404)
+    const diagnostic = diagnostics(path)
     let stage = 'challenge'
     try {
       const proof = await options.proof(AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(8000)]), DEVICE_UI_CHALLENGE)
+      diagnostic?.proofReady()
       stage = 'request'
       // Match execution/challenge routing when a device endpoint is mounted under a proxy prefix.
       const endpoint = new URL(options.endpoint)
@@ -101,10 +105,12 @@ export function childWorkspacePlugin(options: {
         responseHeaders.delete('content-length')
       }
       // Fetch headers are immutable; the local gateway must still add its CORS headers.
-      return new Response(response.body, {
+      const forwarded = new Response(response.body, {
         status: response.status, statusText: response.statusText, headers: responseHeaders,
       })
+      return diagnostic?.response(forwarded, c.req.raw.signal) ?? forwarded
     } catch (error) {
+      diagnostic?.fail(c.req.raw.signal)
       // Never log endpoint, proof, credentials, arbitrary exception messages or response bodies.
       const cause = error instanceof Error ? error.cause : undefined
       const transportCode = cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined

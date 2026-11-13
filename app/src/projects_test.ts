@@ -253,12 +253,12 @@ test('project JSON translates only its deadline cancellation across fetch and bo
   const { projectJson, createConditionalProjectJson } = await import('./projects.ts')
   let deadline = new AbortController()
   t.mock.method(AbortSignal, 'timeout', (ms: number) => {
-    assert.equal(ms, 15_000)
+    assert.equal(ms, 60_000)
     return deadline.signal
   })
   const timeoutReason = new DOMException('fixture deadline', 'TimeoutError')
   const aborted = () => new DOMException('The user aborted a request.', 'AbortError')
-  const timeoutMessage = /project request timed out after 15 seconds/
+  const timeoutMessage = /project request timed out after 60 seconds/
   const caller = new AbortController()
   const fetchTimeout: typeof fetch = async (_, init) => {
     deadline.abort(timeoutReason)
@@ -321,7 +321,7 @@ test('conditional project JSON retains its validated cache after a body timeout'
   })
   const signal = new AbortController().signal
   const cached = await reader.load(signal)
-  await assert.rejects(reader.load(signal), /project request timed out after 15 seconds/)
+  await assert.rejects(reader.load(signal), /project request timed out after 60 seconds/)
   deadline = new AbortController()
   assert.equal(await reader.load(signal), cached)
 })
