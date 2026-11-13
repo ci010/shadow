@@ -122,6 +122,8 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     await sidebar('a');await run('document.dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true}))');
     await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).query.child,'web:child');
     await sidebar('a');
+    assert.deepEqual(await run('Array.from(('+visible('.workflow-manager')+').querySelectorAll(".graph-column-heading")).map(el=>el.textContent)'),['Cron','Automation','BOT']);
+    assert.equal(await run('Array.from(document.querySelectorAll(".graph-group[data-workflow^=bot-]")).every(el=>el.dataset.column==="bot")'),true);
     // BOTs are inspection-only rows in the same canvas/tab, with binding-specific
     // Agent identity and only real existing Session links. No control POST exists.
     await wait('document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"]')+')');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { workflowCanvas } from './workflow-canvas.ts'
+import { workflowCanvas, workflowColumn } from './workflow-canvas.ts'
 import type { WorkflowDefinition, WorkflowRun } from './workflows.ts'
 const definition = (id: string): WorkflowDefinition => ({ id, name: id, revision: 2, enabled: true,
   source: { kind: 'schedule', id: 'daily' }, gate: { kind: 'revision-dedupe', first: 'emit' }, nodes: [{ kind: 'transform' }, { kind: 'record' }],
@@ -8,12 +8,12 @@ const definition = (id: string): WorkflowDefinition => ({ id, name: id, revision
 test('shared canvas scopes every node and edge to a separate non-editable workflow group', () => {
   const { nodes, edges } = workflowCanvas(['a', 'a:group', '["a","source"]'].map(id => ({ definition: definition(id) })))
   assert.equal(nodes.filter(node => node.type === 'group').length, 3)
-  assert.equal(nodes.length, 15); assert.equal(edges.length, 9)
+  assert.equal(nodes.length, 18); assert.equal(edges.length, 9)
   assert.equal(new Set(nodes.map(node => node.id)).size, nodes.length)
   assert.equal(new Set(edges.map(edge => edge.id)).size, edges.length)
   for (const node of nodes) {
     assert.equal(node.draggable, false); assert.equal(node.connectable, false); assert.equal(node.deletable, false)
-    if (node.type === 'group') continue
+    if (node.type !== 'workflow') continue
     const group = nodes.find(group => group.id === node.parentNode)!
     assert.equal(group.type, 'group'); assert.equal(group.data.definition.id, node.data.flowId)
   }
@@ -22,7 +22,7 @@ test('shared canvas scopes every node and edge to a separate non-editable workfl
     assert.equal(source.parentNode, target.parentNode); assert.equal(source.data.flowId, target.data.flowId)
     assert.equal(edge.deletable, false)
   }
-  assert.deepEqual(nodes.filter(node => node.type === 'group').map(node => node.position.y), [0, 260, 520])
+  assert.deepEqual(nodes.filter(node => node.type === 'group').map(node => node.position.y), [48, 308, 568])
 })
 test('canvas uses recorded node states; enabled does not imply running or animation', () => {
   const flow = definition('schedule:daily')
@@ -30,7 +30,7 @@ test('canvas uses recorded node states; enabled does not imply running or animat
   const before = JSON.stringify({ flow, run })
   const result = workflowCanvas([{ definition: flow, run }])
   assert.deepEqual(result.nodes.filter(node => node.type === 'workflow').map(node => node.data.status), ['received', 'accepted', 'completed', 'blocked'])
-  assert.equal(result.nodes[0]!.data.definition.revision, 2)
+  assert.equal(result.nodes.find(n => n.type === 'group')!.data.definition.revision, 2)
   assert.ok(result.edges.every(edge => !edge.animated))
   assert.ok(workflowCanvas([{ definition: flow }]).edges.every(edge => !edge.animated))
   const paused = workflowCanvas([{ definition: { ...flow, enabled: false } }])
@@ -78,4 +78,32 @@ test('canvas reflects optional leading deduplication from the definition, not a 
   assert.deepEqual(workflowGraph(historic).map(node => node.id), ['source', 'gate', 'node-0', 'node-1'])
   assert.equal(workflowCanvas([{ definition: plain }]).edges.length, 2)
   assert.equal(workflowCanvas([{ definition: historic }]).edges.length, 3)
+})
+
+test('product columns distinguish ordinary cron from managed scheduled automation without guessing names', () => {
+  const scheduled = (action: string, job: unknown) => ({ definition: { ...definition('same-id'), name: 'learning work-dispatch BOT', nodes: [{ kind: 'schedule-action', action, job }] } })
+  for (const session of ['fresh', 'existing']) assert.equal(workflowColumn(scheduled('agent', { source: 'cron', session })), 'cron')
+  assert.equal(workflowColumn(scheduled('session', {})), 'cron') // historical jobs omit source
+  for (const source of ['learning', 'system']) assert.equal(workflowColumn(scheduled('agent', { source })), 'automation')
+  assert.equal(workflowColumn(scheduled('program', {})), 'automation')
+  assert.equal(workflowColumn(scheduled('agent', { source: 'cron', program: { kind: 'work-dispatch' } })), 'automation')
+  for (const kind of ['external', 'internal', 'github-resource'] as const) assert.equal(workflowColumn({ definition: { ...definition('schedule:misleading'), source: { kind, id: 'cron' } } }), 'automation')
+  assert.equal(workflowColumn({ definition: { id: 'schedule:bot', enabled: false }, graph: [], projection: true }), 'bot')
+})
+
+test('columns reserve their maximum group width and stack only within the same category', () => {
+  const cron = definition('cron')
+  const automation = { ...definition('automation'), source: { kind: 'internal' as const, id: 'host' }, nodes: [{ kind: 'host-action' }] }
+  const projection = { definition: { id: 'bot', enabled: false }, projection: true as const, graph: [{ id: 'b', label: 'BOT', detail: '', config: {}, status: 'ready' as const }] }
+  const { nodes } = workflowCanvas([{ definition: automation }, projection, { definition: cron }, { definition: { ...cron, id: 'wider', nodes: [...cron.nodes, ...cron.nodes] } }])
+  const columns = nodes.filter(n => n.type === 'column')
+  assert.deepEqual(columns.map(n => n.data.column), ['cron', 'automation', 'bot'])
+  const groups = nodes.filter(n => n.type === 'group')
+  for (const group of groups) {
+    const index = columns.findIndex(c => c.data.column === group.data.column)
+    assert.equal(group.position.x, columns[index]!.position.x)
+    if (index < 2) assert.ok(group.position.x + parseFloat(String(group.style && (group.style as Record<string, unknown>).width)) < columns[index + 1]!.position.x)
+  }
+  assert.deepEqual(groups.filter(n => n.data.column === 'cron').map(n => n.position.y), [48, 308])
+  assert.ok(groups.filter(n => n.data.column !== 'cron').every(n => n.position.y === 48))
 })

@@ -53,8 +53,11 @@ const canvas = computed(() => workflowCanvas(props.flows))
         :elements-selectable="false" :delete-key-code="null" :connect-on-click="false" :default-viewport="{ x: 20, y: 20, zoom: 1 }"
         :min-zoom=".1" :max-zoom="1.5" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :prevent-scrolling="false" :zoom-on-double-click="false"
         :pan-on-drag="[0, 1]" :pan-activation-key-code="null" :zoom-activation-key-code="null" :selection-key-code="null" :multi-selection-key-code="null">
+        <template #node-column="{ data }">
+          <h2 class="graph-column-heading" :data-column="data.column">{{ data.column === 'cron' ? t('Cron workflows') : data.column === 'automation' ? t('Automation workflows') : t('BOT workflows') }}</h2>
+        </template>
         <template #node-group="{ data }">
-          <div class="graph-group" :class="{ selected: selectedId === data.definition.id }" :data-workflow="data.definition.id" :data-enabled="data.enabled">
+          <div class="graph-group" :class="{ selected: selectedId === data.definition.id }" :data-workflow="data.definition.id" :data-column="data.column" :data-enabled="data.enabled">
             <div class="group-header">
             <button class="group-heading nodrag nopan" @click="inspect(data.definition.id)">
               <strong><span :class="data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
@@ -101,6 +104,7 @@ const canvas = computed(() => workflowCanvas(props.flows))
 .graph-toolbar span { color: var(--c-text-secondary); font-size: 12px; }
 .graph-canvas { flex: 1; min-height: 0; width: 100%; position: relative; overflow: hidden; }
 /* Keep the shared body dot grid visible, just like the conversation canvas. */
+.graph-column-heading { margin: 0; padding: 0 0 10px; border-bottom: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 14px; line-height: 20px; font-weight: 600; }
 .graph-group { box-sizing: border-box; width: 100%; height: 100%; border: 1px solid var(--c-border); background: transparent; }
 .graph-group[data-enabled=true] { border: 2px solid var(--c-border-hover); }
 .graph-group[data-enabled=false] { border: 2px dashed var(--c-border); }
