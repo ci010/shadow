@@ -714,8 +714,23 @@ No stream is cloned, buffered or consumed by diagnostics. Backend transport
 events (including fast successes) share a cap of 120 per minute per Project
 runtime (excess dropped). Missing correlation can therefore mean volume limits,
 not proof that Main never received or completed the request.
-Forwarded device UI
-requests without a native outgoing response cannot produce this transport event.
+Forwarded device UI requests without a native outgoing response cannot produce
+this native transport event. For `sessions/summary`, Main device-ui and Child
+workspace proxies additionally emit `API forward`: `side`, fixed endpoint,
+validated Main `id` (when headers arrived), status, `headersMs`, streamed `bytes`,
+`elapsedMs`, and `headers`/`terminal` stage. Child also records `proofMs` (included
+in `headersMs`); the difference separates proof acquisition from upstream fetch.
+Main timing starts immediately before forwarding the internal business request,
+not before device authentication. Terminal `completion` distinguishes `eof`,
+`bodyless`, downstream `cancel`, request `abort`, and stream/fetch `error`. EOF is
+proxy reader completion, not browser receipt. Bytes count chunks read by that
+proxy (Child counts fetch-decoded bytes), not wire bytes. Aborts report bytes at
+abort time. Each proxy instance admits at most 60 summary observations/minute,
+at most two events each; no other routes are stream-wrapped. Readers are lazy,
+with no eager body buffering. Logs omit paths, hosts, queries, payloads, proofs,
+credentials and exception text. Main and Child logs live on their respective
+devices; the Main Project log view is not a Child stdout collector. Rebuild and
+restart each affected runtime before expecting these diagnostics.
 
 For the assistant, in the affected Project:
 

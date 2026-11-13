@@ -1,4 +1,5 @@
 import WebSocket from 'ws'
+import { createForwardDiagnostics } from '../runtime/forward-diagnostic.ts'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
 import { bridgeSockets } from '../gateway/socket-bridge.ts'
 import { isBackendPath } from '../gateway/route-kind.ts'
@@ -60,6 +61,7 @@ export function deviceUiHeaders(headers: Headers): Headers {
 export class MainDeviceUi {
   private readonly identities = new Map<string, DeviceAuthenticationV1>()
   private readonly active = new Map<AbortController, DeviceAuthenticationV1>()
+  private readonly diagnostics = createForwardDiagnostics('main')
   private closed = false
   private timer: ReturnType<typeof setInterval>
   constructor(private readonly cluster: MainCluster, private readonly clientAddresses: GatewayClientAddressRegistry, private readonly forward: (request: Request) => Promise<Response>, private readonly developmentUrl?: string) {
@@ -129,8 +131,10 @@ export class MainDeviceUi {
         const identity = `device-ui:${authentication.credentialId}`
         this.identities.set(identity, authentication)
         this.clientAddresses.capture(request, { transport: 'device-ui', hostname: authentication.credentialId })
+        const diagnostic = this.diagnostics(path)
         try {
-          const response = await this.forward(request)
+          const forwarded = await this.forward(request)
+          const response = diagnostic?.response(forwarded, signal) ?? forwarded
           const headers = new Headers(response.headers)
           for (const name of ['set-cookie', 'access-control-allow-origin', 'access-control-allow-credentials']) headers.delete(name)
           headers.set('Cache-Control', 'no-store')
@@ -147,7 +151,7 @@ export class MainDeviceUi {
             cancel() { controller.abort(); release(); return reader.cancel() },
           })
           return new Response(body, { status: response.status, headers })
-        } catch { this.active.delete(controller); return c.json({ error: 'main_workspace_unavailable' }, 502) }
+        } catch { diagnostic?.fail(signal); this.active.delete(controller); return c.json({ error: 'main_workspace_unavailable' }, 502) }
       })
     }
   }

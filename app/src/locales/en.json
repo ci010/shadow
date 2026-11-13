@@ -1175,7 +1175,7 @@
   "Default mode": "Default mode",
   "Default model": "Default model",
   "Default selected by timeout": "Default selected by timeout",
-  "The project request timed out after 15 seconds. Check Main and retry.": "The project request timed out after 15 seconds. Check Main and retry.",
+  "The project request timed out after 60 seconds. Check Main and retry.": "The project request timed out after 60 seconds. Check Main and retry.",
   "Default · {label}": "Default · {label}",
   "Defer · continue independent work": "Defer · continue independent work",
   "Deferred · not approved": "Deferred · not approved",
