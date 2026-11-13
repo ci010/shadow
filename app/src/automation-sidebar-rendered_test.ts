@@ -59,7 +59,7 @@ test('actual folder sidebar keeps one icon-bearing Workflow route and ordinary c
     const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict');
     app.setPath('userData',${JSON.stringify(directory)});
     app.whenReady().then(async()=>{
-      const win=new BrowserWindow({show:false,width:600,height:800,webPreferences:{contextIsolation:true,nodeIntegration:false}});
+      const win=new BrowserWindow({show:false,width:900,height:800,webPreferences:{contextIsolation:true,nodeIntegration:false}});
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       const wait=()=>new Promise(r=>setTimeout(r,250));
       await win.loadURL(${JSON.stringify(new URL('__automation', server.resolvedUrls!.local[0]).href)});
@@ -69,6 +69,20 @@ test('actual folder sidebar keeps one icon-bearing Workflow route and ordinary c
       assert.equal(await run(()=>document.querySelector('.automations-sidebar a').textContent.trim()),'Workflows');
       assert.ok(await run(()=>{const icon=document.querySelector('.automations-sidebar .i-lucide-workflow');return icon&&getComputedStyle(icon).maskImage!=='none'&&icon.getBoundingClientRect().width===16}));
       assert.ok(await run(()=>document.body.textContent.includes('Ordinary conversation')));
+      assert.ok(await run(()=>{
+        const entry=document.querySelector('.automations-sidebar a');
+        const icon=entry.querySelector('.automation-icon').getBoundingClientRect();
+        const peer=document.querySelector('.chat-new-row .tree-icon').getBoundingClientRect();
+        const row=entry.getBoundingClientRect();
+        return Math.abs(icon.left-peer.left)<1 && row.height===40 && Math.abs(icon.top+icon.height/2-row.top-row.height/2)<1;
+      }), 'Workflow icon shares the tree icon column and is vertically centered in its taller row');
+      await run(()=>document.querySelector('[aria-label="Collapse folders"]').click());await wait();
+      assert.ok(await run(()=>{
+        const entry=document.querySelector('.automations-sidebar a');
+        const row=entry.getBoundingClientRect(), icon=entry.querySelector('.automation-icon').getBoundingClientRect();
+        return entry.classList.contains('is-rail') && row.width===44 && row.height===44
+          && Math.abs(icon.left+icon.width/2-row.left-row.width/2)<1 && Math.abs(icon.top+icon.height/2-row.top-row.height/2)<1;
+      }), 'Collapsed rail remains a centered 44px target');
       await run(()=>document.querySelector('.automations-sidebar a').click());await wait();
       assert.equal(await run(()=>window.router.currentRoute.value.name),'project-workflows');
       assert.deepEqual(await run(()=>window.patches),[]);

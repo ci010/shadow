@@ -1,20 +1,20 @@
 <template>
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
-    <div v-show="!childId || wide || route.name === 'project-settings' || route.name === 'agents'" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
+    <div v-show="!childId || wide || route.name === 'project-settings' || route.name === 'agents' || route.name === 'project-workflows'" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
       <FileWorkbench v-if="discordChannelKey(sessionId || '')" :api-base="apiBase" session-id="" :project-id="projectId" :context-key="sessionId || ''" :active="visible" :explorer-enabled="false" :project-navigation-enabled="!embedded" :knowledge-enabled="!embedded" :knowledge-request="knowledgeRequest"
-        @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)" @project-navigation="emit('project-navigation', $event)" :conversation-title="t('Channel content')">
+        @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)" @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)" :conversation-title="t('Channel content')">
         <DiscordChannelIndex :api-base="apiBase" :project-id="projectId || ''" :channel-key="discordChannelKey(sessionId || '')!" :active="visible" @open="emit('navigate', $event)" />
       </FileWorkbench>
       <FileWorkbench v-else-if="observedGroupKey(sessionId || '')" :api-base="apiBase" session-id="" :project-id="projectId" :context-key="sessionId || ''" :active="visible" :explorer-enabled="false" :project-navigation-enabled="!embedded" :knowledge-enabled="!embedded" :knowledge-request="knowledgeRequest"
         @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
-        @project-navigation="emit('project-navigation', $event)" :conversation-title="t('Received messages')">
+        @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)" :conversation-title="t('Received messages')">
         <div class="observed-chat"><ChannelGroupContext :api-base="apiBase" :project-id="projectId || ''" :group-key="observedGroupKey(sessionId || '')!" :active="visible" discovery-only /></div>
       </FileWorkbench>
       <ChatTab v-else ref="primary" :api-base="apiBase" :embedded="embedded" enable-child-pane :child-session-id="childId"
         :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
-        @project-navigation="emit('project-navigation', $event)"
+        @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)"
         :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :automation-run="automationRun"
-        :visible="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name)) && (!childId || wide || route.name !== 'chat')" :keyboard-active="keyboardActive && visible && (!childId || wide || route.name !== 'chat') && activePane === 'primary'"
+        :visible="visible && ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)) && (!childId || wide || route.name !== 'chat')" :keyboard-active="keyboardActive && visible && (!childId || wide || route.name !== 'chat') && (activePane === 'primary' || route.name !== 'chat')"
         @open-child="openChild" @close-child="closeChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
     <div v-if="split" class="conversation-resizer" role="separator" tabindex="0" :aria-label="t('Resize child conversation')"
@@ -49,7 +49,7 @@ import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
-const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab] }>()
+const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string] }>()
 const route = useRoute()
 const router = useRouter()
 const workspace = ref<HTMLElement>()

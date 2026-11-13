@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { FileEntry } from './composables/useSessionFiles.ts'
 
 export interface OpenFile {
@@ -32,10 +33,13 @@ export const knowledgeEntryTabKey = (id: string) => `\0knowledge-entry:${id}`
 export const knowledgeEntryId = (key: string) => key.startsWith('\0knowledge-entry:') ? key.slice('\0knowledge-entry:'.length) : undefined
 export const DIAGNOSIS_TAB_KEY = '\0diagnosis'
 export const isPermanentDocumentTab = (key: string) => !key || key === DIAGNOSIS_TAB_KEY
-export type ProjectTab = 'settings'
+export type ProjectTab = 'settings' | 'workflows'
 export const projectTabKey = (tab: ProjectTab) => `\0project:${tab}`
 export const projectTabFromKey = (key: string): ProjectTab | undefined =>
-  key === projectTabKey('settings') || key === '\0project:agents' ? 'settings' : undefined
+  key === projectTabKey('workflows') ? 'workflows'
+    : key === projectTabKey('settings') || key === '\0project:agents' ? 'settings' : undefined
+export const projectTabLabel = (tab: ProjectTab) => tab === 'workflows' ? t('Workflows') : t('Project settings')
+export const projectTabIcon = (tab: ProjectTab) => tab === 'workflows' ? 'i-lucide-workflow' : 'i-lucide-settings-2'
 
 export function withDiagnosisTab(state: FileTabs, enabled: boolean): FileTabs {
   if (enabled) return state.diagnosis ? state : { ...state, diagnosis: true }

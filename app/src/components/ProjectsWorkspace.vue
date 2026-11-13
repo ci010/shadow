@@ -54,12 +54,11 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <WorkflowManager v-if="workflowProjectId" :api-base="projectBase(apiBase, workflowProjectId)" :project-id="workflowProjectId" :active="visible" />
-      <nav v-if="automation" class="workflow-projection-link" :aria-label="t('Workflow execution')">
+      <nav v-if="automation && !workflowProjectId" class="workflow-projection-link" :aria-label="t('Workflow execution')">
         <RouterLink :to="`/projects/${encodeURIComponent(automation.projectId)}/workflows`">{{ t('View workflow execution') }}</RouterLink>
         <span>{{ t('This conversation is a model execution, not the workflow run.') }}</span>
       </nav>
-      <AutomationDetail v-show="!workflowProjectId" :enabled="!!automation"
+      <AutomationDetail :enabled="!!automation && !workflowProjectId"
         :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
         :selected-session-id="selected?.sessionId"
         @open="openAutomationRun">
@@ -82,7 +81,7 @@
         :automation-run="!!automation && selected?.key === resource.key"
         :child-session-id="resource.childSessionId"
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
-        @project-navigation="tab => projectNavigation(resource, tab)"
+        @project-navigation="(tab, documentKey) => projectNavigation(resource, tab, documentKey)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </AutomationDetail>
     </div>
@@ -108,7 +107,6 @@ import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
 import SessionQuickOpen from './SessionQuickOpen.vue'
 import { isSessionQuickOpenShortcut } from '../session-quick-open.ts'
-import WorkflowManager from './WorkflowManager.vue'
 import AutomationDetail from './AutomationDetail.vue'
 import { projectBase } from '../api-url.ts'
 import { createProjectsClient, projectChatLocation, type ProjectRecord } from '../projects.ts'
@@ -122,7 +120,7 @@ import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { useAutomationNavigation } from '../composables/useAutomationNavigation.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
-import type { ProjectTab } from '../file-workbench.ts'
+import { DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
 const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean }>(), { visible: true })
@@ -147,6 +145,12 @@ const dashboardProject = computed(() => route.name === 'project-dashboard' ? pro
 const selectedProjectId = computed(() => workflowProjectId.value || (dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? ''))
 const selectedProjectName = computed(() => projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
+// Project documents reuse the current workbench (including an unsent draft).
+// Their deep links must not discard the conversation or each project's inspection.
+const workflowQueries = new Map<string, Record<string, string>>()
+const conversationQueries = new Map<string, typeof route.query>()
+const projectWorkbenches = new Map<string, ConversationResource>()
+let documentRoute = ''
 const localSidebarOpen = ref(false)
 const sidebarOpen = computed({
   get: () => mobileIntegrated.value ? mobile!.menuOpen.value : localSidebarOpen.value,
@@ -276,7 +280,12 @@ function setConversation(key: string, component: Element | ComponentPublicInstan
   if (component) instances.set(key, component as InstanceType<typeof ProjectConversation>)
   else instances.delete(key)
 }
+function projectWorkbench(projectId: string): ConversationResource {
+  return projectWorkbenches.get(projectId)
+    ?? registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
+}
 function publish(resource: ConversationResource) {
+  projectWorkbenches.set(resource.projectId, resource)
   selected.value = resource
   resources.value = [...registry.resources]
   closeSidebar()
@@ -290,7 +299,14 @@ function syncRoute() {
     if (projectId && !loading.value) error.value = t('This project is unavailable. Refresh the catalog or choose another project.')
     return
   }
-  if (route.name === 'project-dashboard' || route.name === 'project-workflows') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
+  const nextDocumentRoute = `${String(route.name)}:${projectId}`
+  const workflowQuery = workflowQueries.get(projectId)
+  if (route.name === 'project-workflows' && documentRoute !== nextDocumentRoute
+    && !Object.keys(route.query).length && workflowQuery?.workflow) {
+    void router.replace({ query: workflowQuery })
+  }
+  documentRoute = nextDocumentRoute
+  if (route.name === 'project-dashboard') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
   let resource: ConversationResource
@@ -299,11 +315,14 @@ function syncRoute() {
     resource.childSessionId = typeof route.query.child === 'string' ? route.query.child : undefined
   }
   else if (automationId) { selected.value = undefined; closeSidebar(); return }
-  else if (route.name !== 'chat') resource = selected.value?.projectId === projectId ? selected.value
-    : registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
+  else if (route.name !== 'chat') resource = projectWorkbench(projectId)
   else resource = selected.value?.projectId === projectId && !selected.value.sessionId ? selected.value : registry.draft(projectId)
   resource.knowledgeRequest = route.query.panel === 'knowledge'
     ? { entryId: typeof route.query.entry === 'string' ? route.query.entry : undefined } : undefined
+  if (route.name === 'chat') {
+    const { panel, entry, ...query } = route.query
+    conversationQueries.set(resource.key, query)
+  }
   publish(resource)
 }
 async function refresh() {
@@ -395,15 +414,14 @@ function selectSession(projectId: string, sessionId: string) {
 function openKnowledge(projectId: string) {
 
   automation.value = undefined
-  const resource = selected.value?.projectId === projectId ? selected.value
-    : registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
+  const resource = projectWorkbench(projectId)
   publish(resource)
-  void router.push({ ...projectChatLocation(resource), query: { panel: 'knowledge' } })
+  void router.push({ ...projectChatLocation(resource), query: { ...conversationQueries.get(resource.key), panel: 'knowledge' } })
 }
 function knowledgeNavigation(resource: ConversationResource, active: boolean, entryId?: string) {
-  if (!props.visible || selected.value?.key !== resource.key || !['chat', 'project-settings', 'agents'].includes(String(route.name))
+  if (!props.visible || selected.value?.key !== resource.key || !['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))
     || route.params.projectId !== resource.projectId || (route.name === 'chat' && (route.params.sessionId || '') !== resource.sessionId)) return
-  const query = { ...route.query }
+  const query = { ...(route.name === 'project-workflows' ? conversationQueries.get(resource.key) : route.query) }
   if (active) {
     query.panel = 'knowledge'
     delete query.diagnosis
@@ -417,23 +435,38 @@ function knowledgeNavigation(resource: ConversationResource, active: boolean, en
   if (route.name !== 'chat' && active) void router.push({ ...projectChatLocation(resource), query })
   else if (query.panel !== route.query.panel || query.entry !== route.query.entry) void router.push({ query })
 }
-// Settings document tabs return to the last section visited in each project.
-// Track the route, not the cached settings component (which also sees chat routes).
+// Project document tabs restore their own route context. Track the route, not
+// cached components, which also see other documents and Projects while hidden.
+watch(() => route.fullPath, () => {
+  const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
+  if (route.name === 'project-workflows' && projectId) {
+    const query: Record<string, string> = {}
+    if (typeof route.query.workflow === 'string') query.workflow = route.query.workflow
+    if (typeof route.query.run === 'string') query.run = route.query.run
+    workflowQueries.set(projectId, query)
+  }
+}, { flush: 'post', immediate: true })
 const settingsSections = new Map<string, string>()
 watch(() => [route.name, route.params.projectId, route.params.section] as const, ([name, projectId, section]) => {
   if (name === 'project-settings' && typeof projectId === 'string') {
     settingsSections.set(projectId, typeof section === 'string' && section ? section : 'general')
   }
 }, { immediate: true })
-function projectNavigation(resource: ConversationResource, tab?: ProjectTab) {
+function projectNavigation(resource: ConversationResource, tab?: ProjectTab, documentKey?: string) {
   if (!props.visible || selected.value?.key !== resource.key || route.params.projectId !== resource.projectId) return
-  if (tab) {
+  if (tab === 'workflows') {
+    if (route.name !== 'project-workflows') void router.push({ name: 'project-workflows',
+      params: { projectId: resource.projectId }, query: workflowQueries.get(resource.projectId) ?? {} })
+  } else if (tab === 'settings') {
     if (route.name !== 'project-settings') {
       void router.push({ name: 'project-settings',
         params: { projectId: resource.projectId, section: settingsSections.get(resource.projectId) ?? 'general' } })
     }
-  } else if (route.name === 'project-settings' || route.name === 'agents') {
-    void router.push(projectChatLocation(resource))
+  } else if (route.name === 'project-settings' || route.name === 'agents' || route.name === 'project-workflows') {
+    const query = { ...conversationQueries.get(resource.key) }
+    if (documentKey === DIAGNOSIS_TAB_KEY) query.panel = 'diagnosis'
+    else delete query.diagnosis
+    void router.push({ ...projectChatLocation(resource), query })
   }
 }
 function prepared(key: string, sessionId: string) {
@@ -445,12 +478,16 @@ function prepared(key: string, sessionId: string) {
   }
 }
 function deleted(projectId: string, sessionId: string) {
+  if (projectWorkbenches.get(projectId)?.sessionId === sessionId) projectWorkbenches.delete(projectId)
   registry.removeSession({ projectId, sessionId })
   resources.value = [...registry.resources]
   if (selected.value?.projectId === projectId && selected.value.sessionId === sessionId) startDraft(projectId)
 }
 function forgetProject(projectId: string) {
+  for (const resource of registry.resources) if (resource.projectId === projectId) conversationQueries.delete(resource.key)
   registry.removeProject(projectId)
+  projectWorkbenches.delete(projectId)
+  workflowQueries.delete(projectId)
   resources.value = [...registry.resources]
   if (folderOperation.value?.project.id === projectId) folderOperation.value = undefined
   if (selected.value?.projectId === projectId) selected.value = undefined

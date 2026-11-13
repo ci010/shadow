@@ -280,7 +280,7 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     assert.ok(await run(()=>document.querySelector('.automations-sidebar .i-lucide-workflow')));
     assert.equal(await run(()=>document.querySelectorAll('[data-automation-id],.automations-heading').length),0);
     await run(()=>{window.sidebar.jobs=[]});await wait();
-    assert.ok(await run(()=>document.querySelector('a[href="/projects/fixture/workflows"]')));
+    assert.ok(await run(()=>document.querySelector('a[href^="/projects/fixture/workflows"]')));
     await run(()=>{window.titleFixture.show=true});await wait();
     assert.equal(await run(()=>document.querySelector('.heading-name').textContent),'Fixture project / Encapsulation');
     await run(()=>{window.titleFixture.session={sessionId:'cron:historical',automation:{contextMode:'fresh',jobId:'daily',runId:'old-run',name:'Original daily review'}}});await wait();

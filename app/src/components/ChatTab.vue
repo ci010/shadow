@@ -31,13 +31,13 @@
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
       :project-navigation-enabled="!embedded"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
-      :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
+      :active="visible && ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
       @diagnosis-visible="diagnosisVisibilityChanged"
       @knowledge-navigation="knowledgeNavigation"
-      @project-navigation="emit('project-navigation', $event)"
+      @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)"
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
     <template #mobile-actions="{ close }">
@@ -713,7 +713,7 @@ const emit = defineEmits<{
   navigate: [id: string]
   prepared: [id: string]
   'knowledge-navigation': [active: boolean, entryId?: string]
-  'project-navigation': [tab?: ProjectTab]
+  'project-navigation': [tab?: ProjectTab, documentKey?: string]
 }>()
 const paneId = useId()
 const domId = (id: string) => props.embedded || props.managed ? `${paneId}-${id}` : id
@@ -1256,7 +1256,7 @@ const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => route.name !== 'project-settings' && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
+const composerVisible = computed(() => route.name !== 'project-settings' && route.name !== 'project-workflows' && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)

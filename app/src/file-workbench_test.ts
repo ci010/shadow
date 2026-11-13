@@ -140,7 +140,7 @@ test('Knowledge shares document navigation and closing without impersonating a f
   assert.deepEqual(closeOtherFileTabs(source, KNOWLEDGE_TAB_KEY), {
     files: [], knowledge: {}, knowledgeEntries: [], selected: KNOWLEDGE_TAB_KEY,
   })
-  test('Project Settings is the only project document and legacy agent keys map to Settings', () => {
+  test('Project Settings is a project document and legacy agent keys map to Settings', () => {
     const initial = openFileTab(openKnowledgeTab({ files: [], selected: '' }), file('notes.md'))
     const settings = openProjectTab(initial, 'settings')
     assert.deepEqual(documentTabKeys(settings), ['', KNOWLEDGE_TAB_KEY, projectTabKey('settings'), 'notes.md'])
@@ -268,4 +268,19 @@ test('shortcuts ignore inactive, hidden, embedded, overlay and IME contexts and 
     assert.equal(cycleDocumentTab(state, direction, available), 'a.md')
     assert.equal(cycleDocumentTab({ ...state, selected: 'a.md' }, direction, available), '')
   }
+})
+
+test('Workflow is a deduplicated project document with shared navigation and close semantics', () => {
+  const initial = openProjectTab(openKnowledgeTab(withDiagnosisTab({ files: [], selected: '' }, true)), 'settings')
+  const workflow = openProjectTab(initial, 'workflows')
+  const key = projectTabKey('workflows')
+  assert.equal(projectTabFromKey(key), 'workflows')
+  assert.deepEqual(documentTabKeys(workflow), ['', DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, projectTabKey('settings'), key])
+  assert.equal(openProjectTab(workflow, 'workflows'), workflow)
+  assert.equal(cycleDocumentTab(workflow, 1, available), '')
+  assert.equal(selectedFileToClose(workflow, available), key)
+  assert.deepEqual(closeFileTab(workflow, key), { ...initial, selected: '' })
+  assert.deepEqual(closeOtherFileTabs(workflow, key), { files: [], diagnosis: true, projectTabs: ['workflows'], selected: key })
+  assert.deepEqual(closeAllFileTabs(workflow), { files: [], diagnosis: true, selected: '' })
+  assert.equal(initial.projectTabs?.includes('workflows'), false, 'Opening a workflow never mutates the previous workbench')
 })
