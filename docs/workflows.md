@@ -187,3 +187,15 @@ Retained deliberately:
 - EventService/internal subscriptions still route directed session inputs. They are not the removed external provider subscription store.
 
 Apart from the compatibility normalization described above, no automatic migration, execution, deletion or successful reconciliation of historical data is claimed. Unknown external effects still need explicit human inspection; inbox acceptance and model-session completion remain distinct from Work acceptance.
+
+### Graph object categories
+
+Node surface tints identify object type, not enabled state, connection health or
+processing success. BOT projections carry explicit connection, conversation
+binding, published deployment and session metadata. Ordinary Workflow nodes use
+three stable categories: source, optional gate and action (all action kinds share
+one tint). The `--c-graph-*-bg` tokens provide subdued light/dark category surfaces;
+type labels remain visible. Paused nodes retain dashed edges and a muted tint;
+execution status remains separate text on a neutral badge. BOT projection headers
+use object icons and type badges rather than Workflow enabled/paused icons;
+isolated inventory is not evidence that a Workflow is paused.
