@@ -40,6 +40,7 @@ test('beside worktree, fixed commit, registered descriptions, retry and source p
     const registered = await folders.register(source)
     let fail = true
     const service = new DerivedWorkspaces({ projectId: 'default', directory: join(home, 'derived'), validateWork: key => assert.equal(key, 'work:one'), folders: {
+      recordLineage: (id, value) => folders.recordLineage(id, value),
       list: () => folders.list(), requireExecutionAvailable: (id, s) => folders.requireExecutionAvailable(id, s), acquireAccess: () => folders.acquireAccess(), reserveDestination: p => folders.reserveDestination(p),
       register: async (...args) => { if (fail) { fail = false; throw new Error('registration unavailable') }; return folders.register(...args) },
     } })
@@ -47,6 +48,9 @@ test('beside worktree, fixed commit, registered descriptions, retry and source p
     await assert.rejects(service.createDerivedWorkspace(request, signal), /registration unavailable/)
     const retained = await service.retained('stable'); assert.ok(retained)
     const result = await service.createDerivedWorkspace(request, signal)
+    assert.equal(folders.get(result.workspaceId)?.lineage?.parentId, registered.id)
+    const reloaded = new ProjectCatalog(join(temporary, 'host')); await reloaded.init()
+    assert.equal(reloaded.folders('default').find(item => item.id === result.workspaceId)?.lineage?.parentId, registered.id)
     assert.equal(result.path, retained.path); assert.equal(result.baseCommit, first)
     assert.match(result.branch, /^shadow-derived-[0-9a-f-]{36}$/)
     assert.equal(await git(source, ['rev-parse', 'refs/heads/shadow'], signal), first)

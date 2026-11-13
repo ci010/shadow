@@ -66,3 +66,28 @@ test('workspace_create selects backend, preserves default Git contract and never
   await assert.rejects(new WorkspaceCreateTool(git, 'one', () => true).execute({ backend: 'layerfs', source: 'main' }, context), /no Git or host fallback/)
   assert.equal(seen.length, 2)
 })
+
+test('registered fork validates namespace and connection before dispatch and on recovery', async () => {
+  const dir = await mkdtemp(join(process.cwd(), '.layerfs-create-'))
+  try {
+    const calls: unknown[] = []
+    const project = layerfsName('one')
+    let identity = 'managed:active'
+    const service = new LayerFSWorkspaces({ projectId: 'one', directory: dir,
+      identity: async () => identity, bindingProject: async () => project,
+      run: async args => { calls.push(args); return JSON.stringify({ ok: true, result: args.action === 'branch_workspace' ? { workspace: branchWorkspace(project, String(args.branch)) } : {} }) },
+      register: async () => ({ id: 'registered' }),
+    })
+    const args = { source: 'main', idempotencyKey: 'registered-fork' }
+    await assert.rejects(service.create(args, context, branchWorkspace('foreign', 'main')), /another Project/)
+    await assert.rejects(service.create(args, context, branchWorkspace(project, 'other')), /binding\/connection/)
+    assert.equal(calls.length, 0)
+    const binding = branchWorkspace(project, 'main')
+    await service.create(args, context, binding)
+    await service.create(args, context, binding)
+    assert.equal(calls.length, 2)
+    identity = 'managed:fresh'
+    await assert.rejects(service.create(args, context, binding), /identity/)
+    assert.equal(calls.length, 2)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

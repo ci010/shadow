@@ -59,7 +59,7 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
   constructor(private readonly options: {
     projectId: string
     directory: string
-    folders: Pick<FolderRegistry, 'list' | 'requireExecutionAvailable' | 'register' | 'reserveDestination' | 'acquireAccess'> & Partial<Pick<FolderRegistry, 'registerRemote'>>
+    folders: Pick<FolderRegistry, 'list' | 'requireExecutionAvailable' | 'register' | 'reserveDestination' | 'acquireAccess'> & Partial<Pick<FolderRegistry, 'registerRemote' | 'recordLineage'>>
     remote?: DerivedWorkspaceRemoteBackend
     validateWork: (key: string) => void
   }) {}
@@ -166,6 +166,7 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
           await persist(receipt, 'checkout-complete')
           const registered = await this.options.folders.register(receipt.path, signal, receipt.description)
           if (receipt.workspaceId && receipt.workspaceId !== registered.id) throw new Error('Registered workspace identity changed.')
+          await this.options.folders.recordLineage?.(registered.id, { version: 1, parentId: source.id, backend: 'git-worktree', ownership: 'shadow-derived' })
           const completed = { ...receipt, workspaceId: registered.id }
           await persist(completed, 'registered')
           return completed
@@ -254,6 +255,7 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
     }
     const receipt = saved.receipt!
     if (receipt.workspaceId) {
+      await this.options.folders.recordLineage?.(receipt.workspaceId, { version: 1, parentId: folder.id, backend: 'git-worktree', ownership: 'shadow-derived' })
       await this.#registeredRemote(receipt, signal)
       return receipt as DerivedWorkspaceReceipt & { workspaceId: string }
     }
@@ -261,6 +263,7 @@ export class DerivedWorkspaces implements DerivedWorkspaceCreator {
     const registered = await this.options.folders.registerRemote!({ version: 2, nodeId: saved.result!.nodeId, workdirId: saved.result!.workdir.workdirId }, signal)
     if (registered.kind !== 'remote' || registered.workdir.nodeId !== saved.remote.nodeId || registered.workdir.workdirId !== receipt.remote!.workdirId ||
       (registered.projectId !== undefined && registered.projectId !== this.options.projectId)) throw new Error('Registered remote workspace binding mismatch.')
+    await this.options.folders.recordLineage?.(registered.id, { version: 1, parentId: folder.id, backend: 'git-worktree', ownership: 'shadow-derived' })
     const completed = { ...receipt, workspaceId: registered.id }
     await this.#persistRemote(file, { ...saved, phase: 'remote-registered', receipt: completed })
     return completed

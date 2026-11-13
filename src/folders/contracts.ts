@@ -1,7 +1,10 @@
 import type { WorkdirRefV2 } from '../sessions/locality.ts'
 import type { WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
 
+import type { WorkspaceLineage } from './lineage.ts'
+
 interface FolderBase {
+  lineage?: WorkspaceLineage
   projectId?: string
   id: string
   name: string

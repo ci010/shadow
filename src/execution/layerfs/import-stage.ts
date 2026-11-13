@@ -1,3 +1,4 @@
+import { importSelection } from './import-selection.ts'
 import { classifyLayerFSName } from './import-review.ts'
 
 /** Fixed, default-WSL-user helper (that configured user may itself be root). Never accepts shell text or a destination.
@@ -9,10 +10,11 @@ const fs = await import('node:fs/promises');
 const { constants } = await import('node:fs');
 const { createHash, randomBytes } = await import('node:crypto');
 const { execFileSync } = await import('node:child_process');
+const select = ${importSelection.toString()};
 const classify = ${classifyLayerFSName.toString()};
 const [source, namespace, policy] = process.argv.slice(1);
 const refuse = () => { throw new Error('StageRefused'); };
-if (!/^[a-zA-Z]:[\\/]/.test(source) || source.includes('\0') || source.split(/[\\/]/).some(p => p === '..' || p === '.') || !/^[a-f0-9]{32}$/.test(namespace) || !['curated','whole_tree'].includes(policy)) refuse();
+if (!/^[a-zA-Z]:[\\/]/.test(source) || source.includes('\0') || source.split(/[\\/]/).some(p => p === '..' || p === '.') || !/^[a-f0-9]{32}$/.test(namespace) || !['git','curated','whole_tree'].includes(policy)) refuse();
 const root = execFileSync('wslpath', ['-a', '-u', source], { encoding: 'utf8', timeout: 5000 }).trim();
 if (!root.startsWith('/') || root.includes('\0') || root.split('/').includes('..')) refuse();
 const deadline = performance.now() + 600000;
@@ -26,6 +28,7 @@ const plain = async path => {
  }
 };
 await plain(root); await plain('/var/tmp');
+const selection = await select(root, 'win32');
 // Only Linux ext filesystems, not DrvFS/9p/FUSE/network-backed destinations.
 if (Number((await fs.statfs('/var/tmp')).type) !== 0xef53) refuse();
 const envelope = '/var/tmp/shadow-layerfs-stage-' + namespace + '-' + randomBytes(16).toString('hex');
@@ -35,13 +38,13 @@ await fs.mkdir(destination, { mode: 0o700 });
 const stamp = s => [s.dev,s.ino,s.mode,s.nlink,s.size,s.mtimeNs].join(':');
 async function scan(copy) {
  const records = []; let entries = 0, bytes = 0;
- async function walk(relative, depth, credentialAncestor) {
+ async function walk(relative, depth, credentialAncestor, gitAncestor) {
   check(); if (depth > 128 || ++entries > 100000) refuse();
   const path = relative ? root + '/' + relative : root;
   const before = await fs.lstat(path, { bigint: true });
   if (before.isSymbolicLink() || (!before.isDirectory() && !before.isFile()) || (before.mode & 0o6000n) !== 0n || (before.isFile() && (before.mode & 0o1000n) !== 0n)) refuse();
   const name = path.split('/').pop();
-  const classification = classify(name, before.isDirectory(), policy, credentialAncestor);
+  const classification = classify(name, before.isDirectory(), policy, credentialAncestor, gitAncestor);
   if (classification.blocker) refuse();
   if (before.isDirectory()) {
    if (copy && relative) await fs.mkdir(destination + '/' + relative, { mode: 0o700 });
@@ -52,7 +55,9 @@ async function scan(copy) {
    names.sort();
    for (const name of names) {
     if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\') || name.includes('\0')) refuse();
-    await walk(relative ? relative + '/' + name : name, depth + 1, credentialAncestor || classification.warning === 'credential_related_name_requires_content_review');
+    const child = relative ? relative + '/' + name : name;
+    if (!selection.includes(child)) continue;
+    await walk(child, depth + 1, credentialAncestor || classification.warning === 'credential_related_name_requires_content_review', gitAncestor || name.toLowerCase() === '.git');
    }
    records.push(createHash('sha256').update(JSON.stringify([relative,stamp(before),names])).digest('hex'));
   } else {
@@ -81,7 +86,7 @@ async function scan(copy) {
    await fs.utimes(target, Number(before.atimeNs) / 1e9, Number(before.mtimeNs) / 1e9);
   }
  }
- await walk('',0,false);
+ await walk('',0,false,root.split('/').pop().toLowerCase() === '.git');
  return createHash('sha256').update(records.sort().join('\n')).digest('hex');
 }
 const copied = await scan(true);

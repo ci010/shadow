@@ -1,24 +1,25 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { importSelection } from './import-selection.ts'
+import { createHash } from 'node:crypto'
 import { constants, type BigIntStats, type Dir } from 'node:fs'
 import { access, lstat, opendir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { ToolNoEffectError } from '../../tools/tool.ts'
 
-const TTL_MS = 15 * 60_000
-const WARNING = 'Metadata and names only: no file contents were read. This is not a credential-free certification. Human content review is required. The source remains a mutable tree, not a snapshot; a metadata rescan cannot eliminate races or detect every content change.'
-const NEXT = 'For VCS/dependency/build scope findings, preview again with importPolicy: whole_tree to include and recursively review them. No policy silently ignores files. Otherwise, if blocked, prepare a separate curated, registered baseline containing only files approved for import. Never delete or move blocked files from the original checkout to make preview pass. Run import_preview on that separate baseline, then, after human content review, use create with sourceReview: <reviewToken> and sourceReviewed: true. Repeat the exact preview importPolicy on create.'
-
-export type LayerFSImportPolicy = 'curated' | 'whole_tree'
-export function importPolicy(value: unknown = 'curated'): LayerFSImportPolicy {
-  if (value !== 'curated' && value !== 'whole_tree') throw new ToolNoEffectError('Invalid LayerFS importPolicy; use curated or whole_tree. No import started.')
-  return value
+const WARNING = 'Names and metadata only, not a secret scan. Includes tracked working files (even if ignored), nonignored untracked files and standalone .git metadata. Not an exact clone: local changes and untracked files are included; deleted files stay deleted. Linux-source node_modules are included even when ignored for reuse. Other or unknown source OS excludes node_modules for the Linux target, even tracked ones (Git may show deletions). Same OS does not guarantee ABI/architecture compatibility. No installs.'
+const NEXT = 'Preview is advisory, not approval. Create imports a freshly selected safe tree without a content-review token. Non-Git folders include all safe entries; .gitignore is not interpreted outside a repository.'
+export type LayerFSImportPolicy = 'git' | 'curated' | 'whole_tree'
+export function importPolicy(value: unknown = 'git'): LayerFSImportPolicy {
+  if (!['git', 'curated', 'whole_tree'].includes(String(value))) throw new ToolNoEffectError('Invalid importPolicy; use git. Legacy names are equivalent aliases.')
+  return 'git'
 }
 
 export interface LayerFSImportPreview {
+  sourcePlatform: string
+  dependencyPolicy: string
   policy: LayerFSImportPolicy
-  scope: 'entire_source_tree_no_ignores'
-  status: 'review_required' | 'blocked'
+  scope: 'git_working_tree_or_all_safe_files'
+  status: 'ready' | 'blocked'
   reviewToken?: string
   /** Counts exclude the source root. Bytes count regular files only. */
   summary: { entries: number; files: number; directories: number; bytes: number; complete: boolean }
@@ -30,7 +31,6 @@ export interface LayerFSImportPreview {
   next: string
 }
 interface Scan { result: LayerFSImportPreview; digest: string }
-interface Review { source: string; owner: string; policy: LayerFSImportPolicy; digest: string; expires: number }
 
 /** Optional tighter limits are useful for callers/tests; they cannot raise the hard ceilings. */
 export interface LayerFSImportReviewLimits {
@@ -43,25 +43,8 @@ function limit(value: number | undefined, ceiling: number): number {
 }
 export interface LayerFSNameClassification { blocker?: string; warning?: string }
 /** Classify a single path component, not contents. Check every ancestor as a directory. */
-export function classifyLayerFSName(name: string, directory = false, policy: LayerFSImportPolicy = 'curated', credentialAncestor = false): LayerFSNameClassification {
-  const n = name.toLowerCase()
-  if ((!credentialAncestor || directory) && ['.git', '.hg', '.svn', '.venv', 'venv', 'node_modules', 'vendor', '__pycache__', '.tox', '.mypy_cache', '.pytest_cache', 'dist', 'build'].includes(n)) return policy === 'curated'
-    ? { blocker: 'outside_curated_scope_use_whole_tree_or_separate_baseline' }
-    : { warning: 'repository_dependency_or_build_data_requires_content_review' }
-  if (n.startsWith('.env') && !['.env.example', '.env.sample'].includes(n)) return { blocker: 'environment_configuration' }
-  if (['bot.config.json', '.shadow', '.credentials', '.secrets', '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', '.dockercfg', 'gcloud', '.npmrc', '.pypirc', '.netrc', '_netrc', '.git-credentials', '.htpasswd', '.pgpass'].includes(n)
-    || /^id_(?:rsa|dsa|ecdsa|ed25519)(?:[._-].*)?$/.test(n)
-    || /\.(?:pem|key|p12|pfx|ppk|pkcs8|keytab|keystore|jks)$/.test(n)) return { blocker: 'possible_credentials_or_private_key' }
-  const heuristic = /(?:^|[._-])(?:credentials?|secrets?)(?:[._-]|$)/.test(n) || /(?:private[._-]?key|service[._-]?account)/.test(n)
-  if (!heuristic && !credentialAncestor) return {}
-  // Code, tests, documentation and visual assets often discuss credentials. Their
-  // names warrant content review, not a claim that they contain credentials.
-  const reviewable = /\.(?:[cm]?[jt]sx?|vue|svelte|py|pyi|rs|go|java|kt|kts|c|h|cc|cpp|hpp|cs|rb|php|swift|sh|ps1|sql|md|mdx|rst|adoc|html?|css|scss|sass|less|svg|png|jpe?g|gif|webp|ico|snap)$/.test(n)
-  const configuration = /\.(?:json|jsonc|ya?ml|toml|ini|conf|config|xml|properties|env)$/.test(n)
-    || /^\.?(?:credentials?|secrets?)(?:\.(?:txt|csv|tsv|bak|log))?$/.test(n)
-    || /^(?:private[._-]?key|service[._-]?account)\.txt$/.test(n)
-  if (!directory && !reviewable && (configuration || credentialAncestor)) return { blocker: 'possible_credentials_or_private_key' }
-  return { warning: 'credential_related_name_requires_content_review' }
+export function classifyLayerFSName(name: string, directory = false, ..._legacy: unknown[]): LayerFSNameClassification {
+  return name.toLowerCase() === '.git' && !directory ? { blocker: 'unsupported_git_file_topology_external_metadata_not_imported' } : {}
 }
 /** Percent encoding prevents control characters, bidi, separators and markup in findings. */
 function safeName(relative: string): string {
@@ -77,9 +60,8 @@ function sourcePath(source: string): string {
   return resolve(source)
 }
 
-/** In-memory, owner-scoped approvals. No SDK, workers, persistence or file-content reads. */
+/** Advisory metadata plan and mandatory safety preflight. No content approval or secret reads. */
 export class LayerFSImportReview {
-  private readonly reviews = new Map<string, Review>()
   private readonly maxEntries: number
   private readonly maxDurationMs: number
   private readonly maxFindings: number
@@ -89,53 +71,34 @@ export class LayerFSImportReview {
     this.maxFindings = limit(limits.maxFindings, 100)
   }
 
-  async preview(source: string, owner: string, signal: AbortSignal, policyValue: unknown = 'curated'): Promise<LayerFSImportPreview> {
+  async preview(source: string, owner: string, signal: AbortSignal, policyValue: unknown = 'git'): Promise<LayerFSImportPreview> {
     const policy = importPolicy(policyValue)
-    this.prune()
     let path: string
     try {
       path = sourcePath(source)
       if (typeof owner !== 'string' || !owner.trim()) throw new Error('invalid_owner')
     } catch {
-      return { policy, scope: 'entire_source_tree_no_ignores', status: 'blocked', summary: { entries: 0, files: 0, directories: 0, bytes: 0, complete: false },
+      return { sourcePlatform: process.platform, dependencyPolicy: process.platform === 'linux' ? 'reuse_node_modules_even_ignored' : 'exclude_node_modules_even_tracked_for_linux_target', policy, scope: 'git_working_tree_or_all_safe_files', status: 'blocked', summary: { entries: 0, files: 0, directories: 0, bytes: 0, complete: false },
         blockers: [{ path: '.', reason: 'invalid_source_or_owner' }], blockersTruncated: false, warnings: [], warningsTruncated: false, warning: WARNING, next: NEXT }
     }
-    const { result, digest } = await this.scan(path, signal, policy)
-    if (result.status === 'review_required') {
-      // Bound retained approvals too. Eviction fails closed for old callers.
-      while (this.reviews.size >= 128) this.reviews.delete(this.reviews.keys().next().value!)
-      const token = randomBytes(32).toString('hex')
-      this.reviews.set(token, { source: path, owner, policy, digest, expires: Date.now() + TTL_MS })
-      result.reviewToken = token
-    }
+    const { result } = await this.scan(path, signal, policy)
     return result
   }
 
-  /** owner must be the caller's trusted project/session identity, not a model-supplied argument. */
-  async consume(token: unknown, source: string, owner: string, reviewed: unknown, signal: AbortSignal, policyValue: unknown = 'curated'): Promise<void> {
-    const policy = importPolicy(policyValue)
-    this.prune()
-    const review = typeof token === 'string' ? this.reviews.get(token) : undefined
-    let path: string | undefined
-    try { path = sourcePath(source) } catch { /* fail closed below */ }
-    if (reviewed !== true || !review || review.policy !== policy || review.owner !== owner || review.source !== path || signal.aborted) {
-      throw new ToolNoEffectError('LayerFS import requires a fresh preview token for this project/session and source, and explicit human review (sourceReviewed: true). No import started.')
-    }
-    // Reserve synchronously before awaiting: concurrent consumption cannot reuse the token.
-    this.reviews.delete(token as string)
-    const scan = await this.scan(path!, signal, policy)
-    if (signal.aborted || Date.now() >= review.expires || scan.result.status === 'blocked' || scan.digest !== review.digest) {
-      throw new ToolNoEffectError('LayerFS import review expired, was interrupted, or source metadata changed/was blocked. Preview the curated registered baseline again. No import started.')
-    }
+  async fingerprint(source: string, signal: AbortSignal): Promise<string> {
+    const scan = await this.scan(sourcePath(source), signal, 'git')
+    if (scan.result.status === 'blocked') throw new ToolNoEffectError('Import source safety preflight blocked: ' + JSON.stringify(scan.result.blockers))
+    return scan.digest
   }
 
-  private prune(): void {
-    const now = Date.now()
-    for (const [token, review] of this.reviews) if (now >= review.expires) this.reviews.delete(token)
+  /** Legacy consume API: ignores old tokens/acknowledgements; freshly validates safety only. */
+  async consume(token: unknown, source: string, owner: string, reviewed: unknown, signal: AbortSignal, policyValue: unknown = 'git'): Promise<void> {
+    const result = await this.preview(source, owner, signal, policyValue)
+    if (result.status === 'blocked') throw new ToolNoEffectError('Import source safety preflight blocked: ' + JSON.stringify(result.blockers))
   }
 
   private async scan(source: string, signal: AbortSignal, policy: LayerFSImportPolicy): Promise<Scan> {
-    const result: LayerFSImportPreview = { policy, scope: 'entire_source_tree_no_ignores', status: 'review_required', summary: { entries: 0, files: 0, directories: 0, bytes: 0, complete: true },
+    const result: LayerFSImportPreview = { sourcePlatform: process.platform, dependencyPolicy: process.platform === 'linux' ? 'reuse_node_modules_even_ignored' : 'exclude_node_modules_even_tracked_for_linux_target', policy, scope: 'git_working_tree_or_all_safe_files', status: 'ready', summary: { entries: 0, files: 0, directories: 0, bytes: 0, complete: true },
       blockers: [], blockersTruncated: false, warnings: [], warningsTruncated: false, warning: WARNING, next: NEXT }
     // Fixed-size record hashes bound retained digest data even for long paths.
     const records: string[] = []
@@ -187,9 +150,10 @@ export class LayerFSImportReview {
         if (s.isSymbolicLink() || !s.isDirectory()) { block('.', 'source_or_ancestor_not_plain_directory'); result.summary.complete = false; return { result, digest: '' } }
         if (dirname(ancestor) === ancestor) break
       }
+      const selection = await importSelection(source)
       const rootReason = classifyLayerFSName(basename(source), true, policy).blocker
       if (rootReason) { block('.', rootReason); result.summary.complete = false; return { result, digest: '' } }
-      const pending = [{ path: source, relative: '.', depth: 0, credentialAncestor: classifyLayerFSName(basename(source), true, policy).warning === 'credential_related_name_requires_content_review' }]
+      const pending = [{ path: source, relative: '.', depth: 0, gitAncestor: basename(source).toLowerCase() === '.git', credentialAncestor: classifyLayerFSName(basename(source), true, policy).warning === 'credential_related_name_requires_content_review' }]
       while (pending.length) {
         check()
         const directory = pending.pop()!
@@ -204,6 +168,11 @@ export class LayerFSImportReview {
             check()
             const entry = await bounded(() => dir.read())
             if (!entry) break
+            const selectedPath = directory.relative === '.' ? entry.name : `${directory.relative}/${entry.name}`
+            if (!selection.includes(selectedPath)) {
+              if (entry.name === 'node_modules' && result.warnings.length < this.maxFindings) result.warnings.push({ path: safeName(selectedPath), reason: 'excluded_non_linux_source_dependencies_tracked_entries_may_appear_deleted' })
+              continue
+            }
             if (result.summary.entries >= this.maxEntries) throw new Error('scan_entry_limit')
             result.summary.entries++
             // Backslashes are valid POSIX filename characters, not portable relative names.
@@ -215,13 +184,15 @@ export class LayerFSImportReview {
             record(relative, s)
             if (s.isSymbolicLink()) { block(relative, 'symbolic_link'); result.summary.complete = false; continue }
             if (!s.isDirectory() && !s.isFile()) { block(relative, 'special_file'); result.summary.complete = false; continue }
+            if ((s.mode & 0o6000n) !== 0n || (s.isFile() && ((s.mode & 0o1000n) !== 0n || s.nlink !== 1n))) { block(relative, 'unsafe_mode_or_hardlink'); result.summary.complete = false; continue }
             if (s.isDirectory()) result.summary.directories++
             else {
               result.summary.files++
               if (s.size > BigInt(Number.MAX_SAFE_INTEGER - result.summary.bytes)) throw new Error('scan_byte_count_limit')
               result.summary.bytes += Number(s.size)
+              if (result.summary.bytes > 16 * 1024 ** 3) throw new Error('scan_byte_count_limit')
             }
-            const classification = classifyLayerFSName(entry.name, s.isDirectory(), policy, directory.credentialAncestor)
+            const classification = classifyLayerFSName(entry.name, s.isDirectory(), policy, directory.credentialAncestor, directory.gitAncestor)
             if (classification.blocker) { block(relative, classification.blocker); if (s.isDirectory()) result.summary.complete = false; continue }
             if (classification.warning) {
               if (result.warnings.length < this.maxFindings) result.warnings.push({ path: safeName(relative), reason: classification.warning })
@@ -230,7 +201,7 @@ export class LayerFSImportReview {
             await bounded(() => access(path, constants.R_OK | (s.isDirectory() ? constants.X_OK : 0)))
             if (s.isDirectory()) {
               if (directory.depth >= 128) throw new Error('scan_depth_limit')
-              pending.push({ path, relative, depth: directory.depth + 1, credentialAncestor: directory.credentialAncestor || classification.warning === 'credential_related_name_requires_content_review' })
+              pending.push({ path, relative, depth: directory.depth + 1, gitAncestor: directory.gitAncestor || entry.name.toLowerCase() === '.git', credentialAncestor: directory.credentialAncestor || classification.warning === 'credential_related_name_requires_content_review' })
             }
           }
         } finally { close(dir) }
@@ -244,7 +215,7 @@ export class LayerFSImportReview {
       check()
     } catch (error) {
       result.summary.complete = false
-      const reason = error instanceof Error && ['scan_aborted', 'scan_time_limit', 'scan_entry_limit', 'scan_depth_limit', 'scan_byte_count_limit', 'directory_changed', 'nonportable_name'].includes(error.message)
+      const reason = error instanceof Error && ['scan_aborted', 'scan_time_limit', 'scan_entry_limit', 'scan_depth_limit', 'scan_byte_count_limit', 'directory_changed', 'nonportable_name', 'unsupported_git_submodule_topology'].includes(error.message)
         ? error.message : 'unreadable_or_unstable_entry'
       block(current, reason)
     }

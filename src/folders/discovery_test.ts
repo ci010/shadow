@@ -95,7 +95,9 @@ test('live project-scoped registry provides complete read/search discovery and c
     const afterMove = await read.execute({ path: 'v:project/workspaces' }, context)
     assert.equal(requireToolText(afterMove).split('\n').filter(line => line.startsWith('- **')).length, 11)
     assert(!requireToolText(afterMove).includes(moved.id))
-    await assert.rejects(read.execute({ path: `v:project/workspaces/${moved.id}` }, context), /Unknown current-project/)
+    const archived = JSON.parse(requireToolText(await read.execute({ path: `v:project/workspaces/${moved.id}` }, context))).workspace
+    assert.equal(archived.status, 'archived')
+    assert.equal(archived.availability.available, false)
   })
 })
 
@@ -171,7 +173,7 @@ test('empty discovery returns current project metadata without creating or selec
   assert.equal((await handlers.list(executionContext())).length, 1)
 })
 
-test('Markdown groups by node identity, renders live names, unique selectors and inert metadata', async () => {
+test('Markdown lists include node identity, live names, unique selectors and inert metadata', async () => {
   const base = { projectId: DEFAULT_PROJECT_ID, createdAt: '' }
   const remote = (id: string, nodeId: string, name = 'app'): RemoteFolderRecord => ({
     ...base, id, name, kind: 'remote', path: 'Z:\\remote',
@@ -200,11 +202,11 @@ test('Markdown groups by node identity, renders live names, unique selectors and
   const handlers = discovery.handlers()
   const text = await handlers.read('folders', executionContext())
   assert.equal((await handlers.list(executionContext()))[0].content, text)
-  assert.equal(text.split('\n').filter(line => line.startsWith('## ')).length, 4)
-  assert.match(text, /## Main: Host/)
-  assert(text.includes('Worker \\(child-a\\)'))
-  assert(text.includes('Worker \\(child-b\\)'))
-  assert.match(text, /## unknown/)
+  assert.equal(text.split('\n').filter(line => line.startsWith('- **')).length, 5)
+  assert.match(text, /local\/Main.*Host/)
+  assert.match(text, /remote:child-a.*Worker/)
+  assert.match(text, /remote:child-b.*Worker/)
+  assert.match(text, /remote:unknown/)
   assert.match(text, /unavailable: node-offline/)
   assert.doesNotMatch(text, /<img>|<script>|\n## injected|\[link\]\(https:/)
   assert.match(text, /&lt;script&gt;&amp;/)
@@ -220,7 +222,7 @@ test('Markdown groups by node identity, renders live names, unique selectors and
   assert.equal(selectors[1], folders[1].id)
   assert.equal(selectors[3], 'second')
   displayName = 'Renamed'
-  assert.match(await handlers.read('folders', executionContext()), /## Renamed/)
+  assert.match(await handlers.read('folders', executionContext()), /Renamed/)
 })
 
 test('displayed selectors reject collisions with other slugs and authoritative full IDs', async () => {
@@ -237,8 +239,8 @@ test('displayed selectors reject collisions with other slugs and authoritative f
   })
   const handlers = discovery.handlers()
   const text = await handlers.read('folders', executionContext())
-  assert.match(text, /## Main\n/)
-  const selectors = [...text.matchAll(/^- \*\*(.+?)\*\*:/gm)].map(match => match[1]!)
+  assert.match(text, /local\/Main/)
+  const selectors = [...text.matchAll(/^- \*\*(.+?)\*\* /gm)].map(match => match[1]!)
   assert.equal(selectors.length, folders.length)
   selectors.forEach((selector, i) => assert.equal(selectFolder(folders, selector), folders[i]))
   assert.equal(selectors[0], folders[0].id)

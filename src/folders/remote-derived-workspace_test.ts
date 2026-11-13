@@ -220,10 +220,12 @@ test('Main ProjectExecutor -> LocalExecutor -> real Child derivation registers e
   assert.equal(receipt.projectId, 'default'); assert.equal(receipt.sourceId, sourceFolder.id)
   const registered = registry.get(receipt.workspaceId)
   assert.ok(registered?.kind === 'remote'); assert.equal(registered.workdir.workdirId, receipt.remote?.workdirId)
+  assert.equal(registered.lineage?.parentId, sourceFolder.id)
   assert.equal(await readFile(join(repo, 'untracked'), 'utf8'), 'preserve source')
   assert.equal(await git(receipt.path, ['rev-parse', 'HEAD'], signal), receipt.baseCommit)
   const reloadedCatalog = new ProjectCatalog(join(root, 'host')); await reloadedCatalog.init()
   const reloadedRegistry = new FolderRegistry(workspace, { catalog: reloadedCatalog, projectId: 'default' }); await reloadedRegistry.init()
+  assert.equal(reloadedRegistry.get(receipt.workspaceId)?.lineage?.parentId, sourceFolder.id)
   const reloadedExecutor = new ProjectExecutor('default', local, request => {
     assert.ok(DIRECTORY_OPERATIONS.includes(request.operation))
     if (request.operation === DERIVED_WORKSPACE_OPERATION) {

@@ -101,7 +101,7 @@ export class LayerFSWorkflow {
       try {
         const registered = await this.register(baseline.path, signal)
         return { status: 'prepared', workspace: registered.id, name: registered.name, files: baseline.files, bytes: baseline.bytes, originalUnchanged: true, imported: false,
-          next: 'Review the baseline contents, then run import_preview on this registered workspace. Creation still requires sourceReview and sourceReviewed:true. Use the fresh namespace returned by import_recover when applicable.' }
+          next: 'The explicit baseline snapshot is ready. import_preview is advisory; create needs no content-review token. Use the fresh namespace returned by import_recover when applicable.' }
       } catch { throw new ToolOutcomeUnknownError('The prepared baseline was retained but workspace registration could not be confirmed. Inspect Project workspaces before preparing another copy; no import was started.') }
     }, 'Separate baseline preparation result. No source was imported. Review contents and run import_preview on the returned workspace before create; do not modify the original checkout.')
   }

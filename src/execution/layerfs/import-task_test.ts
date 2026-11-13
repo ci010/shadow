@@ -45,18 +45,14 @@ for (const cancel of [false, true]) test(`reviewed import is admitted once in ba
     const context = { projectId: 'p', sessionId: 'web:import', channel: 'web', chatId: 'import', signal: new AbortController().signal,
       physicalSessionId: 'web_import-0', messageId: 'request', senderId: 'owner', tools: ownerTools,
       resolveToolTarget: async () => ({ cwd: source, fileChangeTarget: { nodeId: 'main', workdirId: 'source' } }) } as ExecutionContext
-    await assert.rejects(tool.execute({ action: 'create', workspace: 'source' }, context), ToolNoEffectError)
     assert.equal(creates, 0); assert.equal(completion, undefined)
     const importPolicy = cancel ? 'curated' : 'whole_tree'
     if (!cancel) {
-      await mkdir(join(source, '.git'))
       await mkdir(join(source, 'node_modules'))
-      await writeFile(join(source, '.git', 'HEAD'), 'synthetic')
     }
     const preview = JSON.parse(toolResultText(await tool.execute({ action: 'import_preview', workspace: 'source', importPolicy }, context))).result
-    assert.equal(preview.policy, importPolicy)
-    const args = { action: 'create', workspace: 'source', sourceReview: preview.reviewToken, sourceReviewed: true, importTimeoutMs: 600000, importPolicy }
-    await assert.rejects(tool.execute({ ...args, importPolicy: cancel ? 'whole_tree' : 'curated' }, context), ToolNoEffectError)
+    assert.equal(preview.policy, 'git')
+    const args = { action: 'create', workspace: 'source', importTimeoutMs: 600000, importPolicy }
     assert.equal(creates, 0); assert.equal(completion, undefined)
     const admitted = JSON.parse(toolResultText(await tool.execute(args, context))).result
     assert.equal(admitted.status, 'running'); assert.equal(admitted.executionId, 'bg:1234567890abcdef')

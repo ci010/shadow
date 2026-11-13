@@ -438,7 +438,7 @@ export class ManagedLayerFS {
     const status = runtimeStatusSchema.parse(value)
     if (!status.ready || !status.answering || status.docker !== 'ok') throw new ToolNoEffectError('LayerFS worker or Docker is not ready. Inspect runtime_status; no source import or sandbox operation was dispatched.')
   }
-  async create(source: string, signal: AbortSignal, timeoutMs: number = IMPORT_TIMEOUT.defaultMs, expectedNamespace?: string, importPolicy: 'curated' | 'whole_tree' = 'curated') {
+  async create(source: string, signal: AbortSignal, timeoutMs: number = IMPORT_TIMEOUT.defaultMs, expectedNamespace?: string, importPolicy: 'git' | 'curated' | 'whole_tree' = 'git') {
     signal.throwIfAborted()
     await this.loadNamespace()
     this.requireNamespace(expectedNamespace)

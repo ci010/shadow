@@ -1,332 +1,94 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises'
-import { join, relative } from 'node:path'
-import { performance } from 'node:perf_hooks'
-import { spawnSync } from 'node:child_process'
-import { classifyLayerFSName, LayerFSImportReview } from './import-review.ts'
-import { ToolNoEffectError } from '../../tools/tool.ts'
+import { realpath, mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { LayerFSImportReview, importPolicy } from './import-review.ts'
+import { stageLocalImport } from './import-local-stage.ts'
 
-const owner = JSON.stringify(['synthetic-project', 'synthetic-session'])
 const signal = () => new AbortController().signal
-async function fixture(work: (root: string) => Promise<void>) {
-  const root = await mkdtemp(join(process.cwd(), '.layerfs-import-review-test-'))
-  try { await work(root) } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
-}
-
-test('safe baseline: JSON-safe metadata summary, hidden source dirs and template env files allowed', async () => {
-  await fixture(async root => {
-    await mkdir(join(root, '.github'))
-    await mkdir(join(root, 'src'))
-    await writeFile(join(root, '.github', 'workflow.yml'), 'abc')
-    await writeFile(join(root, 'src', 'main.ts'), '12345')
-    await writeFile(join(root, '.env.example'), 'EXAMPLE=')
-    await writeFile(join(root, '.env.sample'), '')
+test('Git-aware plan and actual staging preserve index, tracked ignored and untracked nonignored files', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'import-test-'))
+  let staged: string | undefined
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args])
+  try {
+    git('init')
+    await writeFile(join(root, '.gitignore'), 'ignored\nnode_modules/\n')
+    await writeFile(join(root, 'ignored'), 'synthetic tracked fixture')
+    git('add', '-f', 'ignored'); git('add', '.gitignore')
+    await mkdir(join(root, 'node_modules')); await writeFile(join(root, 'node_modules', 'untracked'), 'fixture')
+    await mkdir(join(root, 'dist')); await writeFile(join(root, 'dist', 'x'), 'fixture')
+    await mkdir(join(root, 'build')); await writeFile(join(root, 'build', 'x'), 'fixture')
+    await writeFile(join(root, '.env'), 'synthetic fixture only')
+    const index = await readFile(join(root, '.git', 'index'))
     const review = new LayerFSImportReview()
-    const result = await review.preview(root, owner, signal())
-    assert.equal(result.status, 'review_required')
-    assert.match(result.reviewToken!, /^[a-f0-9]{64}$/)
-    assert.deepEqual(result.summary, { entries: 6, files: 4, directories: 2, bytes: 16, complete: true })
-    assert.deepEqual(result.blockers, [])
-    assert.equal(result.blockersTruncated, false)
-    assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
-    assert.match(result.warning, /no file contents were read/)
-    assert.match(result.warning, /not a credential-free certification/)
-    assert.match(result.warning, /mutable tree, not a snapshot/)
-    assert.match(result.next, /separate curated, registered baseline/)
-    assert.match(result.next, /Never delete or move blocked files from the original checkout/)
-    assert.match(result.next, /import_preview/)
-    assert.match(result.next, /sourceReview: <reviewToken> and sourceReviewed: true/)
-    // Equivalent lexical paths are accepted; the root's metadata isn't a content read.
-    await review.consume(result.reviewToken, relative(process.cwd(), root), owner, true, signal())
-    await assert.rejects(review.consume(result.reviewToken, root, owner, true, signal()), ToolNoEffectError)
-  })
-})
-
-test('obvious dependency, environment, bot config and credential names block without traversing excluded dirs', async () => {
-  await fixture(async root => {
-    for (const name of ['.git', '.venv', 'venv', 'node_modules', '.ssh', '.aws']) {
-      await mkdir(join(root, name))
-      await writeFile(join(root, name, 'never-enumerated.txt'), 'synthetic')
+    for (const policy of ['git', 'curated', 'whole_tree']) {
+      assert.equal(importPolicy(policy), 'git')
+      assert.equal((await review.preview(root, 'owner', signal(), policy)).status, 'ready')
     }
-    const files = ['.env', '.env.local', '.env.production', '.env.example.local', '.envrc', 'bot.config.json', 'id_rsa', 'private-key.txt', 'credentials.json', 'secrets.yaml', 'test.pem', 'test.key', 'test.p12', 'test.ppk', 'service-account.json', '.npmrc', '.credentials.json', '.secrets', 'production.credentials.json', '.dockercfg']
-    for (const name of files) await writeFile(join(root, name), 'synthetic')
+    await review.consume(undefined, root, 'owner', undefined, signal())
+    staged = await stageLocalImport(root, signal())
+    assert.deepEqual((await readdir(staged)).sort(), ['.env', '.git', '.gitignore', 'build', 'dist', 'ignored'])
+    assert.deepEqual(await readFile(join(staged, '.git', 'index')), index)
+    assert.deepEqual(await readFile(join(root, '.git', 'index')), index)
+    assert.equal(execFileSync('git', ['-C', staged, 'status', '--porcelain']).toString(), git('status', '--porcelain').toString())
+  } finally { await rm(root, { recursive: true, force: true }); if (staged) await rm(join(staged, '..'), { recursive: true, force: true }) }
+})
+test('non Git ignores no names; safety, quotas and pointer topology still fail closed', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'import-test-'))
+  try {
+    await mkdir(join(root, 'node_modules')); await writeFile(join(root, '.gitignore'), '*')
+    await writeFile(join(root, '.env'), 'synthetic')
     const review = new LayerFSImportReview()
-    const result = await review.preview(root, owner, signal())
-    assert.equal(result.status, 'blocked')
-    assert.equal(result.reviewToken, undefined)
-    assert.equal(result.summary.entries, files.length + 6)
-    assert.equal(result.summary.complete, false)
-    assert.equal(result.blockers.length, files.length + 6)
-    assert.ok(result.blockers.every(b => !b.path.includes('never-enumerated')))
-    await assert.rejects(review.consume(undefined, root, owner, true, signal()), ToolNoEffectError)
-  })
+    assert.equal((await review.preview(root, 'owner', signal())).summary.files, 2)
+    assert.equal((await new LayerFSImportReview({ maxEntries: 1 }).preview(root, 'owner', signal())).status, 'blocked')
+    await symlink('/outside', join(root, 'link'))
+    assert.equal((await review.preview(root, 'owner', signal())).status, 'blocked')
+    await rm(join(root, 'link')); await writeFile(join(root, '.git'), 'gitdir: /outside')
+    await assert.rejects(review.consume(undefined, root, 'owner', undefined, signal()))
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('empty, missing, non-directory sources and excluded source roots fail closed without raw errors', async () => {
-  await fixture(async root => {
-    await writeFile(join(root, 'file.txt'), 'synthetic')
-    await mkdir(join(root, '.git'))
+test('dependency reuse is source-provenance aware, never inferred from WSL target', async () => {
+  const { importSelection } = await import('./import-selection.ts')
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'import-os-test-'))
+  try {
+    execFileSync('git', ['init', root])
+    await writeFile(join(root, '.gitignore'), 'node_modules/\ncache/\n')
+    await mkdir(join(root, 'node_modules')); await writeFile(join(root, 'node_modules', 'x'), 'synthetic')
+    await mkdir(join(root, 'cache')); await writeFile(join(root, 'cache', 'x'), 'synthetic')
+    for (const os of ['win32', 'darwin', 'unknown', 'linux']) {
+      const selection = await importSelection(root, os)
+      assert.equal(selection.includes('node_modules'), os === 'linux')
+      assert.equal(selection.includes('node_modules/x'), os === 'linux')
+      assert.equal(selection.includes('cache/x'), false)
+    }
+    execFileSync('git', ['-C', root, 'add', '-f', 'node_modules/x'])
+    assert.equal((await importSelection(root, 'win32')).includes('node_modules/x'), false)
+    assert.equal((await importSelection(root, 'linux')).includes('node_modules/x'), true)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('initialized submodule gitlinks explicitly block preview and local staging before filtering', async () => {
+  const envelope = await mkdtemp(join(await realpath(tmpdir()), 'import-submodule-test-'))
+  const root = join(envelope, 'root'), sub = join(envelope, 'sub')
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' })
+  try {
+    await mkdir(root); await mkdir(sub)
+    git(root, 'init'); git(sub, 'init')
+    await writeFile(join(sub, 'fixture.txt'), 'synthetic fixture')
+    git(sub, 'add', 'fixture.txt')
+    git(sub, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture')
+    git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'child')
+    assert.match(await readFile(join(root, 'child', '.git'), 'utf8'), /^gitdir:/)
+    const index = await readFile(join(root, '.git', 'index'))
     const review = new LayerFSImportReview()
-    for (const source of ['', join(root, 'missing'), join(root, 'file.txt'), join(root, '.git')]) {
-      const result = await review.preview(source, owner, signal())
-      assert.equal(result.status, 'blocked')
-      assert.equal(result.reviewToken, undefined)
-      assert.equal(result.summary.complete, false)
-      assert.ok(!JSON.stringify(result).includes(root))
-    }
-    assert.equal((await review.preview(root, '', signal())).status, 'blocked')
-  })
-})
-
-test('tokens require exact project/session, resolved source, literal review; invalid attempts do not import', async () => {
-  await fixture(async root => {
-    await mkdir(join(root, 'other'))
-    const review = new LayerFSImportReview()
-    const token = (await review.preview(root, owner, signal())).reviewToken
-    for (const reviewed of [false, undefined, 'true', 1, {}]) {
-      await assert.rejects(review.consume(token, root, owner, reviewed, signal()), error => {
-        assert.ok(error instanceof ToolNoEffectError)
-        assert.match(error.message, /sourceReviewed: true/)
-        return true
-      })
-    }
-    for (const tokenValue of [undefined, {}, 123, 'invented']) {
-      await assert.rejects(review.consume(tokenValue, root, owner, true, signal()), ToolNoEffectError)
-    }
-    await assert.rejects(review.consume(token, root, 'other-project/session', true, signal()), ToolNoEffectError)
-    await assert.rejects(review.consume(token, join(root, 'other'), owner, true, signal()), ToolNoEffectError)
-    await assert.rejects(new LayerFSImportReview().consume(token, root, owner, true, signal()), ToolNoEffectError)
-    await review.consume(token, root, owner, true, signal())
-  })
-})
-
-test('single-use reservation rejects concurrent consumers', async () => {
-  await fixture(async root => {
-    const review = new LayerFSImportReview()
-    const token = (await review.preview(root, owner, signal())).reviewToken
-    const results = await Promise.allSettled([
-      review.consume(token, root, owner, true, signal()),
-      review.consume(token, root, owner, true, signal()),
-    ])
-    assert.equal(results.filter(r => r.status === 'fulfilled').length, 1)
-    const rejected = results.find(r => r.status === 'rejected') as PromiseRejectedResult
-    assert.ok(rejected.reason instanceof ToolNoEffectError)
-  })
-})
-
-test('tokens expire at 15 minutes, not just after', async t => {
-  await fixture(async root => {
-    t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
-    const review = new LayerFSImportReview()
-    const token = (await review.preview(root, owner, signal())).reviewToken
-    t.mock.timers.tick(15 * 60_000)
-    await assert.rejects(review.consume(token, root, owner, true, signal()), ToolNoEffectError)
-    const fresh = (await review.preview(root, owner, signal())).reviewToken
-    t.mock.timers.tick(15 * 60_000 - 1)
-    await review.consume(fresh, root, owner, true, signal())
-  })
-})
-
-test('metadata changes (write/add/remove/rename/new blocker) reject and invalidate token', async t => {
-  const changes = {
-    write: (root: string) => writeFile(join(root, 'file.txt'), 'changed size'),
-    add: (root: string) => writeFile(join(root, 'added.txt'), 'x'),
-    remove: (root: string) => rm(join(root, 'file.txt')),
-    rename: (root: string) => rename(join(root, 'file.txt'), join(root, 'renamed.txt')),
-    blocker: (root: string) => writeFile(join(root, '.env'), 'SYNTHETIC='),
-  }
-  for (const [name, change] of Object.entries(changes)) await t.test(name, async () => {
-    await fixture(async root => {
-      await writeFile(join(root, 'file.txt'), 'original')
-      const review = new LayerFSImportReview()
-      const token = (await review.preview(root, owner, signal())).reviewToken
-      await change(root)
-      await assert.rejects(review.consume(token, root, owner, true, signal()), ToolNoEffectError)
-      await assert.rejects(review.consume(token, root, owner, true, signal()), ToolNoEffectError)
-    })
-  })
-})
-
-test('directory symlinks/junctions, linked roots and linked ancestors fail closed', async () => {
-  await fixture(async root => {
-    const target = join(root, 'target'), source = join(root, 'source'), link = join(source, 'link')
-    await mkdir(join(target, 'nested'), { recursive: true })
-    await mkdir(source)
-    await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir')
-    const review = new LayerFSImportReview()
-    const result = await review.preview(source, owner, signal())
-    assert.equal(result.status, 'blocked')
-    assert.deepEqual(result.blockers, [{ path: 'link', reason: 'symbolic_link' }])
-    assert.equal((await review.preview(link, owner, signal())).status, 'blocked')
-    assert.equal((await review.preview(join(link, 'nested'), owner, signal())).status, 'blocked')
-  })
-})
-
-test('bounded traversal and findings fail closed with relative, encoded names', async () => {
-  await fixture(async root => {
-    for (let i = 0; i < 6; i++) await writeFile(join(root, `credentials.${i}.json`), 'x')
-    await writeFile(join(root, 'credentials.名字.json'), 'x')
-    const findings = await new LayerFSImportReview({ maxFindings: 2 }).preview(root, owner, signal())
-    assert.equal(findings.status, 'blocked')
-    assert.equal(findings.blockers.length, 2)
-    assert.equal(findings.blockersTruncated, true)
-    assert.ok(findings.blockers.every(b => b.path.length <= 240 && !b.path.includes(root)))
-    const all = await new LayerFSImportReview().preview(root, owner, signal())
-    assert.ok(all.blockers.some(b => b.path.includes('%E5%90%8D')))
-    const entries = await new LayerFSImportReview({ maxEntries: 2 }).preview(root, owner, signal())
-    assert.equal(entries.status, 'blocked')
-    assert.equal(entries.summary.entries, 2)
-    assert.equal(entries.summary.complete, false)
-    assert.ok(entries.blockers.some(b => b.reason === 'scan_entry_limit'))
-  })
-})
-
-test('aborted scans and consumption fail closed', async () => {
-  await fixture(async root => {
-    const review = new LayerFSImportReview(), aborted = new AbortController()
-    aborted.abort()
-    const result = await review.preview(root, owner, aborted.signal)
-    assert.equal(result.status, 'blocked')
-    assert.equal(result.blockers[0]?.reason, 'scan_aborted')
-    const token = (await review.preview(root, owner, signal())).reviewToken
-    await assert.rejects(review.consume(token, root, owner, true, aborted.signal), ToolNoEffectError)
-    const during = new AbortController()
-    const pending = review.preview(root, owner, during.signal)
-    during.abort()
-    assert.equal((await pending).status, 'blocked')
-  })
-})
-
-test('scan deadline is enforced independently of wall-clock token TTL', async t => {
-  await fixture(async root => {
-    let elapsed = 0
-    t.mock.method(performance, 'now', () => elapsed += 10)
-    const result = await new LayerFSImportReview({ maxDurationMs: 1 }).preview(root, owner, signal())
-    assert.equal(result.status, 'blocked')
-    assert.equal(result.blockers[0]?.reason, 'scan_time_limit')
-  })
-})
-
-test('unreadable directory fails closed', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async () => {
-  await fixture(async root => {
-    const denied = join(root, 'denied')
-    await mkdir(denied)
-    await chmod(denied, 0)
-    try {
-      const result = await new LayerFSImportReview().preview(root, owner, signal())
-      assert.equal(result.status, 'blocked')
-      assert.ok(result.blockers.some(b => b.reason === 'unreadable_or_unstable_entry'))
-    } finally { await chmod(denied, 0o700) }
-  })
-})
-
-test('special files fail closed without opening their contents', { skip: process.platform === 'win32' }, async () => {
-  await fixture(async root => {
-    const made = spawnSync('mkfifo', [join(root, 'pipe')], { encoding: 'utf8' })
-    assert.equal(made.status, 0, made.stderr)
-    const result = await new LayerFSImportReview().preview(root, owner, signal())
-    assert.equal(result.status, 'blocked')
-    assert.deepEqual(result.blockers, [{ path: 'pipe', reason: 'special_file' }])
-  })
-})
-
-
-test('credential-related code, tests, docs and assets warn without bypassing explicit content review', async () => {
-  await fixture(async root => {
-    const names = ['credentials.svg', 'secret-redaction.ts', 'secrets_test.ts', 'credentials.md', 'service-account.test.ts', 'private-key-icon.png', 'secret-guide.txt']
-    for (const name of names) await writeFile(join(root, name), 'synthetic')
-    const review = new LayerFSImportReview({ maxFindings: 3 })
-    const result = await review.preview(root, owner, signal())
-    assert.equal(result.status, 'review_required')
-    assert.deepEqual(result.blockers, [])
-    assert.equal(result.warnings.length, 3)
-    assert.equal(result.warningsTruncated, true)
-    await assert.rejects(review.consume(result.reviewToken, root, owner, false, signal()), ToolNoEffectError)
-    await review.consume(result.reviewToken, root, owner, true, signal())
-  })
-})
-
-test('credential modules warn, private hidden credential directories still block', async () => {
-  await fixture(async root => {
-    for (const name of ['credentials', '.secrets', '.ssh', 'service-account', '.aws']) {
-      await mkdir(join(root, name))
-      await writeFile(join(root, name, 'innocent.ts'), 'synthetic')
-    }
-    const result = await new LayerFSImportReview().preview(root, owner, signal())
-    assert.equal(result.status, 'blocked')
-    assert.equal(result.blockers.length, 3)
-    assert.equal(result.warnings.length, 4)
-    assert.equal(result.warningsTruncated, false)
-  })
-})
-
-
-test('exact credential plaintext/export names block without reclassifying explanatory names or assets', async () => {
-  const blocked: string[] = []
-  for (const name of ['credential', 'credentials', 'secret', 'secrets']) {
-    for (const extension of ['txt', 'csv', 'tsv', 'bak', 'log']) {
-      for (const prefix of ['', '.']) {
-        const path = `${prefix}${name}.${extension}`
-        blocked.push(path)
-        assert.deepEqual(classifyLayerFSName(path), { blocker: 'possible_credentials_or_private_key' }, path)
-        assert.deepEqual(classifyLayerFSName(path.toUpperCase()), { blocker: 'possible_credentials_or_private_key' }, path)
-      }
-    }
-  }
-  for (const path of ['credentials.svg', 'secret-redaction.ts', 'secret-guide.txt', 'credentials-explanation.csv', 'secrets-format.tsv', 'credential-example.bak', 'secret-redaction.log']) {
-    assert.deepEqual(classifyLayerFSName(path), { warning: 'credential_related_name_requires_content_review' }, path)
-  }
-  await fixture(async root => {
-    for (const path of blocked) await writeFile(join(root, path), 'synthetic')
-    const result = await new LayerFSImportReview().preview(root, owner, signal())
-    assert.equal(result.status, 'blocked')
-    assert.equal(result.reviewToken, undefined)
-    assert.equal(result.blockers.length, blocked.length)
-    assert.deepEqual(result.warnings, [])
-  })
-})
-
-
-test('whole_tree explicitly reviews VCS, dependencies and build data; policy is token-bound', async () => {
-  await fixture(async root => {
-    for (const dir of ['.git/objects', 'node_modules/package', 'build', 'src/credentials']) {
-      await mkdir(join(root, dir), { recursive: true })
-      await writeFile(join(root, dir, 'module.ts'), 'synthetic code')
-    }
-    const review = new LayerFSImportReview()
-    assert.equal((await review.preview(root, owner, signal())).status, 'blocked')
-    const result = await review.preview(root, owner, signal(), 'whole_tree')
-    assert.equal(result.status, 'review_required')
-    assert.equal(result.policy, 'whole_tree')
-    assert.equal(result.scope, 'entire_source_tree_no_ignores')
-    assert.equal(result.summary.files, 4)
-    assert.equal(result.summary.complete, true)
-    assert.ok(result.warnings.some(w => w.path === '.git'))
-    assert.ok(result.warnings.some(w => w.path === 'node_modules'))
-    await assert.rejects(review.consume(result.reviewToken, root, owner, true, signal(), 'curated'), ToolNoEffectError)
-    await assert.rejects(review.consume(result.reviewToken, root, owner, true, signal(), 'invented'), ToolNoEffectError)
-    await review.consume(result.reviewToken, root, owner, true, signal(), 'whole_tree')
-    const changed = await review.preview(root, owner, signal(), 'whole_tree')
-    await writeFile(join(root, 'node_modules/package/module.ts'), 'changed metadata')
-    await assert.rejects(review.consume(changed.reviewToken, root, owner, true, signal(), 'whole_tree'), ToolNoEffectError)
-  })
-})
-
-test('whole_tree does not exempt secrets or symlinks inside included directories', async () => {
-  await fixture(async root => {
-    for (const dir of ['.git', 'node_modules/package', 'src/credentials']) {
-      await mkdir(join(root, dir), { recursive: true })
-      for (const file of ['.env', 'private.key', 'credentials.json']) await writeFile(join(root, dir, file), 'synthetic')
-    }
-    await writeFile(join(root, 'src/credentials/account.json'), 'synthetic')
-    await mkdir(join(root, '.shadow'))
-    await symlink(join(root, 'src'), join(root, 'node_modules/link'), process.platform === 'win32' ? 'junction' : 'dir')
-    const result = await new LayerFSImportReview().preview(root, owner, signal(), 'whole_tree')
-    assert.equal(result.status, 'blocked')
-    assert.equal(result.reviewToken, undefined)
-    for (const path of ['.git/.env', 'node_modules/package/private.key', 'src/credentials/account.json', '.shadow', 'node_modules/link']) {
-      assert.ok(result.blockers.some(b => b.path === path), path)
-    }
-  })
+    const preview = await review.preview(root, 'owner', signal())
+    assert.equal(preview.status, 'blocked')
+    assert.ok(preview.blockers.some(blocker => blocker.reason === 'unsupported_git_submodule_topology'))
+    await assert.rejects(stageLocalImport(root, signal()), /unsupported_git_submodule_topology/)
+    assert.deepEqual(await readFile(join(root, '.git', 'index')), index)
+    assert.equal(await readFile(join(root, 'child', 'fixture.txt'), 'utf8'), 'synthetic fixture')
+  } finally { await rm(envelope, { recursive: true, force: true }) }
 })

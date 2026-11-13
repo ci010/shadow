@@ -1,6 +1,6 @@
 ---
 name: layerfs-setup
-description: "Owner lifecycle workflow for LayerFS connect/bootstrap, reviewed imports, separate baselines and guarded recovery; exact approvals required."
+description: "Owner lifecycle workflow for LayerFS connect/bootstrap, Git-aware imports, separate baselines and guarded recovery; exact approvals required."
 metadata:
   category: tools
 ---
@@ -28,11 +28,29 @@ requires its session-bound plan, approval reference and approved/allowRootWorker
 allowDownloads flags; flags alone are not consent. This can be a lengthy multi-GiB
 pinned build with root WSL execution, not OS/WSL/Docker installation.
 
-Source import is separate: metadata preview is not a content/secret scan. Review
-contents, keep the source stable and use the matching single-use sourceReview and
-sourceReviewed acknowledgement with the exact importPolicy. Neither policy
-silently filters files or bypasses credential/symlink checks. Never strip the
-original checkout to pass review; use the separately approved baseline workflow.
+Import uses one Git-aware selection: tracked working-tree files (even matching ignore
+rules), nonignored untracked files, and standalone `.git` metadata. Git enumerates names
+with `ls-files --cached --others --exclude-standard`; no manual ignore parser or
+directory/credential-name blacklist. `dist` and `build` follow those same rules.
+Dependency reuse exception for the Linux target: source OS comes from the actual source
+execution device (the Windows staging helper passes `win32` explicitly, never its WSL
+host OS). Linux-source `node_modules` are included even when Git-ignored, to reuse
+installed dependencies; all other ignored entries remain excluded. Non-Linux or
+unknown-source `node_modules` are excluded even when tracked; the unchanged index can
+therefore show working-tree deletions. This is a dependency-specific compatibility rule,
+not a general directory blacklist. Symlinks remain refused, including local dependency
+links; no external dependency dereferencing and no automatic installs. Linux-to-Linux
+does not guarantee matching CPU architecture or ABI. This is not an exact clone: local
+changes and nonignored untracked files enter, and working-tree deletions remain deleted.
+Non-Git folders include every safe entry; `.gitignore` is not interpreted there. Preview
+is advisory; no manual content review, token or acknowledgement is required. Legacy
+`curated`/`whole_tree` are aliases for `git`; old review fields are ignored. Standalone
+Git metadata is retained unchanged; external `.git` pointers, linked worktrees and
+alternate object stores are refused. Symlink, containment, authorized workspace and
+scan-limit checks remain. No automatic dependency installation; cross-OS native
+dependencies may be incompatible. Setup/install permissions remain separate. The
+original source and index are not modified; staging is filtered before SDK Init. A
+mutable source still requires stability during copy, not a secret-free certification.
 
 Wait for background completion, never poll/replay; then continue the original task.
 Cancellation or unknown receipts do not prove native work stopped or rolled back.

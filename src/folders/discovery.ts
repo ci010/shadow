@@ -1,3 +1,4 @@
+import { workspaceTree } from './lineage.ts'
 import { folderSlug, projectFolderIdentifier } from './identifier.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import type { ProjectRecord } from '../projects/contracts.ts'
@@ -14,7 +15,7 @@ export interface ProjectFolderDiscoveryOptions {
   projectId: string
   workspace: string
   getProject: () => ProjectRecord | undefined
-  registry: Pick<FolderRegistry, 'list'>
+  registry: Pick<FolderRegistry, 'list'> & Partial<Pick<FolderRegistry, 'archived'>>
   workdirLookup: WorkdirLookup
   getNodeInventory?: () => NodeInventoryResponse | undefined
 }
@@ -64,32 +65,17 @@ export class ProjectFolderDiscovery {
   }
 
   #overview(project: ProjectRecord, folders: FolderRecord[]): string {
-    const nodes = this.options.getNodeInventory?.()?.nodes ?? []
-    // Group by identity, never by an untrusted or non-unique display name.
-    const groups = new Map<string, { label: string; folders: FolderRecord[] }>()
-    for (const folder of folders) {
-      const remote = folder.kind === 'remote'
-      const nodeId = folder.kind === 'remote' ? folder.workdir.nodeId : undefined
-      const key = folder.kind === 'layerfs' ? 'layerfs' : remote ? `remote:${nodeId}` : 'local:main'
-      if (!groups.has(key)) {
-        const node = remote ? nodes.find(node => node.nodeId === nodeId) : nodes.find(node => node.role === 'main')
-        const name = node?.displayName.trim()
-        const label = folder.kind === 'layerfs' ? 'LayerFS sandboxes (not host filesystems)' : remote ? (name && name !== nodeId ? `${name} (${nodeId})` : nodeId!) : (name && name !== 'Main' ? `Main: ${name}` : 'Main')
-        groups.set(key, { label, folders: [] })
-      }
-      groups.get(key)!.folders.push(folder)
-    }
-    const lines = [`# ${markdownText(project.name)}`, '', 'Selectors: workspace_use(workspace) or session.create(folderId); the registered workspace determines its backend and resource. LayerFS is a sandbox mount, not a host or remote-node directory. Details: v:project/workspaces/<uuid>.']
+    const lines = [`# ${markdownText(project.name)}`, '', 'Selectors: workspace_use(workspace) or session.create(folderId); the registered workspace determines its backend and resource. LayerFS is a sandbox mount, not a host or remote-node directory. Details: v:project/workspaces/<uuid>. Archives (metadata only, not physical cleanup): v:project/workspaces/archive.']
     if (!folders.length) lines.push('', 'No registered workspaces.')
-    for (const group of groups.values()) {
-      lines.push('', `## ${markdownText(group.label)}`)
-      for (const folder of group.folders) {
-        const described = this.#describe(folder, folders)
-        const status = described.availability.available ? '' : ` (unavailable: ${described.availability.reason})`
-        const description = folder.description ? ` — ${markdownText(folder.description)}` : ''
-        lines.push(`- **${markdownText(described.identifier)}**: ${markdownText(folder.path)}${status}${description}`)
-      }
-    }
+    lines.push(...workspaceTree(folders, folder => {
+      const described = this.#describe(folder, folders)
+      const node = this.options.getNodeInventory?.()?.nodes.find(node => folder.kind === 'remote' ? node.nodeId === folder.workdir.nodeId : node.role === 'main')
+      const nodeLabel = node?.displayName?.trim()
+      const backend = folder.kind === 'layerfs' ? 'LayerFS' : folder.kind === 'remote' ? `Git/remote:${folder.workdir.nodeId}` : folder.lineage?.backend === 'git-worktree' ? 'Git worktree/Main' : 'local/Main'
+      const status = described.availability.available ? 'available' : `unavailable: ${described.availability.reason}`
+      const description = folder.description ? ` — ${markdownText(folder.description)}` : ''
+      return `**${markdownText(described.identifier)}** [${markdownText(backend)}${nodeLabel ? ` (${markdownText(nodeLabel)})` : ''}; ${markdownText(status)}]: ${markdownText(folder.path)}${description}`
+    }))
     lines.push('', FOLDER_DISCOVERY_NOTICE)
     return lines.join('\n')
   }
@@ -103,6 +89,10 @@ export class ProjectFolderDiscovery {
         if (!subpath || subpath === 'folders' || subpath === 'folders/') {
           return this.#overview(project, folders)
         }
+        const archived = this.options.registry.archived?.() ?? []
+        if (subpath === 'folders/archive') return JSON.stringify({ project, status: 'archived; unregistered, not necessarily deleted', workspaces: archived }, null, 2)
+        const retired = archived.find(folder => subpath === `folders/${folder.id}`)
+        if (retired && !folders.some(folder => folder.id === retired.id)) return JSON.stringify({ project, notice: FOLDER_DISCOVERY_NOTICE, [modern ? 'workspace' : 'folder']: { ...retired, status: 'archived', availability: { available: false, reason: 'registration retired; metadata only, not physical cleanup' } } }, null, 2)
         const folder = folders.find(folder => subpath === `folders/${folder.id}`)
         if (!folder) throw new Error('Unknown current-project folder discovery path.')
         return JSON.stringify({ project, notice: FOLDER_DISCOVERY_NOTICE, [modern ? 'workspace' : 'folder']: this.#describe(folder, folders) }, null, 2)

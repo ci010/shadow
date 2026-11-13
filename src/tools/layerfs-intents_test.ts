@@ -17,7 +17,7 @@ test('factory exposes 29 narrow intents, not dispatcher or file-operation duplic
   const find = (name: string) => tools.find(t => t.name === `layerfs_${name}`)!
   assert.deepEqual(find('fork').parameters.required, ['branch'])
   assert.deepEqual(find('mount').parameters.required, ['branch'])
-  assert.deepEqual(find('import').parameters.required, ['workspace', 'sourceReview', 'sourceReviewed'])
+  assert.deepEqual(find('import').parameters.required, ['workspace'])
   assert.deepEqual(Object.keys(find('doctor').parameters.properties), ['namespace'])
   assert.ok(!('allowDownloads' in find('setup').parameters.properties))
   assert.ok(!('installation' in find('bootstrap').parameters.properties))
