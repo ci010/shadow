@@ -319,8 +319,13 @@ Automations use the ordinary conversation workbench, opening the latest run by d
 
 Workflow is the first-class Project automation concept. The sidebar has one
 icon-bearing Workflows entry, visible even without saved conversation runs. It
-opens the Project Workflow page; individual automation rows are not expanded in
-the sidebar. Ordinary conversation groups remain unchanged. Automation run
+opens or reuses the Project Workflow document tab in the current workbench,
+beside Conversation, Diagnosis, Knowledge and other open documents. Do not replace
+the workspace with a standalone Workflow view or add a second tab strip. The same
+document shell works before a conversation is created; entering Workflow never
+prepares a session. Project changes retain independent workbench and inspection
+context. Workflow/run deep links enter this shared tab shell. Individual automation
+rows are not expanded in the sidebar. Ordinary conversation groups remain unchanged. Automation run
 conversations and their existing history controls open from each workflow group.
 The Project Workflow page uses one shared Vue Flow canvas for all definitions,
 not a nested inventory sidebar or one canvas per selected flow. Each flow has

@@ -8,7 +8,7 @@
     </div>
     <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
-      @project-navigation="$emit('project-navigation', $event)"
+      @project-navigation="(tab, documentKey) => $emit('project-navigation', tab, documentKey)"
       :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
       @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)" />
   </div>
@@ -32,7 +32,7 @@ const props = defineProps<{
   knowledgeRequest?: KnowledgeTabRequest
   automationRun?: boolean
 }>()
-const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; 'dashboard-visible': [visible: boolean] }>()
+const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; 'dashboard-visible': [visible: boolean] }>()
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})

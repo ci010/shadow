@@ -20,8 +20,8 @@
         <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: knowledgeLabel(entryId) })" @click="closeFile(knowledgeEntryTabKey(entryId), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="tab in tabs.projectTabs ?? []" :key="tab" class="mobile-view-row">
-        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span class="i-lucide-settings-2" aria-hidden="true" /><span>{{ t('Project settings') }}</span></button>
-        <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: t('Project settings') })" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span :class="projectTabIcon(tab)" aria-hidden="true" /><span>{{ projectTabLabel(tab) }}</span></button>
+        <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: projectTabLabel(tab) })" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="file in tabs.files" :key="fileTabKey(file)" class="mobile-view-row">
         <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? t(' (changes)') : '' }}</span></button>
@@ -102,9 +102,9 @@
             <button :id="tabId(projectTabKey(tab))" role="tab" :aria-selected="tabs.selected === projectTabKey(tab)"
               :tabindex="tabs.selected === projectTabKey(tab) ? 0 : -1" :aria-controls="panelId(projectTabKey(tab))"
               @click="selectTab(projectTabKey(tab))" @keydown="tabKey($event, projectTabKey(tab))">
-              <span class="document-icon i-lucide-settings-2" aria-hidden="true" /><span class="document-name">{{ t('Project settings') }}</span>
+              <span class="document-icon" :class="projectTabIcon(tab)" aria-hidden="true" /><span class="document-name">{{ projectTabLabel(tab) }}</span>
             </button>
-            <button class="document-close" :aria-label="t('Close {value1}', { value1: t('Project settings') })" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
+            <button class="document-close" :aria-label="t('Close {value1}', { value1: projectTabLabel(tab) })" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
           </div>
           <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
             <HoverInfo :text="`${file.path}${file.view === 'diff' ? t('\nChanges from HEAD') : ''}`" v-slot="{ triggerProps }">
@@ -155,6 +155,11 @@
           <ProjectSettings :api-base="apiBase" :host-api-base="installation.apiBase" :project-id="projectId ?? ''" />
         </div>
 
+        <div v-if="tabs.projectTabs?.includes('workflows')" v-show="tabs.selected === projectTabKey('workflows')"
+          :id="panelId(projectTabKey('workflows'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('workflows'))">
+          <WorkflowManager :api-base="apiBase" :project-id="projectId ?? ''" :active="active && tabs.selected === projectTabKey('workflows')" />
+        </div>
+
         <div v-for="file in tabs.files" v-show="tabs.selected === fileTabKey(file)" :id="panelId(fileTabKey(file))" :key="`${contextKey}:${fileTabKey(file)}`" class="file-document" role="tabpanel" :aria-labelledby="tabId(fileTabKey(file))">
           <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :folder-id="file.source ? file.source.folderId : folderId" :session-workspace="file.source?.sessionWorkspace"
             :path="file.path" :active="active && tabs.selected === fileTabKey(file)" :selection-active="keyboardActive && tabs.selected === fileTabKey(file)"
@@ -184,6 +189,7 @@ import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import OverlayTransition from '../OverlayTransition.vue'
 import KnowledgeView from '../KnowledgeView.vue'
+import WorkflowManager from '../WorkflowManager.vue'
 import ProjectSettings from '../ProjectSettings.vue'
 import MobileSheet from '../MobileSheet.vue'
 import { useMobileHeader } from '../../composables/useMobileChrome.ts'
@@ -191,7 +197,7 @@ import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, knowledgeEntryTabKey, knowledgeEntryId, projectTabKey, projectTabFromKey, openProjectTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile, type ProjectTab } from '../../file-workbench.ts'
+import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, knowledgeEntryTabKey, knowledgeEntryId, projectTabKey, projectTabFromKey, projectTabLabel, projectTabIcon, openProjectTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile, type ProjectTab } from '../../file-workbench.ts'
 import type { KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
@@ -199,7 +205,7 @@ const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; con
 const router = useRouter()
 const route = useRoute()
 const installation = useInstallationContext()
-const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
+const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
 const mobileHeader = useMobileHeader(() => props.active)
@@ -234,7 +240,7 @@ const selectedSource = computed(() => tabs.value.files.find(file => fileTabKey(f
 const selectedFilePath = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.path)
 const revealVersion = ref(0)
 const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? t('Diagnosis') : tabs.value.selected === KNOWLEDGE_TAB_KEY ? t('Knowledge')
-  : tabs.value.selected === projectTabKey('settings') ? t('Project settings')
+  : projectTabFromKey(tabs.value.selected) ? projectTabLabel(projectTabFromKey(tabs.value.selected)!)
   : knowledgeEntryId(tabs.value.selected) ? knowledgeLabel(knowledgeEntryId(tabs.value.selected)!)
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
     ?? props.primaryLabel ?? props.conversationTitle ?? t('Conversation'))
@@ -495,7 +501,7 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
 }, { immediate: true })
 watch(() => [route?.name, route?.params?.projectId, props.active, props.projectId, props.contextKey], () => {
   if (!props.projectNavigationEnabled || !props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
-  const tab = route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'settings' : undefined
+  const tab = route?.name === 'project-workflows' ? 'workflows' : route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'settings' : undefined
   if (tab) tabs.value = openProjectTab(tabs.value, tab)
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
 }, { immediate: true })
@@ -512,7 +518,7 @@ watch(() => [knowledgeSelected.value, knowledgeEntryId(tabs.value.selected)] as 
   ([active, entryId]) => emit('knowledge-navigation', active, entryId), { immediate: true })
 watch(() => [tabs.value.selected, props.active] as const, ([selected]) => {
   if (props.projectNavigationEnabled && props.active && props.projectId && route?.params?.projectId === props.projectId && !knowledgeSelected.value) {
-    emit('project-navigation', projectTabFromKey(selected))
+    emit('project-navigation', projectTabFromKey(selected), selected)
   }
 })
 onMounted(() => {
