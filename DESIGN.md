@@ -346,7 +346,12 @@ Only recorded running execution animates edges, and reduced motion disables it.
 Nodes cannot be dragged, connected, deleted or edited. Selecting a group or node
 opens the existing resizable right-inspector pattern, including ordered native
 Node details disclosures and bounded recent runs; it is not a second flow list.
-Configuration authoring belongs to chat/Agent tools. Distinguish current configuration,
+The selected workflow inspector owns the associated automation's rolling 24-hour
+statistics, reusing its profile endpoint and complete measurement limitations;
+the legacy conversation page keeps history and navigation without duplicate metrics.
+Associations use catalog workflow identity (plus the fixed host organizer identity),
+not names or the latest 30 retained runs. Missing or ambiguous associations are
+explicitly unavailable, never zero usage. Configuration authoring belongs to chat/Agent tools. Distinguish current configuration,
 run configuration and Workflow/run/session identities without routine revision-number
 labels; internal concurrency revisions remain intact. Only recorded session outputs
 receive run-session links; explicit fixed destinations also receive target-session links.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test from 'node:test'
-import { createRenderer, nextTick, type Component } from 'vue'
+import { createRenderer, h, reactive, nextTick, type Component } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 
@@ -31,11 +31,16 @@ test('selected automation renders actual metrics, unknown usage, frequency and r
     parentNode: node => node.parent ?? null, nextSibling: node => node.parent?.children[node.parent.children.indexOf(node) + 1] ?? null, patchProp: (node, key, _previous, value) => { node.props[key] = value },
   })
   const requests: string[] = []
+  let fail = false
+  let pending: ((response: Response) => void) | undefined
   t.mock.method(globalThis, 'fetch', async (input: unknown) => {
     requests.push(String(input))
+    if (fail) return Response.json({ secret: 'never display' }, { status: 503 })
+    if (String(input).includes('delayed')) return new Promise<Response>(resolve => { pending = resolve })
     return Response.json({ profile: { frequency: { description: 'Explicit full / delta organization', scope: 'current_runtime' }, runs: { total: 1, failed: 0, partial: 0, cancelled: 0, unknown: 0 }, usage: { providerCalls: 3, toolCalls: 2, inputTokens: 0, outputTokens: null, knownUsageCalls: 2, unknownUsageCalls: 1, untrackedSessions: 0 }, coverage: 'partial', window: { from: '2026-10-10T00:00:00.000Z', asOf: '2026-10-11T00:00:00.000Z' }, limitations: ['No cost estimates'] } })
   })
-  const root = node('root'), app = renderer.createApp(module.exports.default, { apiBase: 'https://example.test/projects/current/', featureId: 'system:work-organizer', active: true })
+  const props = reactive({ apiBase: 'https://example.test/projects/current/', featureId: 'system:work-organizer', active: true })
+  const root = node('root'), app = renderer.createApp({ render: () => h(module.exports.default, props) })
   app.mount(root); t.after(() => app.unmount())
   const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
   await settle()
@@ -46,6 +51,14 @@ test('selected automation renders actual metrics, unknown usage, frequency and r
   ;(find(root)?.props.onClick as () => void)(); await settle()
   assert.equal(requests.length, 2)
   assert.ok(requests.every(url => url === 'https://example.test/projects/current/api/automations/system%3Awork-organizer/profile'))
+  fail = true; (find(root)?.props.onClick as () => void)(); await settle()
+  assert.match(text(root), /503/); assert.doesNotMatch(text(root), /never display/)
+  fail = false; (find(root)?.props.onClick as () => void)(); await settle()
+  assert.doesNotMatch(text(root), /503/)
+  props.featureId = 'delayed'; await settle(); assert.doesNotMatch(text(root), /Recorded provider calls 3/)
+  props.featureId = 'next'; await settle(); assert.match(text(root), /Recorded provider calls 3/)
+  pending!(Response.json({ profile: { usage: { providerCalls: 999 }, window: {} } })); await settle()
+  assert.doesNotMatch(text(root), /999/); assert.match(text(root), /Recorded provider calls 3/)
 })
 
 // Keep the panel height bounded without creating a second scroll target inside it.
@@ -61,11 +74,17 @@ test('automation statistics uses one scroll container for metrics and expanded l
 })
 
 // A standalone statistics header has nothing above it to separate.
-test('automation statistics remain in a read-only history projection without model settings', () => {
+test('history projection keeps navigation but statistics live only in the workflow inspector', () => {
   const profile = parse(readFileSync(new URL('./components/AutomationProfile.vue', import.meta.url), 'utf8')).descriptor
   const settings = parse(readFileSync(new URL('./components/AutomationConversationProjection.vue', import.meta.url), 'utf8')).descriptor
   assert.doesNotMatch(profile.styles.map(style => style.content).join('\n'), /border-top\s*:/)
   const css = settings.styles.map(style => style.content).join('\n')
   assert.match(css, /border-top:\s*1px solid var\(--c-border-soft\)/)
-  assert.doesNotMatch(settings.template!.content, /<form|<input|ModelSelector/)
+  assert.doesNotMatch(settings.template!.content, /<form|<input|ModelSelector|AutomationProfile/)
+  assert.match(settings.template!.content, /Open Workflow/)
+  const manager = parse(readFileSync(new URL('./components/WorkflowManager.vue', import.meta.url), 'utf8')).descriptor
+  assert.match(manager.template!.content, /<WorkflowAutomationProfile/)
+  const wrapper = parse(readFileSync(new URL('./components/WorkflowAutomationProfile.vue', import.meta.url), 'utf8')).descriptor
+  assert.match(wrapper.styles.map(style => style.content).join('\n'), /max-height: none; overflow: visible/)
+  assert.match(wrapper.template!.content, /<AutomationProfile/)
 })

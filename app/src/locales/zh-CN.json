@@ -3562,6 +3562,7 @@
   "Load statistics": "加载统计",
   "Load on demand. No background polling or model calls.": "按需加载，不进行后台轮询或模型调用。",
   "As of {date}": "截至 {date}",
+  "No uniquely linked automation statistics are available for this workflow.": "此工作流没有唯一关联的自动化统计数据。",
   "Rolling 24h": "最近 24 小时",
   "Conversation total": "对话累计",
   "Own conversation": "仅此对话",

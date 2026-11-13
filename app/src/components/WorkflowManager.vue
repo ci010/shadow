@@ -27,6 +27,7 @@
         <p class="workflow-explanation">{{ t('A workflow run is not a model session. Deterministic actions can finish without starting a conversation.') }}</p>
         <p v-if="notice" class="workflow-message" role="status">{{ notice }}</p>
         <p v-if="operationError" class="workflow-message failure" role="alert">{{ operationError }}</p>
+        <WorkflowAutomationProfile :key="`${apiBase}:${definition.id}`" :api-base="apiBase" :workflow-id="definition.id" :active="enabled" />
         <div class="workflow-map-heading">
           <h3>{{ selectedRun ? t('This run configuration') : t('Current configuration') }}</h3>
           <button v-if="selectedRun" class="btn btn-sm" @click="selectRun()">{{ t('Current configuration') }}</button>
@@ -87,6 +88,7 @@
 <script setup lang="ts">
 import { computed, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
 import WorkflowGraph from './WorkflowGraph.vue'
+import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { t, formatDateTime } from '../i18n.ts'
