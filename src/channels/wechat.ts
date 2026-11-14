@@ -576,15 +576,18 @@ export class WeChatChannel extends AbstractChannel {
       }`,
     )
 
-    // Skip bot's own replies
-    if (msg.message_type === WeixinMessageType.BOT) return
-
-    const chatId = msg.from_user_id?.trim()
-    if (!chatId) return
+    const ownReply = msg.message_type === WeixinMessageType.BOT
+    const senderId = msg.from_user_id?.trim()
+    const chatId = ownReply ? msg.to_user_id?.trim() : senderId
+    if (!chatId || !senderId || msg.message_id === undefined) return
 
     const dedupKey = `${chatId}:${msg.message_id}`
-    if (!this.repository.tryMarkMessageSeen(dedupKey)) return
 
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: String(msg.message_id ?? ''),
+      platformMessageId: String(msg.message_id ?? ''), content: bodyFromMessageItems(msg.item_list, null) || '[media message]', isGroup: false })
+    if (ownReply) return // Own platform echoes are records only, never BOT input.
+    // Linked-user and owner admission constrain processing, not common receipt.
+    if (arrival && !arrival.eligible) return
     // Only accept messages from the linked user (if configured)
     if (linkedUserId && chatId !== linkedUserId) {
       console.info(
@@ -594,6 +597,7 @@ export class WeChatChannel extends AbstractChannel {
     }
 
     if (!this.isAllowed(chatId)) return
+    if (!this.repository.tryMarkMessageSeen(dedupKey)) return
 
     let mediaResult: InboundMediaResult | null = null
     const mainMedia = findMainMediaItem(msg.item_list)
@@ -697,6 +701,7 @@ export class WeChatChannel extends AbstractChannel {
       item_list: [item],
       context_token: contextToken ?? undefined,
     }
+    await this.assertDelivery()
     await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg }, { ...diagnostic })
   }
 
@@ -719,6 +724,7 @@ export class WeChatChannel extends AbstractChannel {
       item_list: [item],
       context_token: contextToken ?? undefined,
     }
+    await this.assertDelivery()
     await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg }, { ...diagnostic })
   }
 }

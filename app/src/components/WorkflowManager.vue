@@ -20,7 +20,17 @@
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
         <div class="inspector-toolbar"><span>{{ t('BOT topology') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
         <header class="workflow-title"><h2>{{ selectedBot.definition.name }}</h2></header>
-        <p class="workflow-explanation">{{ t('Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.') }}</p>
+        <section v-if="selectedBot.sinkProjection" class="receiver-directory">
+          <p>{{ t('Records messages without model reactions') }}</p>
+          <p v-if="!selectedBot.sinkProjection.receivers.length">{{ t('No received conversations yet') }}</p>
+          <ul><li v-for="receiver in selectedBot.sinkProjection.receivers" :key="receiver.id">
+            <button class="btn btn-sm" @click="inspectedNode = `receiver:${receiver.id}`">{{ receiver.name ?? receiver.address.conversationId }}</button>
+            <RouterLink v-if="sinkNavigationLocation(receiver.navigation)" :to="sinkNavigationLocation(receiver.navigation)!">{{ sinkNavigationLabel(receiver.navigation) }}</RouterLink>
+            <span v-else>{{ t('Channel metadata unavailable. Waiting for received content.') }}</span>
+          </li></ul>
+          <p>{{ t('Agent resource') }} <code>{{ selectedBot.sinkProjection.sinkPath }}</code> · <code>{{ selectedBot.sinkProjection.guidePath }}</code></p>
+        </section>
+        <p v-else class="workflow-explanation">{{ t('Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.') }}</p>
         <details v-for="node in selectedBot.graph" :key="node.id" class="workflow-node" :open="!inspectedNode || inspectedNode === node.id">
           <summary>{{ node.label }} · {{ node.detail }}</summary><pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
           <RouterLink v-if="node.targetSessionId" :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Open conversation') }}</RouterLink>
@@ -99,8 +109,9 @@
 
 <script setup lang="ts">
 import { computed, inject, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
-import { WorkflowInputReferencesKey, workflowInputReference } from '../workflow-input-references.ts'
+import { WorkflowInputReferencesKey, workflowInputReference, connectionSinkInputReference } from '../workflow-input-references.ts'
 import WorkflowGraph from './WorkflowGraph.vue'
+import { sinkNavigationLabel, sinkNavigationLocation } from '../connection-sinks.ts'
 import { botCanvas } from '../bot-workflows.ts'
 import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
 import SidebarResizer from './SidebarResizer.vue'
@@ -141,8 +152,13 @@ const inspectorId = useId(), inspectorWidth = ref(380)
 const botFlows = computed(() => botCanvas(snapshot.value?.bots))
 const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot))
 const inspectorOpen = computed(() => !!selectedBot.value || typeof documentQuery.value.workflow === 'string' && !!definition.value)
-const referenceSelection = computed(() => props.active && activated.value && inspectorOpen.value && !selectedBot.value && displayed.value
-  ? workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value) : undefined)
+const referenceSelection = computed(() => {
+  if (!props.active || !activated.value || !inspectorOpen.value) return
+  const sink = selectedBot.value?.sinkProjection
+  if (sink) return connectionSinkInputReference(props.projectId, sink.connectionId, selectedBot.value!.definition.name ?? sink.connectionId,
+    inspectedNode.value?.startsWith('receiver:') ? inspectedNode.value.slice('receiver:'.length) : undefined)
+  return !selectedBot.value && displayed.value ? workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value) : undefined
+})
 watch(referenceSelection, item => referenceHub?.select?.(item, () => { void closeInspector() }, props.projectId), { immediate: true, flush: 'sync' })
 onUnmounted(() => referenceHub?.select?.(undefined, undefined, props.projectId))
 async function closeInspector() {

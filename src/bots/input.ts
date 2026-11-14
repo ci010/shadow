@@ -20,6 +20,8 @@ export function botInputListeners(bot: BotDefinition): InputListener[] {
 
 /** Shared host admission for both the lazy strategy and its eventual normalized output. */
 function assertBotChannelInput(bot: BotDefinition, message: InboundMessage) {
+  const senders = bot.connectionPolicies?.[message.channelAddress?.botInstanceId ?? '']?.allowFrom
+  if (senders && !senders.includes(message.senderId)) throw new Error('Sender is outside BOT connection admission policy')
   if (!botInputListeners(bot).some(sub => matchesInput(sub, channelInputSource(message))))
     throw new Error('BOT is not subscribed to this input')
   const binding = subscribedBindings(bot).find(binding => binding.platform !== 'discord' &&
@@ -65,6 +67,7 @@ export async function handleBotInput(id: string, input: InputEnvelope<ChannelInp
 }): Promise<ChannelInputResult> {
   const { bots, directory, receive } = options
   if (input.projectId !== bots.projectId || directory.deployments.projectId !== bots.projectId) throw new Error('BOT input Project mismatch')
+  directory.assertExecution(id)
   const bot = directory.definition(id)
   if (!bot || bot.mode !== 'service') throw new Error('Service BOT no longer deployed')
   if (!botInputListeners(bot).some(listener => matchesInput(listener, input))) throw new Error('BOT is not subscribed to this input')

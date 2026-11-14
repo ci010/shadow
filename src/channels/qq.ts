@@ -907,13 +907,13 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.member_openid
     if (!msgId || !groupId || !senderId) return
-    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
     const chatName = typeof data.group_name === 'string' ? data.group_name : undefined
     const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
     const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: true, chatName,
       ...(typeof author?.username === 'string' ? { senderName: author.username } : {}), attachmentReferences: passiveAttachmentReferences(passive.attachments) })
     if (arrival && !arrival.eligible) return
+    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     // Discovery without business trigger evaluation; unassigned sources stay closed.
     if (!this.admitGroup(chatId, chatName)) {
       this.admitGroup(chatId, chatName, { id: msgId, sender: senderId, text: typeof data.content === 'string' ? data.content : '[attachment]' })
@@ -952,11 +952,11 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.user_openid
     if (!msgId || !senderId) return
-    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `c2c:${senderId}`
     const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
     const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: false, senderName: author?.username, attachmentReferences: passiveAttachmentReferences(passive.attachments) })
     if (arrival && !arrival.eligible) return
+    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     if (!this.isNewIncoming(chatId, msgId, data)) return
 
     await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: false }, async () => {
@@ -981,13 +981,13 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.id
     if (!msgId || !senderId) return
-    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = isDirect
       ? `dms:${data.guild_id as string}`
       : `channel:${data.channel_id as string}`
     const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
     const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: !isDirect, senderName: author?.username, attachmentReferences: passiveAttachmentReferences(passive.attachments) })
     if (arrival && !arrival.eligible) return
+    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     if (!isDirect && !this.admitGroup(chatId)) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
     this._lastMsgId.set(chatId, msgId)

@@ -26,6 +26,16 @@ export class WorkflowRuntime {
   private schedule?: { execute(job: unknown, signal: AbortSignal): Promise<void | { sessionId: string }>; current(job: unknown): boolean }
   private github?: { current(node: GitHubNotifyNode): boolean; execute(node: GitHubNotifyNode, observation: SignalObservation, signal: AbortSignal): Promise<void> }
   bindGitHub(adapter: NonNullable<WorkflowRuntime['github']>) { this.github = adapter }
+  private botEpoch = new Map<string, number>()
+  private botAvailable?: (id: string) => boolean
+  bindBots(available: (id: string) => boolean) { this.botAvailable = available }
+  /** Reference only: BOT.md owns addresses/filters. No input is enqueued into
+   * recoverable Workflow runs; receipt/arrival guards stay in the channel path. */
+  botExecution(id: string): { enabled: boolean; generation: string } {
+    const refs = this.state.definitions.filter(d => d.source.kind === 'bot' && d.source.id === id)
+    return { enabled: !this.stopped && refs.every(d => d.enabled && !!d.owner && this.host.canUse(d.owner)), generation: digest([this.botEpoch.get(id) ?? 0, refs.map(d => [d.id, d.revision, d.enabled])]) }
+  }
+
   private hosts = new Map<string, { current(): boolean; execute(observation: SignalObservation, signal: AbortSignal): Promise<void | { sessionId: string }> }>()
   private sourceStatus?: () => Array<{ kind: 'external'; id: string; enabled: boolean; error?: string; nextAt?: number }>
   private sourceAuthorizer?: (owner: string, definition: Definition) => Definition
@@ -125,7 +135,7 @@ export class WorkflowRuntime {
     ...this.sourceStatus?.() ?? [],
     ...this.state.definitions.filter(d => d.source.kind !== 'external').map(d => {
       const node = d.nodes[0]
-      const enabled = node.kind === 'github-notify' ? this.github?.current(node) === true : node.kind === 'host-action' ? this.hosts.get(node.handler)?.current() === true : node.kind === 'schedule-action' && this.schedule?.current(node.job) === true && (node.job as { enabled?: boolean })?.enabled !== false
+      const enabled = node.kind === 'bot-reference' ? this.botAvailable?.(node.botId) === true : node.kind === 'github-notify' ? this.github?.current(node) === true : node.kind === 'host-action' ? this.hosts.get(node.handler)?.current() === true : node.kind === 'schedule-action' && this.schedule?.current(node.job) === true && (node.job as { enabled?: boolean })?.enabled !== false
       return { ...d.source, enabled }
     }),
   ] } }
@@ -135,11 +145,12 @@ export class WorkflowRuntime {
   define(raw: Omit<Definition, 'revision'> & { revision?: number }): void {
     if (this.stopped) throw new Error('Workflow stopped')
     const definition = WorkflowDefinition.parse(JSON.parse(JSON.stringify(raw)))
-    if (definition.owner && definition.source.kind === 'external') this.authorize(definition.owner)
+    if (definition.owner && ['external', 'bot'].includes(definition.source.kind)) this.authorize(definition.owner)
     if (definition.source.kind === 'external' && (!definition.owner || definition.nodes.some(n => n.kind === 'schedule-action'))) throw new Error('External workflow cannot invoke a schedule action')
+    if (definition.source.kind === 'bot') throw new Error('BOT execution references require authenticated versioned authoring')
     const old = this.state.definitions.find(d => d.id === definition.id)
     if (!old && (Object.hasOwn(this.state.dedupe, definition.id) || this.hasAdmitted(definition.id))) throw new Error('Retired Workflow ID; create a new subscription ID')
-    if (old && definition.source.kind === 'external') throw new Error('External Workflow ID already exists; use versioned Workflow authoring to update it')
+    if (old && ['external', 'bot'].includes(definition.source.kind)) throw new Error('External Workflow ID already exists; use versioned Workflow authoring to update it')
     if (old && (old.source.kind !== definition.source.kind || old.source.id !== definition.source.id || old.owner !== definition.owner)) throw new Error('Workflow binding cannot change')
     if (old && canonical(old) === canonical(definition)) return
     this.update(state => {
@@ -153,12 +164,17 @@ export class WorkflowRuntime {
     this.authorize(owner)
     const input = AuthorDefinition.parse(raw)
     const old = this.state.definitions.find(d => d.id === input.id)
-    if (old ? old.owner !== owner || old.source.kind !== 'external' || old.revision !== expectedRevision : expectedRevision !== undefined) throw new Error('Workflow owner or revision conflict')
+    if (old ? old.owner !== owner || !['external', 'bot'].includes(old.source.kind) || old.revision !== expectedRevision : expectedRevision !== undefined) throw new Error('Workflow owner or revision conflict')
     if (!old && (Object.hasOwn(this.state.dedupe, input.id) || this.hasAdmitted(input.id))) throw new Error('Retired Workflow identity')
     let definition = WorkflowDefinition.parse({ ...input, owner, revision: (old?.revision ?? 0) + 1 })
-    if (!this.sourceAuthorizer) throw new Error('Source authorization unavailable')
-    definition = this.sourceAuthorizer(owner, definition)
-    if (old && (canonical(old.source) !== canonical(definition.source) || canonical(old.binding ?? this.sourceAuthorizer(owner, old).binding) !== canonical(definition.binding))) {
+    if (definition.source.kind === 'bot') {
+      if (this.botAvailable?.(definition.source.id) !== true) throw new Error('Referenced BOT is unavailable')
+      if (this.state.definitions.some(d => d.id !== definition.id && d.source.kind === 'bot' && d.source.id === definition.source.id)) throw new Error('BOT already has a Workflow execution reference')
+    } else {
+      if (!this.sourceAuthorizer) throw new Error('Source authorization unavailable')
+      definition = this.sourceAuthorizer(owner, definition)
+    }
+    if (old && (canonical(old.source) !== canonical(definition.source) || canonical(old.binding ?? (old.source.kind === 'bot' ? null : this.sourceAuthorizer!(owner, old).binding)) !== canonical(definition.binding ?? null))) {
       throw new Error('Source/demand identity is immutable; create a new Workflow with an explicit first-batch policy')
     }
     if (old && canonical(old.gate ?? null) !== canonical(definition.gate ?? null)) throw new Error('First-batch policy cannot be changed after creation')
@@ -170,7 +186,7 @@ export class WorkflowRuntime {
     this.authorize(owner)
     const definition = this.state.definitions.find(d => d.id === id)
     if (!Number.isInteger(expectedRevision)) throw new Error('expectedRevision required')
-    if (definition?.owner !== owner || definition.source.kind !== 'external' || definition.revision !== expectedRevision) throw new Error('External Workflow ownership or revision conflict')
+    if (definition?.owner !== owner || !['external', 'bot'].includes(definition.source.kind) || definition.revision !== expectedRevision) throw new Error('External Workflow ownership or revision conflict')
     this.remove(id)
   }
   /** Atomic multi-subscriber admission. A failed commit must never advance a source checkpoint. */
@@ -185,6 +201,7 @@ export class WorkflowRuntime {
       for (const batch of batches) {
         const definition = state.definitions.find(d => d.id === batch.workflow)
         if (!definition || canonical(definition.source) !== canonical(batch.source)) throw new Error('Workflow source binding mismatch')
+        if (definition.source.kind === 'bot') throw new Error('BOT references consume live guarded inputs only, never persisted observations')
         // Disabled external definitions still advance their revision window without creating actions.
         if (definition.source.kind === 'external' && definition.owner && !this.host.canUse(definition.owner)) throw new Error('Workflow owner unavailable')
         const observations = batch.observations.map(value => Observation.parse(value))
@@ -213,6 +230,8 @@ export class WorkflowRuntime {
   }
   /** Revocation keeps inspectable history; no accepted effect is rolled back. */
   remove(id: string): void {
+    const removed = this.state.definitions.find(d => d.id === id)
+    if (removed?.source.kind === 'bot') this.botEpoch.set(removed.source.id, (this.botEpoch.get(removed.source.id) ?? 0) + 1)
     this.update(state => {
       // Retire even an identity removed before its first collection/admission.
       state.dedupe[id] ??= { baseline: true, seen: [] }

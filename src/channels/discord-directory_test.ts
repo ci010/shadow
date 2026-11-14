@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import { DiscordChannel } from './discord.ts'
-import { discordDirectory, discordMembers, inspectDiscordConversation, type DiscordApi } from './discord-directory.ts'
+import { discordDirectory, discordMembers, inspectDiscordConversation, inspectDiscordReceipt, type DiscordApi } from './discord-directory.ts'
 import { DiscordPermission as P } from './discord-permissions.ts'
 import type { InboundMessage } from '../bus/events.ts'
 import type { DiscordLocation } from './integration-contract.ts'
@@ -385,4 +385,69 @@ test('passive Discord collection verifies public-thread ancestry and live visibi
   f.values.set('/guilds/100/members/500', { user: { id: '500', username: 'other-bot', bot: true }, roles: ['700'] })
   await assert.rejects(inspectDiscordConversation(f.api, '201', '500', signal()), /membership/)
   assert.equal((await inspectDiscordConversation(f.api, '201', '500', signal(), true)).canView, true, 'Read-only capture does not promote a Bot account to ordinary Agent participant authority')
+})
+
+test('common receipt proves only Bot visibility, not actor, participant, history or send authority', async () => {
+  const f = fixture()
+  f.values.delete('/guilds/100/members/500')
+  const receipt = await inspectDiscordReceipt(f.api, '201', signal())
+  assert.equal(receipt.canView, true)
+  assert.equal(receipt.location.parentId, null, 'Category ancestry is not a thread identity')
+  for (const field of ['actor', 'canSend', 'canReadHistory', 'admissionId']) assert.equal(field in receipt, false)
+  assert.equal(f.calls.some(path => path.endsWith('/members/500')), false, 'Partial edits/deletes need no fabricated sender')
+  await assert.rejects(inspectDiscordConversation(f.api, '201', '500', signal()), /Unavailable synthetic API/)
+  f.values.set('/guilds/100/roles', [{ id: '100', name: '@everyone', permissions: '0' }, { id: '700', name: 'Support', permissions: '0' }])
+  assert.equal((await inspectDiscordReceipt(f.api, '201', signal())).canView, false, 'Live platform revocation still applies')
+})
+
+test('common receipt preserves public-thread ancestry and rejects private/mismatched locations', async () => {
+  const f = fixture()
+  const receipt = await inspectDiscordReceipt(f.api, '301', signal())
+  assert.equal(receipt.location.parentId, '201')
+  f.values.set('/channels/301', channel('301', { type: 12, parent_id: '201' }))
+  await assert.rejects(inspectDiscordReceipt(f.api, '301', signal()), /private threads/)
+  f.values.set('/channels/301', channel('301', { type: 11, parent_id: '201' }))
+  f.values.set('/channels/201', channel('201', { guild_id: '200' }))
+  await assert.rejects(inspectDiscordReceipt(f.api, '301', signal()), /ancestry/)
+})
+
+test('common DM receipt records verified recipient without turning it into execution authority', async () => {
+  const f = fixture()
+  f.values.set('/channels/401', { id: '401', type: 1, recipients: [{ id: '500', username: 'sam' }] })
+  const receipt = await inspectDiscordReceipt(f.api, '401', signal())
+  assert.equal(receipt.location.recipientId, '500')
+  assert.equal(receipt.location.guildId, null)
+  assert.equal('actor' in receipt, false)
+  f.values.set('/channels/401', { id: '401', type: 1, recipients: [] })
+  await assert.rejects(inspectDiscordReceipt(f.api, '401', signal()), /ancestry/)
+})
+
+test('Discord common receipt precedes sender admission and a durable duplicate cannot replay observation processing', async t => {
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic', allowFrom: ['999'], reactionEmoji: '' })
+  t.after(() => adapter.stop())
+  let records = 0, observed = 0, admissions = 0, deliveries = 0
+  let fresh = true
+  adapter.setPassiveCollector(async message => {
+    records++
+    assert.equal(message.senderId, '500')
+    return { fresh, eligible: false, assertCurrent: () => { throw new Error('Unbound input must not run') } }
+  })
+  adapter.setDiscordIntegration({
+    admit: async () => { admissions++; throw new Error('No participant authority') },
+    observationScopes: () => ['observation-scope'], observationRevision: () => 'revision-one',
+    observe: async () => { observed++; return [] },
+    runObservationPolicy: async (_scope, run) => { await run() },
+    discard: () => {}, confirm: async () => {}, invalidate: () => {},
+  })
+  adapter.setReceiver(async () => { deliveries++; throw new Error('No execution') })
+  const event = { id: '601', channel_id: '201', guild_id: '100', content: 'untrusted evidence', author: { id: '500', username: 'sender' } }
+  await dispatch(adapter, 'MESSAGE_CREATE', event)
+  assert.equal(records, 1, 'Connection business allowlist does not suppress common receipt')
+  assert.equal(observed, 1)
+  fresh = false
+  await dispatch(adapter, 'MESSAGE_CREATE', event)
+  assert.equal(records, 2, 'Sink owns durable duplicate detection')
+  assert.equal(observed, 1, 'Duplicate is not replayed through observation processing')
+  assert.equal(admissions, 0)
+  assert.equal(deliveries, 0)
 })

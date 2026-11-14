@@ -66,3 +66,31 @@ test('managed/fresh conversation navigation reuses the sidebar automation route 
   const host = { ...flow, id: 'internal:work-organizer', source: { kind: 'internal', id: 'organizer' } }
   assert.deepEqual(workflowConversation(host, [], [{ ...job, id: 'system:work-organizer', workflow: undefined }]), { kind: 'automation', automationId: 'system:work-organizer' })
 })
+
+
+test('BOT reference definitions parse beside ordinary flows and render identity without copied subscriptions or run navigation', async () => {
+  const { workflowCanvas, workflowColumn } = await import('./workflow-canvas.ts')
+  const bot: WorkflowDefinition = { id: 'bot-execution:support', revision: 1, enabled: true,
+    source: { kind: 'bot', id: 'support' }, nodes: [{ kind: 'bot-reference', botId: 'support' }] }
+  const snapshot = parseWorkflows({ projectId: 'fixture', definitions: [definition, bot], runs: [] }, 'fixture')
+  assert.equal(snapshot.definitions.length, 2)
+  assert.equal(workflowColumn({ definition: bot }), 'bot')
+  const graph = workflowGraph(snapshot.definitions[1]!)
+  assert.deepEqual(graph.map(node => node.config), [bot.source, bot.nodes[0]])
+  assert.equal(graph[1]!.label, 'BOT reference')
+  assert.equal(graph[1]!.detail, 'support')
+  assert.match(graph[1]!.description!, /does not add listeners/)
+  assert(graph.every(node => node.status === 'ready' && !node.targetSessionId))
+  const canvas = workflowCanvas(snapshot.definitions.map(definition => ({ definition })))
+  assert.equal(canvas.nodes.find(node => node.type === 'group' && node.data.definition.id === bot.id)!.data.column, 'bot')
+  assert.equal(canvas.edges.length, 3) // Ordinary source/gate/action plus BOT source/reference.
+  assert.equal(workflowConversation(bot, [{ ...run, workflow: bot.id, definition: bot, output: { sessionId: 'not-a-bot-run-target' } }]), undefined)
+  for (const invalid of [
+    { ...bot, binding: { demand: {} } }, { ...bot, gate: { kind: 'revision-dedupe', first: 'emit' } },
+    { ...bot, source: { ...bot.source, address: 'copied-receiver' } },
+    { ...bot, nodes: [{ kind: 'bot-reference', botId: 'other' }] },
+    { ...bot, nodes: [{ kind: 'bot-reference', botId: 'support', bindings: [] }] },
+    { ...bot, nodes: [...bot.nodes, { kind: 'record' }] },
+    { ...bot, source: { kind: 'external', id: 'support' } },
+  ]) assert.throws(() => parseWorkflows({ projectId: 'fixture', definitions: [invalid], runs: [] }, 'fixture'))
+})

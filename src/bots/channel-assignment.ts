@@ -5,6 +5,7 @@ import { parseChannelSource, type ChannelSource } from '../channels/passive-cont
 /** Target identity comes exclusively from a host-recorded inbox, never the model's policy JSON. */
 export function assignChannelSource(files: Record<string, string>, source: ChannelSource, policy: unknown, scope: 'conversation' | 'parent' = 'conversation') {
   parseChannelSource(source)
+  if (source.kind === 'direct' || source.kind === 'thread' && scope !== 'parent') throw new Error('Assign BOTs to top-level groups/channels only; threads remain history under their parent')
   const { bot, configPath } = parseBotPackage(files)
   if (bot.mode !== 'service') throw new Error('Personal BOTs cannot receive service channel assignments')
   if (!policy || typeof policy !== 'object' || Array.isArray(policy)) throw new Error('Explicit binding policy object required')
@@ -19,10 +20,10 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
     : binding.conversationId === source.conversationId))
   let target: Record<string, unknown>
   if (source.platform === 'discord') {
-    if (!source.botUserId || source.kind === 'direct' && !source.recipientId || source.kind !== 'direct' && !source.guildId) throw new Error('Verified Discord source identity required')
+    if (!source.botUserId || !source.guildId) throw new Error('Verified Discord source identity required')
     if (!Object.hasOwn(permissions, 'participants')) throw new Error('Choose Discord participants explicitly')
     target = { platform: 'discord', botInstanceId: source.botInstanceId, botUserId: source.botUserId, id: existing?.platform === 'discord' ? existing.id : randomUUID(),
-      target: source.kind === 'direct' ? { kind: 'dm', userId: source.recipientId } : { kind: 'channel', guildId: source.guildId, channelId: conversationId } }
+      target: { kind: 'channel', guildId: source.guildId, channelId: conversationId } }
   } else {
     if (!Array.isArray(permissions.allowFrom)) throw new Error('Choose allowed senders explicitly; [] permits nobody')
     target = { platform: source.platform, botInstanceId: source.botInstanceId, conversationId: source.conversationId }

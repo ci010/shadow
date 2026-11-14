@@ -120,7 +120,7 @@ class TokenManager {
   private _cache: TokenInfo | null = null
   private _inflight: Promise<string> | null = null
 
-  constructor(appId: string, appSecret: string, private readonly signal?: AbortSignal) {
+  constructor(appId: string, appSecret: string, private readonly signal?: AbortSignal, readonly beforeRequest?: () => Promise<void>) {
     this.appId = appId
     this.appSecret = appSecret
   }
@@ -275,6 +275,7 @@ async function apiRequest<T = unknown>(
     reqBody = JSON.stringify(opts.body)
   }
 
+  await tokenManager.beforeRequest?.()
   opts.beforeRequest?.()
   opts.signal?.throwIfAborted()
   const resp = await fetch(url, { method, headers, body: reqBody, signal: opts.signal })
@@ -322,6 +323,7 @@ async function apiRequestMultipart<T = unknown>(
   const token = await tokenManager.getTenantAccessToken()
   const url = `${FEISHU_BASE}${path}`
   // Do NOT set Content-Type manually — fetch sets it with the correct boundary for FormData
+  await tokenManager.beforeRequest?.()
   const resp = await fetch(url, {
     method,
     headers: { Authorization: `Bearer ${token}` },
@@ -382,9 +384,9 @@ class Client {
   private _tokens: TokenManager
 
   constructor(
-    opts: { appId: string; appSecret: string; disableTokenCache?: boolean; signal?: AbortSignal },
+    opts: { appId: string; appSecret: string; disableTokenCache?: boolean; signal?: AbortSignal; beforeRequest?: () => Promise<void> },
   ) {
-    this._tokens = new TokenManager(opts.appId, opts.appSecret, opts.signal)
+    this._tokens = new TokenManager(opts.appId, opts.appSecret, opts.signal, opts.beforeRequest)
   }
 
   /** `client.im.message.create(…)` */

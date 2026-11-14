@@ -152,3 +152,38 @@ export async function inspectDiscordConversation(api: DiscordApi, chatId: string
   signal.throwIfAborted()
   return result
 }
+
+/** Transport-only receipt proof. Deliberately has no actor, participant, send or
+ * history grant. Edits/deletes may arrive without a sender; BOT admission must
+ * still use inspectDiscordConversation and its live member/participant checks.
+ */
+export async function inspectDiscordReceipt(api: DiscordApi, chatId: string, signal: AbortSignal): Promise<{
+  botUserId: string; location: DiscordLocation; canView: boolean
+}> {
+  id.parse(chatId)
+  const [botUserId, rawChannel] = await Promise.all([discordBotIdentity(api, signal), api(`/channels/${chatId}`, { signal })])
+  const channel = channelSchema.parse(rawChannel)
+  if (channel.id !== chatId) throw new Error('Discord returned another conversation.')
+  const location: DiscordLocation = { id: chatId, name: channel.name ?? null, type: channel.type, guildId: channel.guild_id ?? null,
+    guildName: null, parentId: null, parentName: null, recipientId: null }
+  if (channel.type === 1 && !channel.guild_id) {
+    if (channel.recipients?.length !== 1 || channel.recipients[0]!.id === botUserId) throw new Error('Discord receipt DM ancestry is invalid.')
+    const recipient = channel.recipients[0]!
+    location.recipientId = recipient.id
+    location.name = recipient.global_name ?? recipient.username
+    signal.throwIfAborted()
+    return { botUserId, location, canView: true }
+  }
+  if (!channel.guild_id || ![0, 5, 10, 11].includes(channel.type)) throw new Error('Unsupported Discord receipt location; private threads remain closed.')
+  const [{ guild, roles, bot }, parent] = await Promise.all([
+    guildFacts(api, channel.guild_id, botUserId, signal),
+    thread(channel.type) ? api(`/channels/${id.parse(channel.parent_id)}`, { signal }).then(value => channelSchema.parse(value)) : Promise.resolve(channel),
+  ])
+  if (parent.guild_id !== channel.guild_id || !parent.permission_overwrites || thread(channel.type) &&
+    (parent.id !== channel.parent_id || ![0, 5, 15].includes(parent.type))) throw new Error('Discord receipt ancestry mismatch.')
+  const bits = discordPermissions(guild.id, botUserId, guild.owner_id, roles, bot, parent.permission_overwrites)
+  location.guildName = guild.name
+  if (thread(channel.type)) { location.parentId = parent.id; location.parentName = parent.name ?? null }
+  signal.throwIfAborted()
+  return { botUserId, location, canView: has(bits, Permission.view) }
+}

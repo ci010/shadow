@@ -401,6 +401,7 @@ export class FeishuChannel extends AbstractChannel {
       appSecret: this.appSecret,
       disableTokenCache: false,
       signal: this.controller.signal,
+      beforeRequest: () => this.assertDelivery(),
     })
 
     this._wsClient = this.transportFactory({
@@ -1023,7 +1024,7 @@ export class FeishuChannel extends AbstractChannel {
             | string
             | undefined
 
-      if (!messageId || !senderId || !this.isAllowed(senderId)) return
+      if (!messageId || !senderId) return
 
       // Dedup — Feishu may deliver the same event multiple times
 
@@ -1060,6 +1061,7 @@ export class FeishuChannel extends AbstractChannel {
       const arrival = await this.collectPassive({ senderId, chatId: replyTo, messageId, platformMessageId: messageId, content: passiveBody.text, isGroup,
         ...(managedTopic ? { passiveParentId: outerChatId } : {}), attachmentReferences: passiveBody.attachments })
       if (arrival && !arrival.eligible) return
+      if (!this.isAllowed(senderId)) return
       if (!this._seenIds.add(messageId)) return
       if (isGroup && !this.admitGroup(replyTo)) {
         this.admitGroup(replyTo, undefined, { id: messageId, sender: senderId, text: observedText })

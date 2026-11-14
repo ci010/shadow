@@ -1,8 +1,11 @@
+import { parseConnectionSinkProjection } from '../shared/connection-sink.ts'
+import type { ConnectionSinkProjection } from '../channels/sink-contract.ts'
 import { parseInputReferences } from '../shared/input-references.ts'
 import type { WorkflowRuntime } from './runtime.ts'
 
 /** Host-only resolver. Snapshot once at admission; queued input retains this exact text. */
-export function workflowReferenceResolver(projectId: string, runtime: Pick<WorkflowRuntime, 'inspect'>) {
+export function workflowReferenceResolver(projectId: string, runtime: Pick<WorkflowRuntime, 'inspect'>,
+  sinkLookup?: (connectionId: string) => ConnectionSinkProjection) {
   return (value: unknown): string => {
     const references = parseInputReferences(value)
     if (!references.length) return ''
@@ -10,6 +13,15 @@ export function workflowReferenceResolver(projectId: string, runtime: Pick<Workf
     if (state.projectId !== projectId) throw new TypeError('reference_project_mismatch')
     const resolved = references.map(ref => {
       if (ref.projectId !== projectId) throw new TypeError('reference_project_mismatch')
+      if (ref.kind === 'connection-sink') {
+        if (!sinkLookup) throw new TypeError('reference_sink_unavailable')
+        const sink = parseConnectionSinkProjection(sinkLookup(ref.connectionId), projectId)
+        if (sink.connectionId !== ref.connectionId) throw new TypeError('reference_sink_identity_mismatch')
+        const receiver = ref.receiverId === undefined ? undefined : sink.receivers.find(item => item.id === ref.receiverId)
+        if (ref.receiverId !== undefined && !receiver) throw new TypeError('reference_receiver_unavailable')
+        return { ...ref, path: receiver?.path ?? sink.sinkPath, connectionPath: sink.connectionPath, guidePath: sink.guidePath,
+          sink: sink.sink, ...(receiver ? { receiver } : { receivers: sink.receivers }), bots: sink.bots }
+      }
       const run = ref.runId === undefined ? undefined : state.runs.find(r => r.id === ref.runId)
       if (ref.runId !== undefined && (!run || run.workflow !== ref.workflowId)) throw new TypeError('reference_run_unavailable')
       const definition = run ? run.definition : state.definitions.find(d => d.id === ref.workflowId)

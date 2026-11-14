@@ -27,12 +27,18 @@ const uuid = (id: string) => { const h = digest(['bot', id]); return `${h.slice(
 export class DirectoryBots {
   constructor(readonly deployments: BotDeployments, private broker?: CapabilityBroker) {}
   setBroker(broker: CapabilityBroker): void { this.broker = broker }
+  private execution = (_id: string) => ({ enabled: true, generation: '' })
+  setExecutionPolicy(policy: (id: string) => { enabled: boolean; generation: string }): void { this.execution = policy }
+  executionState(id: string) { return this.execution(id) }
+  assertExecution(id: string): void { if (!this.execution(id).enabled) throw new Error('BOT execution is paused by its Workflow reference') }
+
   private hostOperation?: (scope: BotHostScope, operation: BotHostCapability, input: Record<string, unknown>, context: ExecutionContext) => Promise<unknown>
   setHostOperations(call: NonNullable<DirectoryBots['hostOperation']>): void { this.hostOperation = call }
   /** Persisted wake identities grant nothing: every dispatch/callback revalidates the live package and binding. */
   assertHostScope(scope: BotHostScope, operation: BotHostCapability): void {
     BotHostScopeSchema.parse(scope)
     if (scope.projectId !== this.deployments.projectId || scope.address.projectId !== scope.projectId) throw new Error('BOT Project mismatch.')
+    this.assertExecution(scope.botId)
     const current = this.definitions().find(({ bot }) => bot.id === scope.botId)
     if (!current || current.deployment.revision !== scope.revision || !current.bot.hostCapabilities?.includes(operation)) throw new Error('BOT host capability is unavailable or deployment changed.')
     const binding = current.bot.bindings.find(binding => (binding.platform === 'discord' ? binding.id : conversationBindingKey(binding)) === scope.bindingKey)
@@ -58,7 +64,7 @@ export class DirectoryBots {
     try {
       const { bot, format } = parseBotPackage(files)
       if (bot.id !== id) return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'identity-mismatch' as const }
-      return { id, deployment, bot, format, state: 'valid' as const, loaded: true, listeners: botInputListeners(bot) }
+      return { id, deployment, bot, format, state: 'valid' as const, loaded: true, listeners: this.execution(bot.id).enabled ? botInputListeners(bot) : [] }
     } catch {
       return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'invalid-package' as const }
     }
@@ -94,7 +100,7 @@ export class DirectoryBots {
     }
     return candidates
   }
-  inputListeners() { return this.definitions().flatMap(({bot}) => botInputListeners(bot)) }
+  inputListeners() { return this.definitions().filter(({bot}) => this.execution(bot.id).enabled).flatMap(({bot}) => botInputListeners(bot)) }
   definition(id: string) { return this.definitions().find(({bot}) => bot.id === id)?.bot }
   personal(connection: string) {
     const matches = this.definitions().filter(({bot}) => bot.mode === 'personal' && bot.connection === connection)
@@ -102,7 +108,15 @@ export class DirectoryBots {
     // Invalid source cannot safely identify its connection. Never interpret a
     // missing parsed definition as permission to fall back to an ordinary role.
     if (!matches.length && this.invalidDeployments.size) throw new Error('Quarantined BOT deployment prevents personal role fallback; correct and redeploy the package.')
+    if (matches[0]) this.assertExecution(matches[0].bot.id)
     return matches[0]?.bot
+  }
+  personalGeneration(connection: string): string | undefined {
+    const bot = this.personal(connection) // validates ownership, package and live Workflow gate
+    if (!bot) return undefined
+    const deployment = this.deployments.read(bot.id)?.deployment
+    if (!deployment) throw new Error('Personal BOT deployment disappeared.')
+    return `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`
   }
   isManaged(address: Pick<ChannelAddress, 'botInstanceId' | 'platform' | 'conversationId'>): boolean {
     const managed = this.definitions().some(({bot}) => bot.bindings.some(binding => binding.platform === address.platform && binding.botInstanceId === address.botInstanceId))
@@ -114,9 +128,11 @@ export class DirectoryBots {
     const matches = this.definitions().flatMap(({ bot, deployment }) => bot.bindings.flatMap(binding => {
       if (binding.platform === 'discord' || conversationBindingKey(binding) !== conversationBindingKey(address)) return []
       // Receive configuration belongs to the BOT handler, not Session tool grants.
-      const { tools, trigger: _trigger, ...data } = binding
+      const { tools, trigger: _trigger, ...rawData } = binding
+      const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
+      const data = { ...rawData, ...(upper ? { allowFrom: binding.allowFrom ? binding.allowFrom.filter(id => upper.includes(id)) : upper } : {}) }
       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ generation: deployment.generation, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding), skills: [], agent: agentName(bot.id) }, agent,
+      return [{ generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
@@ -136,7 +152,8 @@ export class DirectoryBots {
         version:deployment.revision,publishedAt:new Date(0).toISOString() })
       for (const binding of selected) {
         const {platform: _platform,...data} = binding
-        bindings.push({...data,enabled:data.enabled && bindingSubscribed(bot,binding),agentId:id,epochRevision:parseInt((deployment.generation ? digest(deployment.generation) : deployment.revision).slice(0,12),16)})
+        const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
+        bindings.push({...data,...(upper ? { allowFrom: data.allowFrom ? data.allowFrom.filter(id => upper.includes(id)) : upper } : {}),enabled:data.enabled && bindingSubscribed(bot,binding) && this.execution(bot.id).enabled,agentId:id,epochRevision:parseInt((deployment.generation ? digest([deployment.generation, this.execution(bot.id).generation]) : digest([deployment.revision, this.execution(bot.id).generation])).slice(0,12),16)})
       }
     }
     if (new Set(bindings.map(binding => binding.id)).size !== bindings.length || new Set(bindings.map(binding => JSON.stringify([binding.botInstanceId,binding.target]))).size !== bindings.length) throw new Error('Discord conversation is owned by multiple BOT deployments.')

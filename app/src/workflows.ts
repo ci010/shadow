@@ -11,7 +11,7 @@ export type WorkflowStatus = 'queued' | 'running' | 'retry' | 'blocked' | 'compl
 export interface WorkflowNode { kind: string; [key: string]: unknown }
 export interface WorkflowDefinition {
   id: string; name?: string; owner?: string; revision: number; enabled: boolean
-  source: { kind: 'external' | 'schedule' | 'internal' | 'github-resource'; id: string }
+  source: { kind: 'external' | 'schedule' | 'internal' | 'github-resource' | 'bot'; id: string }
   binding?: { demand?: unknown }; gate?: { kind: string; first: 'baseline' | 'emit' }; nodes: WorkflowNode[]
 }
 export interface WorkflowRun {
@@ -26,10 +26,18 @@ function invalid(): never { throw new Error(t('Workflow state is invalid. Refres
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 export function parseWorkflowDefinition(raw: unknown): WorkflowDefinition {
   if (!isRecord(raw) || !text(raw.id) || !Number.isSafeInteger(raw.revision) || Number(raw.revision) < 1 || typeof raw.enabled !== 'boolean'
-    || !isRecord(raw.source) || !text(raw.source.id) || !['external', 'schedule', 'internal', 'github-resource'].includes(String(raw.source.kind))
+    || !isRecord(raw.source) || !text(raw.source.id) || !['external', 'schedule', 'internal', 'github-resource', 'bot'].includes(String(raw.source.kind))
     || raw.gate !== undefined && (!isRecord(raw.gate) || raw.gate.kind !== 'revision-dedupe' || !['baseline', 'emit'].includes(String(raw.gate.first)))
     || !Array.isArray(raw.nodes) || !raw.nodes.length || raw.nodes.length > 8 || raw.nodes.some(n => !isRecord(n) || !text(n.kind))
     || raw.name !== undefined && !text(raw.name) || raw.owner !== undefined && !text(raw.owner)) return invalid()
+  if (raw.source.kind === 'bot') {
+    // A reference carries identity only; BOT.md remains the subscription authority.
+    const node = raw.nodes[0]
+    if (raw.binding !== undefined || raw.gate !== undefined || raw.nodes.length !== 1 || node.kind !== 'bot-reference' || node.botId !== raw.source.id
+      || Object.keys(raw.source).some(key => !['kind', 'id'].includes(key))
+      || Object.keys(node).some(key => !['kind', 'botId'].includes(key))
+      || Object.keys(raw).some(key => !['id', 'name', 'owner', 'revision', 'enabled', 'source', 'nodes', 'binding', 'gate'].includes(key))) return invalid()
+  } else if (raw.nodes.some(node => node.kind === 'bot-reference')) return invalid()
   if (raw.nodes.some(node => node.kind === 'schedule-action' && node.delivery !== undefined && !scheduleNodeDelivery(node))) return invalid()
   return raw as unknown as WorkflowDefinition
 }
@@ -50,7 +58,7 @@ export function parseWorkflows(raw: unknown, projectId: string): WorkflowSnapsho
   if (new Set(definitions.map(d => d.id)).size !== definitions.length || new Set(runs.map(r => r.id)).size !== runs.length) return invalid()
   const sources = raw.sources === undefined ? [] : raw.sources
   if (!Array.isArray(sources) || sources.some(s => !isRecord(s) || !text(s.kind) || !text(s.id) || typeof s.enabled !== 'boolean' || s.error !== undefined && !text(s.error) || s.nextAt !== undefined && (typeof s.nextAt !== 'number' || !Number.isFinite(s.nextAt)))) return invalid()
-  return { projectId, definitions, runs, bots: raw.bots === undefined ? undefined : parseBotProjection(raw.bots), botsUnavailable: raw.botsUnavailable === true, sources: sources as WorkflowSourceStatus[], runtimeError: typeof raw.runtimeError === 'string' ? raw.runtimeError : undefined }
+  return { projectId, definitions, runs, bots: raw.bots === undefined ? undefined : parseBotProjection(raw.bots, projectId), botsUnavailable: raw.botsUnavailable === true, sources: sources as WorkflowSourceStatus[], runtimeError: typeof raw.runtimeError === 'string' ? raw.runtimeError : undefined }
 }
 export function workflowStatus(status: WorkflowStatus | 'paused' | 'ready' | 'waiting' | 'received' | 'accepted') {
   const labels: Record<typeof status, MessageKey> = { queued: 'Queued', running: 'Running', retry: 'Retry pending', blocked: 'Blocked', completed: 'Completed', cancelled: 'Cancelled', paused: 'Paused', ready: 'Ready', waiting: 'Waiting', received: 'Received', accepted: 'Accepted' }
@@ -63,11 +71,12 @@ export function workflowHint(error?: string): string {
   return t('The action failed. Inspect the source and node configuration in chat. Safe retries use bounded backoff.')
 }
 export function nodeLabel(kind: string): string {
-  const labels: Record<string, MessageKey> = { 'github-notify': 'GitHub → Session inbox', transform: 'Transform', inbox: 'Session inbox', record: 'Record', 'work-map': 'Map to Work', 'schedule-action': 'Schedule action', 'host-action': 'Host action', 'revision-dedupe': 'Deduplicate observations' }
+  const labels: Record<string, MessageKey> = { 'bot-reference': 'BOT reference', 'github-notify': 'GitHub → Session inbox', transform: 'Transform', inbox: 'Session inbox', record: 'Record', 'work-map': 'Map to Work', 'schedule-action': 'Schedule action', 'host-action': 'Host action', 'revision-dedupe': 'Deduplicate observations' }
   return labels[kind] ? t(labels[kind]) : kind
 }
 const recordedText = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined
 function actionPresentation(node: WorkflowNode, definition: WorkflowDefinition) {
+  if (node.kind === 'bot-reference') return { label: t('BOT reference'), detail: String(node.botId), description: t('BOT.md controls subscriptions; this reference does not add listeners.') }
   const job = isRecord(node.job) ? node.job : undefined
   if (node.kind === 'schedule-action') {
     const task = recordedText(job?.task) ?? recordedText(job?.name)
@@ -101,6 +110,7 @@ export function workflowConversationLocation(projectId: string, conversation: Wo
 }
 /** Fixed delivery stays ordinary chat; fresh/managed runs reuse sidebar latest-run navigation. */
 export function workflowConversation(definition: WorkflowDefinition, runs: WorkflowRun[], jobs: readonly AutomationSummary[] = []): WorkflowConversation | undefined {
+  if (definition.source.kind === 'bot') return undefined
   const fixed = definition.nodes.map(node => workflowTargetSession(node, definition)).find(Boolean)
   if (fixed) return { sessionId: fixed, kind: 'fixed' as const }
   const automation = workflowAutomation(jobs, definition.id)

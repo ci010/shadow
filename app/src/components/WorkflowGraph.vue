@@ -62,7 +62,7 @@ const canvas = computed(() => buildCanvas(props.flows))
             <div class="group-header">
             <button class="group-heading nodrag nopan" @click="inspect(data.definition.id)">
               <strong><span :class="data.projection ? (data.projectionType === 'connection' ? 'i-lucide-plug' : data.projectionType === 'deployment' ? 'i-lucide-package' : 'i-lucide-git-branch') : data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
-              <span :class="{ 'projection-type': data.projection }">{{ data.projection ? (data.projectionType === 'connection' ? t('BOT connection') : data.projectionType === 'deployment' ? t('Published BOT / Agent') : t('Conversation binding')) : data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
+              <span :class="{ 'projection-type': data.projection }">{{ data.projection ? (data.projectionType === 'connection' ? (data.sinkProjection ? t('Connection') : t('BOT connection')) : data.projectionType === 'deployment' ? t('Published BOT / Agent') : t('Conversation binding')) : data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
             </button>
             <div class="group-actions nodrag nopan" @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop @click.stop>
             <button v-if="data.control" class="btn btn-sm group-toggle" :disabled="data.control.disabled" :aria-busy="data.control.busy"
@@ -70,7 +70,10 @@ const canvas = computed(() => buildCanvas(props.flows))
               @click="emit('toggle', data.definition.id, !data.control.enabled)">
               {{ data.control.busy ? t('Saving…') : data.control.enabled ? t('Pause') : t('Resume') }}
             </button>
-            <HoverInfo v-if="data.configureConnectionId" :text="t('Configure BOT connection')">
+            <HoverInfo v-if="data.sinkProjection" :text="t('Open connection content')">
+              <template #default="{ triggerProps }"><button v-bind="triggerProps" class="btn btn-sm group-conversation nodrag nopan" @click.stop="inspect(data.definition.id)">{{ t('Open connection content') }}</button></template>
+            </HoverInfo>
+            <HoverInfo v-else-if="data.configureConnectionId" :text="t('Configure BOT connection')">
               <template #default="{ triggerProps }">
                 <RouterLink v-bind="triggerProps" class="btn btn-sm group-connection nodrag nopan" :aria-label="t('Configure BOT connection')"
                   :to="{ name: 'project-settings', params: { projectId, section: 'connections' }, query: { connectionId: data.configureConnectionId } }">

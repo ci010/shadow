@@ -1,8 +1,9 @@
+import { parseConnectionConfig, splitLegacyConnectionConfig } from './connection-config.ts'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { ChannelsSchema, type Config } from '../config/schema.ts'
+import { type Config } from '../config/schema.ts'
 import { REDACTED_SECRET, writePrivateFile } from '../config/store.ts'
 import { CHANNEL_IDS, type BotInstanceStatus, type ChannelId, type ChannelState } from './setup-contract.ts'
 import { channelConfigured, channelPatchSchemas, channelSetupStatus, ChannelSetupError, secretFields } from './setup.ts'
@@ -17,7 +18,7 @@ const recordSchema = z.object({
   purpose: z.enum(['personal', 'service', 'legacy']).default('legacy'),
   verifiedOwner: z.object({ senderId: z.string().min(1), chatId: z.string().min(1), verifiedAt: z.string() }).strict().optional(),
 }).strict()
-const documentSchema = z.object({ version: z.literal(2), bots: z.array(recordSchema) }).strict()
+const documentSchema = z.object({ version: z.literal(3), bots: z.array(recordSchema) }).strict()
 
 export interface BotInstance {
   id: string
@@ -80,10 +81,11 @@ export class BotInstanceStore {
     if (!this.projectId) throw new TypeError('Project ID is required')
     if (existsSync(options.path)) {
       const raw: unknown = JSON.parse(readFileSync(options.path, 'utf8'))
+      if ((raw as { version?: unknown })?.version === 2) throw new Error('Connection configuration requires the explicit offline BOT policy migration before startup')
       this.document = documentSchema.parse(raw)
     } else {
       this.document = {
-        version: 2,
+        version: 3,
         bots: options.legacyConfig ? CHANNEL_IDS.filter(platform => platform !== 'wechat' &&
           options.legacyConfig?.channels[platform] !== undefined || options.legacyRawChannels?.[platform] !== undefined
         ).map(platform => ({
@@ -93,6 +95,7 @@ export class BotInstanceStore {
           config: { ...options.legacyRawChannels?.[platform] },
         })) : [],
       }
+      for (const raw of this.document.bots) this.resolve(raw)
       mkdirSync(dirname(options.path), { recursive: true })
       this.save(this.document)
     }
@@ -110,7 +113,10 @@ export class BotInstanceStore {
   private resolve(raw: z.infer<typeof recordSchema>): BotInstance {
     if (raw.platform === 'wechat' && raw.purpose !== 'personal') throw new ChannelSetupError('wechat_personal_bot_required')
     const inherited = raw.legacySessionId ? this.options.legacyConfig?.channels[raw.platform] : undefined
-    const config = ChannelsSchema.parse({ [raw.platform]: { ...inherited, ...raw.config } })[raw.platform]!
+    // Effective legacy environment overlays may supply credentials only. Business
+    // fields in a persisted record require the explicit offline migration.
+    const transport = splitLegacyConnectionConfig({ ...inherited }).transport
+    const config = parseConnectionConfig(raw.platform, { ...transport, ...raw.config }) as BotInstance['config']
     return { ...raw, config, enabled: config.enabled }
   }
 
@@ -140,7 +146,9 @@ export class BotInstanceStore {
     }
     const parsed = channelPatchSchemas[platform].safeParse(patch)
     if (!parsed.success) throw new ChannelSetupError('invalid_channel_config')
-    return parsed.data
+    const transport = { ...parsed.data }
+    for (const key of ['allowFrom', 'adminChats', 'trustedChats', 'triggerMode']) if (Object.hasOwn(transport, key)) throw new ChannelSetupError('bot_policy_belongs_in_bot_package')
+    return transport
   }
 
   private save(document: z.infer<typeof documentSchema>): void {

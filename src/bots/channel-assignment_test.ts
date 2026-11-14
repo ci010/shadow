@@ -12,28 +12,25 @@ import type { OutboundMessage } from '../bus/events.ts'
 
 const files = { 'BOT.md': '---\nid: support\nconfig: nested/bot.json\nmode: service\n---\nSupport', 'nested/bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }
 const source: ChannelSource = { version: 1, projectId: 'p', platform: 'discord', botInstanceId: 'connection', conversationId: '201', kind: 'thread', parentId: '200', guildId: '100', botUserId: '900' }
+const parentSource: ChannelSource = { ...source, conversationId: '200', kind: 'channel', parentId: undefined }
 const policy = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: [], readDomains: [], inheritThreads: false, manage: false }
 
-test('referenced Discord public thread and DM resolve exact targets, never parent inheritance or sender grants', () => {
-  const assigned = assignChannelSource(files, source, policy)
+test('referenced parent channel resolves an exact stable rule; direct thread and DM assignments are forbidden', () => {
+  const assigned = assignChannelSource(files, parentSource, policy)
   assert.equal(assigned.configPath, 'nested/bot.json')
-  assert.equal(assigned.binding.platform, 'discord')
-  if (assigned.binding.platform !== 'discord') assert.fail()
-  assert.deepEqual(assigned.binding.target, { kind: 'channel', guildId: '100', channelId: '201' })
-  assert.equal(assigned.binding.inheritThreads, false)
-  const again = assignChannelSource(assigned.files, source, policy)
-  assert.equal(again.binding.platform === 'discord' && again.binding.id, assigned.binding.id)
+  assert.deepEqual(assigned.binding.platform === 'discord' && assigned.binding.target, { kind: 'channel', guildId: '100', channelId: '200' })
+  const again = assignChannelSource(assigned.files, parentSource, policy)
+  assert.equal(again.binding.platform === 'discord' && again.binding.id, assigned.binding.platform === 'discord' && assigned.binding.id)
   assert.equal(JSON.parse(again.content).bindings.length, 1)
   assert.equal(JSON.parse(again.content).subscriptions.length, 1)
-  const dm = assignChannelSource(files, { version: 1, projectId: 'p', platform: 'discord', botInstanceId: 'connection', conversationId: '300', kind: 'direct', recipientId: '500', botUserId: '900' }, policy)
-  assert.deepEqual(dm.binding.platform === 'discord' && dm.binding.target, { kind: 'dm', userId: '500' })
-  const disabled = assignChannelSource(again.files, source, { ...policy, enabled: false })
-  assert.deepEqual(JSON.parse(disabled.content).subscriptions, [])
+  assert.throws(() => assignChannelSource(files, source, policy), /top-level/)
+  assert.throws(() => assignChannelSource(files, { version: 1, projectId: 'p', platform: 'discord', botInstanceId: 'connection', conversationId: '300', kind: 'direct', recipientId: '500', botUserId: '900' }, policy), /top-level/)
+  assert.deepEqual(JSON.parse(assignChannelSource(again.files, parentSource, { ...policy, enabled: false }).content).subscriptions, [])
 })
 
 test('policy JSON cannot forge target, connection, platform or implicitly choose participants', () => {
-  for (const key of ['target', 'conversationId', 'botInstanceId', 'platform', 'botUserId', 'id']) assert.throws(() => assignChannelSource(files, source, { ...policy, [key]: 'forged' }), /targets/)
-  assert.throws(() => assignChannelSource(files, source, { ...policy, participants: undefined }), /participants/)
+  for (const key of ['target', 'conversationId', 'botInstanceId', 'platform', 'botUserId', 'id']) assert.throws(() => assignChannelSource(files, parentSource, { ...policy, [key]: 'forged' }), /targets/)
+  assert.throws(() => assignChannelSource(files, parentSource, { ...policy, participants: undefined }), /participants/)
   const qq = { version: 1, projectId: 'p', platform: 'qq', botInstanceId: 'qq', conversationId: 'group:one', kind: 'group' } as const
   assert.throws(() => assignChannelSource(files, qq, { enabled: true, trigger: 'all', tools: [] }), /allowed senders/)
   const personal = { ...files, 'BOT.md': files['BOT.md'].replace('mode: service', 'mode: personal\nagent: general'), 'nested/bot.json': JSON.stringify({ connection: '00000000-0000-4000-a000-000000000001', allowedModules: [], tools: [], bindings: [] }) }
@@ -68,9 +65,8 @@ test('parent scope resolves one explicit inherited rule from trusted child ances
   assert.throws(() => assignChannelSource(files, { ...source, kind: 'channel', parentId: undefined }, parentPolicy, 'parent'), /verified public Discord thread/)
   assert.throws(() => assignChannelSource(files, { version: 1, projectId: 'p', platform: 'feishu', botInstanceId: 'connection', conversationId: 'om_thread', kind: 'thread', parentId: 'oc_group' }, { enabled: true, trigger: 'mention', tools: [], allowFrom: [], inheritThreads: true }, 'parent'), /verified public Discord thread/)
   // An inherited policy on a referenced child cannot silently promote it to a parent rule.
-  assert.throws(() => assignChannelSource(files, source, parentPolicy), /scope:parent explicitly/)
-  const exact = assignChannelSource(files, source, policy)
-  assert.deepEqual(exact.binding.platform === 'discord' && exact.binding.target, { kind: 'channel', guildId: '100', channelId: '201' })
+  assert.throws(() => assignChannelSource(files, source, parentPolicy), /top-level/)
+  assert.throws(() => assignChannelSource(files, source, policy), /top-level/)
 })
 
 
@@ -92,7 +88,7 @@ test('parent rule selects new child events through verified source parent metada
 test('prepared source revision preserves CRLF for the ordinary exact write path', async () => {
   const { applyReplacement } = await import('../tools/filesystem.ts')
   const original = JSON.stringify(JSON.parse(files['nested/bot.json']), null, 2).replace(/\n/g, '\r\n') + '\r\n'
-  const updated = assignChannelSource({ ...files, 'nested/bot.json': original }, source, policy)
+  const updated = assignChannelSource({ ...files, 'nested/bot.json': original }, parentSource, policy)
   assert.ok(updated.content.includes('\r\n'))
   assert.equal(applyReplacement(original, original, updated.content), updated.content)
 })

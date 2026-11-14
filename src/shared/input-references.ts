@@ -2,7 +2,9 @@
 export const workflowNodeKinds = ['transform', 'inbox', 'record', 'work-map', 'schedule-action', 'github-notify', 'host-action'] as const
 export type WorkflowNodeKind = typeof workflowNodeKinds[number]
 export type WorkflowReferenceSelector = { kind: 'source' } | { kind: 'gate' } | { kind: 'node'; index: number; nodeKind: WorkflowNodeKind }
-export interface InputReference {
+export type InputReference = WorkflowInputReference | ConnectionSinkInputReference
+export interface ConnectionSinkInputReference { kind: 'connection-sink'; projectId: string; connectionId: string; receiverId?: string }
+export interface WorkflowInputReference {
   kind: 'workflow'
   projectId: string
   workflowId: string
@@ -16,7 +18,13 @@ const id = (v: unknown): v is string => typeof v === 'string' && v.length > 0 &&
 export function parseInputReferences(value: unknown): InputReference[] {
   if (value === undefined) return []
   if (!Array.isArray(value) || value.length > 8) throw new TypeError('invalid_references')
-  return value.map(v => {
+  return value.map((v): InputReference => {
+    if (object(v) && v.kind === 'connection-sink') {
+      if (!keys(v, ['kind', 'projectId', 'connectionId', 'receiverId']) || !id(v.projectId) || (v.receiverId !== undefined && !id(v.receiverId)) || typeof v.connectionId !== 'string' ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(v.connectionId)) throw new TypeError('invalid_references')
+      return { kind: 'connection-sink', projectId: v.projectId, connectionId: v.connectionId,
+        ...(v.receiverId !== undefined ? { receiverId: v.receiverId as string } : {}) }
+    }
     if (!object(v) || !keys(v, ['kind', 'projectId', 'workflowId', 'revision', 'runId', 'selector']) || v.kind !== 'workflow' ||
       !id(v.projectId) || !id(v.workflowId) || !Number.isSafeInteger(v.revision) || (v.revision as number) < 1 ||
       (v.runId !== undefined && !id(v.runId))) throw new TypeError('invalid_references')

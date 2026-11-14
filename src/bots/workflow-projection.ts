@@ -5,9 +5,12 @@ import { publishedBotAgentName, type DirectoryBots } from './runtime.ts'
 import { bindingSubscribed } from './sdk.ts'
 import { channelSessionId } from '../bus/events.ts'
 import type { InputListener } from '../input/router.ts'
+import type { ConnectionSinkProjection } from '../channels/sink-contract.ts'
+import { connectionSinkProjection } from '../channels/sink-projection.ts'
 
 /** Inspection-only DTO: never a Workflow definition, routing authority or run receipt. */
 export interface BotWorkflowProjection {
+  sinks: ConnectionSinkProjection[]
   connections: Array<{ id: string; displayName: string; platform: string; purpose: string; enabled: boolean; health: string }>
   deployments: Array<{ id: string; state: 'valid' | 'quarantined' | 'unavailable'; mode?: 'service' | 'personal'; agent?: string; revision?: string }>
   bindings: Array<{ id: string; deploymentId: string; connectionId: string; platform: string; topic?: string; enabled: boolean; subscribed: boolean; listener: boolean; kind: string; sessionIds: string[] }>
@@ -26,10 +29,11 @@ export function botWorkflowProjection(options: {
   directory: Pick<DirectoryBots, 'deployments' | 'inspect'>
   sessionIds: readonly string[]
   personalListeners: readonly InputListener[]
+  sinkLookup?: (connectionId: string) => ConnectionSinkProjection
 }): BotWorkflowProjection {
   const { projectId, store, channels, directory } = options
   if ([store.projectId, channels.projectId, directory.deployments.projectId].some(id => id !== projectId)) throw new Error('BOT projection Project mismatch')
-  const result: BotWorkflowProjection = { connections: [], deployments: [], bindings: [], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }
+  const result: BotWorkflowProjection = { connections: [], sinks: [], deployments: [], bindings: [], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }
   const index = store.ids(1000), deployments = directory.deployments.diagnosticIds()
   if (index.truncated) result.warnings.push('connection-index-limit')
   if (deployments.warning) result.warnings.push(deployments.warning)
@@ -40,6 +44,11 @@ export function botWorkflowProjection(options: {
       if (status.projectId !== projectId) throw new Error('Project mismatch')
       result.connections.push({ id: safe(status.id), displayName: safe(status.displayName), platform: status.platform,
         purpose: status.purpose ?? 'unknown', enabled: status.enabled, health: status.state })
+      try {
+        const sink = options.sinkLookup?.(id) ?? connectionSinkProjection({ projectId, connectionId: id, platform: status.platform, histories: [], observations: [] })
+        if (sink.projectId !== projectId || sink.connectionId !== id) throw new Error('Sink ownership mismatch')
+        result.sinks.push(sink)
+      } catch { result.warnings.push('connection-sink-unavailable') }
     } catch { result.warnings.push('connection-unavailable') }
   }
   for (const id of deployments.ids) {

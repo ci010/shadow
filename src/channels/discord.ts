@@ -20,7 +20,7 @@ import { parseYieldRequest, type YieldRequest } from '../sessions/yield-contract
 import { discordPermissions, discordRecord, DiscordPermission as Permission, isDiscordId } from './discord-permissions.ts'
 import { DISCORD_READ_OPERATIONS, discordHistoryArguments, discordMessageArguments, type ChannelOperationRequest, type ChannelOperationTarget } from './operations.ts'
 import { DISCORD_CONTENT_NOTICE, discordReadHistory, discordReadMessage } from './discord-operations.ts'
-import { discordBotIdentity, discordDirectory, discordMembers, inspectDiscordConversation } from './discord-directory.ts'
+import { discordBotIdentity, discordDirectory, discordMembers, inspectDiscordConversation, inspectDiscordReceipt } from './discord-directory.ts'
 import type { DiscordAdapterIntegration, DiscordBinding } from './integration-contract.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
@@ -193,6 +193,10 @@ export class DiscordChannel extends AbstractChannel {
 
   inspectConversation(chatId: string, senderId: string, signal: AbortSignal) {
     return inspectDiscordConversation((path, init) => this.api(path, init), chatId, senderId, signal)
+  }
+
+  inspectReceipt(chatId: string, signal: AbortSignal) {
+    return inspectDiscordReceipt((path, init) => this.api(path, init), chatId, signal)
   }
 
   inspectPassiveConversation(chatId: string, senderId: string, signal: AbortSignal) {
@@ -1178,13 +1182,16 @@ export class DiscordChannel extends AbstractChannel {
       const author = data.author as Record<string, string>
       // Ignore bot messages
       const isBot = !!(author as Record<string, unknown>).bot
-      if (author.id === this.botUserId || isBot && !this.integration) return
+      if (this.hasPassiveCollector && (!isDiscordId(author.id) || !isDiscordId(data.channel_id) || !isDiscordId(data.id))) return
 
       const observedScopes = processedRevision === undefined ? this.integration?.observationScopes?.(data) : undefined
       const observationRevisions = new Map(observedScopes?.map(id => [id, this.integration?.observationRevision?.(id)]))
       let arrival: PassiveArrival | undefined
-      if (processedRevision === undefined && this.isAllowed(author.id)) arrival = await this.collectPassive({ senderId: author.id, chatId: String(data.channel_id), messageId: String(data.id), platformMessageId: String(data.id), content: typeof data.content === 'string' ? data.content : '', isGroup: !!data.guild_id,
+      if (processedRevision === undefined) arrival = await this.collectPassive({ senderId: author.id, chatId: String(data.channel_id), messageId: String(data.id), platformMessageId: String(data.id), content: typeof data.content === 'string' ? data.content : '', isGroup: !!data.guild_id,
         senderName: author.username, attachmentReferences: passiveAttachmentReferences(data.attachments) })
+      if (arrival?.fresh === false) return // Durable duplicate: neither ordinary nor observation execution.
+      // Self/bot suppression is execution policy, not common receipt policy.
+      if (author.id === this.botUserId || isBot && !this.integration) return
       const ordinaryArrival = arrival?.eligible ?? true
       if (!ordinaryArrival && !observedScopes?.length) return
       let observed = false

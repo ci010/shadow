@@ -1,3 +1,4 @@
+import { assertPersonalOutput } from '../bots/personal-output.ts'
 import { assertServiceOutput } from '../bots/service-output.ts'
 import { type ChannelSource } from './passive-contract.ts'
 import { markIngressFailure } from './ingress-diagnostic.ts'
@@ -47,6 +48,8 @@ export interface ChannelManagerOptions {
   serviceDiscovery?: ServiceDiscoveryStore
   serviceAssigned?: (address: ChannelAddress) => boolean
   serviceGeneration?: (address: ChannelAddress) => string | undefined
+  personalGeneration?: (connectionId: string) => string | undefined
+  trustedConversation?: (connectionId: string, chatId: string) => boolean
   messageStream?: ChannelMessageStream
   discordIntegration?: DiscordIntegration
   /** External observation subscriptions share the same router as ordinary platform input. */
@@ -426,19 +429,23 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
-    if (bot?.purpose === 'service' && scope) channel.setPassiveCollector?.(async message => {
+    if (bot && scope) channel.setPassiveCollector?.(async message => {
       const verify = this.options!.instanceStore.accessGuard(bot.id), guard = channel.connectionGuard?.()
       const assertLive = () => {
         verify(); guard?.()
         const current = this.options!.instanceStore.get(bot.id)
-        if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key) || !current.enabled || current.purpose !== 'service' || message.channel !== current.platform || !channel.isAllowed(message.senderId)) throw new ChannelAdmissionError('Passive source unavailable', 403)
+        if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key) || !current.enabled || message.channel !== current.platform) throw new ChannelAdmissionError('Common source unavailable', 403)
       }
       assertLive()
       // Freeze whether this received event was assigned before any asynchronous persistence/inspection.
-      const discordAssignment = bot.platform === 'discord' ? this.options?.discordIntegration?.snapshotInputAssignment(bot.id) : undefined
+      let discordAssignment: ReturnType<NonNullable<ChannelManagerOptions['discordIntegration']>['snapshotInputAssignment']> | undefined
+      try { discordAssignment = bot.purpose === 'service' && bot.platform === 'discord' ? this.options?.discordIntegration?.snapshotInputAssignment(bot.id) : undefined } catch { /* Broken BOT configuration cannot suppress common receipt. */ }
       const arrivalAddress = { ...scope, conversationId: message.chatId }
-      const generation = this.options?.serviceGeneration?.(arrivalAddress)
-      let assigned = bot.platform !== 'discord' && !!this.options?.serviceAssigned?.(arrivalAddress)
+      let generation: string | undefined, assigned = false
+      try {
+        generation = this.options?.serviceGeneration?.(arrivalAddress)
+        assigned = bot.purpose === 'service' && bot.platform !== 'discord' && !!this.options?.serviceAssigned?.(arrivalAddress)
+      } catch { /* Receipt is transport-owned, not dependent on a healthy BOT store. */ }
       let assertAssignment = () => { if (!assigned || this.options?.serviceGeneration?.(arrivalAddress) !== generation || !this.options?.serviceAssigned?.(arrivalAddress)) throw new ChannelAdmissionError('Arrival assignment changed; retained in inbox only', 403) }
       let source: ChannelSource = { version: 1, projectId: scope.projectId, botInstanceId: bot.id, platform: bot.platform as ChannelSource['platform'], conversationId: message.chatId,
         kind: message.passiveParentId ? 'thread' : message.isGroup === false ? 'direct' : message.chatId.startsWith('channel:') ? 'channel' : 'group',
@@ -446,21 +453,48 @@ export class ChannelManager {
         ...(message.chatName ? { name: message.chatName.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
       if (bot.platform === 'discord') {
         if (!(channel instanceof DiscordChannel)) throw new ChannelAdmissionError('Discord source verification unavailable', 403)
-        const inspection = await channel.inspectPassiveConversation(message.chatId, message.senderId, new AbortController().signal)
+        const inspection = await channel.inspectReceipt(message.chatId, new AbortController().signal)
         assertLive()
         const location = inspection.location
-        const snapshot = discordAssignment?.(location)
-        assigned = !!snapshot?.assigned
+        let snapshot: ReturnType<NonNullable<typeof discordAssignment>> | undefined
+        try { snapshot = discordAssignment?.(location) } catch { /* Fail closed for execution, not transport recording. */ }
+        assigned = bot.purpose === 'service' && !!snapshot?.assigned
         assertAssignment = () => { if (!snapshot) throw new ChannelAdmissionError('Arrival assignment unavailable', 403); snapshot.assertCurrent() }
         // Same live platform visibility and public-thread boundaries; no binding/participant authority is inferred.
         if (!inspection.canView || ![0, 1, 5, 10, 11].includes(location.type) || location.id !== message.chatId) throw new ChannelAdmissionError('Passive Discord visibility denied', 403)
-        source = { ...source, kind: location.type === 1 ? 'direct' : location.parentId ? 'thread' : 'channel', botUserId: inspection.botUserId,
-          ...(location.parentId ? { parentId: location.parentId } : {}), ...(location.guildId ? { guildId: location.guildId } : {}), ...(location.recipientId ? { recipientId: location.recipientId } : {}),
+        const isThread = location.type === 10 || location.type === 11
+        // Discord channel parent IDs may refer to a category. Only public
+        // thread types carry receipt ancestry; discard any adapter-supplied parent.
+        delete source.parentId
+        source = { ...source, kind: location.type === 1 ? 'direct' : isThread ? 'thread' : 'channel', botUserId: inspection.botUserId,
+          ...(isThread && location.parentId ? { parentId: location.parentId } : {}), ...(location.guildId ? { guildId: location.guildId } : {}), ...(location.recipientId ? { recipientId: location.recipientId } : {}),
           ...(location.name ? { name: location.name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
       }
-      const receipt = await this.sessionManager.recordPassiveChannel(source, message, assertLive)
+      if (bot.purpose === 'personal') {
+        let personalAtArrival: string | undefined
+        try { personalAtArrival = this.options?.personalGeneration?.(bot.id) } catch { /* paused/quarantined BOT: receipt only */ }
+        const ownerAtArrival = this.options!.instanceStore.get(bot.id).verifiedOwner
+        const pairing = message.isGroup === false && /^\/shadow-pair [a-f0-9]{48}\s*$/.test(message.content)
+        assigned = pairing || (!this.options?.personalGeneration || !!personalAtArrival) && message.isGroup === false && ownerAtArrival?.senderId === message.senderId && ownerAtArrival?.chatId === message.chatId
+        assertAssignment = () => {
+          const owner = this.options!.instanceStore.get(bot.id).verifiedOwner
+          if (!assigned || !pairing && (this.options?.personalGeneration?.(bot.id) !== personalAtArrival || owner?.senderId !== ownerAtArrival?.senderId || owner?.chatId !== ownerAtArrival?.chatId))
+            throw new ChannelAdmissionError('Personal arrival ownership changed', 403)
+        }
+      }
+      const recorded = /^\/shadow-pair [a-f0-9]{48}\s*$/.test(message.content)
+        ? { ...message, content: '/shadow-pair [redacted pairing proof]' } : message
+      // Recording is independent of BOT admission. Persist before any business
+      // allowFrom/trigger/participant check; keep the arrival assignment frozen
+      // so binding an inbox later never replays old messages into execution.
+      try {
+        this.options?.messageStream?.append({ connection: bot.id, platform: bot.platform, conversation: source.conversationId,
+          ...(source.parentId ? { parent: source.parentId } : {}), kind: 'created', message: message.platformMessageId ?? message.messageId,
+          sender: message.senderId, content: recorded.content.slice(0, 32000) })
+      } catch (error) { markIngressFailure(error, 'stream'); throw error }
+      const receipt = await this.sessionManager.recordPassiveChannel(source, recorded, assertLive)
       if (!assigned && message.isGroup === true && (bot.platform === 'qq' || bot.platform === 'feishu')) this.options?.serviceDiscovery?.observe({ botInstanceId: bot.id, platform: bot.platform, conversationId: message.chatId, ...(source.name ? { name: source.name } : {}) }, { id: message.messageId, sender: message.senderId, text: message.content, state: 'not_enabled' })
-      return { eligible: assigned && receipt.disposition !== 'filtered', assertCurrent: () => { assertLive(); assertAssignment() } }
+      return { eligible: assigned && receipt.disposition !== 'filtered', fresh: receipt.disposition !== 'filtered', assertCurrent: () => { assertLive(); assertAssignment() } }
     })
     if (bot && bot.purpose !== 'legacy' && scope) {
       if (!channel.setReceivePolicy && this.options?.routeInputPolicy) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
@@ -542,31 +576,28 @@ export class ChannelManager {
         invalidate: () => integration.invalidateBot(bot.id),
       })
     }
-    if (bot && scope && this.options?.messageStream) channel.setStreamCollector?.(async (event, isGroup) => {
+    if (bot && scope && this.options?.messageStream) channel.setStreamCollector?.(async event => {
+      const guard = channel.connectionGuard?.()
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) throw new ChannelAdmissionError('Connection changed', 503)
       this.options!.instanceStore.assertAccess(bot.id)
       const current = this.options!.instanceStore.get(bot.id)
       if (!current.enabled) throw new ChannelAdmissionError('Bot disabled', 403)
       const stream = this.options!.messageStream!
-      if(event.kind==='discovered') {
-        if(current.purpose!=='service' || !event.parent || !(current.platform==='discord'?integration?.streamAssigned(bot.id,event.conversation,event.parent):this.options?.serviceAssigned?.({...scope,conversationId:event.parent}))) return
-        stream.append({...event,connection:bot.id,platform:bot.platform});return
-      }
       const prior = event.message ? stream.latest(bot.id, event.conversation, event.message) : undefined
       const sender = event.sender ?? prior?.sender
       let parent = event.parent ?? prior?.parent
-      if (!sender || !channel.isAllowed(sender)) return
-      if (current.purpose === 'personal') {
-        if (isGroup || sender !== current.verifiedOwner?.senderId || event.conversation !== current.verifiedOwner?.chatId) return
-      } else if (current.purpose === 'service') {
-        if (current.platform === 'discord' && integration) {
-          const proof = await integration.prepareIngress(bot.id, {chatId:event.conversation,senderId:sender,messageId:event.message ?? 'stream'}, new AbortController().signal)
-          integration.discardAdmission(proof.admissionId)
-          parent ??= proof.location.parentId ?? undefined
-        } else if (!this.options?.serviceAssigned?.({...scope,conversationId:event.conversation})) return
-      } else return
+      if (current.platform === 'discord') {
+        if (!(channel instanceof DiscordChannel)) throw new ChannelAdmissionError('Discord source verification unavailable', 403)
+        const inspection = await channel.inspectReceipt(event.conversation, new AbortController().signal)
+        if (!inspection.canView || ![0, 1, 5, 10, 11].includes(inspection.location.type) || inspection.location.id !== event.conversation)
+          throw new ChannelAdmissionError('Common Discord visibility denied', 403)
+        parent = inspection.location.type === 10 || inspection.location.type === 11 ? inspection.location.parentId ?? undefined : undefined
+      }
       this.options!.instanceStore.assertAccess(bot.id)
-      if (this.closing || this.channels.get(key) !== channel) return
+      if (this.closing || this.channels.get(key) !== channel || !this.options!.instanceStore.get(bot.id).enabled) throw new ChannelAdmissionError('Connection changed', 503)
+      guard?.()
+      // Actual transport events, including unbound discoveries and deletions
+      // without a cached sender, are records only. No BOT processing is invoked.
       stream.append({...event,parent,sender,connection:bot.id,platform:bot.platform})
     })
     channel.setReceiver(async message => {
@@ -835,9 +866,8 @@ export class ChannelManager {
     if (address && address.conversationId !== chatId) return false
     const key = this.resolveKey(name, address)
     if (!key) return false
-    const config = this.options
-      ? this.options.instanceStore.list().find(bot => bot.id === key)?.config
-      : isChannelId(name) ? this.config.channels[name] : undefined
+    if (this.options) return this.options.trustedConversation?.(key, chatId) === true
+    const config = isChannelId(name) ? this.config.channels[name] : undefined
     return config?.trustedChats?.includes(chatId) === true
   }
 
@@ -1198,7 +1228,16 @@ export class ChannelManager {
     const channel = key ? this.availableByKey(key) : undefined
     if (!channel) throw new YieldError('unavailable', 'The source bot is unavailable.')
     const verify = channel.connectionGuard?.()
-    const integration = msg.channel === 'discord' && (!msg.channelAddress || this.options?.instanceStore.get(msg.channelAddress.botInstanceId).purpose !== 'personal') ? this.options?.discordIntegration : undefined
+    const personal = !!key && this.options?.instanceStore.list().some(bot => bot.id === key && bot.purpose === 'personal')
+    const personalGuard = () => {
+      if (!personal) return
+      const current = this.options!.instanceStore.get(key!)
+      if (!current.enabled || current.purpose !== 'personal' || current.platform !== msg.channel || current.verifiedOwner?.chatId !== msg.chatId)
+        throw new YieldError('unavailable', 'Personal owner conversation is no longer active')
+      assertPersonalOutput(msg)
+    }
+    personalGuard()
+    const integration = msg.channel === 'discord' && !personal ? this.options?.discordIntegration : undefined
     const guard = () => integration!.assertDelivery(msg, this.dispatchController?.signal ?? new AbortController().signal)
     if (integration) await guard()
     const service = msg.channelAddress && this.options?.instanceStore.get(msg.channelAddress.botInstanceId).purpose === 'service' && msg.channel !== 'discord'
@@ -1210,13 +1249,14 @@ export class ChannelManager {
     }
     serviceGuard()
     const run = async () => {
+      personalGuard()
       serviceGuard()
       if (msg.yieldRequest) await this.deliverDecision(msg)
       else if (channel.withConnection) await channel.withConnection(() => channel.onMessage(msg))
       else await channel.onMessage(msg)
     }
     if (integration && channel.withDeliveryGuard) await channel.withDeliveryGuard(guard, run)
-    else if (service && channel.withDeliveryGuard) await channel.withDeliveryGuard(async () => serviceGuard(), run)
+    else if ((service || personal) && channel.withDeliveryGuard) await channel.withDeliveryGuard(async () => { personalGuard(); serviceGuard() }, run)
     else await run()
     verify?.()
   }

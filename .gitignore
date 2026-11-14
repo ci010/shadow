@@ -78,3 +78,5 @@ bot.config.json
 instruction/
 
 .browser
+# Private offline Connection migration backups include credentials
+**/.connection-policy-migration/

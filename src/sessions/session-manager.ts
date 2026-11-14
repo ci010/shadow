@@ -1,3 +1,4 @@
+import { stampPersonalOutput } from '../bots/personal-output.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { parseChannelSource, passiveChannelId, PASSIVE_CHANNEL_PREFIX, type ChannelSource, type PassiveChannelMessage } from '../channels/passive-contract.ts'
 import { localFolderWorkdirRef } from './locality.ts'
@@ -919,8 +920,9 @@ ${JSON.stringify(request)}`,
       done: true,
       yieldRequest: request,
     }
-    if (this.deps.deliverYield) await this.deps.deliverYield(message)
-    else this.deps.bus.emit('message.outbound', message)
+    const stamped = this.stampPersonalNotification(request.sessionId, message)
+    if (this.deps.deliverYield) await this.deps.deliverYield(stamped)
+    else this.deps.bus.emit('message.outbound', stamped)
   }
 
   // Only coordinator-created parent questions may bypass task correction admission.
@@ -980,8 +982,9 @@ ${JSON.stringify(request)}`,
       ...(channelAddress ? { channelAddress } : {}), replyTo: context.platformMessageId, done: true,
       content: `${request.question}\nReply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.\nNo answer is chosen automatically.`,
     }
-    if (this.deps.deliverInput) await this.deps.deliverInput(message)
-    else this.deps.bus.emit('message.outbound', message)
+    const stamped = this.stampPersonalNotification(request.sessionId, message)
+    if (this.deps.deliverInput) await this.deps.deliverInput(stamped)
+    else this.deps.bus.emit('message.outbound', stamped)
   }
 
   get workspace(): string {
@@ -1768,7 +1771,23 @@ ${JSON.stringify(request)}`,
     }
   }
 
+  private personalContextGuards = new WeakMap<Session | EphemeralSession, () => void>()
+
+  private stampPersonalNotification(sessionId: string, message: import('../bus/events.ts').OutboundMessage) {
+    const active = this.sessions[sessionId], check = active && this.personalContextGuards.get(active)
+    // Questions belong to the already active execution, never a freshly read
+    // generation that could renew a revoked turn during asynchronous delivery.
+    return check ? stampPersonalOutput(message, check) : message
+  }
+
   private async reconcileChannelContext(sessionId: string): Promise<void> {
+    const activePersonal = this.sessions[sessionId]
+    const personalGuard = activePersonal && this.personalContextGuards.get(activePersonal)
+    if (personalGuard) {
+      let stale = false
+      try { personalGuard() } catch { stale = true }
+      if (stale) { activePersonal.stop(); await activePersonal.completion }
+    }
     if (!this.deps.conversationPolicies || !this.isManagedConversation(sessionId)) return
     const policy = this.deps.conversationPolicies.resolve(sessionId)
     if (!policy) return
@@ -1880,6 +1899,7 @@ ${JSON.stringify(request)}`,
       sess.onStopped = onStopped
       const frame = this.calls.get(sessionId)
       if (frame) frame.session = sess
+      if (ctx.personalGuard) this.personalContextGuards.set(sess, ctx.personalGuard)
       this.sessions[sessionId] = sess
       return sess
     } else {
@@ -1901,6 +1921,7 @@ ${JSON.stringify(request)}`,
         this.deps.evalBridge,
         this.deps.promptCaptures,
       )
+      if (ctx.personalGuard) this.personalContextGuards.set(sess, ctx.personalGuard)
       this.sessions[sessionId] = sess
       return sess
     }
@@ -3705,6 +3726,12 @@ ${JSON.stringify(request)}`,
       blockedTools,
       resolvedAgentType.allowedModules,
     )
+    if (personal?.assertCurrent) {
+      const check = personal.assertCurrent, snapshot = sessionTools.assertSnapshot, stamp = sessionTools.stampOutput
+      check() // includes changes while prompt/history preparation awaited
+      sessionTools.assertSnapshot = () => { check(); snapshot?.() }
+      sessionTools.stampOutput = message => stampPersonalOutput(stamp?.(message) ?? message, check)
+    }
     const automatic = state.automaticWork ? automaticWorkSessionSchema.parse(state.automaticWork) : undefined
     const limits = this.executionLimits.get(sessionId)
     if (limits) sessionTools.setTrustedLimits(limits)
@@ -3757,6 +3784,7 @@ ${JSON.stringify(request)}`,
       blockedTools,
       promptCtx,
       conversationPolicy,
+      personalGuard: personal?.assertCurrent,
     }
   }
 

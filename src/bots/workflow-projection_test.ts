@@ -16,6 +16,7 @@ import { botWorkflowProjection } from './workflow-projection.ts'
 import { channelSessionId } from '../bus/events.ts'
 import { registerWorkflowRoutes } from '../workflows/management.ts'
 import { WorkflowRuntime } from '../workflows/runtime.ts'
+import { connectionSinkProjection } from '../channels/sink-projection.ts'
 
 const tree = (path: string): unknown => readdirSync(path).sort().map(name => { const p = join(path, name); return [name, statSync(p).isDirectory() ? tree(p) : readFileSync(p, 'utf8')] })
 test('real immutable BOT packages project shared connection, distinct groups/Agents, disabled/unsubscribed and invalid deployment without effects or secrets', async () => {
@@ -36,10 +37,22 @@ test('real immutable BOT packages project shared connection, distinct groups/Age
     await deploy('support', { bindings: [binding('group:two'), binding('group:disabled', false), binding('group:unsubscribed')], subscriptions: [ { platform: 'qq', botInstanceId: connection.id, conversationId: 'group:two' }, { platform: 'qq', botInstanceId: connection.id, conversationId: 'group:disabled' } ] })
     await deploy('broken', { invalid: 'PRIVATE_INVALID' })
     const existing = channelSessionId({ projectId: 'p', botInstanceId: connection.id, platform: 'qq', conversationId: 'group:two' })
-    const options = { projectId: 'p', store, channels, directory, sessionIds: [existing], personalListeners: [] }
+    const sink = connectionSinkProjection({ projectId: 'p', connectionId: connection.id, platform: 'qq', histories: [], observations: [] })
+    const lookedUp: string[] = []
+    const options = { projectId: 'p', store, channels, directory, sessionIds: [existing], personalListeners: [],
+      sinkLookup: (id: string) => {
+        lookedUp.push(id)
+        return connectionSinkProjection({ projectId: 'p', connectionId: id, platform: 'qq', histories: [], observations: [] })
+      } }
     const before = tree(workspace)
     const snapshot = botWorkflowProjection(options)
     assert.equal(snapshot.connections.length, 1)
+    assert.deepEqual(lookedUp, [connection.id])
+    assert.deepEqual(snapshot.sinks, [sink], 'API nests real host-resolved sinks under bots, not copied binding receivers')
+    const foreign = botWorkflowProjection({ ...options, sinkLookup: () => ({ ...sink, projectId: 'other' }) })
+    assert.deepEqual(foreign.sinks, [])
+    assert.ok(foreign.warnings.includes('connection-sink-unavailable'))
+    assert.equal(foreign.connections.length, 1, 'A bad projection never hides the transport connection')
     assert.equal(snapshot.bindings.length, 4)
     assert.equal(new Set(snapshot.bindings.map(b => b.connectionId)).size, 1)
     assert.notEqual(snapshot.deployments.find(d => d.id === 'sales')?.agent, snapshot.deployments.find(d => d.id === 'support')?.agent)

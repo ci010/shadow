@@ -78,3 +78,19 @@ test('web admission freezes references in ordinary user text before queue; retry
     assert.equal(calls, 2)
   } finally { await channel.stop() }
 })
+
+test('Connection selection resolves host-owned paths and validates receivers without Workflow identity', () => {
+  const runtime = { inspect: () => ({ projectId: 'p', definitions: [], runs: [] }) } as unknown as Pick<WorkflowRuntime, 'inspect'>
+  const reference = { kind: 'connection-sink', projectId: 'p', connectionId: 'conn' }
+  const sink = { kind: 'connection-sink' as const, id: 'connection:conn', projectId: 'p', connectionId: 'conn',
+    connectionPath: 'v:connections/conn/overview.json', sinkPath: 'v:connections/conn/sink.json',
+    sink: { kind: 'common-receipt' as const, reacts: false as const, navigation: { kind: 'connection-content' as const, projectId: 'p', connectionId: 'conn' } },
+    receivers: [], bots: [], guidePath: 'v:bots/authoring' as const }
+  const resolve = workflowReferenceResolver('p', runtime, id => { assert.equal(id, 'conn'); return sink })
+  const text = resolve([reference])
+  assert.match(text, /v:connections\/conn\/sink.json/); assert.match(text, /v:bots\/authoring/)
+  assert.throws(() => resolve([{ ...reference, receiverId: 'forged' }]), /receiver_unavailable/)
+  assert.throws(() => resolve([{ ...reference, sinkPath: 'v:connections/other/sink.json' }]), /invalid_references/)
+  assert.throws(() => resolve([{ ...reference, projectId: 'other' }]), /project_mismatch/)
+  assert.throws(() => workflowReferenceResolver('p', runtime)([reference]), /sink_unavailable/)
+})

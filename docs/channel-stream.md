@@ -13,33 +13,48 @@ Production Project composition explicitly injects one Project-owned stream into
 `ChannelManager`. Merely constructing a manager (including existing test mocks)
 does not create a default-workspace journal.
 
-- Discord Gateway creations are captured **after** sender/binding admission and
-  **before** trigger selection or an approved input processor. Ordinary unmentioned
-  messages may be stored without creating a session or starting inference. Mentions,
-  replies, DMs and approved processors retain their existing trigger policies.
-  The Bot's own Gateway messages never wake it.
-- Gateway edits, deletes and bulk deletes append new events. Deletes/partial edits
-  need a retained earlier sender for renewed admission. Unknown unauthorized
-  changes are not harvested. Active/new thread metadata is recorded only under an
-  explicitly assigned, inheritable service parent. A newly received message in an
-  old thread also supplies its parent from live admission.
-- Other Project Bots use the existing admitted `ChannelManager` receive boundary.
-  This captures only inputs that their existing adapters actually forward. It does
-  **not** add unmentioned-message delivery, webhook subscriptions, platform history,
-  edit/delete feeds or sending adapters to QQ, Feishu or WeChat. Adapter filtering
-  and platform delivery limitations still apply.
-- Personal Bots collect only the verified owner's bound DM, never arbitrary DMs
-  or group traffic. Service Bots require existing explicit assignments; Discord
-  additionally rechecks sender/member permissions through existing admission.
-  Observation-only/unbound service groups are **not** converted into stored feeds.
-  This implementation's trusted stream tools support channel/thread service
-  assignments, not service-DM discovery/history. No new approval system is added.
+- Project connections capture received message creations **before** business
+  sender/binding admission, trigger selection or processors. Unbound conversations,
+  observation-only inputs and personal connections are recorded without invoking
+  a model, tool, command or reply. The existing passive inbox remains the durable
+  message history; this stream remains its bounded change/cursor index.
+- Discord Gateway edits, deletes and bulk deletes append events under the same
+  connection/conversation address. Partial changes need no fabricated sender or
+  BOT binding. Live connected-Bot visibility and verified public-thread ancestry
+  are still required; private threads remain closed. A transport receipt carries
+  no actor, history-read, send or participant grant. Actual thread discovery can
+  be recorded before any BOT is assigned.
+- QQ, Feishu and WeChat feed their actually received creates into the same host
+  receipt path before business admission or attachment downloads. This does not
+  install extra platform intents/webhooks, fetch old messages or add missing
+  edit/delete feeds. Messages the platform did not deliver cannot be harvested.
+- Model processing and replies still require current BOT/verified-owner authority.
+  Owner stream-tool read/send checks remain independent of recording: merely
+  discovering an unbound address does not grant history reads, tools or output.
 
-Service input routing now filters non-triggering messages before Session creation;
-stream collection stays independent and does not wake a BOT. A directory package's
-explicit `subscriptions: []` also closes its service collection/admission route;
-omission preserves its existing binding-derived subscriptions. See
+A directory package's `subscriptions: []` disables its BOT input execution, not
+common receipt. Assignment is frozen at arrival and durable duplicate receipts
+cannot wake a newly bound BOT or replay observation processing after reconnect.
+The stable inbox address contains Project, connection, platform and real
+conversation/thread identity, never BOT role/binding/revision. Binding does not
+move its history; execution sessions remain separate. See
 [external input routing](input-routing.md).
+
+Connection inspection exposes this receipt data through
+`v:connections/<encoded connectionId>/overview.json`, `sink.json` and
+`receivers/<encoded receiverId>.json`; `/api/workflows` includes the same
+host-resolved projections under `bots.sinks`. These are inspection DTOs, not
+Workflow definitions or routing authority. Graph receivers represent observed
+top-level groups/channels only: direct-message receipts remain in common history,
+and public-thread receipts aggregate under their verified parent without moving
+or merging thread histories. Unknown Discord channel types remain unknown rather
+than being guessed from numeric IDs. Discovery-only stream entries without
+parent/type evidence do not invent graph receivers.
+
+Connection configuration and BOT admission changes use an explicit offline
+migration; receipt storage itself never migrates or replays history. See
+[Connection policy migration](connection-migration.md) for v2/v3 startup,
+backup/recovery and the still-unperformed real-Project rollout.
 
 The stream contains bounded text and identities, not downloaded attachments or
 raw credential-bearing payloads. Platform content is untrusted data, never agent
@@ -155,3 +170,29 @@ that messages were collected.
 All verification used synthetic adapters/REST mocks. Live Discord API behavior,
 Gateway reconnect/resume and deployed permission configurations are not validated
 by these tests.
+
+## Read-only Connection map and chat references
+
+The Workflow canvas consumes the host's `bots.sinks` inspection projection. Each
+Connection section branches to its observed top-level group/channel receivers;
+these are durable message receivers, not model BOTs or Workflow definitions.
+Threads retain their separate receipt histories but are browsed inside the parent
+channel content page, not rendered as assignable receiver blocks. An empty
+Connection remains selectable while waiting for messages; it does not invent a
+group, conversation or BOT.
+
+The section's **Open connection content** action opens its read-only receiver
+directory in the existing inspector. Each receiver opens only an existing inbox
+or the existing Discord parent-channel messages/posts/thread browser. Missing
+Discord guild metadata is shown as unavailable rather than guessed. None of
+these inspection actions creates a session, sends a message or executes a flow.
+
+Selecting a section or receiver supplies the current chat's dynamic context with
+`connection-sink` identity (`projectId`, `connectionId`, optional `receiverId`).
+The host validates Project ownership and resolves the live receiver and paths;
+client-authored paths, navigation and Workflow identities are rejected.
+Canonical resources are `v:connections/<id>/overview.json`, `sink.json` and
+`receivers/<encoded-receiver-id>.json`. `v:bots/authoring` describes BOT.md and
+skill configuration and linking an existing BOT without duplicating its
+bindings in a Workflow. `v:bots/connections` is compatibility inspection only.
+References convey context, never tool, configuration or execution authority.
