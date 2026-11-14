@@ -3,11 +3,11 @@ import test from 'node:test'
 import { projectNavigationShortcut } from './project-navigation-shortcut.ts'
 
 const event = { key: 'k', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, defaultPrevented: false, repeat: false, isComposing: false }
-test('project navigation uses Ctrl/Meta K for Knowledge and Shift K for Workflows', () => {
+test('project navigation uses Ctrl/Meta K for Knowledge and J for Workflows', () => {
   assert.equal(projectNavigationShortcut(event), 'knowledge')
-  assert.equal(projectNavigationShortcut({ ...event, shiftKey: true }), 'workflows')
+  assert.equal(projectNavigationShortcut({ ...event, key: 'j' }), 'workflows')
   assert.equal(projectNavigationShortcut({ ...event, key: 'K', ctrlKey: false, metaKey: true }), 'knowledge')
-  for (const change of [{ defaultPrevented: true }, { repeat: true }, { isComposing: true }, { altKey: true }, { ctrlKey: false }, { key: 'n' }]) {
+  for (const change of [{ defaultPrevented: true }, { repeat: true }, { isComposing: true }, { shiftKey: true }, { altKey: true }, { ctrlKey: false }, { key: 'n' }]) {
     assert.equal(projectNavigationShortcut({ ...event, ...change }), undefined)
   }
 })
@@ -27,7 +27,7 @@ test('workspace navigation targets the active Project and ignores overlays and i
   const key = { ...event, preventDefault: () => prevented++ }
   handler(key)
   assert.deepEqual(knowledge, ['active'])
-  handler({ ...key, shiftKey: true })
+  handler({ ...key, key: 'j' })
   assert.deepEqual(routes, [{ name: 'project-workflows', params: { projectId: 'active' }, query: {} }])
   overlay = true; handler(key)
   overlay = false; active.value = false; handler(key)
