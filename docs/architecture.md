@@ -2727,10 +2727,23 @@ UnoCSS embeds the selected colored SVGs in local CSS; no runtime icon service is
 needed. Loading spinners, remote-workspace indicators, Git decorations, and diff
 tab icons retain their existing meaning.
 
-`Ctrl+Shift+E` toggles the available file explorer in the active workbench,
-including its narrow-screen drawer and remote-workspace view. The shortcut
-ignores key repeats, IME composition, and open dialogs/menus. Closing it while
-focus is inside the tree returns focus to the explorer control.
+In the Project editor, `EditorGroupHost` owns one `ProjectFileExplorer` beside
+both editor groups. Its normal-flow header control stays on the left; file
+exploration is not positioned over the conversation or teleported with it.
+Roots are deduplicated from actually open conversation descriptors and the
+Project-scoped registered folder catalog, not the sidebar's historical session
+list. Each root expands independently. Session file sources carry the owning
+`sessionId` explicitly through tab identity, previews, diffs and Git reads;
+folder sources retain the registered ID and remote preview restrictions.
+Closing a conversation removes its root, without changing file data. The
+sidebar still expands folder conversation lists and parent/child conversations;
+these navigation lists are not filesystem trees.
+
+`Ctrl+Shift+E` toggles the Project explorer; standalone workbenches retain their
+own explorer and narrow-screen drawer. The Project header control remains
+available on narrow screens too. Escape from the Project tree closes it and
+returns focus to that control. Existing standalone shortcut eligibility still
+ignores key repeats, IME composition, and open dialogs/menus.
 Electron forwards the same action through the existing document-shortcut bridge
 so editor iframe focus does not prevent toggling; the renderer owns eligibility.
 The file tree's path search uses `rg --files` in the owning local or remote

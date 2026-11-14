@@ -1,5 +1,11 @@
 <template>
-  <div ref="root" class="editor-groups" @keydown="shortcut">
+  <div class="editor-workspace" @keydown="shortcut">
+    <header v-if="apiBase" class="editor-workspace-header">
+      <HoverInfo :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
+    </header>
+    <div class="editor-workspace-body">
+      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="groups.explorers.has(projectId)" :explorer-id="`${hostId}-explorer`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
+  <div ref="root" class="editor-groups">
     <nav v-if="state.left.length && state.right.length" class="mobile-group-switch" :aria-label="t('Open documents')"><button v-for="side in sides" :key="side" :aria-pressed="state.active === side" @click="groups.focus(projectId, side)">{{ t(side === 'left' ? 'Left editor group' : 'Right editor group') }}</button></nav>
     <section v-for="side in sides" :key="side" v-show="state[side].length" class="editor-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" :data-editor-group="side" @pointerdown.capture="groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
       <SidebarResizer v-if="side === 'right' && state.left.length" edge="left" :model-value="rightWidth" :bounds="bounds" :label="t('Resize editor group')" :controls="`${hostId}-${side}`" @update:model-value="preferredWidth = $event" />
@@ -18,19 +24,25 @@
       </div>
     </div></Teleport>
   </div>
+    </div>
+  </div>
 </template>
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, type ComponentPublicInstance } from 'vue'
 import { EditorGroupsKey, type EditorSide } from '../editor-groups.ts'
 import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
+import ProjectFileExplorer from './files/ProjectFileExplorer.vue'
 import { t } from '../i18n.ts'
-const props = defineProps<{ projectId: string; active?: boolean }>()
+const props = defineProps<{ projectId: string; active?: boolean; apiBase?: string; folderRevision?: number }>()
+const emit = defineEmits<{ quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
 const hostId = `groups-${useId()}`
 const root = ref<HTMLElement>()
+const explorerToggle = ref<HTMLButtonElement>()
+function closeExplorer() { groups.explorers.delete(props.projectId); explorerToggle.value?.focus() }
 const width = ref(1000), preferredWidth = ref(480)
 const bounds = computed(() => ({ min: 240, max: Math.max(240, width.value - 280) }))
 const rightWidth = computed(() => Math.min(bounds.value.max, Math.max(bounds.value.min, preferredWidth.value)))
@@ -56,7 +68,7 @@ function menuKey(event: KeyboardEvent) {
 function nativeDocument(event: Event) {
   if (!props.active || menu.value || document.querySelector('[aria-modal="true"]')) return
   const action = (event as CustomEvent).detail, side = state.value.active, list = [...state.value[side]], current = state.value.selected[side]
-  if (action === 'toggle-explorer') groups.active(props.projectId)?.commands?.toggleExplorer?.()
+  if (action === 'toggle-explorer') { if (props.apiBase) groups.toggleExplorer(props.projectId); else groups.active(props.projectId)?.commands?.toggleExplorer?.() }
   else if (action === 'close') groups.close(current)
   else if (action === 'close-all') for (const id of list) groups.close(id)
   else if ((action === -1 || action === 1) && list.length) { const id = list[(list.indexOf(current) + action + list.length) % list.length]!; groups.activate(id); focusTab(id) }
@@ -70,14 +82,22 @@ function tabKey(event: KeyboardEvent, side: EditorSide, id: string) {
   if (event.key === 'Delete') { event.preventDefault(); groups.close(id) }
 }
 function shortcut(event: KeyboardEvent) {
-  if (event.defaultPrevented || event.isComposing || menu.value || !(event.ctrlKey || event.metaKey) || event.altKey) return
+  if (event.defaultPrevented || event.repeat || event.isComposing || menu.value || !(event.ctrlKey || event.metaKey) || event.altKey) return
   const side = state.value.active, list = state.value[side], current = state.value.selected[side]
-  if (event.key.toLowerCase() === 'e' && event.shiftKey) { const command = groups.active(props.projectId)?.commands?.toggleExplorer; if (command) { event.preventDefault(); event.stopPropagation(); command() }; return }
+  if (event.key.toLowerCase() === 'e' && event.shiftKey) { const command = props.apiBase ? () => groups.toggleExplorer(props.projectId) : groups.active(props.projectId)?.commands?.toggleExplorer; if (command) { event.preventDefault(); event.stopPropagation(); command() }; return }
   if (event.key.toLowerCase() === 'w') { event.preventDefault(); event.stopPropagation(); if (event.shiftKey) { for (const id of [...list]) groups.close(id) } else groups.close(current); focusTab(state.value.selected[side]) }
   if (event.key === 'Tab' && list.length) { event.preventDefault(); event.stopPropagation(); const next = list[(list.indexOf(current) + (event.shiftKey ? list.length - 1 : 1)) % list.length]!; groups.activate(next); focusTab(next) }
 }
 </script>
 <style scoped>
+.editor-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.editor-workspace-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.editor-workspace-header { display: flex; flex-shrink: 0; background: var(--c-bg-soft); border-bottom: 1px solid var(--c-border); }
+.project-explorer-toggle { display: grid; place-items: center; width: 36px; height: 36px; border: 0; background: transparent; color: var(--c-text-secondary); }
+.project-explorer-toggle > span { width: 18px; height: 18px; }
+.project-explorer-toggle:hover { background: var(--c-bg-muted); }
+.project-explorer-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+
 .editor-groups { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .editor-group { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .editor-group + .editor-group { border-left: 1px solid var(--c-border); }

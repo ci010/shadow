@@ -15,6 +15,8 @@ export interface EditorDescriptor {
 }
 /** Resource identity/lifetime is deliberately independent of group placement. */
 export function createEditorGroups() {
+  const explorers = reactive(new Set<string>())
+  const toggleExplorer = (projectId: string) => { if (explorers.has(projectId)) explorers.delete(projectId); else explorers.add(projectId) }
   const descriptors = shallowReactive(new Map<string, EditorDescriptor>())
   const projects = reactive(new Map<string, { left: string[]; right: string[]; selected: Record<EditorSide, string>; active: EditorSide; conversation?: string }>())
   // Multiple source workbenches may reference the same Project resource. Only
@@ -81,7 +83,7 @@ export function createEditorGroups() {
     const descriptor = descriptors.get(id), placement = side(id)
     return visible(id) && !!descriptor && state(descriptor.projectId).active === placement
   }
-  return { descriptors, projects, targets, views,
+  return { descriptors, projects, targets, views, explorers, toggleExplorer,
     registerView(id: string, token: symbol) { views.set(id, [...(views.get(id) ?? []), token]) },
     unregisterView(id: string, token: symbol) {
       const remaining = (views.get(id) ?? []).filter(item => item !== token)

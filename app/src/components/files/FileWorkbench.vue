@@ -113,8 +113,8 @@
         <EditorViewHost :descriptor="descriptor('', primaryLabel || conversationTitle || t('Conversation'), primaryIcon)" :selected="tabs.selected === '' && (!groups || route.name === 'chat' && !route.query.panel && (route.params.sessionId || '') === sessionId)" :active="active">
         <div ref="viewRoot" class="workbench-view-layout">
     <button v-if="expanded && !wide" class="explorer-backdrop" :aria-label="t('Dismiss files')" @click="collapseExplorer" />
-    <aside v-if="explorerAvailable || (tabs.knowledge && knowledgeEnabled)" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? t('Knowledge explorer') : t('File explorer')" @keydown.esc.stop.prevent="collapseExplorer">
-      <div v-if="explorerAvailable" v-show="!knowledgeSelected" class="file-spaces">
+    <aside v-if="(!groups && explorerAvailable) || (tabs.knowledge && knowledgeEnabled)" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? t('Knowledge explorer') : t('File explorer')" @keydown.esc.stop.prevent="collapseExplorer">
+      <div v-if="!groups && explorerAvailable" v-show="!knowledgeSelected" class="file-spaces">
       <button v-if="folderId" class="file-space-root" :aria-expanded="fileSpace === 'project'" @click="fileSpace = fileSpace === 'project' ? undefined : 'project'"><span class="i-lucide-folder" aria-hidden="true" />{{ t('Project files') }}</button>
       <FileTree v-if="fileSpace === 'project' && folderId" v-show="!knowledgeSelected" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded && !knowledgeSelected"
         :remote="remote" :selected-path="!selectedSource?.sessionWorkspace ? selectedFilePath : undefined" :reveal-version="revealVersion"
@@ -135,7 +135,6 @@
         :label="knowledgeSelected ? t('Resize Knowledge navigation') : t('Resize files')" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
     </aside>
         <div class="workbench-view-content" :style="{ '--composer-height': `${composerHeight ?? 0}px` }" :class="{ 'draft-view': draft }">
-          <button v-if="explorerAvailable" class="workbench-button view-explorer-toggle" :aria-label="t('Toggle files')" @click="toggleExplorer"><span class="i-lucide-folder-open" aria-hidden="true" /></button>
         <div :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="tabId('')">
           <slot :active="shown('')" />
         </div>
@@ -165,11 +164,11 @@
 
         <EditorViewHost v-for="file in tabs.files" :key="`${contextKey}:${fileTabKey(file)}`" :descriptor="descriptor(fileTabKey(file), file.entry.name, fileIcon(file.entry.name))" :selected="tabs.selected === fileTabKey(file)" :active="active">
         <div :id="panelId(fileTabKey(file))" class="file-document" role="tabpanel" :aria-labelledby="tabId(fileTabKey(file))">
-          <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :folder-id="file.source ? file.source.folderId : folderId" :session-workspace="file.source?.sessionWorkspace"
+          <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="file.source?.sessionId ?? sessionId" :folder-id="file.source ? file.source.folderId : folderId" :session-workspace="file.source?.sessionWorkspace"
             :path="file.path" :active="shown(fileTabKey(file))" :selection-active="focused(fileTabKey(file))"
             :can-quote="canQuote" :revision="diffGitRevision" @quote="emit('quote', $event)" @open-source="openFile({ path: file.path, entry: file.entry, source: file.source })" />
-          <FilePreviewModal v-else-if="sessionId || folderId" inline :api-base="apiBase" :session-id="sessionId" :folder-id="file.source ? file.source.folderId : folderId" :session-workspace="file.source?.sessionWorkspace"
-            :remote="file.source?.sessionWorkspace ? false : remote"
+          <FilePreviewModal v-else-if="sessionId || folderId" inline :api-base="apiBase" :session-id="file.source?.sessionId ?? sessionId" :folder-id="file.source ? file.source.folderId : folderId" :session-workspace="file.source?.sessionWorkspace"
+            :remote="file.source?.sessionWorkspace ? false : (file.source?.remote ?? remote)"
             :context-key="contextKey" @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)"
             :active="shown(fileTabKey(file))" :selection-active="focused(fileTabKey(file))" :can-quote="canQuote"
             :entry="file.entry" :dir="file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''"
@@ -238,7 +237,7 @@ const knowledgeSelected = computed(() => props.knowledgeEnabled && (tabs.value.s
 const knowledgeExpanded = ref(true)
 const expanded = computed(() => knowledgeSelected.value
   ? wide.value && knowledgeExpanded.value
-  : explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? false)))
+  : !groups && explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? false)))
 const documents = inject(ProjectDocumentsKey, undefined)
 const projectDocuments = computed(() => props.projectNavigationEnabled && props.projectId ? documents?.get(props.projectId) : undefined)
 const localTabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
@@ -253,7 +252,7 @@ function editorId(key: string) {
   if (key === KNOWLEDGE_TAB_KEY || knowledgeEntryId(key)) return JSON.stringify([props.projectId, 'knowledge', key])
   const file = tabs.value.files.find(file => fileTabKey(file) === key)
   if (file) {
-    const source = file.source?.sessionWorkspace ? ['session', props.sessionId || props.contextKey] : ['folder', file.source?.folderId ?? props.folderId ?? props.sessionId]
+    const source = file.source?.sessionWorkspace ? ['session', file.source.sessionId ?? props.sessionId ?? props.contextKey] : ['folder', file.source?.folderId ?? props.folderId ?? props.sessionId]
     return JSON.stringify([props.projectId, 'file', source, key])
   }
   return `${owner || id}:${key}`
@@ -266,7 +265,7 @@ function descriptor(key: string, label: string, icon: string): EditorDescriptor 
     closable: key === '' || !isPermanentDocumentTab(key),
     select: () => { if (tabs.value.selected !== key) tabs.value = { ...tabs.value, selected: key } },
     close: () => closeFile(key, false),
-    commands: { toggleExplorer: () => { if (explorerAvailable.value) toggleExplorer() } },
+    commands: { toggleExplorer: () => { if (groups || explorerAvailable.value) toggleExplorer() } },
     ...(key === '' ? { conversation: { sessionId: props.sessionId, editable: !!props.editableConversation } } : {}),
   }
   descriptorCache.set(key, value)
@@ -309,7 +308,7 @@ const gitActive = computed(() => explorerAvailable.value && props.active && !kno
 const { status: gitStatus, loading: gitLoading, error: gitError, offline: gitOffline, revision: gitRevision, refresh: refreshGit } = useWorkdirGit(
   () => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: fileSpace.value === 'project' ? props.folderId : undefined, sessionWorkspace: fileSpace.value === 'session' }), gitActive)
 const diffActive = computed(() => props.active && tabs.value.files.some(file => file.view === 'diff' && fileTabKey(file) === tabs.value.selected))
-const { revision: diffGitRevision } = useWorkdirGit(() => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: selectedSource.value ? selectedSource.value.folderId : props.folderId, sessionWorkspace: selectedSource.value?.sessionWorkspace }), diffActive)
+const { revision: diffGitRevision } = useWorkdirGit(() => ({ apiBase: props.apiBase, sessionId: selectedSource.value?.sessionId ?? props.sessionId, folderId: selectedSource.value ? selectedSource.value.folderId : props.folderId, sessionWorkspace: selectedSource.value?.sessionWorkspace }), diffActive)
 watch(() => [props.contextKey, props.folderId], () => { fileSpace.value = props.folderId ? 'project' : props.sessionId ? 'session' : undefined })
 const cachedTabs = new Map<string, FileTabs>()
 const tabMenu = ref<{ key: string }>()
@@ -523,6 +522,7 @@ function collapseExplorer() {
   ;(mobileLayout.value ? mobileActionsButton.value : explorerButton.value)?.focus({ preventScroll: true })
 }
 function toggleExplorer() {
+  if (groups && !knowledgeSelected.value) { groups.toggleExplorer(props.projectId ?? ''); return }
   if (knowledgeSelected.value) knowledgeExpanded.value = !knowledgeExpanded.value
   else if (props.remote) remoteExpanded.value = !expanded.value
   else preference.value = !expanded.value
@@ -604,7 +604,6 @@ onUnmounted(() => {
 .workbench-view-content { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .workbench-view-content.draft-view { overflow-y: auto; justify-content: safe center; padding: 40px 0 80px; box-sizing: border-box; }
 .draft-view > .conversation-document { flex: 0 0 auto; overflow: visible; }
-.view-explorer-toggle { position: absolute; top: 4px; right: 4px; z-index: 3; }
 
 .file-workbench { display: flex; position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; height: 100%; }
 .mobile-document-title { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; min-height: 44px; border: 0; padding: 0 4px; background: transparent; color: var(--c-text); font: inherit; font-size: 15px; font-weight: 600; line-height: 1.5; text-align: left; }

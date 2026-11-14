@@ -65,7 +65,7 @@
         <button v-if="!projects.length && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
       <AutomationDetail :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
-      <EditorGroupHost v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
+      <EditorGroupHost @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
       </AutomationDetail>
       <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
       <div v-show="false" class="editor-resource-owners">
@@ -160,6 +160,10 @@ function projectDescriptor(projectId: string, tab: ProjectTab): EditorDescriptor
   return descriptor
 }
 function setParking(element: Element | ComponentPublicInstance | null) { if (element instanceof HTMLElement) editorGroups.targets.set('parking', element) }
+function quoteExplorer(projectId: string, text: string) {
+  const target = editorGroups.referenceTarget(projectId)
+  if (target) instances.get(target.owner)?.appendDraft(text)
+}
 function ownerFocused(owner: string) { return editorGroups.active(selectedProjectId.value)?.owner === owner }
 
 const liveState = useProjectLiveState()
