@@ -20,6 +20,26 @@ export function workflowColumn(entry: WorkflowCanvasEntry): WorkflowColumn {
 const nodeId = (flow: string, node: string) => JSON.stringify([flow, node])
 
 /** A read-only projection. IDs and connections are scoped to their owning workflow. */
+/** Reuse unchanged rendered elements across reconciliation/layout updates. No
+ * viewport state lives here; additions/removals can still legitimately move rows. */
+export function createWorkflowCanvas() {
+  let previous: ReturnType<typeof workflowCanvas> | undefined
+  return (flows: WorkflowCanvasEntry[]) => {
+    const next = workflowCanvas(flows)
+    if (previous) {
+      for (const key of ['nodes', 'edges'] as const) {
+        const before = new Map(previous[key].map(item => [item.id, item]))
+        Object.assign(next, { [key]: next[key].map(item => {
+          const old = before.get(item.id)
+          return old && JSON.stringify(old) === JSON.stringify(item) ? old : item
+        }) })
+      }
+    }
+    previous = next
+    return next
+  }
+}
+
 export function workflowCanvas(flows: WorkflowCanvasEntry[]): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [], edges: Edge[] = []
   if (!flows.length) return { nodes, edges }

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { createWorkflowSnapshotDelta } from './snapshot-delta.ts'
 import type { Hono } from 'hono'
 import type { WorkflowRuntime } from './runtime.ts'
 import { AuthorDefinition } from './contracts.ts'
@@ -90,12 +91,22 @@ export function createWorkflowHandler(runtime: WorkflowRuntime) {
 export function registerWorkflowRoutes(app: Hono, runtime: WorkflowRuntime, authorize: (request: Request) => boolean | Promise<boolean>,
   setFeatureEnabled?: (workflowId: string, enabled: boolean, request: Request) => Promise<void>,
   inspectBots?: () => import('../bots/workflow-projection.ts').BotWorkflowProjection) {
+  // Owned by this authorized Project router; never share versions across Projects.
+  const reconcile = createWorkflowSnapshotDelta()
   app.get('/api/workflows', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)
     const snapshot = runtime.inspect()
-    if (!inspectBots) return c.json(snapshot)
-    try { return c.json({ ...snapshot, bots: inspectBots() }) }
-    catch { return c.json({ ...snapshot, botsUnavailable: true }) }
+    let projection: Record<string, unknown> = {}
+    if (inspectBots) {
+      try { projection = { bots: inspectBots() } }
+      catch { projection = { botsUnavailable: true } }
+    }
+    const state = { ...snapshot, ...projection }
+    c.header('Cache-Control', 'no-store')
+    // Legacy callers keep their full snapshot contract.
+    return c.json(c.req.query('sync') === '1' ? reconcile({ projectId: snapshot.projectId,
+      definitions: snapshot.definitions, runs: snapshot.runs, sources: snapshot.sources,
+      runtimeError: snapshot.runtimeError, ...projection }, c.req.query('since')) : state)
   })
   app.post('/api/workflows/control', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)

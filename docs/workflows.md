@@ -30,6 +30,38 @@ and edges with explicit text; only real running state animates edges, respecting
 reduced motion. Nodes show saved schedules, session policies, targets and task
 summaries; unavailable timezone/target metadata is marked unrecorded.
 
+## Page reconciliation
+
+`WorkflowManager` reads an initial full UI snapshot through the authenticated,
+Project-scoped `GET /api/workflows?sync=1`. While its document and browser page
+are visible it reconciles every 30 seconds; Refresh and completed controls also
+reconcile. Subsequent requests include `since=<cursor>` and return `noop` or a
+version-1 delta with definition/run upserts, removals and authoritative ID order.
+Unchanged collections are omitted. Source/BOT/health metadata is replaced only
+when changed. Legacy `GET /api/workflows` keeps its full-snapshot contract.
+
+Each Project router retains at most eight serialized UI versions, 8 MiB total,
+with a two-minute idle lifetime. Oversized snapshots are served but not retained.
+Unknown, expired or process-restart cursors safely return full state; incompatible
+or invalid delta responses trigger one full retry, then expose the read failure.
+Versions are read-model cursors, not durable execution checkpoints. Authentication
+runs before inspecting or accessing cached versions; responses use `no-store`.
+
+A noop preserves the snapshot identity and does not recompute the graph; background
+reads do not toggle graph controls. Changed reads retain equal definition/run and
+canvas element objects. They do not fit/reset the viewport or clear inspection.
+Hidden/deactivated documents stop reads and abort in-flight requests. Project/base
+changes discard the client version and reject stale/aborted responses.
+
+This is incremental HTTP reconciliation, **not an event-driven execution change**.
+The page does not subscribe to every live event or fetch a full snapshot for each
+one. It still makes a request every 30 visible seconds; the server still inspects,
+serializes and compares the UI snapshot, and changed candidates/layouts still need
+validation/reconciliation. Existing automation catalog live subscriptions remain
+separate. Complete workflow/source/BOT invalidation coverage on the shared resource
+live mechanism is future work, not a second bus implemented here. Response size
+and rendered-fixture stability tests do not establish production latency/FPS gains.
+
 ## BOT topology (read-only first stage)
 
 The existing Project Workflow tab and shared canvas also show the live BOT topology:

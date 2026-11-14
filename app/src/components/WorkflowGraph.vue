@@ -7,7 +7,7 @@ import { t } from '../i18n.ts'
 import { useRouter } from 'vue-router'
 import HoverInfo from './HoverInfo.vue'
 import { workflowStatus, workflowConversationLocation } from '../workflows.ts'
-import { workflowCanvas, type WorkflowCanvasEntry } from '../workflow-canvas.ts'
+import { createWorkflowCanvas, type WorkflowCanvasEntry } from '../workflow-canvas.ts'
 const router = useRouter()
 const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string; projectId: string }>()
 const emit = defineEmits<{ inspect: [id: string, nodeId?: string]; clear: []; toggle: [id: string, enabled: boolean] }>()
@@ -37,7 +37,8 @@ function wheel(event: WheelEvent) {
   } else void setViewport({ ...current, x: current.x - (event.shiftKey ? event.deltaY : event.deltaX) * unit, y: current.y - (event.shiftKey ? 0 : event.deltaY) * unit })
 }
 function inspect(flow: string, node?: string) { emit('inspect', flow, node) }
-const canvas = computed(() => workflowCanvas(props.flows))
+const buildCanvas = createWorkflowCanvas()
+const canvas = computed(() => buildCanvas(props.flows))
 </script>
 <template>
   <section class="workflow-graph" :aria-label="t('Read-only workflow graph')" @keydown="keydown">

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { workflowCanvas, workflowColumn } from './workflow-canvas.ts'
+import { createWorkflowCanvas, workflowCanvas, workflowColumn } from './workflow-canvas.ts'
 import type { WorkflowDefinition, WorkflowRun } from './workflows.ts'
 const definition = (id: string): WorkflowDefinition => ({ id, name: id, revision: 2, enabled: true,
   source: { kind: 'schedule', id: 'daily' }, gate: { kind: 'revision-dedupe', first: 'emit' }, nodes: [{ kind: 'transform' }, { kind: 'record' }],
@@ -107,4 +107,18 @@ test('columns reserve their maximum group width and stack only within the same c
   }
   assert.deepEqual(groups.filter(n => n.data.column === 'cron').map(n => n.position.y), [48, 308])
   assert.ok(groups.filter(n => n.data.column !== 'cron').every(n => n.position.y === 48))
+})
+
+test('canvas reconciliation retains unchanged nodes and edges when another workflow changes', () => {
+  const build = createWorkflowCanvas()
+  const flows = ['a', 'b'].map(id => ({ definition: definition(id) }))
+  const first = build(flows)
+  const noop = build(flows)
+  assert.ok(noop.nodes.every((node, i) => node === first.nodes[i]))
+  assert.ok(noop.edges.every((edge, i) => edge === first.edges[i]))
+  const changed = build([{ definition: { ...flows[0].definition, enabled: false } }, flows[1]])
+  for (const node of first.nodes.filter(node => node.data.flowId === 'b' || node.type === 'group' && node.data.definition.id === 'b')) {
+    assert.equal(changed.nodes.find(next => next.id === node.id), node)
+  }
+  assert.notEqual(changed.nodes.find(node => node.data.flowId === 'a'), first.nodes.find(node => node.data.flowId === 'a'))
 })
