@@ -1,4 +1,5 @@
 import { MarkdownExit, type PluginSimple } from 'markdown-exit'
+import cjkFriendly from 'markdown-it-cjk-friendly'
 import { tasklist } from '@mdit/plugin-tasklist'
 import { katex } from '@mdit/plugin-katex'
 import { highlightMarkdownCode } from './markdown-highlight.ts'
@@ -8,6 +9,8 @@ export const MAX_MATH = 16_384
 /** Shared synchronous parser. Sanitization remains at each DOM/resource boundary. */
 export function createMarkdown(options: { html?: boolean; breaks?: boolean; math?: boolean } = {}) {
   const md = new MarkdownExit({ html: options.html ?? true, breaks: options.breaks ?? true, linkify: true })
+  // markdown-exit exposes markdown-it's inline State/scanDelims plugin API.
+  md.use(cjkFriendly as unknown as PluginSimple)
   md.use(tasklist as unknown as PluginSimple, { disabled: true, label: false, containerClass: '', itemClass: '', checkboxClass: '' })
   md.renderer.rules.fence = (tokens, index) => {
     const token = tokens[index]!
