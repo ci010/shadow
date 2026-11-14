@@ -38,7 +38,7 @@ import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean; inspection?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
 const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string] }>()
 const primary = ref<InstanceType<typeof ChatTab>>()
-defineExpose({ appendInputReference: (item: LabeledInputReference): AttachReferenceResult => primary.value?.appendInputReference(item) ?? 'unavailable',
+defineExpose({ canReplaceSidebarTab: () => primary.value?.canReplaceSidebarTab() ?? false, appendInputReference: (item: LabeledInputReference): AttachReferenceResult => primary.value?.appendInputReference(item) ?? 'unavailable',
   requestSession: (id: string) => primary.value?.requestSession(id),
   appendDraft: (text: string) => {
     primary.value?.appendDraft(text)
