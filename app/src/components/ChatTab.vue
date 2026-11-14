@@ -29,7 +29,7 @@
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : t('New conversation')" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
-      :inspection="inspection" :project-navigation-enabled="!embedded"
+      :inspection="inspection" :project-navigation-enabled="!embedded" :primary-activity="conversationTabActivity"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && (inspection || ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive && conversationFocused" :draft="!activeSessionId"
       :editable-conversation="!isExecution && (!activeSessionId || isDirectChat) && !viewingPhysicalId" :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
@@ -628,7 +628,7 @@ import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessa
 import CommandResult from './CommandResult.vue'
 import { mergeCommandResults } from '../command-results.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
-import { displayedSessionStages as resolveDisplayedStages, isAnimatingStage, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { conversationIconStage, displayedSessionStages as resolveDisplayedStages, isAnimatingStage, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type ConversationActivity, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames, parseSessionMessage, sessionMessageTitle, sessionMessageSourceLabel, type SessionMessageSource } from '../message-author.ts'
@@ -919,6 +919,12 @@ const sessionStage = computed<SessionStage | null>(() =>
 )
 const sessionWorking = computed(() => isWorkingStage(sessionStage.value))
 const activeSubagentActivity = computed(() => summarizeSubagents(activeSubagents.value, displayedSessionStages.value))
+const conversationTabActivity = computed<ConversationActivity | undefined>(() => activeSessionId.value ? {
+  stage: conversationIconStage(sessionStage.value, activeSession.value?.completed),
+  hasCron: activeSession.value?.hasCron,
+  hasBackgroundTasks: activeSession.value?.hasBackgroundTasks,
+  subagents: activeSubagentActivity.value,
+} : undefined)
 const activeSubagentDetails = computed(() => activeSubagents.value.map(agent => agent.label).join(' · '))
 const composerWorking = computed(() => !viewingPhysicalId.value && (isAnimatingStage(sessionStage.value)
   || activeSubagentActivity.value.running > 0))
