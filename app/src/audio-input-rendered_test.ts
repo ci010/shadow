@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 ﻿import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -70,6 +71,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>,
     observeHost: (_base: string, listener: (status: unknown) => void) => { listener({ phase: 'live' }); return () => {} },
     onDispose: (callback: () => void) => { disposers.push(callback); return () => {} },
   })
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => { app.unmount(); for (const dispose of disposers) dispose() })
   const nodes = (): ElementNode[] => {

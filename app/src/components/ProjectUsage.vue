@@ -93,14 +93,21 @@
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
 import UsageTrendChart from './UsageTrendChart.vue'
-import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { compactUsageNumber, compactUsageCost, durationParts, usageWindow, displayCosts, costWindow, costUnits, type CostUnit, type UsagePoint } from '../project-usage-charts.ts'
 import type { UsageChartDatum } from '../usage-chart-options.ts'
-import { apiUrl } from '../api-url.ts'
+import { useCatalogResourceStore } from '../stores/catalog.ts'
+import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
+import { requireResourcePinia } from '../stores/app.ts'
 import { t, formatDateTime, formatNumber } from '../i18n.ts'
 import { projectUsageSchema, projectUsagePageSchema, type ProjectUsagePage, type ProjectUsage, type ProjectUsageMetrics } from '../../../src/projects/usage-contract.ts'
 const props = defineProps<{ apiBase: string; projectId: string; active: boolean }>()
-const data = shallowRef<ProjectUsage>(), loading = ref(false), error = ref(false)
+const owner = useCatalogResourceStore(requireResourcePinia()).owner
+const enabled = useCatalogVisibility(() => props.active)
+const summary = shallowRef<ReturnType<typeof owner.usage>>()
+const data = computed(() => summary.value?.state.value.value)
+const loading = computed(() => summary.value?.state.value.loading ?? false)
+const error = computed(() => !!summary.value?.state.value.error)
 const periods = [{ key: 'today', label: 'Today' }, { key: 'past7Days', label: 'Past 7 days' }, { key: 'month', label: 'This month' }, { key: 'total', label: 'All time' }] as const
 const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
@@ -158,51 +165,28 @@ function costs(usage: ProjectUsageMetrics) {
 function duration(usage: ProjectUsageMetrics) {
   return usage.durationMs === null ? t('Unavailable') : t('{seconds} s', { seconds: formatNumber(usage.durationMs / 1000, { maximumFractionDigits: 3 }) })
 }
-const dailyPage = shallowRef<ProjectUsagePage>()
-const pageLoading = ref(false), pageError = ref(false), requestedPage = ref(1)
-let pageController: AbortController | undefined
-function resetPage() {
-  pageController?.abort(); pageController = undefined
-  dailyPage.value = undefined; pageLoading.value = false; pageError.value = false; requestedPage.value = 1
+const pageLease = shallowRef<ReturnType<typeof owner.usagePage>>()
+const previousPageLease = shallowRef<ReturnType<typeof owner.usagePage>>()
+const dailyPage = computed(() => pageLease.value?.state.value.value ?? previousPageLease.value?.state.value.value)
+const pageLoading = computed(() => pageLease.value?.state.value.loading ?? false)
+const pageError = computed(() => !!pageLease.value?.state.value.error)
+const requestedPage = ref(1)
+function resetPage() { pageLease.value?.release(); previousPageLease.value?.release(); pageLease.value = undefined; previousPageLease.value = undefined; requestedPage.value = 1 }
+function loadPage(page: number) {
+  if (!enabled.value || !data.value || loading.value) return
+  if (pageLease.value?.state.value.value) {
+    previousPageLease.value?.release(); previousPageLease.value = pageLease.value
+  } else pageLease.value?.release()
+  requestedPage.value = page
+  pageLease.value = owner.usagePage(props.apiBase, props.projectId, page)
 }
-async function loadPage(page: number) {
-  if (!props.active || !data.value || loading.value) return
-  pageController?.abort()
-  const current = new AbortController(); pageController = current
-  requestedPage.value = page; pageLoading.value = true; pageError.value = false
-  try {
-    const response = await fetch(apiUrl(props.apiBase, `/api/project/usage/daily?page=${page}`), { signal: current.signal, cache: 'no-store' })
-    if (!response.ok) throw new Error('Usage page request failed')
-    const result = projectUsagePageSchema.parse(await response.json())
-    if (result.projectId !== props.projectId || result.page !== page) throw new Error('Usage page mismatch')
-    if (pageController === current && !current.signal.aborted) dailyPage.value = result
-  } catch {
-    if (pageController === current && !current.signal.aborted) pageError.value = true
-  } finally { if (pageController === current) pageLoading.value = false }
-}
-let controller: AbortController | undefined
-async function refresh() {
-  resetPage()
-  controller?.abort()
-  const current = new AbortController(); controller = current
-  loading.value = true; error.value = false
-  try {
-    const response = await fetch(apiUrl(props.apiBase, '/api/project/usage'), { signal: current.signal })
-    if (!response.ok) throw new Error('Usage request failed')
-    const result = projectUsageSchema.parse(await response.json())
-    if (result.projectId !== props.projectId) throw new Error('Project mismatch')
-    if (controller === current && !current.signal.aborted) data.value = result
-  } catch {
-    if (controller === current && !current.signal.aborted) error.value = true
-  } finally { if (controller === current) loading.value = false }
-}
-watch(() => [props.apiBase, props.projectId, props.active] as const, (_, previous) => {
-  resetPage()
-  controller?.abort(); controller = undefined; loading.value = false
-  if (props.apiBase !== previous?.[0] || props.projectId !== previous?.[1]) { data.value = undefined; error.value = false }
-  if (props.active) void refresh()
+function refresh() { resetPage(); return summary.value?.refresh() }
+watch(() => [props.apiBase, props.projectId, enabled.value] as const, ([base, projectId, active], _, cleanup) => {
+  resetPage(); summary.value = undefined
+  if (!active) return
+  const lease = owner.usage(base, projectId); summary.value = lease
+  cleanup(() => { lease.release(); resetPage() })
 }, { immediate: true })
-onUnmounted(() => { controller?.abort(); resetPage() })
 </script>
 <style scoped>
 .project-usage { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 24px; color: var(--c-text); background: var(--c-bg-soft); container: usage / inline-size; }

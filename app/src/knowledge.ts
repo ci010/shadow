@@ -51,7 +51,7 @@ export function createKnowledgeTransport(base: string, request: typeof fetch = f
       throw new Error(t('Cannot reach Main. Refresh before retrying; a change may already have completed.'))
     }
     if (!response.ok) {
-      throw new Error(response.status === 409
+      throw Object.assign(new Error(response.status === 409
         ? t('Knowledge changed since it was loaded. Close this dialog, refresh or scan again, and review it before making changes.')
         : response.status === 401 || response.status === 403
           ? t('Knowledge management requires Main administrator access.')
@@ -61,7 +61,7 @@ export function createKnowledgeTransport(base: string, request: typeof fetch = f
               ? t('The knowledge collection exceeds the browsing limits. Reduce its size before retrying.')
               : response.status === 422
                 ? t('Knowledge contains invalid data. Check the project log and fix the reported file before scanning again.')
-              : t('Main could not complete the knowledge request ({status}). Refresh and retry.', { status: response.status }))
+              : t('Main could not complete the knowledge request ({status}). Refresh and retry.', { status: response.status })), { status: response.status })
     }
     try { return await response.json() } catch { throw invalid() }
   }

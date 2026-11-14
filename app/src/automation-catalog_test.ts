@@ -71,7 +71,7 @@ test('all concurrent consumers share initial fetch, invalidation bursts, reconne
   await flush()
   t.mock.timers.tick(40_000)
   assert.equal(reads.length, 3)
-  assert.equal(detail.state.jobs[0].name, 'Refreshed')
+  assert.deepEqual(detail.state.jobs, [], 'last release clears the retired projection')
 })
 
 test('project boundaries, release and reacquisition reject late snapshots and observer calls', async t => {

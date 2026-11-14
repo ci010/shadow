@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -62,6 +63,7 @@ function mount(t: TestContext, name: string, props: Record<string, unknown> = {}
   })
   const root = element('root')
   const app = renderer.createApp(loadComponent(new URL(name, import.meta.url)), props)
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => {
     app.unmount()

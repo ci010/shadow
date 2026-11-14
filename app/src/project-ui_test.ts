@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -49,6 +50,7 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
   const app = renderer.createApp(defineComponent({
     setup: () => () => h(module.exports.default, { ...props, ref: (value: ComponentPublicInstance | null) => { instance = value } }),
   }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   return () => {
@@ -329,9 +331,10 @@ test('bot sidebar names stay Project-scoped and late catalogs cannot replace ano
   assert.equal(state().sessions[0].channelAddress.projectId, 'b')
 })
 
-test('folder catalog revision cancels stale lists and moves an agent-created topic into its new folder', async t => {
+test('folder catalog revision serializes stale lists and moves an agent-created topic into its new folder', async t => {
   const requests: Array<{ signal?: AbortSignal | null; finish: (value: unknown) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: URL, init?: RequestInit) => new Promise<Response>(resolve => {
+    if (new URL(url).pathname === '/nodes/v1') { resolve(Response.json({version:1,nodes:[]})); return }
     assert.match(new URL(url).pathname, /^\/projects\/a\/api\/folders$/)
     requests.push({ signal: init?.signal, finish: value => resolve(Response.json(value)) })
   }))
@@ -341,19 +344,28 @@ test('folder catalog revision cancels stale lists and moves an agent-created top
       topic: 'Installer' }], nodes: [] }),
     activeSessionId: 'web:chat-generated', collapsed: new Set<string>(), stages: {}, sessionsLoading: false, sessionsError: '',
   })
-  const state = mountScript(t, 'FoldersSidebar.vue', props, undefined, { vue: { ...Vue, onMounted: () => {} } })
+  const state = mountScript(t, 'FoldersSidebar.vue', props, undefined, { vue: { ...Vue, onMounted: () => {} },
+    '../composables/useLiveClient.ts': { useLiveClientPool: () => ({
+      observeHost: (_base: string, callback: (status: unknown) => void) => { callback({phase:'live'}); return () => {} },
+      client: () => ({subscribe: () => ({ready: async () => {},close() {}})}),
+    }) },
+  })
+  state().subscribeCatalogs()
+  await settle()
   const stale = state().loadFolders()
   assert.equal(requests.length, 1)
   assert.equal(state().groups.chats.length, 1)
   props.folderRevision++
   await nextTick()
-  assert.equal(requests[0]!.signal?.aborted, true)
+  assert.equal(requests[0]!.signal?.aborted, false, 'shared invalidation queues rather than cancelling another lease')
+  assert.equal(requests.length, 1, 'no overlapping list requests')
+  requests[0]!.finish({ folders: [] })
+  await settle()
   assert.equal(requests.length, 2)
   requests[1]!.finish({ folders: [{ id: 'agent-folder', name: 'Agent registered', path: 'C:\\synthetic\\folder', createdAt: '' }] })
   await settle()
   assert.equal(state().groups.chats.length, 0)
   assert.equal(state().groups.folders[0].sessions[0].label, 'Installer')
-  requests[0]!.finish({ folders: [] })
   await stale
   await settle()
   assert.equal(state().groups.folders[0].folder.id, 'agent-folder', 'A stale list cannot erase the new registration')

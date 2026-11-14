@@ -6,6 +6,7 @@ import test, { type TestContext } from 'node:test'
 import { createRenderer, defineComponent, h, nextTick, reactive, type Component } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
+import { createResourceStores } from './stores/app.ts'
 
 interface ElementNode {
   tag: string
@@ -16,7 +17,7 @@ interface ElementNode {
   parent?: ElementNode
 }
 const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], style: {} })
-const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
+const settle = async () => { await nextTick(); await new Promise(resolve => setTimeout(resolve, 5)); await nextTick() }
 
 function mount(t: TestContext, filename: string, props: Record<string, unknown>) {
   function load(filename: string): Component {
@@ -59,6 +60,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>)
   const root = element('root')
   const state = reactive(props)
   const app = renderer.createApp(defineComponent({ setup: () => () => h(component, state) }))
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => app.unmount())
   const nodes = (): ElementNode[] => {
@@ -274,14 +276,16 @@ test('complete data has no warning or partial badges but retains zero-count comp
   assert.ok(cells.some(n => String(n.props.title).includes('0.25 USD · 1 CNY')))
 })
 
-test('latest refresh wins even if the aborted fetch ignores its signal', async t => {
+test('refresh during a pending shared read is serialized and the follow-up wins', async t => {
   const pending: Array<(response: Response) => void> = []
   t.mock.method(globalThis, 'fetch', () => new Promise<Response>(resolve => pending.push(resolve)))
   const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
+  await settle()
   const refresh = view.button().click()
+  assert.equal(pending.length, 1, 'shared reads remain single-flight')
+  pending[0](Response.json(response())); await settle()
   const fresh = response(); fresh.past7Days = { ...metrics, tokens: 87654321 }
   pending[1](Response.json(fresh)); await refresh; await settle()
-  pending[0](Response.json(response())); await settle()
   assert.ok(view.nodes().some(n => String(n.props.title).includes('87,654,321')))
   assert.match(view.text(), /87.7M/)
 })

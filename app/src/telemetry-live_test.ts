@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -68,6 +69,7 @@ function mountTelemetry(t: TestContext, name: 'LogsTab' | 'SpansTab', timeoutMs 
   const app = renderer.createApp(defineComponent({
     setup: () => () => h(module.exports.default, { ...props, ref: (value: ComponentPublicInstance | null) => { instance = value } }),
   }))
+  app.use(createResourceStores())
   app.mount({})
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }

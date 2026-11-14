@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -37,6 +38,7 @@ test('conversation statistics load only on demand and show zero, unknown and alt
     return Response.json({ sessionId: 'web:one/child', scope: 'own_and_descendants', asOf: '2026-10-11T00:00:00.000Z', rolling24h: { own: usage, inclusive: usage }, total: { own: usage, inclusive: usage }, limitations: ['No cost estimates'] })
   })
   const root = node('root'), app = renderer.createApp(module.exports.default, { apiBase: 'https://example.test/projects/current/', sessionId: 'web:one/child', active: true })
+  app.use(createResourceStores())
   app.mount(root); t.after(() => app.unmount())
   const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
   await settle()

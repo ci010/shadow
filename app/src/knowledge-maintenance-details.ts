@@ -1,37 +1,32 @@
 import { t } from './i18n.ts'
-import { shallowReactive } from 'vue'
+import { shallowRef } from 'vue'
 import type { KnowledgeMaintenanceReport } from '../../src/knowledge/maintenance-contracts.ts'
+import { resourceViews } from './resources/vue-resource.ts'
 
-/** Full diagnostic details are fetched only after disclosure; a report ID is immutable. */
+/** Compatibility selector for non-app consumers. The engine owns reads and abort generations. */
 export function createMaintenanceDetails(load: (reportId: string, signal: AbortSignal) => Promise<KnowledgeMaintenanceReport>) {
-  const state = shallowReactive({ report: undefined as KnowledgeMaintenanceReport | undefined, loading: false, error: '' })
-  let controller: AbortController | undefined
+  const views = resourceViews()
+  type Lease = ReturnType<typeof views.acquire<KnowledgeMaintenanceReport>>
+  const lease = shallowRef<Lease>()
   let selected: string | undefined
-  let pending: Promise<void> | undefined
-  function cancel() { controller?.abort(); controller = undefined; pending = undefined; state.loading = false }
+  const state = {
+    get report() { return lease.value?.state.value.value },
+    get loading() { return lease.value?.state.value.loading ?? false },
+    get error() { return lease.value?.state.value.error ?? '' },
+  }
   return {
     state,
     select(reportId: string | undefined, expanded: boolean, active = true): Promise<void> {
-      if (selected !== reportId) { cancel(); selected = reportId; state.report = undefined; state.error = '' }
-      if (!active || !expanded || !reportId) { cancel(); return Promise.resolve() }
-      if (state.report?.id === reportId) return Promise.resolve()
-      if (pending) return pending
-      const current = controller = new AbortController()
-      state.loading = true; state.error = ''
-      pending = (async () => {
-        try {
-          const report = await load(reportId, current.signal)
-          if (current.signal.aborted || selected !== reportId) return
-          if (report.id !== reportId) throw new Error(t('Main returned invalid maintenance data. Refresh and retry.'))
-          state.report = report
-        } catch (error) {
-          if (!current.signal.aborted) state.error = error instanceof Error ? error.message : String(error)
-        } finally {
-          if (controller === current) { controller = undefined; pending = undefined; state.loading = false }
-        }
-      })()
-      return pending
+      if (selected !== reportId) { lease.value?.release(); lease.value = undefined; selected = reportId }
+      if (!active || !expanded || !reportId) {
+        if (lease.value?.state.value.loading) { lease.value.release(); lease.value = undefined }
+        return Promise.resolve()
+      }
+      if (!lease.value) lease.value = views.acquire(reportId, signal => load(reportId, signal), { validate(report) {
+        if (report.id !== reportId) throw new Error(t('Main returned invalid maintenance data. Refresh and retry.'))
+      } })
+      return lease.value.state.value.error ? lease.value.refresh() : lease.value.read()
     },
-    dispose() { cancel(); selected = undefined; state.report = undefined; state.error = '' },
+    dispose() { lease.value?.release(); lease.value = undefined; selected = undefined; views.dispose() },
   }
 }

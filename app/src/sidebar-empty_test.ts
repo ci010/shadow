@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -31,7 +32,7 @@ const render = (props: Record<string, unknown> = {}) => renderToString(createSSR
   sessionsLoading: false,
   sessionsError: '',
   ...props,
-}))
+}).use(createResourceStores()))
 
 test('empty sidebar keeps a direct scratch-chat action without empty conversation hints', async () => {
   const html = await render()

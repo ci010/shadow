@@ -1,4 +1,5 @@
-import { createApp, defineComponent, h, type Component } from 'vue'
+import { defineComponent, h, type Component } from 'vue'
+import { createResourceApp as createApp } from './stores/app.ts'
 import 'uno.css'
 import 'katex/dist/katex.min.css'
 import './styles.css'

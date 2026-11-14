@@ -1,37 +1,27 @@
-import { t } from '../i18n.ts'
-import { computed, getCurrentInstance, inject, onActivated, onDeactivated, onMounted, onScopeDispose, ref, shallowRef, watch, type InjectionKey } from 'vue'
-import { createAutomationCatalog } from '../automation-catalog.ts'
+import { computed, onActivated, onDeactivated, onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue'
+import { useCatalogResourceStore } from '../stores/catalog.ts'
+import { requireResourcePinia } from '../stores/app.ts'
 import { useLiveClientPool } from './useLiveClient.ts'
 
-const catalogKey: InjectionKey<ReturnType<typeof createAutomationCatalog>> = Symbol.for('shadow.automation-catalog')
-
 export function useAutomationCatalog(base: () => string, active: () => boolean) {
-  const instance = getCurrentInstance()
-  if (!instance) throw new Error(t('Automations require a Vue application context.'))
-  let catalog = inject(catalogKey, undefined)
-  if (!catalog) {
-    catalog = createAutomationCatalog(useLiveClientPool())
-    instance.appContext.provides[catalogKey] = catalog
-    const owned = catalog
-    instance.appContext.app.onUnmount(() => owned.dispose())
-  }
+  const owner = useCatalogResourceStore(requireResourcePinia()).owner
+  const pool = useLiveClientPool()
   const activated = ref(true)
   const visible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
   const enabled = computed(() => active() && activated.value && visible.value)
-  const state = shallowRef<ReturnType<typeof catalog.acquire>['state']>()
-  const retained = shallowRef<ReturnType<typeof catalog.acquire>['state']>()
-  const displayed = computed(() => state.value?.loaded ? state.value : retained.value ?? state.value)
+  const state = shallowRef<ReturnType<typeof owner.automations>['state']['value']>()
+  const displayed = state
   let refresh = () => {}
   let identity = ''
   watch(() => [base(), enabled.value] as const, ([scope, enabled], _previous, onCleanup) => {
-    if (identity !== scope) { identity = scope; state.value = undefined; retained.value = undefined }
+    if (identity !== scope) { identity = scope; state.value = undefined }
     refresh = () => {}
     if (!enabled) return
-    const lease = catalog.acquire(scope)
-    if (state.value?.loaded) retained.value = state.value
-    state.value = lease.state
+    const lease = owner.automations(scope, pool)
+    state.value = lease.state.value
+    const stop = watch(lease.state, next => { state.value = next })
     refresh = lease.refresh
-    onCleanup(lease.release)
+    onCleanup(() => { stop(); lease.release() })
   }, { immediate: true })
   const updateVisibility = () => { visible.value = document.visibilityState !== 'hidden' }
   onMounted(() => { if (typeof document !== 'undefined') document.addEventListener('visibilitychange', updateVisibility) })
@@ -43,11 +33,13 @@ export function useAutomationCatalog(base: () => string, active: () => boolean) 
   })
   return {
     enabled,
-    jobs: computed(() => displayed.value?.jobs ?? []),
+    jobs: computed(() => displayed.value?.value ?? []),
     loading: computed(() => state.value?.loading ?? enabled.value),
-    loaded: computed(() => displayed.value?.loaded ?? false),
+    loaded: computed(() => displayed.value?.value !== undefined),
     error: computed(() => state.value?.error ?? ''),
-    revision: computed(() => state.value?.revision ?? 0),
+    // Existing consumers use this as a reconciliation hint, not a data commit version.
+    // Initial catalog arrival must not cause a second initial run-history read.
+    revision: computed(() => Math.max(0, (state.value?.readRevision ?? 0) - 1)),
     refresh: () => refresh(),
   }
 }

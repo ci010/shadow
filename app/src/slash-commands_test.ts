@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { createRenderer, defineComponent, reactive } from 'vue'
@@ -24,6 +25,7 @@ function harness(t: TestContext) {
     catalog = useSlashCommandCatalog(() => source)
     return () => null
   } }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   return { source, catalog, pending }

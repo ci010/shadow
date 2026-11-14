@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -112,6 +113,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>)
   const state = reactive(props)
   const app = renderer.createApp(defineComponent({ setup: () => () => h(component, state) }))
   app.component('RouterLink', defineComponent({ setup: (_, { slots }) => () => h('a', slots.default?.()) }))
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => app.unmount())
   const nodes = (): ElementNode[] => {

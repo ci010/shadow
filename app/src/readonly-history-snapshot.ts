@@ -2,7 +2,6 @@ type Body = Record<string, unknown> & { messages: unknown[] }
 type Snapshot = { revision: string; historyRevision: string; metadataRevision: string; body: Body; bytes: number }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const revision = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
-const snapshots = new WeakMap<object, ReturnType<typeof createReadonlyHistorySnapshots>>()
 
 /** Authenticated-lifetime, bounded memory; never return stale data on access/network errors. */
 export function createReadonlyHistorySnapshots(request: typeof fetch = fetch, maxBytes = 16 * 1024 * 1024, maxEntries = 8) {
@@ -72,10 +71,4 @@ export function createReadonlyHistorySnapshots(request: typeof fetch = fetch, ma
     },
     dispose() { disposed = true; entries.clear(); bytes = 0 },
   }
-}
-
-export function readonlyHistorySnapshots(pool: { onDispose(callback: () => void): () => void }) {
-  let cache = snapshots.get(pool)
-  if (!cache) { cache = createReadonlyHistorySnapshots(); snapshots.set(pool, cache); pool.onDispose(() => cache!.dispose()) }
-  return cache
 }

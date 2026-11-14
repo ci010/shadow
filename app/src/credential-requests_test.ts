@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { readFile } from 'node:fs/promises'
@@ -31,6 +32,7 @@ async function harness(t: TestContext, initial: Partial<CredentialRequestSource>
   }))
   let resourceEvent: ((event: { payload: unknown }) => void) | undefined
   app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: (_topic: unknown, observer: { event?: typeof resourceEvent }) => { resourceEvent = observer.event; return { ready: async () => {}, close() {} } } }), observeHost: (_base: string, callback: (status: { phase: string }) => void) => { callback({ phase: 'live' }); return () => {} } })
+  app.use(createResourceStores())
   app.mount({})
   await settle()
   let mounted = true

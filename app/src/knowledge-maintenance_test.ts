@@ -105,7 +105,9 @@ test('lazy details only load on disclosure, reject stale replacements, retry and
   await details.select('report-a', false)
   assert.equal(calls.length, 0)
   const first = details.select('report-a', true)
+  await new Promise(resolve => setTimeout(resolve, 5)) // engine scheduling boundary
   const replacement = details.select('report-b', true)
+  await new Promise(resolve => setTimeout(resolve, 5))
   assert(calls[0]!.signal.aborted)
   calls[1]!.finish({ ...report, id: 'report-b' }); await replacement
   calls[0]!.finish(report); await first
@@ -115,10 +117,12 @@ test('lazy details only load on disclosure, reject stale replacements, retry and
   await details.select(undefined, true)
   assert.equal(details.state.report, undefined, 'mutation invalidation drops old findings')
   const retry = details.select('report-c', true)
+  await new Promise(resolve => setTimeout(resolve, 5))
   calls[2]!.fail(new Error('Report changed')); await retry
   assert.equal(details.state.report, undefined)
   assert.match(details.state.error, /Report changed/)
   const retried = details.select('report-c', true)
+  await new Promise(resolve => setTimeout(resolve, 5))
   calls[3]!.finish({ ...report, id: 'report-c' }); await retried
   assert.equal(details.state.report!.id, 'report-c')
   details.dispose()

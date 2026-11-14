@@ -1,108 +1,36 @@
-import { onActivated, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 import { t } from './i18n.ts'
-import { apiUrl } from './api-url.ts'
-import { isRecord } from './folders-sidebar.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
-import { createLiveResourceRefresh } from './live-resource-refresh.ts'
+import { useBotResourceStore } from './stores/bots.ts'
+import { requireResourcePinia } from './stores/app.ts'
+import { useCatalogVisibility } from './resources/catalog-visibility.ts'
 
-export interface ServiceGroup {
-  sessionId?: string; botInstanceId: string; platform: string; conversationId: string; name?: string; botName: string
-  enabled: boolean; agent?: string; pending: boolean; lastSeen: number
-  messages: Array<{ id: string; sender: string; text: string; state: 'received' | 'not_enabled' | 'not_triggered'; receivedAt: number }>
-}
+import { type ServiceGroup, type ServiceGroupSource } from './service-group-contract.ts'
+export { parseServiceGroups, type ServiceGroup, type ServiceGroupSource } from './service-group-contract.ts'
 export function serviceGroupKey(group: Pick<ServiceGroup, 'botInstanceId' | 'conversationId'>): string {
   return JSON.stringify([group.botInstanceId, group.conversationId])
-}
-type ServiceGroupSource = { apiBase: string; projectId: string; active: boolean; group?: string; session?: string }
-type LivePool = ReturnType<typeof useLiveClientPool>
-const serviceGroupResources = new WeakMap<LivePool, Map<string, ReturnType<typeof createServiceGroupResource>>>()
-
-// A resource exists only while at least one active component subscribes. Project ID
-// is included defensively even when callers already pass a project-scoped base.
-function createServiceGroupResource(options: ServiceGroupSource, pool: LivePool) {
-  const source = () => options
-  const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
-  let controller: AbortController | undefined, generation = 0
-  let pending: Promise<void> | undefined
-  let disposed = false, invalidated = false
-  function refresh(): Promise<void> {
-    if (pending) return pending
-    if (disposed || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return Promise.resolve()
-    pending = (async () => {
-      do {
-        invalidated = false
-        await load()
-      } while (invalidated && !disposed && (typeof document === 'undefined' || document.visibilityState !== 'hidden'))
-    })().finally(() => { pending = undefined })
-    return pending
-  }
-  async function load() {
-    const current = generation, request = controller = new AbortController()
-    try {
-      const url = apiUrl(source().apiBase, '/api/service-groups')
-      if (source().group) url.searchParams.set('group', source().group!)
-      if (source().session) url.searchParams.set('session', source().session!)
-      const response = await fetch(url, { cache: 'no-store', redirect: 'error', signal: AbortSignal.any([request.signal, AbortSignal.timeout(10000)]) })
-      if (!response.ok) throw new Error('Unavailable')
-      const body: unknown = await response.json()
-      if (!isRecord(body) || typeof body.revision !== 'string' || !Array.isArray(body.agents) || body.agents.some(agent => typeof agent !== 'string') || !Array.isArray(body.groups) || body.groups.length > 200) throw new Error('Invalid groups')
-      for (const group of body.groups) {
-        if (!isRecord(group) || (group.sessionId !== undefined && typeof group.sessionId !== 'string') || typeof group.botInstanceId !== 'string' || typeof group.conversationId !== 'string' || !['qq', 'feishu'].includes(String(group.platform)) || (group.name !== undefined && typeof group.name !== 'string') || (group.agent !== undefined && typeof group.agent !== 'string') || typeof group.botName !== 'string' || typeof group.enabled !== 'boolean' || typeof group.pending !== 'boolean' || typeof group.lastSeen !== 'number' || !Array.isArray(group.messages) || group.messages.length > 20) throw new Error('Invalid group')
-        for (const message of group.messages) if (!isRecord(message) || typeof message.id !== 'string' || typeof message.sender !== 'string' || typeof message.text !== 'string' || message.text.length > 2000 || !['received', 'not_enabled', 'not_triggered'].includes(String(message.state)) || typeof message.receivedAt !== 'number') throw new Error('Invalid message')
-      }
-      if (current !== generation || request.signal.aborted) return
-      groups.value = body.groups as unknown as ServiceGroup[]; agents.value = body.agents as string[]; revision.value = body.revision; error.value = ''
-    } catch { if (current === generation && !request.signal.aborted) error.value = 'unavailable' }
-    finally { if (controller === request) controller = undefined }
-  }
-  function subscribe() { return createLiveResourceRefresh(pool, {
-    base: options.apiBase, projectId: options.projectId, resource: 'service-groups',
-    refresh: () => { invalidated = true; void refresh() },
-  }) }
-  let live: ReturnType<typeof createLiveResourceRefresh> | undefined = (typeof document === 'undefined' || document.visibilityState !== 'hidden') ? subscribe() : undefined
-  const visible = () => {
-    live?.dispose(); live = undefined
-    if (document.visibilityState === 'hidden') { generation++; controller?.abort() }
-    else live = subscribe()
-  }
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visible)
-  function dispose() {
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visible)
-    disposed = true; generation++; controller?.abort()
-    live?.dispose()
-  }
-  return { groups, agents, revision, error, refresh, dispose, subscribers: 0 }
 }
 
 export function useServiceGroups(source: () => ServiceGroupSource) {
   const pool = useLiveClientPool()
-  let resources = serviceGroupResources.get(pool)
-  if (!resources) { resources = new Map(); serviceGroupResources.set(pool, resources) }
-  const lifecycleActive = ref(true)
-  const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
-  let resource: ReturnType<typeof createServiceGroupResource> | undefined
-  const stop = watch(() => [source().apiBase, source().projectId, source().active, source().group, source().session, lifecycleActive.value], (_, __, cleanup) => {
-    groups.value = []; agents.value = []; revision.value = ''; error.value = ''
-    const options = { ...source() }
-    if (!options.active || !lifecycleActive.value) return
-    const key = JSON.stringify([options.apiBase, options.projectId, options.group || '', options.session || ''])
-    const shared = resources!.get(key) ?? createServiceGroupResource(options, pool)
-    resources!.set(key, shared)
-    resource = shared
-    shared.subscribers++
-    const stopSync = watch([shared.groups, shared.agents, shared.revision, shared.error], () => {
-      groups.value = shared.groups.value; agents.value = shared.agents.value
-      revision.value = shared.revision.value; error.value = shared.error.value
-    }, { immediate: true, flush: 'sync' })
-    cleanup(() => {
-      stopSync(); resource = undefined
-      if (--shared.subscribers === 0) { shared.dispose(); resources!.delete(key) }
-    })
-  }, { immediate: true })
-  onActivated(() => { lifecycleActive.value = true })
-  onDeactivated(() => { lifecycleActive.value = false })
-  onUnmounted(stop)
-  return { groups, agents, revision, error, refresh: () => resource?.refresh() ?? Promise.resolve() }
+  const owner = useBotResourceStore(requireResourcePinia()).owner
+  const enabled = useCatalogVisibility(() => source().active)
+  const current = shallowRef<ReturnType<typeof owner.groups>>()
+  watch(() => [source().apiBase, source().projectId, source().group, source().session, enabled.value] as const,
+    ([apiBase, projectId, group, session, active], _, cleanup) => {
+      current.value = undefined
+      if (!active) return
+      const lease = owner.groups({ apiBase, projectId, group, session, active }, pool)
+      current.value = lease
+      cleanup(lease.release)
+    }, { immediate: true })
+  return {
+    groups: computed(() => current.value?.state.value.value?.groups ?? []),
+    agents: computed(() => current.value?.state.value.value?.agents ?? []),
+    revision: computed(() => current.value?.state.value.value?.revision ?? ''),
+    error: computed(() => current.value?.state.value.error ?? ''),
+    refresh: () => current.value?.refresh() ?? Promise.resolve(),
+  }
 }
 
 // Display-only addresses are never passed to session prepare/send APIs.

@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { computed, createRenderer, defineComponent, h, nextTick, onUpdated, ref } from 'vue'
@@ -76,6 +77,7 @@ test('Vue component commit stamp coalesces bottom/progressive callbacks without 
     onUpdated(() => { commit++ })
     return () => h('div', String(rows.value))
   } }))
+  app.use(createResourceStores())
   app.mount({ children: [] })
   try {
     for (let batch = 0; batch < 3; batch++) {

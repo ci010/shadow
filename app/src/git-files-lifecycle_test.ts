@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRenderer, defineComponent, nextTick, reactive, ref } from 'vue'
@@ -18,6 +19,7 @@ test('Git polling cancels old identities and hidden panes, preserving explicit f
   const app = renderer.createApp(defineComponent({
     setup() { state = useWorkdirGit(() => source, active); return () => null },
   }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   assert.equal(requests[0]!.url.pathname, '/api/folders/first/git/status')
@@ -70,6 +72,7 @@ test('Git offline retry and reconnection do not leak results across projects or 
   const app = renderer.createApp(defineComponent({
     setup() { state = useWorkdirGit(() => source, active); return () => null },
   }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   const offline = () => Response.json({ error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', workdirId: 'folder' }, { status: 503 })
@@ -198,6 +201,7 @@ test('document visibility suspends readers and resume performs a fresh read', as
       return () => null
     },
   }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   assert.equal(requests.length, 1)

@@ -99,6 +99,7 @@
 
 <script setup lang="ts">
 import { computed, inject, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { useWorkflowResourceStore } from '../stores/workflow.ts'
 import { WorkflowInputReferencesKey, workflowInputReference } from '../workflow-input-references.ts'
 import WorkflowGraph from './WorkflowGraph.vue'
 import { botCanvas } from '../bot-workflows.ts'
@@ -118,7 +119,12 @@ const documentQuery = shallowRef(route.query)
 watch(() => route.fullPath, () => {
   if (route.name === 'project-workflows' && route.params.projectId === props.projectId) documentQuery.value = route.query
 })
-const snapshot = shallowRef<WorkflowSnapshot>(), loading = ref(false), error = ref(''), operationError = ref(''), busy = ref(false), confirmation = ref(''), notice = ref('')
+const { owner } = useWorkflowResourceStore()
+const resourceLease = shallowRef<ReturnType<typeof owner.acquire>>()
+const snapshot = computed(() => resourceLease.value?.state.value.value)
+const loading = computed(() => resourceLease.value?.state.value.loading ?? false)
+const error = computed(() => resourceLease.value?.state.value.error ?? '')
+const operationError = ref(''), busy = ref(false), confirmation = ref(''), notice = ref('')
 const activated = ref(true), pageVisible = ref(typeof document === 'undefined' || !document.hidden)
 const enabled = computed(() => props.active && activated.value && pageVisible.value)
 const catalog = useAutomationCatalog(() => props.apiBase, () => enabled.value)
@@ -179,28 +185,15 @@ async function inspectFlow(id: string, nodeId?: string) {
   await nextTick(); inspector.value?.focus({ preventScroll: true })
 }
 const chatLocation = computed(() => ({ name: 'chat', params: { projectId: props.projectId } }))
-let client = createWorkflowClient(props.apiBase, props.projectId)
-let timer: ReturnType<typeof setTimeout> | undefined, reader: AbortController | undefined, mutation: AbortController | undefined
-function stopRead() { clearTimeout(timer); reader?.abort(); reader = undefined; loading.value = false }
+let mutation: AbortController | undefined
 function refreshAll() { catalog.refresh(); void refresh() }
-async function refresh() {
-  if (!enabled.value || loading.value || busy.value) return
-  clearTimeout(timer)
-  const controller = reader = new AbortController(), base = props.apiBase, project = props.projectId
-  loading.value = true
-  try {
-    const value = await client.read(controller.signal)
-    if (!controller.signal.aborted && base === props.apiBase && project === props.projectId) { snapshot.value = value; error.value = '' }
-  } catch (cause) { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Workflows are unavailable. Refresh to retry.') }
-  finally {
-    if (reader === controller) { reader = undefined; loading.value = false; if (enabled.value) timer = setTimeout(refresh, 30_000) }
-  }
-}
+async function refresh() { if (enabled.value) await resourceLease.value?.refresh() }
+
 function selectRun(id?: string) { confirmation.value = ''; void router.replace({ query: { workflow: definition.value?.id, ...(id ? { run: id } : {}) } }) }
 function requestRetry(run: WorkflowRun) { if (run.status === 'blocked') confirmation.value = run.id; else void operate('retry', run.id) }
 async function operate(action: 'pause' | 'resume' | 'retry' | 'cancel', id: string, acknowledgeReplay = false) {
   if (busy.value) return
-  stopRead(); busy.value = true; operationId.value = id; operationError.value = ''; notice.value = ''
+  busy.value = true; operationId.value = id; operationError.value = ''; notice.value = ''
   const controller = mutation = new AbortController(), base = props.apiBase, project = props.projectId
   try {
     await createWorkflowClient(base, project).control(id, action, acknowledgeReplay, controller.signal)
@@ -211,11 +204,18 @@ async function operate(action: 'pause' | 'resume' | 'retry' | 'cancel', id: stri
 }
 function visibility() { pageVisible.value = !document.hidden }
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)
-watch(() => [props.apiBase, props.projectId], () => { stopRead(); mutation?.abort(); mutation = undefined; busy.value = false; client = createWorkflowClient(props.apiBase, props.projectId); snapshot.value = undefined; error.value = ''; operationError.value = ''; confirmation.value = ''; notice.value = ''; void refresh() })
-watch(enabled, value => { if (value) void refresh(); else stopRead() }, { immediate: true })
+watch(() => [props.apiBase, props.projectId, enabled.value] as const, ([base, project, active], _old, cleanup) => {
+  mutation?.abort(); mutation = undefined; busy.value = false
+  if (_old && (base !== _old[0] || project !== _old[1])) resourceLease.value = undefined
+  operationError.value = ''; confirmation.value = ''; notice.value = ''
+  if (!active) return
+  const lease = owner.acquire(base, project)
+  resourceLease.value = lease
+  cleanup(lease.release)
+}, { immediate: true, flush: 'sync' })
 onActivated(() => { activated.value = true })
 onDeactivated(() => { activated.value = false })
-onUnmounted(() => { activated.value = false; stopRead(); mutation?.abort(); document.removeEventListener('visibilitychange', visibility) })
+onUnmounted(() => { activated.value = false; mutation?.abort(); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility) })
 </script>
 
 <style scoped>

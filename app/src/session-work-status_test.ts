@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createSessionWorkStatus } from './session-work-status.ts'
@@ -171,6 +172,7 @@ test('mounted work status gates initial ready and ignores graph revisions, but r
   })
   const props = Vue.reactive({ apiBase: 'http://fixture/projects/a', sessionId: 'web:one', active: true, revision: 0 })
   const app = renderer.createApp({ setup: () => () => Vue.h(module.exports.default, props) })
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   const tick = () => new Promise(resolve => setTimeout(resolve, 10))

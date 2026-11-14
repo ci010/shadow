@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -72,6 +73,7 @@ function mount(t: TestContext, props: Record<string, unknown> = {}, shadowDeskto
   const root = element('root')
   // Render the production ProviderSetup template; only the generic select widget is stubbed.
   const app = renderer.createApp(component ?? loadComponent(new URL('./ProviderSetup.vue', import.meta.url)), props)
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => {
     app.unmount()

@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -41,6 +42,7 @@ test('selected automation renders actual metrics, unknown usage, frequency and r
   })
   const props = reactive({ apiBase: 'https://example.test/projects/current/', featureId: 'system:work-organizer', active: true })
   const root = node('root'), app = renderer.createApp({ render: () => h(module.exports.default, props) })
+  app.use(createResourceStores())
   app.mount(root); t.after(() => app.unmount())
   const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
   await settle()

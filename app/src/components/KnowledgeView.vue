@@ -90,10 +90,13 @@
 import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { createKnowledgeClient, filterKnowledge, knowledgeRelations, type KnowledgeCatalog, type KnowledgeDetail, type KnowledgeEntry, type KnowledgeKind } from '../knowledge.ts'
+import { filterKnowledge, knowledgeRelations, type KnowledgeCatalog, type KnowledgeDetail, type KnowledgeEntry, type KnowledgeKind } from '../knowledge.ts'
 import { renderKnowledgeMarkdown } from '../knowledge-markdown.ts'
+import { useKnowledgeResourceStore } from '../stores/knowledge.ts'
+import { requireResourcePinia } from '../stores/app.ts'
+import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
 import KnowledgeGraph from './KnowledgeGraph.vue'
 import KnowledgeDeleteDialog from './KnowledgeDeleteDialog.vue'
 import KnowledgeMaintenance from './KnowledgeMaintenance.vue'
@@ -108,23 +111,24 @@ const previewElement = ref<HTMLDivElement>()
 const linkError = ref('')
 let pendingAnchor: { id: string; fragment: string } | undefined
 const scrollPositions = new Map<string, number>()
-const catalog = ref<KnowledgeCatalog>({ entries: [], links: [] })
-const detail = ref<KnowledgeDetail>()
+const owner = useKnowledgeResourceStore(requireResourcePinia()).owner
+const enabled = useCatalogVisibility(() => props.active)
+const catalogLease = shallowRef<ReturnType<typeof owner.catalog>>()
+const detailLease = shallowRef<ReturnType<typeof owner.detail>>()
+const catalog = computed<KnowledgeCatalog>(() => catalogLease.value?.state.value.value ?? { entries: [], links: [] })
+const detail = computed<KnowledgeDetail | undefined>(() => detailLease.value?.state.value.value)
 const deletion = ref<KnowledgeEntry>()
 const kind = ref<KnowledgeKind | 'all'>('all')
 const query = ref('')
 const showGraph = ref(true)
 const focusGraph = ref(false)
 const raw = ref(false)
-const loading = ref(false)
-const detailLoading = ref(false)
-const error = ref('')
-const detailError = ref('')
+const loading = computed(() => catalogLease.value?.state.value.loading ?? false)
+const detailLoading = computed(() => detailLease.value?.state.value.loading ?? false)
+const error = computed(() => catalogLease.value?.state.value.error ?? '')
+const detailError = computed(() => detailLease.value?.state.value.error ?? '')
 const notice = ref('')
 const maintenanceRevision = ref(0)
-let catalogRequest: AbortController | undefined
-let detailRequest: AbortController | undefined
-const detailCache = new Map<string, KnowledgeDetail>()
 function restoreScroll(id: string) {
   void nextTick(() => {
     if (selectedId.value !== id || !scroll.value) return
@@ -187,88 +191,50 @@ function followPreviewLink(event: MouseEvent) {
   else restoreScroll(id)
 }
 
-async function loadDetail() {
-  detailRequest?.abort()
-  detail.value = detailCache.get(selectedId.value)
-  detailError.value = ''
-  detailLoading.value = false
-  if (!props.active || !selectedId.value || !entriesById.value.has(selectedId.value)) return
-  if (detail.value) return
-  const request = new AbortController()
-  detailRequest = request
-  detailLoading.value = true
-  try {
-    const result = await createKnowledgeClient(props.apiBase).read(selectedId.value, request.signal)
-    if (!request.signal.aborted) { detailCache.set(result.entry.id, result); detail.value = result }
-  } catch (cause) {
-    if (!request.signal.aborted) detailError.value = cause instanceof Error ? cause.message : t('Could not load this entry.')
-  } finally { if (!request.signal.aborted) detailLoading.value = false }
-}
 async function refresh() {
-  catalogRequest?.abort()
-  detailRequest?.abort()
-  detailCache.clear()
-  detail.value = undefined
-  detailLoading.value = false
-  detailError.value = ''
-  loading.value = false
-  const request = new AbortController()
-  catalogRequest = request
-  if (!props.active) return
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await createKnowledgeClient(props.apiBase).list(request.signal)
-    if (request.signal.aborted) return
-    catalog.value = result
-    emit('catalog', result.entries)
-    await loadDetail()
-  } catch (cause) {
-    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load knowledge.')
-  } finally { if (!request.signal.aborted) loading.value = false }
+  await catalogLease.value?.refresh()
+  await detailLease.value?.refresh()
 }
-async function deleted(id: string) {
+async function loadDetail() { await detailLease.value?.refresh() }
+async function deleted(_id: string) {
   deletion.value = undefined
-  detail.value = undefined
-  detailRequest?.abort()
-  detailCache.delete(id)
-  catalog.value = {
-    entries: catalog.value.entries.filter(item => item.id !== id),
-    links: catalog.value.links.filter(link => link.source !== id),
-  }
   notice.value = t('File deleted. Other entries and their references were kept.')
   maintenanceRevision.value++
   await refresh()
 }
-watch(selectedId, (id, previous) => {
-  if (scroll.value) scrollPositions.set(previous, scroll.value.scrollTop)
-  notice.value = ''
-  linkError.value = ''
-  if (pendingAnchor?.id !== id) pendingAnchor = undefined
-  void loadDetail()
-  restoreScroll(id)
-})
-watch(detail, () => restoreScroll(selectedId.value), { flush: 'post' })
-watch(() => props.entryId, id => { selectedId.value = id ?? '' })
-watch(() => [props.apiBase, props.active] as const, ([base, active], previous) => {
+watch(() => [props.apiBase, props.projectId, enabled.value] as const, ([base, projectId, active], previous, cleanup) => {
   deletion.value = undefined
-  if (base !== previous?.[0]) {
-    detailCache.clear()
+  catalogLease.value = undefined
+  if (base !== previous?.[0] || projectId !== previous?.[1]) {
     scrollPositions.clear()
-    catalog.value = { entries: [], links: [] }
     query.value = ''
     notice.value = ''
     linkError.value = ''
     pendingAnchor = undefined
   }
-  if (active) void refresh()
-  else {
-    catalogRequest?.abort()
-    detailRequest?.abort()
-    loading.value = false
-    detailLoading.value = false
-  }
+  if (!active) return
+  const lease = owner.catalog(base, projectId)
+  catalogLease.value = lease
+  cleanup(lease.release)
 }, { immediate: true })
+watch(() => catalog.value, value => emit('catalog', value.entries))
+watch(() => [props.apiBase, props.projectId, enabled.value, selectedId.value, entriesById.value.get(selectedId.value)?.revision] as const,
+  ([base, projectId, active, id, revision], _, cleanup) => {
+    detailLease.value = undefined
+    if (!active || !id || revision === undefined) return
+    const lease = owner.detail(base, projectId, id, revision)
+    detailLease.value = lease
+    cleanup(lease.release)
+  }, { immediate: true })
+watch(selectedId, (id, previous) => {
+  if (scroll.value) scrollPositions.set(previous, scroll.value.scrollTop)
+  notice.value = ''
+  linkError.value = ''
+  if (pendingAnchor?.id !== id) pendingAnchor = undefined
+  restoreScroll(id)
+})
+watch(detail, () => restoreScroll(selectedId.value), { flush: 'post' })
+watch(() => props.entryId, id => { selectedId.value = id ?? '' })
 watch(() => [props.entryId, route.query.entry, route.hash] as const, ([id, entry, hash]) => {
   if (id && entry === id && hash) {
     pendingAnchor = { id, fragment: hash.slice(1) }
@@ -276,7 +242,6 @@ watch(() => [props.entryId, route.query.entry, route.hash] as const, ([id, entry
     restoreScroll(id)
   }
 }, { immediate: true })
-onUnmounted(() => { catalogRequest?.abort(); detailRequest?.abort() })
 </script>
 
 <style scoped>

@@ -136,9 +136,11 @@
 
 <script setup lang="ts">
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
-import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
+import { useCatalogResourceStore } from '../stores/catalog.ts'
+import { requireResourcePinia } from '../stores/app.ts'
+import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
 import { t } from '../i18n.ts'
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { composerDraftKey, composerDraftEditedAt, composerDraftRevision } from '../composables/useComposerDraft.ts'
 import { sessionListMetadata } from '../session-list-metadata.ts'
 import FolderDialog from './FolderDialog.vue'
@@ -152,7 +154,7 @@ import WorkingWave from './WorkingWave.vue'
 import CopyableId from './CopyableId.vue'
 import AutomationSidebar from './AutomationSidebar.vue'
 import { sidebarFolderLabels } from '../sidebar-folder-labels.ts'
-import { fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
+
 import { railInitial } from '../folder-rail.ts'
 import { prominentWorkingStage } from '../session-activity.ts'
 import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
@@ -190,14 +192,28 @@ const emit = defineEmits<{
   automation: [id: string]
   knowledge: []
 }>()
-const client = computed(() => createFoldersClient(props.apiBase))
+const client = computed(() => createFoldersClient(props.apiBase)) // Explicit registration/clone commands.
+const owner = useCatalogResourceStore(requireResourcePinia()).owner
+const catalogsEnabled = useCatalogVisibility(() => true)
+const folderLease = shallowRef<ReturnType<typeof owner.folders>>()
+const nodeLease = shallowRef<ReturnType<typeof owner.nodes>>()
+// A confirmed registration receipt is a temporary UI overlay, never a cache mutation.
+const registeredFolders = ref<FolderRecord[]>([])
 const livePool = useLiveClientPool()
 const groupExpanded = ref(true)
 const componentId = useId()
 const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
 const folderActions = computed(() => FOLDER_ACTIONS)
-const folders = ref<FolderRecord[]>([])
-const nodes = ref<readonly NodeInventoryEntry[]>([])
+const folders = computed(() => {
+  if (folderLease.value?.state.value.status === 'forbidden') return []
+  const rows = folderLease.value?.state.value.value ?? []
+  return [...rows, ...registeredFolders.value.filter(row => !rows.some(item => item.id === row.id))]
+})
+const nodes = computed(() => nodeLease.value?.state.value.value?.nodes ?? [])
+watch(() => folderLease.value?.state.value, state => {
+  if (state?.status === 'forbidden') registeredFolders.value = []
+  else if (state?.value) registeredFolders.value = registeredFolders.value.filter(row => !state.value!.some(item => item.id === row.id))
+})
 const groups = computed(() => groupFolderSessions(folders.value, props.sessions, props.grouped
   ? { activeSessionId: props.activeSessionId, draftActivity: draftActivity.value } : undefined))
 const executionsByOwner = computed(() => activeSubagentsByOwner(props.sessions, props.stages))
@@ -259,8 +275,8 @@ function toggleBot(id: string) {
 const activeAutomation = computed(() => automationSessionOwners(props.sessions).get(props.activeSessionId))
 const expandedFolders = reactive(new Set<string>())
 const selectedFolderId = ref('')
-const loading = ref(false)
-const error = ref('')
+const loading = computed(() => folderLease.value?.state.value.loading ?? false)
+const error = computed(() => folderLease.value?.state.value.error ?? '')
 const cloneStatus = ref<CloneView>({ state: 'idle' })
 const dialogMode = ref<'open' | 'clone' | null>(null)
 const menuOpen = ref(false)
@@ -283,28 +299,17 @@ const preferredWidth = ref<number>()
 const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 200, 400))
 const sidebarWidth = computed(() => clampSidebarWidth(preferredWidth.value ?? (compact.value ? 240 : 260), resizeBounds.value))
 let resizeObserver: ResizeObserver | undefined
-let listRequest: AbortController | undefined
-let nodeRequest: AbortController | undefined
 let stopCatalogs: (() => void) | undefined
 function subscribeCatalogs() {
-  stopCatalogs?.()
-  if (!props.projectId) { void loadFolders(); void loadNodes(); return }
-  const folders = createLiveResourceRefresh(livePool, { base: props.apiBase, projectId: props.projectId,
-    resource: 'folders', refresh: () => { void loadFolders() } })
-  const nodes = createLiveResourceRefresh(livePool, { base: props.apiBase, projectId: props.projectId,
-    resource: 'nodes', refresh: () => { void loadNodes() } })
-  stopCatalogs = () => { folders.dispose(); nodes.dispose() }
+  stopCatalogs?.(); stopCatalogs = undefined
+  if (!active || !catalogsEnabled.value) return
+  const projectId = props.projectId ?? 'default'
+  const currentFolders = owner.folders(props.apiBase, projectId, livePool)
+  const currentNodes = owner.nodes(props.apiBase, projectId, livePool)
+  folderLease.value = currentFolders; nodeLease.value = currentNodes
+  stopCatalogs = () => { currentFolders.release(); currentNodes.release(); folderLease.value = undefined; nodeLease.value = undefined }
 }
-async function loadNodes() {
-  if (!active) return
-  nodeRequest?.abort()
-  const controller = nodeRequest = new AbortController()
-  try {
-    const inventory = await fetchNodeInventory(props.apiBase, 'main', AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]))
-    if (!controller.signal.aborted && active) nodes.value = inventory.nodes
-  } catch { /* Remote node IDs remain a usable fallback. */ }
-  finally { if (nodeRequest === controller) nodeRequest = undefined }
-}
+async function loadNodes() { if (active && catalogsEnabled.value) await nodeLease.value?.refresh() }
 let active = true
 const folderWorkingStage = (sessions: SidebarSession[]) => prominentWorkingStage(sessions.map(session => props.stages[session.sessionId]))
 const folderSubagents = (sessions: SidebarSession[]) => summarizeSubagents(sessions.flatMap(session => executionsByOwner.value.get(session.sessionId) ?? []), props.stages)
@@ -335,31 +340,12 @@ watch(() => activeAutomation.value ? undefined : props.activeSessionId
 }, { immediate: true })
 
 async function loadFolders() {
-  if (!active) return
-  listRequest?.abort()
-  const controller = new AbortController()
-  listRequest = controller
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await client.value.list(controller.signal)
-    if (!controller.signal.aborted) folders.value = result
-  } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load folders. Retry.')
-  } finally {
-    if (listRequest === controller) { loading.value = false; listRequest = undefined }
-  }
+  if (active && catalogsEnabled.value) await folderLease.value?.refresh()
 }
 async function folderRegistered(folder: FolderRecord) {
   selectedFolderId.value = folder.id
   expandedFolders.add(folder.id)
-  const index = folders.value.findIndex(existing => existing.id === folder.id)
-  if (index < 0) folders.value.push(folder)
-  else folders.value[index] = folder
-  // The returned record keeps the folder usable even if refreshing the registry fails.
-  listRequest?.abort()
-  listRequest = undefined
-  loading.value = false
+  registeredFolders.value = [...registeredFolders.value.filter(row => row.id !== folder.id), folder]
   await loadFolders()
 }
 function toggleFolder(id: string) {
@@ -436,29 +422,22 @@ function deactivate() {
   stopActivityClock()
   stopCatalogs?.()
   stopCatalogs = undefined
-  nodeRequest?.abort()
-  nodeRequest = undefined
   active = false
   resizeActive.value = false
   resizeObserver?.disconnect()
   closeMenu()
   dialogMode.value = null
-  listRequest?.abort()
-  listRequest = undefined
-  loading.value = false
 }
 const closeOnResize = () => { closeMenu(); measureSidebar() }
 watch(() => props.folderRevision, () => {
   void loadNodes()
-  listRequest?.abort()
-  listRequest = undefined
-  loading.value = false
   void loadFolders()
 })
 watch(() => [props.apiBase, props.projectId], () => {
-  listRequest?.abort(); nodeRequest?.abort(); folders.value = []; nodes.value = []
+  registeredFolders.value = []
   if (active) subscribeCatalogs()
 })
+watch(catalogsEnabled, enabled => { if (enabled) subscribeCatalogs(); else { stopCatalogs?.(); stopCatalogs = undefined } })
 onMounted(() => { window.addEventListener('storage', refreshDraftActivity); startActivityClock(); observeSidebar(); subscribeCatalogs(); window.addEventListener('resize', closeOnResize) })
 onActivated(() => { if (active) return; startActivityClock(); active = true; observeSidebar(); subscribeCatalogs() })
 onDeactivated(deactivate)

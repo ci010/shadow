@@ -59,18 +59,27 @@
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
 import { t, formatDateTime } from '../i18n.ts'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { createKnowledgeMaintenanceClient, type KnowledgeMaintenanceFinding, type KnowledgeRepairPreview } from '../knowledge-maintenance.ts'
-import type { KnowledgeMaintenanceSummary } from '../../../src/knowledge/maintenance-contracts.ts'
-import { createMaintenanceDetails } from '../knowledge-maintenance-details.ts'
+import { useMaintenanceResourceStore } from '../stores/maintenance.ts'
 import KnowledgeRepairDialog from './KnowledgeRepairDialog.vue'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; revision?: number; active?: boolean }>(), { active: true })
 const emit = defineEmits<{ select: [id: string]; changed: [id: string] }>()
 let client = createKnowledgeMaintenanceClient(props.apiBase)
-const details = createMaintenanceDetails((id, signal) => client.report(id, signal))
-const status = ref<KnowledgeMaintenanceSummary>()
+const { owner } = useMaintenanceResourceStore()
+const activated = ref(true)
+const visible = ref(typeof document === 'undefined' || !document.hidden)
+const enabled = computed(() => props.active && activated.value && visible.value)
+const summaryLease = shallowRef<ReturnType<typeof owner.acquire>>()
+const reportLease = shallowRef<ReturnType<typeof owner.report>>()
+const status = computed(() => summaryLease.value?.state.value.value)
+const details = { state: {
+  get report() { return reportLease.value?.state.value.value },
+  get loading() { return reportLease.value?.state.value.loading ?? false },
+  get error() { return reportLease.value?.state.value.error ?? '' },
+} }
 const preview = ref<KnowledgeRepairPreview>()
-const loading = ref(false)
+const loading = computed(() => summaryLease.value?.state.value.loading ?? false)
 const scanning = ref(false)
 const preparing = ref(false)
 const busy = computed(() => loading.value || scanning.value || preparing.value)
@@ -78,7 +87,8 @@ const expanded = ref(false)
 const filter = ref<'all' | KnowledgeMaintenanceFinding['reason']>('all')
 const page = ref(0)
 const pageSize = 100
-const error = ref('')
+const commandError = ref('')
+const error = computed(() => commandError.value || summaryLease.value?.state.value.error || '')
 const notice = ref('')
 let request: AbortController | undefined
 interface FindingGroup {
@@ -105,70 +115,65 @@ const formatDate = (value: string) => formatDateTime(new Date(value))
 function begin() {
   request?.abort()
   request = new AbortController()
-  error.value = ''
+  commandError.value = ''
   return request
 }
 async function refresh() {
-  if (!props.active) return
-  const current = begin()
-  loading.value = true
-  try {
-    const result = await client.summary(current.signal)
-    if (!current.signal.aborted) {
-      status.value = result
-      void details.select(result.report?.findingCount ? result.report.id : undefined, expanded.value, props.active)
-    }
-  } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load the maintenance report.')
-  } finally { if (!current.signal.aborted) loading.value = false }
+  if (enabled.value) await summaryLease.value?.refresh()
 }
+
 async function scan() {
-  if (!props.active || busy.value) return
+  if (!enabled.value || busy.value) return
   const current = begin()
   scanning.value = true
   try {
-    const result = await client.scanSummary(current.signal)
+    await client.scanSummary(current.signal)
     if (current.signal.aborted) return
-    status.value = result
-    expanded.value = true
+    await summaryLease.value?.refresh()
+    if (!current.signal.aborted) expanded.value = true
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('The scan failed. The previous report may be stale.')
+    if (!current.signal.aborted) commandError.value = cause instanceof Error ? cause.message : t('The scan failed. The previous report may be stale.')
   } finally { if (!current.signal.aborted) scanning.value = false }
 }
 async function prepare(sourceId: string) {
-  if (!props.active || busy.value || !status.value?.report) return
+  if (!enabled.value || busy.value || !status.value?.report) return
   const current = begin()
   preparing.value = true
   try {
     const result = await client.preview(status.value.report.id, sourceId, current.signal)
     if (!current.signal.aborted) preview.value = result
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not prepare a repair preview.')
+    if (!current.signal.aborted) commandError.value = cause instanceof Error ? cause.message : t('Could not prepare a repair preview.')
   } finally { if (!current.signal.aborted) preparing.value = false }
 }
 async function applied(id: string) {
   preview.value = undefined
   notice.value = t('Repair applied to the selected Wiki file. Pages and historical references were preserved.')
-  if (status.value) status.value = { ...status.value, report: null }
+  reportLease.value?.release(); reportLease.value = undefined
   emit('changed', id)
   await scan()
 }
-watch(() => [props.apiBase, props.revision, props.active] as const, ([base, revision, active], previous) => {
-  request?.abort()
-  preview.value = undefined
-  if (base !== previous?.[0] || revision !== previous?.[1]) {
-    status.value = undefined
-    details.dispose()
-    if (base !== previous?.[0]) client = createKnowledgeMaintenanceClient(base)
-    notice.value = ''
-  }
-  loading.value = false
-  scanning.value = false
-  preparing.value = false
-  if (active) void refresh()
-}, { immediate: true })
-watch(() => [status.value?.report?.findingCount ? status.value.report.id : undefined, expanded.value, props.active] as const, ([id, open, active]) => { void details.select(id, open, active) }, { immediate: true })
-onUnmounted(() => { request?.abort(); details.dispose() })
+watch(() => [props.apiBase, props.projectId, props.revision, enabled.value] as const, ([base, projectId, _revision, active]) => {
+  request?.abort(); preview.value = undefined
+  reportLease.value?.release(); reportLease.value = undefined
+  summaryLease.value?.release(); summaryLease.value = undefined
+  client = createKnowledgeMaintenanceClient(base)
+  commandError.value = ''; notice.value = ''; scanning.value = false; preparing.value = false
+  if (active) summaryLease.value = owner.acquire(base, projectId)
+}, { immediate: true, flush: 'sync' })
+watch(() => [status.value?.report?.findingCount ? status.value.report.id : undefined, expanded.value, enabled.value] as const, ([id, open, active], _old, cleanup) => {
+  reportLease.value = undefined
+  if (!id || !open || !active) return
+  const lease = owner.report(props.apiBase, props.projectId, id)
+  reportLease.value = lease
+  cleanup(lease.release)
+}, { immediate: true, flush: 'sync' })
+function visibility() { visible.value = !document.hidden }
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)
+onActivated(() => { activated.value = true })
+onDeactivated(() => { activated.value = false })
+onUnmounted(() => { request?.abort(); reportLease.value?.release(); summaryLease.value?.release(); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility) })
+
 </script>
 
 <style scoped>

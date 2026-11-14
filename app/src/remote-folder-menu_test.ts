@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -29,6 +30,7 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>) {
   const app = renderer.createApp(defineComponent({
     setup: () => () => h(module.exports.default, { ...props, ref: (value: unknown) => { instance = value } }),
   }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   return { props, state: () => instance.$.setupState }
