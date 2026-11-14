@@ -1,9 +1,11 @@
 import type { EditorGroups } from './editor-groups.ts'
 import type { SessionStage } from './session-activity.ts'
 
-/** Unknown activity is not evidence that a conversation is idle. */
-export function canReplaceIdleConversation(stage: SessionStage | null, protectedState: boolean): boolean {
-  return stage === 'idle' && !protectedState
+/** A successful full activity snapshot omits inactive sessions. Missing activity
+ * is only evidence of inactivity after that snapshot has loaded, never before. */
+export function canReplaceIdleConversation(stage: SessionStage | null | undefined, protectedState: boolean,
+  activityKnown = false): boolean {
+  return !protectedState && (stage === 'idle' || stage === 'inactive' || (stage == null && activityKnown))
 }
 
 /** Close only the conversation selected when sidebar navigation began. */

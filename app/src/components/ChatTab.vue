@@ -2259,13 +2259,17 @@ async function openProjectWork(key: string) {
   }
 }
 // Sidebar replacement is deliberately stricter than the composer busy indicator:
-// only a positively idle, empty conversation may lose its tab.
+// only a known idle/inactive, loaded and empty conversation may lose its tab.
 function canReplaceSidebarTab(): boolean {
-  return canReplaceIdleConversation(sessionStage.value, !activeSessionId.value || requestBusy.value
+  const activity = projectLease?.activity.state
+  const activityKnown = !!activity?.value && !activity.loading && !activity.error
+  return canReplaceIdleConversation(sessionStage.value, !activityKnown || !activeSession.value
+    || loadingHistory.value || sessionsLoading.value || !!sessionsError.value || !!composerError.value
+    || !activeSessionId.value || requestBusy.value
     || submissionBusy.value || !!activeAsk.value || activeSubagents.value.length > 0
     || !!activeSession.value?.hasBackgroundTasks || !!inputText.value || pendingAttachments.value.length > 0
     || contextItems.value.length > 0 || inputReferences.value.length > 0 || pastingFiles.value
-    || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0)
+    || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0, activityKnown)
 }
 defineExpose({ canReplaceSidebarTab, restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, appendInputReference, quoteSelection, handleImageContext, handleImageBusy })
 
