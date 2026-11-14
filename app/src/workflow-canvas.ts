@@ -1,3 +1,4 @@
+import { scheduleNodeDelivery } from '../../src/cron/delivery.ts'
 import { MarkerType, type Node, type Edge } from '@vue-flow/core'
 import { workflowGraph, type WorkflowDefinition, type WorkflowRun, type WorkflowConversation } from './workflows.ts'
 
@@ -9,18 +10,12 @@ export type WorkflowCanvasEntry = ({ definition: WorkflowDefinition; graph?: nev
   { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl; configureConnectionId?: string }
 export const workflowColumns = ['cron', 'automation', 'bot'] as const
 export type WorkflowColumn = typeof workflowColumns[number]
-/** Managed automations also use CronService's schedule adapter. Classify their
- * saved product metadata, not names, IDs, schedule expressions or session policy. */
+/** Periodic inputs share one source; delivery determines the product column. */
 export function workflowColumn(entry: WorkflowCanvasEntry): WorkflowColumn {
   if (entry.projection) return 'bot'
   if (entry.definition.source.kind !== 'schedule') return 'automation'
   const node = entry.definition.nodes.find(node => node.kind === 'schedule-action')
-  const job = node?.job
-  if (node?.action === 'program' || isRecord(job) && (job.program != null || job.source === 'learning' || job.source === 'system')) return 'automation'
-  return 'cron'
-}
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return scheduleNodeDelivery(node)?.kind === 'session' ? 'cron' : 'automation'
 }
 const nodeId = (flow: string, node: string) => JSON.stringify([flow, node])
 

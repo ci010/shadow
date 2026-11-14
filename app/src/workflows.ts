@@ -1,3 +1,4 @@
+import { scheduleNodeDelivery } from '../../src/cron/delivery.ts'
 import { parseBotProjection, type BotProjection } from './bot-workflows.ts'
 import { t, type MessageKey } from './i18n.ts'
 import { formatWorkflowSchedule } from './workflow-schedule.ts'
@@ -29,6 +30,7 @@ export function parseWorkflowDefinition(raw: unknown): WorkflowDefinition {
     || raw.gate !== undefined && (!isRecord(raw.gate) || raw.gate.kind !== 'revision-dedupe' || !['baseline', 'emit'].includes(String(raw.gate.first)))
     || !Array.isArray(raw.nodes) || !raw.nodes.length || raw.nodes.length > 8 || raw.nodes.some(n => !isRecord(n) || !text(n.kind))
     || raw.name !== undefined && !text(raw.name) || raw.owner !== undefined && !text(raw.owner)) return invalid()
+  if (raw.nodes.some(node => node.kind === 'schedule-action' && node.delivery !== undefined && !scheduleNodeDelivery(node))) return invalid()
   return raw as unknown as WorkflowDefinition
 }
 export function parseWorkflows(raw: unknown, projectId: string): WorkflowSnapshot {
@@ -69,12 +71,11 @@ function actionPresentation(node: WorkflowNode, definition: WorkflowDefinition) 
   const job = isRecord(node.job) ? node.job : undefined
   if (node.kind === 'schedule-action') {
     const task = recordedText(job?.task) ?? recordedText(job?.name)
-    if (node.action === 'agent') return { label: t('New Agent session'), detail: t('Fresh session each run · Agent: {agent}', { agent: recordedText(job?.agentType) ?? t('Not recorded') }), description: task }
-    if (node.action === 'session') return { label: t('Deliver to existing session'), detail: isRecord(job?.target) && recordedText(job.target.sessionId) ? String(job.target.sessionId) : t('Target not recorded'), description: task }
-    if (node.action === 'program') {
-      const program = isRecord(job?.program) ? recordedText(job.program.kind) : undefined
-      return { label: program === 'work-dispatch' ? t('Work dispatch program') : job?.source === 'learning' ? t('Learning program') : t('Program action'),
-        detail: program ?? recordedText(job?.agentType) ?? t('Program not recorded'), description: task }
+    const delivery = scheduleNodeDelivery(node)
+    if (delivery?.kind === 'session') return { label: t('Deliver to fixed session'), detail: `${t('Reuse context')} · ${delivery.sessionId}`, description: task }
+    if (delivery?.kind === 'automation') {
+      const strategy = isRecord(job?.program) ? recordedText(job.program.kind) : job?.source === 'learning' ? t('Learning program') : recordedText(job?.agentType)
+      return { label: t('Deliver to automation'), detail: t('Fresh context each run'), description: [task, strategy].filter(Boolean).join(' · ') }
     }
     return { label: t('Schedule action'), detail: t('Session policy not recorded'), description: task }
   }
@@ -89,7 +90,8 @@ function actionPresentation(node: WorkflowNode, definition: WorkflowDefinition) 
 export function workflowTargetSession(node: WorkflowNode, definition: WorkflowDefinition): string | undefined {
   if (node.kind === 'inbox') return recordedText(definition.owner)
   if (node.kind === 'github-notify' && isRecord(node.subscription)) return recordedText(node.subscription.sessionId)
-  if (node.kind === 'schedule-action' && node.action === 'session' && isRecord(node.job) && isRecord(node.job.target)) return recordedText(node.job.target.sessionId)
+  const delivery = scheduleNodeDelivery(node)
+  if (delivery?.kind === 'session') return delivery.sessionId
   return undefined
 }
 export type WorkflowConversation = { sessionId: string; kind: 'fixed' | 'latest' } | { automationId: string; kind: 'automation' }

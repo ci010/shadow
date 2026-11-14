@@ -18,6 +18,8 @@ import {
   type CronEventTarget,
 } from './events.ts'
 
+import { scheduleDelivery } from './delivery.ts'
+
 const JOBS_FILE = '.cron/jobs.json'
 
 export interface CronJobDef {
@@ -245,7 +247,7 @@ export class CronService {
         return canonical(config(live)) === canonical(config(raw))
       },
       execute: async (raw, signal) => {
-        if (!isCronJob(raw)) throw new Error('Invalid schedule action')
+        if (!isCronJob(raw) || !scheduleDelivery(raw)) throw new Error('Invalid schedule delivery')
         const handler = this.managed.get(raw.id)?.handler ?? this.handler
         if (!handler) throw new Error('Schedule handler unavailable')
         const execute = async () => {
@@ -433,10 +435,19 @@ export class CronService {
     if (this.stopped || !this.workflows.available) return
     const id = `schedule:${job.id}`
     const old = this.workflows.inspect().definitions.find(d => d.id === id)
-    const node = { kind: 'schedule-action' as const, action: job.program || job.source === 'learning' ? 'program' as const : cronContextMode(job) === 'fresh' ? 'agent' as const : 'session' as const, job: JSON.parse(JSON.stringify(job)) }
-    const changed = !old || old.gate !== undefined || canonical(old.nodes) !== canonical([node])
+    const node = { kind: 'schedule-action' as const, action: job.program || job.source === 'learning' ? 'program' as const : scheduleDelivery(job)?.kind === 'automation' ? 'agent' as const : 'session' as const, job: JSON.parse(JSON.stringify(job)), delivery: scheduleDelivery(job)! }
+    // Do not rewrite equivalent legacy definitions on startup. Saved run snapshots remain untouched.
+    const comparable = (nodes: unknown[]) => nodes.map(raw => {
+      const { delivery: _delivery, ...rest } = raw as Record<string, unknown>
+      if (this.managed.has(job.id) && rest.job && typeof rest.job === 'object') {
+        const { createdAt: _createdAt, ...config } = rest.job as Record<string, unknown>
+        rest.job = config
+      }
+      return rest
+    })
+    const changed = !old || old.gate !== undefined || canonical(comparable(old.nodes)) !== canonical(comparable([node]))
     this.workflows.define({ id, name: job.name ?? job.task?.slice(0, 160) ?? job.id, owner: job.originSessionId ?? job.target?.sessionId,
-      revision: old ? old.revision + Number(changed) : 1, source: { kind: 'schedule', id: job.id }, enabled: old?.enabled ?? true, nodes: [node] })
+      revision: old ? old.revision + Number(changed) : 1, source: { kind: 'schedule', id: job.id }, enabled: old?.enabled ?? true, nodes: !changed && old ? old.nodes : [node] })
   }
   async updateJob(id: string, definition: CronJobDef): Promise<string> {
     const old = this.jobs.get(id)

@@ -4361,5 +4361,9 @@
   "Quarantined package": "Quarantined package",
   "Cron workflows": "Cron",
   "Automation workflows": "Automation",
-  "BOT workflows": "BOT"
+  "BOT workflows": "BOT",
+  "Deliver to fixed session": "Deliver to fixed session",
+  "Reuse context": "Reuse context",
+  "Deliver to automation": "Deliver to automation",
+  "Fresh context each run": "Fresh context each run"
 }

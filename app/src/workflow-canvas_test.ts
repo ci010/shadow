@@ -49,13 +49,13 @@ test('schedule semantics use saved jobs: fixed targets, fresh sessions, maintena
   const graph = workflowGraph(fixed)
   assert.equal(graph[0]!.detail, '0 9 * * 1')
   assert.equal(graph[0]!.description, 'Timezone: Asia/Shanghai')
-  assert.equal(graph[2]!.label, 'Deliver to existing session')
-  assert.equal(graph[2]!.detail, 'web:old-target')
-  const cleanup = workflowGraph({ ...flow, nodes: [{ kind: 'schedule-action', action: 'agent', job: SESSION_CLEANUP_AUTOMATION }] })
+  assert.equal(graph[2]!.label, 'Deliver to fixed session')
+  assert.equal(graph[2]!.detail, 'Reuse context · web:old-target')
+  const cleanup = workflowGraph({ ...flow, nodes: [{ kind: 'schedule-action', action: 'agent', job: { ...SESSION_CLEANUP_AUTOMATION, id: 'cleanup' } }] })
   assert.equal(cleanup[0]!.detail, 'Daily at 03:00')
   assert.equal(cleanup[0]!.description, undefined)
-  assert.equal(cleanup[2]!.label, 'New Agent session')
-  assert.match(cleanup[2]!.detail, /Fresh session each run/)
+  assert.equal(cleanup[2]!.label, 'Deliver to automation')
+  assert.match(cleanup[2]!.detail, /Fresh context each run/)
   assert.match(cleanup[2]!.description!, /Perform recoverable session cleanup/)
   const host = workflowGraph({ ...flow, source: { kind: 'internal', id: 'maintenance' }, nodes: [{ kind: 'host-action', handler: 'maintenance-handler', replay: 'safe' }] })
   assert.equal(host[2]!.label, 'Host action'); assert.equal(host[2]!.detail, 'maintenance-handler')
@@ -63,8 +63,8 @@ test('schedule semantics use saved jobs: fixed targets, fresh sessions, maintena
   assert.equal(unknown[0]!.detail, 'Schedule not recorded'); assert.equal(unknown[2]!.detail, 'Session policy not recorded')
   // A later target edit must not rewrite the admitted definition's target.
   const current = { ...fixed, revision: 3, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 2h', target: { sessionId: 'web:new-target' } } }] }
-  assert.equal(workflowGraph(current)[2]!.detail, 'web:new-target')
-  assert.equal(workflowGraph(fixed)[2]!.detail, 'web:old-target')
+  assert.equal(workflowGraph(current)[2]!.detail, 'Reuse context · web:new-target')
+  assert.equal(workflowGraph(fixed)[2]!.detail, 'Reuse context · web:old-target')
 })
 
 test('canvas reflects optional leading deduplication from the definition, not a source-kind display exception', async () => {
@@ -82,8 +82,9 @@ test('canvas reflects optional leading deduplication from the definition, not a 
 
 test('product columns distinguish ordinary cron from managed scheduled automation without guessing names', () => {
   const scheduled = (action: string, job: unknown) => ({ definition: { ...definition('same-id'), name: 'learning work-dispatch BOT', nodes: [{ kind: 'schedule-action', action, job }] } })
-  for (const session of ['fresh', 'existing']) assert.equal(workflowColumn(scheduled('agent', { source: 'cron', session })), 'cron')
-  assert.equal(workflowColumn(scheduled('session', {})), 'cron') // historical jobs omit source
+  assert.equal(workflowColumn(scheduled('agent', { id: 'fresh', source: 'cron', session: 'fresh' })), 'automation')
+  assert.equal(workflowColumn(scheduled('session', { id: 'fixed', session: 'existing', target: { sessionId: 'web:fixed' } })), 'cron')
+  assert.equal(workflowColumn(scheduled('session', { target: { sessionId: 'web:legacy' } })), 'cron') // historical jobs omit source
   for (const source of ['learning', 'system']) assert.equal(workflowColumn(scheduled('agent', { source })), 'automation')
   assert.equal(workflowColumn(scheduled('program', {})), 'automation')
   assert.equal(workflowColumn(scheduled('agent', { source: 'cron', program: { kind: 'work-dispatch' } })), 'automation')
@@ -92,7 +93,7 @@ test('product columns distinguish ordinary cron from managed scheduled automatio
 })
 
 test('columns reserve their maximum group width and stack only within the same category', () => {
-  const cron = definition('cron')
+  const cron = { ...definition('cron'), nodes: [{ kind: 'schedule-action', job: { target: { sessionId: 'fixed' } } }] }
   const automation = { ...definition('automation'), source: { kind: 'internal' as const, id: 'host' }, nodes: [{ kind: 'host-action' }] }
   const projection = { definition: { id: 'bot', enabled: false }, projection: true as const, graph: [{ id: 'b', label: 'BOT', detail: '', config: {}, status: 'ready' as const }] }
   const { nodes } = workflowCanvas([{ definition: automation }, projection, { definition: cron }, { definition: { ...cron, id: 'wider', nodes: [...cron.nodes, ...cron.nodes] } }])

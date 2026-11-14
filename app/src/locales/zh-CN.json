@@ -4361,5 +4361,9 @@
   "Quarantined package": "已隔离的包",
   "Cron workflows": "Cron 定时任务",
   "Automation workflows": "Automation 自动化",
-  "BOT workflows": "BOT"
+  "BOT workflows": "BOT",
+  "Deliver to fixed session": "投递固定会话",
+  "Reuse context": "复用上下文",
+  "Deliver to automation": "投递自动化",
+  "Fresh context each run": "每轮新上下文"
 }

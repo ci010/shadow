@@ -4,7 +4,7 @@ Workflow is the durable execution unit; a **run is not a model session**. Signal
 
 ## Product surface
 
-Open **Project → Workflows** (`/projects/:projectId/workflows`). One shared Vue Flow canvas groups workflows into three horizontal columns (Cron, Automation, BOT), stacking each category vertically. Ordinary scheduled agent/session jobs appear under Cron; managed learning/system jobs and program actions appear under Automation even when their adapter uses a schedule source. Other runtime workflows also appear under Automation; BOT projections always appear under BOT. Classification uses saved source/action/job metadata, never names or IDs. Column spacing accounts for the widest graph in each category; narrow windows retain the columns through canvas pan/zoom.
+Open **Project → Workflows** (`/projects/:projectId/workflows`). One shared Vue Flow canvas groups workflows into three horizontal columns (Cron, Automation, BOT), stacking each category vertically. Schedule delivery to a fixed session (reuse context) appears under Cron; schedule delivery to a stable automation job (fresh context each run), including ordinary fresh cron, Learning and Work Dispatch, appears under Automation. Learning/Work Dispatch are execution strategies, not destination node types. Other runtime workflows also appear under Automation; BOT projections always appear under BOT. Classification uses the shared validated delivery projection of saved job metadata, never names or IDs. Column spacing accounts for the widest graph in each category; narrow windows retain the columns through canvas pan/zoom.
 
 The canvas groups all workflows, with properties and run history in a resizable right inspector rather than a nested flow list. Each graph connects Source → optional observation deduplication → action nodes, with current or historical run configuration, node/run status, latest 30 retained runs, sanitized errors and recovery guidance. Definition revision numbers remain internal concurrency/snapshot data, not routine UI labels. Source availability, persisted collector error and next reserved collection check are separate from run status. A baseline or idle deterministic check may create no run. A run exposes a conversation link only when the executor returned a real `output.sessionId`; the history keeps links beside their respective run identities and reports missing receipts explicitly. Fixed session destinations also have target links on the node and in its details, without implying that a run occurred. Links use the existing Project chat route and do not inspect or pan the canvas. Work mapping returns a separate `output.workKey`.
 
@@ -201,3 +201,30 @@ type labels remain visible. Paused nodes retain dashed edges and a muted tint;
 execution status remains separate text on a neutral badge. BOT projection headers
 use object icons and type badges rather than Workflow enabled/paused icons;
 isolated inventory is not evidence that a Workflow is paused.
+
+### Delivery contract and execution strategies
+
+`src/cron/delivery.ts` is the renderer-safe shared contract used by the schedule
+adapter, Workflow validation and frontend projection. New or materially revised
+schedule nodes record `delivery: {kind:"session", sessionId, context:"reuse"}` or
+`{kind:"automation", jobId, context:"fresh-per-run"}`. Timing remains the same
+`schedule` source for both. External/internal sources retain their real source;
+placing them in the Automation column does not invent a time signal.
+
+The legacy `action: session|agent|program` remains a compatibility wire field;
+it is not delivery evidence or a new execution permission. Readers derive absent
+delivery from the saved job (`session` defaults to existing); conflicting explicit
+delivery is rejected. Equivalent legacy definitions are not rewritten on startup
+just to backfill delivery; saved run snapshots remain unchanged. Managed registration
+`createdAt` differences are not configuration revisions. Existing gate migration
+rules above still apply.
+
+Stable automation identity is the job ID, not a physical session ID. Fresh runs
+keep their existing `cron:UUID` / AutomationSessionRef behavior and latest-run
+navigation through the catalog association; a scan without a session receipt does
+not acquire a synthetic session link. No second destination database is introduced.
+Learning evidence/ledger recovery, Work Dispatch dependency/capacity/write-ahead,
+resume permissions and budgets, and Bot wake platform admission stay in their host
+handlers. Delivery never converts a managed strategy into a generic prompt or
+claims an idle scan ran a model. Completed Workflow execution is not itself proof
+of a model session or a verified learning outcome.
