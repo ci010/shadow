@@ -14,7 +14,7 @@
     <template #project-actions>
       <HoverInfo :text="t('Workflows')"><template #default="{ triggerProps }">
         <RouterLink class="project-settings" v-bind="triggerProps" :aria-label="t('Workflows')"
-          :to="`/projects/${encodeURIComponent(project.id)}/workflows`">
+          :to="`/projects/${encodeURIComponent(project.id)}/workflows`" @click="$emit('project-document', 'workflows')">
           <span class="i-lucide-workflow w-3.5 h-3.5" aria-hidden="true" />
         </RouterLink>
       </template></HoverInfo>
@@ -24,7 +24,7 @@
       </button>
       <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="t('Retry {name} startup', { name: project.name })" :title="t('Retry project startup')" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
       <RouterLink class="project-settings" :aria-label="t('{name} settings', { name: project.name })" :title="t('{name} settings', { name: project.name })"
-        :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }">
+        :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }" @click="$emit('project-document', 'settings')">
         <span class="i-lucide-settings-2 w-3.5 h-3.5" aria-hidden="true" />
       </RouterLink>
       <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
@@ -60,7 +60,7 @@ const props = withDefaults(defineProps<{
   folderRevision?: number
   selectedAutomationId?: string
 }>(), { dashboardSelected: true })
-const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; dashboard: []; 'session-automation': [sessionId: string, jobId?: string] }>()
+const emit = defineEmits<{ 'project-document': [tab: 'workflows' | 'settings']; select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; dashboard: []; 'session-automation': [sessionId: string, jobId?: string] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const liveState = useProjectLiveState()
 const livePool = useLiveClientPool()

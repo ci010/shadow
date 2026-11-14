@@ -161,7 +161,25 @@ the same in-app browser (Main only), and existing destinations are never replace
 A folder's **+** starts a conversation in that folder. A new draft does not create a session until its first message is
 sent. Selecting the Project name opens its independent **Dashboard** at
 `/projects/:projectId/dashboard`. Knowledge and project settings remain available
-from the sidebar; conversations retain their document tabs. The Dashboard groups
+from the sidebar; conversations retain their document tabs.
+
+Conversation (including subagent inspection), Diagnosis, Knowledge, Project settings,
+Workflows, and file/diff documents use the same Project-local editor groups.
+Right-click a tab (or press Shift+F10 on it) to **Move to right**, **Move to main area**,
+or **Close**. Moving a tab relocates its existing view; it does not fork a session,
+change ancestry or execution mode, or create another composer. Subagent inspection
+opens on the right by default, using the same group controls. Permanent base tabs
+such as Diagnosis may be moved even when they cannot be closed. Ctrl/Cmd+W and
+Ctrl+Tab operate on the focused group, not every open document. Closing a tab does
+not itself reopen it; explicitly open the resource again from navigation.
+
+Workflow **Use in chat** attaches only to the most recently focused, still-open
+editable ordinary conversation in that Project. Clicking the inspector does not
+lose this target; Settings, Diagnosis, files, and read-only executions are not
+message destinations. If no eligible conversation has been opened, the action
+prompts you to open one. Selection and moving tabs never send messages.
+
+The Dashboard groups
 recent focus by inferred shared purpose, then shows separate topics with their latest
 reports and expandable evidence/decision history. Model interpretations are not
 confirmed user intent; legacy topics without inference remain unclassified.

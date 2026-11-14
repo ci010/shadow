@@ -38,7 +38,7 @@
           :dashboard-selected="!!dashboardProject"
           :draft-folder-id="selected?.folder?.id" :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
-          @knowledge="openKnowledge(project.id)" @dashboard="openDashboard(project.id)"
+          @project-document="openProjectDocument(project.id, $event)" @knowledge="openKnowledge(project.id)" @dashboard="openDashboard(project.id)"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
           @automation="showAutomation(project.id, $event)" @session-automation="(session, job) => identifyAutomation(project.id, session, job)" />
       </div>
@@ -54,62 +54,42 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <div class="project-editors">
-      <AutomationDetail :enabled="!!automation && !workflowProjectId"
-        :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
-        :selected-session-id="selected?.sessionId"
-        @open="openAutomationRun">
       <ProjectWorkbench v-if="dashboardProject" :key="dashboardProject.id"
         :api-base="projectBase(apiBase, dashboardProject.id)" :project-id="dashboardProject.id"
         :project-name="dashboardProject.name" :visible="visible"
         @navigate="navigate(dashboardProject.id, $event)" @compose="composeFromDashboard(dashboardProject.id, $event)" />
-      <section v-if="!selected && !automation && !dashboardProject" class="project-empty">
+      <section v-if="!selectedProjectId && !loading" class="project-empty">
         <h1>{{ t('Where would you like to work?') }}</h1>
         <p>{{ t('Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.') }}</p>
         <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">{{ t('Start in') }} {{ project.name }}</button>
-        <button v-if="!projects.length && !loading && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
+        <button v-if="!projects.length && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
-      <div ref="primaryEditorTarget" class="project-editor-target" @pointerdown.capture="editorFocus = 'primary'" @focusin="editorFocus = 'primary'" />
-    <template v-for="resource in resources" :key="resource.key">
-      <Teleport v-if="primaryEditorTarget && secondaryEditorTarget" :to="secondaryResource?.key === resource.key ? secondaryEditorTarget : primaryEditorTarget">
-      <ProjectConversation
-        :ref="component => setConversation(resource.key, component)"
-        v-show="selected?.key === resource.key || secondaryResource?.key === resource.key"
-        :secondary="secondaryResource?.key === resource.key" :movable="canMove(resource)" :keyboard-active="secondaryResource?.key === resource.key ? editorFocus === 'secondary' : editorFocus === 'primary'"
-        :visible="visible && (selected?.key === resource.key || secondaryResource?.key === resource.key)"
-        @move="moveRight(resource)" @restore="restoreSecondary"
-        :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
-        :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
-        :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
-        :automation-run="!!automation && selected?.key === resource.key"
-        :child-session-id="resource.childSessionId"
-        :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
-        @project-navigation="(tab, documentKey) => projectNavigation(resource, tab, documentKey)"
-        @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
-      </Teleport>
-    </template>
+      <AutomationDetail :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
+      <EditorGroupHost v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
       </AutomationDetail>
-      <aside v-show="!!secondaryResource" id="project-secondary-editor" class="project-secondary-editor" :style="{ width: `${secondaryWidth}px` }" :aria-label="t('Right conversation')" @pointerdown.capture="editorFocus = 'secondary'" @focusin="editorFocus = 'secondary'">
-        <SidebarResizer edge="left" :model-value="secondaryWidth" :bounds="secondaryBounds" :label="t('Resize right conversation')" controls="project-secondary-editor" @update:model-value="secondaryPreferredWidth = $event" />
-        <header class="secondary-editor-toolbar">
-          <span>{{ t('Right conversation') }}</span>
-          <button class="btn btn-sm" @click="restoreSecondary">{{ t('Move to main area') }}</button>
-          <HoverInfo :text="t('Close right conversation')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="project-add" :aria-label="t('Close right conversation')" @click="closeSecondary"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
-        </header>
-        <div ref="secondaryEditorTarget" class="project-editor-target" />
-      </aside>
+      <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
+      <div v-show="false" class="editor-resource-owners">
+        <ProjectConversation v-for="resource in resources" :key="resource.key" :resource-key="resource.key"
+          :ref="component => setConversation(resource.key, component)"
+          :inspection="!!resource.inspection" :keyboard-active="ownerFocused(resource.key)"
+          :visible="visible && selectedProjectId === resource.projectId && !dashboardProject"
+          :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
+          :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
+          :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
+          :automation-run="!!automation && selected?.key === resource.key"
+          :knowledge-request="resource.knowledgeRequest"
+          @project-navigation="(tab, documentKey) => projectNavigation(resource, tab, documentKey)"
+          @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </div>
     </div>
-    <div v-show="false" ref="documentParking" />
+    <div v-show="false" :ref="setParking" />
     <template v-for="[projectId, state] in projectDocuments.projects" :key="projectId">
-      <Teleport v-if="state.target || documentParking" :to="state.target || documentParking!">
-        <div v-if="state.tabs.includes('workflows')" v-show="state.selected === projectTabKey('workflows')" class="project-document-host">
-          <WorkflowManager :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && state.active && state.selected === projectTabKey('workflows')" />
+      <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && selectedProjectId === projectId">
+        <div class="project-document-host">
+          <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" />
+          <ProjectSettings v-else :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
         </div>
-        <div v-if="state.tabs.includes('settings')" v-show="state.selected === projectTabKey('settings')" class="project-document-host">
-          <ProjectSettings :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
-        </div>
-      </Teleport>
+      </EditorViewHost>
     </template>
     <SessionQuickOpen v-if="sessionSearchOpen" :api-base="apiBase" :projects="projects"
       @close="sessionSearchOpen = false" @select="quickOpenSession" />
@@ -121,8 +101,9 @@
 </template>
 
 <script setup lang="ts">
-import { isDirectConversation } from '../project-coordination.ts'
-import { isDisplayOnlyConversation } from '../discord-navigation.ts'
+import { createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
+import EditorGroupHost from './EditorGroupHost.vue'
+import EditorViewHost from './EditorViewHost.vue'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -151,14 +132,36 @@ import WorkflowManager from './WorkflowManager.vue'
 import ProjectSettings from './ProjectSettings.vue'
 import { createProjectDocuments, ProjectDocumentsKey } from '../project-documents.ts'
 import { WorkflowInputReferencesKey } from '../workflow-input-references.ts'
-import { createSecondaryEditors, ProjectSecondaryEditorKey } from '../project-editors.ts'
-import { projectTabKey, DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
+import { projectTabKey, projectTabLabel, projectTabIcon, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
 const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean }>(), { visible: true })
 const projectDocuments = createProjectDocuments()
 provide(ProjectDocumentsKey, projectDocuments)
-const documentParking = ref<HTMLElement>()
+const editorGroups = createEditorGroups()
+provide(EditorGroupsKey, editorGroups)
+const projectEditorId = (projectId: string, tab: ProjectTab) => `${projectId}:project:${tab}`
+function openProjectDocument(projectId: string, tab: ProjectTab) {
+  const state = projectDocuments.get(projectId)
+  if (!state.tabs.includes(tab)) state.tabs = [...state.tabs, tab]
+  state.selected = projectTabKey(tab)
+  void nextTick(() => { const descriptor = editorGroups.descriptors.get(projectEditorId(projectId, tab)); if (descriptor) editorGroups.open(descriptor) })
+}
+const projectDescriptorCache = new Map<string, EditorDescriptor>()
+function projectDescriptor(projectId: string, tab: ProjectTab): EditorDescriptor {
+  const state = projectDocuments.get(projectId)
+  const id = projectEditorId(projectId, tab), previous = projectDescriptorCache.get(id)
+  if (previous && previous.label === projectTabLabel(tab)) return previous
+  const descriptor: EditorDescriptor = { id, projectId, owner: projectId, label: projectTabLabel(tab), icon: projectTabIcon(tab), closable: true,
+    select: () => { state.selected = projectTabKey(tab) },
+    close: () => { state.tabs = state.tabs.filter(item => item !== tab); if (state.selected === projectTabKey(tab)) state.selected = '' },
+  }
+  projectDescriptorCache.set(id, descriptor)
+  return descriptor
+}
+function setParking(element: Element | ComponentPublicInstance | null) { if (element instanceof HTMLElement) editorGroups.targets.set('parking', element) }
+function ownerFocused(owner: string) { return editorGroups.active(selectedProjectId.value)?.owner === owner }
+
 const liveState = useProjectLiveState()
 const route = useRoute()
 const router = useRouter()
@@ -169,51 +172,16 @@ provide(HomeTreeCacheKey, createHomeTreeCache())
 const projects = ref<ProjectRecord[]>([])
 const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
-const secondaryEditors = createSecondaryEditors()
-const primaryEditorTarget = ref<HTMLElement>()
-const secondaryEditorTarget = ref<HTMLElement>()
-const editorFocus = ref<'primary' | 'secondary'>('primary')
-const secondaryPreferredWidth = ref(480)
-const secondaryBounds = computed(() => ({ min: 280, max: Math.max(280, Math.min(800, containerWidth.value - (sidebarPinned.value ? sidebarWidth.value : 0) - 320)) }))
-const secondaryWidth = computed(() => clampSidebarWidth(secondaryPreferredWidth.value, secondaryBounds.value))
-const secondaryResource = computed(() => secondaryEditors.get(selectedProjectId.value, resources.value))
-provide(ProjectSecondaryEditorKey, {
-  active: computed(() => secondaryResource.value ? { projectId: secondaryResource.value.projectId, sessionId: secondaryResource.value.sessionId, resourceKey: secondaryResource.value.key } : undefined),
-  focus: () => { const resource = secondaryResource.value; if (resource) { editorFocus.value = 'secondary'; instances.get(resource.key)?.focusConversation() } },
-})
 provide(WorkflowInputReferencesKey, {
   attach(item) {
-    const resource = secondaryResource.value
-    if (!resource || resource.projectId !== item.reference.projectId || !props.visible) return 'unavailable'
-    const result = instances.get(resource.key)?.appendInputReference(item) ?? 'unavailable'
-    if (result === 'added' || result === 'duplicate') {
-      editorFocus.value = 'secondary'
-      void nextTick(() => instances.get(resource.key)?.focusConversation())
-    }
+    const editor = editorGroups.referenceTarget(selectedProjectId.value)
+    if (!editor?.conversation?.editable || editor.projectId !== item.reference.projectId || !props.visible) return 'unavailable'
+    editorGroups.activate(editor.id)
+    const result = instances.get(editor.owner)?.appendInputReference(item) ?? 'unavailable'
+    if (result === 'added' || result === 'duplicate') void nextTick(() => instances.get(editor.owner)?.focusConversation())
     return result
   },
 })
-function canMove(resource: ConversationResource) {
-  return isDirectConversation(resource.sessionId) && !resource.childSessionId && !(automation.value && selected.value?.key === resource.key)
-}
-function moveRight(resource: ConversationResource) {
-  if (!canMove(resource)) return
-  secondaryEditors.move(resource)
-  const primary = resources.value.findLast(item => item.projectId === resource.projectId && item.key !== resource.key && !item.sessionId) ?? registry.draft(resource.projectId)
-  publish(primary)
-  editorFocus.value = 'secondary'
-  if (route.name === 'chat') void router.push(projectChatLocation(primary))
-  void nextTick(() => instances.get(resource.key)?.focusConversation())
-}
-function closeSecondary() { secondaryEditors.close(selectedProjectId.value); editorFocus.value = 'primary' }
-function restoreSecondary() {
-  const resource = secondaryResource.value
-  if (!resource) return
-  closeSecondary()
-  publish(resource)
-  void router.push(projectChatLocation(resource))
-  void nextTick(() => instances.get(resource.key)?.focusConversation())
-}
 const selected = shallowRef<ConversationResource>()
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
   route, router, selected,
@@ -225,7 +193,7 @@ const dashboardProject = computed(() => route.name === 'project-dashboard' ? pro
 const selectedProjectId = computed(() => workflowProjectId.value || (dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? ''))
 const selectedProjectName = computed(() => projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
-watch(secondaryResource, resource => { if (!resource) editorFocus.value = 'primary' })
+
 // Project documents reuse the current workbench (including an unsent draft).
 // Their deep links must not discard the conversation or each project's inspection.
 const workflowQueries = new Map<string, Record<string, string>>()
@@ -366,12 +334,17 @@ function projectWorkbench(projectId: string): ConversationResource {
     ?? registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
 }
 function publish(resource: ConversationResource) {
-  if (secondaryEditors.get(resource.projectId, registry.resources)?.key === resource.key) secondaryEditors.close(resource.projectId)
   projectWorkbenches.set(resource.projectId, resource)
   selected.value = resource
   resources.value = [...registry.resources]
   closeSidebar()
+  if (route.name === 'chat') void nextTick(() => {
+    const key = route.query.panel === 'knowledge' ? (typeof route.query.entry === 'string' ? knowledgeEntryTabKey(route.query.entry) : KNOWLEDGE_TAB_KEY) : route.query.panel === 'diagnosis' ? DIAGNOSIS_TAB_KEY : ''
+    const descriptor = editorGroups.descriptors.get(`${resource.key}:${key}`)
+    if (descriptor) editorGroups.open(descriptor)
+  })
 }
+const consumedInspectionLinks = new Set<string>()
 function syncRoute() {
   if (!props.visible || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
@@ -394,7 +367,9 @@ function syncRoute() {
   let resource: ConversationResource
   if (sessionId) {
     resource = registry.session({ projectId, sessionId })
-    resource.childSessionId = typeof route.query.child === 'string' ? route.query.child : undefined
+    const child = typeof route.query.child === 'string' ? route.query.child : undefined
+    const link = JSON.stringify([projectId, sessionId, child])
+    if (child && child !== sessionId && !consumedInspectionLinks.has(link)) { consumedInspectionLinks.add(link); openInspection(projectId, child) }
   }
   else if (automationId) { selected.value = undefined; closeSidebar(); return }
   else if (route.name !== 'chat') resource = projectWorkbench(projectId)
@@ -406,6 +381,13 @@ function syncRoute() {
     conversationQueries.set(resource.key, query)
   }
   publish(resource)
+  const tab = route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' || route.name === 'agents' ? 'settings' : undefined
+  if (tab) {
+    const state = projectDocuments.get(projectId)
+    if (!state.tabs.includes(tab)) state.tabs = [...state.tabs, tab]
+    state.selected = projectTabKey(tab)
+    void nextTick(() => editorGroups.activate(projectEditorId(projectId, tab)))
+  }
 }
 async function refresh() {
   await catalog?.refresh()
@@ -478,17 +460,25 @@ const newConversationShortcut = createNewConversationShortcut({
 watch(() => [route.fullPath, selected.value?.key, selected.value?.sessionId, automation.value?.id,
   props.apiBase, props.visible, keyboardActive.value,
   projects.value.map(project => project.id).join(',')], () => newConversationShortcut.cancel(), { flush: 'sync' })
+function openInspection(projectId: string, sessionId: string) {
+  const existed = registry.resources.some(item => item.projectId === projectId && item.sessionId === sessionId)
+  const resource = registry.session({ projectId, sessionId })
+  if (!existed) resource.inspection = true
+  resources.value = [...registry.resources]
+  void nextTick(() => { const id = `${resource.key}:`; if (editorGroups.descriptors.has(id)) editorGroups.move(id, 'right') })
+}
 function navigate(projectId: string, sessionId: string, child?: string) {
   automation.value = undefined
   if (!sessionId) { startDraft(projectId); return }
   const resource = registry.session({ projectId, sessionId })
-  resource.childSessionId = child
   publish(resource)
+  if (child && child !== sessionId) openInspection(projectId, child)
   void router.push({ ...projectChatLocation({ projectId, sessionId }), query: child ? { child } : {} })
 }
 function selectSession(projectId: string, sessionId: string) {
-  if (!isDisplayOnlyConversation(sessionId) && !isDisplayOnlyConversation(selected.value?.sessionId ?? '') && selected.value?.projectId === projectId) {
-    const instance = instances.get(selected.value.key)
+  const current = selected.value
+  if (current?.projectId === projectId && current.sessionId !== sessionId) {
+    const instance = instances.get(current.key)
     if (instance) { instance.requestSession(sessionId); closeSidebar(); return }
   }
   navigate(projectId, sessionId)
@@ -499,23 +489,6 @@ function openKnowledge(projectId: string) {
   const resource = projectWorkbench(projectId)
   publish(resource)
   void router.push({ ...projectChatLocation(resource), query: { ...conversationQueries.get(resource.key), panel: 'knowledge' } })
-}
-function knowledgeNavigation(resource: ConversationResource, active: boolean, entryId?: string) {
-  if (!props.visible || selected.value?.key !== resource.key || !['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))
-    || route.params.projectId !== resource.projectId || (route.name === 'chat' && (route.params.sessionId || '') !== resource.sessionId)) return
-  const query = { ...(route.name === 'project-workflows' ? conversationQueries.get(resource.key) : route.query) }
-  if (active) {
-    query.panel = 'knowledge'
-    delete query.diagnosis
-    if (entryId) query.entry = entryId
-    else delete query.entry
-  } else {
-    if (query.panel !== 'knowledge') return
-    delete query.panel
-    delete query.entry
-  }
-  if (route.name !== 'chat' && active) void router.push({ ...projectChatLocation(resource), query })
-  else if (query.panel !== route.query.panel || query.entry !== route.query.entry) void router.push({ query })
 }
 // Project document tabs restore their own route context. Track the route, not
 // cached components, which also see other documents and Projects while hidden.
@@ -567,9 +540,11 @@ function deleted(projectId: string, sessionId: string) {
   if (selected.value?.projectId === projectId && selected.value.sessionId === sessionId) startDraft(projectId)
 }
 function forgetProject(projectId: string) {
-  secondaryEditors.close(projectId)
+  for (const [id, descriptor] of editorGroups.descriptors) if (descriptor.projectId === projectId) editorGroups.unregister(id)
+  editorGroups.projects.delete(projectId)
   for (const resource of registry.resources) if (resource.projectId === projectId) conversationQueries.delete(resource.key)
   projectDocuments.projects.delete(projectId)
+  for (const id of projectDescriptorCache.keys()) if (id.startsWith(`${projectId}:project:`)) projectDescriptorCache.delete(id)
   registry.removeProject(projectId)
   projectWorkbenches.delete(projectId)
   workflowQueries.delete(projectId)
@@ -667,11 +642,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); ou
 .projects-sidebar.is-floating { position: absolute; inset: 44px auto 0 0; z-index: 50; width: min(var(--projects-width), calc(100% - 40px)); box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .projects-backdrop { position: absolute; inset: 44px 0 0; z-index: 49; padding: 0; border: 0; background: var(--c-shadow-softer); }
 @media (max-width: 700px), (pointer: coarse) { .projects-toggle { min-height: 44px; } }
-.project-editors { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
-.project-editor-target { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
-.project-secondary-editor { position: relative; display: flex; flex: none; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--c-border); background: var(--c-bg); }
-.secondary-editor-toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; min-height: 44px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); font-size: 12px; }
-.secondary-editor-toolbar > span { flex: 1; }
 @media (max-width: 1000px) { .project-secondary-editor { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; max-width: calc(100% - 32px); box-shadow: -8px 0 24px var(--c-shadow-soft); } }
 .project-document-host { display: flex; flex: 1; min-height: 0; min-width: 0; }
 </style>
