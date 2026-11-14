@@ -109,7 +109,7 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:ordinary"}})');
     await sidebar('b');await sidebar('a');await primary();
     await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,'web:ordinary');
-    await sidebar('a');await clickTab('Diagnosis');await wait(visible('.diagnosis-document'));
+    await sidebar('a');await primary();await run('('+visible('.conversation-diagnosis')+').click()');await clickTab('Diagnosis');await wait(visible('.diagnosis-document'));
     assert.equal((await route()).name,'chat');assert.equal((await route()).query.panel,'diagnosis');
     await sidebar('a');await wait(visible('.graph-group'));
     await run('window.fixture.workflowElement=('+visible('.workflow-manager')+')');

@@ -10,7 +10,7 @@
     </Teleport>
     <MobileSheet v-if="mobileLayout" :open="viewsOpen" :label="t('Open views')" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
       <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || t('Conversation') }}</span></button></div>
-      <div v-if="tabs.diagnosis" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="chooseMobileView(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span></button></div>
+      <div v-if="diagnosisEnabled" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="openDiagnosis(); viewsOpen = false"><span class="i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
         <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>{{ t('Knowledge') }}</span></button>
         <button v-if="tabs.knowledge" class="mobile-view-close" :aria-label="t('Close Knowledge')" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
@@ -33,7 +33,7 @@
         <slot name="actions" />
         <button v-if="explorerAvailable && !knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />{{ t('Browse files') }}</button>
         <button v-if="!isPermanentDocumentTab(tabs.selected)" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />{{ t('Close current document') }}</button>
-        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">{{ t('Close all documents') }}</button>
+        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length || tabs.diagnosis" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">{{ t('Close all documents') }}</button>
         <slot name="mobile-actions" :close="closeMobileActions" />
       </div>
     </MobileSheet>
@@ -50,11 +50,12 @@
               <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || t('Conversation') }}</span>
             </button>
           </div>
-          <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll">
+          <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, DIAGNOSIS_TAB_KEY)">
             <button :id="tabId(DIAGNOSIS_TAB_KEY)" role="tab" :aria-selected="tabs.selected === DIAGNOSIS_TAB_KEY" :tabindex="tabs.selected === DIAGNOSIS_TAB_KEY ? 0 : -1"
-              :aria-controls="panelId(DIAGNOSIS_TAB_KEY)" :title="t('Session diagnosis')" @click="selectTab(DIAGNOSIS_TAB_KEY)" @keydown="tabKey($event, DIAGNOSIS_TAB_KEY)">
+              :aria-controls="panelId(DIAGNOSIS_TAB_KEY)" @click="selectTab(DIAGNOSIS_TAB_KEY)" @keydown="tabKey($event, DIAGNOSIS_TAB_KEY)">
               <span class="document-icon i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span>
             </button>
+            <HoverInfo :text="t('Close {value1}', { value1: t('Diagnosis') })" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="document-close" :aria-label="t('Close {value1}', { value1: t('Diagnosis') })" @click="closeFile(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
           </div>
           <div ref="documentTabs" class="document-tabs">
           <div v-if="tabs.knowledge" class="document-tab" :class="{ selected: tabs.selected === KNOWLEDGE_TAB_KEY }"
@@ -240,7 +241,7 @@ const expanded = computed(() => knowledgeSelected.value
   : !groups && explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? false)))
 const documents = inject(ProjectDocumentsKey, undefined)
 const projectDocuments = computed(() => props.projectNavigationEnabled && props.projectId ? documents?.get(props.projectId) : undefined)
-const localTabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
+const localTabs = ref<FileTabs>({ files: [], selected: '' })
 const tabs = computed<FileTabs>({
   get: () => projectDocuments.value ? { ...localTabs.value, projectTabs: projectDocuments.value.tabs } : localTabs.value,
   set(value) {
@@ -260,13 +261,13 @@ function editorId(key: string) {
 const descriptorCache = new Map<string, EditorDescriptor>()
 function descriptor(key: string, label: string, icon: string): EditorDescriptor {
   const previous = descriptorCache.get(key)
-  if (previous && previous.id === editorId(key) && previous.label === label && previous.icon === icon && previous.conversation?.sessionId === (key === '' ? props.sessionId : undefined) && previous.conversation?.editable === (key === '' ? !!props.editableConversation : undefined)) return previous
+  if (previous && previous.id === editorId(key) && previous.label === label && previous.icon === icon && previous.conversation?.sessionId === (key === '' ? props.sessionId : undefined) && previous.conversation?.editable === (key === '' ? !!props.editableConversation : undefined) && previous.conversation?.folderId === (key === '' ? props.folderId : undefined)) return previous
   const value: EditorDescriptor = { id: editorId(key), projectId: props.projectId ?? '', owner: owner || id, label, icon,
     closable: key === '' || !isPermanentDocumentTab(key),
     select: () => { if (tabs.value.selected !== key) tabs.value = { ...tabs.value, selected: key } },
     close: () => closeFile(key, false),
     commands: { toggleExplorer: () => { if (groups || explorerAvailable.value) toggleExplorer() } },
-    ...(key === '' ? { conversation: { sessionId: props.sessionId, editable: !!props.editableConversation } } : {}),
+    ...(key === '' ? { conversation: { sessionId: props.sessionId, editable: !!props.editableConversation, folderId: props.folderId } } : {}),
   }
   descriptorCache.set(key, value)
   return value
@@ -319,6 +320,11 @@ let composing = false
 const tabId = (path: string) => `${id}-tab-${encodeURIComponent(path)}`
 const panelId = (path: string) => `${id}-panel-${encodeURIComponent(path)}`
 function reopen(key: string) { void nextTick(() => { const descriptor = groups?.descriptors.get(editorId(key)); if (descriptor) groups?.open(descriptor) }) }
+function openDiagnosis() {
+  if (!props.diagnosisEnabled) return
+  tabs.value = { ...withDiagnosisTab(tabs.value, true), selected: DIAGNOSIS_TAB_KEY }
+  reopen(DIAGNOSIS_TAB_KEY)
+}
 function selectTab(path: string) {
   if (groups?.side(editorId(path))) groups.activate(editorId(path))
   if (tabs.value.selected === path) return
@@ -327,6 +333,7 @@ function selectTab(path: string) {
 defineExpose({
   showConversation: () => selectTab(''),
   openLinkedFile,
+  openDiagnosis,
 })
 function openLinkedFile(file: OpenFile) {
   fileSpace.value = file.source?.sessionWorkspace ? 'session' : props.folderId ? 'project' : 'session'
@@ -539,7 +546,7 @@ watch(() => [props.contextKey, props.diagnosisEnabled] as const, ([key, diagnosi
     cachedTabs.set(previous, tabs.value)
     tabs.value = { ...(cachedTabs.get(key) ?? { files: [], selected: '' }), projectTabs: tabs.value.projectTabs }
   }
-  tabs.value = withDiagnosisTab(tabs.value, diagnosis)
+  if (!diagnosis) tabs.value = withDiagnosisTab(tabs.value, false)
 })
 watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], () => {
   if (!props.knowledgeEnabled) {
@@ -560,7 +567,7 @@ watch(() => [route?.fullPath, props.active] as const, (value, previous) => {
 watch(() => [props.apiBase, props.contextKey], () => { knowledgeLabels.value = {} })
 watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
 watch(() => [props.diagnosisRequest, props.contextKey, props.diagnosisEnabled], () => {
-  if (props.diagnosisRequest && props.diagnosisEnabled) selectTab(DIAGNOSIS_TAB_KEY)
+  if (props.diagnosisRequest && props.diagnosisEnabled) openDiagnosis()
   else if (props.diagnosisRequest === false && tabs.value.selected === DIAGNOSIS_TAB_KEY) selectTab('')
 }, { immediate: true })
 watch(() => shown(''), value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })

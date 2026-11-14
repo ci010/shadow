@@ -11,7 +11,7 @@ export interface EditorDescriptor {
   select(): void
   close(): void
   commands?: { toggleExplorer?: () => void }
-  conversation?: { sessionId: string; editable: boolean }
+  conversation?: { sessionId: string; editable: boolean; folderId?: string }
 }
 /** Resource identity/lifetime is deliberately independent of group placement. */
 export function createEditorGroups() {

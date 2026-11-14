@@ -118,6 +118,25 @@ test('all resources share Project editor groups without remount, child panes or 
     const move=async label=>{const target=editorTab(label);await wait(target);await run(target+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.editor-menu'));await run('document.querySelector(".editor-menu button").click()')};
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
     await wait(visible('.reference-composer'));
+    assert.equal(await run('document.querySelectorAll(".diagnosis-document").length'),0,'diagnosis does not register by default');
+    await run('('+visible('.conversation-diagnosis')+').click()');await wait(editorTab('Diagnosis'));
+    await wait(visible('.session-diagnosis'));
+    assert.equal(await run(editorTab('Diagnosis')+'.getAttribute("aria-selected")'), 'true', 'heading opens and selects diagnosis');
+    await run('('+visible('[id$="diagnosis-tools-tab"]')+').click()');
+    await run(editorTab('Diagnosis')+'.dispatchEvent(new MouseEvent("auxclick",{button:1,bubbles:true,cancelable:true}))');
+    await wait('!('+editorTab('Diagnosis')+')');
+    await run('('+visible('.conversation-diagnosis')+').click()');await wait(visible('.session-diagnosis'));
+    await wait('('+visible('[id$="diagnosis-tools-tab"]')+').getAttribute("aria-selected")==="true"');
+    await run('window.fixture.diagnosisId=('+editorTab('Diagnosis')+').id');
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:second"}})');
+    await wait(visible('.conversation-diagnosis'));
+    assert.equal(await run('document.querySelectorAll(".diagnosis-document").length'),1,'hidden sessions do not register new diagnosis');
+    await run('('+visible('.conversation-diagnosis')+').click()');
+    await wait('document.querySelectorAll(".diagnosis-document").length===2');
+    assert.equal(await run('new Set([...document.querySelectorAll(".diagnosis-document")].map(e=>e.closest(".editor-view").dataset.editorId)).size'),2);
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
+    await wait(visible('.reference-composer'));
+
     await run('window.fixture.chatInput=('+visible('.reference-composer')+');window.fixture.chatInput.textContent="Right unsent draft";window.fixture.chatInput.dispatchEvent(new Event("input",{bubbles:true}))');
     await wait('('+visible('.editor-group-content .chat-messages')+').textContent.includes("Retained history scroll fixture")');await delay(250);await run('window.fixture.historyNode=('+visible('.editor-group-content .chat-messages')+');window.fixture.historyNode.scrollTop=120');
     assert.equal(await run('window.fixture.historyNode.scrollTop'),120,'Fixture has scrollable loaded history before move');
@@ -137,6 +156,7 @@ test('all resources share Project editor groups without remount, child panes or 
     await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a",section:"general"}})');
     await wait(editorTab('Project settings'));await move('Project settings');
     await wait(visible('[data-editor-group="right"] .project-settings-view'));
+    await wait('!document.querySelector("[data-editor-group=right] .project-settings-view .settings-content [role=status]") && document.querySelector("[data-editor-group=right] .project-settings-view input")?.value==="Project A"');
     await run('window.fixture.settingsInput=document.querySelector("[data-editor-group=right] .project-settings-view input");window.fixture.settingsInput.value="Unsaved name";window.fixture.settingsInput.dispatchEvent(new Event("input",{bubbles:true}))');
     assert.equal(await run('document.querySelectorAll(".child-conversation").length'),0);
     await move('Project settings');await wait(visible('[data-editor-group="left"] .project-settings-view'));

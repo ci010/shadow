@@ -87,7 +87,7 @@ async function main() {
     await wait(`document.querySelector('.conversation-dock')?.getClientRects().length > 0`)
     assert.equal(await execute(`document.querySelector('.reference-composer[aria-label="Message"]') === window.__composerBeforeSettings`), true)
     assert.equal(await execute(`window.__composerBeforeSettings.value`), 'Unsent draft\nSecond line')
-    await execute(`document.querySelector('.diagnosis-tab [role="tab"]').click()`)
+    await execute(`document.querySelector('.conversation-diagnosis').click()`)
     await wait(`!!document.querySelector('[id$="diagnosis-prompt-tab"]')`)
     await execute(`document.querySelector('[id$="diagnosis-prompt-tab"]').click()`)
     await wait(`new URL(location.href).searchParams.get('diagnosis') === 'prompt'`)

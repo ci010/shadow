@@ -2807,14 +2807,34 @@ cannot retain header ownership. Desktop Electron chrome and desktop pane layout
 are unchanged. Session details, rename, diagnosis, Knowledge, files and child
 return remain reachable through sheets rather than extra persistent bars.
 
-Existing conversations expose permanent, square-edged **Conversation** and
-**Diagnosis** tabs before the scrollable file tabs. Diagnosis is reachable
-directly from any open document; it is not a title-row action or a closable file.
-Both views participate in document keyboard navigation. On phones, Diagnosis
-lives in **Switch view**, not the actions sheet. Blank drafts omit it until a
-session exists. The diagnosis view mounts lazily, retains its selected section
-between document switches, and hides the composer without discarding the draft
-or conversation scroll position.
+Existing conversations keep the square-edged **Conversation** tab. **Diagnosis**
+is not registered by default: the conversation heading's Diagnosis action (next
+to Actions) opens and selects the existing session-scoped view on demand. The
+tab is closable and can be reopened; its section selection is retained in the
+conversation's in-memory navigation state. Explicit diagnosis URL deep links
+still open it. Separate conversations and child panes own independent documents;
+hidden conversations do not consume another conversation's request. On phones,
+Diagnosis remains available in Switch view and the conversation actions sheet.
+Blank drafts omit it until a session exists. Opening Diagnosis hides the composer
+without discarding its draft or conversation scroll position.
+
+The centralized Project file explorer uses compact single-line root names with
+session/folder icons and a short device source label. Optional public picker
+device names are preferred; unavailable metadata falls back to Main, LayerFS, or
+a remote node short ID. Full names, paths, and remote node IDs are available in
+shared HoverInfo on pointer hover and keyboard focus, not as wrapped row text.
+Only conversations actually open in this Project's editor groups contribute
+session roots. Folder roots are the union of their explicit `folderId` bindings,
+filtered against the catalog before deduplication by canonical local IDs or remote
+node/root identity. Closing or rebinding the last owning conversation removes its
+folder root; unbound conversations and project-only tabs do not expose unrelated
+catalog entries. Display metadata is never resolved as a local execution path.
+
+Middle-click closes the targeted closable tab in either editor group without
+selecting it or activating another group. Standalone document tabs (including
+Diagnosis) use the same convention; permanent standalone Conversation remains
+unclosable. Middle mousedown prevents browser autoscroll, while left-click
+selection and right-click context menus retain their existing behavior.
 
 Composer text is saved to `localStorage` as it changes, scoped by API base,
 Project, and logical session (with a separate unsent draft per Project).
