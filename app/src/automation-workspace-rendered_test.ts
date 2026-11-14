@@ -15,17 +15,24 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('automations open ordinary conversations and navigate run history without a runs explorer or run tabs', {
+// Exercise the shared workbench with feature identities, not an Encapsulation
+// name exception. Every variant also covers ordinary responses without receipts.
+for (const variant of [
+  { id: 'learning:encapsulator', name: 'Encapsulation', source: 'learning' },
+  { id: 'learning:reflector', name: 'Reflector', source: 'learning' },
+  { id: 'default:work-dispatch-v1', name: 'Work dispatch', source: 'system' },
+  { id: 'cron:weekly', name: 'Weekly report', source: 'cron' },
+]) test(`${variant.id}: ordinary conversation layout keeps results exclusively in history`, {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
   const directory = resolve(root, '.test-artifacts', `automations-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
-  const automation = { id: 'cron:weekly', name: 'Encapsulation', source: 'learning', session: 'fresh', schedule: '0 9 * * 1', task: 'Review recent work', enabled: true }
+  const automation = { ...variant, session: 'fresh', schedule: '0 9 * * 1', task: 'Review recent work', enabled: true }
   const runs = Array.from({ length: 65 }, (_, index) => ({
     id: `run-${index}`, sessionId: `cron:run-${index}`, startedAt: new Date(Date.UTC(2026, 8, 30, 0, -index)).toISOString(),
     status: index === 2 ? 'failed' : index === 3 ? 'running' : index === 9 ? 'cancelled' : 'completed', title: `Saved conversation ${index} ${'Long prompt text '.repeat(20)}`,
-    ...(index === 0 ? { learning: { status: 'partial', summary: 'Reviewed both assigned Wiki pages. One conditional decision persisted; a source page still needs review.\n\n' + 'Evidence remains conditional; preserve the full summary.\n'.repeat(100) + '\nEND OF LONG SUMMARY', artifacts: 1, events: 1, evaluated: 0 } } : {}),
+    ...(index === 0 ? { learning: { status: 'partial', summary: 'Recovered saved result. Reviewed both assigned Wiki pages. One conditional decision persisted; a source page still needs review.\n\n' + 'Evidence remains conditional; preserve the full summary.\n'.repeat(100) + '\nEND OF LONG SUMMARY', artifacts: 1, events: 1, evaluated: 0 } } : {}),
   }))
   for (const [index, status] of [[4, 'applied'], [5, 'no_change'], [6, 'blocked'], [7, 'draft_only']] as const) {
     runs[index]!.learning = { status, summary: `Synthetic run result cron:run-${index}`, artifacts: 0, events: 0, evaluated: 0 }
@@ -75,7 +82,7 @@ test('automations open ordinary conversations and navigate run history without a
             {name:'project-workflows',path:'/projects/:projectId/workflows',component:{}},
             {name:'settings',path:'/settings/:section?',component:{}},
           ]});
-          await router.push({name:'chat',params:{projectId:'fixture'},query:{automation:'cron:weekly'}});
+          await router.push({name:'chat',params:{projectId:'fixture'},query:{automation:${JSON.stringify(automation.id)}}});
           const app = createApp({render:() => h(ProjectsWorkspace,{apiBase:location.origin,visible:true})});
           const disposers = new Set();
           const pool = {onDispose(callback){disposers.add(callback);return()=>disposers.delete(callback);},dispose(){for(const callback of disposers)callback();disposers.clear();},observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
@@ -176,7 +183,7 @@ test('automations open ordinary conversations and navigate run history without a
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
-  const env: NodeJS.ProcessEnv = { AUTOMATION_SMOKE_URL: url, AUTOMATION_SCREENSHOTS: process.env.AUTOMATION_SCREENSHOTS }
+  const env: NodeJS.ProcessEnv = { AUTOMATION_SMOKE_URL: url, AUTOMATION_ID: automation.id, AUTOMATION_SCREENSHOTS: process.env.AUTOMATION_SCREENSHOTS }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
