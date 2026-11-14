@@ -74,7 +74,7 @@ test('knowledge is visible, recovers from 503 on Refresh, and navigates sanitize
       load(id) {
         if (id !== '\0knowledge-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import {createApp, h} from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue';
           import {createRouter, createMemoryHistory} from 'vue-router';
           import KnowledgeView from '/src/components/KnowledgeView.vue';
           const router=createRouter({history:createMemoryHistory(),routes:[

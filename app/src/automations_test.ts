@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -8,7 +9,6 @@ import ts from 'typescript'
 import { AUTOMATION_PAGE_SIZE, fetchAutomations, fetchAutomationRuns, learningOutcomeLabel, setAutomationEnabled } from './automations.ts'
 import { createLiveRefresh } from './live-refresh.ts'
 import type { LiveObserver } from './live-client.ts'
-import { createAutomationCatalog } from './automation-catalog.ts'
 import { createAutomationRunHistory } from './automation-run-history.ts'
 import * as automationConversationModule from './composables/useAutomationConversation.ts'
 
@@ -21,7 +21,7 @@ const run = (id = 'one') => ({
 })
 const page = (runs: unknown[] = [run()], total = runs.length, offset = 0) => ({ runs, total, offset })
 const signal = () => new AbortController().signal
-const settle = () => new Promise(resolve => setTimeout(resolve, 30))
+const settle = () => new Promise(resolve => setTimeout(resolve, 90))
 const response = (value: unknown): typeof fetch => async () => Response.json(value)
 
 test('automation workspace delegates to the ordinary conversation without a runs explorer or tab strip', () => {
@@ -177,14 +177,13 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   })
   t.mock.method(globalThis, 'clearInterval', (id: number) => { intervals.delete(id) })
   const subscriptions: Array<{ base: string; topic: unknown; observer: LiveObserver; closed: boolean }> = []
-  const catalog = createAutomationCatalog({ client: (base: string) => ({
+  const livePool = { observeHost: (_base: string, callback: (status: any) => void) => { callback({ phase: 'live' }); return () => {} }, client: (base: string) => ({
     subscribe: (topic: unknown, observer: LiveObserver) => {
       const entry = { base, topic, observer, closed: false }
       subscriptions.push(entry)
       return { ready: async () => {}, close: () => { entry.closed = true } }
     },
-  }) } as Parameters<typeof createAutomationCatalog>[0], { delayMs: 0 })
-  t.after(() => catalog.dispose())
+  }) }
   const props = reactive({ apiBase: base, automationId: automation().id, active, selectedSessionId: '', enabled: true })
   const opens: string[] = []
   function component(filename: string) {
@@ -273,7 +272,8 @@ function mount(t: TestContext, active = true, withSidebar = false) {
       { default: () => h(conversation) }),
     ],
   }))
-  app.provide(Symbol.for('shadow.automation-catalog'), catalog)
+  app.provide(Symbol.for('shadow.live-client-pool'), livePool)
+  app.use(createResourceStores())
   app.mount(root)
   // Workflow navigation is expanded by default, including an empty catalog.
   let mounted = true

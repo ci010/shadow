@@ -24,7 +24,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useServiceGroups, projectGroupConversations, observedGroupId } from '../service-groups.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
@@ -36,10 +36,11 @@ import type { FolderRecord } from '../folders-client.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import { HomeTreeCacheKey } from '../home-tree-cache.ts'
-import { createBotSettingsClient } from '../bot-settings.ts'
+import { useBotResourceStore } from '../stores/bots.ts'
+import { requireResourcePinia } from '../stores/app.ts'
+import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
 import type { SidebarBot } from '../bot-sidebar.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
-import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
 
 const props = withDefaults(defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
@@ -53,6 +54,8 @@ const emit = defineEmits<{ 'project-document': [tab: 'workflows' | 'settings']; 
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const liveState = useProjectLiveState()
 const livePool = useLiveClientPool()
+const botOwner = useBotResourceStore(requireResourcePinia()).owner
+let botLease: ReturnType<typeof botOwner.catalog> | undefined
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])
 const bots = ref<SidebarBot[]>([])
@@ -85,36 +88,28 @@ watch(() => [sessions.value, loading.value, props.selectedProjectId, props.selec
   emit('session-automation', props.selectedSessionId, automationSessionOwners(sessions.value).get(props.selectedSessionId)?.jobId)
 })
 let controller: AbortController | undefined
-let catalogRetry: ReturnType<typeof setTimeout> | undefined
-let catalogRetryMs = 3_000
-function cancelCatalogRetry() {
-  clearTimeout(catalogRetry)
-  catalogRetry = undefined
-}
-function retryCatalog(snapshot: ProjectLiveLease) {
-  if (catalogRetry !== undefined || disposed || !active) return
-  catalogRetry = setTimeout(() => {
-    catalogRetry = undefined
-    if (lease === snapshot && active && !disposed) void refreshMetadata(snapshot)
-  }, catalogRetryMs)
-  catalogRetryMs = Math.min(catalogRetryMs * 2, 30_000)
-}
 const lifetime = new AbortController()
 let lease: ProjectLiveLease | undefined
 let stopWatching: (() => void) | undefined
-let active = true
+const panelEnabled = useCatalogVisibility(() => true)
+let mounted = false
+let active = false
 let disposed = false
 function toggle(id: string) { if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id) }
 function subscribe() {
   const current = lease = liveState.acquireProject(props.apiBase, props.project.id)
   const stopSessions = watch(() => [current.sessions.state.revision, current.sessions.state.error], () => {
-    if (current.sessions.state.value) {
+    if (current.sessions.state.status === 'forbidden') {
+      sessions.value = []
+      homeCache?.setSessions(scope.value, [])
+    } else if (current.sessions.state.value) {
       sessions.value = current.sessions.state.value
       homeCache?.setSessions(scope.value, sessions.value)
     }
   }, { immediate: true })
   const stopActivity = watch(() => [current.activity.state.revision, current.activity.state.error], () => {
-    if (current.activity.state.value) stages.value = current.activity.state.value.stages
+    if (current.activity.state.status === 'forbidden') stages.value = {}
+    else if (current.activity.state.value) stages.value = current.activity.state.value.stages
     const detail = [...new Set([current.sessions.state.error, current.activity.state.error].filter(Boolean))].join(' ')
     error.value = detail && runtimeState.value === 'failed'
       ? t('This project could not start. Use Retry project startup beside its name.') : detail
@@ -124,17 +119,20 @@ function subscribe() {
   const stopMetadata = watch(() => current.sessions.state.error, () => {
     void refreshMetadata(current)
   })
-  const catalog = createLiveResourceRefresh(livePool, {
-    base: props.apiBase, projectId: props.project.id, resource: 'channels',
-    // Resource readiness owns the initial snapshot and reconnect retries. A
-    // session sessions (especially observed groups) need not have channelAddress.
-    refresh: () => { void refreshMetadata(current) },
-  })
-  stopWatching = () => { stopSessions(); stopActivity(); stopMetadata(); catalog.dispose() }
+  const catalog = botLease = botOwner.catalog(scope.value, props.project.id, livePool)
+  const stopBots = watch(catalog.state, state => {
+    if (state.status === 'forbidden') bots.value = []
+    else if (state.value && !state.error) bots.value = state.value
+    else if (state.error) clearBotConnections()
+    if (!state.loading && state.status !== 'idle') void refreshMetadata(current)
+  }, { immediate: true })
+  stopWatching = () => { stopSessions(); stopActivity(); stopMetadata(); stopBots(); catalog.release(); botLease = undefined }
+
 }
 async function refresh() {
   liveFolderRevision.value++
   await lease?.refresh()
+  await botLease?.refresh()
   if (lease) await refreshMetadata(lease)
 }
 async function refreshMetadata(snapshot: ProjectLiveLease) {
@@ -143,27 +141,16 @@ async function refreshMetadata(snapshot: ProjectLiveLease) {
   const current = new AbortController()
   controller = current
   try {
-    if (!snapshot.sessions.state.error) {
-      try {
-        const catalog = await createBotSettingsClient(scope.value, props.project.id).catalog(current.signal)
-        if (current.signal.aborted) return
-        bots.value = catalog
-        cancelCatalogRetry()
-        catalogRetryMs = 3_000
-      } catch {
-        // Bot settings may be unavailable to a conversation reader; retain scoped names and usable chats.
-        if (current.signal.aborted) return
-        clearBotConnections()
-        // A healthy resource stream does not retry a failed HTTP snapshot.
-        // Recover independently: no further channel event may arrive.
-        retryCatalog(snapshot)
-      }
-    } else if (snapshot.sessions.state.error) clearBotConnections()
+    if (snapshot.sessions.state.error) clearBotConnections()
     error.value = [...new Set([snapshot.sessions.state.error, snapshot.activity.state.error].filter(Boolean))].join(' ')
     if (error.value) {
       try {
-        const status = await createProjectsClient(props.apiBase).status(props.project.id, current.signal)
-        if (!current.signal.aborted) {
+        const statusLease = botOwner.status(props.apiBase, props.project.id)
+        let status: ProjectRuntimeStatus | undefined
+        try { await statusLease.read(); status = statusLease.state.value.value
+          if (!status) throw new Error(statusLease.state.value.error || t('Runtime status is unavailable.'))
+        } finally { statusLease.release() }
+        if (!current.signal.aborted && status) {
           runtimeState.value = status.state
           if (status.state === 'failed') error.value = t('This project could not start. Use Retry project startup beside its name.')
         }
@@ -202,8 +189,6 @@ async function sessionsDeleted(ids: string[]) {
   await refresh()
 }
 function stop() {
-  cancelCatalogRetry()
-  catalogRetryMs = 3_000
   clearBotConnections()
   stopWatching?.()
   stopWatching = undefined
@@ -215,13 +200,13 @@ function stop() {
 function clearBotConnections() {
   bots.value = bots.value.map(({ connection: _connection, ...bot }) => bot)
 }
-onMounted(subscribe)
-onActivated(() => {
-  if (active) return
-  active = true
-  subscribe()
+onMounted(() => { mounted = true; active = panelEnabled.value; if (active) subscribe() })
+watch(panelEnabled, enabled => {
+  if (!mounted || active === enabled) return
+  active = enabled
+  if (enabled) subscribe()
+  else stop()
 })
-onDeactivated(() => { active = false; stop() })
 watch(() => props.folderRevision, () => { void refresh() })
 watch(() => [props.apiBase, props.project.id], () => {
   deletion.value = undefined

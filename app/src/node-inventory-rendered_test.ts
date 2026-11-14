@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -51,6 +52,7 @@ function mount(t: TestContext) {
   })
   const root = element('root')
   const app = renderer.createApp(module.exports.default, { apiBase: 'http://fixture/projects/a/' })
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => {
     app.unmount()
