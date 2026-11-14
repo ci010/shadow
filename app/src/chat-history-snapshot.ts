@@ -62,8 +62,6 @@ function jsonSize(value: unknown, limit: number, lowerBound: boolean, depth = 0)
 }
 
 interface Snapshot { revision: string; historyRevision: string; metadataVersions: ChatMetadataVersions; body: Record<string, unknown>; bytes: number }
-interface Pool { onDispose(callback: () => void): () => void }
-const pools = new WeakMap<Pool, ReturnType<typeof createChatHistorySnapshots>>()
 const messages = (value: unknown): value is Record<string, unknown>[] => Array.isArray(value)
   && value.every(message => isRecord(message) && typeof message.role === 'string')
 const identityFields = ['chatId', 'currentPhysicalId', 'previousPhysicalId', 'segmentIndex'] as const
@@ -163,14 +161,4 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
     },
     dispose() { disposed = true; entries.clear(); latest.clear(); bytes = 0 },
   }
-}
-
-export function chatHistorySnapshots(pool: Pool) {
-  let cache = pools.get(pool)
-  if (!cache) {
-    cache = createChatHistorySnapshots()
-    pools.set(pool, cache)
-    pool.onDispose(() => cache!.dispose())
-  }
-  return cache
 }

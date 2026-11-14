@@ -77,6 +77,7 @@ function fixture(t: TestContext, canWrite = false) {
     const app = renderer.createApp(Vue.defineComponent({
       setup: () => () => Vue.h(module.exports.default, { ...props, onNavigate: (id: string) => navigation.push(id), ref: (value: Vue.ComponentPublicInstance | null) => { instance = value } }),
     }))
+    app.use(require('../stores/app.ts').createResourceStores())
     app.mount({})
     let mounted = true
     const unmount = () => { if (mounted) { mounted = false; app.unmount() } }

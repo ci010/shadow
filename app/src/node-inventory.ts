@@ -58,7 +58,7 @@ export async function fetchNodeInventory(
     signal, cache: 'no-store',
   })
   if (response.status === 401 || response.status === 403) {
-    throw new Error(t('Device access was denied. Open Nodes through the authorized desktop app or reconnect.'))
+    throw Object.assign(new Error(t('Device access was denied. Open Nodes through the authorized desktop app or reconnect.')), { status: response.status })
   }
   if (response.status === 404 || response.status === 501) {
     throw new Error(t('This backend does not provide device inventory. Restart Shadow after updating the backend.'))

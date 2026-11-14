@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import test, { type TestContext } from 'node:test'
 import * as Vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
@@ -15,7 +16,7 @@ interface ElementNode {
   showModal(): void; close(): void; focus(): void
 }
 const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], scrollTop: 0, showModal() {}, close() {}, focus() {} })
-const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await Vue.nextTick() }
+const settle = async () => { await new Promise(resolve => setTimeout(resolve, 20)); await Vue.nextTick() }
 const wiki: KnowledgeEntry = { id: 'memory/topics/node.md', path: 'memory/topics/node.md', title: 'Node wiki', kind: 'wiki', source: 'project', deletable: true, revision: 'r1' }
 const memory: KnowledgeEntry = { ...wiki, id: 'memory/sessions/chat.md', path: 'memory/sessions/chat.md', title: 'Chat memory', kind: 'memory' }
 const builtin: KnowledgeEntry = { ...wiki, id: 'builtin:skills/node', path: 'skills/node/SKILL.md', title: 'Node skill', kind: 'skill', source: 'builtin', deletable: false }
@@ -49,6 +50,8 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
       replace: ({ query }: { query: typeof route.query }) => { route.query = query },
       back: () => history.push(-1), forward: () => history.push(1), go: (direction: number) => history.push(direction),
     }) }
+    // Tooltip DOM behavior has its own tests; this in-memory renderer has no DOM.
+    if (id.endsWith('markdown-link-hints')) return { vMarkdownLinkHints: {} }
     if (id.endsWith('useInstallationContext.ts')) return { useInstallationContext: () => scope }
     if (id.endsWith('/knowledge-markdown.ts')) return {
       renderKnowledgeMarkdown: (content: string) => require('marked').marked.parse(content),
@@ -113,6 +116,7 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
   const find = (node: ElementNode, selector: string): ElementNode | undefined =>
     node.props.id === selector.slice(1) ? node : node.children.map(child => find(child, selector)).find(Boolean)
   const app = renderer.createApp(Vue.defineComponent({ setup: () => () => Vue.h(module.exports.default, props) }))
+  app.use(require(fileURLToPath(new URL('./stores/app.ts', import.meta.url))).createResourceStores())
   app.mount(root)
   let mounted = true
   const unmount = () => { if (mounted) { mounted = false; app.unmount() } }
