@@ -54,10 +54,6 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <nav v-if="automation && !workflowProjectId" class="workflow-projection-link" :aria-label="t('Workflow execution')">
-        <RouterLink :to="`/projects/${encodeURIComponent(automation.projectId)}/workflows`">{{ t('View workflow execution') }}</RouterLink>
-        <span>{{ t('This conversation is a model execution, not the workflow run.') }}</span>
-      </nav>
       <AutomationDetail :enabled="!!automation && !workflowProjectId"
         :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
         :selected-session-id="selected?.sessionId"
@@ -85,6 +81,17 @@
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </AutomationDetail>
     </div>
+    <div v-show="false" ref="documentParking" />
+    <template v-for="[projectId, state] in projectDocuments.projects" :key="projectId">
+      <Teleport v-if="state.target || documentParking" :to="state.target || documentParking!">
+        <div v-if="state.tabs.includes('workflows')" v-show="state.selected === projectTabKey('workflows')" class="project-document-host">
+          <WorkflowManager :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && state.active && state.selected === projectTabKey('workflows')" />
+        </div>
+        <div v-if="state.tabs.includes('settings')" v-show="state.selected === projectTabKey('settings')" class="project-document-host">
+          <ProjectSettings :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
+        </div>
+      </Teleport>
+    </template>
     <SessionQuickOpen v-if="sessionSearchOpen" :api-base="apiBase" :projects="projects"
       @close="sessionSearchOpen = false" @select="quickOpenSession" />
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
@@ -120,10 +127,16 @@ import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { useAutomationNavigation } from '../composables/useAutomationNavigation.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
-import { DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
+import WorkflowManager from './WorkflowManager.vue'
+import ProjectSettings from './ProjectSettings.vue'
+import { createProjectDocuments, ProjectDocumentsKey } from '../project-documents.ts'
+import { projectTabKey, DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
 const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean }>(), { visible: true })
+const projectDocuments = createProjectDocuments()
+provide(ProjectDocumentsKey, projectDocuments)
+const documentParking = ref<HTMLElement>()
 const liveState = useProjectLiveState()
 const route = useRoute()
 const router = useRouter()
@@ -486,6 +499,7 @@ function deleted(projectId: string, sessionId: string) {
 }
 function forgetProject(projectId: string) {
   for (const resource of registry.resources) if (resource.projectId === projectId) conversationQueries.delete(resource.key)
+  projectDocuments.projects.delete(projectId)
   registry.removeProject(projectId)
   projectWorkbenches.delete(projectId)
   workflowQueries.delete(projectId)
@@ -550,8 +564,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.workflow-projection-link { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; font-size: 12px; color: var(--c-text-secondary); border-bottom: 1px solid var(--c-border); }
-.workflow-projection-link a { color: var(--c-primary); }
 .session-search-trigger { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .session-search-trigger:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .session-search-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
@@ -585,4 +597,5 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); ou
 .projects-sidebar.is-floating { position: absolute; inset: 44px auto 0 0; z-index: 50; width: min(var(--projects-width), calc(100% - 40px)); box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .projects-backdrop { position: absolute; inset: 44px 0 0; z-index: 49; padding: 0; border: 0; background: var(--c-shadow-softer); }
 @media (max-width: 700px), (pointer: coarse) { .projects-toggle { min-height: 44px; } }
+.project-document-host { display: flex; flex: 1; min-height: 0; min-width: 0; }
 </style>

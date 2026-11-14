@@ -150,12 +150,13 @@
           <div v-if="tabs.selected !== knowledgeEntryTabKey(entryId)" v-show="false" :id="panelId(knowledgeEntryTabKey(entryId))"
             role="tabpanel" :aria-labelledby="tabId(knowledgeEntryTabKey(entryId))" />
         </template>
-        <div v-if="tabs.projectTabs?.includes('settings')" v-show="tabs.selected === projectTabKey('settings')"
+        <div v-if="projectDocuments" ref="projectTarget" class="project-document" v-show="!!projectTabFromKey(tabs.selected)" role="tabpanel" :id="projectTabFromKey(tabs.selected) ? panelId(tabs.selected) : undefined" :aria-labelledby="projectTabFromKey(tabs.selected) ? tabId(tabs.selected) : undefined" />
+        <div v-if="!projectDocuments && tabs.projectTabs?.includes('settings')" v-show="tabs.selected === projectTabKey('settings')"
           :id="panelId(projectTabKey('settings'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('settings'))">
           <ProjectSettings :api-base="apiBase" :host-api-base="installation.apiBase" :project-id="projectId ?? ''" />
         </div>
 
-        <div v-if="tabs.projectTabs?.includes('workflows')" v-show="tabs.selected === projectTabKey('workflows')"
+        <div v-if="!projectDocuments && tabs.projectTabs?.includes('workflows')" v-show="tabs.selected === projectTabKey('workflows')"
           :id="panelId(projectTabKey('workflows'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('workflows'))">
           <WorkflowManager :api-base="apiBase" :project-id="projectId ?? ''" :active="active && tabs.selected === projectTabKey('workflows')" />
         </div>
@@ -179,7 +180,7 @@
 
 <script setup lang="ts">
 import { t } from '../../i18n.ts'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import FileTree from './FileTree.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
@@ -189,6 +190,7 @@ import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import OverlayTransition from '../OverlayTransition.vue'
 import KnowledgeView from '../KnowledgeView.vue'
+import { ProjectDocumentsKey } from '../../project-documents.ts'
 import WorkflowManager from '../WorkflowManager.vue'
 import ProjectSettings from '../ProjectSettings.vue'
 import MobileSheet from '../MobileSheet.vue'
@@ -230,7 +232,22 @@ const knowledgeExpanded = ref(true)
 const expanded = computed(() => knowledgeSelected.value
   ? wide.value && knowledgeExpanded.value
   : explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? false)))
-const tabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
+const documents = inject(ProjectDocumentsKey, undefined)
+const projectDocuments = computed(() => props.projectNavigationEnabled && props.projectId ? documents?.get(props.projectId) : undefined)
+const localTabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
+const tabs = computed<FileTabs>({
+  get: () => projectDocuments.value ? { ...localTabs.value, projectTabs: projectDocuments.value.tabs } : localTabs.value,
+  set(value) {
+    if (projectDocuments.value) projectDocuments.value.tabs = value.projectTabs ?? []
+    localTabs.value = value
+  },
+})
+const projectTarget = ref<HTMLElement>()
+watch(() => [projectTarget.value, props.active, tabs.value.selected] as const, ([target, active, selected]) => {
+  const state = projectDocuments.value
+  if (state && active && target) { state.target = target; state.active = true; state.selected = selected }
+  else if (state && state.target === target) state.active = false
+}, { flush: 'post' })
 const knowledgeLabels = ref<Record<string, string>>({})
 const knowledgeLabel = (entryId: string) => knowledgeLabels.value[entryId] ?? entryId.split('/').at(-1) ?? entryId
 function updateKnowledgeLabels(entries: KnowledgeEntry[]) {
@@ -486,7 +503,7 @@ watch(() => [props.contextKey, props.diagnosisEnabled] as const, ([key, diagnosi
   remoteExpanded.value = false
   if (key !== previous) {
     cachedTabs.set(previous, tabs.value)
-    tabs.value = cachedTabs.get(key) ?? { files: [], selected: '' }
+    tabs.value = { ...(cachedTabs.get(key) ?? { files: [], selected: '' }), projectTabs: tabs.value.projectTabs }
   }
   tabs.value = withDiagnosisTab(tabs.value, diagnosis)
 })
@@ -499,10 +516,10 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
     selectTab('')
   }
 }, { immediate: true })
-watch(() => [route?.name, route?.params?.projectId, props.active, props.projectId, props.contextKey], () => {
+watch(() => [route?.fullPath, props.active] as const, (value, previous) => {
   if (!props.projectNavigationEnabled || !props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
   const tab = route?.name === 'project-workflows' ? 'workflows' : route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'settings' : undefined
-  if (tab) tabs.value = openProjectTab(tabs.value, tab)
+  if (tab && (!previous || value[0] !== previous[0] || tabs.value.projectTabs?.includes(tab))) tabs.value = openProjectTab(tabs.value, tab)
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
 }, { immediate: true })
 watch(() => [props.apiBase, props.contextKey], () => { knowledgeLabels.value = {} })
@@ -535,6 +552,11 @@ onMounted(() => {
   if (root.value) observer.observe(root.value)
 })
 onUnmounted(() => {
+  const state = projectDocuments.value
+  if (state && state.target === projectTarget.value) {
+    state.target = undefined
+    state.active = false
+  }
   observer?.disconnect()
   document.removeEventListener('keydown', documentKey, true)
   document.removeEventListener('compositionstart', compositionStart, true)
