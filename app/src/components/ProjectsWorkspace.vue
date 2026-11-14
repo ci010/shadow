@@ -122,6 +122,7 @@ import { createConversationResources, type ConversationResource } from '../proje
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { type FolderRecord } from '../folders-client.ts'
 import { createNewConversationShortcut, hasVisibleNewConversationOverlay } from '../new-conversation-shortcut.ts'
+import { projectNavigationShortcut } from '../project-navigation-shortcut.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { DEFAULT_PROJECT_SIDEBAR, projectSidebarStorageKey, restoreProjectSidebarPreferences } from '../project-sidebar.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
@@ -457,6 +458,17 @@ function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
   return router.push(projectChatLocation(resource))
 }
 const keyboardActive = ref(true)
+function projectNavigationKeydown(event: KeyboardEvent) {
+  const destination = projectNavigationShortcut(event)
+  if (!destination || !keyboardActive.value || !props.visible || creating.value
+    || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
+    || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
+  const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
+  if (!projects.value.some(project => project.id === projectId)) return
+  event.preventDefault()
+  if (destination === 'knowledge') openKnowledge(projectId)
+  else void router.push({ name: 'project-workflows', params: { projectId }, query: workflowQueries.get(projectId) ?? {} })
+}
 const newConversationShortcut = createNewConversationShortcut({
   context() {
     if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
@@ -609,6 +621,7 @@ onMounted(() => {
   window.addEventListener('keydown', sidebarKeydown)
   window.addEventListener('keydown', sessionSearchKeydown)
   window.addEventListener('keydown', newConversationShortcut.keydown)
+  window.addEventListener('keydown', projectNavigationKeydown)
 })
 onActivated(() => { keyboardActive.value = true })
 onDeactivated(() => { sessionSearchOpen.value = false; keyboardActive.value = false; newConversationShortcut.cancel(); closeSidebar(false) })
@@ -616,6 +629,7 @@ onUnmounted(() => {
   keyboardActive.value = false
   newConversationShortcut.cancel()
   window.removeEventListener('keydown', newConversationShortcut.keydown)
+  window.removeEventListener('keydown', projectNavigationKeydown)
   mutation?.abort(); sidebarObserver?.disconnect()
   window.removeEventListener('resize', measureSidebar)
   window.removeEventListener('shadow:projects-changed', onCatalogChanged)
