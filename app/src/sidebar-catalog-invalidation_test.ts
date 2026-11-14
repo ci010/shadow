@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile, mkdir, rm } from 'node:fs/promises'
@@ -28,7 +29,7 @@ async function component(name: string, fixture: any, t: any) {
   const mocks: Record<string, string> = {
     'i18n.ts': `export const t = x => x; export const i18n = {global:{locale:{value:'en'}}}; export const formatDateTime = x => x`,
     'useProjectLiveState.ts': `export const useProjectLiveState = () => f.live`,
-    'useLiveClient.ts': `export const useLiveClientPool = () => f.pool`,
+    'useLiveClient.ts': `export const useLiveClientPool = () => f.pool; export const liveProjectId = base => new URL(base).pathname.split('/').filter(Boolean).at(-1) || 'default'`,
     'service-groups.ts': `export const useServiceGroups = () => ({groups:{value:[]}}); export const projectGroupConversations = x => x; export const observedGroupId = () => ''`,
     'bot-settings.ts': `export const createBotSettingsClient = () => ({catalog:async () => {f.channels++; if(f.failCatalog) throw Error('unavailable'); return f.bots || []}})`,
     'folders-client.ts': `export const createFoldersClient = base => ({list:async signal => {f.folders++; return f.records || []}})`,
@@ -36,7 +37,7 @@ async function component(name: string, fixture: any, t: any) {
     'useComposerDraft.ts': `export const composerDraftRevision={value:0}; export const composerDraftKey=()=>''; export const composerDraftEditedAt=()=>0`,
   }
   await build({ stdin: { contents: script, loader: 'ts', resolveDir: resolve('app/src/components') },
-    outfile: resolve(directory, 'component.mjs'), bundle: true, format: 'esm', platform: 'node', external: ['vue'],
+    outfile: resolve(directory, 'component.mjs'), bundle: true, format: 'esm', platform: 'node', external: ['vue', 'pinia'],
     plugins: [{ name: 'fixture-dependencies', setup(builder) {
       builder.onResolve({ filter: /\.vue$/ }, () => ({ path: 'child', namespace: 'stub' }))
       builder.onResolve({ filter: /\.ts$/ }, args => {
@@ -71,13 +72,14 @@ test('ProjectGroup session start/end revisions do not refresh catalogs; channels
   const f = fixture()
   const graph = { state: reactive<any>({ revision: 1, value: [{sessionId:'web:a',channelAddress:{}}], error:'' }) }
   const activity = { state: reactive<any>({revision:1,value:{stages:{}},error:''}), read: async () => {} }
-  const lease = { graph, activity, refresh: async () => {}, release() {} }
+  const lease = { sessions: graph, activity, refresh: async () => {}, release() {} }
   Object.assign(f, { live: { acquireProject: () => lease } })
   const definition = await component('ProjectGroup', f, t)
   const app = renderer.createApp({render: () => h(definition, {
     apiBase: 'http://localhost', project: {id:'a',name:'A'}, selectedProjectId:'a',
     selectedSessionId:'web:a', navigationKey:'a',remoteFolders:false,
   })})
+  app.use(createResourceStores())
   const vm = app.mount({})
   t.after(() => app.unmount())
   await settle()
@@ -100,6 +102,7 @@ test('FoldersSidebar folder and node resources refresh independently and release
   const sessions = reactive<any[]>([])
   const app = renderer.createApp({render: () => h(definition, {apiBase:'http://localhost/projects/a',projectId:'a',
     sessions,activeSessionId:'',collapsed:new Set(),stages:{},sessionsLoading:false,sessionsError:''})})
+  app.use(createResourceStores())
   app.mount({}); await settle()
   assert.deepEqual([f.folders,f.nodes], [1,1])
   sessions.push({sessionId:'web:new'}); await settle()
@@ -120,11 +123,12 @@ test('ProjectGroup reads catalog without channel sessions and recovers failed in
   const f = Object.assign(fixture(), { failCatalog: true, bots: [{id:'discord-1',projectId:'a',platform:'discord',displayName:'Named Discord',connection:{state:'connected',configured:true}}] })
   const graph = { state: reactive<any>({ revision: 1, value: [], error:'' }) }
   const activity = { state: reactive<any>({revision:1,value:{stages:{}},error:''}) }
-  Object.assign(f, { live: { acquireProject: () => ({graph,activity,refresh:async()=>{},release(){}}) } })
+  Object.assign(f, { live: { acquireProject: () => ({sessions:graph,activity,refresh:async()=>{},release(){}}) } })
   const definition = await component('ProjectGroup', f, t)
   const app = renderer.createApp({render: () => h(definition, {
     apiBase:'http://localhost',project:{id:'a',name:'A'},selectedProjectId:'a',selectedSessionId:'',navigationKey:'a',remoteFolders:false,
   })})
+  app.use(createResourceStores())
   const vm = app.mount({})
   t.after(() => app.unmount())
   await settle()
@@ -144,11 +148,12 @@ test('ProjectGroup retries failed catalog even while resource transport remains 
   const f = Object.assign(fixture(), { failCatalog: true, bots: [{id:'qq-1',projectId:'a',platform:'qq',displayName:'Named QQ',connection:{state:'connected',configured:true}}] })
   const graph = { state: reactive<any>({ revision:1,value:[],error:'' }) }
   const activity = { state: reactive<any>({revision:1,value:{stages:{}},error:''}) }
-  Object.assign(f, { live: { acquireProject: () => ({graph,activity,refresh:async()=>{},release(){}}) } })
+  Object.assign(f, { live: { acquireProject: () => ({sessions:graph,activity,refresh:async()=>{},release(){}}) } })
   const definition = await component('ProjectGroup', f, t)
   const app = renderer.createApp({render: () => h(definition, {
     apiBase:'http://localhost',project:{id:'a',name:'A'},selectedProjectId:'a',selectedSessionId:'',navigationKey:'a',remoteFolders:false,
   })})
+  app.use(createResourceStores())
   const vm = app.mount({})
   t.after(() => app.unmount())
   await settle()

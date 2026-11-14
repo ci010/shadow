@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -95,6 +96,7 @@ function fixture(t: TestContext, waitForReady = false) {
   })
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
+  app.use(createResourceStores())
   app.mount(node())
   t.after(() => {
     try { unmount(); stop() }

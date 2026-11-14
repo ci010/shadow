@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -104,6 +105,7 @@ function mountHighlighter(t: TestContext) {
   const app = renderer.createApp(defineComponent({
     setup: () => () => h(module.exports.default, { ...props, ref: (value: unknown) => { instance = value }, onError: (value: string) => errors.push(value) }),
   }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   return { props, pending, errors, state: () => instance.$.setupState }

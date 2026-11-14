@@ -1,3 +1,4 @@
+import { createResource } from './resources/engine.ts'
 import { createSnapshotReader } from './snapshot-reader.ts'
 import { unkeyedWork } from '../../src/shared/snapshot-wire.ts'
 import { affectsSessionResource, affectsSessionSummary } from './session-invalidation.ts'
@@ -13,90 +14,18 @@ import type { LiveClient, LiveObserver } from './live-client.ts'
 import { projectWorkLiveOverviewSchema } from '../../src/projects/work-overview.ts'
 import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../../src/sessions/activity-read-model.ts'
 
-/** A snapshot has one serialized reader, regardless of how many views use it.
- * initialLoading represents an external readiness gate; its owner must invalidate
- * when ready (or dispose to settle readers), without starting HTTP early. */
-export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number, options: { initialLoading?: boolean; reconcile?: (value: T) => T } = {}) {
-  const state = shallowReactive({ value: undefined as T | undefined, loading: options.initialLoading ?? false, error: '', revision: 0, readRevision: 0, refreshReason: 'initial', readReason: 'initial' })
-  let controller: AbortController | undefined
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let pending = false
-  let closed = false
-  const waiters = new Set<() => void>()
-  function settle() { for (const resolve of waiters) resolve(); waiters.clear() }
-  function schedule() {
-    if (closed || controller || timer !== undefined || !pending) return
-    timer = setTimeout(() => { void run() }, delayMs)
-  }
-  async function run() {
-    timer = undefined
-    if (closed || !pending) return
-    pending = false
-    const current = controller = new AbortController()
-    state.readRevision++
-    state.readReason = state.refreshReason
-    try {
-      const value = await load(current.signal)
-      if (closed || current.signal.aborted || controller !== current) return
-      state.value = options.reconcile ? options.reconcile(value) : value
-      state.error = ''
-      state.revision++
-    } catch (cause) {
-      if (!closed && !current.signal.aborted && controller === current) {
-        state.error = cause instanceof Error ? cause.message : t('Live state is unavailable. Retry.')
-      }
-    } finally {
-      if (controller === current) {
-        controller = undefined
-        if (pending) schedule()
-        else { state.loading = false; settle() }
-      }
-    }
-  }
-  function invalidate(reason = 'invalidation') {
-    if (closed) return
-    state.refreshReason = reason
-    pending = true
-    state.loading = true
-    schedule()
-  }
-  function read(): Promise<void> {
-    if (closed) return Promise.resolve()
-    if (state.value === undefined && !state.error && !state.loading) invalidate('initial-read')
-    if (!state.loading) return Promise.resolve()
-    return new Promise(resolve => waiters.add(resolve))
-  }
+/** Vue publication bridge. Scheduling, cancellation and commit ownership live in the engine. */
+export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number, options: { initialLoading?: boolean; reconcile?: (value: T) => T; version?: (value: T) => string | undefined } = {}) {
+  const resource = createResource(load, delayMs, options)
+  const state = shallowReactive({ ...resource.state })
+  const unsubscribe = resource.subscribe(next => Object.assign(state, next))
   return {
-    state: shallowReadonly(state), read, invalidate,
-    update(transform: (value: T) => T) {
-      if (closed || state.value === undefined) return false
-      state.value = transform(state.value)
-      state.revision++
-      return true
-    },
-    refresh() { invalidate('manual'); return read() },
-    reset(reason = 'recovery') {
-      controller?.abort()
-      controller = undefined
-      invalidate(reason)
-    },
-    pause() {
-      clearTimeout(timer)
-      timer = undefined
-      controller?.abort()
-      controller = undefined
-      pending = false
-      state.loading = false
-      settle()
-    },
-    dispose() {
-      closed = true
-      clearTimeout(timer)
-      controller?.abort()
-      controller = undefined
-      state.loading = false
-      settle()
-    },
+    state: shallowReadonly(state), read: resource.read, invalidate: resource.invalidate,
+    update: resource.update,
+    // Existing domain adapters use refresh as an invalidation, including during reads.
+    refresh() { resource.invalidate('manual'); return resource.read() },
+    reset: resource.reset, pause: resource.pause,
+    dispose() { resource.dispose(); unsubscribe() },
   }
 }
 
@@ -170,7 +99,7 @@ export function createProjectLiveState(
     const workReader = createSnapshotReader(
       (version, signal) => projectJson(scope, '/api/work?transport=snapshot-v1' + (version ? '&since=' + encodeURIComponent(version) : ''), { signal }, request),
       value => projectWorkLiveOverviewSchema.parse(value), unkeyedWork)
-    const work = createSnapshot(signal => workReader.load(signal), delay)
+    const work = createSnapshot(signal => workReader.load(signal), delay, { version: () => workReader.version })
     const usage = { work: 0 }
     const observers = new Set<Partial<LiveObserver>>()
     function reset(reason: Parameters<LiveObserver['reset']>[0]) {

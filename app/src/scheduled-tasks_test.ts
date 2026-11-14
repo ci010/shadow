@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -47,6 +48,7 @@ test('scheduled inventory ignores history and healthy idle ticks; automation upd
   })
   const props = reactive({ apiBase: 'http://fixture/projects/a', sessionId: 'web:one', active: true })
   const app = renderer.createApp(defineComponent({ setup: () => () => h(module.exports.default, props) }))
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => app.unmount())
   const tick = () => new Promise(resolve => setTimeout(resolve, 15))

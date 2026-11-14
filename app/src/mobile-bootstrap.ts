@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
-import { createApp, defineComponent, h, watch, type App as VueApp } from 'vue'
+import { defineComponent, h, watch, type App as VueApp } from 'vue'
+import { createResourceApp as createApp } from './stores/app.ts'
 import MainApp from './App.vue'
 import MobileConnection from './MobileConnection.vue'
 import router from './router.ts'

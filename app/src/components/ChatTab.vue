@@ -607,8 +607,8 @@ import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 import { timelineCanPrepend, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
-import { chatHistorySnapshots } from '../chat-history-snapshot.ts'
-import { readonlyHistorySnapshots } from '../readonly-history-snapshot.ts'
+import { useChatResourceStore } from '../stores/chat.ts'
+import { requireResourcePinia } from '../stores/app.ts'
 import type { LiveSubscription } from '../live-client.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
@@ -730,6 +730,8 @@ const conversationFocused = computed(() => editorGroups ? editorGroups.focused(`
 const chatRouteActive = computed(() => !!editorGroups || !!props.inspection || route.name === 'chat')
 const paneActive = computed(() => props.visible && activated.value)
 const livePool = useLiveClientPool()
+const chatResources = useChatResourceStore(requireResourcePinia()).owner
+const chatReadScope = () => ({ projectId: props.projectId ?? liveProjectId(props.apiBase) })
 const projectLiveState = useProjectLiveState()
 let projectLease: ProjectLiveLease | undefined
 onActivated(() => { activated.value = true })
@@ -1402,7 +1404,7 @@ function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], 
 async function seedRecentTimeline(controller: AbortController): Promise<void> {
   const id = previousPhysicalId.value
   if (!id || olderSegments.value.length || messages.value.filter(msg => !msg.isSummary && !msg.event && !msg.isSystemEvent).length >= 20) return
-  const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) })
+  const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]), 'physical-history-v1')
   if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
   const data = await res.json()
   if (controller.signal.aborted) return
@@ -1420,7 +1422,7 @@ async function prependOlderSegment(): Promise<void> {
   const container = messagesContainer.value
   browseHistory()
   try {
-    const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) })
+    const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]), 'physical-history-v1')
     if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return
@@ -2298,7 +2300,7 @@ async function loadDirectChat(background = false): Promise<void> {
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const res = await chatHistorySnapshots(livePool).read(buildUrl('/api/chat/session', { chatId }), controller.signal)
+    const res = await chatResources.readDirect(buildUrl('/api/chat/session', { chatId }), chatReadScope(), controller.signal)
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
       disconnectEventStream()
@@ -2369,10 +2371,10 @@ async function loadReadonlySession(background = false): Promise<void> {
   try {
     // Fetch all history + context in parallel
     const [histRes, context] = await Promise.all([
-      readonlyHistorySnapshots(livePool).read(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])),
+      chatResources.readReadonly(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])),
       background ? Promise.resolve(null) : (async () => {
         try {
-          const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal })
+          const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), chatReadScope(), controller.signal, 'context-v1')
           const data = await res.json()
           // Archived runs still have readable history, but no live context to show.
           // Do not rebuild today's prompt as if it were the historical execution.
@@ -2449,7 +2451,7 @@ async function loadHistoricalSegment(physId: string, direction: 'previous' | 'ne
   historyRequest = controller
   loadingHistory.value = true
   try {
-    const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`), { signal: controller.signal })
+    const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`), chatReadScope(), controller.signal, 'physical-history-v1')
     if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return

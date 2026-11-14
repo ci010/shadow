@@ -90,13 +90,13 @@ export function createFoldersClient(apiBase: string, request: typeof fetch = fet
       let data: unknown
       try { data = await response.json() } catch { data = undefined }
       const message = isRecord(data) && typeof data.error === 'string' ? safeFolderMessage(data.message) : undefined
-      throw new Error(workdirUnavailableMessage(data) ?? message ?? (response.status === 401 || response.status === 403
+      throw Object.assign(new Error(workdirUnavailableMessage(data) ?? message ?? (response.status === 401 || response.status === 403
         ? t('Main did not authorize this request. Reconnect and retry.')
         : response.status === 400 || response.status === 409
           ? t('Check the folder path and repository details. The destination must not already exist.')
           : response.status === 404
             ? t('The folder or clone could not be found. Refresh and retry.')
-            : t('Main could not complete this request. Check Main and retry.')))
+            : t('Main could not complete this request. Check Main and retry.'))), { status: response.status })
     }
     let data: unknown
     try { data = await response.json() } catch { throw invalidResponse() }

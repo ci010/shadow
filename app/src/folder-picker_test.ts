@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -28,6 +29,7 @@ function mount(t: TestContext, client: object, localNodeId?: string) {
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { activeElement: null } })
   const originalElement = Object.getOwnPropertyDescriptor(globalThis, 'HTMLElement')
   Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: class {} })
+  app.use(createResourceStores())
   app.mount({})
   t.after(() => {
     app.unmount()
