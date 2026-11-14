@@ -1,6 +1,6 @@
 <template>
   <aside v-show="open" :id="explorerId" class="project-file-explorer" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
-    <ProjectExplorerRoot v-for="session in sessions" :key="`session:${session.sessionId}`" :root-id="`session:${session.sessionId}`" :api-base="apiBase" :session-id="session.sessionId" :label="session.label" :hint="`${t('Session files')}: ${session.label}`" :active="active && open" @open="openFile" />
+    <ProjectExplorerRoot v-for="session in sessions" :key="`session:${session.sessionId}`" :root-id="`session:${session.sessionId}`" :api-base="apiBase" :session-id="session.sessionId" :label="session.label" :hint="`${t('Session files')}: ${session.label}`" :reveal="active && open && mainSessionId === session.sessionId" :active="active && open" @open="openFile" />
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
     <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
   </aside>
@@ -22,6 +22,14 @@ import ProjectExplorerFile from './ProjectExplorerFile.vue'
 const props = defineProps<{ apiBase: string; projectId: string; active: boolean; open: boolean; explorerId: string; folderRevision?: number; canQuote?: boolean }>()
 const emit = defineEmits<{ close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
+// Follow the selected document in the main (left) group, never the last
+// focused group/reference target or a resource owner's hidden conversation.
+const mainSessionId = computed(() => {
+  const state = groups.state(props.projectId)
+  const id = state.selected.left
+  const editor = state.left.includes(id) ? groups.descriptors.get(id) : undefined
+  return editor?.projectId === props.projectId ? editor.conversation?.sessionId : undefined
+})
 const conversations = computed(() => {
   const state = groups.state(props.projectId)
   return [...state.left, ...state.right].flatMap(id => {

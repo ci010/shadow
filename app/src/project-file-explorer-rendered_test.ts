@@ -40,7 +40,30 @@ test('Project explorer roots stay left, expand independently and preserve sessio
   const url = server.resolvedUrls!.local[0]
   const script = String.raw`const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});(async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1300,height:800,webPreferences:{backgroundThrottling:false}});const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<200;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw Error('Timeout '+s+' '+await run('document.body.innerText'))};await win.loadURL(${JSON.stringify(url)});
     await wait('document.querySelectorAll(".explorer-root").length===4');await run('document.querySelector(".project-explorer-toggle").click()');
-    for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
+    const expanded = id => run('document.querySelector('+JSON.stringify('[data-root-id="'+id+'"] .root-toggle')+').getAttribute("aria-expanded")');
+    assert.equal(await expanded('session:web:A'),'true','opening explorer reveals main A');
+    assert.equal(await expanded('session:web:B'),'false');
+    assert.equal(await expanded('folder:one'),'false','bound folder is not auto-expanded');
+    await run('window.groups.move("B","right");window.groups.focus("p","right")');await delay(80);
+    assert.equal(await expanded('session:web:B'),'false','right focus never reveals B');
+    await run('window.groups.move("B","left")');await delay(80);
+    assert.equal(await expanded('session:web:B'),'true','main selection follows B');
+    assert.equal(await expanded('session:web:A'),'true','previous expansion is retained');
+    await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').click();document.querySelector(\'[data-root-id="session:web:B"] .root-toggle\').click()');
+    assert.equal(await expanded('session:web:B'),'false','manual collapse remains possible');
+    await run('window.groups.toggleExplorer("p");window.groups.activate("A")');await delay(50);
+    await run('window.groups.activate("B");window.groups.toggleExplorer("p")');await delay(80);
+    assert.equal(await expanded('session:web:B'),'true','reopening restores main root');
+    assert.equal(await expanded('folder:one'),'true','manual folder expansion survives reopen');
+    // Non-conversation documents share A ownership but must not fall back to A.
+    await run('window.groups.open({id:"workflow-test",projectId:"p",owner:"A",label:"Workflow",icon:"",closable:true,select(){},close(){}});document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').click();window.groups.toggleExplorer("p")');await delay(50);
+    await run('window.groups.toggleExplorer("p")');await delay(80);
+    assert.equal(await expanded('session:web:A'),'false','workflow never reveals hidden owner conversation');
+    await run('window.groups.open({id:"other-project",projectId:"q",owner:"A",label:"A",conversation:{sessionId:"web:A",editable:true},icon:"",closable:true,select(){},close(){}})');await delay(80);
+    assert.equal(await expanded('session:web:A'),'false','other Project selection cannot reveal this root');
+    await run('window.groups.unregister("other-project");window.groups.close("workflow-test");window.groups.activate("A")');await delay(80);
+    assert.equal(await expanded('session:web:A'),'true');
+    for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';if(await expanded(id)==='false')await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
     assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),4);
     // Real layout/scroll regression: every dynamic resource heading stays visible,
     // not just the first sticky row. Exercise both desktop and narrow panes.

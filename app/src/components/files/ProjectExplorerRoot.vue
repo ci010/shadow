@@ -9,15 +9,18 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import HoverInfo from '../HoverInfo.vue'
 import FileTree from './FileTree.vue'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import type { FolderRecord } from '../../folders-client.ts'
 import type { OpenFile } from '../../file-workbench.ts'
-const props = defineProps<{ apiBase: string; sessionId: string; folder?: FolderRecord; label: string; hint?: string; source?: string; rootId: string; active: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; folder?: FolderRecord; label: string; hint?: string; source?: string; rootId: string; active: boolean; reveal?: boolean }>()
 const emit = defineEmits<{ open: [file: OpenFile] }>()
 const expanded = ref(false)
+// Additive reveal: preserve other roots and allow manual collapse until the
+// main selection changes or the explorer is opened again.
+watch(() => props.reveal, reveal => { if (reveal) expanded.value = true }, { immediate: true })
 const treeId = `project-tree-${useId()}`
 const { status, loading, error, offline, refresh } = useWorkdirGit(() => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folder?.id, sessionWorkspace: !props.folder }), computed(() => props.active && expanded.value))
 </script>
