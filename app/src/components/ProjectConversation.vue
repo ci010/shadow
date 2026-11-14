@@ -88,7 +88,7 @@ onUnmounted(() => {
   request?.abort()
   window.removeEventListener('shadow:config-changed', defaultsChanged)
 })
-defineExpose({ appendInputReference: (item: LabeledInputReference): AttachReferenceResult => workspace.value?.appendInputReference(item) ?? 'unavailable', focusConversation: () => workspace.value?.focusConversation(), appendDraft: (text: string) => workspace.value?.appendDraft(text), requestSession: (id: string) => workspace.value?.requestSession(id) })
+defineExpose({ canReplaceSidebarTab: () => workspace.value?.canReplaceSidebarTab() ?? false, appendInputReference: (item: LabeledInputReference): AttachReferenceResult => workspace.value?.appendInputReference(item) ?? 'unavailable', focusConversation: () => workspace.value?.focusConversation(), appendDraft: (text: string) => workspace.value?.appendDraft(text), requestSession: (id: string) => workspace.value?.requestSession(id) })
 </script>
 
 <style scoped>

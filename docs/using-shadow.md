@@ -161,7 +161,12 @@ the same in-app browser (Main only), and existing destinations are never replace
 A folder's **+** starts a conversation in that folder. A new draft does not create a session until its first message is
 sent. Selecting the Project name opens its independent **Dashboard** at
 `/projects/:projectId/dashboard`. Knowledge and project settings remain available
-from the sidebar; conversations retain their document tabs.
+from the sidebar. Opening another conversation from the sidebar (or session quick-open)
+closes only the previously selected Conversation tab when its live state is positively
+idle and its composer is empty. Working conversations, input/call waits, unknown
+activity, unsent drafts/attachments/references, and background work keep their tabs.
+Other idle tabs and document tabs are not swept. Closing a tab never deletes the
+session or stops its tasks; reopen it from the sidebar.
 
 Conversation (including subagent inspection), Diagnosis, Knowledge, Project settings,
 Workflows, and file/diff documents use the same Project-local editor groups.

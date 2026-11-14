@@ -101,6 +101,7 @@
 </template>
 
 <script setup lang="ts">
+import { closePreviousSidebarConversation } from '../sidebar-conversation-tabs.ts'
 import { createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
 import EditorGroupHost from './EditorGroupHost.vue'
 import EditorViewHost from './EditorViewHost.vue'
@@ -505,12 +506,17 @@ function navigate(projectId: string, sessionId: string, child?: string) {
   void router.push({ ...projectChatLocation({ projectId, sessionId }), query: child ? { child } : {} })
 }
 function selectSession(projectId: string, sessionId: string) {
-  const current = selected.value
-  if (current?.projectId === projectId && current.sessionId !== sessionId) {
-    const instance = instances.get(current.key)
-    if (instance) { instance.requestSession(sessionId); closeSidebar(); return }
-  }
-  navigate(projectId, sessionId)
+  const previous = selectedProjectId.value ? editorGroups.active(selectedProjectId.value) : undefined
+  const current = (previous?.conversation && resources.value.find(resource => resource.key === previous.owner)) || selected.value
+  const instance = current && instances.get(current.key)
+  if (current?.projectId === projectId && current.sessionId !== sessionId && instance) {
+    instance.requestSession(sessionId)
+    closeSidebar()
+  } else navigate(projectId, sessionId)
+  // requestSession resolves child inspections synchronously. Keeping the same
+  // owner (e.g. opening a child of this conversation) must not close its tab.
+  closePreviousSidebarConversation(editorGroups, previous?.id, selected.value?.key,
+    () => previous?.owner === current?.key && (instance?.canReplaceSidebarTab() ?? false))
 }
 function openKnowledge(projectId: string) {
 

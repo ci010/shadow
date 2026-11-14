@@ -636,6 +636,7 @@ import SessionHeading from './SessionHeading.vue'
 import IoRequestCard from './io/IoRequestCard.vue'
 import { useIoConversation } from '../io/conversation.ts'
 import { isChannelConversation, updateSessionSettings, type ReasoningSettings, type ConversationSettings } from '../session-settings.ts'
+import { canReplaceIdleConversation } from '../sidebar-conversation-tabs.ts'
 import { draftSettingsKey as createDraftSettingsKey, loadDraftSettings, saveDraftSettings } from '../draft-settings.ts'
 import { useConversationNavigation } from '../composables/useConversationNavigation.ts'
 import ToolActivityGroup from './ToolActivityGroup.vue'
@@ -2251,7 +2252,16 @@ async function openProjectWork(key: string) {
     composerError.value = cause instanceof Error ? cause.message : t('Could not open Project work. Retry from the Project entry.')
   }
 }
-defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, appendInputReference, quoteSelection, handleImageContext, handleImageBusy })
+// Sidebar replacement is deliberately stricter than the composer busy indicator:
+// only a positively idle, empty conversation may lose its tab.
+function canReplaceSidebarTab(): boolean {
+  return canReplaceIdleConversation(sessionStage.value, !activeSessionId.value || requestBusy.value
+    || submissionBusy.value || !!activeAsk.value || activeSubagents.value.length > 0
+    || !!activeSession.value?.hasBackgroundTasks || !!inputText.value || pendingAttachments.value.length > 0
+    || contextItems.value.length > 0 || inputReferences.value.length > 0 || pastingFiles.value
+    || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0)
+}
+defineExpose({ canReplaceSidebarTab, restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, appendInputReference, quoteSelection, handleImageContext, handleImageBusy })
 
 // ── History ───────────────────────────────────────────────────────────────────
 

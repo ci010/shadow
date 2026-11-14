@@ -787,3 +787,26 @@ test('commands and question answers cannot silently drop workflow references', a
   assert.equal(f.requests.length, 0)
   assert.equal(state.inputReferences.length, 1)
 })
+
+
+test('sidebar tab replacement uses live idle state and preserves unsent composer content and waits', t => {
+  const f = fixture(t, true)
+  const state = f.mount('a', root).state()
+  assert.equal(state.canReplaceSidebarTab(), false, 'unknown activity stays open')
+  state.inputText = ''
+  state.sessionStages = { [root]: 'idle' }
+  assert.equal(state.canReplaceSidebarTab(), true)
+  state.inputText = 'unsent draft'
+  assert.equal(state.canReplaceSidebarTab(), false)
+  state.inputText = ''
+  state.contextItems = [{ path: '/fixture', name: 'fixture', kind: 'file' }]
+  assert.equal(state.canReplaceSidebarTab(), false)
+  state.contextItems = []
+  state.inputReferences = [{ reference: { kind: 'workflow', projectId: 'a', workflowId: 'fixture' } }]
+  assert.equal(state.canReplaceSidebarTab(), false)
+  state.inputReferences = []
+  for (const stage of ['waiting', 'waiting-for-call', 'llm', 'pending', 'rate-limit']) {
+    state.sessionStages = { [root]: stage }
+    assert.equal(state.canReplaceSidebarTab(), false, stage)
+  }
+})
