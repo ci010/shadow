@@ -4363,5 +4363,17 @@
   "Deliver to fixed session": "投递固定会话",
   "Reuse context": "复用上下文",
   "Deliver to automation": "投递自动化",
-  "Fresh context each run": "每轮新上下文"
+  "Fresh context each run": "每轮新上下文",
+  "Conversation actions": "对话操作",
+  "Move to right": "移到右侧",
+  "Move to main area": "移回主区域",
+  "Right conversation": "右侧对话",
+  "Close right conversation": "关闭右侧对话",
+  "Resize right conversation": "调整右侧对话宽度",
+  "Use in chat": "用于对话",
+  "Open an ordinary conversation in the secondary pane first.": "请先在右侧打开一个普通对话。",
+  "Attach up to 8 workflow references.": "最多添加 8 个工作流引用。",
+  "This reference is already attached.": "已添加此引用。",
+  "Reference added to the conversation draft.": "引用已添加到对话草稿。",
+  "Remove workflow references before sending a command or answering a question.": "发送命令或回答问题前，请先移除工作流引用。"
 }

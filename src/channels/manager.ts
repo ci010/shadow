@@ -37,6 +37,7 @@ import type { ServiceDiscoveryStore } from './service-discovery.ts'
 
 type ChannelFactory = (id: ChannelId, config: Config, instance?: BotInstance) => BaseChannel
 export interface ChannelManagerOptions {
+  resolveInputReferences?: (references: unknown) => string
   projectId: string
   instanceStore: BotInstanceStore
   factory?: ChannelFactory
@@ -151,6 +152,7 @@ export class ChannelManager {
         sessionManager: this.sessionManager,
         realtime: this.options?.realtime,
         authorize: this.options?.authorizeWebRequest,
+        resolveInputReferences: this.options?.resolveInputReferences,
         prepareSession: async id => {
           this.sessionManager.assertFolderAccess(id)
           await this.sessionManager.prepareCommandSession(id)

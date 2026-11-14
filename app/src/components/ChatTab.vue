@@ -29,9 +29,9 @@
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
-      :project-navigation-enabled="!embedded"
+      :secondary="secondary" :project-navigation-enabled="!embedded && !secondary"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
-      :active="visible && ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
+      :active="visible && (secondary || ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
@@ -49,7 +49,7 @@
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
         <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
           <summary>{{ t('Message history') }}</summary>
-          <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && route.name === 'chat'" @navigate="browseHistory(); close()" />
+          <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && chatRouteActive" @navigate="browseHistory(); close()" />
         </details>
       </template>
     </template>
@@ -73,7 +73,7 @@
           <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
             :name="conversationTitle" :run-title="dedicatedRunTitle(activeSession)" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :hide-focus="hideRunFocus" :can-rename="true" @renamed="loadSessionList()"
-            :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
+            :active="visible && chatRouteActive && !!activeSession" @workdir="currentWorkdir = $event" />
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="viewingPhysicalId ? !!previousPhysicalId : canLoadOlder || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
             @next="viewNextSegment" @current="goBackToCurrentSegment">
@@ -88,7 +88,7 @@
         <AutomationConversationInfo v-if="automationConversation" :conversation="automationConversation" />
         <QuickActionsOverlay v-if="actionsOpen" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="paneActive" :can-write="true" @close="closeActions(true)" />
         <ConversationSearch ref="conversationSearch" :container="messagesContainer"
-          :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
+          :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive"
           :keyboard-active="keyboardActive" :context-key="fileContextKey" :live-entries="liveSearchEntries"
           :load-entries="loadSearchEntries" :reveal-match="revealSearchMatch"
           @update:open="searchVisibilityChanged" @query-change="clearSearchHighlights" />
@@ -96,7 +96,7 @@
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
-          <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && route.name === 'chat'" />
+          <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && chatRouteActive" />
           <ChannelInboxNotice v-if="activeSession?.channelSource" :source="activeSession.channelSource" />
           <div class="chat-message-list">
           <div v-if="!viewingPhysicalId && oldestPhysicalId" class="timeline-older">
@@ -105,7 +105,7 @@
             <span v-if="loadingHistory" class="sr-only" role="status">{{ t('Loading older messages…') }}</span>
           </div>
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
-            :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
+            :active="visible && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive" />
           <div v-else-if="!loadingHistory && messages.length === 0 && !runResult && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
@@ -249,7 +249,7 @@
         <div v-if="historyBrowsing && !viewingPhysicalId" class="timeline-latest-anchor"><HoverInfo :text="t('Return to latest')" v-slot="{ triggerProps }">
           <button v-bind="triggerProps" type="button" class="timeline-latest" :aria-label="t('Return to latest')" @click="returnToLatest"><span class="i-lucide-arrow-down" aria-hidden="true" /></button>
         </HoverInfo></div>
-        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
+        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive" @navigate="browseHistory" />
         </div>
       </template>
     </div>
@@ -258,7 +258,7 @@
       <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" :aria-label="t('Session diagnosis')" :id-prefix="embedded || managed ? paneId : undefined"
         :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-        :active="visible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="true"
+        :active="visible && activePanel === 'diagnosis' && chatRouteActive" :can-read-trace="true"
         :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
     </template>
     <template #composer>
@@ -266,9 +266,9 @@
         <div class="session-status-row">
           <SessionWorkStatus v-if="sessionReadable && !isExecution && !viewingPhysicalId"
             :key="`work-status:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
-            :active="paneActive && composerVisible && route.name === 'chat'" @open="openProjectWork" />
+            :active="paneActive && composerVisible && chatRouteActive" @open="openProjectWork" />
           <SessionWorkControls v-if="sessionReadable && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
-            :api-base="apiBase" :session-id="activeSessionId" :can-write="true" :active="paneActive && composerVisible && route.name === 'chat'"
+            :api-base="apiBase" :session-id="activeSessionId" :can-write="true" :active="paneActive && composerVisible && chatRouteActive"
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" :class="{ 'work-chip-active': composerWorking }" role="status" aria-live="polite">
             <SessionActivity :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
@@ -288,16 +288,16 @@
           </div>
         </div>
         <YieldQuestion v-if="!isCall" ref="yieldQuestion" :api-base="apiBase" :session-id="activeSessionId"
-          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :active="visible && composerVisible && !viewingPhysicalId && chatRouteActive"
           :stage="sessionStage" :can-answer="true" @cancelled="handleYieldCancelled"
           :use-composer="isDirectChat && !viewingPhysicalId" :composer-id="domId('message-input')" :composer-busy="submittingMessage"
           @request="handleYieldRequest" @inspect="inspectExecution" @custom="focusQuestionComposer" />
         <BotChatSetup :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
-          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :active="visible && composerVisible && !viewingPhysicalId && chatRouteActive"
           :can-submit="true" />
         <CredentialRequest v-if="isDirectChat && !isExecution" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
-          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :active="visible && composerVisible && !viewingPhysicalId && chatRouteActive"
           :stage="sessionStage" :can-submit="true" />
 
         <div v-if="channelConversation && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
@@ -359,12 +359,12 @@
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
-            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && chatRouteActive"
             @complete="completeSlashCommand" />
           <SessionReferenceMenu ref="sessionReferenceMenu" :api-base="apiBase" :stages="displayedSessionStages" :project-id="projectId || liveProjectId(apiBase)" :sessions="allSessions" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
-            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && chatRouteActive"
             @complete="completeSessionReference" />
           <input ref="attachmentInput" class="composer-file-input" type="file" :accept="remoteConversation ? 'image/png,image/jpeg,image/gif,image/webp' : undefined" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" :aria-label="t('Attached files')">
@@ -379,6 +379,15 @@
                 <button v-bind="triggerProps" type="button" class="attachment-insert" :disabled="submissionBusy" :aria-label="t('Insert reference to {name}', { name: attachment.file.name })" @click="insertImageReference(attachment)"><span class="i-lucide-text-cursor-input w-3.5 h-3.5" aria-hidden="true" /></button>
               </HoverInfo>
               <button :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: attachment.file.name })" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+            </span>
+          </div>
+          <div v-if="inputReferences.length" class="composer-context" :aria-label="t('Attached context')">
+            <span v-for="(item, index) in inputReferences" :key="inputReferenceKey(item.reference)" class="context-chip">
+              <span class="context-icon i-lucide-workflow" aria-hidden="true" />
+              <span>{{ item.label }}</span>
+              <HoverInfo :text="t('Remove {name}', { name: item.label })" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: item.label })" @click="inputReferences.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              </HoverInfo>
             </span>
           </div>
           <div v-if="contextItems.length" class="composer-context" :aria-label="t('Attached context')">
@@ -458,7 +467,7 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && route.name === 'chat'" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0 || inputReferences.length > 0" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
                 @request="sendMessage($event)" />
             <button
               v-if="showComposerSend"
@@ -487,7 +496,7 @@
     </template>
     </FileWorkbench>
     <SelectionMenu ref="selectionMenu" :container="messagesContainer"
-      :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
+      :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive"
       :can-quote="canQuoteSelection" @quote="quoteSelection" />
     <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
     <ImageViewer v-if="imagePreview" :image="imagePreview" :context-key="fileContextKey"
@@ -522,6 +531,8 @@ import { messageAttachments } from '../message-attachments.ts'
 import { conversationFileLink } from '../conversation-file-link.ts'
 import { discordReviewLink } from '../discord-integration.ts'
 import { composerDraftKey, useComposerDraft } from '../composables/useComposerDraft.ts'
+import { useInputReferenceDraft } from '../composables/useInputReferenceDraft.ts'
+import { inputReferenceKey, type LabeledInputReference, type AttachReferenceResult } from '../workflow-input-references.ts'
 import { useDiagnosisNavigation } from '../composables/useDiagnosisNavigation.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
@@ -688,6 +699,7 @@ const props = withDefaults(defineProps<{
   managed?: boolean
   initialFolder?: FolderRecord
   openRemote?: boolean
+  secondary?: boolean
   embedded?: boolean
   sessionId?: string
   childSessionId?: string
@@ -698,6 +710,7 @@ const props = withDefaults(defineProps<{
   automationRun?: boolean
 }>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
 const activated = ref(true)
+const chatRouteActive = computed(() => !!props.secondary || route.name === 'chat')
 const paneActive = computed(() => props.visible && activated.value)
 const livePool = useLiveClientPool()
 const projectLiveState = useProjectLiveState()
@@ -783,7 +796,7 @@ const composerPopoverTitle = computed(() =>
     : t('Folder context requires the local Main desktop app'))
 const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
-  contextItems.value.length,
+  contextItems.value.length + inputReferences.value.length,
   pendingAttachments.value.length,
 ) && !submissionBusy.value && !currentRequest.value?.state.stopping
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
@@ -831,6 +844,8 @@ const streamMedia = ref<string[]>([])
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
 const composerKey = computed(() => composerDraftKey(props.apiBase, props.projectId ?? '', activeSessionId.value))
 const composerDraft = useComposerDraft(composerKey, () => window.localStorage)
+const referenceDraft = useInputReferenceDraft(composerKey)
+const inputReferences = referenceDraft.items
 const inputText = composerDraft.text
 watch(inputText, () => { void nextTick(autoResize) })
 onMounted(autoResize)
@@ -1256,7 +1271,7 @@ const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => route.name !== 'project-settings' && route.name !== 'project-workflows' && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
+const composerVisible = computed(() => (props.secondary || (route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)
@@ -1521,7 +1536,7 @@ watch(() => pendingAttachments.value.map(item => item.previewUrl), (urls, previo
 const physicalIdStack = ref<string[]>([])
 const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation(
   () => paneActive.value && conversationDocumentVisible.value && activePanel.value === 'conversation' &&
-    route.name === 'chat' && activeSessionId.value && !viewingPhysicalId.value
+    chatRouteActive.value && activeSessionId.value && !viewingPhysicalId.value
     ? { apiBase: props.apiBase, sessionId: activeSessionId.value, projectId: props.projectId, remote: remoteConversation.value }
     : undefined,
   () => displayMessages.value,
@@ -1545,7 +1560,7 @@ let scrollCommit = 0
 onUpdated(() => { scrollCommit++ })
 const followCommittedBottom = createCommitBottomScroll()
 const progressiveActive = () => paneActive.value && conversationDocumentVisible.value
-  && activePanel.value === 'conversation' && route.name === 'chat'
+  && activePanel.value === 'conversation' && chatRouteActive.value
 const { mountedRows: mountedHistoryRows, reveal: revealHistoryRow } = useProgressiveHistory({
   rows: historyRows,
   key: historyRowKey,
@@ -2189,6 +2204,12 @@ function focusConversation(): void {
   const target = chatInput.value?.getClientRects().length ? chatInput.value : paneRoot.value?.querySelector<HTMLElement>('.document-tabs [aria-selected="true"]')
   target?.focus({ preventScroll: true })
 }
+function appendInputReference(item: LabeledInputReference): AttachReferenceResult {
+  if (item.reference.projectId !== (props.projectId || liveProjectId(props.apiBase)) || !canQuoteSelection.value || !composerVisible.value || isExecution.value) return 'unavailable'
+  const result = referenceDraft.append(item)
+  if (result === 'added' || result === 'duplicate') void nextTick(focusConversation)
+  return result
+}
 async function appendDraft(text: string) {
   inputText.value = inputText.value ? `${inputText.value}\n\n${text}` : text
   await nextTick()
@@ -2206,7 +2227,7 @@ async function openProjectWork(key: string) {
     composerError.value = cause instanceof Error ? cause.message : t('Could not open Project work. Retry from the Project entry.')
   }
 }
-defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, quoteSelection, handleImageContext, handleImageBusy })
+defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, appendInputReference, quoteSelection, handleImageContext, handleImageBusy })
 
 // ── History ───────────────────────────────────────────────────────────────────
 
@@ -2813,7 +2834,13 @@ async function sendMessage(overrideContent?: string, opts?: {
   const retry = opts?.retry === true
   const submittedText = inputText.value
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
+  const references = retry ? [] : referenceDraft.capture()
+  let referenceDraftKey = composerKey.value
   const isCommand = !retry && content.trimStart().startsWith('/')
+  if (references.length && (isCommand || answeringQuestion.value)) {
+    composerError.value = t('Remove workflow references before sending a command or answering a question.')
+    return
+  }
   const attachments = retry ? [] : [...pendingAttachments.value]
   const model = explicitModel.value
   const savedDraftKey = pendingDraftSettings.value ? draftSettingsKey.value : undefined
@@ -2821,7 +2848,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     composerError.value = t('Remove non-image attachments and file or folder context before sending to a remote workspace.')
     return
   }
-  if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
+  if ((!content && !retry && attachments.length === 0 && references.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
     || retry && requestBusy.value
     || pickingContext.value || pastingFiles.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   if (!retry && !opts?.queue && answeringQuestion.value && activeAsk.value) {
@@ -2865,7 +2892,11 @@ async function sendMessage(overrideContent?: string, opts?: {
     historyRequest = undefined
     loadingHistory.value = false
     if (startingDraft && draftRemote.value) currentWorkdir.value = { kind: 'remote', displayPath: draftRemote.value.displayPath ?? null }
-    if (startingDraft) composerDraft.migrate(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId))
+    if (startingDraft) {
+      referenceDraftKey = composerDraftKey(props.apiBase, props.projectId ?? '', sessionId)
+      composerDraft.migrate(referenceDraftKey)
+      referenceDraft.migrate(referenceDraftKey)
+    }
     if (startingDraft) unpersistedDrafts.value.add(sessionId)
     activeSessionId.value = sessionId
     if (props.managed) emit('prepared', sessionId)
@@ -2904,6 +2935,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       if (uploadedMedia.length > 0) payload.media = uploadedMedia
     } else {
       payload.content = messageContent
+      if (references.length) payload.references = references
       if (uploadedMedia.length > 0) payload.media = uploadedMedia
       if (!isCommand) {
         const msg: ChatMsg = { role: 'user', content: messageContent, timestamp: new Date().toISOString() }
@@ -2937,6 +2969,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       throw new Error(t('Main returned an invalid command result. Refresh the conversation before retrying.'))
     }
     accepted = true
+    if (!retry) referenceDraft.admitted(referenceDraftKey, references)
     // The visible text was cleared at submission, not after Main's admission.
     // Do not clear again here: the user may already be composing the next message.
     // Steered inputs are admitted before the tool boundary writes them to history.
@@ -3182,7 +3215,7 @@ function quoteSelection(text: string): void {
 
 // Focus on entry (including cached/split panes), not on subsequent draft edits.
 watch(() => !activeSessionId.value && paneActive.value && props.keyboardActive
-  && route.name === 'chat' && composerVisible.value, async available => {
+  && chatRouteActive.value && composerVisible.value, async available => {
   if (!available) return
   await nextTick()
   const input = chatInput.value
@@ -3200,7 +3233,7 @@ function handleTypingFocus(e: KeyboardEvent): void {
     .some(element => element.getClientRects().length > 0
       && (!element.classList.contains('hover-info-popup') || element.contains(document.activeElement)))
   if (!canRedirectComposerKey(e, {
-    available: route.name === 'chat' && (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value
+    available: chatRouteActive.value && (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value
       && !input.disabled && !input.readOnly && !preparingSend.value && !pickingContext.value,
     editing,
     overlayOpen,
@@ -3422,7 +3455,7 @@ function resendLastMessage() {
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
-.composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
+.composer-box { container: chat-composer / inline-size; padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
 .composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
 .composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .composer-input { display: flex; min-width: 0; }
@@ -3489,6 +3522,16 @@ function resendLastMessage() {
 .composer-hint { min-width: 0; white-space: nowrap; text-align: right; color: var(--c-text-secondary); font-size: 11px; line-height: 1.4; }
 @container composer-submit (max-width: 320px) {
   .composer-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+}
+@container chat-composer (max-width: 560px) {
+  .composer-controls { flex: 1 1 auto; flex-wrap: nowrap; }
+  .composer-controls :deep(.composer-control:has(.model-label)) { min-width: 0; max-width: 100%; }
+  .composer-controls :deep(.model-label) { min-width: 0; max-width: 160px; }
+  .composer-controls :deep(.model-effort), .composer-controls :deep(.model-account) { display: none; }
+  .composer-submit { flex: 0 0 auto; }
+  .composer-hint, .composer-submit :deep(.audio-input > span[role="status"]) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+  .composer-submit :deep(.audio-input) { min-width: 0; }
+  .composer-submit :deep(.audio-input > span[role="alert"]) { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 .mobile-sessions-toggle { display: none; }
 .mobile-sidebar-backdrop { display: none; }

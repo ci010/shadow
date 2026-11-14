@@ -54,6 +54,7 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
+      <div class="project-editors">
       <AutomationDetail :enabled="!!automation && !workflowProjectId"
         :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
         :selected-session-id="selected?.sessionId"
@@ -68,9 +69,15 @@
         <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">{{ t('Start in') }} {{ project.name }}</button>
         <button v-if="!projects.length && !loading && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
-      <ProjectConversation v-for="resource in resources" :key="resource.key"
+      <div ref="primaryEditorTarget" class="project-editor-target" @pointerdown.capture="editorFocus = 'primary'" @focusin="editorFocus = 'primary'" />
+    <template v-for="resource in resources" :key="resource.key">
+      <Teleport v-if="primaryEditorTarget && secondaryEditorTarget" :to="secondaryResource?.key === resource.key ? secondaryEditorTarget : primaryEditorTarget">
+      <ProjectConversation
         :ref="component => setConversation(resource.key, component)"
-        v-show="selected?.key === resource.key" :visible="visible && selected?.key === resource.key"
+        v-show="selected?.key === resource.key || secondaryResource?.key === resource.key"
+        :secondary="secondaryResource?.key === resource.key" :movable="canMove(resource)" :keyboard-active="secondaryResource?.key === resource.key ? editorFocus === 'secondary' : editorFocus === 'primary'"
+        :visible="visible && (selected?.key === resource.key || secondaryResource?.key === resource.key)"
+        @move="moveRight(resource)" @restore="restoreSecondary"
         :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
         :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
         :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
@@ -79,7 +86,19 @@
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @project-navigation="(tab, documentKey) => projectNavigation(resource, tab, documentKey)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
+      </Teleport>
+    </template>
       </AutomationDetail>
+      <aside v-show="!!secondaryResource" id="project-secondary-editor" class="project-secondary-editor" :style="{ width: `${secondaryWidth}px` }" :aria-label="t('Right conversation')" @pointerdown.capture="editorFocus = 'secondary'" @focusin="editorFocus = 'secondary'">
+        <SidebarResizer edge="left" :model-value="secondaryWidth" :bounds="secondaryBounds" :label="t('Resize right conversation')" controls="project-secondary-editor" @update:model-value="secondaryPreferredWidth = $event" />
+        <header class="secondary-editor-toolbar">
+          <span>{{ t('Right conversation') }}</span>
+          <button class="btn btn-sm" @click="restoreSecondary">{{ t('Move to main area') }}</button>
+          <HoverInfo :text="t('Close right conversation')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="project-add" :aria-label="t('Close right conversation')" @click="closeSecondary"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
+        </header>
+        <div ref="secondaryEditorTarget" class="project-editor-target" />
+      </aside>
+      </div>
     </div>
     <div v-show="false" ref="documentParking" />
     <template v-for="[projectId, state] in projectDocuments.projects" :key="projectId">
@@ -102,6 +121,7 @@
 </template>
 
 <script setup lang="ts">
+import { isDirectConversation } from '../project-coordination.ts'
 import { isDisplayOnlyConversation } from '../discord-navigation.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
@@ -130,6 +150,8 @@ import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import WorkflowManager from './WorkflowManager.vue'
 import ProjectSettings from './ProjectSettings.vue'
 import { createProjectDocuments, ProjectDocumentsKey } from '../project-documents.ts'
+import { WorkflowInputReferencesKey } from '../workflow-input-references.ts'
+import { createSecondaryEditors, ProjectSecondaryEditorKey } from '../project-editors.ts'
 import { projectTabKey, DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
@@ -147,6 +169,51 @@ provide(HomeTreeCacheKey, createHomeTreeCache())
 const projects = ref<ProjectRecord[]>([])
 const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
+const secondaryEditors = createSecondaryEditors()
+const primaryEditorTarget = ref<HTMLElement>()
+const secondaryEditorTarget = ref<HTMLElement>()
+const editorFocus = ref<'primary' | 'secondary'>('primary')
+const secondaryPreferredWidth = ref(480)
+const secondaryBounds = computed(() => ({ min: 280, max: Math.max(280, Math.min(800, containerWidth.value - (sidebarPinned.value ? sidebarWidth.value : 0) - 320)) }))
+const secondaryWidth = computed(() => clampSidebarWidth(secondaryPreferredWidth.value, secondaryBounds.value))
+const secondaryResource = computed(() => secondaryEditors.get(selectedProjectId.value, resources.value))
+provide(ProjectSecondaryEditorKey, {
+  active: computed(() => secondaryResource.value ? { projectId: secondaryResource.value.projectId, sessionId: secondaryResource.value.sessionId, resourceKey: secondaryResource.value.key } : undefined),
+  focus: () => { const resource = secondaryResource.value; if (resource) { editorFocus.value = 'secondary'; instances.get(resource.key)?.focusConversation() } },
+})
+provide(WorkflowInputReferencesKey, {
+  attach(item) {
+    const resource = secondaryResource.value
+    if (!resource || resource.projectId !== item.reference.projectId || !props.visible) return 'unavailable'
+    const result = instances.get(resource.key)?.appendInputReference(item) ?? 'unavailable'
+    if (result === 'added' || result === 'duplicate') {
+      editorFocus.value = 'secondary'
+      void nextTick(() => instances.get(resource.key)?.focusConversation())
+    }
+    return result
+  },
+})
+function canMove(resource: ConversationResource) {
+  return isDirectConversation(resource.sessionId) && !resource.childSessionId && !(automation.value && selected.value?.key === resource.key)
+}
+function moveRight(resource: ConversationResource) {
+  if (!canMove(resource)) return
+  secondaryEditors.move(resource)
+  const primary = resources.value.findLast(item => item.projectId === resource.projectId && item.key !== resource.key && !item.sessionId) ?? registry.draft(resource.projectId)
+  publish(primary)
+  editorFocus.value = 'secondary'
+  if (route.name === 'chat') void router.push(projectChatLocation(primary))
+  void nextTick(() => instances.get(resource.key)?.focusConversation())
+}
+function closeSecondary() { secondaryEditors.close(selectedProjectId.value); editorFocus.value = 'primary' }
+function restoreSecondary() {
+  const resource = secondaryResource.value
+  if (!resource) return
+  closeSecondary()
+  publish(resource)
+  void router.push(projectChatLocation(resource))
+  void nextTick(() => instances.get(resource.key)?.focusConversation())
+}
 const selected = shallowRef<ConversationResource>()
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
   route, router, selected,
@@ -158,6 +225,7 @@ const dashboardProject = computed(() => route.name === 'project-dashboard' ? pro
 const selectedProjectId = computed(() => workflowProjectId.value || (dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? ''))
 const selectedProjectName = computed(() => projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
+watch(secondaryResource, resource => { if (!resource) editorFocus.value = 'primary' })
 // Project documents reuse the current workbench (including an unsent draft).
 // Their deep links must not discard the conversation or each project's inspection.
 const workflowQueries = new Map<string, Record<string, string>>()
@@ -298,6 +366,7 @@ function projectWorkbench(projectId: string): ConversationResource {
     ?? registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
 }
 function publish(resource: ConversationResource) {
+  if (secondaryEditors.get(resource.projectId, registry.resources)?.key === resource.key) secondaryEditors.close(resource.projectId)
   projectWorkbenches.set(resource.projectId, resource)
   selected.value = resource
   resources.value = [...registry.resources]
@@ -498,6 +567,7 @@ function deleted(projectId: string, sessionId: string) {
   if (selected.value?.projectId === projectId && selected.value.sessionId === sessionId) startDraft(projectId)
 }
 function forgetProject(projectId: string) {
+  secondaryEditors.close(projectId)
   for (const resource of registry.resources) if (resource.projectId === projectId) conversationQueries.delete(resource.key)
   projectDocuments.projects.delete(projectId)
   registry.removeProject(projectId)
@@ -597,5 +667,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); ou
 .projects-sidebar.is-floating { position: absolute; inset: 44px auto 0 0; z-index: 50; width: min(var(--projects-width), calc(100% - 40px)); box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .projects-backdrop { position: absolute; inset: 44px 0 0; z-index: 49; padding: 0; border: 0; background: var(--c-shadow-softer); }
 @media (max-width: 700px), (pointer: coarse) { .projects-toggle { min-height: 44px; } }
+.project-editors { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+.project-editor-target { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
+.project-secondary-editor { position: relative; display: flex; flex: none; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--c-border); background: var(--c-bg); }
+.secondary-editor-toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; min-height: 44px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); font-size: 12px; }
+.secondary-editor-toolbar > span { flex: 1; }
+@media (max-width: 1000px) { .project-secondary-editor { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; max-width: calc(100% - 32px); box-shadow: -8px 0 24px var(--c-shadow-soft); } }
 .project-document-host { display: flex; flex: 1; min-height: 0; min-width: 0; }
 </style>

@@ -4363,5 +4363,17 @@
   "Deliver to fixed session": "Deliver to fixed session",
   "Reuse context": "Reuse context",
   "Deliver to automation": "Deliver to automation",
-  "Fresh context each run": "Fresh context each run"
+  "Fresh context each run": "Fresh context each run",
+  "Conversation actions": "Conversation actions",
+  "Move to right": "Move to right",
+  "Move to main area": "Move to main area",
+  "Right conversation": "Right conversation",
+  "Close right conversation": "Close right conversation",
+  "Resize right conversation": "Resize right conversation",
+  "Use in chat": "Use in chat",
+  "Open an ordinary conversation in the secondary pane first.": "Open an ordinary conversation in the secondary pane first.",
+  "Attach up to 8 workflow references.": "Attach up to 8 workflow references.",
+  "This reference is already attached.": "This reference is already attached.",
+  "Reference added to the conversation draft.": "Reference added to the conversation draft.",
+  "Remove workflow references before sending a command or answering a question.": "Remove workflow references before sending a command or answering a question."
 }

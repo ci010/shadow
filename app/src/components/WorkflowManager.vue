@@ -33,6 +33,11 @@
           <div><h2>{{ definition.name || definition.id }}</h2><p>{{ t('Workflow ID') }} <code>{{ definition.id }}</code></p></div>
           <button class="btn btn-sm" :disabled="selectedControl?.disabled ?? true" @click="operate(selectedControl?.enabled ? 'pause' : 'resume', definition.id)">{{ selectedControl?.busy ? t('Saving…') : selectedControl?.enabled ? t('Pause') : t('Resume') }}</button>
         </header>
+        <div class="workflow-reference-actions">
+          <button class="btn btn-sm" :disabled="!referenceSelection" @click="useInChat">{{ t('Use in chat') }}</button>
+          <span v-if="referenceSelection" class="workflow-explanation workflow-reference-label">{{ referenceSelection.label }}</span>
+        </div>
+        <p v-if="referenceNotice" class="workflow-message" role="status">{{ referenceNotice }}</p>
         <p v-if="sourceStatus" class="workflow-explanation">{{ t('Signal source') }}: {{ sourceStatus.enabled ? t('Enabled') : t('Paused') }}<span v-if="sourceStatus.nextAt"> · {{ t('Next collection check') }}: {{ formatDateTime(sourceStatus.nextAt) }}</span></p>
         <p v-if="sourceStatus?.error" class="workflow-run-hint failure" role="alert">{{ t('Source collection failed. Inspect its authorized binding and source status in chat; no collector checkpoint was advanced for this failure.') }} <code>{{ sourceStatus.error }}</code></p>
         <p v-if="documentQuery.run && !selectedRun" class="workflow-message" role="status">{{ t('This run is no longer retained. The current definition is shown instead.') }}</p>
@@ -98,7 +103,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { WorkflowInputReferencesKey, workflowInputReference } from '../workflow-input-references.ts'
 import WorkflowGraph from './WorkflowGraph.vue'
 import { botCanvas } from '../bot-workflows.ts'
 import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
@@ -133,7 +139,20 @@ const githubTarget = computed(() => {
 const selectedRun = computed(() => snapshot.value?.runs.find(r => r.workflow === definition.value?.id && r.id === documentQuery.value.run))
 const displayed = computed(() => selectedRun.value?.definition ?? definition.value)
 const graph = computed(() => displayed.value ? workflowGraph(displayed.value, selectedRun.value ?? runs.value.find(r => r.definition.revision === displayed.value?.revision)) : [])
-const inspector = ref<HTMLElement>(), inspectedNode = ref<string>(), graphView = ref<InstanceType<typeof WorkflowGraph>>()
+const inspector = ref<HTMLElement>(), inspectedNode = ref<string>(), inspectedFlow = ref<string>(), graphView = ref<InstanceType<typeof WorkflowGraph>>()
+watch(() => documentQuery.value.workflow, id => { if (typeof id === 'string' && id !== inspectedFlow.value) inspectedNode.value = undefined })
+const referenceHub = inject(WorkflowInputReferencesKey, undefined)
+const referenceNotice = ref('')
+const referenceSelection = computed(() => displayed.value && workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value))
+watch([displayed, inspectedNode, selectedRun], () => { referenceNotice.value = '' })
+function useInChat() {
+  const item = referenceSelection.value
+  if (!item) return
+  const result = referenceHub?.attach(item) ?? 'unavailable'
+  referenceNotice.value = result === 'unavailable' ? t('Open an ordinary conversation in the secondary pane first.')
+    : result === 'limit' ? t('Attach up to 8 workflow references.')
+    : result === 'duplicate' ? t('This reference is already attached.') : t('Reference added to the conversation draft.')
+}
 const inspectorId = useId(), inspectorWidth = ref(380)
 const botFlows = computed(() => botCanvas(snapshot.value?.bots))
 const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot))
@@ -158,6 +177,7 @@ const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(f
 }), ...botFlows.value])
 const selectedControl = computed(() => canvasFlows.value.find(flow => flow.definition.id === definition.value?.id)?.control)
 async function inspectFlow(id: string, nodeId?: string) {
+  inspectedFlow.value = id
   inspectedNode.value = nodeId
   await router.replace({ query: botFlows.value.some(flow => flow.definition.id === id) ? { bot: id } : { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
   confirmation.value = ''; operationError.value = ''; notice.value = ''
@@ -214,6 +234,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 18px; font-weight: 600; } h2 { font
 .workflow-inspector:focus { outline: none; }.workflow-inspector:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .graph-text { margin-top: 12px; border-bottom: 1px solid var(--c-border); }.graph-text summary { padding: 10px 0; cursor: pointer; overflow-wrap: anywhere; }
 .workflow-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }.workflow-title>div, .workflow-heading>div { min-width: 0; flex: 1; }.workflow-title h2 { overflow-wrap: anywhere; }.workflow-title>.btn, .workflow-heading>.btn { flex-shrink: 0; white-space: nowrap; }.workflow-title p { margin-top: 8px; font-size: 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.workflow-reference-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.workflow-reference-label { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 12px; }
 .workflow-map-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 24px 0 12px; }.workflow-map-heading>span { color: var(--c-text-secondary); font-size: 12px; }
 .workflow-state { font-size: 12px; color: var(--c-text-secondary); font-weight: 400; }.workflow-state[data-state=completed] { color: var(--c-success); }.workflow-state[data-state=blocked], .workflow-run-hint[data-state=blocked] { color: var(--c-warn); }.workflow-state[data-state=retry], .failure { color: var(--c-error); }.workflow-state[data-state=running] { color: var(--c-info); }
 .workflow-definition { margin-top: 18px; border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); }.workflow-definition summary { padding: 12px 0; cursor: pointer; }.workflow-definition>p { margin: 10px 0; overflow-wrap: anywhere; }

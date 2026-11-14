@@ -10,11 +10,11 @@
         @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)" :conversation-title="t('Received messages')">
         <div class="observed-chat"><ChannelGroupContext :api-base="apiBase" :project-id="projectId || ''" :group-key="observedGroupKey(sessionId || '')!" :active="visible" discovery-only /></div>
       </FileWorkbench>
-      <ChatTab v-else ref="primary" :api-base="apiBase" :embedded="embedded" enable-child-pane :child-session-id="childId"
+      <ChatTab v-else ref="primary" :api-base="apiBase" :embedded="embedded" :enable-child-pane="!secondary" :child-session-id="childId"
         :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)"
-        :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :automation-run="automationRun"
-        :visible="visible && ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)) && (!childId || wide || route.name !== 'chat')" :keyboard-active="keyboardActive && visible && (!childId || wide || route.name !== 'chat') && (activePane === 'primary' || route.name !== 'chat')"
+        :secondary="secondary" :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :automation-run="automationRun"
+        :visible="visible && (secondary || ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) && (!childId || wide || route.name !== 'chat')" :keyboard-active="keyboardActive && visible && (!childId || wide || route.name !== 'chat') && (activePane === 'primary' || route.name !== 'chat')"
         @open-child="openChild" @close-child="closeChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
     <div v-if="split" class="conversation-resizer" role="separator" tabindex="0" :aria-label="t('Resize child conversation')"
@@ -36,6 +36,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
+import type { LabeledInputReference, AttachReferenceResult } from '../workflow-input-references.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DiscordChannelIndex from './DiscordChannelIndex.vue'
@@ -48,7 +49,7 @@ import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDL
 import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
+const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean; secondary?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
 const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string] }>()
 const route = useRoute()
 const router = useRouter()
@@ -152,7 +153,7 @@ watch(() => props.childSessionId, id => {
   childId.value = id && id !== props.sessionId ? id : ''
   activePane.value = childId.value ? 'child' : 'primary'
 }, { immediate: true })
-defineExpose({
+defineExpose({ appendInputReference: (item: LabeledInputReference): AttachReferenceResult => primary.value?.appendInputReference(item) ?? 'unavailable',
   requestSession: (id: string) => primary.value?.requestSession(id),
   appendDraft: (text: string) => {
     if (childId.value) closeChild()
