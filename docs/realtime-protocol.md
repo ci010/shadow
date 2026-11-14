@@ -55,6 +55,39 @@ cancel/resume continue using their existing routes. Admission
 uses the existing channel receiver and SessionManager. Steering may reuse the
 running turn's requestId rather than the steering command's admission ID.
 
+## Workflow input references
+
+`POST /api/chat/send` and `/api/chat/message` accept optional `references` (at most
+8). The renderer-safe contract is
+[`src/shared/input-references.ts`](../src/shared/input-references.ts); do not import
+WorkflowRuntime into the renderer. Example:
+
+```json
+{"chatId":"review","content":"Explain this node","references":[{"kind":"workflow","projectId":"project-id","workflowId":"flow-id","revision":3,"selector":{"kind":"node","index":0,"nodeKind":"record"}}]}
+```
+
+Only `kind: workflow` is supported, not BOT projections. Each reference requires
+Project ID, stable Workflow ID and positive integer revision. Optional `runId`
+selects that run's captured definition, not the current definition. Optional
+`selector` is `{kind:source}`, `{kind:gate}`, or
+`{kind:node,index,nodeKind}`; node indices are zero-based in `definition.nodes`
+(excluding source/gate), not canvas IDs. Omit selector for the whole Workflow.
+Unknown fields, invalid selectors, cross-Project identity, missing runs and stale
+revisions fail with HTTP 400; no silent upgrade or ignored references. Current
+reference revisions must exactly match current definitions. References alone may
+supply message content. `retry:true` rejects nonempty references: retry uses the
+already persisted user input, not a newly resolved snapshot.
+
+The authenticated Project route resolves references once before message
+admission and appends a bounded identity/shape summary and exact `v:workflows`
+path to the ordinary user message. It copies no code, binding demands, job
+configuration, observations or arbitrary node payloads. Queue delivery retains
+that string; later inference does not re-resolve it or mutate the system prompt.
+The context block explicitly labels values as data, not instructions or grants;
+text resembling this block in user content does not acquire host authority.
+Paths may expose newer state when read later; the admitted snapshot stays fixed.
+The initial display label/chip is a renderer concern, not a trusted request field.
+
 ## Conversational response provenance
 
 Conversational assistant records and matching `response` payloads may contain

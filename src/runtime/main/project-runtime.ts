@@ -1,3 +1,4 @@
+import { workflowReferenceResolver } from '../../workflows/references.ts'
 import { scheduleAuthoring } from '../../workflows/schedule-authoring.ts'
 import { workMapper } from '../../workflows/work-mapping.ts'
 import { WorkflowRuntime } from '../../workflows/runtime.ts'
@@ -1603,6 +1604,7 @@ export async function createProjectRuntime(
     async message => requireChannelReceipt(await inputs.route(channelMessageEnvelope(botStore, message))), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
     authorizeWebRequest: dependencies.authorize,
+    resolveInputReferences: workflowReferenceResolver(project.id, workflows),
     routeInputPolicy: async (message, runPolicy) => requirePolicyReceipt(await inputs.route(channelMessageEnvelope(botStore, message, runPolicy))),
     routeObservation: async (connection, bindingId, runPolicy) => requirePolicyReceipt(await inputs.route(observationEnvelope(botStore, connection, bindingId, runPolicy))),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.

@@ -67,7 +67,7 @@
         </button>
         </HoverInfo>
         <div class="document-tablist" role="tablist" :aria-label="t('Open documents')" @wheel="scrollTabs">
-          <div class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
+          <div class="document-tab conversation-tab fixed-tab" @contextmenu.prevent.stop="openConversationMenu" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
               <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || t('Conversation') }}</span>
             </button>
@@ -131,6 +131,12 @@
         </div>
         <slot name="actions" />
       </div>
+      <Teleport to="body"><div v-if="conversationMenu && active" class="document-menu-backdrop" @pointerdown.self="conversationMenu = undefined" @contextmenu.prevent.self="conversationMenu = undefined" @keydown="conversationMenuKey">
+        <div class="document-menu conversation-editor-menu" role="menu" :aria-label="t('Conversation actions')" :style="{ left: `${conversationMenu.x}px`, top: `${conversationMenu.y}px` }">
+          <button role="menuitem" @click="conversationMenu = undefined; editor?.secondary.value ? editor.restore() : editor?.move()">{{ editor?.secondary.value ? t('Move to main area') : t('Move to right') }}</button>
+          <button role="menuitem" @click="conversationMenu = undefined">{{ t('Cancel') }}</button>
+        </div>
+      </div></Teleport>
       <div class="workbench-content" :class="{ 'draft-document': draft && tabs.selected === '' }">
         <div v-show="tabs.selected === ''" :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="tabId('')">
           <slot :active="active && tabs.selected === ''" />
@@ -190,6 +196,7 @@ import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import OverlayTransition from '../OverlayTransition.vue'
 import KnowledgeView from '../KnowledgeView.vue'
+import { ConversationEditorKey } from '../../project-editors.ts'
 import { ProjectDocumentsKey } from '../../project-documents.ts'
 import WorkflowManager from '../WorkflowManager.vue'
 import ProjectSettings from '../ProjectSettings.vue'
@@ -203,7 +210,7 @@ import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, clos
 import type { KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; secondary?: boolean; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
 const router = useRouter()
 const route = useRoute()
 const installation = useInstallationContext()
@@ -232,11 +239,29 @@ const knowledgeExpanded = ref(true)
 const expanded = computed(() => knowledgeSelected.value
   ? wide.value && knowledgeExpanded.value
   : explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? false)))
+const editor = inject(ConversationEditorKey, undefined)
+const conversationMenu = ref<{ x: number; y: number }>()
+function openConversationMenu(event: MouseEvent) {
+  if (!editor?.enabled.value) return
+  conversationMenu.value = { x: Math.max(0, Math.min(event.clientX, window.innerWidth - 284)), y: Math.max(0, Math.min(event.clientY, window.innerHeight - 100)) }
+  void nextTick(() => document.querySelector<HTMLButtonElement>('.conversation-editor-menu button')?.focus())
+}
+function conversationMenuKey(event: KeyboardEvent) {
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>('.conversation-editor-menu button')]
+  if (event.key === 'Escape' || event.key === 'Tab') {
+    conversationMenu.value = undefined
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); root.value?.querySelector<HTMLButtonElement>('.conversation-tab button')?.focus() }
+  } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault()
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
+  }
+}
 const documents = inject(ProjectDocumentsKey, undefined)
 const projectDocuments = computed(() => props.projectNavigationEnabled && props.projectId ? documents?.get(props.projectId) : undefined)
 const localTabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
 const tabs = computed<FileTabs>({
-  get: () => projectDocuments.value ? { ...localTabs.value, projectTabs: projectDocuments.value.tabs } : localTabs.value,
+  get: () => props.secondary ? { ...localTabs.value, projectTabs: [], selected: projectTabFromKey(localTabs.value.selected) ? '' : localTabs.value.selected } : projectDocuments.value ? { ...localTabs.value, projectTabs: projectDocuments.value.tabs } : localTabs.value,
   set(value) {
     if (projectDocuments.value) projectDocuments.value.tabs = value.projectTabs ?? []
     localTabs.value = value
@@ -523,7 +548,7 @@ watch(() => [route?.fullPath, props.active] as const, (value, previous) => {
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
 }, { immediate: true })
 watch(() => [props.apiBase, props.contextKey], () => { knowledgeLabels.value = {} })
-watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
+watch(() => props.active && props.keyboardActive, active => { if (!active) { dismissTabMenu(); conversationMenu.value = undefined } })
 watch(() => [props.diagnosisRequest, props.contextKey, props.diagnosisEnabled], () => {
   if (props.diagnosisRequest && props.diagnosisEnabled) selectTab(DIAGNOSIS_TAB_KEY)
   else if (props.diagnosisRequest === false && tabs.value.selected === DIAGNOSIS_TAB_KEY) selectTab('')

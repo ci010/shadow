@@ -726,3 +726,64 @@ for (const draft of [false, true]) test(`remote ${draft ? 'draft' : 'existing se
   await sending
   assert.equal(state.pendingAttachments.length, 0)
 })
+
+
+test('workflow references are captured as independent send JSON, rejected drafts retain them, and retries never drift', async t => {
+  const f = fixture(t, true)
+  const state = f.mount('a', '').state()
+  const item = { label: 'Historic flow · source · r2', reference: { kind: 'workflow', projectId: 'a', workflowId: 'flow', revision: 2, runId: 'old-run', selector: { kind: 'source' } } }
+  assert.equal(state.appendInputReference(item), 'added')
+  assert.equal(state.appendInputReference(item), 'duplicate')
+  assert.equal(state.appendInputReference({ ...item, reference: { ...item.reference, projectId: 'b' } }), 'unavailable')
+  state.inputText = ''
+  assert.equal(state.canSend, true, 'reference-only ordinary sends are enabled')
+  const sending = state.sendMessage(undefined, { queue: true })
+  await settle()
+  const send = f.requests.find(request => request.path.endsWith('/send'))!
+  assert.ok(send)
+  const payload = JSON.parse(send.body as string)
+  assert.deepEqual(payload.references, [item.reference])
+  assert.equal(payload.delivery, 'queue')
+  assert.equal(payload.media, undefined)
+  assert.equal(payload.content, '')
+  item.reference.revision = 8
+  assert.equal(payload.references[0].revision, 2, 'selection edits cannot mutate a captured wire reference')
+  send.finish({ error: 'invalid_reference' }, 409)
+  await sending
+  assert.equal(state.inputReferences.length, 1, 'server resolution failure retains the chip')
+  assert.match(state.composerError, /Could not send/)
+  const again = state.sendMessage()
+  await settle()
+  const second = f.requests.filter(request => request.path.endsWith('/send'))[1]!
+  assert.equal(JSON.parse(second.body as string).references[0].revision, 2)
+  second.finish({ chatId: state.activeSessionId.slice(4), requestId: 'refs-admitted' })
+  await again
+  assert.equal(state.inputReferences.length, 0)
+  state.appendInputReference({ ...item, reference: { ...item.reference, revision: 9 } })
+  state.requestControls.clear()
+  state.streaming = false
+  const retrying = state.sendMessage(undefined, { retry: true, retryContent: 'frozen fallback' })
+  await settle()
+  const third = f.requests.filter(request => request.path.endsWith('/send'))[2]!
+  assert.ok(third)
+  assert.equal(JSON.parse(third.body as string).references, undefined)
+  third.finish({ chatId: state.activeSessionId.slice(4), requestId: 'retry-admitted' })
+  await retrying
+  assert.equal(state.inputReferences.length, 1, 'ordinary retry leaves the next draft untouched')
+})
+
+test('commands and question answers cannot silently drop workflow references', async t => {
+  const f = fixture(t, true), state = f.mount('a').state()
+  state.appendInputReference({ label: 'Flow', reference: { kind: 'workflow', projectId: 'a', workflowId: 'flow', revision: 1 } })
+  state.inputText = '/help'
+  await state.sendMessage()
+  assert.match(state.composerError, /Remove workflow references/)
+  assert.equal(f.requests.length, 0)
+  state.sessionStages = { [root]: 'waiting' }
+  state.handleYieldRequest({ kind: 'input', id: 'ref-answer', sessionId: root, question: 'Which?', recipient: { kind: 'user', sessionId: root }, origin: { physicalId: 'root-0' }, createdAt: new Date().toISOString(), deadline: null })
+  state.inputText = 'answer'
+  await state.sendMessage()
+  assert.match(state.composerError, /Remove workflow references/)
+  assert.equal(f.requests.length, 0)
+  assert.equal(state.inputReferences.length, 1)
+})

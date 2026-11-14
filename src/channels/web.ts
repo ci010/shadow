@@ -1,3 +1,4 @@
+import { parseInputReferences } from '../shared/input-references.ts'
 import { imageFromBytes, readImage, MAX_IMAGE_BYTES, isImagePath } from '../utils/image-input.ts'
 import { presenceReportSchema } from '../sessions/presence.ts'
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
@@ -91,7 +92,16 @@ export class WebChannel extends AbstractChannel {
     }
   }
   private workspace: string
+  private readonly resolveInputReferences?: (references: unknown) => string
   private readonly outputRoots: () => Promise<string[]>
+
+  private referenceContext(value: unknown, retry = false): string {
+    const refs = parseInputReferences(value)
+    if (!refs.length) return ''
+    if (retry) throw new TypeError('retry_references_not_allowed')
+    if (!this.resolveInputReferences) throw new TypeError('references_unavailable')
+    return this.resolveInputReferences(refs)
+  }
 
   /** Pending sync REST requests keyed by requestId. */
   private syncPending = new Map<string, {
@@ -110,6 +120,7 @@ export class WebChannel extends AbstractChannel {
   constructor(
     bus: Bus,
     opts: {
+      resolveInputReferences?: (references: unknown) => string
       allowFrom?: string[]
       workspace?: string
       sessionManager?: SessionManager
@@ -123,6 +134,7 @@ export class WebChannel extends AbstractChannel {
     },
   ) {
     super(bus, opts.allowFrom, true)
+    this.resolveInputReferences = opts.resolveInputReferences
     this.workspace = opts.workspace ?? '.'
     this.outputRoots = opts.durableMediaRoots ?? durableMediaRoots
     this.sessionManager = opts.sessionManager
@@ -321,6 +333,7 @@ export class WebChannel extends AbstractChannel {
         content: string
         senderId?: string
         media?: string[]
+        references?: unknown
         timeoutMs?: number
       }>()
 
@@ -331,7 +344,10 @@ export class WebChannel extends AbstractChannel {
         (body.timeoutMs !== undefined && (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs) || body.timeoutMs < 1 || body.timeoutMs > 600_000))) {
         return c.json({ error: 'invalid_request' }, 400)
       }
-      if (!body.content && (!body.media || body.media.length === 0)) {
+      let referenceContext: string
+      try { referenceContext = this.referenceContext(body.references) }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'invalid_references' }, 400) }
+      if (!body.content && !referenceContext && (!body.media || body.media.length === 0)) {
         return c.json({ error: 'content or media is required' }, 400)
       }
 
@@ -365,7 +381,7 @@ export class WebChannel extends AbstractChannel {
           this.handleIncoming(
             'web-user',
             chatId,
-            body.content,
+            (body.content ?? '') + referenceContext,
             requestId,
             { senderName: 'web-user' },
             body.media,
@@ -433,7 +449,10 @@ export class WebChannel extends AbstractChannel {
           (media !== undefined && (!Array.isArray(media) || !media.every(item => typeof item === 'string')))) {
         return c.json({ error: 'invalid_request' }, 400)
       }
-      if (!content && !retry && (!media || media.length === 0)) {
+      let referenceContext: string
+      try { referenceContext = this.referenceContext(rawBody.references, retry === true) }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'invalid_references' }, 400) }
+      if (!content && !referenceContext && !retry && (!media || media.length === 0)) {
         return c.json({ error: 'chatId and content or media are required' }, 400)
       }
       if (stream === true) {
@@ -477,7 +496,7 @@ export class WebChannel extends AbstractChannel {
         const receipt = await this.handleIncoming(
           'web-user',
           chatId,
-          content ?? '',
+          (content ?? '') + referenceContext,
           requestId,
           {
             senderName: 'web-user',

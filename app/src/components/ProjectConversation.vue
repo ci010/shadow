@@ -9,15 +9,17 @@
     <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       @project-navigation="(tab, documentKey) => $emit('project-navigation', tab, documentKey)"
-      :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
+      :secondary="secondary" :keyboard-active="keyboardActive" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
       @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { ConversationEditorKey } from '../project-editors.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { LabeledInputReference, AttachReferenceResult } from '../workflow-input-references.ts'
+import { computed, onMounted, onUnmounted, provide, ref } from 'vue'
 import ChatWorkspace from './ChatWorkspace.vue'
 import { createProjectSettingsClient, configReasoning } from '../project-settings.ts'
 import type { ReasoningSettings } from '../session-settings.ts'
@@ -30,9 +32,10 @@ const props = defineProps<{
   apiBase: string; projectId: string; projectName: string; sessionId: string
   initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
   knowledgeRequest?: KnowledgeTabRequest
-  automationRun?: boolean
+  automationRun?: boolean; secondary?: boolean; keyboardActive?: boolean; movable?: boolean
 }>()
-const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; 'dashboard-visible': [visible: boolean] }>()
+const emit = defineEmits<{ move: []; restore: []; navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; 'dashboard-visible': [visible: boolean] }>()
+provide(ConversationEditorKey, { enabled: computed(() => !!props.movable), secondary: computed(() => !!props.secondary), move: () => { if (props.movable) emit('move') }, restore: () => emit('restore') })
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})
@@ -82,7 +85,7 @@ onUnmounted(() => {
   request?.abort()
   window.removeEventListener('shadow:config-changed', defaultsChanged)
 })
-defineExpose({ appendDraft: (text: string) => workspace.value?.appendDraft(text), requestSession: (id: string) => workspace.value?.requestSession(id) })
+defineExpose({ appendInputReference: (item: LabeledInputReference): AttachReferenceResult => workspace.value?.appendInputReference(item) ?? 'unavailable', focusConversation: () => workspace.value?.focusConversation(), appendDraft: (text: string) => workspace.value?.appendDraft(text), requestSession: (id: string) => workspace.value?.requestSession(id) })
 </script>
 
 <style scoped>
