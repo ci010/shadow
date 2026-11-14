@@ -67,6 +67,9 @@ test('actual folder sidebar keeps one icon-bearing Workflow route and ordinary c
       assert.equal(await run(()=>document.querySelectorAll('.automations-sidebar a').length),1);
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id],.automations-heading').length),0);
       assert.equal(await run(()=>document.querySelector('.automations-sidebar a').textContent.trim()),'Workflows');
+      assert.equal(await run(()=>document.querySelector('.automations-sidebar button').textContent.trim()),'Knowledge');
+      assert.ok(await run(()=>!!document.querySelector('.automations-sidebar button .i-lucide-book-open')));
+      assert.ok(await run(()=>document.querySelector('.chat-new-row').textContent.includes('New conversation')));
       assert.ok(await run(()=>{const icon=document.querySelector('.automations-sidebar .i-lucide-workflow');return icon&&getComputedStyle(icon).maskImage!=='none'&&icon.getBoundingClientRect().width===16}));
       assert.ok(await run(()=>document.body.textContent.includes('Ordinary conversation')));
       assert.ok(await run(()=>{
