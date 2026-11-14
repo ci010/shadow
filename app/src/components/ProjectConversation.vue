@@ -1,21 +1,24 @@
 <template>
   <div class="project-conversation">
-    <div v-if="error" class="project-model-error" role="alert">
-      {{ error }}
-      <button class="btn btn-sm" :disabled="loading" @click="load">{{ t('Retry models') }}</button>
-      <RouterLink :to="{ name: 'project-settings', params: { projectId, section: 'models' } }">{{ t('Project models') }}</RouterLink>
-      <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('App providers') }}</RouterLink>
-    </div>
     <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       @project-navigation="(tab, documentKey) => $emit('project-navigation', tab, documentKey)"
-      :secondary="secondary" :keyboard-active="keyboardActive" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
-      @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)" />
+      :inspection="inspection" :keyboard-active="keyboardActive" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
+      @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)">
+      <template #notice>
+        <div v-if="error" class="project-model-error" role="alert">
+          {{ error }}
+          <button class="btn btn-sm" :disabled="loading" @click="load">{{ t('Retry models') }}</button>
+          <RouterLink :to="{ name: 'project-settings', params: { projectId, section: 'models' } }">{{ t('Project models') }}</RouterLink>
+          <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('App providers') }}</RouterLink>
+        </div>
+      </template>
+    </ChatWorkspace>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ConversationEditorKey } from '../project-editors.ts'
+import { EditorOwnerKey } from '../editor-groups.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
 import type { LabeledInputReference, AttachReferenceResult } from '../workflow-input-references.ts'
@@ -29,13 +32,13 @@ import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
 const livePool = useLiveClientPool()
 const props = defineProps<{
-  apiBase: string; projectId: string; projectName: string; sessionId: string
+  resourceKey?: string; apiBase: string; projectId: string; projectName: string; sessionId: string
   initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
   knowledgeRequest?: KnowledgeTabRequest
-  automationRun?: boolean; secondary?: boolean; keyboardActive?: boolean; movable?: boolean
+  automationRun?: boolean; inspection?: boolean; keyboardActive?: boolean
 }>()
-const emit = defineEmits<{ move: []; restore: []; navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; 'dashboard-visible': [visible: boolean] }>()
-provide(ConversationEditorKey, { enabled: computed(() => !!props.movable), secondary: computed(() => !!props.secondary), move: () => { if (props.movable) emit('move') }, restore: () => emit('restore') })
+const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; 'dashboard-visible': [visible: boolean] }>()
+provide(EditorOwnerKey, props.resourceKey ?? `${props.projectId}:${props.sessionId}`)
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})

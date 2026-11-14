@@ -9,6 +9,7 @@ export interface ConversationResource extends SessionRef {
   key: string
   folder?: FolderRecord
   openRemote?: boolean
+  inspection?: boolean
   childSessionId?: string
   knowledgeRequest?: KnowledgeTabRequest
 }

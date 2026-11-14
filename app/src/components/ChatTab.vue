@@ -29,11 +29,11 @@
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
-      :secondary="secondary" :project-navigation-enabled="!embedded && !secondary"
+      :inspection="inspection" :project-navigation-enabled="!embedded"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
-      :active="visible && (secondary || ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
-      :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
-      :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
+      :active="visible && (inspection || ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive && conversationFocused" :draft="!activeSessionId"
+      :editable-conversation="!isExecution && (!activeSessionId || isDirectChat) && !viewingPhysicalId" :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
+      :composer-height="composerVisible ? dockHeight : 0" :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
       @diagnosis-visible="diagnosisVisibilityChanged"
       @knowledge-navigation="knowledgeNavigation"
@@ -54,7 +54,8 @@
       </template>
     </template>
     <!-- Chat area -->
-    <div class="chat-panel" :class="{ 'is-draft': !activeSessionId }">
+    <div class="chat-panel" :class="{ 'is-draft': !activeSessionId, 'mobile-chat': mobileLayout, 'is-embedded': embedded }">
+      <slot name="notice" />
       <div v-if="!activeSessionId" class="draft-heading">
         <h1>{{ t('What would you like to work on?') }}</h1>
         <p v-if="projectName" class="draft-scratch">{{ projectName }}</p>
@@ -89,12 +90,12 @@
         <QuickActionsOverlay v-if="actionsOpen" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="paneActive" :can-write="true" @close="closeActions(true)" />
         <ConversationSearch ref="conversationSearch" :container="messagesContainer"
           :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive"
-          :keyboard-active="keyboardActive" :context-key="fileContextKey" :live-entries="liveSearchEntries"
+          :keyboard-active="keyboardActive && conversationFocused" :context-key="fileContextKey" :live-entries="liveSearchEntries"
           :load-entries="loadSearchEntries" :reveal-match="revealSearchMatch"
           @update:open="searchVisibilityChanged" @query-change="clearSearchHighlights" />
 
         <!-- Messages -->
-        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
+        <div v-show="editorGroups || activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && chatRouteActive" />
           <ChannelInboxNotice v-if="activeSession?.channelSource" :source="activeSession.channelSource" />
@@ -258,11 +259,11 @@
       <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" :aria-label="t('Session diagnosis')" :id-prefix="embedded || managed ? paneId : undefined"
         :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-        :active="visible && activePanel === 'diagnosis' && chatRouteActive" :can-read-trace="true"
+        :active="visible && (editorGroups ? diagnosisDocumentVisible : activePanel === 'diagnosis') && chatRouteActive" :can-read-trace="true"
         :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
     </template>
     <template #composer>
-      <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
+      <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible, 'mobile-chat': mobileLayout }">
         <div class="session-status-row">
           <SessionWorkStatus v-if="sessionReadable && !isExecution && !viewingPhysicalId"
             :key="`work-status:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
@@ -546,6 +547,7 @@ import AudioSetupButton from './AudioSetupButton.vue'
 import SlashCommandMenu from './SlashCommandMenu.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
+import { EditorGroupsKey, EditorOwnerKey } from '../editor-groups.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import SelectionMenu from './SelectionMenu.vue'
@@ -699,7 +701,7 @@ const props = withDefaults(defineProps<{
   managed?: boolean
   initialFolder?: FolderRecord
   openRemote?: boolean
-  secondary?: boolean
+  inspection?: boolean
   embedded?: boolean
   sessionId?: string
   childSessionId?: string
@@ -710,7 +712,10 @@ const props = withDefaults(defineProps<{
   automationRun?: boolean
 }>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
 const activated = ref(true)
-const chatRouteActive = computed(() => !!props.secondary || route.name === 'chat')
+const editorGroups = inject(EditorGroupsKey, undefined)
+const editorOwner = inject(EditorOwnerKey, '')
+const conversationFocused = computed(() => editorGroups ? editorGroups.focused(`${editorOwner}:`) : props.keyboardActive)
+const chatRouteActive = computed(() => !!editorGroups || !!props.inspection || route.name === 'chat')
 const paneActive = computed(() => props.visible && activated.value)
 const livePool = useLiveClientPool()
 const projectLiveState = useProjectLiveState()
@@ -1270,8 +1275,9 @@ const diagnosisNavigation = useDiagnosisNavigation({
 const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
+const diagnosisDocumentVisible = ref(false)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => (props.secondary || (route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
+const composerVisible = computed(() => editorGroups ? conversationDocumentVisible.value : (props.inspection || (route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)
@@ -1283,6 +1289,8 @@ function switchPanel(panel: ConversationPanel): void {
   else if (conversationDocumentVisible.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && !historyRequest) void loadReadonlySession(true)
 }
 function diagnosisVisibilityChanged(visible: boolean) {
+  diagnosisDocumentVisible.value = visible
+  if (editorGroups) { if (visible) diagnosisOpened.value = true; return }
   const panel = visible ? 'diagnosis' : 'conversation'
   if (panel !== activePanel.value) switchPanel(panel)
   void nextTick(() => {
@@ -1908,7 +1916,7 @@ function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePic
     workbench.value?.showConversation()
     await nextTick()
     autoResize()
-    if (props.visible && props.keyboardActive) {
+    if (props.visible && (props.keyboardActive && conversationFocused.value)) {
       if (openRemotePicker) await chooseRemoteExecution()
       else chatInput.value?.focus({ preventScroll: true })
     }
@@ -2163,7 +2171,7 @@ function resetConversation(): void {
   settingsError.value = ''
   settingsOverride.value = undefined
   pendingDraftSettings.value = undefined
-  activePanel.value = diagnosisNavigation.requested.value ? 'diagnosis' : 'conversation'
+  activePanel.value = !editorGroups && diagnosisNavigation.requested.value ? 'diagnosis' : 'conversation'
   diagnosisOpened.value = activePanel.value === 'diagnosis'
   if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   sendRequest = undefined
@@ -3214,7 +3222,7 @@ function quoteSelection(text: string): void {
 }
 
 // Focus on entry (including cached/split panes), not on subsequent draft edits.
-watch(() => !activeSessionId.value && paneActive.value && props.keyboardActive
+watch(() => !activeSessionId.value && paneActive.value && (props.keyboardActive && conversationFocused.value)
   && chatRouteActive.value && composerVisible.value, async available => {
   if (!available) return
   await nextTick()
@@ -3224,7 +3232,7 @@ watch(() => !activeSessionId.value && paneActive.value && props.keyboardActive
   input.focus({ preventScroll: true })
 }, { immediate: true, flush: 'post' })
 function handleTypingFocus(e: KeyboardEvent): void {
-  if (!props.visible || !conversationDocumentVisible.value || !props.keyboardActive || !paneRoot.value?.getClientRects().length || activePanel.value !== 'conversation' || !isComposerFocusKey(e)) return
+  if (!props.visible || !conversationDocumentVisible.value || !(props.keyboardActive && conversationFocused.value) || !(editorGroups ? chatInput.value?.getClientRects().length : paneRoot.value?.getClientRects().length) || activePanel.value !== 'conversation' || !isComposerFocusKey(e)) return
   const input = chatInput.value
   if (!input) return
   const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="listbox"], .workbench-explorer'

@@ -4375,5 +4375,8 @@
   "Attach up to 8 workflow references.": "最多添加 8 个工作流引用。",
   "This reference is already attached.": "已添加此引用。",
   "Reference added to the conversation draft.": "引用已添加到对话草稿。",
-  "Remove workflow references before sending a command or answering a question.": "发送命令或回答问题前，请先移除工作流引用。"
+  "Remove workflow references before sending a command or answering a question.": "发送命令或回答问题前，请先移除工作流引用。",
+  "Resize editor group": "调整编辑组大小",
+  "Left editor group": "左侧编辑组",
+  "Right editor group": "右侧编辑组"
 }

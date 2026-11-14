@@ -4375,5 +4375,8 @@
   "Attach up to 8 workflow references.": "Attach up to 8 workflow references.",
   "This reference is already attached.": "This reference is already attached.",
   "Reference added to the conversation draft.": "Reference added to the conversation draft.",
-  "Remove workflow references before sending a command or answering a question.": "Remove workflow references before sending a command or answering a question."
+  "Remove workflow references before sending a command or answering a question.": "Remove workflow references before sending a command or answering a question.",
+  "Resize editor group": "Resize editor group",
+  "Left editor group": "Left editor group",
+  "Right editor group": "Right editor group"
 }

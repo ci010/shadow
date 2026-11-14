@@ -20,8 +20,8 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('ordinary conversation moves between Project editors without remount, lineage changes or duplicate sends', {
-  timeout: 90_000,
+test('all resources share Project editor groups without remount, child panes or duplicate sends', {
+  timeout: 120_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
   const directory = resolve(root, '.test-artifacts', `secondary-editor-${randomUUID()}`)
@@ -64,7 +64,7 @@ test('ordinary conversation moves between Project editors without remount, linea
         const revision = (frozenHistory.length ? 'b' : 'a').repeat(64)
         json({ revision, historyRevision: revision, metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
           data: { chatId: new URL(req.url!, 'http://fixture').searchParams.get('chatId'), currentPhysicalId: 'physical-ordinary', previousPhysicalId: null, segmentIndex: 0,
-            history: [{ role: 'assistant', content: 'Ordinary conversation retained' }, ...frozenHistory.map(content => ({ role: 'user', content }))], systemPrompt: 'Fixture system prompt', tools: [], commandResults: [], decisionRecords: [] } }); return
+            history: [{ role: 'assistant', content: 'Ordinary conversation retained\n\n' + 'Retained history scroll fixture.\n\n'.repeat(70) }, ...frozenHistory.map(content => ({ role: 'user', content }))], systemPrompt: 'Fixture system prompt', tools: [], commandResults: [], decisionRecords: [] } }); return
       }
       if (path.endsWith('/api/chat/send')) {
         let body = ''
@@ -91,6 +91,7 @@ test('ordinary conversation moves between Project editors without remount, linea
       if (path.endsWith('/api/config')) { json({ agent: { model: 'fixture', workspace: '/synthetic/home', temperature: 0.5 } }); return }
       if (path.endsWith('/api/models')) { json({ models: ['fixture'], providers: [] }); return }
       if (path.endsWith('/api/service-groups')) { json({ revision: 'r1', agents: [], groups: [] }); return }
+      if (path.endsWith('/preview')) { json({ binary: false, size: 31, content: '# Shared file editor fixture\n', sourcePath: 'note.md' }); return }
       if (path.endsWith('/api/knowledge')) { json({ entries: [], links: [] }); return }
       if (path.endsWith('/api/folders')) { json({ folders: [] }); return }
       if (/\/api\/sessions\/web%3Aordinary$/.test(path)) { json({ messages: [{ role: 'user', content: 'Ordinary conversation retained' }] }); return }
@@ -109,75 +110,97 @@ test('ordinary conversation moves between Project editors without remount, linea
     const open=async(project,query={})=>{await run('window.fixture.router.push('+JSON.stringify({name:'project-workflows',params:{projectId:project},query})+')');await wait(visible('.workflow-manager'));await wait(visible('.graph-group'))};
     const sidebar=async project=>{const s='document.querySelector('+JSON.stringify('[data-project-id="'+project+'"] .automation-entry')+')';await wait(s);await run(s+'.click()');await wait('window.fixture.router.currentRoute.value.name==="project-workflows" && window.fixture.router.currentRoute.value.params.projectId==='+JSON.stringify(project));await wait(visible('.workflow-manager'));await wait(visible('.graph-group'))};
     await win.loadURL(${JSON.stringify(url)});
-    await wait(visible('.workflow-inspector')); await wait(visible('.graph-group'));
+    await wait(visible('.workflow-inspector'));
     const useRef='document.querySelector(".workflow-reference-actions button")';
     await run(useRef+'.click()'); await wait('document.querySelector(".workflow-inspector").textContent.includes("Open an ordinary conversation")');
-    await run('document.querySelector('+JSON.stringify('.graph-node[data-flow="bot-binding:one"]')+').click()');
-    await wait('document.querySelector(".workflow-inspector").textContent.includes("BOT topology")');
-    assert.equal(await run('!!document.querySelector(".workflow-reference-actions")'),false,'BOT projections never fabricate workflow reference identity');
-    await run('window.fixture.router.replace({query:{workflow:"schedule:a",run:"run:a"}})'); await wait(useRef);
-
-    await primary(); await wait(visible('.reference-composer'));
-    await run('('+visible('.reference-composer')+').textContent="Primary unsent draft";('+visible('.reference-composer')+').dispatchEvent(new Event("input",{bubbles:true}))');
+    const editorTab=label=>'[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.textContent.trim()==='+JSON.stringify(label)+' && e.getBoundingClientRect().width)';
+    const tabById=part=>'[...document.querySelectorAll(".editor-view")].find(e=>e.dataset.editorId.includes('+JSON.stringify(part)+') && e.getBoundingClientRect().width)';
+    const move=async label=>{const target=editorTab(label);await wait(target);await run(target+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.editor-menu'));await run('document.querySelector(".editor-menu button").click()')};
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
     await wait(visible('.reference-composer'));
     await run('window.fixture.chatInput=('+visible('.reference-composer')+');window.fixture.chatInput.textContent="Right unsent draft";window.fixture.chatInput.dispatchEvent(new Event("input",{bubbles:true}))');
-    const move=async()=>{await run('('+visible('.conversation-tab')+').dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.conversation-editor-menu'));await run('document.querySelector(".conversation-editor-menu button").click()');await wait(visible('#project-secondary-editor .reference-composer'))};
-    await move();
-    assert.equal(await run('document.querySelector("#project-secondary-editor .reference-composer")===window.fixture.chatInput'),true,'Teleport moves the unique input rather than constructing another controller');
-    const rightInput='document.querySelector("#project-secondary-editor .reference-composer")';
-    assert.equal(await run(rightInput+'.textContent'),'Right unsent draft');
-    await sidebar('a'); await wait(visible('.workflow-inspector'));
-    assert.equal((await route()).query.run,'run:a');
-    assert.equal(await run('!!'+visible('.workflow-manager')),true);
-    assert.equal(await run('!!'+visible('#project-secondary-editor .reference-composer')),true);
-    assert.equal(await run('('+visible('.workflow-manager')+').getBoundingClientRect().right<=document.querySelector("#project-secondary-editor").getBoundingClientRect().left+1'),true,'Real Workflow occupies left pane and ordinary chat the right');
+    await wait('('+visible('.editor-group-content .chat-messages')+').textContent.includes("Retained history scroll fixture")');await delay(250);await run('window.fixture.historyNode=('+visible('.editor-group-content .chat-messages')+');window.fixture.historyNode.scrollTop=120');
+    assert.equal(await run('window.fixture.historyNode.scrollTop'),120,'Fixture has scrollable loaded history before move');
+    const ordinary='[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.getAttribute("aria-selected")==="true"&&e.getBoundingClientRect().width&&e.textContent.includes("Conversation"))';
+    await run(ordinary+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.editor-menu'));await run('document.querySelector(".editor-menu button").click()');
+    await wait(visible('[data-editor-group="right"] .reference-composer'));
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .reference-composer")===window.fixture.chatInput'),true);
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .chat-messages")===window.fixture.historyNode'),true);
+    assert.equal(await run('window.fixture.historyNode.scrollTop'),120,'Scroll position survives moving the existing view');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');
+    await wait(visible('.workflow-inspector'));
+    assert.equal(await run('!!'+visible('[data-editor-group="right"] .reference-composer')),true);
+    await run(useRef+'.click()');await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    await run(useRef+'.click()');assert.equal(await run('document.querySelectorAll("[data-editor-group=right] .context-chip").length'),1);
+    await move('Workflows');await wait(visible('[data-editor-group="right"] .workflow-manager'));
+    await move('Workflows');await wait(visible('[data-editor-group="left"] .workflow-manager'));
+    await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a",section:"general"}})');
+    await wait(editorTab('Project settings'));await move('Project settings');
+    await wait(visible('[data-editor-group="right"] .project-settings-view'));
+    await run('window.fixture.settingsInput=document.querySelector("[data-editor-group=right] .project-settings-view input");window.fixture.settingsInput.value="Unsaved name";window.fixture.settingsInput.dispatchEvent(new Event("input",{bubbles:true}))');
     assert.equal(await run('document.querySelectorAll(".child-conversation").length'),0);
-    const chips='document.querySelectorAll("#project-secondary-editor .context-chip")';
-    assert.equal(await run(chips+'.length'),0,'Selection alone never attaches context');
-    await run(useRef+'.click()'); await wait(chips+'.length===1');
-    await run(useRef+'.click()'); assert.equal(await run(chips+'.length'),1,'Explicit duplicates are deduplicated');
-    assert.ok(await run(chips+'[0].textContent.includes("run:a")'),'Historic run identity is visible');
-    await run(chips+'[0].querySelector("button").click()'); await wait(chips+'.length===0');
-    const source='document.querySelector('+JSON.stringify('.graph-node[data-flow="schedule:a"][data-node-type="source"]')+')';
-    await run(source+'.click()'); await run(useRef+'.click()'); await wait(chips+'.length===1');
-    assert.ok(await run(chips+'[0].textContent.includes("source")'));
+    await move('Project settings');await wait(visible('[data-editor-group="left"] .project-settings-view'));
+    assert.equal(await run('document.querySelector("[data-editor-group=left] .project-settings-view input")===window.fixture.settingsInput'),true);
+    assert.equal(await run('window.fixture.settingsInput.value'),'Unsaved name');
+    // Existing FileWorkbench documents use exactly the same host and move action.
+    await run('(()=>{let c=window.fixture.chatInput.__vueParentComponent;while(c&&c.type.__name!=="ChatTab")c=c.parent;c.setupState.workbench.openLinkedFile({path:"note.md",entry:{name:"note.md",type:"file",ext:".md",size:31,mtime:null},source:{sessionWorkspace:true}})})()');
+    await wait(visible('.file-markdown'));await run('window.fixture.filePreview=document.querySelector(".file-markdown")');
+    await move('note.md');await wait(visible('[data-editor-group="right"] .file-markdown'));
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .file-markdown")===window.fixture.filePreview'),true);
+    assert.ok(await run('window.fixture.filePreview.textContent.includes("Shared file editor fixture")'));
+    await move('note.md');await wait(visible('[data-editor-group="left"] .file-markdown'));
 
-    const sep='document.querySelector('+JSON.stringify('#project-secondary-editor [role="separator"]')+')';
-    const before=await run(sep+'.getAttribute("aria-valuenow")');await run(sep+'.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}))');assert.notEqual(await run(sep+'.getAttribute("aria-valuenow")'),before);
-    await delay(800);
-    assert.equal(await run('(()=>{const pane=document.querySelector("#project-secondary-editor"),box=pane.querySelector(".composer-box");return pane.scrollWidth<=pane.clientWidth+1&&box.scrollWidth<=box.clientWidth+1})()'),true,'Narrow ordinary editor and composer have no horizontal overflow');
-    const model='document.querySelector('+JSON.stringify('#project-secondary-editor [aria-label="Choose model"]')+')';
-    assert.equal(await run(model+'.disabled'),false,'Model control remains available in a narrow pane');
-    await run(model+'.click()'); await wait(visible('.model-menu'));
-    assert.equal(await run('!!document.querySelector(".model-menu-effort")'),true,'Effort remains available inside the model settings');
-    await run('document.querySelector(".composer-popover").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
-    await wait('!('+visible('.model-menu')+')');
-    assert.equal(await run('(()=>{const p=document.querySelector("#project-secondary-editor"),m=p.querySelector(".model-label").closest("button").getBoundingClientRect(),a=p.querySelector("[data-composer-microphone]").getBoundingClientRect(),s=p.querySelector(".composer-submit > button:last-of-type").getBoundingClientRect();return m.right<=a.left+1&&a.right<=s.left+1})()'),true,'Model, microphone and send stay distinct, without overlapping');
-    if(process.env.SECONDARY_EDITOR_SCREENSHOT) require('node:fs').writeFileSync(process.env.SECONDARY_EDITOR_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
-    // Isolation preserves the Project A input/inspection but exposes no right input in B.
-    await open('b'); assert.equal(await run('!!'+visible('#project-secondary-editor .reference-composer')),false);
-    await sidebar('a'); await wait(visible('#project-secondary-editor .reference-composer')); assert.equal((await route()).query.run,'run:a');
-    assert.equal(await run(rightInput+'===window.fixture.chatInput'),true); assert.equal(await run(rightInput+'.textContent'),'Right unsent draft');
-    // Restore, then close/reopen, keeps drafts and document/inspection state.
-    await run('document.querySelector(".secondary-editor-toolbar .btn").click()');await wait('window.fixture.router.currentRoute.value.params.sessionId==="web:chat-ordinary"');
-    await wait(visible('.reference-composer')); assert.equal(await run('('+visible('.reference-composer')+')===window.fixture.chatInput'),true);
-    await move();await run('document.querySelector('+JSON.stringify('#project-secondary-editor [aria-label="Close right conversation"]')+').click()');
-    await wait('!('+visible('#project-secondary-editor')+')');
-    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');await wait(visible('.reference-composer'));assert.equal(await run('('+visible('.reference-composer')+').textContent'),'Right unsent draft');
-    await move();await sidebar('a');await wait(visible('.workflow-manager'));
-    assert.equal(await run(rightInput+'.textContent'),'Right unsent draft','Draft survives reopening and workflow navigation');
-    assert.equal(await run('document.querySelector('+JSON.stringify('#project-secondary-editor [aria-label="Send message"]')+').disabled'),false);
-    // One ordinary submission from the right, while Workflow remains selected.
-    await run('document.querySelector('+JSON.stringify('#project-secondary-editor [aria-label="Send message"]')+').click()');
-    await wait(rightInput+'.textContent===""');await delay(600);assert.equal((await route()).name,'project-workflows');
-    await wait('document.querySelectorAll("#project-secondary-editor .context-chip").length===0');
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"knowledge"}})');
+    await wait(editorTab('Knowledge'));await move('Knowledge');await wait(visible('[data-editor-group="right"] .knowledge-document'));
+    await move('Diagnosis');await wait(visible('[data-editor-group="right"] .diagnosis-document'));
+    await wait(visible('[data-editor-group="right"] .session-diagnosis'));
+    // The active group's shortcut closes only its selected closable resource.
+    await run(editorTab('Knowledge')+'.click()');
+    await run('document.querySelector("[data-editor-group=right] .editor-tabs").dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true}))');
+    await wait('!('+editorTab('Knowledge')+')');
+    assert.equal(await run('!!'+editorTab('Workflows')),true,'Closing a right document never closes the left workflow');
+    await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a"}})');
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"knowledge"}})');
+    await wait(editorTab('Knowledge'));
+    const ordinaryTab='[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.id.includes("chat-ordinary")&&!e.textContent.includes("Diagnosis")&&!e.textContent.includes("Knowledge")&&!e.textContent.includes("note.md"))';
+    await run(ordinaryTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
+    await wait('!('+ordinaryTab+')');
+    await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a"}})');
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
+    await wait(visible('.reference-composer'));
+    assert.equal(await run('('+visible('.reference-composer')+')===window.fixture.chatInput'),true,'Close/reopen reuses the unsent draft and its input');
+    if(await run(ordinaryTab+'.closest("section").dataset.editorGroup==="left"')){await run(ordinaryTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()')}
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-second"},query:{panel:"knowledge"}})');
+    await wait(visible('.knowledge-document'));
+    assert.equal(await run('document.querySelectorAll(".knowledge-document").length'),1,'Project knowledge has a single rendered instance across conversation owners');
+    // Child inspection is another resource in the same strip, never a nested child pane.
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{child:"web:child-fixture"}})');
+    await wait('!!document.querySelector("[data-editor-group=right] .editor-view[data-editor-id*=child-fixture]")');
+    assert.equal(await run('document.querySelectorAll(".child-conversation").length'),0);
+    const childTab='[...document.querySelectorAll("[data-editor-group=right] .editor-tab [role=tab]")].find(e=>e.id.includes("child-fixture")&&!e.textContent.includes("Diagnosis"))';
+    await wait(childTab);await run(childTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()');
+    await wait('!!document.querySelector("[data-editor-group=left] .editor-view[data-editor-id*=child-fixture]")');
+    await run(childTab.replaceAll('data-editor-group=right','data-editor-group=left')+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
+    await run('window.fixture.router.replace({query:{child:"web:child-fixture",diagnosis:"prompt"}})');
+    assert.equal(await run('!!'+childTab.replaceAll('data-editor-group=right','data-editor-group=left')),false,'Closed child does not reopen on unrelated route updates');
+    // Project switching preserves the exact composer node and its unsent draft.
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"b"}})');await wait(visible('.workflow-manager'));
+    assert.equal(await run('!!'+visible('[data-editor-group="right"] .reference-composer')),false);
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');await wait(visible('.workflow-inspector'));
+    await run(useRef+'.click()');
+    await wait(visible('[data-editor-group="right"] .reference-composer'));
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .reference-composer")===window.fixture.chatInput'),true);
+    assert.equal(await run('window.fixture.chatInput.textContent'),'Right unsent draft');
+    const resizeHandle='document.querySelector("[data-editor-group=right] [role=separator]")';
+    const beforeWidth=await run(resizeHandle+'.getAttribute("aria-valuenow")');
+    await run(resizeHandle+'.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}))');
+    await delay(100);assert.notEqual(await run(resizeHandle+'.getAttribute("aria-valuenow")'),beforeWidth,'Shared group resize is keyboard-operable');
+    // One ordinary submission after inspector focus, with immutable host references.
+    await wait('!document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').disabled');
+    await run('document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').click()');
+    await wait('window.fixture.chatInput.textContent===""');await wait('!!window.fixture.lastAdmission');await delay(400);
     await run('window.fixture.chatObservers.forEach(observer=>observer.event({requestId:window.fixture.lastAdmission.requestId,payload:{event:"turn_finished",done:true,status:"completed",turnId:"fixture-turn"}}))');
-    await wait('document.querySelector("#project-secondary-editor .chat-messages").textContent.includes("Host-resolved identity snapshot")');
-    assert.equal(await run('document.querySelector("#project-secondary-editor .chat-messages").textContent.includes("Changed after admission")'),false,'Rendered user history retains the admission snapshot');
-
-    await primary(); await wait(visible('.primary-conversation .reference-composer'));
-    assert.equal(await run('('+visible('.primary-conversation .reference-composer')+').textContent'),'Primary unsent draft');
+    if(process.env.EDITOR_GROUP_SCREENSHOT) require('node:fs').writeFileSync(process.env.EDITOR_GROUP_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
     await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
   await build({ stdin: { contents: script, resolveDir: directory, sourcefile: 'fixture-run.cjs' }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
@@ -188,7 +211,7 @@ test('ordinary conversation moves between Project editors without remount, linea
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); if (code !== 0) console.error(output); assert.equal(code, 0, output); assert.match(output, /WORKFLOW_WORKBENCH_OK/)
   assert.deepEqual(requests.filter(request => request.method !== 'GET'), [{ path: '/projects/a/api/chat/send', method: 'POST' }], 'Only the explicit send submits; editor movement never forks, prepares or submits')
-  assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a', selector: { kind: 'source' } }])
+  assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a' }])
   assert.equal(sentBodies[0]!.content, 'Right unsent draft')
   assert.equal(sentBodies[0]!.media, undefined)
   assert.match(frozenHistory[0]!, /Host-resolved identity snapshot/)

@@ -9,7 +9,7 @@ export function createProjectDocuments() {
     get(projectId: string) {
       let state = projects.get(projectId)
       if (!state) {
-        state = shallowReactive({ tabs: [] as ProjectTab[], target: undefined, active: false, selected: '' })
+        state = shallowReactive({ tabs: [] as ProjectTab[], selected: '' })
         projects.set(projectId, state)
       }
       return state
@@ -18,8 +18,6 @@ export function createProjectDocuments() {
 }
 export interface ProjectDocuments {
   tabs: ProjectTab[]
-  target?: HTMLElement
-  active: boolean
   selected: string
 }
 export const ProjectDocumentsKey: InjectionKey<ReturnType<typeof createProjectDocuments>> = Symbol('ProjectDocuments')
