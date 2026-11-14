@@ -18,11 +18,10 @@ export function exitStrongCompatibility(md: import('markdown-exit').MarkdownExit
         for (const match of token.content.matchAll(pattern)) {
           const inner = match[1]!, trimmed = inner.trim()
           const before = token.content.slice(0, match.index).match(/.$/u)?.[0] ?? ''
-          const after = token.content.slice(match.index + match[0].length)
-          const cjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+          // CJK punctuation boundaries are handled by markdown-it-cjk-friendly.
+          // Retain only the non-standard, space-padded label compatibility.
           const padded = /^[ \t]|[ \t]$/.test(inner) && !/[\p{L}\p{N}]/u.test(before)
-          const punct = inner === trimmed && /\p{P}$/u.test(inner) && cjk.test(Array.from(after)[0] ?? '') && (!/[\p{L}\p{N}]/u.test(before) || cjk.test(before))
-          if (!trimmed || (!padded && !punct)) continue
+          if (!trimmed || !padded) continue
           const make = (type: string, tag: string, nesting: -1 | 0 | 1, content = '') => { const t = new state.Token(type, tag, nesting); t.content = content; return t }
           if (match.index > cursor) parts.push(make('text', '', 0, token.content.slice(cursor, match.index)))
           parts.push(make('strong_open', 'strong', 1), make('text', '', 0, trimmed), make('strong_close', 'strong', -1))

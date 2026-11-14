@@ -5,8 +5,11 @@ SystemPromptCard, knowledge entries and Markdown inside answer-HTML fragments.
 Callers retain their own DOMPurify policy and mobile-resource replacement.
 System prompts disable raw HTML; answer fences are opt-in only for chat.
 Shared lazy Shiki highlighting stays synchronous and invalidates Vue rendering
-when a grammar finishes loading. Strong-label compatibility runs before text
-joining, respecting code, links, escapes, raw HTML and math token boundaries.
+when a grammar finishes loading. `markdown-it-cjk-friendly` adjusts inline delimiter
+scanning for CJK emphasis and strikethrough punctuation boundaries in every shared
+parser instance. Space-padded strong-label compatibility remains a separate display
+adapter before text joining, respecting code, links, escapes, raw HTML and math
+token boundaries; it no longer repairs CJK punctuation itself.
 
 Math uses @mdit/plugin-katex (`delimiters: all`, untrusted, bounded expansion and
 size). Small adapters preserve inline `$$...$$` and dollar math before `_`.
