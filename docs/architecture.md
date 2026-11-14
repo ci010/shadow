@@ -2392,10 +2392,14 @@ sessions in the current Project and messaging permission for a peer target.
 `SessionManager.assertCanScheduleSession` checks access at creation and each
 dispatch; missing targets are never implicitly recreated. Events carry creator
 session provenance, not user/admin authority. The target retains its own agent,
-tools, workdir and history. For event continuations, `inputContext` resolves
-execution admin from the host-owned durable owner Web session state, never from
-reply routing or event payloads. Prompt preparation and execution/trace context
-use that same resolution. The input remains an event, not direct human approval;
+tools, workdir and history. For event and session-message continuations,
+`inputContext` resolves execution admin from the host-owned durable owner Web
+session state, never from reply routing, sending sessions or event payloads.
+Prompt preparation and execution/trace context use that same resolution. The
+input keeps its original source (`event` or `session`), not direct human approval.
+Bot overview/status reads retain this execution authority; Bot setup changes,
+package publication, convention writes and development restart still require
+an authenticated direct human turn;
 service/bounded/automated sessions and other channels do not gain this fallback. Dedicated recurring conversations are ordinary topics
 created before scheduling, not a separate cron mode. The former `origin` and
 `isolated` modes/boolean are rejected without migration.

@@ -5,11 +5,11 @@ import type { SessionState } from './session-store.ts'
 import { isOwnerSession } from './owner-policy.ts'
 
 /** Execution authority is not human approval. Only host-owned durable Web
- * identity may supply the missing principal on an event continuation. Never
- * consult event sender/origin/attributes or the reply projection for authority. */
+ * identity may supply the missing principal on an event or session continuation.
+ * Never consult sender/origin/attributes or the reply projection for authority. */
 export function inputAdmin(sessionId: string, input: SessionInput, state?: SessionState): boolean {
   if (input.source.kind === 'user') return input.source.sender.admin ?? false
-  return input.source.kind === 'event' && state?.sessionId === sessionId &&
+  return (input.source.kind === 'event' || input.source.kind === 'session') && state?.sessionId === sessionId &&
     typeof state.projectId === 'string' && isOwnerSession(state, state.projectId) &&
     !state.channelBoundary && !state.serviceGeneration
 }

@@ -27,8 +27,10 @@ export class BotSetupTool implements Tool {
     assertBotManagementAccess(this.setup.projectId, context, this.assertSession)
     if (this.channels.projectId !== this.setup.projectId) throw new Error('Bot runtime ownership mismatch.')
     const input = argsSchema.parse(args)
-    if (input.action === 'open') return this.setup.request(context.sessionId, context.signal)
     if (input.action === 'status') return JSON.stringify({ bots: this.channels.botStatuses() })
+    // Continuations retain read authority, not a direct human management turn.
+    if (context.inputSource !== 'user') throw new Error('Bot setup changes require a direct administrator human turn.')
+    if (input.action === 'open') return this.setup.request(context.sessionId, context.signal)
     if (input.action === 'create') {
       if (input.platform === 'wechat' && input.purpose !== 'personal') throw new Error('WeChat requires a personal Bot.')
       return JSON.stringify({ bot: await this.channels.createBot({ ...input, config: { enabled: false } }, context.signal) })
