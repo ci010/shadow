@@ -20,14 +20,15 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     name: 'explorer-fixture', resolveId: id => id === '/fixture.ts' ? '\0fixture' : undefined,
     load(id) { if (id !== '\0fixture') return; return `import {createApp,h,provide} from 'vue';import Host from '/src/components/EditorGroupHost.vue';import View from '/src/components/EditorViewHost.vue';import {createEditorGroups,EditorGroupsKey} from '/src/editor-groups.ts';import {setLocalePreference} from '/src/i18n.ts';import '/src/styles.css';import 'virtual:uno.css';setLocalePreference('en');
       const groups=createEditorGroups();window.groups=groups;
-      const descriptors=['A','B'].map(label=>({id:label,projectId:'p',owner:label,label,icon:'i-lucide-message-square',closable:true,conversation:{sessionId:'web:'+label,editable:true},select(){},close(){}}));
+      const descriptors=['A','B'].map(label=>({id:label,projectId:'p',owner:label,label,icon:'i-lucide-message-square',closable:true,conversation:{sessionId:'web:'+label,editable:true,folderId:label==='A'?'one':'two'},select(){},close(){}}));
       createApp({setup(){provide(EditorGroupsKey,groups);return()=>h('div',{style:'display:flex;height:100vh'},[h(Host,{projectId:'p',apiBase:location.origin+'/projects/p',active:true}),...descriptors.map(descriptor=>h(View,{descriptor},()=>h('div',{class:'chat-fixture'},[h('button',{class:'chat-right-action',style:'float:right'},'Chat action')])))]);}}).mount('#app');` },
     configureServer(server) { server.middlewares.use((req, res, next) => {
       const url = new URL(req.url!, 'http://fixture')
       if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<html><body style="margin:0"><div id="app"></div><script type="module" src="/fixture.ts"></script></body></html>'); return }
       if (!url.pathname.startsWith('/projects/p/api/')) return next()
       requests.push(url.pathname + url.search); res.setHeader('Content-Type', 'application/json')
-      if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: [{ id: 'one', name: 'shadow', path: '/synthetic/shadow', createdAt: '2026-01-01' }, ...['two', 'two-alias'].map(id => ({ id, name: 'shadow', path: 'C:\\synthetic\\shadow', createdAt: '2026-01-01', kind: 'remote', workdir: { version: 2, nodeId: 'windows-node', workdirId: 'registered-' + id }, identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] } }))] }))
+      if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: [{ id: 'unrelated', name: 'Unrelated project root', path: '/synthetic/unrelated', createdAt: '2026-01-01' }, { id: 'one', name: 'shadow with a very long folder name that must never wrap', path: '/synthetic/shadow', createdAt: '2026-01-01' }, ...['two', 'two-alias'].map(id => ({ id, name: 'shadow with a very long folder name that must never wrap', path: 'C:\\synthetic\\shadow', createdAt: '2026-01-01', kind: 'remote', workdir: { version: 2, nodeId: 'windows-node', workdirId: 'registered-' + id }, identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] } }))] }))
+      else if (url.pathname.endsWith('/picker/devices')) res.end(JSON.stringify({devices:[{nodeId:'windows-node',name:'CI010',role:'child',online:true,supported:true}]}))
       else if (url.pathname.endsWith('/files')) res.end(JSON.stringify({ path: '', entries: [{ name: 'same.md', type: 'file', ext: '.md', size: 12, mtime: null }] }))
       else if (url.pathname.endsWith('/preview')) res.end(JSON.stringify({ binary: false, size: 12, content: '# ' + url.pathname }))
       else if (url.pathname.endsWith('/git/diff')) res.end(JSON.stringify({ path: 'same.md', status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [], notice: url.pathname }))
@@ -52,16 +53,45 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     assert.equal(await run('document.querySelector(".editor-workspace-header").getBoundingClientRect().height <= document.querySelector(".editor-tabs").getBoundingClientRect().height+1'),true,'no extra toolbar row');
     await run('document.querySelector(\'[role="tab"]\').focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Right'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Right'});assert.equal(await run('document.activeElement.getAttribute("role")'),'tab');
     assert.equal(await run('document.querySelectorAll(\'[data-root-id="folder:two-alias"]\').length'),0,'same physical resource is deduplicated');
-    assert.match(await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').textContent'),/Main: \/synthetic\/shadow/);
-    assert.match(await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').textContent'),/windows-node: C:/);
+    assert.equal(await run('document.querySelector(\'[data-root-id="folder:one"] .root-source\').textContent'),'Main');
+    assert.equal(await run('document.querySelector(\'[data-root-id="folder:two"] .root-source\').textContent'),'CI010');
+    assert.equal(await run('[...document.querySelectorAll(".root-toggle")].every(e=>e.getBoundingClientRect().height<=32)'),true,'all roots remain single compact rows');
+    assert.equal(await run('[...document.querySelectorAll(".root-name")].every(e=>getComputedStyle(e).whiteSpace==="nowrap"&&getComputedStyle(e).textOverflow==="ellipsis")'),true);
+    assert.equal(await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').textContent.includes("/synthetic")'),false,'paths are not persistent row text');
+    win.webContents.focus();await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
+    await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').focus()');
+    await wait('document.querySelector(".shared-hover-info")?.textContent.includes("windows-node")');
+    assert.match(await run('document.querySelector(".shared-hover-info").textContent'),/C:/,'keyboard hint exposes full source path');
+    await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').focus()');
+    await wait('document.querySelector(".shared-hover-info")?.textContent.includes("Session files: A")');
     await run('window.groups.move("A","right")');await delay(100);assert.equal(await run(sameRow),true,'split groups keep the same header row');
     await run('window.groups.move("A","left")');await delay(100);
-    await run('window.groups.close("B")');await wait('!document.querySelector(\'[data-root-id="session:web:B"]\')');
     await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').click()');assert.equal(await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').getAttribute("aria-expanded")'),'true');
+    assert.equal(await run('!!document.querySelector(\'[data-root-id="folder:unrelated"]\')'),false,'catalog roots unrelated to open conversations stay hidden');
+    await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"two-alias"}});void 0');
+    await wait('document.querySelectorAll(\'[data-root-id^="folder:"]\').length===1');
+    assert.equal(await run('!!document.querySelector(\'[data-root-id="folder:two"]\')'),true,'two bound aliases of the same node/root deduplicate');
+    await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"two"}});void 0');
+    await wait('!document.querySelector(\'[data-root-id="folder:one"]\')');
+    await run('window.groups.close("B")');await wait('!document.querySelector(\'[data-root-id="session:web:B"]\')');
+    assert.equal(await run('!!document.querySelector(\'[data-root-id="folder:two"]\')'),true,'another open binding retains the shared root');
+    await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"two-alias"}});void 0');
+    await wait('!!document.querySelector(\'[data-root-id="folder:two-alias"]\')&&!document.querySelector(\'[data-root-id="folder:two"]\')');
+    await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true}});void 0');
+    await wait('!document.querySelector(\'[data-root-id^="folder:"]\')');
+    assert.equal(await run('!!document.querySelector(\'[data-root-id="session:web:A"]\')'),true,'unbound session keeps only session data');
+    await run('window.groups.open({id:"project-only",projectId:"p",owner:"project",label:"Settings",icon:"i-lucide-settings",closable:true,select(){},close(){}});void 0');
+    assert.equal(await run('document.querySelectorAll(\'[data-root-id^="folder:"]\').length'),0,'project-only tabs never expose the catalog');
+    await run('window.groups.close("project-only");window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"one"}});void 0');
+    await wait('!!document.querySelector(\'[data-root-id="folder:one"]\')');
     if(process.env.PROJECT_EXPLORER_SCREENSHOT) require('node:fs').writeFileSync(process.env.PROJECT_EXPLORER_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
     win.setSize(500,800);await delay(100);assert.equal(await run(sameRow),true,'narrow header stays inline');
     const wasOpen=await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")');await run('document.querySelector(".project-explorer-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'E',modifiers:['control','shift']});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'E',modifiers:['control','shift']});await delay(100);assert.notEqual(await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")'),wasOpen,'keyboard shortcut toggles');
     await run('window.groups.explorers.add("p");void 0');await delay(50);await run('document.querySelector(".root-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(50);assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true,'Escape returns focus to header toggle');
+    await run('window.groups.explorers.add("p");window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),label:"A full long conversation title ".repeat(8)});void 0');
+    await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').focus()');
+    await wait('document.querySelector(".shared-hover-info")?.textContent.includes("A full long conversation title")');
+    assert.equal(await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').getBoundingClientRect().height<=32'),true,'long session title also stays single-line');
     await run('for(const id of [...window.groups.descriptors.keys()])window.groups.close(id)');await delay(100);assert.equal(await run('document.querySelectorAll(".editor-tab").length'),0);assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().width>0'),true);await win.close();console.log('PROJECT_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs'); await writeFile(entry, script)
   const child = spawn(require('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })

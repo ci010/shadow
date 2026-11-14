@@ -3,9 +3,9 @@
     <header class="editor-workspace-header">
       <HoverInfo v-if="apiBase" :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
-        <div v-for="side in sides" :key="side" v-show="state[side].length" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
+        <div v-for="side in sides" :key="side" v-show="state[side].length" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
           <div class="editor-tabs" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
-            <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @contextmenu.prevent="openMenu($event, editor.id)">
+            <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, editor.id)" @contextmenu.prevent="openMenu($event, editor.id)">
               <button :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" />{{ editor.label }}</button>
               <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: editor.label })" @click="groups.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
             </div>
@@ -46,6 +46,14 @@ const state = computed(() => groups.state(props.projectId))
 const hostId = `groups-${useId()}`
 const root = ref<HTMLElement>()
 const explorerToggle = ref<HTMLButtonElement>()
+function preventMiddleScroll(event: MouseEvent) {
+  if (event.button === 1) event.preventDefault()
+}
+function middleClickTab(event: MouseEvent, id: string) {
+  if (event.button !== 1) return
+  event.preventDefault()
+  groups.close(id)
+}
 function closeExplorer() { groups.explorers.delete(props.projectId); explorerToggle.value?.focus() }
 const width = ref(1000), preferredWidth = ref(480)
 const bounds = computed(() => ({ min: 240, max: Math.max(240, width.value - 280) }))

@@ -44,6 +44,7 @@
       <button data-actions-trigger @click="close(); nextTick(toggleActions)">{{ t('Actions') }}</button>
       <template v-if="activeSessionId">
         <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
+        <button @click="close(); workbench?.openDiagnosis()">{{ t('Diagnosis') }}</button>
         <button @click="close(); showMobileSessionDetails()">{{ t('Session details') }}</button>
         <button @click="close(); renameMobileSession()">{{ t('Rename session') }}</button>
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
@@ -80,6 +81,7 @@
             @next="viewNextSegment" @current="goBackToCurrentSegment">
             <ConversationHistoryMenu :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId" :automation="automationConversation" @select="selectHistorySegment" />
           </SegmentNavigation>
+          <button class="conversation-actions conversation-diagnosis" type="button" @click="workbench?.openDiagnosis()">{{ t('Diagnosis') }}</button>
           <button ref="actionsTrigger" data-actions-trigger class="conversation-actions" type="button" :aria-expanded="actionsOpen" @click="toggleActions">{{ t('Actions') }}</button>
           <button class="conversation-find" type="button" :aria-label="t('Search conversation')" aria-keyshortcuts="Control+F Meta+F"
             :title="t('Search conversation (Ctrl+F / Cmd+F)')" @click="conversationSearch?.show()">

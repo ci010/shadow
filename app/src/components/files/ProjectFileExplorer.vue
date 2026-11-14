@@ -1,8 +1,8 @@
 <template>
   <aside v-show="open" :id="explorerId" class="project-file-explorer" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
-    <ProjectExplorerRoot v-for="session in sessions" :key="`session:${session.sessionId}`" :root-id="`session:${session.sessionId}`" :api-base="apiBase" :session-id="session.sessionId" :label="`${t('Session files')}: ${session.label}`" :active="active && open" @open="openFile" />
+    <ProjectExplorerRoot v-for="session in sessions" :key="`session:${session.sessionId}`" :root-id="`session:${session.sessionId}`" :api-base="apiBase" :session-id="session.sessionId" :label="session.label" :hint="`${t('Session files')}: ${session.label}`" :active="active && open" @open="openFile" />
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
-    <ProjectExplorerRoot v-for="folder in folders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folderLabel(folder)" :active="active && open" @open="openFile" />
+    <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
   </aside>
   <EditorViewHost v-for="file in files" :key="fileTabKey(file)" :descriptor="descriptor(file)" :active="active">
     <ProjectExplorerFile :api-base="apiBase" :file="file" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
@@ -22,17 +22,34 @@ import ProjectExplorerFile from './ProjectExplorerFile.vue'
 const props = defineProps<{ apiBase: string; projectId: string; active: boolean; open: boolean; explorerId: string; folderRevision?: number; canQuote?: boolean }>()
 const emit = defineEmits<{ close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
-const sessions = computed(() => {
+const conversations = computed(() => {
   const state = groups.state(props.projectId)
-  const unique = new Map<string, { sessionId: string; label: string }>()
-  for (const id of [...state.left, ...state.right]) {
+  return [...state.left, ...state.right].flatMap(id => {
     const editor = groups.descriptors.get(id)
-    if (editor?.conversation?.sessionId) unique.set(editor.conversation.sessionId, { sessionId: editor.conversation.sessionId, label: editor.label })
+    return editor?.conversation?.sessionId ? [editor] : []
+  })
+})
+const sessions = computed(() => {
+  const unique = new Map<string, { sessionId: string; label: string }>()
+  for (const editor of conversations.value) {
+    const sessionId = editor.conversation!.sessionId
+    unique.set(sessionId, { sessionId, label: editor.label })
   }
   return [...unique.values()]
 })
 const livePool = useLiveClientPool()
 const folders = ref<FolderRecord[]>([]), error = ref('')
+const relatedFolders = computed(() => {
+  const bound = new Set(conversations.value.map(editor => editor.conversation?.folderId).filter(Boolean))
+  const seen = new Set<string>()
+  return folders.value.filter(folder => {
+    if (!bound.has(folder.id)) return false
+    const identity = resourceIdentity(folder)
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+})
 // Local catalog IDs are canonical resource identities. Remote aliases may have
 // different catalog IDs but refer to the same physical root on the same node.
 function resourceIdentity(folder: FolderRecord) {
@@ -40,27 +57,37 @@ function resourceIdentity(folder: FolderRecord) {
     ? JSON.stringify(['remote', folder.workdir.nodeId, folder.identity.rootId])
     : JSON.stringify([folder.kind ?? 'local', folder.id])
 }
-function folderLabel(folder: FolderRecord) {
-  const label = `${t('Project files')}: ${folder.name}`
-  if (folders.value.filter(item => item.name === folder.name).length < 2) return label
-  // Paths here are public display metadata only, never resolved on Main.
-  const location = folder.kind === 'remote' ? folder.workdir.nodeId : folder.kind === 'layerfs' ? 'LayerFS' : t('Main')
-  return `${label} — ${location}: ${folder.path}`
+const devices = ref<Record<string, string>>({})
+const mainDeviceName = ref('')
+function folderSource(folder: FolderRecord) {
+  if (folder.kind === 'layerfs') return 'LayerFS'
+  if (folder.kind !== 'remote') return mainDeviceName.value || t('Main')
+  const node = folder.workdir.nodeId
+  const name = devices.value[node]
+  if (!name) return node.slice(0, 8)
+  const duplicate = Object.values(devices.value).filter(value => value === name).length > 1
+  return duplicate ? `${name} · ${node.slice(0, 6)}` : name
+}
+function folderHint(folder: FolderRecord) {
+  const node = folder.kind === 'remote' ? ` (${folder.workdir.nodeId})` : ''
+  return `${t('Project files')}: ${folder.name} — ${folderSource(folder)}${node}\n${folder.path}`
 }
 let controller: AbortController | undefined
 async function load() {
   controller?.abort()
   const request = new AbortController(); controller = request
   try {
-    const next = await createFoldersClient(props.apiBase).list(request.signal)
+    const client = createFoldersClient(props.apiBase)
+    // Friendly device metadata is optional; catalog availability must not depend on it.
+    const [next, deviceList] = await Promise.all([client.list(request.signal), client.pickerDevices(request.signal).catch(() => [])])
     if (!request.signal.aborted) {
-      const seen = new Set<string>()
-      folders.value = next.filter(folder => {
-        const identity = resourceIdentity(folder)
-        if (seen.has(identity)) return false
-        seen.add(identity)
-        return true
-      })
+      devices.value = Object.fromEntries(deviceList.map(device => [device.nodeId, device.name.trim()]))
+      mainDeviceName.value = deviceList.find(device => device.role === 'main')?.name.trim() ?? ''
+    }
+    if (!request.signal.aborted) {
+      // Filter by exact catalog bindings before physical-root deduplication:
+      // an unbound alias must never hide a bound remote catalog ID.
+      folders.value = next
       error.value = ''
     }
   } catch (cause) { if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Retry folders') }

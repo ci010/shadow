@@ -66,7 +66,7 @@ const available = {
 test('file writes do not add a permanent document to the conversation workbench', () => {
   const state = withDiagnosisTab(openFileTab({ files: [], selected: '' }, file('memory.md')), true)
   assert.deepEqual(documentTabKeys(state), ['', DIAGNOSIS_TAB_KEY, 'memory.md'])
-  assert.deepEqual(documentTabKeys(closeAllFileTabs(state)), ['', DIAGNOSIS_TAB_KEY])
+  assert.deepEqual(documentTabKeys(closeAllFileTabs(state)), [''])
 })
 test('Alt+Left and Alt+Right use browser history only for unhandled, nonrepeating keys', () => {
   const back = { ...tabKey, key: 'ArrowLeft', altKey: true, ctrlKey: false }
@@ -97,20 +97,20 @@ test('explorer shortcut uses active workbench guards without requiring an open f
   }
 })
 
-test('optional Diagnosis is a permanent peer of Conversation, including keyboard navigation', () => {
+test('optional Diagnosis is a closable peer of Conversation, including keyboard navigation', () => {
   const state = withDiagnosisTab(openKnowledgeTab(openFileTab({ files: [], selected: '' }, file('notes.md'))), true)
   assert.deepEqual(documentTabKeys(state), ['', DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, 'notes.md'])
   assert.equal(cycleDocumentTab({ ...state, selected: '' }, 1, available), DIAGNOSIS_TAB_KEY)
   assert.equal(cycleDocumentTab({ ...state, selected: DIAGNOSIS_TAB_KEY }, 1, available), KNOWLEDGE_TAB_KEY)
   const selected = { ...state, selected: DIAGNOSIS_TAB_KEY }
-  assert.equal(selectedFileToClose(selected, available), undefined)
-  assert.equal(closeFileTab(selected, DIAGNOSIS_TAB_KEY), selected)
-  assert.deepEqual(closeAllFileTabs(selected), { files: [], diagnosis: true, selected: DIAGNOSIS_TAB_KEY })
-  assert.equal(closeOtherFileTabs(selected, 'notes.md').diagnosis, true)
-  assert.equal(closeOtherFileTabs(selected, KNOWLEDGE_TAB_KEY).diagnosis, true)
+  assert.equal(selectedFileToClose(selected, available), DIAGNOSIS_TAB_KEY)
+  assert.deepEqual(closeFileTab(selected, DIAGNOSIS_TAB_KEY), withDiagnosisTab(selected, false))
+  assert.deepEqual(closeAllFileTabs(selected), { files: [], selected: '' })
+  assert.equal(closeOtherFileTabs(selected, 'notes.md').diagnosis, undefined)
+  assert.equal(closeOtherFileTabs(selected, KNOWLEDGE_TAB_KEY).diagnosis, undefined)
   assert.equal(closeAllFileTabs(state).selected, '')
-  const pinned = closeAllFileTabs(selected)
-  assert.equal(canCloseAllDocuments(pinned, available), false)
+  const pinned = { files: [], diagnosis: true, selected: DIAGNOSIS_TAB_KEY }
+  assert.equal(canCloseAllDocuments(pinned, available), true)
   assert.equal(cycleDocumentTab(pinned, 1, available), '')
   assert.equal(cycleDocumentTab({ ...pinned, selected: '' }, -1, available), DIAGNOSIS_TAB_KEY)
   const draft = withDiagnosisTab(pinned, false)
@@ -280,7 +280,7 @@ test('Workflow is a deduplicated project document with shared navigation and clo
   assert.equal(cycleDocumentTab(workflow, 1, available), '')
   assert.equal(selectedFileToClose(workflow, available), key)
   assert.deepEqual(closeFileTab(workflow, key), { ...initial, selected: '' })
-  assert.deepEqual(closeOtherFileTabs(workflow, key), { files: [], diagnosis: true, projectTabs: ['workflows'], selected: key })
-  assert.deepEqual(closeAllFileTabs(workflow), { files: [], diagnosis: true, selected: '' })
+  assert.deepEqual(closeOtherFileTabs(workflow, key), { files: [], projectTabs: ['workflows'], selected: key })
+  assert.deepEqual(closeAllFileTabs(workflow), { files: [], selected: '' })
   assert.equal(initial.projectTabs?.includes('workflows'), false, 'Opening a workflow never mutates the previous workbench')
 })

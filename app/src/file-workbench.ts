@@ -32,7 +32,7 @@ export const KNOWLEDGE_TAB_KEY = '\0knowledge'
 export const knowledgeEntryTabKey = (id: string) => `\0knowledge-entry:${id}`
 export const knowledgeEntryId = (key: string) => key.startsWith('\0knowledge-entry:') ? key.slice('\0knowledge-entry:'.length) : undefined
 export const DIAGNOSIS_TAB_KEY = '\0diagnosis'
-export const isPermanentDocumentTab = (key: string) => !key || key === DIAGNOSIS_TAB_KEY
+export const isPermanentDocumentTab = (key: string) => !key
 export type ProjectTab = 'settings' | 'workflows'
 export const projectTabKey = (tab: ProjectTab) => `\0project:${tab}`
 export const projectTabFromKey = (key: string): ProjectTab | undefined =>
@@ -43,6 +43,7 @@ export const projectTabIcon = (tab: ProjectTab) => tab === 'workflows' ? 'i-luci
 
 export function withDiagnosisTab(state: FileTabs, enabled: boolean): FileTabs {
   if (enabled) return state.diagnosis ? state : { ...state, diagnosis: true }
+  if (!state.diagnosis && state.selected !== DIAGNOSIS_TAB_KEY) return state
   const { diagnosis, ...rest } = state
   return { ...rest, selected: state.selected === DIAGNOSIS_TAB_KEY ? '' : state.selected }
 }
@@ -76,6 +77,7 @@ export function openFileTab(state: FileTabs, file: OpenFile): FileTabs {
 }
 
 export function closeFileTab(state: FileTabs, path: string): FileTabs {
+  if (path === DIAGNOSIS_TAB_KEY) return withDiagnosisTab(state, false)
   const projectTab = projectTabFromKey(path)
   if (projectTab && state.projectTabs?.includes(projectTab)) {
     const projectTabs = state.projectTabs.filter(tab => tab !== projectTab)
@@ -99,12 +101,15 @@ export function closeFileTab(state: FileTabs, path: string): FileTabs {
 }
 
 export function closeAllFileTabs(state: FileTabs): FileTabs {
-  if (!state.files.length && !state.knowledge && !state.knowledgeEntries?.length && !state.projectTabs?.length) return state
-  const { knowledge, knowledgeEntries, projectTabs, ...rest } = state
-  return { ...rest, files: [], selected: state.diagnosis && state.selected === DIAGNOSIS_TAB_KEY ? DIAGNOSIS_TAB_KEY : '' }
+  if (!state.files.length && !state.knowledge && !state.knowledgeEntries?.length && !state.projectTabs?.length && !state.diagnosis) return state
+  const { knowledge, knowledgeEntries, projectTabs, diagnosis, ...rest } = state
+  return { ...rest, files: [], selected: '' }
 }
 
 export function closeOtherFileTabs(state: FileTabs, keep: string): FileTabs {
+  if (keep === DIAGNOSIS_TAB_KEY && state.diagnosis) return { files: [], diagnosis: true, selected: keep }
+  if (!documentTabKeys(state).includes(keep)) return state
+  state = withDiagnosisTab(state, false)
   const projectTab = projectTabFromKey(keep)
   if (projectTab && state.projectTabs?.includes(projectTab)) {
     const { knowledge, knowledgeEntries, ...rest } = state
@@ -199,7 +204,7 @@ export function canHandleDocumentShortcut(context: DocumentShortcutContext): boo
 }
 
 export function canCloseAllDocuments(state: FileTabs, context: DocumentShortcutContext): boolean {
-  return !!(state.files.length || state.knowledge || state.projectTabs?.length) && canHandleDocumentShortcut(context)
+  return !!(state.files.length || state.knowledge || state.projectTabs?.length || state.diagnosis) && canHandleDocumentShortcut(context)
 }
 
 export function selectedFileToClose(state: FileTabs, context: DocumentShortcutContext): string | undefined {
