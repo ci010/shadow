@@ -2,7 +2,7 @@
   <aside v-show="open" :id="explorerId" class="project-file-explorer" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
     <ProjectExplorerRoot v-for="session in sessions" :key="`session:${session.sessionId}`" :root-id="`session:${session.sessionId}`" :api-base="apiBase" :session-id="session.sessionId" :label="`${t('Session files')}: ${session.label}`" :active="active && open" @open="openFile" />
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
-    <ProjectExplorerRoot v-for="folder in folders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="`${t('Project files')}: ${folder.name}`" :active="active && open" @open="openFile" />
+    <ProjectExplorerRoot v-for="folder in folders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folderLabel(folder)" :active="active && open" @open="openFile" />
   </aside>
   <EditorViewHost v-for="file in files" :key="fileTabKey(file)" :descriptor="descriptor(file)" :active="active">
     <ProjectExplorerFile :api-base="apiBase" :file="file" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
@@ -33,13 +33,36 @@ const sessions = computed(() => {
 })
 const livePool = useLiveClientPool()
 const folders = ref<FolderRecord[]>([]), error = ref('')
+// Local catalog IDs are canonical resource identities. Remote aliases may have
+// different catalog IDs but refer to the same physical root on the same node.
+function resourceIdentity(folder: FolderRecord) {
+  return folder.kind === 'remote'
+    ? JSON.stringify(['remote', folder.workdir.nodeId, folder.identity.rootId])
+    : JSON.stringify([folder.kind ?? 'local', folder.id])
+}
+function folderLabel(folder: FolderRecord) {
+  const label = `${t('Project files')}: ${folder.name}`
+  if (folders.value.filter(item => item.name === folder.name).length < 2) return label
+  // Paths here are public display metadata only, never resolved on Main.
+  const location = folder.kind === 'remote' ? folder.workdir.nodeId : folder.kind === 'layerfs' ? 'LayerFS' : t('Main')
+  return `${label} — ${location}: ${folder.path}`
+}
 let controller: AbortController | undefined
 async function load() {
   controller?.abort()
   const request = new AbortController(); controller = request
   try {
     const next = await createFoldersClient(props.apiBase).list(request.signal)
-    if (!request.signal.aborted) { folders.value = [...new Map(next.map(folder => [folder.id, folder])).values()]; error.value = '' }
+    if (!request.signal.aborted) {
+      const seen = new Set<string>()
+      folders.value = next.filter(folder => {
+        const identity = resourceIdentity(folder)
+        if (seen.has(identity)) return false
+        seen.add(identity)
+        return true
+      })
+      error.value = ''
+    }
   } catch (cause) { if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Retry folders') }
 }
 watch(() => [props.active, props.folderRevision, props.apiBase, props.open], () => { if (props.active) void load() }, { immediate: true })

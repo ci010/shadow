@@ -27,7 +27,7 @@ test('Project explorer roots stay left, expand independently and preserve sessio
       if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<html><body style="margin:0"><div id="app"></div><script type="module" src="/fixture.ts"></script></body></html>'); return }
       if (!url.pathname.startsWith('/projects/p/api/')) return next()
       requests.push(url.pathname + url.search); res.setHeader('Content-Type', 'application/json')
-      if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: ['one', 'two'].map(id => ({ id, name: id, path: '/synthetic/' + id, createdAt: '2026-01-01' })) }))
+      if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: [{ id: 'one', name: 'shadow', path: '/synthetic/shadow', createdAt: '2026-01-01' }, ...['two', 'two-alias'].map(id => ({ id, name: 'shadow', path: 'C:\\synthetic\\shadow', createdAt: '2026-01-01', kind: 'remote', workdir: { version: 2, nodeId: 'windows-node', workdirId: 'registered-' + id }, identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] } }))] }))
       else if (url.pathname.endsWith('/files')) res.end(JSON.stringify({ path: '', entries: [{ name: 'same.md', type: 'file', ext: '.md', size: 12, mtime: null }] }))
       else if (url.pathname.endsWith('/preview')) res.end(JSON.stringify({ binary: false, size: 12, content: '# ' + url.pathname }))
       else if (url.pathname.endsWith('/git/diff')) res.end(JSON.stringify({ path: 'same.md', status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [], notice: url.pathname }))
@@ -47,11 +47,22 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     await wait('document.querySelectorAll(".file-diff").length===4');
     assert.equal(await run('document.querySelectorAll(".view-explorer-toggle").length'),0);
     assert.equal(await run('document.querySelector(".project-file-explorer").closest(".editor-group-content")===null'),true);
-    assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().right <= document.querySelector(".editor-groups").getBoundingClientRect().left'),true);
+    const sameRow = '(()=>{const b=document.querySelector(".project-explorer-toggle").getBoundingClientRect();const tabs=[...document.querySelectorAll(".editor-tab")].map(e=>e.getBoundingClientRect()).filter(r=>r.width);return tabs.length>0&&tabs.every(r=>Math.abs(r.top-b.top)<2&&b.right<=r.left)})()';
+    assert.equal(await run(sameRow),true,'toggle shares the tab row and precedes every tab');
+    assert.equal(await run('document.querySelector(".editor-workspace-header").getBoundingClientRect().height <= document.querySelector(".editor-tabs").getBoundingClientRect().height+1'),true,'no extra toolbar row');
+    await run('document.querySelector(\'[role="tab"]\').focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Right'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Right'});assert.equal(await run('document.activeElement.getAttribute("role")'),'tab');
+    assert.equal(await run('document.querySelectorAll(\'[data-root-id="folder:two-alias"]\').length'),0,'same physical resource is deduplicated');
+    assert.match(await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').textContent'),/Main: \/synthetic\/shadow/);
+    assert.match(await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').textContent'),/windows-node: C:/);
+    await run('window.groups.move("A","right")');await delay(100);assert.equal(await run(sameRow),true,'split groups keep the same header row');
+    await run('window.groups.move("A","left")');await delay(100);
     await run('window.groups.close("B")');await wait('!document.querySelector(\'[data-root-id="session:web:B"]\')');
     await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').click()');assert.equal(await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').getAttribute("aria-expanded")'),'true');
     if(process.env.PROJECT_EXPLORER_SCREENSHOT) require('node:fs').writeFileSync(process.env.PROJECT_EXPLORER_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
-    win.setSize(500,800);await delay(100);assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().width>0'),true);await win.close();console.log('PROJECT_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`
+    win.setSize(500,800);await delay(100);assert.equal(await run(sameRow),true,'narrow header stays inline');
+    const wasOpen=await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")');await run('document.querySelector(".project-explorer-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'E',modifiers:['control','shift']});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'E',modifiers:['control','shift']});await delay(100);assert.notEqual(await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")'),wasOpen,'keyboard shortcut toggles');
+    await run('window.groups.explorers.add("p");void 0');await delay(50);await run('document.querySelector(".root-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(50);assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true,'Escape returns focus to header toggle');
+    await run('for(const id of [...window.groups.descriptors.keys()])window.groups.close(id)');await delay(100);assert.equal(await run('document.querySelectorAll(".editor-tab").length'),0);assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().width>0'),true);await win.close();console.log('PROJECT_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs'); await writeFile(entry, script)
   const child = spawn(require('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
