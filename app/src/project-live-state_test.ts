@@ -764,3 +764,39 @@ test('failed initial directory stays unknown and a later activity event retries 
   assert.equal(lease.activity.state.value?.stages['web:one'], 'tool')
   assert.equal(lease.sessions.state.error, '')
 })
+
+
+test('Work live reader requests compact initial state then keyed deltas across invalidation and reconnect', async t => {
+  const { createSnapshotResponder } = await import('../../src/shared/snapshot-server.ts')
+  const { keyedWork } = await import('../../src/shared/snapshot-wire.ts')
+  const f = fixture(t), respond = createSnapshotResponder()
+  const lease = f.store.acquireProject('http://fixture', 'a', undefined, true)
+  const value = { ...emptyWork, sessions: [{ sessionId: 'web:one', title: 'One', assignable: true, topicSequence: 1 }] }
+  await f.tick()
+  const initial = f.requests.find(request => request.path.endsWith('/work'))!
+  assert.equal(initial.url.searchParams.get('transport'), 'snapshot-v1')
+  const snapshot = respond(keyedWork(value))
+  initial.finish(snapshot)
+  f.requests.find(request => request.path.endsWith('/summary'))!.finish(graph('One'))
+  f.requests.find(request => request.path.endsWith('/stages'))!.finish({ activity: {} })
+  await flush()
+  assert.equal(lease.work.state.value?.sessions[0]?.topicSequence, 1)
+  value.sessions[0]!.topicSequence = 2
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'activity', sessionId: 'web:one' })
+  await f.tick()
+  const refresh = f.requests.filter(request => request.path.endsWith('/work')).at(-1)!
+  assert.equal(refresh.url.searchParams.get('since'), snapshot.version)
+  const delta = respond(keyedWork(value), snapshot.version)
+  refresh.finish(delta)
+  await flush()
+  assert.equal(lease.work.state.value?.sessions[0]?.topicSequence, 2)
+  value.sessions = []
+  f.observers.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!.reconnected()
+  await f.tick()
+  const recovery = f.requests.filter(request => request.path.endsWith('/work')).at(-1)!
+  assert.equal(recovery.url.searchParams.get('since'), delta.version)
+  recovery.finish(respond(keyedWork(value), delta.version))
+  await flush()
+  assert.deepEqual(lease.work.state.value?.sessions, [])
+  lease.release()
+})

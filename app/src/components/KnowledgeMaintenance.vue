@@ -9,15 +9,16 @@
     </header>
     <p v-if="loading" role="status">{{ t('Loading scan report...') }}</p>
     <p v-if="status?.scanning && !scanning" role="status">{{ t('A scan is in progress. Refresh the report shortly.') }}</p>
-    <p v-if="error || status?.lastError" role="alert" class="error">{{ error || status?.lastError }}</p>
+    <p v-if="error || details.state.error || status?.lastError" role="alert" class="error">{{ error || details.state.error || status?.lastError }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <template v-if="status?.report">
       <div class="report-summary">
         <span>{{ t('Last scan:') }} {{ formatDate(status.report.scannedAt) }} · {{ status.report.entriesScanned }} {{ t('entries') }}</span>
-        <button type="button" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? t('Hide findings') : t('Show findings ({length})', { length: status.report.findings.length }) }}</button>
+        <button type="button" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? t('Hide findings') : t('Show findings ({length})', { length: status.report.findingCount }) }}</button>
       </div>
-      <p v-if="!status.report.findings.length" class="muted">{{ t('No unresolved local references were found in this snapshot.') }}</p>
-      <template v-if="expanded && status.report.findings.length">
+      <p v-if="!status.report.findingCount" class="muted">{{ t('No unresolved local references were found in this snapshot.') }}</p>
+      <template v-if="expanded && status.report.findingCount">
+        <p v-if="details.state.loading" role="status">{{ t('Loading scan report...') }}</p>
         <label>{{ t('Show') }}
           <UiSelect v-model="filter" :aria-label="t('Filter link findings')">
             <option value="all">{{ t('All findings') }}</option>
@@ -46,7 +47,7 @@
             </li></ul>
           </article>
         </div>
-        <p v-if="!groups.length" class="muted">{{ t('No findings match this filter.') }}</p>
+        <p v-if="!details.state.loading && !details.state.error && !groups.length" class="muted">{{ t('No findings match this filter.') }}</p>
       </template>
     </template>
     <p v-else-if="!loading" class="muted">{{ t('No saved report yet. Scan now or wait for the scheduled check.') }}</p>
@@ -59,11 +60,15 @@
 import UiSelect from './UiSelect.vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { createKnowledgeMaintenanceClient, type KnowledgeMaintenanceFinding, type KnowledgeMaintenanceStatus, type KnowledgeRepairPreview } from '../knowledge-maintenance.ts'
+import { createKnowledgeMaintenanceClient, type KnowledgeMaintenanceFinding, type KnowledgeRepairPreview } from '../knowledge-maintenance.ts'
+import type { KnowledgeMaintenanceSummary } from '../../../src/knowledge/maintenance-contracts.ts'
+import { createMaintenanceDetails } from '../knowledge-maintenance-details.ts'
 import KnowledgeRepairDialog from './KnowledgeRepairDialog.vue'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; revision?: number; active?: boolean }>(), { active: true })
 const emit = defineEmits<{ select: [id: string]; changed: [id: string] }>()
-const status = ref<KnowledgeMaintenanceStatus>()
+let client = createKnowledgeMaintenanceClient(props.apiBase)
+const details = createMaintenanceDetails((id, signal) => client.report(id, signal))
+const status = ref<KnowledgeMaintenanceSummary>()
 const preview = ref<KnowledgeRepairPreview>()
 const loading = ref(false)
 const scanning = ref(false)
@@ -92,7 +97,7 @@ const groups = computed(() => {
   }
   return [...result.values()]
 })
-const filteredFindings = computed(() => (status.value?.report?.findings ?? [])
+const filteredFindings = computed(() => (details.state.report?.findings ?? [])
   .filter(finding => filter.value === 'all' || finding.reason === filter.value))
 watch(() => [filter.value, status.value?.report?.id], () => { page.value = 0 })
 const reasonLabel = (reason: KnowledgeMaintenanceFinding['reason']) => reason === 'missing' ? t('Confirmed missing') : reason === 'unavailable' ? t('Unavailable / unverified') : t('Exists outside catalog')
@@ -108,8 +113,11 @@ async function refresh() {
   const current = begin()
   loading.value = true
   try {
-    const result = await createKnowledgeMaintenanceClient(props.apiBase).status(current.signal)
-    if (!current.signal.aborted) status.value = result
+    const result = await client.summary(current.signal)
+    if (!current.signal.aborted) {
+      status.value = result
+      void details.select(result.report?.findingCount ? result.report.id : undefined, expanded.value, props.active)
+    }
   } catch (cause) {
     if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load the maintenance report.')
   } finally { if (!current.signal.aborted) loading.value = false }
@@ -119,10 +127,9 @@ async function scan() {
   const current = begin()
   scanning.value = true
   try {
-    const client = createKnowledgeMaintenanceClient(props.apiBase)
-    const report = await client.scan(current.signal)
+    const result = await client.scanSummary(current.signal)
     if (current.signal.aborted) return
-    status.value = { intervalMs: status.value?.intervalMs ?? 86_400_000, scanning: false, report }
+    status.value = result
     expanded.value = true
   } catch (cause) {
     if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('The scan failed. The previous report may be stale.')
@@ -133,7 +140,7 @@ async function prepare(sourceId: string) {
   const current = begin()
   preparing.value = true
   try {
-    const result = await createKnowledgeMaintenanceClient(props.apiBase).preview(status.value.report.id, sourceId, current.signal)
+    const result = await client.preview(status.value.report.id, sourceId, current.signal)
     if (!current.signal.aborted) preview.value = result
   } catch (cause) {
     if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not prepare a repair preview.')
@@ -151,6 +158,8 @@ watch(() => [props.apiBase, props.revision, props.active] as const, ([base, revi
   preview.value = undefined
   if (base !== previous?.[0] || revision !== previous?.[1]) {
     status.value = undefined
+    details.dispose()
+    if (base !== previous?.[0]) client = createKnowledgeMaintenanceClient(base)
     notice.value = ''
   }
   loading.value = false
@@ -158,7 +167,8 @@ watch(() => [props.apiBase, props.revision, props.active] as const, ([base, revi
   preparing.value = false
   if (active) void refresh()
 }, { immediate: true })
-onUnmounted(() => request?.abort())
+watch(() => [status.value?.report?.findingCount ? status.value.report.id : undefined, expanded.value, props.active] as const, ([id, open, active]) => { void details.select(id, open, active) }, { immediate: true })
+onUnmounted(() => { request?.abort(); details.dispose() })
 </script>
 
 <style scoped>

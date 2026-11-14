@@ -52,7 +52,7 @@ export const projectFocusResultSchema = z.object({
     }
   }
 })
-export const projectFocusSnapshotSchema = z.object({
+const projectFocusSnapshotBaseSchema = z.object({
   inferredAt: z.string().datetime(),
   origin: z.literal('model_interpretation'),
   revision: z.number().int().nonnegative().optional(),
@@ -70,9 +70,9 @@ export const projectFocusSnapshotSchema = z.object({
   evidence: z.array(presentationSourceSchema).max(2400).optional(),
   historyPartial: z.boolean().optional(),
   presentationVersion: z.literal(1).optional(),
-}).strict().superRefine((value, ctx) => {
-  try { validatePresentation(value.result.groups, value.evidence ?? []) }
-  catch (error) { ctx.addIssue({ code: 'custom', message: String(error) }) }
+}).strict()
+
+const validateFocusStructure = (value: Pick<z.infer<typeof projectFocusSnapshotBaseSchema>, 'inputCount' | 'sources' | 'result'>, ctx: z.RefinementCtx) => {
   if (value.inputCount !== value.sources.length || new Set(value.sources.map(source => source.key)).size !== value.sources.length) {
     ctx.addIssue({ code: 'custom', message: 'Input count and unique source notes must agree.' })
   }
@@ -82,5 +82,17 @@ export const projectFocusSnapshotSchema = z.object({
   if (value.result.groups.some(group => group.topicKeys.some(key => !value.sources.some(source => source.key === key)))) {
     ctx.addIssue({ code: 'custom', message: 'Focus groups must cite supplied topic keys.' })
   }
+}
+export const projectFocusSnapshotSchema = projectFocusSnapshotBaseSchema.superRefine((value, ctx) => {
+  validateFocusStructure(value, ctx)
+  try { validatePresentation(value.result.groups, value.evidence ?? []) }
+  catch (error) { ctx.addIssue({ code: 'custom', message: String(error) }) }
 })
 export type ProjectFocusSnapshot = z.infer<typeof projectFocusSnapshotSchema>
+
+/** UI projection: provenance references stay on cards; raw excerpts and retry state stay server-side; identity/kind support evidence navigation. */
+export const projectFocusOverviewSchema = projectFocusSnapshotBaseSchema.omit({ organizerAdmission: true }).strip().extend({ evidence: z.array(presentationSourceSchema.omit({ text: true, at: true }).strip()).max(2400).optional() }).superRefine((value, ctx) => {
+  validateFocusStructure(value, ctx)
+  try { validatePresentation(value.result.groups, value.evidence ?? []) }
+  catch (error) { ctx.addIssue({ code: 'custom', message: String(error) }) }
+})

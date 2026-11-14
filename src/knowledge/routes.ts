@@ -1,3 +1,6 @@
+import { maintenanceSummary } from './maintenance-contracts.ts'
+import { keyedMaintenance } from '../shared/snapshot-wire.ts'
+import { createSnapshotResponder } from '../shared/snapshot-server.ts'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z, ZodError } from 'zod'
@@ -44,10 +47,27 @@ export function registerKnowledgeRoutes(app: Hono, options: {
     if (!options.maintenance) throw new KnowledgeError('maintenance_unavailable', 'Knowledge maintenance is not enabled for this Project', 503)
     return options.maintenance
   }
-  routes.get('/maintenance', c => c.json(maintenance().status()))
+  const respond = createSnapshotResponder()
+  const summarize = createSnapshotResponder()
+  routes.get('/maintenance', c => {
+    const value = maintenance().status()
+    if (c.req.query('view') === 'summary') {
+      const summary = maintenanceSummary(value)
+      return c.json(c.req.query('transport') === 'snapshot-v1' ? summarize(summary, c.req.query('since')) : summary)
+    }
+    return c.json(c.req.query('transport') === 'snapshot-v1' ? respond(keyedMaintenance(value), c.req.query('since')) : value)
+  })
+  routes.get('/maintenance/report', c => {
+    const reportId = z.string().min(1).max(128).parse(c.req.query('reportId'))
+    const report = maintenance().status().report
+    if (!report || report.id !== reportId) return c.json({ error: 'maintenance_report_changed' }, 409)
+    return c.json(report)
+  })
   routes.post('/maintenance/scan', async c => {
     z.object({}).strict().parse(await requestJson(c.req.raw))
-    return c.json(await maintenance().scan(c.req.raw.signal))
+    const report = await maintenance().scan(c.req.raw.signal)
+    return c.json(c.req.query('view') === 'summary'
+      ? maintenanceSummary({ intervalMs: maintenance().status().intervalMs, scanning: false, report }) : report)
   })
   routes.post('/maintenance/preview', async c => {
     const body = repairSource.parse(await requestJson(c.req.raw))

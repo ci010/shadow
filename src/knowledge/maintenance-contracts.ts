@@ -31,3 +31,19 @@ export interface KnowledgeRepairPreview {
   after: string
   findingIds: string[]
 }
+
+/** Lightweight browsing status; totals always cover the entire immutable report. */
+export interface KnowledgeMaintenanceSummary extends Omit<KnowledgeMaintenanceStatus, 'report'> {
+  report: (Omit<KnowledgeMaintenanceReport, 'findings'> & {
+    findingCount: number
+    counts: Record<KnowledgeMaintenanceFinding['reason'], number>
+  }) | null
+}
+export function maintenanceSummary(status: KnowledgeMaintenanceStatus): KnowledgeMaintenanceSummary {
+  const { report, ...rest } = status
+  if (!report) return { ...rest, report: null }
+  const { findings, ...metadata } = report
+  const counts = { missing: 0, unavailable: 0, 'outside-catalog': 0 }
+  for (const finding of findings) counts[finding.reason]++
+  return { ...rest, report: { ...metadata, findingCount: findings.length, counts } }
+}

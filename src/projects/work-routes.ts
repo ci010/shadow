@@ -1,3 +1,5 @@
+import { createSnapshotResponder } from '../shared/snapshot-server.ts'
+import { keyedWork } from '../shared/snapshot-wire.ts'
 import { isLightweightTopic, sessionTopicTitle, sessionTopicFocus, sessionTopicSequence } from '../sessions/lightweight-topic.ts'
 import { OrganizationConflict } from './organization-controller.ts'
 import { randomUUID } from 'node:crypto'
@@ -8,7 +10,7 @@ import type { GatewayPlugin } from '../gateway/types.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { WorkConflict } from '../initiatives/work-contract.ts'
 import { FolderError } from '../folders/registry.ts'
-import { projectWorkOverviewSchema, visibleProjectFocus, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
+import { projectWorkOverviewSchema, projectWorkLiveOverviewSchema, visibleProjectFocus, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
 
 export const humanWorkActionSchema = z.object({
   action: z.enum(['create', 'update', 'assign', 'review']),
@@ -97,6 +99,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
   github: () => Record<string, ProjectWorkItem['github']> = () => ({}),
   organization?: () => ProjectWorkOverview['organization'],
   organize?: (signal: AbortSignal, mode?: "full"|"delta") => Promise<void>): GatewayPlugin {
+  const respond = createSnapshotResponder()
   return app => {
     const diagnostics = new WeakMap<Request, string>()
     app.use('/api/work/organize', async (c, next) => {
@@ -127,7 +130,10 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
       if (!sessions.alignment) return c.json({ error: 'work_unavailable' }, 501)
       return next()
     })
-    app.get('/api/work', async c => c.json(await projectWorkOverview(sessions, github(), organization?.())))
+    app.get('/api/work', async c => {
+      const value = await projectWorkOverview(sessions, github(), organization?.())
+      return c.json(c.req.query('transport') === 'snapshot-v1' ? respond(keyedWork(projectWorkLiveOverviewSchema.parse(value)), c.req.query('since')) : value)
+    })
     // Historical decisions are read on expansion, not on every live overview refresh.
     app.get('/api/work-history', async c => {
       if (!diagnostics.has(c.req.raw) && !await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
