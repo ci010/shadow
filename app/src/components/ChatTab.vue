@@ -384,6 +384,15 @@
               <button :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: attachment.file.name })" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
+          <div v-if="selectedWorkflowReference" class="composer-context" role="status" :aria-label="t('Current selection')">
+            <span class="context-chip">
+              <span class="context-icon i-lucide-workflow" aria-hidden="true" />
+              <span>{{ t('Current selection') }}: {{ selectedWorkflowReference.label }}</span>
+              <HoverInfo :text="t('Clear selection')" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" :aria-label="t('Clear selection')" @click="workflowReferenceHub?.clearSelection?.()"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              </HoverInfo>
+            </span>
+          </div>
           <div v-if="inputReferences.length" class="composer-context" :aria-label="t('Attached context')">
             <span v-for="(item, index) in inputReferences" :key="inputReferenceKey(item.reference)" class="context-chip">
               <span class="context-icon i-lucide-workflow" aria-hidden="true" />
@@ -470,7 +479,7 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0 || inputReferences.length > 0" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0 || inputReferences.length > 0 || !!selectedWorkflowReference" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
                 @request="sendMessage($event)" />
             <button
               v-if="showComposerSend"
@@ -535,7 +544,7 @@ import { conversationFileLink } from '../conversation-file-link.ts'
 import { discordReviewLink } from '../discord-integration.ts'
 import { composerDraftKey, useComposerDraft } from '../composables/useComposerDraft.ts'
 import { useInputReferenceDraft } from '../composables/useInputReferenceDraft.ts'
-import { inputReferenceKey, type LabeledInputReference, type AttachReferenceResult } from '../workflow-input-references.ts'
+import { WorkflowInputReferencesKey, captureInputReferences, inputReferenceKey, type LabeledInputReference, type AttachReferenceResult } from '../workflow-input-references.ts'
 import { useDiagnosisNavigation } from '../composables/useDiagnosisNavigation.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
@@ -803,7 +812,7 @@ const composerPopoverTitle = computed(() =>
     : t('Folder context requires the local Main desktop app'))
 const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
-  contextItems.value.length + inputReferences.value.length,
+  contextItems.value.length + inputReferences.value.length + (selectedWorkflowReference.value ? 1 : 0),
   pendingAttachments.value.length,
 ) && !submissionBusy.value && !currentRequest.value?.state.stopping
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
@@ -853,6 +862,11 @@ const composerKey = computed(() => composerDraftKey(props.apiBase, props.project
 const composerDraft = useComposerDraft(composerKey, () => window.localStorage)
 const referenceDraft = useInputReferenceDraft(composerKey)
 const inputReferences = referenceDraft.items
+const workflowReferenceHub = inject(WorkflowInputReferencesKey, undefined)
+// Dynamic selection is never stored in the per-conversation attachment draft.
+// Resolving against the current editor lease prevents stale targets and child injection.
+const selectedWorkflowReference = computed(() => !props.embedded && isDirectChat.value && !viewingPhysicalId.value && !isExecution.value
+  ? workflowReferenceHub?.selection?.(props.projectId || liveProjectId(props.apiBase), editorOwner, activeSessionId.value) : undefined)
 const inputText = composerDraft.text
 watch(inputText, () => { void nextTick(autoResize) })
 onMounted(autoResize)
@@ -2844,7 +2858,12 @@ async function sendMessage(overrideContent?: string, opts?: {
   const retry = opts?.retry === true
   const submittedText = inputText.value
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
-  const references = retry ? [] : referenceDraft.capture()
+  const selectedReference = selectedWorkflowReference.value
+  const referenceItems = selectedReference
+    ? [...inputReferences.value.filter(item => inputReferenceKey(item.reference) !== inputReferenceKey(selectedReference.reference)), selectedReference]
+    : inputReferences.value
+  if (!retry && referenceItems.length > 8) { composerError.value = t('Attach up to 8 workflow references.'); return }
+  const references = retry ? [] : captureInputReferences(referenceItems)
   let referenceDraftKey = composerKey.value
   const isCommand = !retry && content.trimStart().startsWith('/')
   if (references.length && (isCommand || answeringQuestion.value)) {

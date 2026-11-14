@@ -173,11 +173,15 @@ such as Diagnosis may be moved even when they cannot be closed. Ctrl/Cmd+W and
 Ctrl+Tab operate on the focused group, not every open document. Closing a tab does
 not itself reopen it; explicitly open the resource again from navigation.
 
-Workflow **Use in chat** attaches only to the most recently focused, still-open
-editable ordinary conversation in that Project. Clicking the inspector does not
-lose this target; Settings, Diagnosis, files, and read-only executions are not
-message destinations. If no eligible conversation has been opened, the action
-prompts you to open one. Selection and moving tabs never send messages.
+Workflow/node selection automatically supplies context to the most recently
+focused, still-open editable ordinary conversation in that Project. The composer
+shows **Current selection**; switching replaces it and clearing removes it without
+changing your draft or manual attachments. Clicking the inspector does not lose
+the target; Settings, Diagnosis, files, children and read-only executions are not
+message destinations. No eligible conversation means no injection and no implicit
+conversation creation. Selection persists after sending while the Workflow stays
+selected and visible. Selection and moving tabs never send messages or execute a
+Workflow.
 
 The Dashboard groups
 recent focus by inferred shared purpose, then shows separate topics with their latest

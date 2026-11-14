@@ -4378,5 +4378,7 @@
   "Remove workflow references before sending a command or answering a question.": "发送命令或回答问题前，请先移除工作流引用。",
   "Resize editor group": "调整编辑组大小",
   "Left editor group": "左侧编辑组",
-  "Right editor group": "右侧编辑组"
+  "Right editor group": "右侧编辑组",
+  "Current selection": "当前选中",
+  "Clear selection": "清除选择"
 }

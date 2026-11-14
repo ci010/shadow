@@ -4,7 +4,12 @@ import type { WorkflowDefinition, WorkflowRun } from './workflows.ts'
 
 export interface LabeledInputReference { reference: InputReference; label: string }
 export type AttachReferenceResult = 'added' | 'duplicate' | 'limit' | 'unavailable'
-export interface WorkflowInputReferences { attach(item: LabeledInputReference): AttachReferenceResult }
+export interface WorkflowInputReferences {
+  attach(item: LabeledInputReference): AttachReferenceResult
+  select?(item: LabeledInputReference | undefined, clear?: () => void, projectId?: string): void
+  selection?(projectId: string, owner: string, sessionId: string): LabeledInputReference | undefined
+  clearSelection?(): void
+}
 export const WorkflowInputReferencesKey: InjectionKey<WorkflowInputReferences> = Symbol('WorkflowInputReferences')
 export const inputReferenceKey = (item: InputReference): string => JSON.stringify([item.projectId, item.workflowId, item.revision, item.runId ?? null,
   item.selector?.kind === 'node' ? ['node', item.selector.index, item.selector.nodeKind] : item.selector?.kind ?? null])

@@ -176,7 +176,20 @@ provide(HomeTreeCacheKey, createHomeTreeCache())
 const projects = ref<ProjectRecord[]>([])
 const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
+const workflowSelections = ref(new Map<string, { item: import('../workflow-input-references.ts').LabeledInputReference; clear?: () => void }>())
 provide(WorkflowInputReferencesKey, {
+  select(item, clear, projectId) {
+    if (item) workflowSelections.value.set(item.reference.projectId, { item, clear })
+    else if (projectId) workflowSelections.value.delete(projectId)
+  },
+  clearSelection() { workflowSelections.value.get(selectedProjectId.value)?.clear?.() },
+  selection(projectId, owner, sessionId) {
+    const item = workflowSelections.value.get(projectId)?.item
+    const editor = editorGroups.referenceTarget(projectId)
+    if (!props.visible || selectedProjectId.value !== projectId || item?.reference.projectId !== projectId
+      || !sessionId || editor?.owner !== owner || editor.conversation?.sessionId !== sessionId) return
+    return item
+  },
   attach(item) {
     const editor = editorGroups.referenceTarget(selectedProjectId.value)
     if (!editor?.conversation?.editable || editor.projectId !== item.reference.projectId || !props.visible) return 'unavailable'
