@@ -1,7 +1,17 @@
 <template>
   <div class="editor-workspace" @keydown="shortcut">
-    <header v-if="apiBase" class="editor-workspace-header">
-      <HoverInfo :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
+    <header class="editor-workspace-header">
+      <HoverInfo v-if="apiBase" :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
+      <div class="editor-header-groups">
+        <div v-for="side in sides" :key="side" v-show="state[side].length" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
+          <div class="editor-tabs" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
+            <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @contextmenu.prevent="openMenu($event, editor.id)">
+              <button :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" />{{ editor.label }}</button>
+              <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: editor.label })" @click="groups.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
+            </div>
+          </div>
+        </div>
+      </div>
     </header>
     <div class="editor-workspace-body">
       <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="groups.explorers.has(projectId)" :explorer-id="`${hostId}-explorer`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
@@ -9,12 +19,6 @@
     <nav v-if="state.left.length && state.right.length" class="mobile-group-switch" :aria-label="t('Open documents')"><button v-for="side in sides" :key="side" :aria-pressed="state.active === side" @click="groups.focus(projectId, side)">{{ t(side === 'left' ? 'Left editor group' : 'Right editor group') }}</button></nav>
     <section v-for="side in sides" :key="side" v-show="state[side].length" class="editor-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" :data-editor-group="side" @pointerdown.capture="groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
       <SidebarResizer v-if="side === 'right' && state.left.length" edge="left" :model-value="rightWidth" :bounds="bounds" :label="t('Resize editor group')" :controls="`${hostId}-${side}`" @update:model-value="preferredWidth = $event" />
-      <div class="editor-tabs" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
-        <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @contextmenu.prevent="openMenu($event, editor.id)">
-          <button :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" />{{ editor.label }}</button>
-          <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: editor.label })" @click="groups.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
-        </div>
-      </div>
       <div :id="`${hostId}-${side}`" :ref="element => target(side, element)" class="editor-group-content" />
     </section>
     <Teleport to="body"><div v-if="menu" class="editor-menu-backdrop" @pointerdown.self="menu = undefined" @contextmenu.prevent.self="menu = undefined" @keydown="menuKey">
@@ -92,8 +96,11 @@ function shortcut(event: KeyboardEvent) {
 <style scoped>
 .editor-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .editor-workspace-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
-.editor-workspace-header { display: flex; flex-shrink: 0; background: var(--c-bg-soft); border-bottom: 1px solid var(--c-border); }
-.project-explorer-toggle { display: grid; place-items: center; width: 36px; height: 36px; border: 0; background: transparent; color: var(--c-text-secondary); }
+.editor-header-groups { display: flex; flex: 1; min-width: 0; }
+.editor-header-group { display: flex; flex: 1; min-width: 0; }
+.editor-header-group .editor-tabs { flex: 1; min-width: 0; border-bottom: 0; }
+.editor-workspace-header { display: flex; min-height: 36px; flex-shrink: 0; background: var(--c-bg-soft); border-bottom: 1px solid var(--c-border); }
+.project-explorer-toggle { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border: 0; background: transparent; color: var(--c-text-secondary); }
 .project-explorer-toggle > span { width: 18px; height: 18px; }
 .project-explorer-toggle:hover { background: var(--c-bg-muted); }
 .project-explorer-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
@@ -118,6 +125,8 @@ function shortcut(event: KeyboardEvent) {
 .editor-menu button:disabled { color: var(--c-text-muted); }
 .mobile-group-switch { display: none; }
 @media (max-width: 700px) {
+  .editor-header-group:not(.active-group) { display: none !important; }
+  .editor-header-group { flex: 1 !important; flex-basis: 0 !important; }
   .editor-groups { flex-direction: column; }
   .mobile-group-switch { display: flex; border-bottom: 1px solid var(--c-border); }
   .mobile-group-switch button { flex: 1; min-height: 36px; border: 0; background: var(--c-bg-soft); color: var(--c-text-secondary); }

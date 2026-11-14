@@ -156,7 +156,7 @@ test('all resources share Project editor groups without remount, child panes or 
     await wait(visible('[data-editor-group="right"] .session-diagnosis'));
     // The active group's shortcut closes only its selected closable resource.
     await run(editorTab('Knowledge')+'.click()');
-    await run('document.querySelector("[data-editor-group=right] .editor-tabs").dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true}))');
+    await run('document.querySelector("[data-editor-header-group=right] .editor-tabs").dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true}))');
     await wait('!('+editorTab('Knowledge')+')');
     assert.equal(await run('!!'+editorTab('Workflows')),true,'Closing a right document never closes the left workflow');
     await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a"}})');
@@ -169,7 +169,7 @@ test('all resources share Project editor groups without remount, child panes or 
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
     await wait(visible('.reference-composer'));
     assert.equal(await run('('+visible('.reference-composer')+')===window.fixture.chatInput'),true,'Close/reopen reuses the unsent draft and its input');
-    if(await run(ordinaryTab+'.closest("section").dataset.editorGroup==="left"')){await run(ordinaryTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()')}
+    if(await run(ordinaryTab+'.closest("[data-editor-header-group]").dataset.editorHeaderGroup==="left"')){await run(ordinaryTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()')}
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-second"},query:{panel:"knowledge"}})');
     await wait(visible('.knowledge-document'));
     assert.equal(await run('document.querySelectorAll(".knowledge-document").length'),1,'Project knowledge has a single rendered instance across conversation owners');
@@ -177,12 +177,12 @@ test('all resources share Project editor groups without remount, child panes or 
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{child:"web:child-fixture"}})');
     await wait('!!document.querySelector("[data-editor-group=right] .editor-view[data-editor-id*=child-fixture]")');
     assert.equal(await run('document.querySelectorAll(".child-conversation").length'),0);
-    const childTab='[...document.querySelectorAll("[data-editor-group=right] .editor-tab [role=tab]")].find(e=>e.id.includes("child-fixture")&&!e.textContent.includes("Diagnosis"))';
+    const childTab='[...document.querySelectorAll("[data-editor-header-group=right] .editor-tab [role=tab]")].find(e=>e.id.includes("child-fixture")&&!e.textContent.includes("Diagnosis"))';
     await wait(childTab);await run(childTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()');
     await wait('!!document.querySelector("[data-editor-group=left] .editor-view[data-editor-id*=child-fixture]")');
-    await run(childTab.replaceAll('data-editor-group=right','data-editor-group=left')+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
+    await run(childTab.replaceAll('data-editor-header-group=right','data-editor-header-group=left')+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
     await run('window.fixture.router.replace({query:{child:"web:child-fixture",diagnosis:"prompt"}})');
-    assert.equal(await run('!!'+childTab.replaceAll('data-editor-group=right','data-editor-group=left')),false,'Closed child does not reopen on unrelated route updates');
+    assert.equal(await run('!!'+childTab.replaceAll('data-editor-header-group=right','data-editor-header-group=left')),false,'Closed child does not reopen on unrelated route updates');
     // Project switching preserves the exact composer node and its unsent draft.
     await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"b"}})');await wait(visible('.workflow-manager'));
     assert.equal(await run('!!'+visible('[data-editor-group="right"] .reference-composer')),false);
