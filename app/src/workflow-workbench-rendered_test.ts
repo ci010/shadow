@@ -43,11 +43,12 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
       const projectId = path.split('/')[2]
       if (path === '/api/projects') { json({ projects }); return }
       if (path.endsWith('/api/workflows')) {
-        const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'existing', target: { sessionId: 'web:ordinary' }, task: `Reminder ${projectId}` } }] }
+        const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'fresh', task: `Reminder ${projectId}` } }] }
         json({ projectId, bots: { connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:ordinary' } }] }); return
       }
       if (path.endsWith('/api/channels')) { json({ channels: (projectId === 'a' ? ['isolated-one', 'isolated-two'] : ['other']).map(id => ({ id, projectId, displayName: id, platform: 'qq', label: 'QQ', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { appId: 'fixture' }, secrets: { secret: true } })) }); return }
-      if (path.endsWith('/api/automations')) { json({ automations: [] }); return }
+      if (path.endsWith('/api/automations')) { json({ automations: [{ id: 'system:session-cleanup', name: 'Session cleanup', source: 'system', session: 'fresh', enabled: true, schedule: 'every 1h', workflow: { id: `schedule:${projectId}`, pending: 0, blocked: 0 } }] }); return }
+      if (path.endsWith('/runs')) { json({ runs: [{ id: 'cleanup-run', sessionId: 'web:ordinary', startedAt: '2026-11-12T10:00:00Z', status: 'completed' }], total: 1, offset: 0 }); return }
       if (/\/status$/.test(path)) { json({ state: 'ready' }); return }
       if (path.endsWith('/api/work')) { json({ items: [], sessions: [], requests: [], effects: [] }); return }
       if (path.endsWith('/api/config')) { json({ agent: { model: 'fixture', workspace: '/synthetic/home', temperature: 0.5 } }); return }
@@ -111,11 +112,25 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     await sidebar('a');await clickTab('Diagnosis');await wait(visible('.diagnosis-document'));
     assert.equal((await route()).name,'chat');assert.equal((await route()).query.panel,'diagnosis');
     await sidebar('a');await wait(visible('.graph-group'));
-    // The existing card link still targets the fixed session without creating a run.
-    await run('('+visible('.group-conversation')+').click()');await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,'web:ordinary');
+    await run('window.fixture.workflowElement=('+visible('.workflow-manager')+')');
+    // Reproduce Workflow -> Session cleanup Automation -> open latest conversation (not a direct chat URL).
+    await wait('('+visible('.group-conversation')+').getAttribute("aria-disabled")==="false"');await run('('+visible('.group-conversation')+').click()');
+    await wait('window.fixture.router.currentRoute.value.params.sessionId==="web:ordinary" && window.fixture.router.currentRoute.value.query.automation==="system:session-cleanup"');
+    assert.equal(await run('!!document.querySelector(".workflow-projection-link")'),false,'Automation conversation has no redundant workflow banner');
+    assert.equal(await run('document.body.innerText.includes("This conversation is a model execution, not the workflow run.")'),false);
+    assert.equal(await run('document.body.innerText.includes("View workflow execution")'),false);
+    assert.equal(await run('!!'+tab('Workflows')),true,'Automation navigation retains the actual open document');
+    await clickTab('Workflows');await wait(visible('.workflow-inspector'));
+    assert.equal((await route()).query.run,'run:a');
+    assert.equal(await run('window.fixture.workflowElement===('+visible('.workflow-manager')+')'),true,'Document instance survives latest-run navigation');
+    await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');
+    assert.equal(await run('!!'+tab('Workflows')),true);
     await sidebar('a');await run('('+visible('.document-tab.selected .document-close')+').click()');
     await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,'web:ordinary');
     assert.equal(await run('!!'+tab('Workflows')),false);
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:second"}})');
+    await wait('window.fixture.router.currentRoute.value.params.sessionId==="web:second"');await delay(100);assert.equal(await run('!!'+tab('Workflows')),false,'Switching sessions must not reopen an explicitly closed project document');
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:ordinary"}})');
     await sidebar('a');assert.equal(await run('!!'+tab('Workflows')),true);
     // Project document shortcuts belong to the primary shell even if a child pane had focus.
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:ordinary"},query:{child:"web:child"}})');
@@ -128,7 +143,7 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     // BOTs are inspection-only rows in the same canvas/tab, with binding-specific
     // Agent identity and only real existing Session links. No control POST exists.
     await wait('document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"]')+')');
-    await run('document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"] .group-heading')+').click()');
+    await run('('+visible('[data-workflow="bot-binding:two"] .group-heading')+').click()');
     await wait('window.fixture.router.currentRoute.value.query.bot==="bot-binding:two"');
     await wait(visible('.workflow-inspector'));
     assert.equal(await run('('+visible('.workflow-inspector')+').textContent.includes("BOT:support")'),true);
@@ -137,14 +152,16 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     assert.equal((await route()).query.bot,'bot-binding:two');
     await run('('+visible('.inspector-toolbar button')+').click()');
     await wait('!window.fixture.router.currentRoute.value.query.bot');
+    await run('window.fixture.workflowElement=('+visible('.workflow-manager')+')');
     // Ellipsis is direct, precise, Project-scoped navigation into the existing settings form.
     assert.equal(await run('!!document.querySelector('+JSON.stringify('[data-workflow="bot-deployment:isolated-two"] .group-connection')+')'),false);
     for (const id of ['isolated-one','isolated-two']) {
       await sidebar('a');
+      assert.equal(await run('window.fixture.workflowElement===('+visible('.workflow-manager')+')'),true,'Settings navigation retains the Workflow instance');
       const selector='[data-workflow="bot-connection:'+id+'"] .group-connection';
       await wait('document.querySelector('+JSON.stringify(selector)+')');
       assert.equal(await run('document.querySelector('+JSON.stringify(selector)+').getAttribute("aria-label")'),'Configure BOT connection');
-      await run('document.querySelector('+JSON.stringify(selector)+').click()');
+      await run('('+visible(selector)+').click()');
       await wait('window.fixture.router.currentRoute.value.name==="project-settings"');
       assert.equal((await route()).params.section,'connections');assert.equal((await route()).params.projectId,'a');assert.equal((await route()).query.connectionId,id);
       await wait('document.querySelector(".connection-id")?.textContent==='+JSON.stringify(id));

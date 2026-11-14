@@ -15,7 +15,7 @@
     </div>
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
       <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
-      <p v-if="route.query.bot && !selectedBot || route.query.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
+      <p v-if="documentQuery.bot && !selectedBot || documentQuery.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="selectedBot" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
         <div class="inspector-toolbar"><span>{{ t('BOT topology') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
@@ -35,7 +35,7 @@
         </header>
         <p v-if="sourceStatus" class="workflow-explanation">{{ t('Signal source') }}: {{ sourceStatus.enabled ? t('Enabled') : t('Paused') }}<span v-if="sourceStatus.nextAt"> · {{ t('Next collection check') }}: {{ formatDateTime(sourceStatus.nextAt) }}</span></p>
         <p v-if="sourceStatus?.error" class="workflow-run-hint failure" role="alert">{{ t('Source collection failed. Inspect its authorized binding and source status in chat; no collector checkpoint was advanced for this failure.') }} <code>{{ sourceStatus.error }}</code></p>
-        <p v-if="route.query.run && !selectedRun" class="workflow-message" role="status">{{ t('This run is no longer retained. The current definition is shown instead.') }}</p>
+        <p v-if="documentQuery.run && !selectedRun" class="workflow-message" role="status">{{ t('This run is no longer retained. The current definition is shown instead.') }}</p>
         <p class="workflow-explanation">{{ t('A workflow run is not a model session. Deterministic actions can finish without starting a conversation.') }}</p>
         <p v-if="notice" class="workflow-message" role="status">{{ notice }}</p>
         <p v-if="operationError" class="workflow-message failure" role="alert">{{ operationError }}</p>
@@ -112,12 +112,17 @@ import { t, formatDateTime } from '../i18n.ts'
 import { createWorkflowClient, recentWorkflowRuns, workflowConversation, workflowGraph, workflowHint, workflowStatus, type WorkflowRun, type WorkflowSnapshot } from '../workflows.ts'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; active?: boolean }>(), { active: true })
 const route = useRoute(), router = useRouter()
+// Other documents/routes must not clear an open Workflow's inspector.
+const documentQuery = shallowRef(route.query)
+watch(() => route.fullPath, () => {
+  if (route.name === 'project-workflows' && route.params.projectId === props.projectId) documentQuery.value = route.query
+})
 const snapshot = shallowRef<WorkflowSnapshot>(), loading = ref(false), error = ref(''), operationError = ref(''), busy = ref(false), confirmation = ref(''), notice = ref('')
 const activated = ref(true), pageVisible = ref(typeof document === 'undefined' || !document.hidden)
 const enabled = computed(() => props.active && activated.value && pageVisible.value)
 const catalog = useAutomationCatalog(() => props.apiBase, () => enabled.value)
 const operationId = ref('')
-const definition = computed(() => typeof route.query.workflow === 'string' ? snapshot.value?.definitions.find(d => d.id === route.query.workflow) : snapshot.value?.definitions[0])
+const definition = computed(() => typeof documentQuery.value.workflow === 'string' ? snapshot.value?.definitions.find(d => d.id === documentQuery.value.workflow) : snapshot.value?.definitions[0])
 const sourceStatus = computed(() => snapshot.value?.sources?.find(s => s.kind === definition.value?.source.kind && s.id === definition.value?.source.id))
 const runs = computed(() => definition.value && snapshot.value ? recentWorkflowRuns(snapshot.value, definition.value.id) : [])
 const githubTarget = computed(() => {
@@ -125,14 +130,14 @@ const githubTarget = computed(() => {
   const target = node?.subscription as { sessionId?: unknown; workKey?: unknown } | undefined
   return typeof target?.sessionId === 'string' && typeof target.workKey === 'string' ? { sessionId: target.sessionId, workKey: target.workKey } : undefined
 })
-const selectedRun = computed(() => snapshot.value?.runs.find(r => r.workflow === definition.value?.id && r.id === route.query.run))
+const selectedRun = computed(() => snapshot.value?.runs.find(r => r.workflow === definition.value?.id && r.id === documentQuery.value.run))
 const displayed = computed(() => selectedRun.value?.definition ?? definition.value)
 const graph = computed(() => displayed.value ? workflowGraph(displayed.value, selectedRun.value ?? runs.value.find(r => r.definition.revision === displayed.value?.revision)) : [])
 const inspector = ref<HTMLElement>(), inspectedNode = ref<string>(), graphView = ref<InstanceType<typeof WorkflowGraph>>()
 const inspectorId = useId(), inspectorWidth = ref(380)
 const botFlows = computed(() => botCanvas(snapshot.value?.bots))
-const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === route.query.bot))
-const inspectorOpen = computed(() => !!selectedBot.value || typeof route.query.workflow === 'string' && !!definition.value)
+const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot))
+const inspectorOpen = computed(() => !!selectedBot.value || typeof documentQuery.value.workflow === 'string' && !!definition.value)
 async function closeInspector() { inspectedNode.value = undefined; await router.replace({ query: {} }); await nextTick(); graphView.value?.focusCanvas() }
 const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(flow => {
   const selected = selectedRun.value?.workflow === flow.id ? selectedRun.value : undefined
