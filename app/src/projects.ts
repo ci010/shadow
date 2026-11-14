@@ -63,7 +63,7 @@ async function projectResponse<T>(base: string, path: string, init: RequestInit 
       const detail = response.status === 409 ? t('The resource conflicts with an existing project or folder.')
         : response.status === 401 || response.status === 403 ? t('Main did not authorize this request.')
         : t('Main could not complete this request (HTTP {status}).', { status: response.status })
-      throw new Error(t('{detail} Check Main and retry.', { detail: detail }))
+      throw Object.assign(new Error(t('{detail} Check Main and retry.', { detail: detail })), { status: response.status })
     }
     stage = 'consume'
     return await consume(response)

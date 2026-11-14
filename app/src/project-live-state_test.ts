@@ -161,7 +161,8 @@ test('reset aborts old snapshots, project scopes stay separate, and failures rem
   f.requests[8].finish(graph('Disposed'))
   f.requests[9].finish({ activity: {} })
   await flush()
-  assert.equal(a.sessions.state.value?.[0].label, 'Recovered')
+  assert.equal(a.sessions.state.value, undefined, 'last release clears protected state; late replies cannot restore it')
+  assert.equal(a.sessions.state.status, 'disposed')
 })
 
 test('project creation and rename notifications refresh the shared catalog without polling', async t => {

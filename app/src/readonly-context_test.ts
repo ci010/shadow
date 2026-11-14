@@ -23,9 +23,13 @@ function harness() {
   let fetches = 0
   const deps = {
     ...state, livePool: {}, disconnectEventStream() {}, scrollToBottom() {},
+    currentTimelinePrevious: null, seedRecentTimeline: async () => {},
     buildUrl: (path: string) => path, t: (key: string) => key,
-    readonlyHistorySnapshots: () => ({ read: async () => Response.json({ messages: ['persisted history'] }) }),
-    fetch: () => { fetches++; return response() },
+    chatReadScope: () => ({ projectId: 'fixture' }),
+    chatResources: {
+      readReadonly: async () => Response.json({ messages: ['persisted history'] }),
+      readDocument: () => { fetches++; return response() },
+    },
     collapseHistory: (value: unknown) => value, mergeCommandResults: (value: unknown) => value,
     parseDecisionRecords: (value: unknown) => value,
     applyCurrentTimeline: (value: unknown) => histories.push(value),

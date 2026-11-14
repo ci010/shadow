@@ -1,3 +1,4 @@
+import { createResourceStores } from './stores/app.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -67,6 +68,7 @@ function mount(t: TestContext, path: string, props: Record<string, unknown>, ses
     : renderer.createApp(target, props)
   if (session) app.provide(mobileSessionKey, session)
   app.provide(ioBridge.ioBridgeKey, ioBridge.createIoBridge())
+  app.use(createResourceStores())
   app.mount(root)
   t.after(() => {
     app.unmount()
