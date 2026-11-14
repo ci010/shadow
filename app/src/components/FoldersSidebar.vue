@@ -64,7 +64,7 @@
       </template>
       <section class="legacy-chats" :aria-labelledby="folderGrouped ? domId('legacy-chats-heading') : undefined">
         <TreeRow v-if="!folderGrouped" class="chat-new-row" button-class="chat-new" :icon-only="isRail"
-          :label="t('New')" :ariaLabel="t('Start from scratch')" :button-attrs="{ 'aria-keyshortcuts': 'Control+N Meta+N' }" @select="startScratchDraft">
+          :label="t('New conversation')" :ariaLabel="t('Start from scratch')" :button-attrs="{ 'aria-keyshortcuts': 'Control+N Meta+N' }" @select="startScratchDraft">
           <template #icon><span class="i-lucide-plus" /></template>
           <template v-if="!isRail" #meta><kbd class="chat-new-shortcut">Ctrl+N</kbd></template>
         </TreeRow>
@@ -115,7 +115,7 @@
       </section>
       <AutomationSidebar :project-id="projectId" :api-base="apiBase" :active="resizeActive && (!grouped || groupExpanded)" :rail="isRail"
         :groups="groups.automations" :stages="stages" :selected-id="selectedAutomationId || activeAutomation?.jobId"
-        @select="$emit('automation', $event)" />
+        @select="$emit('automation', $event)" @knowledge="$emit('knowledge')" />
       <div v-if="cloneStatus.state === 'unknown' || cloneStatus.state === 'failed'" class="sidebar-error" role="alert">
         <template v-if="!isRail"><p>{{ cloneStatus.error }}</p><button class="text-action" @click="dialogMode = 'clone'">{{ t('Review clone') }}</button></template>
         <HoverInfo v-else :text="cloneStatus.error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Review clone error')" @click="dialogMode = 'clone'"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
@@ -188,6 +188,7 @@ const emit = defineEmits<{
   draft: [folder: FolderRecord]
   manage: [folder: FolderRecord, action: 'remove' | 'move']
   automation: [id: string]
+  knowledge: []
 }>()
 const client = computed(() => createFoldersClient(props.apiBase))
 const livePool = useLiveClientPool()

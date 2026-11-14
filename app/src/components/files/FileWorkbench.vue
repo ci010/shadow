@@ -263,7 +263,7 @@ function descriptor(key: string, label: string, icon: string): EditorDescriptor 
   const previous = descriptorCache.get(key)
   if (previous && previous.id === editorId(key) && previous.label === label && previous.icon === icon && previous.conversation?.sessionId === (key === '' ? props.sessionId : undefined) && previous.conversation?.editable === (key === '' ? !!props.editableConversation : undefined)) return previous
   const value: EditorDescriptor = { id: editorId(key), projectId: props.projectId ?? '', owner: owner || id, label, icon,
-    closable: key === '' ? !!props.sessionId : !isPermanentDocumentTab(key),
+    closable: key === '' || !isPermanentDocumentTab(key),
     select: () => { if (tabs.value.selected !== key) tabs.value = { ...tabs.value, selected: key } },
     close: () => closeFile(key, false),
     commands: { toggleExplorer: () => { if (explorerAvailable.value) toggleExplorer() } },
