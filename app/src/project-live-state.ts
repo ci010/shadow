@@ -1,3 +1,5 @@
+import { createSnapshotReader } from './snapshot-reader.ts'
+import { unkeyedWork } from '../../src/shared/snapshot-wire.ts'
 import { affectsSessionResource, affectsSessionSummary } from './session-invalidation.ts'
 import { createSessionSummaryLoader } from './session-summary-snapshot.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
@@ -8,7 +10,7 @@ import { isRecord } from './folders-sidebar.ts'
 import { createConditionalProjectJson, createProjectsClient, projectJson } from './projects.ts'
 import { parseSessionActivity, recoveredSessionStage } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
-import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
+import { projectWorkLiveOverviewSchema } from '../../src/projects/work-overview.ts'
 import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../../src/sessions/activity-read-model.ts'
 
 /** A snapshot has one serialized reader, regardless of how many views use it.
@@ -165,8 +167,10 @@ export function createProjectLiveState(
       else if (ids.some(id => !directory?.has(id))) sessions.invalidate()
       return projectActivity(result)
     } })
-    const work = createSnapshot(async signal =>
-      projectWorkOverviewSchema.parse(await projectJson(scope, '/api/work', { signal }, request)), delay)
+    const workReader = createSnapshotReader(
+      (version, signal) => projectJson(scope, '/api/work?transport=snapshot-v1' + (version ? '&since=' + encodeURIComponent(version) : ''), { signal }, request),
+      value => projectWorkLiveOverviewSchema.parse(value), unkeyedWork)
+    const work = createSnapshot(signal => workReader.load(signal), delay)
     const usage = { work: 0 }
     const observers = new Set<Partial<LiveObserver>>()
     function reset(reason: Parameters<LiveObserver['reset']>[0]) {

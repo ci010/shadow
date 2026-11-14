@@ -37,7 +37,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [File spaces](file-spaces.md) and [media attachments](media-attachments.md)
 - [Session references](session-references.md), [proxy sessions](session-proxy.md),
   [context usage](session-context-usage.md), and [task review lifecycle](task-review-lifecycle.md)
-- [Shared live transport](realtime-protocol.md) and [frontend I/O](io.md)
+- [Shared live transport](realtime-protocol.md), [Work/maintenance snapshot deltas](live-snapshot-transport.md), and [frontend I/O](io.md)
 - [Audio streaming backend](audio-streaming-backend.md)
 - [Image input optimization](image-input-optimization.md)
 - [Provider Flash support](providers-flash.md)

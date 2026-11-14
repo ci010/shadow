@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { projectFocusSnapshotSchema } from './focus-contract.ts'
+import { projectFocusSnapshotSchema, projectFocusOverviewSchema } from './focus-contract.ts'
 import { workFocusInferenceSchema, workProgressSchema, workDefinitionSchema } from '../initiatives/work-contract.ts'
 import { githubSnapshotSchema } from './github/contracts.ts'
 import { workNotesSchema, workDecisionContextSchema } from '../initiatives/work-notes.ts'
@@ -23,7 +23,7 @@ export const projectWorkItemSchema = z.object({
   github: z.array(githubWorkReferenceSchema).optional(),
   observation: z.object({ sessionId: id, observedAt: z.string(), sources: z.array(z.object({ id, physicalId: id })), focus: workFocusInferenceSchema.optional() }).optional(),
 })
-export const projectWorkOverviewSchema = z.object({
+const projectWorkOverviewBaseSchema = z.object({
   focus: projectFocusSnapshotSchema.optional(),
   items: z.array(projectWorkItemSchema),
   sessions: z.array(z.object({
@@ -51,7 +51,8 @@ export const projectWorkOverviewSchema = z.object({
     lastCheckedAt: z.string().datetime().optional(),
     nextAutomaticAt: z.string().datetime().optional(),
   }).optional(),
-}).superRefine((value, ctx) => {
+})
+const validateOverview = (value: Pick<z.infer<typeof projectWorkOverviewBaseSchema>, 'items'>, ctx: z.RefinementCtx) => {
   const lookup = new Map(value.items.map(item => [item.key, item]))
   if (lookup.size !== value.items.length) ctx.addIssue({ code: 'custom', path: ['items'], message: 'Duplicate work keys.' })
   const visited = new Set<string>()
@@ -68,9 +69,11 @@ export const projectWorkOverviewSchema = z.object({
     }
     for (const key of path) visited.add(key)
   }
-})
+}
+export const projectWorkOverviewSchema = projectWorkOverviewBaseSchema.superRefine(validateOverview)
+export const projectWorkLiveOverviewSchema = projectWorkOverviewBaseSchema.extend({ focus: projectFocusOverviewSchema.optional() }).superRefine(validateOverview)
 export type ProjectWorkItem = z.infer<typeof projectWorkItemSchema>
-export type ProjectWorkOverview = z.infer<typeof projectWorkOverviewSchema>
+export type ProjectWorkOverview = z.infer<typeof projectWorkLiveOverviewSchema>
 
 /** Read-time projection only: a previously organized standalone conversation must not
  * remain a duplicate root after an explicit Work association. Saved evidence stays intact. */

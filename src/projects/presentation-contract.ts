@@ -18,7 +18,7 @@ export type PresentationSource = z.infer<typeof presentationSourceSchema>
 export const sourceIdentity = (source: z.infer<typeof presentationReferenceSchema>) => JSON.stringify([source.sessionId, source.physicalId, source.id])
 
 /** Validate provenance and user involvement, not semantic truth via keyword heuristics. */
-export function validatePresentation(groups: { cards?: z.infer<typeof presentationCardSchema>[] }[], evidence: PresentationSource[]) {
+export function validatePresentation(groups: { cards?: z.infer<typeof presentationCardSchema>[] }[], evidence: Omit<PresentationSource, 'text' | 'at'>[]) {
   const sources = new Map(evidence.map(source => [sourceIdentity(source), source]))
   const ids = new Set<string>()
   for (const group of groups) for (const card of group.cards ?? []) {

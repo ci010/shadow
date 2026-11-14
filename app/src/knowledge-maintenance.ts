@@ -1,3 +1,6 @@
+import { maintenanceSummary, type KnowledgeMaintenanceSummary } from '../../src/knowledge/maintenance-contracts.ts'
+import { unkeyedMaintenance } from '../../src/shared/snapshot-wire.ts'
+import { createSnapshotReader } from './snapshot-reader.ts'
 import { t } from './i18n.ts'
 import type { KnowledgeMaintenanceFinding, KnowledgeMaintenanceReport, KnowledgeMaintenanceStatus, KnowledgeRepairPreview } from '../../src/knowledge/maintenance-contracts.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -35,6 +38,23 @@ export function parseMaintenanceStatus(value: unknown): KnowledgeMaintenanceStat
   }
 }
 
+export function parseMaintenanceSummary(value: unknown): KnowledgeMaintenanceSummary {
+  // Rolling-upgrade fallback, without retaining unsolicited legacy findings.
+  if (isRecord(value) && isRecord(value.report) && Array.isArray(value.report.findings)) return maintenanceSummary(parseMaintenanceStatus(value))
+  if (!isRecord(value)) throw invalid()
+  const report = value.report
+  const status = parseMaintenanceStatus({ ...value, report: null })
+  if (report === null) return { ...status, report: null }
+  if (!isRecord(report) || !isRecord(report.counts)) throw invalid()
+  const metadata = parseMaintenanceReport({ ...report, findings: [] })
+  const count = (item: unknown): item is number => typeof item === 'number' && Number.isSafeInteger(item) && item >= 0
+  const counts = report.counts
+  if (!count(report.findingCount) || !count(counts.missing) || !count(counts.unavailable) || !count(counts['outside-catalog'])
+    || counts.missing + counts.unavailable + counts['outside-catalog'] !== report.findingCount) throw invalid()
+  return { ...status, report: { id: metadata.id, scannedAt: metadata.scannedAt, entriesScanned: metadata.entriesScanned,
+    findingCount: report.findingCount, counts: { missing: counts.missing, unavailable: counts.unavailable, 'outside-catalog': counts['outside-catalog'] } } }
+}
+
 export function parseRepairPreview(value: unknown, reportId: string, sourceId: string): KnowledgeRepairPreview {
   if (!isRecord(value) || value.reportId !== reportId || value.sourceId !== sourceId || !text(value.revision)
     || typeof value.before !== 'string' || typeof value.after !== 'string' || value.before === value.after
@@ -46,8 +66,23 @@ export function createKnowledgeMaintenanceClient(base: string, request: typeof f
   const json = createKnowledgeTransport(base, request)
   const post = (path: string, body: object, signal?: AbortSignal) =>
     json(`/maintenance/${path}`, { method: 'POST', body: JSON.stringify(body), signal })
+  let legacyReport: KnowledgeMaintenanceReport | undefined
+  const summaryParser = (value: unknown) => {
+    legacyReport = isRecord(value) && isRecord(value.report) && Array.isArray(value.report.findings) ? parseMaintenanceReport(value.report) : undefined
+    return parseMaintenanceSummary(value)
+  }
+  const reader = createSnapshotReader((version, signal) => json('/maintenance', { signal }, { transport: 'snapshot-v1', ...(version ? { since: version } : {}) }), parseMaintenanceStatus, unkeyedMaintenance)
   return {
-    async status(signal?: AbortSignal) { return parseMaintenanceStatus(await json('/maintenance', { signal })) },
+    status: reader.load,
+    summary: createSnapshotReader((version, signal) => json('/maintenance', { signal }, { view: 'summary', transport: 'snapshot-v1', ...(version ? { since: version } : {}) }), summaryParser).load,
+    async scanSummary(signal?: AbortSignal) { return summaryParser(await post('scan?view=summary', {}, signal)) },
+    async report(reportId: string, signal?: AbortSignal) {
+      signal?.throwIfAborted()
+      if (legacyReport?.id === reportId) return structuredClone(legacyReport)
+      const report = parseMaintenanceReport(await json('/maintenance/report', { signal }, { reportId }))
+      if (report.id !== reportId) throw invalid()
+      return report
+    },
     async scan(signal?: AbortSignal) { return parseMaintenanceReport(await post('scan', {}, signal)) },
     async preview(reportId: string, sourceId: string, signal?: AbortSignal) {
       return parseRepairPreview(await post('preview', { reportId, sourceId }, signal), reportId, sourceId)
