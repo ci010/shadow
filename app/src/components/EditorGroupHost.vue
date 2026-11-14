@@ -6,7 +6,7 @@
         <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
           <div class="editor-tabs" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)" @dragenter="drag.enter($event, side)" @dragover="drag.enter($event, side)" @dragleave="leaveDrop($event, side)" @drop="dropTab($event, side)" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
             <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, editor.id)" @contextmenu.prevent="openMenu($event, editor.id)">
-              <button draggable="true" @dragstart="drag.start($event, editor.id)" @dragend="drag.clear" :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" />{{ editor.label }}</button>
+              <HoverInfo :text="editor.label" v-slot="{ triggerProps }"><button v-bind="triggerProps" draggable="true" @dragstart="drag.start($event, editor.id)" @dragend="drag.clear" :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" /><span class="editor-tab-label">{{ editor.label }}</span></button></HoverInfo>
               <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: editor.label })" @click="groups.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
             </div>
             <span v-if="dragging && !state[side].length" class="editor-drop-label">{{ t(side === 'left' ? 'Move to main area' : 'Move to right') }}</span>
@@ -144,11 +144,14 @@ function shortcut(event: KeyboardEvent) {
 .drag-target .editor-tabs { outline: 1px dashed var(--c-border-hover); outline-offset: -2px; min-width: 90px; }
 .drag-over .editor-tabs { background: var(--c-selection-bg); outline: 2px solid var(--c-primary); outline-offset: -2px; }
 .editor-tab [draggable="true"] { cursor: grab; }
-.editor-tab { height: 36px; box-sizing: border-box; display: flex; flex-shrink: 0; border-right: 1px solid var(--c-border-soft); border-top: 2px solid transparent; }
+.editor-tab { height: 36px; box-sizing: border-box; display: flex; flex-shrink: 0; min-width: 0; max-width: 240px; border-right: 1px solid var(--c-border-soft); border-top: 2px solid transparent; }
 .editor-tab.selected { background: var(--c-bg-card); }
 .active-group .editor-tab.selected { border-top-color: var(--c-primary); }
 .editor-tab button { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 6px 10px; color: var(--c-text-secondary); font: inherit; font-size: 12px; white-space: nowrap; }
-.editor-tab button span { width: 14px; height: 14px; }
+.editor-tab [role="tab"] { min-width: 0; }
+.editor-tab button > span:not(.editor-tab-label) { width: 14px; height: 14px; flex-shrink: 0; }
+.editor-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-tab button:not([role="tab"]) { flex-shrink: 0; }
 .editor-tab.selected button { color: var(--c-text); }
 .editor-tab button:hover { background: var(--c-bg-muted); }
 .editor-tab button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
