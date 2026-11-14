@@ -8,6 +8,7 @@ app.setPath('userData', join(process.cwd(), 'profile'))
 app.on('window-all-closed', () => {})
 
 async function main() {
+  const automationId = process.env.AUTOMATION_ID || 'cron:weekly'
   await app.whenReady()
   const window = new BrowserWindow({ show: false, width: 1280, height: 844,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
@@ -19,14 +20,21 @@ async function main() {
   }
   const wait = async (code: string) => {
     const deadline = Date.now() + 30_000
-    while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
+    while (Date.now() < deadline) {
+      // System automation messages retain their authored body in lazy diagnostic
+      // disclosures. Open those when checking message preservation; do not assume
+      // every feature renders its existing messages as plain Markdown bubbles.
+      if (code.includes('Synthetic run result')) await execute(`document.querySelectorAll('.automation-payload:not([open])').forEach(node => { node.open = true }); undefined`)
+      if (await execute(code)) return
+      await delay(50)
+    }
     throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
   }
   const frame = () => execute('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   const selected = () => execute('window.__automationRouter.currentRoute.value.params.sessionId')
   const click = (selector: string) => execute(`window.__visible(${JSON.stringify(selector)}).click()`)
   const go = async (id: string) => {
-    await execute(`window.__automationRouter.push({name:'chat',params:{projectId:'fixture',sessionId:${JSON.stringify(id)}},query:{automation:'cron:weekly'}})`)
+    await execute(`window.__automationRouter.push({name:'chat',params:{projectId:'fixture',sessionId:${JSON.stringify(id)}},query:{automation:${JSON.stringify(automationId)}}})`)
     await wait(`!!window.__visible('.chat-messages')?.innerText.includes(${JSON.stringify(`Synthetic run result ${id}`)})`)
   }
   const screenshot = async (name: string) => {
@@ -38,6 +46,8 @@ async function main() {
     assert.equal(await execute(`document.querySelectorAll('.child-conversation').length`), 0)
     assert.equal(await execute(`document.documentElement.scrollWidth <= innerWidth`), true)
     assert.equal(await execute(`document.querySelector('.automation-info, .automation-projection')`), null)
+    assert.equal(await execute(`Array.from(document.querySelectorAll('.automation-result-message')).every(node => !!node.closest('.chat-message-list'))`), true, 'Every result belongs to chat history, for every automation identity')
+    assert.equal(await execute(`Array.from(document.querySelectorAll('.conversation-heading-row, .automation-context')).some(node => /Recovered saved result|Reviewed both assigned Wiki pages|Synthetic run result/.test(node.textContent))`), false, 'No result text is mounted in the heading or fixed automation context')
     assert.equal(await execute(`document.body.textContent.includes('this page shows conversation history only')`), false)
   }
   try {
@@ -122,7 +132,7 @@ async function main() {
       assert.equal(await execute(`document.querySelectorAll('.chat-message-list .automation-result-message').length`), 1)
       assert.equal(await execute(`window.__visible('.chat-messages').textContent.split('Synthetic run result cron:run-${index}').length - 1`), 1, 'Matching final response and metadata summary appear once')
     }
-    await execute(`window.__automationRouter.push({name:'chat',params:{projectId:'fixture',sessionId:'cron:run-8'},query:{automation:'cron:weekly'}})`)
+    await execute(`window.__automationRouter.push({name:'chat',params:{projectId:'fixture',sessionId:'cron:run-8'},query:{automation:${JSON.stringify(automationId)}}})`)
     await wait(`window.__visible('.automation-result-message')?.dataset.resultKey.endsWith(':run-8')`)
     assert.equal(await execute(`window.__visible('.automation-result-message').textContent.includes('Completed')`), true, 'A terminal run without output still has its recorded status')
     assert.equal(await execute(`!!window.__visible('.automation-result-message .message-copy-actions')`), false, 'No invented summary or empty copy action')
@@ -164,7 +174,7 @@ async function main() {
     await execute(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
     assert.equal(await execute(`!!document.querySelector('.changes-tab, .session-file-changes')`), false)
     assert.equal(await execute(`fetch('/__fixture/stats').then(response => response.json()).then(value => value.changes)`), 0)
-    await execute(`fetch('/__fixture/empty').then(() => window.__automationRouter.push({name:'chat',params:{projectId:'fixture'},query:{automation:'cron:weekly'}}))`)
+    await execute(`fetch('/__fixture/empty').then(() => window.__automationRouter.push({name:'chat',params:{projectId:'fixture'},query:{automation:${JSON.stringify(automationId)}}}))`)
     await wait(`!!document.querySelector('.automation-empty')?.innerText.includes('No saved runs yet')`)
     assert.equal(await execute(`!!window.__visible('.chat-workspace')`), false, 'An empty automation does not create a draft conversation')
     assert.equal(await execute(`document.querySelector('.automation-info, .automation-projection')`), null, 'Empty workflows have no conversation configuration surfaces')
