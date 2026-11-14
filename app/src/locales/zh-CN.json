@@ -4405,5 +4405,15 @@
   "Phone port (1024–65535)": "手机端口（1024–65535）",
   "Refresh phone access": "刷新手机接入",
   "The private LAN address is selected automatically when enabled. Settings are restored after restart. Retry after changing Wi-Fi or Ethernet.": "开启时自动选择局域网地址，重启后恢复设置。切换 Wi-Fi 或以太网后请重试。",
-  "Turn off phone access": "关闭手机接入"
+  "Turn off phone access": "关闭手机接入",
+  "BOT reference": "BOT 引用",
+  "BOT.md controls subscriptions; this reference does not add listeners.": "订阅由 BOT.md 管理，此引用不会新增监听。",
+  "Message receiver": "消息接收器",
+  "Records messages without model reactions": "仅记录消息，不调用模型回复",
+  "No received conversations yet": "尚未收到会话消息，等待消息接入",
+  "Open message history": "打开消息记录",
+  "Open thread list": "打开帖子列表",
+  "Open messages and threads": "打开消息与帖子",
+  "Open connection content": "打开连接内容",
+  "Channel metadata unavailable. Waiting for received content.": "频道元数据暂不可用，等待实际消息接入。"
 }

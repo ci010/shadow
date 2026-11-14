@@ -1,3 +1,4 @@
+import type { DirectoryBots } from '../bots/runtime.ts'
 import { channelSessionId, deriveSessionId } from '../bus/events.ts'
 import type { InputEnvelope, InputListener } from '../input/router.ts'
 import { matchesInput } from '../input/router.ts'
@@ -12,12 +13,16 @@ export type InputSessions = Pick<SessionManager, 'listSessions' | 'listRetiredSe
 /** A live projection of host identities, not a per-input registration. New Web
  * identities must be prepared by an authenticated host request BEFORE routing.
  * Retired human conversations retain their existing restore-on-input behavior. */
-export function sessionInputListeners(projectId: string, sessions: InputSessions, bots: BotInstanceStore): InputListener[] {
+export function sessionInputListeners(projectId: string, sessions: InputSessions, bots: BotInstanceStore, directory?: DirectoryBots): InputListener[] {
   if (bots.projectId !== projectId) throw new Error('Input listener Project mismatch')
   const web: InputListener[] = [...sessions.listSessions(), ...sessions.listRetiredSessions()]
     .filter(state => state.sessionId.startsWith('web:') && (!state.projectId || state.projectId === projectId))
     .map(state => ({ source: { type: 'web', id: 'web' }, kind: 'message', topic: state.sessionId.slice(4), target: { kind: 'session', id: state.sessionId } }))
-  const personal: InputListener[] = bots.list().filter(bot => bot.enabled && bot.purpose === 'personal' && bot.verifiedOwner).map(bot => ({
+  const personal: InputListener[] = bots.list().filter(bot => {
+    if (!bot.enabled || bot.purpose !== 'personal' || !bot.verifiedOwner) return false
+    if (!directory) return true // Standalone legacy harnesses only; production always supplies DirectoryBots.
+    try { return !!directory.personal(bot.id) } catch { return false }
+  }).map(bot => ({
     source: { type: bot.platform, id: bot.id }, kind: 'message', topic: bot.verifiedOwner!.chatId,
     target: { kind: 'session', id: channelSessionId({ projectId, platform: bot.platform, botInstanceId: bot.id,
       conversationId: bot.verifiedOwner!.chatId, ...(bot.legacySessionId ? { legacySessionId: true } : {}) }) },
@@ -28,7 +33,7 @@ export function sessionInputListeners(projectId: string, sessions: InputSessions
 /** Selected ordinary Session handler. Matching a listener does not replace live
  * receipt/folder/Session execution checks (AgentApp and SessionManager retain those). */
 export async function handleSessionInput(id: string, input: InputEnvelope<ChannelInputPayload>, options: {
-  sessions: InputSessions; bots: BotInstanceStore; receive: ReceiveChannelMessage
+  sessions: InputSessions; bots: BotInstanceStore; directory?: DirectoryBots; receive: ReceiveChannelMessage
 }): Promise<ChannelInputResult> {
   const { sessions, bots } = options
   if (input.projectId !== bots.projectId || input.payload.kind === 'observation') throw new ChannelAdmissionError('Session input mismatch', 403)
@@ -37,8 +42,14 @@ export async function handleSessionInput(id: string, input: InputEnvelope<Channe
   if (bot && bot.purpose !== 'personal') throw new ChannelAdmissionError('Service input requires a BOT handler', 403)
   const expected = channelMessageEnvelope(bots, message)
   if (deriveSessionId(message) !== id || !matchesInput({ ...expected, target: { kind: 'session', id } }, input) ||
-    !sessionInputListeners(bots.projectId, sessions, bots).some(listener => listener.target.id === id && matchesInput(listener, input)))
+    !sessionInputListeners(bots.projectId, sessions, bots, options.directory).some(listener => listener.target.id === id && matchesInput(listener, input)))
     throw new ChannelAdmissionError('Session input listener no longer available', 403)
+  if (bot && options.directory) {
+    const definition = options.directory.personal(bot.id)
+    if (!definition) throw new ChannelAdmissionError('Personal BOT is not deployed', 403)
+    const senders = definition.connectionPolicies?.[bot.id]?.allowFrom
+    if (senders && !senders.includes(message.senderId)) throw new ChannelAdmissionError('Sender is outside BOT admission policy', 403)
+  }
   sessions.assertFolderAccess(id)
   if (input.payload.kind === 'policy') {
     if (bot?.purpose !== 'personal') throw new ChannelAdmissionError('Personal policy connection required', 403)

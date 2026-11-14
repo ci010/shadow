@@ -122,7 +122,7 @@ export abstract class AbstractChannel implements BaseChannel {
   private passiveCollector?: (message: PassiveChannelMessage) => Promise<PassiveAdmission>
   setPassiveCollector(collector: (message: PassiveChannelMessage) => Promise<PassiveAdmission>): void { this.passiveCollector = collector }
   protected get hasPassiveCollector(): boolean { return !!this.passiveCollector }
-  /** Before trigger selection/downloads. Installed only on explicit service connections. */
+  /** Common receipt before business admission/trigger/downloads. Recording never grants execution. */
   protected async collectPassive(input: Omit<PassiveChannelMessage, 'channel' | 'timestamp'> & { timestamp?: string }): Promise<PassiveArrival | undefined> {
     if (!this.passiveCollector) return undefined
     this.assertConnection()
@@ -307,11 +307,16 @@ export abstract class AbstractChannel implements BaseChannel {
     }
   }
 
+  /** SDK-backed adapters also call this at their final network boundary. */
+  protected async assertDelivery(): Promise<void> {
+    const guard = this.deliveryContext.getStore()
+    if (guard) await this.deliveryContext.run(undefined, guard)
+    this.assertConnection()
+  }
+
   protected async request(input: string | URL, init: RequestInit = {}): Promise<Response> {
     try {
-      const guard = this.deliveryContext.getStore()
-      if (guard) await this.deliveryContext.run(undefined, guard)
-      this.assertConnection()
+      await this.assertDelivery()
       const signal = AbortSignal.any([
         this.requestController.signal, AbortSignal.timeout(60_000),
         ...(init.signal ? [init.signal] : []),

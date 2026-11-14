@@ -1,3 +1,4 @@
+import { BotConnectionPolicy } from '../channels/connection-config.ts'
 import { z } from 'zod'
 import { BotHostCapabilities } from './host-contract.ts'
 import { agentInferenceSchema } from '../agent/inference-schema.ts'
@@ -51,6 +52,8 @@ const baseDefinition = z.object({
     imports,
   }).strict()).max(64),
   bindings: z.array(BotBindingSchema).max(1000),
+  /** BOT-owned legacy connection-policy intersection; never a transport filter. */
+  connectionPolicies: z.record(z.string().min(1).max(512), BotConnectionPolicy).optional(),
   /** Omission migrates legacy bindings to subscriptions in memory; [] explicitly receives nothing. */
   subscriptions: z.array(BotSubscriptionSchema).max(1000).optional(),
   /** Owner-approved host SDK operations; omission grants none. Always scoped to the invoking binding. */
@@ -62,7 +65,7 @@ const baseDefinition = z.object({
 }).strict()
 const definition = z.discriminatedUnion('mode', [
   baseDefinition.extend({ ...agentInferenceSchema.shape, mode: z.literal('service'), connection: z.never().optional(), agent: z.never().optional() }),
-  baseDefinition.extend({ mode: z.literal('personal'), connection: z.string().uuid(), agent: ResourceName }),
+  baseDefinition.extend({ mode: z.literal('personal'), connection: z.union([z.string().uuid(), z.enum(['legacy-qq', 'legacy-feishu', 'legacy-discord', 'legacy-wechat'])]), agent: ResourceName }),
 ]).superRefine((bot, ctx) => {
   if (bot.mode === 'personal') {
     if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })

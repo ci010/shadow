@@ -18,6 +18,7 @@ import { channelSessionId } from '../bus/events.ts'
 import { passiveChannelId, parseChannelSource, passiveAttachmentReferences } from './passive-contract.ts'
 import { ChannelManager } from './manager.ts'
 import { QQChannel } from './qq.ts'
+import { ChannelMessageStream } from './message-stream.ts'
 import { Bus } from '../bus/bus.ts'
 import { SessionManager } from '../sessions/session-manager.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
@@ -40,6 +41,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
   await withTempWorkspace(async workspace => {
     const projectId = 'p', bus = new Bus(), bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
     const connection = bots.create('qq', 'Shared QQ', { appId: 'synthetic', secret: 'synthetic', enabled: true }, undefined, 'service')
+    const stream = new ChannelMessageStream(workspace, projectId)
     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } }), directory = new DirectoryBots(deployments)
     const sourcePath = join(workspace, 'source'); mkdirSync(sourcePath)
     writeFileSync(join(sourcePath, 'BOT.md'), '---\nid: support\nconfig: bot.json\nmode: service\n---\nSupport only')
@@ -59,12 +61,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
     let agent = makeAgent(), manager: ChannelManager | undefined
     const connect = async () => {
       const inputs = channelInputFixture({ projectId, sessions, bots, directory, receive: message => agent.receiveChannelMessage(message) })
-      manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions, inputs.receive, { projectId, instanceStore: bots, serviceAssigned: directory.serviceAssigned, serviceGeneration: address => { const policy = directory.resolve(address); return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined }, routeInputPolicy: inputs.policy })
+      manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions, inputs.receive, { projectId, instanceStore: bots, messageStream: stream, serviceAssigned: directory.serviceAssigned, serviceGeneration: address => { const policy = directory.resolve(address); return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined }, routeInputPolicy: inputs.policy })
       await manager.init()
       const adapter = manager['channels'].get(connection.id); assert.ok(adapter instanceof QQChannel)
       t.mock.method(adapter, 'onMessage', async () => { replies++ })
       t.mock.method(adapter as never, 'downloadAttachments' as never, (async (_data: unknown, _chatId: string, content: string) => ({ content })) as never)
-      return (id: string, content: string, group = 'one', mentioned = false) => adapter['handleDispatch'](mentioned ? 'GROUP_AT_MESSAGE_CREATE' : 'GROUP_MESSAGE_CREATE', { id, group_openid: group, group_name: 'Support group', author: { member_openid: 'owner', username: 'Sender' }, content, attachments: [{ url: 'https://cdn.invalid/file?secret=signed', content_type: 'image/png', size: 12 }] })
+      return (id: string, content: string, group = 'one', mentioned = false, sender = 'owner') => adapter['handleDispatch'](mentioned ? 'GROUP_AT_MESSAGE_CREATE' : 'GROUP_MESSAGE_CREATE', { id, group_openid: group, group_name: 'Support group', author: { member_openid: sender, username: 'Sender' }, content, attachments: [{ url: 'https://cdn.invalid/file?secret=signed', content_type: 'image/png', size: 12 }] })
     }
     const inboxId = passiveChannelId({ projectId, botInstanceId: connection.id, platform: 'qq', conversationId: 'group:one' })
     let approve = false, asks = 0
@@ -99,11 +101,18 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       const before = await Array.fromAsync(store.readSessionLog(physical)); assert.equal(before.filter(row => row.channel_input_id === 'old').length, 1)
       assert.match(JSON.stringify(before), /cdn.invalid/); assert.doesNotMatch(JSON.stringify(before), /signed|image_url/)
       await assert.rejects(() => sessions.deliver(inboxId, { id: 'attack', timestamp: new Date().toISOString(), kind: 'message', policy: 'interactive', content: 'run', source: { kind: 'user', sender: { channel: 'web', chatId: inboxId, messageId: 'attack', senderId: 'owner' } } }), /read-only/)
+      assert.equal(stream.snapshot().events.filter(row => row.kind === 'created' && row.message === 'old').length, 1, 'Duplicate transport arrivals produce one common receipt')
+      await send('denied-before-binding', 'RECORD_WITHOUT_PROCESSING', 'one', true, 'stranger')
+      assert.match(JSON.stringify(await Array.fromAsync(store.readSessionLog(physical))), /RECORD_WITHOUT_PROCESSING/)
+      assert.equal(prompts.length, 0)
+      const resolvePolicy = directory.resolve
+      directory.resolve = () => { throw new Error('Synthetic corrupt BOT policy store') }
+      try { await send('broken-bot-store', 'COMMON_RECEIPT_WITH_BROKEN_BOT', 'one', true) }
+      finally { directory.resolve = resolvePolicy }
+      assert.match(JSON.stringify(await Array.fromAsync(store.readSessionLog(physical))), /COMMON_RECEIPT_WITH_BROKEN_BOT/)
+      assert.equal(prompts.length, 0, 'BOT policy failure cannot suppress recording or grant execution')
       const inspected = await inspect(); assert.equal(inspected.channelSource.botInstanceId, connection.id)
-      const cancelled = await assign(true, inspected.sourceRevision); assert.equal(cancelled.status, 'cancelled'); assert.equal(cancelled.sourceUpdated, true); assert.equal(deployments.list().length, 0)
-      assert.equal(JSON.parse(readFileSync(join(sourcePath, 'bot.json'), 'utf8')).bindings[0].conversationId, 'group:one')
-      await send('still-unassigned', 'NO_APPROVAL'); assert.equal(prompts.length, 0)
-      await assert.rejects(() => assign(true, inspected.sourceRevision), /source changed/)
+      await send('still-unassigned', 'NO_BOT_LINK'); assert.equal(prompts.length, 0)
       const archiveStarted = Promise.withResolvers<void>(), archiveRelease = Promise.withResolvers<void>()
       const append = store.appendMessages.bind(store)
       t.mock.method(store, 'appendMessages', async (id: string, entries: import('../sessions/session-store.ts').StoredMessage[]) => {
@@ -113,12 +122,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       const racing = send('assignment-race', 'ARRIVED_BEFORE_ASSIGNMENT', 'one', true)
       await archiveStarted.promise
       approve = true
-      const deployed = await assign(true, (await inspect()).sourceRevision); assert.equal(deployed.status, 'deployed'); assert.equal(asks, 2)
+      const deployed = await assign(true, (await inspect()).sourceRevision); assert.equal(deployed.status, 'deployed'); assert.equal(asks, 0)
       archiveRelease.resolve(); await racing; assert.equal(prompts.length, 0)
+      await assert.rejects(send('denied-after-binding', 'RECORD_DENIED_AFTER_BINDING', 'one', true, 'stranger'), /sender is not authorized|outside BOT/)
+      assert.equal(SessionManager.currentPhysicalId(sessions.getSessionState(inboxId)!), physical, 'BOT binding does not change inbox identity or move history')
+      assert.match(JSON.stringify(await Array.fromAsync(store.readSessionLog(physical))), /RECORD_DENIED_AFTER_BINDING/)
+      assert.equal(prompts.length, 0)
       await send('unmentioned', 'NEW_UNMENTIONED'); assert.equal(prompts.length, 0)
       const finished = Promise.withResolvers<void>(); bus.on('session.turn.finished', fact => { if (fact.inputId === 'new') finished.resolve() })
       await send('new', 'NEW_TRIGGER', 'one', true); await finished.promise
-      assert.equal(prompts.length, 1); assert.match(prompts[0]!, /NEW_TRIGGER/); assert.doesNotMatch(prompts[0]!, /OLD_PASSIVE|NO_APPROVAL|ARRIVED_BEFORE_ASSIGNMENT/)
+      assert.equal(prompts.length, 1); assert.match(prompts[0]!, /NEW_TRIGGER/); assert.doesNotMatch(prompts[0]!, /OLD_PASSIVE|NO_BOT_LINK|ARRIVED_BEFORE_ASSIGNMENT/)
       await send('other', 'OTHER_GROUP', 'two', true); assert.equal(prompts.length, 1)
       // Stop transport and session manager, then recover the same durable inbox and dedup set.
       await manager!.stopAll(); await sessions.stop(); sessions = makeSessions(); agent = makeAgent(); await agent.start(); send = await connect()

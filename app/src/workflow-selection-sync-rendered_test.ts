@@ -14,6 +14,7 @@ import { Hono } from 'hono'
 import { Bus } from '../../src/bus/bus.ts'
 import { WebChannel } from '../../src/channels/web.ts'
 import { workflowReferenceResolver } from '../../src/workflows/references.ts'
+import type { ConnectionSinkProjection } from '../../src/channels/sink-contract.ts'
 import type { WorkflowRuntime } from '../../src/workflows/runtime.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
@@ -32,8 +33,17 @@ test('workflow selection syncs to the editable split target, replaces and clears
   const frozenHistory: string[] = []
   const fixtureDefinition = { id: 'schedule:a', name: 'Workflow a', revision: 1, enabled: true, source: { kind: 'schedule', id: 'a' }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'fresh', task: 'Reminder a' } }] }
   const referenceState = { projectId: 'a', definitions: [fixtureDefinition], runs: [{ id: 'run:a', workflow: 'schedule:a', definition: structuredClone(fixtureDefinition), status: 'completed', cursor: 1 }] }
+  const connectionSink = (projectId: string): ConnectionSinkProjection => ({ kind: 'connection-sink', id: 'connection:conn', projectId, connectionId: 'conn',
+    connectionPath: 'v:connections/conn/overview.json', sinkPath: 'v:connections/conn/sink.json',
+    sink: { kind: 'common-receipt', reacts: false, navigation: { kind: 'connection-content', projectId, connectionId: 'conn' } },
+    receivers: [{ id: 'group', name: 'Received group', address: { projectId, botInstanceId: 'conn', platform: 'qq', conversationId: 'group' },
+      path: 'v:connections/conn/receivers/group.json', navigation: { kind: 'conversation', inboxSessionId: 'web:chat-ordinary',
+        address: { projectId, botInstanceId: 'conn', platform: 'qq', conversationId: 'group' } } },
+    { id: 'forum', name: 'Parent forum', address: { projectId, botInstanceId: 'conn', platform: 'discord', conversationId: 'parent' },
+      path: 'v:connections/conn/receivers/forum.json', navigation: { kind: 'channel-content', channelType: 15, guildId: 'guild', view: 'threads',
+        address: { projectId, botInstanceId: 'conn', platform: 'discord', conversationId: 'parent' } } }], bots: [], guidePath: 'v:bots/authoring' })
   const bus = new Bus()
-  const channel = new WebChannel(bus, { authorize: () => true, resolveInputReferences: workflowReferenceResolver('a', { inspect: () => referenceState as ReturnType<WorkflowRuntime['inspect']> }) })
+  const channel = new WebChannel(bus, { authorize: () => true, resolveInputReferences: workflowReferenceResolver('a', { inspect: () => referenceState as ReturnType<WorkflowRuntime['inspect']> }, id => { assert.equal(id, 'conn'); return connectionSink('a') }) })
   channel.setReceiver(async message => {
     frozenHistory.push(message.content)
     bus.emit('message.outbound', { event: 'response', channel: 'web', chatId: message.chatId, replyTo: message.messageId, done: true, content: 'ok' })
@@ -84,7 +94,7 @@ test('workflow selection syncs to the editable split target, replaces and clears
       }
       if (path.endsWith('/api/workflows')) {
         const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'fresh', task: `Reminder ${projectId}` } }] }
-        json({ projectId, bots: { connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:chat-ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition, { ...definition, id: `${definition.id}:other`, name: `Other workflow ${projectId}` }], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:chat-ordinary' } }] }); return
+        json({ projectId, bots: { sinks: [connectionSink(projectId)], connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:chat-ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition, { ...definition, id: `${definition.id}:other`, name: `Other workflow ${projectId}` }], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:chat-ordinary' } }] }); return
       }
       if (path.endsWith('/api/channels')) { json({ channels: (projectId === 'a' ? ['isolated-one', 'isolated-two'] : ['other']).map(id => ({ id, projectId, displayName: id, platform: 'qq', label: 'QQ', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { appId: 'fixture' }, secrets: { secret: true } })) }); return }
       if (path.endsWith('/api/automations')) { json({ automations: [{ id: 'system:session-cleanup', name: 'Session cleanup', source: 'system', session: 'fresh', enabled: true, schedule: 'every 1h', workflow: { id: `schedule:${projectId}`, pending: 0, blocked: 0 } }] }); return }
@@ -254,10 +264,17 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await wait(visible('[data-editor-group="right"] .reference-composer'));
     assert.equal(await run('document.querySelector("[data-editor-group=right] .reference-composer")===window.fixture.chatInput'),true);
     assert.equal(await run('window.fixture.chatInput.textContent'),'Right unsent draft');
-    const resizeHandle='document.querySelector("[data-editor-group=right] [role=separator]")';
-    const beforeWidth=await run(resizeHandle+'.getAttribute("aria-valuenow")');
-    await run(resizeHandle+'.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}))');
-    await delay(100);assert.notEqual(await run(resizeHandle+'.getAttribute("aria-valuenow")'),beforeWidth,'Shared group resize is keyboard-operable');
+    // Project switching can expose the composer before ResizeObserver has measured
+    // its restored split. Select the visible group handle (not an inspector or a
+    // retained hidden Project), then wait for its bounds to match actual layout.
+    const resizeHandle=visible('[data-editor-group="right"] > [role="separator"][aria-label="Resize editor group"]');
+    await wait('(()=>{const handle='+resizeHandle+';if(!handle)return false;const width=handle.closest(".editor-groups").getBoundingClientRect().width;const min=Number(handle.getAttribute("aria-valuemin")),max=Number(handle.getAttribute("aria-valuemax")),now=Number(handle.getAttribute("aria-valuenow"));return width>520&&Math.abs(max-(width-280))<1&&max-min>=24&&now>=min&&now<=max})()');
+    const beforeWidth=await run('Number(('+resizeHandle+').getAttribute("aria-valuenow"))');
+    const grow=await run('Number(('+resizeHandle+').getAttribute("aria-valuemax"))-'+beforeWidth+'>=24');
+    const resizeKey=grow?'ArrowLeft':'ArrowRight';
+    await run('('+resizeHandle+').dispatchEvent(new KeyboardEvent("keydown",{key:'+JSON.stringify(resizeKey)+',bubbles:true}))');
+    await wait('Number(('+resizeHandle+').getAttribute("aria-valuenow"))==='+String(beforeWidth+(grow?24:-24)));
+    assert.equal(await run('Number(('+resizeHandle+').getAttribute("aria-valuenow"))'),beforeWidth+(grow?24:-24),'Shared group resize is keyboard-operable');
     await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="schedule:a"&&e.dataset.nodeType==="action").click()');
     await wait('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("1: schedule-action")');
     await run('window.fixture.chatState.appendInputReference({label:"Manual workflow",reference:{kind:"workflow",projectId:"a",workflowId:"schedule:a",revision:1,runId:"run:a"}})');
@@ -268,6 +285,44 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await wait('window.fixture.chatInput.textContent===""');await wait('!!window.fixture.lastAdmission');await delay(400);
     await run('window.fixture.chatObservers.forEach(observer=>observer.event({requestId:window.fixture.lastAdmission.requestId,payload:{event:"turn_finished",done:true,status:"completed",turnId:"fixture-turn"}}))');
     await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    // Real Connection section/receiver selection reaches the editable composer and host admission.
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"connection:conn"}})');
+    await wait('document.querySelector("[data-editor-group=right] .context-chip")?.textContent.includes("conn")');
+    assert.equal(await run('window.fixture.chatState.selectedWorkflowReference.reference.kind'),'connection-sink');
+    await run('[...document.querySelectorAll(".graph-group")].find(e=>e.dataset.workflow==="connection:conn").querySelector(".group-conversation").click()');
+    assert.equal(await run('window.fixture.chatState.selectedWorkflowReference.reference.connectionId'),'conn','directory navigation preserves selection');
+    await run('(()=>{const g=window.fixture.groups,d=g.referenceTarget("a");window.fixture.sinkTarget=d;g.descriptors.set(d.id,{...d,conversation:{...d.conversation,editable:false}})})()');
+    await wait('!document.querySelector("[data-editor-group=right] .context-chip")');
+    await run('void window.fixture.groups.descriptors.set(window.fixture.sinkTarget.id,window.fixture.sinkTarget)');
+    await wait('!!window.fixture.chatState.selectedWorkflowReference');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"b"},query:{bot:"connection:conn"}})');
+    await wait('window.fixture.chatState.selectedWorkflowReference===undefined');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"connection:conn"}})');
+    await wait('window.fixture.chatState.selectedWorkflowReference?.reference.projectId==="a"');
+    const submitSink=async(text)=>{
+      await run('window.fixture.chatInput.textContent='+JSON.stringify(text)+';window.fixture.chatInput.dispatchEvent(new Event("input",{bubbles:true}))');
+      await wait('!document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').disabled');
+      await run('window.fixture.lastAdmission=null;document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').click()');
+      await wait('!!window.fixture.lastAdmission');await wait('window.fixture.chatInput.textContent===""');
+      await run('window.fixture.chatObservers.forEach(observer=>observer.event({requestId:window.fixture.lastAdmission.requestId,payload:{event:"turn_finished",done:true,status:"completed",turnId:"sink-turn"}}))');await delay(200);
+    };
+    await submitSink('Discuss Connection');
+    await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="connection:conn"&&e.textContent.includes("Received group")).click()');
+    await wait('window.fixture.chatState.selectedWorkflowReference?.reference.receiverId==="group"');
+    await submitSink('Discuss receiver');
+    await run('document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Clear selection"]')+').click()');
+    await wait('!document.querySelector("[data-editor-group=right] .context-chip")');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"connection:conn"}})');
+    await wait('!!document.querySelector(".receiver-directory")');
+    const navLinks=await run('[...document.querySelectorAll(".receiver-directory a")].map(e=>e.getAttribute("href"))');
+    assert.ok(navLinks.some(href=>href.includes("chat-ordinary")));
+    assert.ok(navLinks.some(href=>href.includes("discord-channel")&&href.includes("parent")));
+    await run('document.querySelector(".receiver-directory a").click()');
+    await wait('window.fixture.router.currentRoute.value.name==="chat"');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"connection:conn"}})');
+    await wait('!!document.querySelector(".receiver-directory a")');
+    await run('[...document.querySelectorAll(".receiver-directory a")].find(e=>e.getAttribute("href").includes("discord-channel")).click()');
+    await wait('window.fixture.router.currentRoute.value.name==="chat" && window.fixture.router.currentRoute.value.params.sessionId.includes("discord-channel:")');
     if(process.env.EDITOR_GROUP_SCREENSHOT) require('node:fs').writeFileSync(process.env.EDITOR_GROUP_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
     await win.close();console.log('WORKFLOW_SELECTION_SYNC_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
@@ -278,8 +333,13 @@ test('workflow selection syncs to the editable split target, replaces and clears
   const timer = setTimeout(() => child.kill(), 80_000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); if (code !== 0) console.error(output); assert.equal(code, 0, output); assert.match(output, /WORKFLOW_SELECTION_SYNC_OK/)
-  assert.deepEqual(requests.filter(request => request.method !== 'GET'), [{ path: '/projects/a/api/chat/send', method: 'POST' }], 'Only the explicit send submits; editor movement never forks, prepares or submits')
+  assert.deepEqual(requests.filter(request => request.method !== 'GET'), Array(3).fill({ path: '/projects/a/api/chat/send', method: 'POST' }), 'Only the explicit send submits; editor movement never forks, prepares or submits')
   assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a' }, { kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a', selector: { kind: 'node', index: 0, nodeKind: 'schedule-action' } }])
+  assert.deepEqual(sentBodies[1]!.references, [{ kind: 'connection-sink', projectId: 'a', connectionId: 'conn' }])
+  assert.deepEqual(sentBodies[2]!.references, [{ kind: 'connection-sink', projectId: 'a', connectionId: 'conn', receiverId: 'group' }])
+  assert.match(frozenHistory[1]!, /v:connections\/conn\/sink.json/)
+  assert.match(frozenHistory[2]!, /v:connections\/conn\/receivers\/group.json/)
+  assert.match(frozenHistory[2]!, /v:bots\/authoring/)
   assert.equal(sentBodies[0]!.content, 'Right unsent draft')
   assert.equal(sentBodies[0]!.media, undefined)
   assert.match(frozenHistory[0]!, /Host-resolved identity snapshot/)

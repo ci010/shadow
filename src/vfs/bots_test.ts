@@ -35,7 +35,7 @@ import { createBotsHandler } from './bots.ts'
 
 function fixture(workspace: string) {
   const store = new BotInstanceStore({ projectId: 'p', path: join(workspace, 'connections.json') })
-  const bot = store.create('qq', 'Synthetic connection', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET', allowFrom: ['PRIVATE_SENDER'] }, undefined, 'personal')
+  const bot = store.create('qq', 'Synthetic connection', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' }, undefined, 'personal')
   store.bindOwner(bot.id, 'PRIVATE_OWNER', 'PRIVATE_CHAT')
   const bus = new Bus()
   const channels = new ChannelManager(ConfigSchema.parse({}), bus, {} as SessionManager, async () => { throw Error('No delivery') },
@@ -51,6 +51,8 @@ function fixture(workspace: string) {
   const context = { projectId: 'p', channel: 'web', sessionId: 'web:owner', admin: true, inputSource: 'user',
     signal: new AbortController().signal, tools: { executionMode: 'session' } } as ExecutionContext
   const read = new ReadTool(workspace, vfs), search = new SearchTool(workspace, undefined, vfs, false)
+  assert.match(String(handler.read('authoring', context)), /BOT.md is the sole BOT listener/)
+  assert.match(String(handler.read('authoring', context)), /skills: \[\{name, content\}\]/)
   const get = async (path: string) => JSON.parse(String(await read.execute({ path: `v:bots/${path}` }, context)))
   const deploy = async (id: string, files = botFiles()) => {
     files = { ...files, 'BOT.md': files['BOT.md']!.replace('id: demo', `id: ${id}`) }

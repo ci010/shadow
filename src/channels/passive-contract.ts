@@ -6,7 +6,7 @@ export function parseServiceGeneration(value: unknown): string | undefined { ret
 const id = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
 export const ChannelSourceSchema = z.object({
   version: z.literal(1), projectId: id, botInstanceId: id,
-  platform: z.enum(['qq', 'feishu', 'discord']), conversationId: id,
+  platform: z.enum(['qq', 'feishu', 'discord', 'wechat']), conversationId: id,
   kind: z.enum(['direct', 'group', 'channel', 'thread']),
   parentId: id.optional(), guildId: id.optional(), recipientId: id.optional(), botUserId: id.optional(),
   name: z.string().max(100).optional(),
@@ -33,7 +33,7 @@ export function parseChannelSource(value: unknown, sessionId?: string, projectId
   if (sessionId && passiveChannelId(source) !== sessionId || projectId && source.projectId !== projectId) throw new Error('Passive channel origin mismatch')
   return source
 }
-export interface PassiveArrival { eligible: boolean; assertCurrent: () => void }
+export interface PassiveArrival { eligible: boolean; fresh?: boolean; assertCurrent: () => void }
 export type PassiveAdmission = boolean | PassiveArrival
 export type PassiveChannelMessage = InboundMessage & { passiveParentId?: string; attachmentReferences?: Array<{ id?: string; type?: string; size?: number; reference?: string }> }
 /** No signed URLs, downloads, embedded images or executable attachment data. */

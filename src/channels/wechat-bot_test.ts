@@ -31,7 +31,7 @@ test('WeChat store rejects service/default creation, role patches and persisted 
     assert.throws(() => store.update(bot.id, { purpose: 'service' }), /wechat_personal_bot_required/)
     assert.equal(store.get(bot.id).purpose, 'personal')
     assert.equal(parseBotStatus(store.status(bot.id), 'p').platform, 'wechat')
-    writeFileSync(path, JSON.stringify({ version: 2, bots: [{ ...bot, enabled: undefined, purpose: 'service' }] }))
+    writeFileSync(path, JSON.stringify({ version: 3, bots: [{ ...bot, enabled: undefined, purpose: 'service' }] }))
     assert.throws(() => new BotInstanceStore({ projectId: 'p', path }), /wechat_personal_bot_required/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
@@ -39,7 +39,10 @@ test('WeChat store rejects service/default creation, role patches and persisted 
 test('WeChat authenticated scoped QR flow feeds only paired owner DMs into existing Bot routing', async () => {
   const root = directory(), store = new BotInstanceStore({ projectId: 'p', path: join(root, 'bots.json') })
   const bus = new Bus(), received: InboundMessage[] = [], adapters: WeChatChannel[] = []
-  const sessions = { listSessions: () => [], getSessionState: () => undefined, retireIdleConversationContexts: async () => {} } as unknown as SessionManager
+  const recorded: string[] = []
+  const sessions = { listSessions: () => [], getSessionState: () => undefined, retireIdleConversationContexts: async () => {},
+    recordPassiveChannel: async (_source: unknown, message: InboundMessage) => { recorded.push(message.content); return { status: 'accepted', inputId: message.messageId } },
+  } as unknown as SessionManager
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), bus, sessions, async message => {
     received.push(message)
     return { status: 'accepted', sessionId: 'fixture', inputId: 'fixture' }
@@ -69,9 +72,13 @@ test('WeChat authenticated scoped QR flow feeds only paired owner DMs into exist
     assert.equal((await login.json()).connected, true)
     const adapter = adapters[0]
     const incoming = (content: string, message_id: number, from_user_id = 'owner') => adapter['_processMessage']({ message_id, from_user_id, message_type: WeixinMessageType.USER, item_list: [{ type: WeixinMessageItemType.TEXT, text_item: { text: content } }] }, 'owner')
-    await assert.rejects(incoming('Before pairing', 1), /Verified owner/)
+    await incoming('Before pairing', 1)
+    assert.deepEqual(recorded, ['Before pairing'])
+    assert.equal(received.length, 0, 'Common recording does not grant verified-owner authority')
     const challenge = manager.createOwnerChallenge(bot.id)
     await incoming(`/shadow-pair ${challenge.challenge}`, 2)
+    assert.equal(recorded.includes('/shadow-pair [redacted pairing proof]'), true)
+    assert.equal(JSON.stringify(recorded).includes(challenge.challenge), false)
     assert.equal(received.length, 0)
     await manager.confirmOwner(bot.id, challenge.challenge)
     await incoming('Hello', 3)
@@ -80,6 +87,11 @@ test('WeChat authenticated scoped QR flow feeds only paired owner DMs into exist
     assert.equal(received[0].isGroup, false)
     assert.equal(received[0].channelAddress?.botInstanceId, bot.id)
     assert.equal(received[0].admin, true)
+    assert.equal(recorded.includes('Stranger'), true, 'Linked-user processing restriction is not a recording filter')
+    await adapter['_processMessage']({ message_id: 5, from_user_id: 'synthetic-account', to_user_id: 'owner', message_type: WeixinMessageType.BOT,
+      item_list: [{ type: WeixinMessageItemType.TEXT, text_item: { text: 'Own platform echo' } }] }, 'owner')
+    assert.equal(recorded.includes('Own platform echo'), true)
+    assert.equal(received.length, 1, 'Own echoes are recorded without a BOT feedback loop')
     assert.equal(JSON.stringify(manager.botStatuses()).includes('synthetic-secret'), false)
     assert.equal((await post(`${base}/login`)).status, 400)
     const duplicate = await manager.createBot({ platform: 'wechat', purpose: 'personal', displayName: 'Duplicate', config: { enabled: true } })

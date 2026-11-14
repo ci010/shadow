@@ -11,7 +11,8 @@ export interface WorkflowInputReferences {
   clearSelection?(): void
 }
 export const WorkflowInputReferencesKey: InjectionKey<WorkflowInputReferences> = Symbol('WorkflowInputReferences')
-export const inputReferenceKey = (item: InputReference): string => JSON.stringify([item.projectId, item.workflowId, item.revision, item.runId ?? null,
+export const inputReferenceKey = (item: InputReference): string => item.kind === 'connection-sink'
+  ? JSON.stringify([item.kind, item.projectId, item.connectionId, item.receiverId ?? null]) : JSON.stringify([item.projectId, item.workflowId, item.revision, item.runId ?? null,
   item.selector?.kind === 'node' ? ['node', item.selector.index, item.selector.nodeKind] : item.selector?.kind ?? null])
 
 /** Resolve graph-local IDs against the displayed admitted definition, never canvas IDs. */
@@ -34,6 +35,11 @@ export function workflowInputReference(projectId: string, definition: WorkflowDe
       ...(run ? { runId: run.id } : {}), ...(selector ? { selector } : {}) }])
     return { reference: reference!, label: `${definition.name || definition.id}${detail ? ` · ${detail}` : ''} · r${definition.revision}${run ? ` · ${run.id}` : ''}` }
   } catch { return }
+}
+
+export function connectionSinkInputReference(projectId: string, connectionId: string, label: string, receiverId?: string): LabeledInputReference {
+  const [reference] = parseInputReferences([{ kind: 'connection-sink', projectId, connectionId, ...(receiverId ? { receiverId } : {}) }])
+  return { reference: reference!, label }
 }
 
 export function addInputReference(items: readonly LabeledInputReference[], item: LabeledInputReference): { items: LabeledInputReference[]; result: AttachReferenceResult } {

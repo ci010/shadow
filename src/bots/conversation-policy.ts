@@ -19,7 +19,7 @@ import type { SessionState } from '../sessions/session-store.ts'
 import type { ChannelBoundary } from '../channels/integration-contract.ts'
 
 export interface ConversationPolicies {
-  personal?(sessionId: string): { agent: string; prompt: string } | undefined
+  personal?(sessionId: string): { agent: string; prompt: string; assertCurrent?: () => void } | undefined
   managed(sessionId: string): boolean
   resolve(sessionId: string): ResolvedConversationPolicy | undefined
   authorize(sessionId: string, input: SessionInput): void
@@ -56,7 +56,7 @@ export class DirectoryBotService implements ConversationPolicies {
     return address
   }
 
-  personal?(sessionId: string): { agent: string; prompt: string } | undefined
+  personal?(sessionId: string): { agent: string; prompt: string; assertCurrent?: () => void } | undefined
   managed(sessionId: string): boolean {
     const address = this.address(sessionId)
     return !!address && this.policyStore.isManaged(address)

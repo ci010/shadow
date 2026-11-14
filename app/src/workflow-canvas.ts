@@ -1,18 +1,19 @@
+import type { ConnectionSinkProjection } from '../../src/channels/sink-contract.ts'
 import { scheduleNodeDelivery } from '../../src/cron/delivery.ts'
 import { MarkerType, type Node, type Edge } from '@vue-flow/core'
 import { workflowGraph, type WorkflowDefinition, type WorkflowRun, type WorkflowConversation } from './workflows.ts'
 
 export interface WorkflowCanvasControl { enabled: boolean; disabled: boolean; busy: boolean; error?: string; notice?: string }
-export type WorkflowNodeType = 'connection' | 'binding' | 'deployment' | 'session' | 'source' | 'gate' | 'action'
+export type WorkflowNodeType = 'sink' | 'connection' | 'binding' | 'deployment' | 'session' | 'source' | 'gate' | 'action'
 type ProjectionGraph = Array<{ id: string; nodeType?: WorkflowNodeType; label: string; detail: string; config: unknown; status: 'ready'; description?: string; targetSessionId?: string }>
 export type WorkflowCanvasEntry = ({ definition: WorkflowDefinition; graph?: never; projection?: false } |
   { definition: Pick<WorkflowDefinition, 'id' | 'name' | 'enabled'>; graph: ProjectionGraph; projection: true }) &
-  { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl; configureConnectionId?: string }
+  { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl; configureConnectionId?: string; sinkProjection?: ConnectionSinkProjection }
 export const workflowColumns = ['cron', 'automation', 'bot'] as const
 export type WorkflowColumn = typeof workflowColumns[number]
 /** Periodic inputs share one source; delivery determines the product column. */
 export function workflowColumn(entry: WorkflowCanvasEntry): WorkflowColumn {
-  if (entry.projection) return 'bot'
+  if (entry.projection || entry.definition.source.kind === 'bot') return 'bot'
   if (entry.definition.source.kind !== 'schedule') return 'automation'
   const node = entry.definition.nodes.find(node => node.kind === 'schedule-action')
   return scheduleNodeDelivery(node)?.kind === 'session' ? 'cron' : 'automation'
@@ -44,7 +45,7 @@ export function workflowCanvas(flows: WorkflowCanvasEntry[]): { nodes: Node[]; e
   const nodes: Node[] = [], edges: Edge[] = []
   if (!flows.length) return { nodes, edges }
   const entries = flows.map(entry => ({ entry, column: workflowColumn(entry), graph: entry.graph ?? workflowGraph(entry.definition as WorkflowDefinition, entry.run) }))
-  const widths = Object.fromEntries(workflowColumns.map(column => [column, Math.max(304, ...entries.filter(item => item.column === column).map(item => item.graph.length * 280 + 24))])) as Record<WorkflowColumn, number>
+  const widths = Object.fromEntries(workflowColumns.map(column => [column, Math.max(304, ...entries.filter(item => item.column === column).map(item => (item.entry.sinkProjection ? 2 : item.graph.length) * 280 + 24))])) as Record<WorkflowColumn, number>
   const positions = {} as Record<WorkflowColumn, number>
   const rows = { cron: 0, automation: 0, bot: 0 }
   let x = 0
@@ -57,17 +58,20 @@ export function workflowCanvas(flows: WorkflowCanvasEntry[]): { nodes: Node[]; e
   }
   for (const { entry, column, graph } of entries) {
     const { definition, run, enabled = definition.enabled, snapshot = false, conversation, control } = entry
-    const row = rows[column]++
+    const y = rows[column]
+    const height = entry.sinkProjection ? Math.max(240, (graph.length - 1) * 160 + 96) : 240
+    const width = (entry.sinkProjection ? 2 : graph.length) * 280 + 24
+    rows[column] += height + 20
     const groupId = nodeId(definition.id, 'group')
-    nodes.push({ id: groupId, type: 'group', position: { x: positions[column], y: 48 + row * 260 }, data: { definition, run, enabled, snapshot, conversation, control, configureConnectionId: entry.configureConnectionId, projection: entry.projection, projectionType: entry.projection ? graph.find(node => node.nodeType === 'binding')?.nodeType ?? graph[0]?.nodeType : undefined, column },
-      style: { width: `${graph.length * 280 + 24}px`, height: '240px' },
+    nodes.push({ id: groupId, type: 'group', position: { x: positions[column], y: 48 + y }, data: { definition, run, enabled, snapshot, conversation, control, configureConnectionId: entry.configureConnectionId, sinkProjection: entry.sinkProjection, projection: entry.projection, projectionType: entry.projection ? graph.find(node => node.nodeType === 'binding')?.nodeType ?? graph[0]?.nodeType : undefined, column },
+      style: { width: `${width}px`, height: `${height}px` },
       draggable: false, selectable: false, connectable: false, deletable: false, focusable: false, zIndex: -1 })
     for (const [index, node] of graph.entries()) {
       nodes.push({ id: nodeId(definition.id, node.id), type: 'workflow',
-        parentNode: groupId, extent: 'parent', position: { x: 24 + index * 280, y: 64 }, data: { ...node, flowId: definition.id, enabled, projection: entry.projection, column },
+        parentNode: groupId, extent: 'parent', position: entry.sinkProjection ? { x: index ? 304 : 24, y: index ? 64 + (index - 1) * 160 : 64 + Math.max(0, graph.length - 2) * 80 } : { x: 24 + index * 280, y: 64 }, data: { ...node, flowId: definition.id, enabled, projection: entry.projection, column },
         draggable: false, connectable: false, deletable: false, selectable: false, focusable: false })
       if (index) edges.push({
-        id: nodeId(definition.id, `edge-${index}`), source: nodeId(definition.id, graph[index - 1]!.id), target: nodeId(definition.id, node.id), type: 'smoothstep',
+        id: nodeId(definition.id, `edge-${index}`), source: nodeId(definition.id, graph[entry.sinkProjection ? 0 : index - 1]!.id), target: nodeId(definition.id, node.id), type: 'smoothstep',
         markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--c-text-muted)' },
         animated: run?.status === 'running',
         style: { stroke: run?.status === 'running' ? 'var(--c-info)' : 'var(--c-text-muted)', strokeDasharray: enabled ? undefined : '6 4' }, selectable: false, deletable: false, focusable: false,

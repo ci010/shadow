@@ -58,6 +58,8 @@ export const DiscordBindingSchema = z.object({
   target: DiscordTargetSchema,
   enabled: z.boolean(), agentId: z.string().uuid(),
   trigger: z.enum(['mention', 'all']),
+  /** BOT-owned sender intersection, independent of participant role grants. */
+  allowFrom: z.array(snowflake).max(1000).optional(),
   processor: InputProcessorSchema.optional(),
   observation: DiscordObservationSchema.optional(),
   participants: z.object({

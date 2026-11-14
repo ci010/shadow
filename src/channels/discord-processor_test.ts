@@ -158,9 +158,8 @@ test('stop aborts attachment preparation and drains even if downloader ignores c
 
 test('managed adapter burst survives durable inbox restart with fresh admissions and no repeated stop rewrite', async t => {
   const {mkdtemp, rm, readdir, readFile} = await import('node:fs/promises')
-  const {tmpdir} = await import('node:os')
   const path = await import('node:path')
-  const workspace = await mkdtemp(path.join(tmpdir(), 'discord-processor-restart-'))
+  const workspace = await mkdtemp(path.join(process.cwd(), '.discord-processor-restart-'))
   // Cleanup must run after both adapter hooks.
   const cleanup: (() => Promise<void>)[] = []
   const scope = {after(fn: () => unknown) {cleanup.push(async () => {await fn()})}}

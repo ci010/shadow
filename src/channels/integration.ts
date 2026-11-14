@@ -300,9 +300,9 @@ export class DiscordIntegration implements ConversationPolicies {
 
   private allowed(binding: DiscordBinding, inspection: DiscordInspection): void {
     const actors = binding.participants
-    const allowFrom = this.options.bots.get(binding.botInstanceId).config.allowFrom
+    const allowFrom = binding.allowFrom
     if (inspection.botUserId !== binding.botUserId || !inspection.canView || !inspection.canSend ||
-      Array.isArray(allowFrom) && allowFrom.length > 0 && !allowFrom.includes(inspection.actor.id) ||
+      Array.isArray(allowFrom) && !allowFrom.includes(inspection.actor.id) ||
       !actors.everyone && !actors.userIds.includes(inspection.actor.id) && !inspection.actor.roleIds.some(role => actors.roleIds.includes(role))) {
       throw new IntegrationError('channel_access_denied', 'The current channel or sender is not authorized.', 403)
     }

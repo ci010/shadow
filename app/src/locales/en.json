@@ -4405,5 +4405,15 @@
   "Phone port (1024–65535)": "Phone port (1024–65535)",
   "Refresh phone access": "Refresh phone access",
   "The private LAN address is selected automatically when enabled. Settings are restored after restart. Retry after changing Wi-Fi or Ethernet.": "The private LAN address is selected automatically when enabled. Settings are restored after restart. Retry after changing Wi-Fi or Ethernet.",
-  "Turn off phone access": "Turn off phone access"
+  "Turn off phone access": "Turn off phone access",
+  "BOT reference": "BOT reference",
+  "BOT.md controls subscriptions; this reference does not add listeners.": "BOT.md controls subscriptions; this reference does not add listeners.",
+  "Message receiver": "Message receiver",
+  "Records messages without model reactions": "Records messages without model reactions",
+  "No received conversations yet": "No received conversations yet",
+  "Open message history": "Open message history",
+  "Open thread list": "Open thread list",
+  "Open messages and threads": "Open messages and threads",
+  "Open connection content": "Open connection content",
+  "Channel metadata unavailable. Waiting for received content.": "Channel metadata unavailable. Waiting for received content."
 }

@@ -1,3 +1,4 @@
+import { assertConnectionMigrationSettled } from '../../bots/connection-migration.ts'
 import { workflowReferenceResolver } from '../../workflows/references.ts'
 import { scheduleAuthoring } from '../../workflows/schedule-authoring.ts'
 import { workMapper } from '../../workflows/work-mapping.ts'
@@ -11,6 +12,8 @@ import { observeSessionInvalidations } from './session-realtime.ts'
 import { learningInterval, updateLearningInterval, updateLearningEnabled } from '../../cron/learning-controls.ts'
 import { InputRouter } from '../../input/router.ts'
 import { createBotsHandler } from '../../vfs/bots.ts'
+import { createConnectionsHandler } from '../../vfs/connections.ts'
+import { connectionSinkProjection } from '../../channels/sink-projection.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
 import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
 import { handleBotInput } from '../../bots/input.ts'
@@ -52,7 +55,7 @@ import { createSelfSessionHandler, withSelfSession } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
 import { TaskTool } from '../../tools/task.ts'
 import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicFocus } from '../../sessions/lightweight-topic.ts'
-import { botConversationPolicies } from '../../channels/bot-policies.ts'
+import { botConversationPolicies, isPersonalConnectionSession } from '../../channels/bot-policies.ts'
 import { channelSessionId, channelAddressFromSessionId } from '../../bus/events.ts'
 import { automationModelSettings, automationDispatchModel, automationCatalogConfigChanged } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
@@ -292,6 +295,7 @@ export async function createProjectRuntime(
   const { scope, project, mainCluster, copilotAuth, configStore } = dependencies
   const startup = new StartupTimings('project', project.id)
   const workspace = config.agent.workspace
+  assertConnectionMigrationSettled(workspace, project.id)
   const cleanup: Array<() => unknown> = []
   const promptCaptures = createPromptCaptureStore(project.id, process.env, projectStoragePath(workspace, '.learning', 'audit'))
   if (promptCaptures) cleanup.push(() => promptCaptures.close())
@@ -1531,7 +1535,7 @@ export async function createProjectRuntime(
   registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled, () => botWorkflowProjection({
     projectId: project.id, store: botStore, channels, directory: directoryBots,
     sessionIds: sessions.listSessions().map(session => session.sessionId),
-    personalListeners: sessionInputListeners(project.id, sessions, botStore),
+    personalListeners: sessionInputListeners(project.id, sessions, botStore, directoryBots), sinkLookup: connectionSink,
   }))
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
@@ -1593,10 +1597,12 @@ export async function createProjectRuntime(
       realtime.invalidateResource?.('config')
       realtime.invalidateResource?.('channels')
   }
+  workflows.bindBots(id => directoryBots.inspect(id)?.state === 'valid')
+  directoryBots.setExecutionPolicy(id => workflows.botExecution(id))
   const inputHandlers = { sessions, bots: botStore, directory: directoryBots,
     receive: (message: import('../../bus/events.ts').InboundMessage) => agent.receiveChannelMessage(message) }
   const inputs = new InputRouter<ChannelInputPayload, ChannelInputResult>(project.id, {
-    listeners: () => [...sessionInputListeners(project.id, sessions, botStore), ...directoryBots.inputListeners()],
+    listeners: () => [...sessionInputListeners(project.id, sessions, botStore, directoryBots), ...directoryBots.inputListeners()],
     deliver: (target, input) => target.kind === 'session'
       ? handleSessionInput(target.id, input, inputHandlers) : handleBotInput(target.id, input, inputHandlers),
   })
@@ -1604,10 +1610,12 @@ export async function createProjectRuntime(
     async message => requireChannelReceipt(await inputs.route(channelMessageEnvelope(botStore, message))), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
     authorizeWebRequest: dependencies.authorize,
-    resolveInputReferences: workflowReferenceResolver(project.id, workflows),
+    resolveInputReferences: workflowReferenceResolver(project.id, workflows, connectionSink),
     routeInputPolicy: async (message, runPolicy) => requirePolicyReceipt(await inputs.route(channelMessageEnvelope(botStore, message, runPolicy))),
     routeObservation: async (connection, bindingId, runPolicy) => requirePolicyReceipt(await inputs.route(observationEnvelope(botStore, connection, bindingId, runPolicy))),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
+    trustedConversation: (connectionId, chatId) => directoryBots.definitions().some(({ bot }) => bot.connectionPolicies?.[connectionId]?.trustedChats?.includes(chatId)),
+    personalGeneration: connectionId => directoryBots.personalGeneration(connectionId),
     serviceAssigned: directoryBots.serviceAssigned,
     serviceGeneration: address => { const policy = directoryBots.resolve(address); return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined },
   })
@@ -1620,6 +1628,31 @@ export async function createProjectRuntime(
     sessions.assertFolderAccess(sessionId)
   }
   importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, assertBotSession))
+  function connectionSink(connectionId: string) {
+    const connection = botStore.get(connectionId)
+    if (connection.projectId !== project.id) throw new Error('Connection Project mismatch')
+    const bots: import('../../channels/sink-contract.ts').ConnectionSinkProjection['bots'] = []
+    for (const id of directoryBots.deployments.diagnosticIds().ids) {
+      let item
+      try { item = directoryBots.inspect(id) } catch { continue } // A corrupt BOT cannot hide transport receipts.
+      const bot = item?.bot
+      if (!bot || !(bot.mode === 'personal' ? bot.connection === connectionId : bot.bindings.some(binding => binding.botInstanceId === connectionId))) continue
+      bots.push({ botId: bot.id, path: `v:bots/deployments/${encodeURIComponent(bot.id)}/status`, workflowIds: workflows.inspect().definitions.filter(flow => flow.source.kind === 'bot' && flow.source.id === bot.id).map(flow => flow.id) })
+    }
+    return connectionSinkProjection({ projectId: project.id, connectionId, platform: connection.platform, bots,
+      observations: new ChannelMessageStream(workspace, project.id).snapshot().events,
+      histories: sessions.listSessions().map(row => {
+        const state = sessions.getSessionState(row.sessionId)
+        return { sessionId: row.sessionId, projectId: state?.projectId, channelSource: state?.channelSource }
+      }) })
+  }
+  const connectionsVfs = createConnectionsHandler({ projectId: project.id, assertSession: assertBotSession,
+    index: () => { const result = botStore.ids(1000); return { ids: result.ids, ...(result.truncated ? { warning: 'connection-index-limit' } : {}) } },
+    overview: id => { const status = channels.botStatus(id); return { id: status.id, displayName: status.displayName,
+      platform: status.platform, purpose: status.purpose ?? 'unknown', enabled: status.enabled, health: status.state, ownerVerified: status.ownerVerified === true } },
+    sink: connectionSink,
+  })
+  vfs.mount('v:connections', 'read-only current Project transport Connections and common receipt sinks; read v:connections/overview', connectionsVfs.read, connectionsVfs.list)
   const botsVfs = createBotsHandler({ projectId: project.id, store: botStore, channels, directory: directoryBots, assertSession: assertBotSession })
   vfs.mount('v:bots', 'read-only current Project Bot connections/deployments/listeners; owner durable Web management only; read v:bots/overview', botsVfs.read, botsVfs.list)
   const channelStreamDeps: ConstructorParameters<typeof ChannelStreamTool>[3] = {
@@ -1724,7 +1757,7 @@ export async function createProjectRuntime(
       const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
       const bindings = definitions.flatMap(item=>item.bot.bindings)
       const beforeRevision = botDeployments.read(id)?.deployment.revision
-      const result = await publishBotChange(sessions, botPolicies, sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
+      const result = await publishBotChange(sessions, botPolicies, sessionId => personalConnections.some(id => isPersonalConnectionSession(botStore, sessionId, id)) || bindings.some(binding => binding.platform === 'discord'
         ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
         : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId,...(botStore.get(binding.botInstanceId).legacySessionId ? {legacySessionId:true} : {})})), personalConnections.length > 0, async () => {
         channelIntegrations.setBotPublication(true)

@@ -42,17 +42,20 @@ private drafts; returning requires a new connection selection. No running
 connection, credential or BOT deployment is changed merely by navigating these
 settings pages.
 
-## Passive service channel sessions
+## Common channel receipt and passive inbox sessions
 
-An enabled **service** connection now records platform-delivered message-create
-inputs into a separate, read-only `channel-inbox:` session before BOT trigger
-selection, processors, attachment downloads or replies. This applies to QQ,
-Feishu and supported Discord locations. It does not change personal connections,
-owner pairing, connection sender allowlists, privileged platform intents, or what
-the platform chooses to deliver. In particular, QQ messages not pushed by QQ
-cannot be recorded. Discord still verifies live conversation visibility and
-public-thread ancestry; private threads and unsupported conversation types remain
-closed. Recording a sender does not make that sender an Agent participant.
+Enabled Project connections record platform-delivered message-create inputs into
+separate, read-only `channel-inbox:` sessions before business sender admission,
+BOT selection, trigger evaluation, processors, attachment downloads or replies.
+This includes personal and unbound connections, not only assigned service BOTs.
+QQ, Feishu, supported Discord locations and WeChat use the existing receipt path;
+there is no collector BOT or additional message database. Existing owner pairing,
+BOT participant/tool/output restrictions, privileged platform intents and what the
+platform chooses to deliver remain execution/transport boundaries. QQ messages
+not pushed by QQ cannot be recorded. Discord verifies the connected Bot's live
+visibility and public-thread ancestry without inventing sender or participant
+permission for a receipt; private threads and unsupported conversation types
+remain closed. Recording a sender never makes that sender an Agent participant.
 
 The host records versioned source metadata: Project, connection ID, platform,
 conversation type and stable ID, plus verified parent/guild/DM information where
@@ -93,38 +96,33 @@ leaves the message in the inbox and does not automatically retry it against a BO
 
 The owner-only `bot_package` workflow now supports:
 
-1. `source` with a registered `folderId`, relative `directory`, and the referenced
-   `channelSessionId`. It reads the source revision and resolves the target from
-   host-recorded metadata, not message content or a model-supplied target object.
-2. `assign` with those fields, `sourceRevision`, the active `expectedRevision` when
-   applicable, a summary, and explicit `bindingJson` permissions. It is a **pure
-   preparation** operation: it returns an exact config-file `edit` and
-   `candidateRevision`; it does not write files, approve, or deploy.
-3. Apply the returned `match`/`content` using the existing authorized `write` tool
-   targeting the registered source Folder. This deliberately reuses ordinary
-   file-write permissions and edit receipts instead of adding a second arbitrary
-   source-file writer to Bot management. Reinspect on a stale match; do not blindly
-   overwrite concurrent source edits.
-4. Call `propose` with the same source, active `expectedRevision`, and
-   `sourceRevision: candidateRevision`. The existing native exact-content owner
-   decision remains mandatory. Cancellation leaves any ordinary source edits on
-   disk but leaves the deployment unchanged. A source change after preparation
-   cannot silently replace the candidate being proposed.
+1. `create` can create a new Service BOT in a new registered local source
+   directory and publish it with zero subscriptions. Existing directories are
+   never overwritten. A failed publication leaves source for inspection/retry.
+2. `source` resolves `sourceRevision` and a host-recorded `channelSessionId`.
+   Target IDs never come from message text or policy JSON.
+3. `link` updates and publishes the **existing BOT companion** with that source
+   revision, active `expectedRevision` and explicit `bindingJson`. No bindings
+   are copied to Connection or Workflow. `assign` remains a pure exact-edit
+   preparation alternative for callers using the ordinary authorized write tool.
+4. `propose` validates and publishes the exact `sourceRevision` under current
+   authenticated owner authority. No separate native approval/activation ask is
+   required. Stale source/base revisions fail rather than replacing newer edits;
+   live scope validation and publication exclusion still run.
 
-QQ/Feishu permission JSON must explicitly choose `enabled`, `trigger`, `allowFrom`
-and `tools` (`allowFrom: []` permits nobody). Discord must explicitly choose its
-participants and retains its normal tools/read-domain/thread/manage restrictions.
-Target identity fields such as `platform`, `botInstanceId`, `target` and
-`conversationId` are rejected in permission JSON; the referenced inbox supplies
-them. A Discord thread reference identifies that exact public thread, not an
-implicit grant over its parent or siblings. Live platform and deployment
-validation still run before and after the owner's approval.
+QQ/Feishu permission JSON explicitly chooses enabled/trigger/allowFrom/tools;
+`allowFrom: []` permits nobody. Discord explicitly chooses participants and its
+normal tool/read-domain/thread/manage restrictions. Target identity keys are
+rejected from policy JSON. Assignment targets are top-level groups/channels,
+not DMs or exact threads. A verified thread may only supply ancestry for an
+explicit `scope:parent` rule with `inheritThreads:true`.
 
-Setting the binding disabled through this same flow stops inference/output but
-not passive receipt. Transferring a channel from BOT A to BOT B requires removing
-A's binding from its source and approving that deployment, then approving B's
-binding; the existing single-owner validation is not bypassed. All assignments
-remain in `BOT.md`/its companion JSON, never session metadata or a UI binding DB.
+Disabling a binding stops inference/output, not common receipt. Transfer from
+BOT A to B requires publishing A's removal before B's link; single-owner
+validation remains enforced. All selectors stay in BOT.md/its companion, not
+session metadata, Connection config or a UI database. See
+[offline Connection policy migration](connection-migration.md) before deploying
+the v3-only reader over existing v2 Project files.
 
 Only new, nonduplicate arrivals eligible for the current assignment may reach a
 BOT. Arrival-time assignment generations are checked through policy selection,
@@ -145,7 +143,13 @@ revalidate live authority; queued output is checked again by the real delivery
 path and immediately before transport requests. Revocation cannot retract bytes
 already accepted by a platform, nor guarantee cancellation of a remote provider,
 but it prevents subsequent sends under the revoked assignment. Personal mode
-retains its previous quiescent publication and owner-pairing contract.
+retains its quiescent publication, ordinary Project role tools and owner-pairing
+contract. Its responses and user questions also carry the original BOT activation
+plus Workflow execution generation. Pause/re-enable or redeploy (even back to the
+same source bytes) cannot revive queued output; adapters recheck immediately
+before network sends, including SDK/token/upload/per-chat-queue waits. New input
+retires a stale active Personal context rather than renewing that context's lease.
+Legacy owner-DM session IDs participate in publication retirement too.
 
 ## Discord parent-channel subscriptions
 
@@ -182,9 +186,8 @@ Use trusted directory/source metadata for actual IDs, not user message text. In
 owner chat, a reference to a received public thread can prepare the same rule with
 `bot_package.assign` and explicit `scope: "parent"`. Its parent ID comes from the
 host-verified thread metadata; permission JSON must explicitly say
-`inheritThreads: true`. The default `scope: "conversation"` remains an exact
-single-conversation target; an exact thread assignment requires
-`inheritThreads: false` rather than silently promoting that child to a parent.
+`inheritThreads: true`. The default `scope: "conversation"` accepts a top-level group/channel only;
+new exact thread assignments are rejected rather than promoted.
 Existing child bindings are not silently promoted to
 parent rules, and repeating parent preparation from a sibling thread reuses the
 same parent binding rather than creating another per-thread entry.
@@ -196,7 +199,7 @@ For ordinary text parents, their own new messages follow that binding's policy
 as well; their public threads still have independent contexts. A thread under
 another parent, connection or Project does not match. Private threads remain
 unsupported and platform visibility, participants, live send/history checks and
-exact deployment approval are unchanged.
+exact revision and live publication checks remain enforced; no extra approval is added.
 
 Subscription/configuration UI displays the **parent-channel rule once**, with its
 inheritance semantics, not one row for every runtime thread. Each received post

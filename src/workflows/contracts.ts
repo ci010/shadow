@@ -19,6 +19,7 @@ export const ExternalAction = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('record') }).strict(), WorkMap,
 ])
 export const Node = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('bot-reference'), botId: WorkflowId }).strict(),
   z.object({ kind: z.literal('transform'), code: z.string().min(1).max(64000) }).strict(),
   z.object({ kind: z.literal('inbox') }).strict(),
   z.object({ kind: z.literal('record'), revisionField: Field.optional() }).strict(), WorkMap,
@@ -28,11 +29,11 @@ export const Node = z.discriminatedUnion('kind', [
 ])
 export const WorkflowDefinition = z.object({
   id: WorkflowId, owner: z.string().min(1).optional(), revision: z.number().int().positive().default(1), name: z.string().trim().min(1).max(160).optional(),
-  source: z.object({ kind: z.enum(['external', 'schedule', 'internal', 'github-resource']), id: WorkflowId }).strict(),
+  source: z.object({ kind: z.enum(['external', 'schedule', 'internal', 'github-resource', 'bot']), id: WorkflowId }).strict(),
   binding: z.object({ demand: z.unknown() }).strict().optional(),
   gate: RevisionGate.optional(), nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
 }).strict().superRefine((d, ctx) => {
-  const invalid = d.source.kind === 'external' && (!d.owner || d.nodes.some(n => ['schedule-action', 'host-action', 'github-notify'].includes(n.kind))) ||
+  const invalid = (d.source.kind === 'bot' ? !d.owner || d.binding !== undefined || d.gate !== undefined || d.nodes.length !== 1 || d.nodes[0].kind !== 'bot-reference' || d.nodes[0].botId !== d.source.id : d.nodes.some(n => n.kind === 'bot-reference')) || d.source.kind === 'external' && (!d.owner || d.nodes.some(n => ['schedule-action', 'host-action', 'github-notify'].includes(n.kind))) ||
     d.source.kind === 'schedule' && (d.gate && d.gate.first !== 'emit' || d.nodes.length !== 1 || d.nodes[0].kind !== 'schedule-action') ||
     d.source.kind === 'github-resource' && (d.nodes.length !== 1 || d.nodes[0].kind !== 'github-notify' || d.nodes[0].subscription.resourceId !== d.source.id) ||
     d.source.kind === 'internal' && (d.nodes.length !== 1 || d.nodes[0].kind !== 'host-action') ||
@@ -42,7 +43,7 @@ export const WorkflowDefinition = z.object({
   if (invalid) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid source/action boundary or node ordering' })
 })
 export const AuthorDefinition = z.object({ id: WorkflowId.refine(id => !/^(schedule|internal|github):/.test(id), 'Host source namespace is reserved'), name: z.string().trim().min(1).max(160),
-  source: z.object({ kind: z.literal('external'), id: WorkflowId }).strict(), binding: z.object({ demand: z.unknown() }).strict(),
+  source: z.object({ kind: z.enum(['external', 'bot']), id: WorkflowId }).strict(), binding: z.object({ demand: z.unknown() }).strict().optional(),
   gate: RevisionGate.optional(), nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
 }).strict().refine(d => d.nodes.every(n => !['schedule-action', 'host-action', 'github-notify'].includes(n.kind)), 'Host actions cannot be authored')
 export const Mapping = z.object({ initial: Observation, objective: z.string(), key: z.string().optional(), title: z.string().optional(), summary: z.string().optional(), revision: z.string().optional() }).strict()
