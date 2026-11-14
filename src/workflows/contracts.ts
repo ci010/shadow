@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { validScheduleDelivery } from '../cron/delivery.ts'
 import { githubSubscriptionSchema } from '../projects/github/contracts.ts'
 
 export const Drafts = z.array(z.object({ content: z.string().min(1).max(32768) }).strict()).max(16)
@@ -21,7 +22,7 @@ export const Node = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('transform'), code: z.string().min(1).max(64000) }).strict(),
   z.object({ kind: z.literal('inbox') }).strict(),
   z.object({ kind: z.literal('record'), revisionField: Field.optional() }).strict(), WorkMap,
-  z.object({ kind: z.literal('schedule-action'), action: z.enum(['agent', 'session', 'program']), job: z.unknown() }).strict(),
+  z.object({ kind: z.literal('schedule-action'), action: z.enum(['agent', 'session', 'program']), job: z.unknown(), delivery: z.unknown().optional() }).strict(),
   z.object({ kind: z.literal('github-notify'), subscription: githubSubscriptionSchema }).strict(),
   z.object({ kind: z.literal('host-action'), handler: WorkflowId, replay: z.enum(['safe', 'confirm']) }).strict(),
 ])
@@ -37,6 +38,7 @@ export const WorkflowDefinition = z.object({
     d.source.kind === 'internal' && (d.nodes.length !== 1 || d.nodes[0].kind !== 'host-action') ||
     d.nodes.some((n, i) => n.kind === 'inbox' && (i === 0 || d.nodes[i - 1].kind !== 'transform')) ||
     d.nodes.filter(n => n.kind === 'work-map').length > 1
+  if (d.nodes.some(n => n.kind === 'schedule-action' && n.delivery !== undefined && !validScheduleDelivery(n.delivery, n.job))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid schedule delivery' })
   if (invalid) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid source/action boundary or node ordering' })
 })
 export const AuthorDefinition = z.object({ id: WorkflowId.refine(id => !/^(schedule|internal|github):/.test(id), 'Host source namespace is reserved'), name: z.string().trim().min(1).max(160),
