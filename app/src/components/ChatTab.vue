@@ -27,7 +27,7 @@
       @draft="createNewWebChat"
     />
 
-    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
+    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : t('New conversation')" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
       :inspection="inspection" :project-navigation-enabled="!embedded"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
