@@ -126,8 +126,60 @@ export function workflowGraph(definition: WorkflowDefinition, run?: WorkflowRun)
 }
 export const recentWorkflowRuns = (snapshot: WorkflowSnapshot, id: string) => snapshot.runs.filter(r => r.workflow === id).sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id)).slice(0, 30)
 export function createWorkflowClient(base: string, projectId: string, request: typeof fetch = fetch) {
+  let cursor: string | undefined, current: WorkflowSnapshot | undefined
+  function apply(raw: unknown): WorkflowSnapshot {
+    if (!isRecord(raw) || raw.version !== 1 || !text(raw.cursor) || raw.cursor.length > 128 || /[\u0000-\u001f\u007f]/.test(raw.cursor)) return invalid()
+    if (raw.kind === 'noop') {
+      if (!current || raw.projectId !== projectId || raw.cursor !== cursor) return invalid()
+      return current
+    }
+    let candidate: unknown = raw.snapshot
+    if (raw.kind === 'delta') {
+      if (!current || raw.projectId !== projectId || raw.base !== cursor) return invalid()
+      const merge = (key: 'definitions' | 'runs') => {
+        const patch = raw[key]
+        if (patch === undefined) return current![key]
+        if (!isRecord(patch) || !Array.isArray(patch.upsert) || !Array.isArray(patch.remove) || !Array.isArray(patch.order)
+          || !patch.remove.every(id => typeof id === 'string') || !patch.order.every(id => typeof id === 'string')
+          || new Set(patch.order).size !== patch.order.length) return invalid()
+        const items = new Map<string, unknown>(current![key].map(item => [item.id, item]))
+        for (const id of patch.remove) items.delete(id)
+        for (const item of patch.upsert) { if (!isRecord(item) || !text(item.id)) return invalid(); items.set(item.id, item) }
+        if (items.size !== patch.order.length || patch.order.some(id => !items.has(id))) return invalid()
+        return patch.order.map(id => items.get(id))
+      }
+      if (raw.metadata !== undefined && (!isRecord(raw.metadata) || raw.metadata.projectId !== projectId)) return invalid()
+      candidate = { ...(raw.metadata ?? current), definitions: merge('definitions'), runs: merge('runs') }
+    } else if (raw.kind !== 'full') return invalid()
+    const parsed = parseWorkflows(candidate, projectId)
+    // Parsing verifies the entire candidate. Structural sharing prevents unchanged
+    // definitions/runs (including selected inspector references) from churning.
+    if (current) {
+      for (const key of ['definitions', 'runs', 'sources', 'bots'] as const) {
+        if (JSON.stringify(parsed[key]) === JSON.stringify(current[key])) Object.assign(parsed, { [key]: current[key] })
+        else if (key === 'definitions' || key === 'runs') {
+          const before = new Map(current[key].map(item => [item.id, item]))
+          Object.assign(parsed, { [key]: parsed[key].map(item => JSON.stringify(item) === JSON.stringify(before.get(item.id)) ? before.get(item.id) : item) })
+        }
+      }
+      if (JSON.stringify(parsed) === JSON.stringify(current)) { cursor = raw.cursor; return current }
+    }
+    cursor = raw.cursor; current = parsed
+    return parsed
+  }
   return {
-    async read(signal: AbortSignal) { return parseWorkflows(await projectJson(base, '/api/workflows', { signal }, request), projectId) },
+    async read(signal: AbortSignal) {
+      const read = (since?: string) => projectJson(base, `/api/workflows?sync=1${since ? `&since=${encodeURIComponent(since)}` : ''}`, { signal }, request)
+      const raw = await read(cursor)
+      signal.throwIfAborted()
+      try { return apply(raw) } catch {
+        // Invalid/unsupported envelope or lost version: one full retry, never
+        // recursive. A second invalid response remains a visible read failure.
+        const full = await read(); signal.throwIfAborted()
+        if (!isRecord(full) || full.kind !== 'full') return invalid()
+        return apply(full)
+      }
+    },
     async control(id: string, action: 'pause' | 'resume' | 'retry' | 'cancel', acknowledgeReplay: boolean, signal: AbortSignal) {
       await projectJson(base, '/api/workflows/control', { method: 'POST', signal, body: JSON.stringify({ id, action, acknowledgeReplay }) }, request)
     },

@@ -36,7 +36,10 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     },
     configureServer(server) { server.middlewares.use((req, res, next) => {
       const path = new URL(req.url!, 'http://127.0.0.1').pathname
-      const json = (body: unknown) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)) }
+      const json = (body: unknown) => {
+        const sync = path.endsWith('/api/workflows') && new URL(req.url!, 'http://fixture').searchParams.get('sync') === '1'
+        res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(sync ? { version: 1, kind: 'full', cursor: 'fixture', snapshot: body } : body))
+      }
       if (path === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><html><body><div id="app"></div><script type="module" src="/fixture.ts"></script></body></html>'); return }
       if (!/^\/(?:projects\/[^/]+\/)?(?:api|debug)\//.test(path)) { next(); return }
       requests.push({ path, method: req.method! })

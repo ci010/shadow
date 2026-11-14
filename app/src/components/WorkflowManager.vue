@@ -163,7 +163,7 @@ const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(f
   const available = !catalog.error.value && catalog.loaded.value && !catalog.loading.value
   const control = {
     enabled: flow.enabled && configured,
-    disabled: busy.value || loading.value || !!error.value || !available || !!job && !canToggleAutomation(job),
+    disabled: busy.value || !!error.value || !available || !!job && !canToggleAutomation(job),
     busy: busy.value && operationId.value === flow.id,
     error: operationId.value === flow.id ? operationError.value : undefined,
     notice: job?.disabledByGlobal ? t('Learning is disabled globally. This control saves the workflow preference only.') : !available ? t('Workflow controls are unavailable. Refresh to retry.') : undefined,
@@ -179,6 +179,7 @@ async function inspectFlow(id: string, nodeId?: string) {
   await nextTick(); inspector.value?.focus({ preventScroll: true })
 }
 const chatLocation = computed(() => ({ name: 'chat', params: { projectId: props.projectId } }))
+let client = createWorkflowClient(props.apiBase, props.projectId)
 let timer: ReturnType<typeof setTimeout> | undefined, reader: AbortController | undefined, mutation: AbortController | undefined
 function stopRead() { clearTimeout(timer); reader?.abort(); reader = undefined; loading.value = false }
 function refreshAll() { catalog.refresh(); void refresh() }
@@ -188,7 +189,7 @@ async function refresh() {
   const controller = reader = new AbortController(), base = props.apiBase, project = props.projectId
   loading.value = true
   try {
-    const value = await createWorkflowClient(base, project).read(controller.signal)
+    const value = await client.read(controller.signal)
     if (!controller.signal.aborted && base === props.apiBase && project === props.projectId) { snapshot.value = value; error.value = '' }
   } catch (cause) { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Workflows are unavailable. Refresh to retry.') }
   finally {
@@ -210,7 +211,7 @@ async function operate(action: 'pause' | 'resume' | 'retry' | 'cancel', id: stri
 }
 function visibility() { pageVisible.value = !document.hidden }
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)
-watch(() => [props.apiBase, props.projectId], () => { stopRead(); mutation?.abort(); mutation = undefined; busy.value = false; snapshot.value = undefined; error.value = ''; operationError.value = ''; confirmation.value = ''; notice.value = ''; void refresh() })
+watch(() => [props.apiBase, props.projectId], () => { stopRead(); mutation?.abort(); mutation = undefined; busy.value = false; client = createWorkflowClient(props.apiBase, props.projectId); snapshot.value = undefined; error.value = ''; operationError.value = ''; confirmation.value = ''; notice.value = ''; void refresh() })
 watch(enabled, value => { if (value) void refresh(); else stopRead() }, { immediate: true })
 onActivated(() => { activated.value = true })
 onDeactivated(() => { activated.value = false })
