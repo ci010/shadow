@@ -6,6 +6,7 @@ export interface EditorDescriptor {
   projectId: string
   owner: string
   label: string
+  activity?: import('./session-activity.ts').ConversationActivity
   icon: string
   closable: boolean
   select(): void

@@ -77,3 +77,22 @@ export function parseSessionActivity(value: unknown) {
 export function parseSessionStages(value: unknown) { return parseSessionActivity(value).stages }
 export function parseActiveRequestIds(value: unknown) { return parseSessionActivity(value).activeRequestIds }
 export function parseSessionRecoveries(value: unknown) { return parseSessionActivity(value).recoveries }
+
+/** Compact conversation presentation shared by sidebar rows and editor tabs.
+ * Runtime/execution outcomes win; completion only decorates ready/inactive sessions.
+ * Missing activity is unavailable/inactive, never inferred to be completed.
+ */
+export function conversationIconStage(stage: string | null | undefined, completed?: boolean): string {
+  const displayStage = stage ?? 'inactive'
+  const activity = sessionActivity(displayStage)
+  return activity.kind === 'idle' || activity.kind === 'inactive'
+    ? completed ? 'completed' : 'inactive'
+    : displayStage
+}
+
+export interface ConversationActivity {
+  stage: string
+  hasCron?: boolean
+  hasBackgroundTasks?: boolean
+  subagents?: import('./subagent-executions.ts').SubagentActivity
+}

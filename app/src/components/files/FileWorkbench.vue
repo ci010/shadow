@@ -47,7 +47,7 @@
         <div class="document-tablist" role="tablist" :aria-label="t('Open documents')" @wheel="scrollTabs">
           <div class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
-              <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || t('Conversation') }}</span>
+              <SessionActivity v-if="primaryActivity" v-bind="primaryActivity" compact icon-only status-icons /><span v-else class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || t('Conversation') }}</span>
             </button>
           </div>
           <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, DIAGNOSIS_TAB_KEY)">
@@ -181,6 +181,7 @@
 </template>
 
 <script setup lang="ts">
+import SessionActivity from '../SessionActivity.vue'
 import { t } from '../../i18n.ts'
 import EditorViewHost from '../EditorViewHost.vue'
 import { EditorGroupsKey, EditorOwnerKey, type EditorDescriptor } from '../../editor-groups.ts'
@@ -207,7 +208,7 @@ import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, clos
 import type { KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; composerHeight?: number; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; inspection?: boolean; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; editableConversation?: boolean; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; composerHeight?: number; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; primaryActivity?: import('../../session-activity.ts').ConversationActivity; inspection?: boolean; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; editableConversation?: boolean; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
 const groups = inject(EditorGroupsKey, undefined)
 const owner = inject(EditorOwnerKey, '')
 const router = useRouter()
@@ -261,8 +262,9 @@ function editorId(key: string) {
 const descriptorCache = new Map<string, EditorDescriptor>()
 function descriptor(key: string, label: string, icon: string): EditorDescriptor {
   const previous = descriptorCache.get(key)
-  if (previous && previous.id === editorId(key) && previous.label === label && previous.icon === icon && previous.conversation?.sessionId === (key === '' ? props.sessionId : undefined) && previous.conversation?.editable === (key === '' ? !!props.editableConversation : undefined) && previous.conversation?.folderId === (key === '' ? props.folderId : undefined)) return previous
+  if (previous && previous.id === editorId(key) && previous.label === label && previous.icon === icon && previous.activity === (key === '' ? props.primaryActivity : undefined) && previous.conversation?.sessionId === (key === '' ? props.sessionId : undefined) && previous.conversation?.editable === (key === '' ? !!props.editableConversation : undefined) && previous.conversation?.folderId === (key === '' ? props.folderId : undefined)) return previous
   const value: EditorDescriptor = { id: editorId(key), projectId: props.projectId ?? '', owner: owner || id, label, icon,
+    ...(key === '' && props.primaryActivity ? { activity: props.primaryActivity } : {}),
     closable: key === '' || !isPermanentDocumentTab(key),
     select: () => { if (tabs.value.selected !== key) tabs.value = { ...tabs.value, selected: key } },
     close: () => closeFile(key, false),

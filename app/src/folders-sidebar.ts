@@ -1,7 +1,7 @@
 import { parseChannelSource, type ChannelSource } from '../../src/channels/passive-contract.ts'
 import { DiscordChannelNavigationSchema, type DiscordChannelNavigation } from '../../src/channels/discord-navigation.ts'
 import { t } from './i18n.ts'
-import { sessionActivity } from './session-activity.ts'
+import { conversationIconStage } from './session-activity.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
 import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
@@ -311,17 +311,8 @@ export function isAbsoluteFolderPath(path: string): boolean {
   return /^(?:[a-zA-Z]:[\\/]|\\\\[^\\]+\\[^\\]+|\/)/.test(path.trim())
 }
 
-/** Sidebar-only completion presentation; live and execution outcomes remain authoritative.
- * Missing activity is the sidebar's inactive fallback, not a persisted status change.
- * SessionActivity still promotes delegated work over these non-working stages.
- */
-export function sidebarSessionIconStage(stage: string | undefined, completed: boolean | undefined): string {
-  const displayStage = stage ?? 'inactive'
-  const activity = sessionActivity(displayStage)
-  return activity.kind === 'idle' || activity.kind === 'inactive'
-    ? completed ? 'completed' : 'inactive'
-    : displayStage
-}
+/** Compatibility name for the shared conversation presentation. */
+export const sidebarSessionIconStage = conversationIconStage
 
 export type ChatListSort = 'time' | 'folder'
 export interface ChatListPreferences { folderGrouped: boolean; sort: ChatListSort }

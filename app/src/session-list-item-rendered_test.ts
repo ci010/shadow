@@ -44,6 +44,33 @@ test('shared icon honors completion, foreground, background and delegated live f
   assert.ok(has('i-lucide-git-branch'))
 })
 
+test('conversation tabs and sidebar share stage projection and the same reactive icon renderer', async t => {
+  const { conversationIconStage } = await import('./session-activity.ts')
+  const { sidebarSessionIconStage } = await import('./folders-sidebar.ts')
+  assert.equal(sidebarSessionIconStage, conversationIconStage)
+  const view = mount(t, 'SessionActivity.vue', { stage: conversationIconStage('idle', true), compact: true, iconOnly: true, statusIcons: true })
+  for (const [stage, icon] of [
+    ['completed', 'circle-check'], ['llm', 'brain'], ['tool', 'wrench'],
+    ['waiting', 'message-circle-question'], ['waiting-for-call', 'git-branch'],
+    ['pending', 'clock'], ['failed', 'circle-alert'], ['cancelled', 'circle-slash'],
+    ['inactive', 'moon'], ['unknown', 'circle-help'],
+  ]) {
+    view.state.stage = stage; await nextTick()
+    assert.ok(view.nodes().some(node => String(node.props.class).includes(`i-lucide-${icon}`)), stage)
+    assert.ok(view.nodes().some(node => node.props.role === 'img' && node.props['aria-label']), `${stage} accessible state`)
+  }
+  view.state.stage = conversationIconStage('idle', false); await nextTick()
+  assert.ok(view.nodes().some(node => String(node.props.class).includes('i-lucide-moon')))
+  // Both editor groups and standalone document tabs render the shared component;
+  // only the primary conversation descriptor carries activity metadata.
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
+  assert.match(source('./components/EditorGroupHost.vue'), /SessionActivity v-if="editor.activity" v-bind="editor.activity" compact icon-only status-icons/)
+  const workbench = source('./components/files/FileWorkbench.vue')
+  assert.match(workbench, /SessionActivity v-if="primaryActivity" v-bind="primaryActivity" compact icon-only status-icons/)
+  assert.match(workbench, /key === '' && props.primaryActivity \? \{ activity: props.primaryActivity \}/)
+  assert.match(source('./components/ChatTab.vue'), /:primary-activity="conversationTabActivity"/)
+})
+
 function mount(t: TestContext, filename: string, props: Record<string, unknown>) {
   const popover = defineComponent({
     setup: (_, { slots }) => () => h('div', [slots.trigger?.(), slots.default?.({ triggerProps: {} })]),
