@@ -11,7 +11,7 @@ function harness() {
   const calls: unknown[] = []
   const manager = { projectId: 'p', botStatuses: () => [], createBot: async (value: unknown) => { calls.push(value); return { id: 'b' } }, updateBot: async () => ({ id: 'b' }) } as unknown as ChannelManager
   const tool = new BotSetupTool(setup, manager, sessionId => { if (sessionId !== 'web:chat-a') throw new Error('Not a user-owned Web session') })
-  const context = { projectId: 'p', sessionId: 'web:chat-a', channel: 'virtual', admin: true, tools: { executionMode: 'session' }, signal: new AbortController().signal } as ExecutionContext
+  const context = { projectId: 'p', sessionId: 'web:chat-a', channel: 'virtual', admin: true, inputSource: 'user', tools: { executionMode: 'session' }, signal: new AbortController().signal } as ExecutionContext
   return { setup, tool, context, calls }
 }
 test('Bot tool enforces Web admin and Project ownership independent of paired channel admin', async () => {
@@ -53,5 +53,19 @@ test('Setup API requires HTTP authorization and real UI closure', async () => {
   const close = await app.request(url, { method: 'POST', headers: { authorization: 'test-admin', 'Content-Type': 'application/json' }, body: JSON.stringify({ id: body.request.id, sessionId: 'web:a', status: 'closed' }) })
   assert.equal(close.status, 200)
   assert.equal(JSON.parse(await pending).status, 'closed')
+  setup.stop()
+})
+
+test('continuation execution identity allows status but never human setup changes', async () => {
+  const { setup, tool, context, calls } = harness()
+  for (const inputSource of ['session', 'event', undefined] as const) {
+    const continuation = { ...context, inputSource }
+    assert.deepEqual(JSON.parse(await tool.execute({ action: 'status' }, continuation)), { bots: [] })
+    for (const args of [{ action: 'open' }, { action: 'create', platform: 'qq', purpose: 'personal', displayName: 'Denied' }, { action: 'connection', id: 'b', enabled: false }]) {
+      await assert.rejects(tool.execute(args, continuation), /direct administrator human turn/)
+    }
+  }
+  assert.equal(calls.length, 0)
+  assert.equal(setup.get(context.sessionId), null)
   setup.stop()
 })

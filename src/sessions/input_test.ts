@@ -50,5 +50,13 @@ test('reply, event provenance and session messages cannot manufacture owner iden
   }
   assert.equal(inputContext(state.sessionId, forged).admin, false)
   assert.equal(inputContext('web:other', forged, state).admin, false)
-  assert.equal(inputContext(state.sessionId, { ...event, source: { kind: 'session', sessionId: state.sessionId } }, state).admin, false)
+  const message: SessionMessageInput = { ...forged, source: { kind: 'session', sessionId: 'web:admin', coordination: { intent: 'request' } } }
+  assert.equal(inputContext(state.sessionId, message, state).admin, true)
+  assert.equal(isDirectOwnerTurn({ ...inputContext(state.sessionId, message, state), sessionId: state.sessionId, inputSource: 'session' }), false)
+  for (const patch of restricted) {
+    const target = { ...state, ...patch }
+    assert.equal(inputContext(target.sessionId, message, target).admin, false, JSON.stringify(patch))
+  }
+  assert.equal(inputContext(state.sessionId, message).admin, false)
+  assert.equal(inputContext('web:other', message, state).admin, false)
 })

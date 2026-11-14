@@ -32,7 +32,7 @@ export class DevelopmentRestartTool implements Tool {
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     if (!developmentRestartAvailable(this.runtime)) return 'Error: development restart is unavailable.'
-    if (!context.admin || context.remoteWorkdir || context.scriptInvocation || context.recoveringToolCall
+    if (context.inputSource !== 'user' || !context.admin || context.remoteWorkdir || context.scriptInvocation || context.recoveringToolCall
       || !context.afterToolResultPublished || context.toolCallName !== 'invoke_tool') {
       return 'Error: development restart requires a direct local admin invoke_tool call with a publishable receipt.'
     }

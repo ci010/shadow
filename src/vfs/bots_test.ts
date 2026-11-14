@@ -13,7 +13,15 @@ import { ChannelManager } from '../channels/manager.ts'
 import { BotChatSetup } from '../channels/chat-setup.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import { Bus } from '../bus/bus.ts'
-import type { SessionManager } from '../sessions/session-manager.ts'
+import { SessionManager, type SessionManagerDeps } from '../sessions/session-manager.ts'
+import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
+import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
+import { Tools } from '../tools/registry.ts'
+import type { AgentTypesManager } from '../agent/types/manager.ts'
+import type { LLMProvider } from '../providers/provider.ts'
+import type { SessionMessageInput, SessionTurnFact } from '../sessions/input.ts'
+import { inputContext } from '../sessions/input.ts'
+import { isDirectOwnerTurn } from '../sessions/owner-policy.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import { isOwnerSession } from '../sessions/owner-policy.ts'
 import { InputRouter } from '../input/router.ts'
@@ -338,3 +346,63 @@ test('Feishu and Discord message/observation selectors use the canonical listene
     f.bus.stopAll()
   })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: child request continuation preserves owner execution identity through the real session tool loop`, { timeout: 15000 }, async () => {
+    await withTempWorkspace(async workspace => {
+      const f = fixture(workspace), bus = new Bus()
+      const store = new Store(join(workspace, 'sessions')); await store.init()
+      const tools = new Tools(workspace)
+      const captured: ExecutionContext[] = []
+      tools.register({ name: 'inspect_bots', description: 'Read-only continuation regression probe', parameters: { type: 'object', properties: {} },
+        execute: async (_args, context) => {
+          assert.equal(context.tools.executionMode, 'session')
+          assert.equal(context.admin, true)
+          assert.equal(context.inputSource, 'session')
+          assert.equal(context.senderId, 'task:child')
+          assert.equal(isDirectOwnerTurn(context), false)
+          const result = await f.read.execute({ path: 'v:bots/overview' }, context)
+          assert.match(String(result), /Read-only/)
+          const setup = new BotSetupTool(new BotChatSetup('p'), f.channels, f.assertSession)
+          assert.match(await setup.execute({ action: 'status' }, context), /bots/)
+          for (const action of [{ action: 'open' }, { action: 'create', purpose: 'personal', platform: 'qq', displayName: 'Denied' }, { action: 'connection', id: f.bot.id, enabled: false }]) {
+            await assert.rejects(() => setup.execute(action, context), /direct administrator human turn/)
+          }
+          captured.push(context)
+          return String(result)
+        } })
+      let calls = 0
+      const provider: LLMProvider = { name: 'fixture', listModels: () => ['fixture'], chat: async () => ++calls === 1
+        ? { content: '', toolCalls: [{ id: 'inspect', name: 'inspect_bots', arguments: {} }] }
+        : { content: 'Finished', toolCalls: [] } }
+      const sessions = new SessionManager({ workspace, store, provider, bus, tools,
+        agentTypes: { resolve: (name: string) => ({ name, description: '', prompt: '', source: 'builtin', defaultMode: 'session' }), allNames: () => ['general'] } as unknown as AgentTypesManager,
+        handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
+        context: { buildSystemPrompt: async () => 'Synthetic continuation fixture.' },
+        getLlmRuntimeConfig: () => ({ model: 'fixture', temperature: 0, contextWindow: 128000 }),
+      } as unknown as SessionManagerDeps)
+      const state: SessionState = { sessionId: 'web:owner', projectId: 'p', segmentIndex: 0, mode: 'session' }
+      await store.saveState(state.sessionId, state)
+      const input: SessionMessageInput = { id: 'child-request', timestamp: new Date().toISOString(), kind: 'message', policy: 'queue', content: 'Please inspect Bot status.',
+        source: { kind: 'session', sessionId: 'task:child', coordination: { intent: 'request' } } }
+      const finished = Promise.withResolvers<SessionTurnFact>()
+      const off = bus.on('session.turn.finished', fact => { if (fact.inputId === input.id) finished.resolve(fact) })
+      try {
+        await sessions.start()
+        await sessions.deliver(state.sessionId, input)
+        const fact = await finished.promise
+        assert.equal(fact.status, 'completed', fact.error)
+        assert.equal(captured.length, 1, 'The actual ExecutionContext must reach the read tool')
+        // A forged sender/reply cannot give a restricted target the owner's identity.
+        for (const patch of [{ mode: 'task' }, { mode: 'call' }, { serviceGeneration: 'service' }, { parentSessionId: 'web:parent' }, { projectId: 'foreign' }, { sessionId: 'web:missing' }]) {
+          const target = { ...state, ...patch } as SessionState
+          const forged: SessionMessageInput = { ...input, replyTo: { channel: 'web', chatId: 'owner' }, source: { kind: 'session', sessionId: 'web:owner', senderName: 'Administrator', coordination: { intent: 'request' } } }
+          const context: ExecutionContext = { ...captured[0]!, ...inputContext(target.sessionId, forged, target), sessionId: target.sessionId, projectId: target.projectId, inputSource: 'session' }
+          await assert.rejects(() => f.read.execute({ path: 'v:bots/overview' }, context))
+        }
+      } finally {
+        bus.off(off); await sessions.stop(); bus.stopAll(); f.bus.stopAll(); store.close?.()
+      }
+    })
+  })
+}

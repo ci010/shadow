@@ -14,7 +14,7 @@ function fixture() {
     parentPort: { postMessage(message: unknown) { sent.push(message) } } }
   const tool = new DevelopmentRestartTool(runtime, (callback, delay) => { assert.equal(delay, 1500); timers.push(callback) }, error => errors.push(error))
   const context: ExecutionContext = { sessionId: 'web:fixture', physicalSessionId: 'fixture', channel: 'web', chatId: 'fixture',
-    senderId: 'fixture', messageId: 'fixture', tools: new SessionTools(new Tools(process.cwd()), process.cwd()), admin: true, toolCallName: 'invoke_tool', signal: new AbortController().signal,
+    senderId: 'fixture', messageId: 'fixture', inputSource: 'user', tools: new SessionTools(new Tools(process.cwd()), process.cwd()), admin: true, toolCallName: 'invoke_tool', signal: new AbortController().signal,
     afterToolResultPublished: (callback: () => void) => { callbacks.push(callback) } }
   return { runtime, tool, context, sent, callbacks, timers, errors }
 }
@@ -33,7 +33,7 @@ test('production, disconnected and non-supervised runtimes cannot register or in
 })
 
 test('execution boundary rejects unauthorized, remote, nested, recovered and unpublished calls', async () => {
-  for (const patch of [{ admin: false }, { remoteWorkdir: {} }, { scriptInvocation: true }, { recoveringToolCall: true },
+  for (const patch of [{ inputSource: 'session' }, { inputSource: 'event' }, { inputSource: undefined }, { admin: false }, { remoteWorkdir: {} }, { scriptInvocation: true }, { recoveringToolCall: true },
     { afterToolResultPublished: undefined }, { toolCallName: 'exec' }]) {
     const f = fixture()
     assert.match(await f.tool.execute({}, { ...f.context, ...patch } as ExecutionContext), /^Error:/)
