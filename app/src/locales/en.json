@@ -4378,5 +4378,7 @@
   "Remove workflow references before sending a command or answering a question.": "Remove workflow references before sending a command or answering a question.",
   "Resize editor group": "Resize editor group",
   "Left editor group": "Left editor group",
-  "Right editor group": "Right editor group"
+  "Right editor group": "Right editor group",
+  "Current selection": "Current selection",
+  "Clear selection": "Clear selection"
 }
