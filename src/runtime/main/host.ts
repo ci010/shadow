@@ -40,7 +40,8 @@ import { privateLanAddresses } from '../../gateway/lan-browser.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
 import { MainDeviceUi } from '../../cluster/device-ui.ts'
 import { MainDeviceNetwork } from './device-network.ts'
-import { MobileAccess, mobileGatewayConfig } from '../../gateway/mobile-access.ts'
+import { mobileGatewayConfig } from '../../gateway/mobile-access.ts'
+import { MainMobileNetwork } from './mobile-network.ts'
 import { a2aRequestProject } from '../../a2a/config.ts'
 import { FolderError } from '../../folders/registry.ts'
 import { ComputerService } from '../../computer/service.ts'
@@ -147,12 +148,12 @@ export async function startProjectHost(
   }
   const browserAuth = new BrowserAuth({ enableLan, disableLan, launchCredential, pinHash: options.gateway?.browserPinHash, clientAddresses, developmentUrl: process.env.VITE_DEV_URL })
   cleanup.push(() => browserAuth.close())
-  const mobileConfig = mobileGatewayConfig(process.env)
-  const mobileAccess = mobileConfig ? new MobileAccess({
-    publicOrigin: mobileConfig.publicOrigin, allowLanHttp: mobileConfig.allowLanHttp, launchCredential: launchCredential ?? '', clientAddresses,
-  }) : undefined
-  if (mobileConfig?.publicOrigin.startsWith('http:')) console.warn('WARNING: LAN HTTP is unencrypted. Pairing codes, tokens and conversations are exposed to the network. Use only a trusted LAN; prefer HTTPS.')
-  if (mobileAccess) cleanup.push(() => mobileAccess.close())
+  const mobileAccess = new MainMobileNetwork({
+    configPath: resolve(appPaths.devices, 'mobile-network.v1.json'),
+    launchCredential: launchCredential ?? '', clientAddresses, main: app,
+    environment: mobileGatewayConfig(process.env),
+  })
+  cleanup.push(() => mobileAccess.shutdown())
   let deviceUi: MainDeviceUi | undefined
   const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
@@ -291,7 +292,7 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), ...(mobileAccess ? [mobileAccess.managementPlugin()] : []), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [browserAuth.plugin(), mobileAccess.plugin(), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, browserAuth, clientAddresses, authorizeClient: request => {
       if (mobileAccess?.authorizeMain(request) || deviceUi?.authorize(request)) return true
       const projectId = a2aRequestProject(request)
@@ -348,16 +349,11 @@ export async function startProjectHost(
   }
   const gateway = serveGateway(app, { ...options.gateway, clientAddresses })
   cleanup.push(() => gateway.shutdown())
-  const mobileGateway = mobileAccess && mobileConfig
-    ? serveGateway(mobileAccess.createGateway(app), { host: mobileConfig.publicOrigin.startsWith('http:') ? new URL(mobileConfig.publicOrigin).hostname.replace(/^\[|\]$/g, '') : '127.0.0.1', port: mobileConfig.port, clientAddresses })
-    : undefined
-  if (mobileGateway) cleanup.push(() => mobileGateway.shutdown())
   let shutdownPromise: Promise<void> | undefined
   shutdown = () => shutdownPromise ??= (async () => {
     stopping = true
     browserAuth.close()
     deviceUi?.close()
-    mobileAccess?.close()
     realtimeHub.close()
     localControl.markStopping()
     const errors: unknown[] = []
@@ -367,6 +363,7 @@ export async function startProjectHost(
         else errors.push(error)
       }
     }
+    await clean(() => mobileAccess.shutdown())
     await clean(() => Promise.allSettled(starts.values()))
     for (const [id, runtime] of runtimes) {
       const scope = scopes.get(id)!
@@ -382,13 +379,13 @@ export async function startProjectHost(
     await clean(() => lanStart?.catch(() => {}))
     await clean(() => Promise.all(lanGateways.map(listener => listener.shutdown())))
     await clean(() => gateway.shutdown())
-    if (mobileGateway) await clean(() => mobileGateway.shutdown())
     await clean(() => mainCluster.save())
     await clean(closeTelemetry)
     if (errors.length) throw new AggregateError(errors, 'Main shutdown failed')
   })()
   try {
-    await startup.measure('gateway', () => Promise.all([gateway.ready, ...(mobileGateway ? [mobileGateway.ready] : [])]))
+    await startup.measure('gateway', () => gateway.ready)
+    await mobileAccess.init()
     await startup.measure('projects', async () => {
       // Bound disk/watcher pressure while avoiding one slow Project delaying every other start.
       const projects = catalog.list()[Symbol.iterator]()
@@ -406,6 +403,6 @@ export async function startProjectHost(
     await shutdown().catch(cleanup => console.error('[projects] Host cleanup failed', cleanup))
     throw error
   }
-  return { ready: Promise.resolve(), finished: mobileGateway ? Promise.race([gateway.finished, mobileGateway.finished]) : gateway.finished, shutdown }
+  return { ready: Promise.resolve(), finished: gateway.finished, shutdown }
   }
 }

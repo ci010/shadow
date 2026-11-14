@@ -14,10 +14,39 @@ iOS and Android devices. See [native builds and signing](../mobile/README.md).
 
 ## Enable a separate mobile endpoint
 
-The ordinary gateway and existing browser authentication are unchanged.
-Mobile access is disabled unless `SHADOW_MOBILE_ORIGIN` is configured. Main
-must also have a launch credential (the Electron host supplies one; headless
-deployments use their existing protected launch-credential setup).
+### Trusted LAN: use the desktop app (no environment variables)
+
+In the authorized Main desktop app, open **Nodes → Phone access**. Review the
+unencrypted LAN HTTP warning, acknowledge it, then choose **Enable / retry phone
+access**. Main automatically selects a private RFC1918 IPv4 interface and starts
+a separate phone-only listener (default port 3125). Its address, pairing-code
+action, authenticated session list and disconnect controls appear in the same
+section. Enter the displayed address and single-use code in the native Shadow
+phone app; explicitly enable **Allow LAN HTTP** on the phone as well.
+
+The opt-in and port are persisted in the app's devices directory as
+`mobile-network.v1.json` and restored at startup. No listener is started by
+default. Turning access off disconnects all phone sessions and invalidates codes
+and resource tickets. After a network change, retry to select a current address;
+check the displayed endpoint if multiple LAN/VPN interfaces are present. On
+failure, the UI shows the cause (no private interface, occupied port, or system
+permission); select a different port or reconnect to the LAN and retry. This
+does not modify the firewall. If necessary, allow the running Shadow backend
+only on your trusted LAN through the operating system's normal controls.
+
+LAN HTTP is unencrypted, including codes, bearer tokens and conversations.
+Never port-forward it to the Internet. This listener serves only authenticated
+phone traffic, not the desktop app, local administration, browser login, device
+pairing or Vite. Main still requires a launch credential, supplied by Electron.
+The ordinary local gateway remains unchanged. This flow is for the native app,
+not a mobile browser. Prefer the HTTPS deployment below outside a trusted LAN.
+
+### Operator-managed HTTPS (optional)
+
+Existing `SHADOW_MOBILE_*` environment configuration remains supported and takes
+precedence over app settings; the UI labels this read-only override. Remove the
+overrides and restart Main before switching to app-managed LAN settings.
+Headless deployments use their existing protected launch-credential setup.
 
 Set these in Main's process environment before starting it:
 
@@ -56,7 +85,10 @@ operator-managed rate limits, updates and operational review.
 
 ## Pair, disconnect and revoke
 
-On the trusted Main computer, reuse an existing protected connection descriptor:
+Use **Create phone pairing code** and **Disconnect phone** in Nodes → Phone access.
+The following CLI is an optional alternative for operators on Main:
+For LAN HTTP only, the CLI process additionally requires
+`SHADOW_MOBILE_ALLOW_LAN_HTTP=1`; the desktop UI does not.
 
 ```powershell
 pnpm mobile:pair --connection C:\absolute\path\connection.json
@@ -69,7 +101,7 @@ pnpm mobile:pair --url http://127.0.0.1:3123 --credential-file C:\absolute\path\
 ```
 
 Never supply the launch credential as an argument or put it in a mobile build.
-The CLI prints the HTTPS address and a five-minute, single-use pairing code.
+The CLI prints the configured phone address and a five-minute, single-use pairing code.
 Enter them in the app. **Pairing grants owner access to application data and
 actions**, including projects, chat, configuration and provider setup; it is not
 a multi-user or read-only authorization model. Do not share codes with others.
@@ -95,7 +127,8 @@ at the mobile gateway.
 
 ## Transport and mobile lifecycle
 
-The bundled app connects only to a validated HTTPS Main origin. Authenticated
+The bundled app connects to a validated HTTPS Main origin, or an explicitly
+acknowledged private numeric LAN HTTP origin. Authenticated
 fetch carries a bearer header, including streaming live events. Native origins
 `capacitor://localhost` (iOS) and `https://localhost` (Android) have an explicit
 CORS policy; CORS alone never grants access. Redirects from proxied application
