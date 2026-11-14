@@ -12,6 +12,16 @@ a store release**, then update the Capacitor config, Android namespace/applicati
 ID and Java package, Xcode bundle ID, signing profile, and workflow profile check
 together. An already published app cannot freely change identity.
 
+## Connect on a trusted LAN
+
+No environment variables are needed on Main: open **Nodes → Phone access** in
+the authorized desktop app, acknowledge unencrypted LAN HTTP, and enable access.
+Use its automatically selected address and generated pairing code in this app;
+enable **Allow LAN HTTP** here too. Main saves the opt-in, restores the listener
+on restart, and exposes session disconnect controls. The desktop management
+entry stays local. See [phone access and HTTPS deployment](../docs/mobile.md).
+Main never changes your system firewall. Do not forward the phone port publicly.
+
 ## Reproducible setup and build
 
 From the repository root:

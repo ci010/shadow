@@ -119,6 +119,27 @@ export class MobileAccess {
       && this.bridges.has(digest(bearer(request)))
   }
 
+  createPairing() {
+    this.prune()
+    if (this.codes.size >= 32) throw new Error('Too many unused pairing codes. Wait five minutes and retry.')
+    const code = randomBytes(12).toString('hex').toUpperCase()
+    const expiresAt = this.now() + CODE_TTL
+    this.codes.set(digest(code), expiresAt)
+    return { version: 1, url: this.publicOrigin, code: code.match(/.{4}/g)!.join('-'), expiresAt: new Date(expiresAt).toISOString() }
+  }
+
+  listSessions() {
+    this.prune()
+    return [...this.sessions.values()].map(session => ({ id: session.id, expiresAt: new Date(session.expiresAt).toISOString() }))
+  }
+
+  revokeSession(id: string): boolean {
+    const session = [...this.sessions.values()].find(session => session.id === id)
+    if (!session) return false
+    this.revoke(session)
+    return true
+  }
+
   managementPlugin(): GatewayPlugin {
     return app => {
       app.use('/local/v1/mobile-*', async (c, next) => {

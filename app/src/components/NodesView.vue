@@ -14,6 +14,7 @@
 
     <DesktopRoleSettings />
 
+    <MobileAdministration v-if="canAdministerDevices(context)" :api-base="apiBase" />
     <DeviceAdministration v-if="canAdministerDevices(context)" :api-base="apiBase" :nodes="nodes" @changed="refresh" />
 
     <p v-if="error" class="inventory-error" role="alert">{{ error }}</p>
@@ -98,6 +99,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { workdirAvailability, fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
 import DesktopRoleSettings from './DesktopRoleSettings.vue'
+import MobileAdministration from './MobileAdministration.vue'
 import DeviceAdministration from './DeviceAdministration.vue'
 import { canAdministerDevices, revokeDevice } from './device-administration.ts'
 
