@@ -116,7 +116,7 @@ function openFile(file: OpenFile) {
 }
 </script>
 <style scoped>
-.project-file-explorer { width: 240px; flex: 0 0 240px; min-height: 0; overflow: auto; border-right: 1px solid var(--c-border); background: var(--c-bg-soft); }
+.project-file-explorer { display: flex; flex-direction: column; width: 240px; flex: 0 0 240px; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--c-border); background: var(--c-bg-soft); }
 .catalog-error { padding: 8px; color: var(--c-error); font-size: 12px; }
 @media (max-width: 700px) { .project-file-explorer { width: min(240px, 60vw); flex-basis: min(240px, 60vw); } }
 </style>

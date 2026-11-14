@@ -29,7 +29,7 @@ test('Project explorer roots stay left, expand independently and preserve sessio
       requests.push(url.pathname + url.search); res.setHeader('Content-Type', 'application/json')
       if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: [{ id: 'unrelated', name: 'Unrelated project root', path: '/synthetic/unrelated', createdAt: '2026-01-01' }, { id: 'one', name: 'shadow with a very long folder name that must never wrap', path: '/synthetic/shadow', createdAt: '2026-01-01' }, ...['two', 'two-alias'].map(id => ({ id, name: 'shadow with a very long folder name that must never wrap', path: 'C:\\synthetic\\shadow', createdAt: '2026-01-01', kind: 'remote', workdir: { version: 2, nodeId: 'windows-node', workdirId: 'registered-' + id }, identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] } }))] }))
       else if (url.pathname.endsWith('/picker/devices')) res.end(JSON.stringify({devices:[{nodeId:'windows-node',name:'CI010',role:'child',online:true,supported:true}]}))
-      else if (url.pathname.endsWith('/files')) res.end(JSON.stringify({ path: '', entries: [{ name: 'same.md', type: 'file', ext: '.md', size: 12, mtime: null }] }))
+      else if (url.pathname.endsWith('/files')) res.end(JSON.stringify({ path: '', entries: [{ name: 'same.md', type: 'file', ext: '.md', size: 12, mtime: null }, ...Array.from({ length: 60 }, (_, i) => ({ name: `file-${i}.md`, type: 'file', ext: '.md', size: 12, mtime: null }))] }))
       else if (url.pathname.endsWith('/preview')) res.end(JSON.stringify({ binary: false, size: 12, content: '# ' + url.pathname }))
       else if (url.pathname.endsWith('/git/diff')) res.end(JSON.stringify({ path: 'same.md', status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [], notice: url.pathname }))
       else if (url.pathname.endsWith('/git/status')) res.end(JSON.stringify({ available: true, entries: [{ path: 'same.md', status: 'modified' }] }))
@@ -42,6 +42,15 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     await wait('document.querySelectorAll(".explorer-root").length===4');await run('document.querySelector(".project-explorer-toggle").click()');
     for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
     assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),4);
+    // Real layout/scroll regression: every dynamic resource heading stays visible,
+    // not just the first sticky row. Exercise both desktop and narrow panes.
+    for (const width of [1300, 500]) {
+      win.setSize(width,800);await delay(100);
+      assert.equal(await run("(()=>{         const pane=document.querySelector('.project-file-explorer'), bounds=pane.getBoundingClientRect();         const roots=[...pane.querySelectorAll('.explorer-root')];         const before=roots.map(root=>root.querySelector('.root-toggle').getBoundingClientRect());         const bodies=roots.map(root=>root.querySelector('.file-tree-body'));         const rows=bodies.map(body=>body.querySelector('.tree-row').getBoundingClientRect().top);         bodies.forEach(body=>{body.scrollTop=400;body.scrollLeft=100});         const after=roots.map(root=>root.querySelector('.root-toggle').getBoundingClientRect());         return after.every((r,i)=>r.height>0&&r.top>=bounds.top&&r.bottom<=bounds.bottom&&r.left>=bounds.left&&r.right<=bounds.right&&r.top===before[i].top&&(!i||r.top>=after[i-1].bottom))           &&bodies.every((body,i)=>body.scrollTop>0&&body.querySelector('.tree-row').getBoundingClientRect().top<rows[i])           &&pane.scrollTop===0;       })()"),true,'all resource headings stay in bounds while each file list scrolls');
+      if(process.env.PROJECT_EXPLORER_SCROLL_SCREENSHOT) require('node:fs').writeFileSync(process.env.PROJECT_EXPLORER_SCROLL_SCREENSHOT+'-'+width+'.png',(await win.webContents.capturePage()).toPNG());
+      await run('document.querySelectorAll(".file-tree-body").forEach(body=>body.scrollTop=0)');
+    }
+    win.setSize(1300,800);await delay(100);
     for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const selector=JSON.stringify('[data-root-id="'+id+'"] .tree-row[data-path="same.md"]');await run('document.querySelector('+selector+').click()');await delay(150);}
     await wait('document.querySelectorAll(".file-markdown").length===4');
     for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';await run(root+'.querySelectorAll(".file-tree-modes button")[1].click()');await wait(root+'.querySelector(".tree-row[data-path]")');await run(root+'.querySelector(".tree-row[data-path]").click()');await delay(150);}
