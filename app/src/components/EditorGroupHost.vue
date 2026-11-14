@@ -3,12 +3,13 @@
     <header class="editor-workspace-header">
       <HoverInfo v-if="apiBase" :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
-        <div v-for="side in sides" :key="side" v-show="state[side].length" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
-          <div class="editor-tabs" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
+        <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
+          <div class="editor-tabs" @dragenter="drag.enter($event, side)" @dragover="drag.enter($event, side)" @dragleave="leaveDrop($event, side)" @drop="dropTab($event, side)" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
             <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, editor.id)" @contextmenu.prevent="openMenu($event, editor.id)">
-              <button :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" />{{ editor.label }}</button>
+              <button draggable="true" @dragstart="drag.start($event, editor.id)" @dragend="drag.clear" :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><span :class="editor.icon" aria-hidden="true" />{{ editor.label }}</button>
               <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: editor.label })" @click="groups.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
             </div>
+            <span v-if="!state[side].length" class="editor-drop-label">{{ t(side === 'left' ? 'Move to main area' : 'Move to right') }}</span>
           </div>
         </div>
       </div>
@@ -32,8 +33,9 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, type ComponentPublicInstance } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, watch, type ComponentPublicInstance } from 'vue'
 import { EditorGroupsKey, type EditorSide } from '../editor-groups.ts'
+import { createEditorTabDrag } from '../editor-tab-drag.ts'
 import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
 import ProjectFileExplorer from './files/ProjectFileExplorer.vue'
@@ -43,6 +45,21 @@ const emit = defineEmits<{ quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
+const drag = createEditorTabDrag(groups, () => props.projectId)
+const dragging = computed(() => !!drag.active.value)
+const dragOver = drag.over
+watch(() => [props.projectId, props.active], () => drag.clear())
+function leaveDrop(event: DragEvent, side: EditorSide) {
+  if (!(event.relatedTarget instanceof Node) || !(event.currentTarget as HTMLElement).contains(event.relatedTarget)) { if (drag.over.value === side) drag.over.value = undefined }
+}
+function dropTab(event: DragEvent, side: EditorSide) {
+  const id = drag.active.value?.id
+  if (drag.drop(event, side) && id) focusTab(id)
+}
+// Native OS drag sessions may blur the window without leaving the renderer.
+// dragend/drop own termination; hiding the document also invalidates the lease.
+function hiddenDrag() { if (document.hidden) drag.clear() }
+function cancelDrag(event: KeyboardEvent) { if (event.key === 'Escape') drag.clear() }
 const hostId = `groups-${useId()}`
 const root = ref<HTMLElement>()
 const explorerToggle = ref<HTMLButtonElement>()
@@ -59,8 +76,8 @@ const width = ref(1000), preferredWidth = ref(480)
 const bounds = computed(() => ({ min: 240, max: Math.max(240, width.value - 280) }))
 const rightWidth = computed(() => Math.min(bounds.value.max, Math.max(bounds.value.min, preferredWidth.value)))
 let observer: ResizeObserver | undefined
-onMounted(() => { window.addEventListener('shadow:cycle-document-tab', nativeDocument); observer = new ResizeObserver(entries => { width.value = entries[0]?.contentRect.width ?? 1000 }); if (root.value) observer.observe(root.value) })
-onUnmounted(() => { observer?.disconnect(); window.removeEventListener('shadow:cycle-document-tab', nativeDocument); for (const side of sides) groups.targets.delete(`${props.projectId}:${side}`) })
+onMounted(() => { window.addEventListener('dragend', drag.clear); window.addEventListener('drop', drag.clear); window.addEventListener('visibilitychange', hiddenDrag); window.addEventListener('keydown', cancelDrag, true); window.addEventListener('shadow:cycle-document-tab', nativeDocument); observer = new ResizeObserver(entries => { width.value = entries[0]?.contentRect.width ?? 1000 }); if (root.value) observer.observe(root.value) })
+onUnmounted(() => { drag.clear(); window.removeEventListener('dragend', drag.clear); window.removeEventListener('drop', drag.clear); window.removeEventListener('visibilitychange', hiddenDrag); window.removeEventListener('keydown', cancelDrag, true); observer?.disconnect(); window.removeEventListener('shadow:cycle-document-tab', nativeDocument); for (const side of sides) groups.targets.delete(`${props.projectId}:${side}`) })
 function entries(side: EditorSide) { return state.value[side].flatMap(id => { const editor = groups.descriptors.get(id); return editor ? [editor] : [] }) }
 function target(side: EditorSide, element: Element | ComponentPublicInstance | null) { if (element instanceof HTMLElement) groups.targets.set(`${props.projectId}:${side}`, element) }
 const menu = ref<{ id: string; x: number; y: number }>()
@@ -117,6 +134,11 @@ function shortcut(event: KeyboardEvent) {
 .editor-group { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .editor-group + .editor-group { border-left: 1px solid var(--c-border); }
 .editor-tabs { display: flex; min-height: 36px; overflow-x: auto; flex-shrink: 0; background: var(--c-bg-soft); border-bottom: 1px solid var(--c-border); }
+.editor-header-group.empty-group { flex: 0 0 120px !important; }
+.editor-drop-label { align-self: center; padding: 0 12px; color: var(--c-text-secondary); font-size: 12px; pointer-events: none; }
+.drag-target .editor-tabs { outline: 1px dashed var(--c-border-hover); outline-offset: -2px; min-width: 90px; }
+.drag-over .editor-tabs { background: var(--c-selection-bg); outline: 2px solid var(--c-primary); outline-offset: -2px; }
+.editor-tab [draggable="true"] { cursor: grab; }
 .editor-tab { display: flex; flex-shrink: 0; border-right: 1px solid var(--c-border-soft); border-top: 2px solid transparent; }
 .editor-tab.selected { background: var(--c-bg-card); }
 .active-group .editor-tab.selected { border-top-color: var(--c-primary); }
@@ -133,7 +155,6 @@ function shortcut(event: KeyboardEvent) {
 .editor-menu button:disabled { color: var(--c-text-muted); }
 .mobile-group-switch { display: none; }
 @media (max-width: 700px) {
-  .editor-header-group:not(.active-group) { display: none !important; }
   .editor-header-group { flex: 1 !important; flex-basis: 0 !important; }
   .editor-groups { flex-direction: column; }
   .mobile-group-switch { display: flex; border-bottom: 1px solid var(--c-border); }
