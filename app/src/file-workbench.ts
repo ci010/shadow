@@ -2,7 +2,7 @@ import { t } from './i18n.ts'
 import type { FileEntry } from './composables/useSessionFiles.ts'
 
 export interface OpenFile {
-  source?: { sessionWorkspace?: boolean; folderId?: string }
+  source?: { sessionWorkspace?: boolean; sessionId?: string; folderId?: string; remote?: boolean }
   path: string
   entry: FileEntry
   view?: 'diff'
