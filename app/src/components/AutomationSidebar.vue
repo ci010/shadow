@@ -8,10 +8,10 @@
       </button>
     </template></HoverInfo>
     <HoverInfo :text="t('Workflows')"><template #default="{ triggerProps }">
-      <RouterLink v-bind="triggerProps" aria-keyshortcuts="Control+Shift+K Meta+Shift+K" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }"
+      <RouterLink v-bind="triggerProps" aria-keyshortcuts="Control+J Meta+J" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }"
         :to="{ name: 'project-workflows', params: { projectId }, query: route.name === 'project-workflows' && route.params.projectId === projectId ? route.query : {} }" :aria-label="t('Workflows')">
         <span class="i-lucide-workflow automation-icon" aria-hidden="true" /><span v-if="!rail">{{ t('Workflows') }}</span>
-        <kbd v-if="!rail" class="navigation-shortcut">Ctrl+Shift+K</kbd>
+        <kbd v-if="!rail" class="navigation-shortcut">Ctrl+J</kbd>
       </RouterLink>
     </template></HoverInfo>
   </nav>
