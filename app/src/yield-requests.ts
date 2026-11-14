@@ -93,8 +93,8 @@ export function useYieldRequest(source: () => YieldSource) {
     const { apiBase, sessionId } = source()
     return apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/ask`).toString()
   }
-  function stopRequests() {
-    generation++
+  function stopRequests(preserveWrite = false) {
+    if (!preserveWrite) generation++
     initial?.dispose()
     initial = undefined
     subscription?.close()
@@ -106,9 +106,13 @@ export function useYieldRequest(source: () => YieldSource) {
     queued = false
     clearTimeout(afterWrite)
     read?.abort()
-    write?.abort()
-    read = write = undefined
-    loading.value = submitting.value = cancelling.value = false
+    read = undefined
+    loading.value = false
+    if (!preserveWrite) {
+      write?.abort()
+      write = undefined
+      submitting.value = cancelling.value = false
+    }
     if (interval) clearInterval(interval)
     interval = undefined
   }
@@ -229,7 +233,11 @@ export function useYieldRequest(source: () => YieldSource) {
   watch([() => source().apiBase, () => source().sessionId, () => source().active, () => source().stage === 'waiting', () => source().expectedRequestId], ([apiBase, sessionId, active, waiting, expectedId], previous) => {
     const preserveDraft = waiting && previous?.[3] && apiBase === previous?.[0]
       && sessionId === previous?.[1] && expectedId === previous?.[4]
-    stopRequests()
+    // A reply can resume the session before its HTTP confirmation arrives.
+    // Keep that write alive, but still cancel it on navigation or permission loss.
+    const preserveWrite = !!write && active && source().canAnswer
+      && apiBase === previous?.[0] && sessionId === previous?.[1]
+    stopRequests(preserveWrite)
     request.value = null
     if (!preserveDraft) {
       selected.value = error.value = ''

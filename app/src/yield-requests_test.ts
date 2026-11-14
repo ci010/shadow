@@ -620,3 +620,19 @@ test('repeated failed writes keep one reconciliation timer and unmount prevents 
   await state.refresh()
   assert.equal(requests.length, 3, 'neither overwritten timers nor stale callers fetch after unmount')
 })
+
+test('custom answer confirmation survives the session resuming before HTTP returns', async t => {
+  const { state, source, requests } = harness(t)
+  requests[0]!.finish(Response.json({ request: question() }))
+  await settle()
+  const answer = state.submitCustom('question-1', 'My answer')
+  source.stage = 'running'
+  assert.equal(requests[1]!.init.signal!.aborted, false)
+  assert.equal(state.busy.value, true)
+  requests[1]!.finish(Response.json({ answer: {
+    requestId: 'question-1', option: 'My answer', custom: true,
+    answeredBy: 'user', answeredAt: new Date().toISOString(),
+  } }))
+  assert.equal(await answer, true)
+  assert.equal(state.busy.value, false)
+})
