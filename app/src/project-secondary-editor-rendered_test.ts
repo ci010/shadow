@@ -81,7 +81,7 @@ test('all resources share Project editor groups without remount, child panes or 
       }
       if (path.endsWith('/api/workflows')) {
         const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'fresh', task: `Reminder ${projectId}` } }] }
-        json({ projectId, bots: { connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:chat-ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:chat-ordinary' } }] }); return
+        json({ projectId, bots: { connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:chat-ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition, { ...definition, id: `${definition.id}:other`, name: `Other workflow ${projectId}` }], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:chat-ordinary' } }] }); return
       }
       if (path.endsWith('/api/channels')) { json({ channels: (projectId === 'a' ? ['isolated-one', 'isolated-two'] : ['other']).map(id => ({ id, projectId, displayName: id, platform: 'qq', label: 'QQ', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { appId: 'fixture' }, secrets: { secret: true } })) }); return }
       if (path.endsWith('/api/automations')) { json({ automations: [{ id: 'system:session-cleanup', name: 'Session cleanup', source: 'system', session: 'fresh', enabled: true, schedule: 'every 1h', workflow: { id: `schedule:${projectId}`, pending: 0, blocked: 0 } }] }); return }
@@ -111,8 +111,8 @@ test('all resources share Project editor groups without remount, child panes or 
     const sidebar=async project=>{const s='document.querySelector('+JSON.stringify('[data-project-id="'+project+'"] .automation-entry')+')';await wait(s);await run(s+'.click()');await wait('window.fixture.router.currentRoute.value.name==="project-workflows" && window.fixture.router.currentRoute.value.params.projectId==='+JSON.stringify(project));await wait(visible('.workflow-manager'));await wait(visible('.graph-group'))};
     await win.loadURL(${JSON.stringify(url)});
     await wait(visible('.workflow-inspector'));
-    const useRef='document.querySelector(".workflow-reference-actions button")';
-    await run(useRef+'.click()'); await wait('document.querySelector(".workflow-inspector").textContent.includes("Open an ordinary conversation")');
+    assert.equal(await run('document.querySelectorAll(".workflow-reference-actions button").length'),0);
+    assert.equal(await run('document.querySelectorAll(".context-chip").length'),0,'selection without an existing target creates no context destination');
     const editorTab=label=>'[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.textContent.trim()==='+JSON.stringify(label)+' && e.getBoundingClientRect().width)';
     const tabById=part=>'[...document.querySelectorAll(".editor-view")].find(e=>e.dataset.editorId.includes('+JSON.stringify(part)+') && e.getBoundingClientRect().width)';
     const move=async label=>{const target=editorTab(label);await wait(target);await run(target+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.editor-menu'));await run('document.querySelector(".editor-menu button").click()')};
@@ -149,8 +149,44 @@ test('all resources share Project editor groups without remount, child panes or 
     await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');
     await wait(visible('.workflow-inspector'));
     assert.equal(await run('!!'+visible('[data-editor-group="right"] .reference-composer')),true);
-    await run(useRef+'.click()');await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
-    await run(useRef+'.click()');assert.equal(await run('document.querySelectorAll("[data-editor-group=right] .context-chip").length'),1);
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    assert.equal(await run('document.querySelectorAll("[data-editor-group=right] .context-chip").length'),1);
+    await run('(()=>{let c=window.fixture.chatInput.__vueParentComponent;while(c&&c.type.__name!=="ChatTab")c=c.parent;window.fixture.chatState=c.setupState;window.fixture.groups=c.setupState.editorGroups})()');
+    // Runtime permission/lease changes immediately remove dynamic context.
+    await run('(()=>{const g=window.fixture.groups,d=g.referenceTarget("a");window.fixture.target=d;g.descriptors.set(d.id,{...d,conversation:{...d.conversation,editable:false}})})()');
+    await wait('!document.querySelector("[data-editor-group=right] .context-chip")');
+    await run('void window.fixture.groups.descriptors.set(window.fixture.target.id,window.fixture.target)');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    // A real editor target switch migrates only the current selection, not draft state.
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-second"}})');
+    await wait('window.fixture.groups.referenceTarget("a")?.conversation.sessionId==="web:chat-second"');
+    await run('(()=>{const g=window.fixture.groups;g.move(g.referenceTarget("a").id,"right");g.activate([...g.descriptors.values()].find(d=>d.id.endsWith(":project:workflows")).id)})()');
+    await wait('window.fixture.chatState.selectedWorkflowReference===undefined');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    await run('window.fixture.groups.activate(window.fixture.target.id)');
+    await wait('!!window.fixture.chatState.selectedWorkflowReference');
+    await run('(()=>{const g=window.fixture.groups;g.close([...g.descriptors.values()].find(d=>d.conversation?.sessionId==="web:chat-second").id)})()');
+    assert.equal(await run('window.fixture.chatState.inputReferences.length'),0,'dynamic context never enters the old target draft');
+    // Selection replaces rather than appends, while leaving the unsent draft alone.
+    await run('window.fixture.router.replace({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    await run('window.fixture.router.replace({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');
+    assert.equal(await run('window.fixture.chatInput.textContent'),'Right unsent draft');
+    await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="schedule:a:other").click()');
+    await wait('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("Other workflow a")');
+    assert.equal(await run('document.querySelectorAll("[data-editor-group=right] .context-chip").length'),1);
+    await run('document.querySelector(".graph-node[data-node-type=action]").click()');
+    await wait('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("1: schedule-action")');
+    assert.equal(await run('document.querySelectorAll("[data-editor-group=right] .context-chip").length'),1);
+    await run('document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Clear selection"]')+').click()');
+    await wait('!document.querySelector("[data-editor-group=right] .context-chip")');
+    assert.equal(await run('window.fixture.chatInput.textContent'),'Right unsent draft');
+    await run('window.fixture.router.replace({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
+    await run('document.querySelector(".workflow-inspector").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
+    await wait('!document.querySelector("[data-editor-group=right] .context-chip")');
+    await run('window.fixture.router.replace({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
     await move('Workflows');await wait(visible('[data-editor-group="right"] .workflow-manager'));
     await move('Workflows');await wait(visible('[data-editor-group="left"] .workflow-manager'));
     await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a",section:"general"}})');
@@ -185,6 +221,7 @@ test('all resources share Project editor groups without remount, child panes or 
     const ordinaryTab='[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.id.includes("chat-ordinary")&&!e.textContent.includes("Diagnosis")&&!e.textContent.includes("Knowledge")&&!e.textContent.includes("note.md"))';
     await run(ordinaryTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
     await wait('!('+ordinaryTab+')');
+    assert.equal(await run('window.fixture.chatState.selectedWorkflowReference'),undefined,'closing the target removes its dynamic context');
     await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a"}})');
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
     await wait(visible('.reference-composer'));
@@ -196,6 +233,7 @@ test('all resources share Project editor groups without remount, child panes or 
     // Child inspection is another resource in the same strip, never a nested child pane.
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{child:"web:child-fixture"}})');
     await wait('!!document.querySelector("[data-editor-group=right] .editor-view[data-editor-id*=child-fixture]")');
+    assert.equal(await run('document.querySelectorAll(".editor-view[data-editor-id*=child-fixture] .context-chip").length'),0,'child inspection never receives dynamic context');
     assert.equal(await run('document.querySelectorAll(".child-conversation").length'),0);
     const childTab='[...document.querySelectorAll("[data-editor-header-group=right] .editor-tab [role=tab]")].find(e=>e.id.includes("child-fixture")&&!e.textContent.includes("Diagnosis"))';
     await wait(childTab);await run(childTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()');
@@ -203,11 +241,13 @@ test('all resources share Project editor groups without remount, child panes or 
     await run(childTab.replaceAll('data-editor-header-group=right','data-editor-header-group=left')+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
     await run('window.fixture.router.replace({query:{child:"web:child-fixture",diagnosis:"prompt"}})');
     assert.equal(await run('!!'+childTab.replaceAll('data-editor-header-group=right','data-editor-header-group=left')),false,'Closed child does not reopen on unrelated route updates');
+    await run('window.fixture.groups.activate(window.fixture.target.id)');
     // Project switching preserves the exact composer node and its unsent draft.
     await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"b"}})');await wait(visible('.workflow-manager'));
+    await wait('[...document.querySelectorAll(".graph-node")].some(e=>e.dataset.flow==="schedule:b")');
+    assert.equal(await run('window.fixture.chatState.selectedWorkflowReference'),undefined,'other Projects cannot retain the old target selection');
     assert.equal(await run('!!'+visible('[data-editor-group="right"] .reference-composer')),false);
     await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{workflow:"schedule:a",run:"run:a"}})');await wait(visible('.workflow-inspector'));
-    await run(useRef+'.click()');
     await wait(visible('[data-editor-group="right"] .reference-composer'));
     assert.equal(await run('document.querySelector("[data-editor-group=right] .reference-composer")===window.fixture.chatInput'),true);
     assert.equal(await run('window.fixture.chatInput.textContent'),'Right unsent draft');
@@ -215,11 +255,16 @@ test('all resources share Project editor groups without remount, child panes or 
     const beforeWidth=await run(resizeHandle+'.getAttribute("aria-valuenow")');
     await run(resizeHandle+'.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}))');
     await delay(100);assert.notEqual(await run(resizeHandle+'.getAttribute("aria-valuenow")'),beforeWidth,'Shared group resize is keyboard-operable');
+    await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="schedule:a"&&e.dataset.nodeType==="action").click()');
+    await wait('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("1: schedule-action")');
+    await run('window.fixture.chatState.appendInputReference({label:"Manual workflow",reference:{kind:"workflow",projectId:"a",workflowId:"schedule:a",revision:1,runId:"run:a"}})');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===2');
     // One ordinary submission after inspector focus, with immutable host references.
     await wait('!document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').disabled');
     await run('document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').click()');
     await wait('window.fixture.chatInput.textContent===""');await wait('!!window.fixture.lastAdmission');await delay(400);
     await run('window.fixture.chatObservers.forEach(observer=>observer.event({requestId:window.fixture.lastAdmission.requestId,payload:{event:"turn_finished",done:true,status:"completed",turnId:"fixture-turn"}}))');
+    await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===1');
     if(process.env.EDITOR_GROUP_SCREENSHOT) require('node:fs').writeFileSync(process.env.EDITOR_GROUP_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
     await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
@@ -231,7 +276,7 @@ test('all resources share Project editor groups without remount, child panes or 
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); if (code !== 0) console.error(output); assert.equal(code, 0, output); assert.match(output, /WORKFLOW_WORKBENCH_OK/)
   assert.deepEqual(requests.filter(request => request.method !== 'GET'), [{ path: '/projects/a/api/chat/send', method: 'POST' }], 'Only the explicit send submits; editor movement never forks, prepares or submits')
-  assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a' }])
+  assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a' }, { kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a', selector: { kind: 'node', index: 0, nodeKind: 'schedule-action' } }])
   assert.equal(sentBodies[0]!.content, 'Right unsent draft')
   assert.equal(sentBodies[0]!.media, undefined)
   assert.match(frozenHistory[0]!, /Host-resolved identity snapshot/)
