@@ -34,7 +34,7 @@ test('installation authority, single owner, independent Homes and durable unknow
       await service.connect(signal())
       assert.equal(deployments.length, 1)
       assert.equal(deployments[0]!.settings.sweep, false)
-      assert.equal(deployments[0]!.settings.wsl.user, 'root')
+      assert.equal(deployments[0]!.settings.wsl!.user, 'root')
       await assert.rejects(tool.execute({ ...request, installation: { ...installation, distribution: 'other' } }, context), /already approved/)
     } finally { await service.close() }
     const next = new ManagedLayerFS('one', home, () => { throw Error('status must not start') }, 'win32')
@@ -42,7 +42,7 @@ test('installation authority, single owner, independent Homes and durable unknow
     await next.status(signal()); await next.close()
     const second = new ManagedLayerFS('one', join(dir, 'two'), factory, 'win32')
     await second.setup(installation, signal()); await second.close()
-    assert.notEqual(deployments[0]!.settings.wsl.home, deployments[1]!.settings.wsl.home)
+    assert.notEqual(deployments[0]!.settings.wsl!.home, deployments[1]!.settings.wsl!.home)
     const failed = new ManagedLayerFS('one', join(dir, 'failed'), () => ({ request: async () => { throw new ToolOutcomeUnknownError('lost') }, close: async () => {} }), 'win32')
     await assert.rejects(failed.setup(installation, signal()), ToolOutcomeUnknownError)
     await failed.close()

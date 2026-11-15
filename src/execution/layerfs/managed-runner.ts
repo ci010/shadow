@@ -1,9 +1,9 @@
 
-// A separate process owns the upstream singleton and the WSL worker for one Project.
+// A separate process owns the upstream singleton and the platform worker for one Project.
 // This uses the pinned 73d974d public Runtime API, never a shell installer or sweep.
-import { nativeSourceProbe } from './native-source.ts'
+import { nativeSourceProbe, macSourceProbe } from './native-source.ts'
 
-export const managedRunner = `const nativeSourceProbe = ${JSON.stringify(nativeSourceProbe)};\n` + String.raw`
+export const managedRunner = `const nativeSourceProbe = ${JSON.stringify(nativeSourceProbe)}; const macSourceProbe = ${JSON.stringify(macSourceProbe)};\n` + String.raw`
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -33,6 +33,11 @@ import { join, posix } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 async function sourceIdentity(input) {
+ if (runtime && !deployment.settings.wsl) {
+  if (typeof input?.path !== 'string' || posix.dirname(input.path) !== join(deployment.settings.home, 'sources') || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(posix.basename(input.path))) fail('SourceScopeRequired');
+  const {stdout} = await promisify(execFile)(process.execPath, ['-e',macSourceProbe,input.path], {timeout:8000,maxBuffer:65536,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+  return JSON.parse(stdout);
+ }
  if (!runtime || !/^\/var\/lib\/shadow-layerfs-sources\/[a-f0-9]{64}\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(input?.path)) fail('SourceScopeRequired');
  const w = deployment.settings.wsl;
  const {stdout} = await promisify(execFile)('wsl.exe', ['--distribution',w.distribution,'--user','root','--exec',w.node,'-e',nativeSourceProbe,input.path], {windowsHide:true,timeout:8000,maxBuffer:65536});
@@ -87,6 +92,10 @@ async function execute(action, input, sourceToken) {
   // Pinned Windows host prepare/scan uses node:fs and host node:path before
   // dispatching to WSL. Only transport the already-authorized Linux binding;
   // the official worker maps this same-distro UNC back to the original path.
+  if (!deployment.settings.wsl) {
+   if (posix.dirname(source) !== join(deployment.settings.home,'sources') || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(posix.basename(source))) fail('SourceScopeRequired');
+   return runtime.project.start_init(name,source,options);
+  }
   const distro = deployment.settings.wsl.distribution;
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(distro) || !/^\/var\/lib\/shadow-layerfs-sources\/[a-f0-9]{64}\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(source)) fail('SourceScopeRequired');
   const transportSource = '\\\\wsl.localhost\\' + distro + source.replaceAll('/', '\\');
@@ -101,7 +110,7 @@ async function execute(action, input, sourceToken) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(project.volume)) fail('InvalidVolume');
   const s = deployment.settings;
   return { sdkModule: deployment.sdkModule, env: {
-   LAYERFS_HOME: s.wsl.home, LAYERFS_DOCKER: '/var/run/docker.sock',
+   LAYERFS_HOME: s.wsl ? s.wsl.home : s.home, LAYERFS_DOCKER: '/var/run/docker.sock',
    LAYERFS_IMAGE: project.image || s.image, LAYERFS_DAEMON: posix.join(s.bundle, 'layerfs-daemon'),
    LAYERFS_VOLUME: project.volume,
    LAYERFS_STORE_PATH: '/var/lib/docker/volumes/' + project.volume + '/_data/global/store.sqlite',

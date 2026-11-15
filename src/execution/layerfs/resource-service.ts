@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile, stat, unlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, stat, unlink, realpath } from 'node:fs/promises'
 import { nativeSourceRoot, nativeSourcePath, verifyNativeSource } from './native-source.ts'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
@@ -10,6 +10,7 @@ import { assertLayerFSSetupOwner } from './bootstrap.ts'
 import { ManagedLayerFS, managedLayerFS, installationSchema } from './managed.ts'
 import { runBridge } from './bridge.ts'
 import { LayerFSResourceCatalog, resourceSchema, type LayerFSResource } from './resources.ts'
+import { projectDataPaths } from '../../utils/data-paths.ts'
 import { sdkLauncher } from './sdk-launcher.ts'
 import { parseBranchWorkspace } from './workspace-identity.ts'
 import { LayerFSWorkspaces } from './workspace-create.ts'
@@ -118,13 +119,14 @@ export class LayerFSResources {
     this.assertOwner(context)
     const record = await this.record(id)
     if (record.phase !== 'ready') throw new ToolNoEffectError('Only a ready runtime may provide its SDK launcher.')
-    const sourceRoot = nativeSourceRoot(this.projectId, id)
+    const mac = 'platform' in record.installation
+    const sourceRoot = nativeSourceRoot(this.projectId, id, mac ? await realpath(join(projectDataPaths(this.runtimeHome(id)).state, 'layerfs', 'runtime')) : undefined)
     const path = sourceName === undefined ? undefined : nativeSourcePath(sourceRoot, sourceName)
     const source = async () => {
       this.assertOwner(context)
       const current = await this.record(id)
       if (current.phase !== 'ready' || digest(current.installation) !== digest(record.installation)) throw new ToolNoEffectError('Runtime source binding changed; obtain a new context.')
-      const identity = verifyNativeSource(path!, await this.runtime(id).sourceIdentity(path!, context.signal))
+      const identity = verifyNativeSource(path!, await this.runtime(id).sourceIdentity(path!, context.signal), mac ? process.getuid?.() : undefined)
       return { path: path!, identity }
     }
     const initial = path ? await source() : undefined

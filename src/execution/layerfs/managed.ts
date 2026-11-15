@@ -11,13 +11,19 @@ import { managedRunner } from './managed-runner.ts'
 
 const absoluteHost = z.string().min(1).refine(isAbsolute)
 const absoluteLinux = z.string().regex(/^\/(?!\/)/).refine(v => !v.includes('\0') && !v.split('/').includes('..'))
-export const installationSchema = z.object({
+const windowsInstallationSchema = z.object({
   apiRoot: absoluteHost,
   bundle: absoluteLinux,
   image: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   distribution: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
   node: absoluteLinux,
 }).strict()
+const macInstallationSchema = z.object({
+  platform: z.literal('darwin'), apiRoot: absoluteHost, bundle: absoluteHost,
+  image: z.string().regex(/^sha256:[a-f0-9]{64}$/), docker: absoluteHost,
+  distribution: z.never().optional(), node: z.never().optional(),
+}).strict()
+export const installationSchema = z.union([windowsInstallationSchema, macInstallationSchema])
 export type LayerFSInstallation = z.infer<typeof installationSchema>
 const savedSchema = z.object({ version: z.literal(1), projectId: z.string(), installation: installationSchema,
   approvedRootWorker: z.literal(true) }).strict()
@@ -29,7 +35,7 @@ export interface ManagedDriver {
 export interface Deployment {
   project: string; sdkModule: string; runtimeModule: string
   settings: { home: string; bundle: string; image: string; containerPrefix: string; sweep: false;
-    wsl: { distribution: string; user: 'root'; node: string; home: string } }
+    docker?: string; wsl?: { distribution: string; user: 'root'; node: string; home: string } }
 }
 const runtimeStatusSchema = z.object({ worker: z.enum(['running', 'unknown']), answering: z.boolean(), docker: z.enum(['ok', 'down', 'unknown']), ready: z.boolean(), sandboxVerified: z.literal(false),
   health: z.literal('not_checked').optional(), activeCalls: z.number().int().nonnegative().safe().optional() }).strict()
@@ -163,7 +169,7 @@ export class ManagedLayerFS {
       runtimeModule: join(installation.apiRoot, 'api', 'runtime', 'src', 'index.js'),
       settings: { home: join(this.directory, 'runtime'), bundle: installation.bundle, image: installation.image,
         containerPrefix: `shadow-${key}-`, sweep: false,
-        wsl: { distribution: installation.distribution, user: 'root', node: installation.node, home: `/var/lib/shadow-layerfs/${key}` } } }
+        ...('platform' in installation ? { docker: installation.docker } : { wsl: { distribution: installation.distribution, user: 'root' as const, node: installation.node, home: `/var/lib/shadow-layerfs/${key}` } }) } }
   }
   async describe() {
     // Missing retained evidence is not a confirmed clean stop. Initial setup
@@ -184,9 +190,10 @@ export class ManagedLayerFS {
   private async setupOwned(installation: unknown, signal: AbortSignal) {
     signal.throwIfAborted()
     if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down.')
-    if (this.platform !== 'win32') throw new ToolNoEffectError('Managed LayerFS setup currently supports Windows/WSL only; use explicit operator configuration on other platforms.')
+    if (!['win32', 'darwin'].includes(this.platform)) throw new ToolNoEffectError('Managed LayerFS setup supports Windows/WSL and macOS only.')
     const parsed = installationSchema.safeParse(installation)
-    if (!parsed.success) throw new ToolNoEffectError('Invalid LayerFS installation: supply the trusted matching API root, absolute sealed Linux bundle/Node paths, WSL distribution and installed sha256 image ID.')
+    if (!parsed.success) throw new ToolNoEffectError('Invalid LayerFS installation: supply matching trusted API root, sealed Linux bundle and installed sha256 image; Windows needs WSL distribution/Node, macOS needs platform:darwin and a local Docker socket.')
+    if (('platform' in parsed.data ? 'darwin' : 'win32') !== this.platform) throw new ToolNoEffectError('Installation platform does not match this execution host.')
     const previous = await this.saved()
     if (previous && JSON.stringify(previous.installation) !== JSON.stringify(parsed.data)) throw new ToolNoEffectError('A different LayerFS installation is already approved for this Project. Existing runtime state will not be replaced.')
     const deployment = this.deployment(parsed.data)
@@ -234,7 +241,7 @@ export class ManagedLayerFS {
     }
     const saved = await this.saved()
     if (!saved) throw new ToolNoEffectError('LayerFS has no approved installation. Use setup; no SDK was loaded.')
-    if (this.platform !== 'win32') throw new ToolNoEffectError('Saved managed LayerFS installation requires Windows/WSL.')
+    if (('platform' in saved.installation ? 'darwin' : 'win32') !== this.platform) throw new ToolNoEffectError('Saved installation platform differs from this host; no worker was started.')
     if (await this.phase() !== 'stopped') throw new ToolOutcomeUnknownError('LayerFS previous worker ownership is unresolved; automatic restart is refused. Inspect runtime_status and retained ownership evidence. Retained worker/Store resources must not be cleared or replayed.')
     signal.throwIfAborted()
     await mkdir(this.directory, { recursive: true, mode: 0o700 })

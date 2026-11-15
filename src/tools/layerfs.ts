@@ -10,13 +10,13 @@ import { ToolNoEffectError, completedToolFailure, type Tool, type ToolParameters
 const installationIntents = {
   doctor: { description: 'Inspect installation configuration without starting a worker.', required: [], optional: [] },
   setup: { description: 'Connect an existing trusted installation with explicit owner consent; not an installer.', required: ['installation', 'approved', 'allowRootWorker'], optional: [] },
-  bootstrap_plan: { description: 'Discover WSL and return the installation approval request without provisioning.', required: [], optional: ['distribution'] },
+  bootstrap_plan: { description: 'Discover local Docker on macOS or WSL on Windows and return the installation approval request without provisioning.', required: [], optional: ['distribution'] },
   bootstrap: { description: 'Build the exact approved pinned installation. Wait for background completion; never replay an unknown outcome.', required: ['plan', 'approval', 'approved', 'allowRootWorker', 'allowDownloads'], optional: [] },
   bootstrap_status: { description: 'Inspect retained installation progress without retry or repair.', required: [], optional: [] },
 } satisfies Record<string, { description: string; required: string[]; optional: string[] }>
 const ordinary = new Set(['status', 'read', 'write', 'search', 'exec'])
 const fields: ToolParameters['properties'] = {
-  installation: { type: 'object', description: 'Existing trusted installation {apiRoot,bundle,image,distribution,node}; explicit installation approval required.' },
+  installation: { type: 'object', description: 'Existing trusted installation: Windows {apiRoot,bundle,image,distribution,node}, macOS {platform:"darwin",apiRoot,bundle,image,docker}; explicit installation approval required.' },
   approved: { type: 'boolean' }, allowRootWorker: { type: 'boolean' }, allowDownloads: { type: 'boolean' },
   plan: { type: 'string' }, approval: { type: 'object', description: 'Exact recorded human decision {sessionId,physicalId,requestId} for the installation plan.' },
   distribution: { type: 'string' },
