@@ -60,8 +60,8 @@ export function parseWorkflows(raw: unknown, projectId: string): WorkflowSnapsho
   if (!Array.isArray(sources) || sources.some(s => !isRecord(s) || !text(s.kind) || !text(s.id) || typeof s.enabled !== 'boolean' || s.error !== undefined && !text(s.error) || s.nextAt !== undefined && (typeof s.nextAt !== 'number' || !Number.isFinite(s.nextAt)))) return invalid()
   return { projectId, definitions, runs, bots: raw.bots === undefined ? undefined : parseBotProjection(raw.bots, projectId), botsUnavailable: raw.botsUnavailable === true, sources: sources as WorkflowSourceStatus[], runtimeError: typeof raw.runtimeError === 'string' ? raw.runtimeError : undefined }
 }
-export function workflowStatus(status: WorkflowStatus | 'paused' | 'ready' | 'waiting' | 'received' | 'accepted') {
-  const labels: Record<typeof status, MessageKey> = { queued: 'Queued', running: 'Running', retry: 'Retry pending', blocked: 'Blocked', completed: 'Completed', cancelled: 'Cancelled', paused: 'Paused', ready: 'Ready', waiting: 'Waiting', received: 'Received', accepted: 'Accepted' }
+export function workflowStatus(status: WorkflowStatus | 'unknown' | 'paused' | 'ready' | 'waiting' | 'received' | 'accepted') {
+  const labels: Record<typeof status, MessageKey> = { unknown: 'Unknown', queued: 'Queued', running: 'Running', retry: 'Retry pending', blocked: 'Blocked', completed: 'Completed', cancelled: 'Cancelled', paused: 'Paused', ready: 'Ready', waiting: 'Waiting', received: 'Received', accepted: 'Accepted' }
   return t(labels[status])
 }
 export function workflowHint(error?: string): string {

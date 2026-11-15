@@ -4415,5 +4415,10 @@
   "Open thread list": "Open thread list",
   "Open messages and threads": "Open messages and threads",
   "Open connection content": "Open connection content",
-  "Channel metadata unavailable. Waiting for received content.": "Channel metadata unavailable. Waiting for received content."
+  "Channel metadata unavailable. Waiting for received content.": "Channel metadata unavailable. Waiting for received content.",
+  "Owner ingress is not permission to reply in every group. Admission and execution are unknown.": "Owner ingress is not permission to reply in every group. Admission and execution are unknown.",
+  "Configuration and existing sessions are not message admission or execution receipts.": "Configuration and existing sessions are not message admission or execution receipts.",
+  "Session metadata exists; message receipt, persistence and execution are unknown.": "Session metadata exists; message receipt, persistence and execution are unknown.",
+  "Discovery only; message receipt, persistence and execution are unknown.": "Discovery only; message receipt, persistence and execution are unknown.",
+  "No conversation evidence available": "No conversation evidence available"
 }

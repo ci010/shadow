@@ -72,3 +72,20 @@ test('parent messages and public-thread history share only the parent receiver, 
     channelType: null, guildId: '100', view: 'messages-and-threads' })
   assert.deepEqual(parseConnectionSinkProjection(first, 'p'), first)
 })
+
+test('inventory evidence never fabricates message persistence, binding, admission or execution', () => {
+  const metadata = connectionSinkProjection({ ...base, histories: [history(source), history(source)] })
+  assert.equal(metadata.receivers.length, 1, 'Duplicate history containers are not duplicate receipts')
+  assert.deepEqual(metadata.receivers[0]!.evidence, { discovery: 'unknown', sessionMetadata: 'present',
+    received: 'unknown', persisted: 'unknown', bound: 'unknown', executed: 'unknown' })
+  const discovered = connectionSinkProjection({ ...base, platform: 'discord', observations: [
+    { connection: 'conn', platform: 'discord', conversation: 'thread', parent: 'parent' }] })
+  assert.deepEqual(discovered.receivers[0]!.evidence, { discovery: 'observed', sessionMetadata: 'unknown',
+    received: 'unknown', persisted: 'unknown', bound: 'unknown', executed: 'unknown' })
+  assert.deepEqual(parseConnectionSinkProjection(JSON.parse(JSON.stringify(metadata)), 'p'), metadata, 'Restart/serialization does not upgrade evidence')
+  assert.deepEqual(connectionSinkProjection({ ...base, histories: [history(source)], bots: [] }), metadata, 'Unlink is not a historical rejection receipt')
+  assert.throws(() => parseConnectionSinkProjection({ ...metadata, receivers: [{ ...metadata.receivers[0],
+    evidence: { ...metadata.receivers[0]!.evidence, persisted: 'confirmed' } }] }), /unknown/)
+  assert.throws(() => parseConnectionSinkProjection({ ...metadata, receivers: [{ ...metadata.receivers[0],
+    evidence: { ...metadata.receivers[0]!.evidence, body: 'PRIVATE' } }] }), /Unrecognized/)
+})

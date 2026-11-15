@@ -4415,5 +4415,10 @@
   "Open thread list": "打开帖子列表",
   "Open messages and threads": "打开消息与帖子",
   "Open connection content": "打开连接内容",
-  "Channel metadata unavailable. Waiting for received content.": "频道元数据暂不可用，等待实际消息接入。"
+  "Channel metadata unavailable. Waiting for received content.": "频道元数据暂不可用，等待实际消息接入。",
+  "Owner ingress is not permission to reply in every group. Admission and execution are unknown.": "所有者入口不代表可向所有群回复。消息准入与执行情况未知。",
+  "Configuration and existing sessions are not message admission or execution receipts.": "配置和已有会话不是消息准入或执行回执。",
+  "Session metadata exists; message receipt, persistence and execution are unknown.": "存在会话元数据；消息接收、持久化和执行情况未知。",
+  "Discovery only; message receipt, persistence and execution are unknown.": "仅有发现证据；消息接收、持久化和执行情况未知。",
+  "No conversation evidence available": "暂无可用的会话证据"
 }

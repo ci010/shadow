@@ -24,7 +24,7 @@ export function connectionSinkProjection(options: {
     projectId, connectionId, connectionPath: `${base}/overview.json`, sinkPath: `${base}/sink.json`,
     sink: { kind: 'common-receipt', reacts: false, navigation: { kind: 'connection-content', projectId, connectionId } },
     receivers: [], bots: options.bots ?? [], guidePath: 'v:bots/authoring' }
-  const facts = new Map<string, { address: ChannelSinkAddress; children: boolean; source?: ChannelSource; inboxSessionId?: string }>()
+  const facts = new Map<string, { address: ChannelSinkAddress; children: boolean; discovered?: boolean; source?: ChannelSource; inboxSessionId?: string }>()
   const fact = (conversationId: string) => {
     let value = facts.get(conversationId)
     if (!value) { value = { address: { projectId, botInstanceId: connectionId, platform, conversationId }, children: false }; facts.set(conversationId, value) }
@@ -49,6 +49,7 @@ export function connectionSinkProjection(options: {
     if (!row.parent) continue
     const value = fact(row.parent)
     value.children = true
+    value.discovered = true
   }
   for (const value of facts.values()) {
     const { address, source, inboxSessionId, children } = value
@@ -62,6 +63,8 @@ export function connectionSinkProjection(options: {
       channelType: null, guildId: source?.guildId ?? null, view: 'messages-and-threads' }
     else continue // Never invent an empty parent chat for a discovery-only source.
     result.receivers.push({ id, address, path: `${base}/receivers/${encodeURIComponent(id)}.json`, navigation,
+      evidence: { discovery: value.discovered ? 'observed' : 'unknown', sessionMetadata: source ? 'present' : 'unknown',
+        received: 'unknown', persisted: 'unknown', bound: 'unknown', executed: 'unknown' },
       ...(source?.conversationId === address.conversationId && source.name ? { name: safeName(source.name) } : {}) })
   }
   result.receivers.sort((a, b) => a.id.localeCompare(b.id))

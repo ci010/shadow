@@ -26,6 +26,17 @@ export interface ChannelSinkReceiver {
   name?: string
   path: string
   navigation: ChannelSinkNavigation
+  /** Inventory evidence, NOT per-message receipts. Optional for older projections. */
+  evidence?: SinkEvidence
+}
+
+export interface SinkEvidence {
+  discovery: 'observed' | 'unknown'
+  sessionMetadata: 'present' | 'unknown'
+  received: 'unknown'
+  persisted: 'unknown'
+  bound: 'unknown'
+  executed: 'unknown'
 }
 export interface ConnectionSinkProjection {
   kind: 'connection-sink'

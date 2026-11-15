@@ -14,6 +14,59 @@ this projection is not a delivery probe or execution migration. See
 [Workflow BOT topology](workflows.md#bot-topology-read-only-first-stage) for the
 DTO, bounds, security exclusions and existing-session link limitations.
 
+### Evidence limits and personal ingress
+
+A common connection sink does not replace the published personal Agent, owner
+ingress, listener or existing Session relationship in the graph. Those remain
+separate read-only inventory rows alongside group receivers. Owner ingress does
+not authorize replies in every group sharing the transport.
+
+Receiver `evidence` is a small allowlisted DTO shared by the graph and
+`v:connections/<id>/sink.json` / receiver reads. `sessionMetadata: present` means a
+validated history container exists, not that any particular message was saved.
+`discovery: observed` means the discovery snapshot contains an entry. Message
+`received` and `persisted`, receiver `bound`, and `executed` remain `unknown`.
+Configured BOT bindings, subscription flags and projected listeners remain visible
+separately; none proves runtime message admission. Unbinding does not establish a
+past rejection, missing evidence is not zero, and connection health is not success.
+Older projections may lack `evidence`; consumers must treat it as unknown.
+
+No new receipts or persistent tracing store are introduced. The projection reads
+existing metadata/discovery only and does not upgrade evidence after restart,
+duplicate observations, or unlinking. It cannot verify real group receipt,
+per-message persistence, admission or execution. Projection nodes are not `ready`
+execution nodes; their status is `unknown`.
+
+Connection/BOT **management VFS** remains restricted to the owning Project's live,
+user-owned durable Web administrator session. The separate read-only
+`bot_observe` tool is discoverable in `v:tools/bot_observe` for host-granted full
+tool sessions, including QQ. Invoke with `invoke_tool({ name: 'bot_observe', args: {} })`.
+It accepts no Project, conversation, owner or `full` argument. The runtime binds
+its source to the current Project and rejects mismatched execution contexts.
+
+There is no model-controlled `full` permission field: existing `SessionTools`
+allow/block policy governs catalog visibility, explicit import and invocation.
+An allowlisted agent without `invoke_tool`, or one blocking `bot_observe`, cannot
+discover or invoke it. Existing remote-workdir dynamic-tool routing restrictions
+still apply; this change adds no remote executor route. It does not require an
+owner-Web role or per-conversation live guard to inspect the Project projection.
+
+The tool and UI use the same runtime `botSnapshot` and receiver `evidence` DTO.
+UI names and navigation addresses are presentation-only. Tool output reconstructs
+a narrower allowlist: opaque hashed identifiers, transport health, receiver
+evidence, deployment mode/state and configured binding/listener/session counts.
+It omits raw conversation/session/user IDs, names, message bodies, URLs, credentials,
+module data and navigation. Same-Project group receivers can be enumerated;
+management, sending, deployment and message-content access are not granted.
+
+Source inspection confirms QQ group pushes call `collectPassive` before business
+checks (`src/channels/qq.ts`); the manager appends the common stream and awaits
+`recordPassiveChannel` before returning assignment eligibility
+(`src/channels/manager.ts`). Personal owner/BOT assignment therefore does not
+suppress the common recording path. This is source-order evidence, **not proof
+that a platform pushed a particular real group message**, or that a historical
+write succeeded. No collection behavior is changed here.
+
 ## Source and deployment
 
 Register a **local Folder**, then create a BOT directory inside it. Edit that
