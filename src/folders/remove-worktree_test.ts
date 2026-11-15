@@ -50,6 +50,23 @@ test('safe disk removal, retained branch, owner gates, admission exclusion and d
   const context = { projectId: 'default', sessionId: 'web:owner', channel: 'web', inputSource: 'user', admin: true, soleDirectToolCall: true, signal } as ExecutionContext
   const folder = await derive()
   const args = { workspaceId: folder.id, integratedRef: 'refs/heads/main' }
+  await t.test('A/B/C lineage requires leaf-first removal without orphaning registered children', async () => {
+    const childPath = join(root, 'nested-child')
+    await git(folder.path, ['worktree', 'add', '-b', 'nested-child', childPath, 'main'], signal)
+    const child = await registry.register(childPath)
+    await registry.recordLineage(child.id, { version: 1, parentId: folder.id, backend: 'git-worktree', ownership: 'shadow-derived' })
+    const before = await readFile(catalog.filePath, 'utf8')
+    await assert.rejects(tool.execute(args, context), /registered derived children; remove leaves first/)
+    assert.equal(await readFile(catalog.filePath, 'utf8'), before)
+    assert.ok((await lstat(folder.path)).isDirectory())
+    assert.ok((await lstat(child.path)).isDirectory())
+    registry.acquireAccess()()
+    const removedChild = JSON.parse(await tool.execute({ ...args, workspaceId: child.id }, context))
+    assert.equal(removedChild.unregistered, true)
+    assert.ok(registry.get(folder.id))
+    assert.equal(registry.get(child.id), undefined)
+    // B remains eligible and is removed successfully below after the other safety checks.
+  })
   for (const patch of [{ projectId: 'foreign' }, { sessionId: 'web:other' }, { inputSource: 'automation' }, { admin: false }, { scriptInvocation: true }, { soleDirectToolCall: false }, { recoveringToolCall: true }, { layerfsWorkdir: {} }, { remoteWorkdir: {} }]) await assert.rejects(tool.execute(args, { ...context, ...patch } as ExecutionContext), /unavailable/)
   await assert.rejects(tool.execute({ ...args, force: true }, context), /Expected only/)
   await assert.rejects(tool.execute({ ...args, workspaceId: folder.path }, context), /Expected only/)

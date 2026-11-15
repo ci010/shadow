@@ -408,6 +408,7 @@ export class ProjectCatalog {
       if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project unavailable.', 409)
       const folder = this.#current().folders.find(item => item.id === id && item.projectId === projectId)
       if (!folder) throw new FolderError('folder_not_found', 'Registered Workspace ID not found in this Project.', 404)
+      if (this.#current().folders.some(item => item.lineage?.parentId === id)) throw new Error('Workspace has registered derived children; remove leaves first. Registration and disk retained.')
       const parent = this.#current().folders.find(item => item.id === folder.lineage?.parentId && item.projectId === projectId)
       if (!parent || folder.kind && folder.kind !== 'local' || parent.kind && parent.kind !== 'local') throw new Error('Only local derived Git worktrees with a registered parent are supported; no remote/LayerFS fallback.')
       if (this.#current().folders.some(item => item.id !== id && item.kind !== 'remote' && item.kind !== 'layerfs' && overlaps(item.path, folder.path))) throw new Error('Overlapping Workspace registration; retained.')
