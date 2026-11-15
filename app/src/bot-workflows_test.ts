@@ -17,6 +17,7 @@ test('BOT projection is distinct from Workflow runtime definitions and shares th
   assert.equal(snapshot.definitions.length, 0)
   const flows = botCanvas(snapshot.bots)
   assert.equal(flows.length, 3)
+  assert.equal(flows[0]?.connectionSettingsId, 'qq-shared')
   assert.equal(flows[0]?.control, undefined)
   assert.equal(flows[0]?.conversation, undefined)
   assert.deepEqual(flows[1]?.conversation, { kind: 'fixed', sessionId: 'qq:existing' })
@@ -34,7 +35,7 @@ test('BOT projection is distinct from Workflow runtime definitions and shares th
   assert.equal(parseWorkflows({ projectId: 'p', definitions: [], runs: [], botsUnavailable: true }, 'p').botsUnavailable, true)
 })
 
-test('only isolated connector groups expose exact connection configuration, not deployments or binding conversations', () => {
+test('isolated group shortcuts remain distinct from binding inspector configuration', () => {
   const flows = botCanvas(parseBotProjection({ ...bots, connections: [...bots.connections,
     { ...bots.connections[0], id: 'one /?#', displayName: 'First' },
     { ...bots.connections[0], id: 'second', displayName: 'Second' }], deployments: [...bots.deployments, { id: 'second', state: 'valid' }] }))
@@ -57,6 +58,7 @@ test('personal paired DM ingress survives a sink with an extra group, without gr
       enabled: true, subscribed: true, listener: true, sessionIds: ['owner-dm-session'] }] }, 'p')
   const flows = botCanvas(snapshot)
   assert.equal(flows.length, 2)
+  assert.equal(flows[0]?.connectionSettingsId, 'qq-shared')
   assert.equal(flows[0]?.sinkProjection?.receivers.length, 1)
   const owner = flows.find(flow => flow.definition.id === 'bot-binding:owner')!
   assert.deepEqual(owner.graph?.map(node => node.nodeType), ['connection', 'binding', 'deployment', 'session'])
@@ -70,3 +72,10 @@ test('personal paired DM ingress survives a sink with an extra group, without gr
   assert.equal((owner.graph![1]!.config as { listener: boolean }).listener, true)
   assert.equal((owner.graph![1]!.config as { admission: string }).admission, 'unknown')
 })
+
+ test('missing binding connection is never replaced by another inventory entry', () => {
+  const flows = botCanvas(parseBotProjection({ ...bots, bindings: [{ ...bots.bindings[0], connectionId: 'missing' }] }))
+  const binding = flows.find(flow => flow.definition.id === 'bot-binding:one')!
+  assert.equal(binding.connectionSettingsId, undefined)
+  assert.deepEqual(binding.graph![0]!.config, { id: 'missing' })
+ })

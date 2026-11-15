@@ -15,6 +15,19 @@ Project settings separates two responsibilities:
   review warning remain available. The old `/settings/channels` shortcut now
   redirects to the Default Project's Connections page.
 
+The Connections page keeps configured connections visible as cards across all
+platforms, with their name, platform, role and reported health. Configure selects
+that exact connection and scrolls/focuses its detail form; credentials and
+connect/disconnect actions remain in the detail form, not on the cards. Create a
+new connection is a separate entry with explicit platform and role choices. The
+compact private card used during chat setup retains its platform/reuse selectors.
+
+Workflow Connection node details link to this page with the current Project and
+exact connection ID (`?connectionId=...`), for both BOT bindings and receipt sinks.
+The settings list must still authorize and resolve that ID. A removed or foreign
+connection shows an unavailable notice without selecting another connection;
+following a link does not start a connection or change a deployment.
+
 Both pages link to the current Project's chat. This is navigation, not an automatic
 configuration request or deployment. Describe the BOT and registered source folder
 in conversation. Behavior, tools and bindings remain authored in `BOT.md`,

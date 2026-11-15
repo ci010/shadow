@@ -2,9 +2,20 @@
   <section class="bot-connection" :aria-label="t('Platform connection')">
     <p v-if="!enabled" role="status">{{ t('Private connection setup requires an authorized Main administrator and HTTPS or loopback access.') }}</p>
     <template v-else>
-      <div class="connection-selectors">
+      <div v-if="!compact && channels.length" class="connection-cards" :aria-label="t('Configured connections')">
+        <article v-for="bot in channels" :key="bot.id" class="connection-card" :data-connection-id="bot.id" :data-selected="selected?.id === bot.id">
+          <header><h3>{{ bot.displayName }}</h3><span v-if="selected?.id === bot.id">{{ t('Selected') }}</span></header>
+          <p>{{ channelDefinitions.find(item => item.id === bot.platform)?.label ?? bot.platform }} · {{ purposeLabel(bot.purpose) }}</p>
+          <p class="muted">{{ bot.id }}</p>
+          <footer><span class="connection-state" :data-state="bot.state">{{ channelStateLabel(botChannel(bot)) }}</span>
+            <button type="button" :aria-label="t('Configure {value1}', { value1: bot.displayName })" :aria-pressed="selected?.id === bot.id" :disabled="locked" @click="chooseConnection(bot)">{{ t('Configure') }}</button>
+          </footer>
+        </article>
+      </div>
+      <div v-if="!compact" class="actions"><button type="button" :disabled="locked" @click="startNewConnection">{{ t('Create a new connection') }}</button><button type="button" :disabled="busy || loading" @click="refresh">{{ t('Refresh status') }}</button></div>
+      <div v-if="compact || selection === 'new'" class="connection-selectors">
         <label>{{ t('Platform') }}<UiSelect v-model="platform" :disabled="busy"><option value="" disabled>{{ t('Choose a platform') }}</option><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></UiSelect></label>
-        <label v-if="platform">{{ t('Connection in this Project') }}<UiSelect v-model="selection" :disabled="busy || loading || !!listError"><option value="" disabled>{{ t('Choose an existing connection or create one') }}</option><option v-for="bot in matching" :key="bot.id" :value="`connection:${bot.id}`">{{ bot.displayName }} · {{ purposeLabel(bot.purpose) }} · {{ bot.id }}</option><option value="new">{{ t('Create a new connection') }}</option></UiSelect></label>
+        <label v-if="compact && platform">{{ t('Connection in this Project') }}<UiSelect v-model="selection" :disabled="busy || loading || !!listError"><option value="" disabled>{{ t('Choose an existing connection or create one') }}</option><option v-for="bot in matching" :key="bot.id" :value="`connection:${bot.id}`">{{ bot.displayName }} · {{ purposeLabel(bot.purpose) }} · {{ bot.id }}</option><option value="new">{{ t('Create a new connection') }}</option></UiSelect></label>
         <button type="button" :disabled="busy || loading" @click="refresh">{{ t('Refresh status') }}</button>
       </div>
       <p v-if="loading" role="status">{{ t('Loading channel connections...') }}</p>
@@ -14,9 +25,9 @@
       <form v-if="selection === 'new'" class="new-connection" @submit.prevent="createConnection">
         <label>{{ t('Role') }}<UiSelect v-model="purpose" :disabled="locked" required><option value="" disabled>{{ t('Select a role') }}</option><option value="personal">{{ t('Personal — verified owner only') }}</option><option v-if="platform !== 'wechat'" value="service">{{ t('Service — explicit BOT permissions') }}</option></UiSelect></label>
         <p class="muted">{{ t('Personal connections require owner pairing. Service connections stay restricted to deployed BOT permissions. Reusing a connection never changes its role or owner.') }}</p>
-        <button type="submit" class="btn-primary" :disabled="locked || !purpose">{{ t('Create connection') }}</button>
+        <button type="submit" class="btn-primary" :disabled="locked || !platform || !purpose">{{ t('Create connection') }}</button>
       </form>
-      <article v-if="selected" :key="selected.id" class="selected-connection">
+      <article v-if="selected" :key="selected.id" ref="connectionDetail" tabindex="-1" class="selected-connection">
         <header><strong>{{ selected.displayName }}</strong><span class="connection-state" :data-state="selected.state">{{ channelStateLabel(botChannel(selected)) }}</span></header>
         <p class="muted">{{ purposeLabel(selected.purpose) }} · <span class="connection-id">{{ selected.id }}</span></p>
         <p v-if="selected.purpose === 'legacy'" role="status">{{ t('Legacy / unclassified: business requests blocked until explicitly configured.') }}</p>
@@ -83,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import UiSelect from './UiSelect.vue'
 import BotPairingCommand from './BotPairingCommand.vue'
@@ -119,8 +130,12 @@ const purposeLabel = (value: BotInstanceStatus['purpose']) => value === 'persona
 function hasSaved(key: string) { return selected.value?.secrets[key] === true || !!selected.value?.config[key] }
 function clearCredentials() { draft.value = platform.value ? botConnectionDraft(platform.value) : {}; editing.value = false }
 function resetSelection() { clearCredentials(); challenge.value = ''; qr.value = ''; groups.value = undefined; serviceStatusOpen.value = false; error.value = ''; notice.value = '' }
-watch(platform, () => { selection.value = ''; purpose.value = ''; resetSelection() }, { flush: 'sync' })
+watch(platform, () => { selection.value = !props.compact && selection.value === 'new' ? 'new' : ''; purpose.value = ''; resetSelection() }, { flush: 'sync' })
 watch(selection, () => { purpose.value = ''; resetSelection() }, { flush: 'sync' })
+const connectionDetail = ref<HTMLElement>()
+function locateConnection() { void nextTick(() => { connectionDetail.value?.scrollIntoView?.({ block: 'nearest' }); connectionDetail.value?.focus?.({ preventScroll: true }) }) }
+function chooseConnection(bot: BotInstanceStatus) { platform.value = bot.platform; selection.value = `connection:${bot.id}`; locateConnection() }
+function startNewConnection() { platform.value = ''; selection.value = 'new' }
 const missingRequestedConnection = ref(false)
 function selectRequestedConnection() {
   missingRequestedConnection.value = false
@@ -131,6 +146,7 @@ function selectRequestedConnection() {
   selection.value = target ? `connection:${target.id}` : ''
   resetSelection()
   missingRequestedConnection.value = !target
+  if (target) locateConnection()
 }
 watch(() => props.requestedConnectionId, () => {
   platform.value = ''; selection.value = ''; resetSelection()
@@ -233,6 +249,11 @@ onBeforeUnmount(stop)
 
 <style scoped>
 .bot-connection { min-width: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.connection-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; margin-bottom: 24px; }
+.connection-card { min-width: 0; padding: 20px; border: 1px solid var(--c-border); background: var(--c-bg-card); }
+.connection-card[data-selected="true"] { border-color: var(--c-primary); }
+.connection-card h3 { margin: 0; font-size: 15px; }
+.connection-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
 .connection-selectors { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .connection-selectors label { flex: 1 1 180px; }
 label { display: grid; gap: 6px; min-width: 0; }

@@ -909,6 +909,7 @@
   "Configure an API key or add a named local model endpoint.": "配置 API 密钥，或添加命名的本地模型端点。",
   "Configure {value1}": "配置 {value1}",
   "Configured": "已配置",
+  "Configured connections": "已配置连接",
   "Configured providers": "已配置的模型提供商",
   "Confirm": "确认",
   "Confirm GitHub write": "确认 GitHub 写入",
