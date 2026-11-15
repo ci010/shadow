@@ -28,7 +28,7 @@ test('App proxy settings render detected routes, persist toggles and keep disabl
         resolveId: id => id === '/proxy-fixture.ts' ? '\0search-fixture' : undefined,
         load: id => id !== '\0search-fixture' ? undefined : `
           import 'uno.css'; import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue';
           import { createRouter, createMemoryHistory, RouterView } from 'vue-router';
           import Settings from '/src/components/SettingsView.vue';
           const state = { enabled:true, detected:true, detectionFailed:false, source:'environment', http:'http://proxy.example:8080/', https:'http://proxy.example:8443/' };

@@ -40,7 +40,7 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
       resolveId: id => id === '/github-fixture.ts' ? '\0github-fixture' : undefined,
       load: id => id !== '\0github-fixture' ? undefined : `
         import '/src/styles.css';
-        import { createApp, h, reactive } from 'vue';
+        import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h, reactive} from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
         import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
         import { createProjectLiveState } from '/src/project-live-state.ts';
@@ -60,7 +60,8 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
           apiBase: location.origin + '/projects/p', projectId: 'p', projectName: 'Delivery project', visible: state.visible,
           style: 'height:100vh', onCompose: text => { state.draft += '\\n\\n' + text; },
         }, { default: () => h('textarea', { value: state.draft }) }) });
-        app.provide(Symbol.for('shadow.project-live-state'), live);
+        useProjectResourceStore(app.config.globalProperties.$pinia).owner=live;
+        app.onUnmount(()=>live.dispose());
         app.use(router); app.use(createInstallationContextProvider(installation)); app.mount('#app');`,
       configureServer(server) {
         server.middlewares.use(async (request, response, next) => {

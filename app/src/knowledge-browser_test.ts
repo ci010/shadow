@@ -74,7 +74,7 @@ test('knowledge is visible, recovers from 503 on Refresh, and navigates sanitize
       load(id) {
         if (id !== '\0knowledge-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h,ref} from 'vue';
           import {createRouter, createMemoryHistory} from 'vue-router';
           import KnowledgeView from '/src/components/KnowledgeView.vue';
           const router=createRouter({history:createMemoryHistory(),routes:[
@@ -82,12 +82,13 @@ test('knowledge is visible, recovers from 503 on Refresh, and navigates sanitize
           ]});
           const initial=new URLSearchParams(location.search);
           await router.push({name:'chat',params:{projectId:'fixture'},query:{panel:'knowledge',entry:initial.has('home')?'':initial.get('entry')||'memory/topics/index.md'},hash:location.hash});
-          window.__knowledge={select:(id,hash='')=>router.push({name:'chat',params:{projectId:'fixture'},query:{panel:'knowledge',entry:id},hash}),router};
+          const active=ref(true),scope=ref('fixture');
+          window.__knowledge={active,scope,select:(id,hash='')=>router.push({name:'chat',params:{projectId:scope.value},query:{panel:'knowledge',entry:id},hash}),router};
           createApp({render:()=>h(KnowledgeView,{
-            apiBase:location.origin+'/projects/fixture',projectId:'fixture',
+            apiBase:location.origin+'/projects/'+scope.value,projectId:scope.value,active:active.value,
             entryId:router.currentRoute.value.query.entry,
             onSelect:id=>window.__knowledge.select(id),
-            style:'height:100dvh',
+            style:active.value?'height:100dvh':'display:none',
           })}).use(router).mount('#app');`
       },
       configureServer(server) {
@@ -101,10 +102,11 @@ test('knowledge is visible, recovers from 503 on Refresh, and navigates sanitize
           } else if (url.pathname.endsWith('/api/knowledge/entry')) {
             const id = url.searchParams.get('id')!
             reads.push(id)
-            json(docs.find(doc => doc.entry.id === id))
+            const doc = docs.find(doc => doc.entry.id === id)
+            json(doc && url.pathname.startsWith('/projects/other/') ? { ...doc, entry: { ...doc.entry, title: `Other ${doc.entry.title}` } } : doc)
           } else if (url.pathname.endsWith('/api/knowledge')) {
             if (++catalogRequests === 1) { response.statusCode = 503; json({ error: 'Fixture catalog unavailable' }) }
-            else json(catalog)
+            else json(url.pathname.startsWith('/projects/other/') ? { ...catalog, entries: catalog.entries.map(entry => ({ ...entry, title: `Other ${entry.title}` })) } : catalog)
           }
           else if (url.pathname.endsWith('/api/knowledge/maintenance')) json({ intervalMs: 86_400_000, scanning: false, report: null })
           else next()

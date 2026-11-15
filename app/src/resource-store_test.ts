@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRenderer, defineComponent, h } from 'vue'
+import { createRenderer, defineComponent, h, ref } from 'vue'
+import { useWorkCompletions } from './composables/useWorkCompletions.ts'
 import { createResourceStores, requireResourcePinia } from './stores/app.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import { useProjectLiveState } from './composables/useProjectLiveState.ts'
@@ -84,4 +85,34 @@ test('one resource plugin cannot install its auth-scoped Pinia into another app'
   a.use(plugin)
   assert.throws(() => b.use(plugin), /cannot be shared/)
   a.mount({ children: [] }); a.unmount()
+})
+
+test('completion read recovery clears an older command error without replaying POST or hiding a newer failure', async t => {
+  const item = { key: 'topic:web:done', completionId: 'done-1', sequence: 1, completedAt: '2026-01-01T00:00:00Z', unread: true }
+  let posts = 0, failRead = false, holdRead = false
+  let finish!: (response: Response) => void, started!: () => void
+  t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') { posts++; return new Response('', { status: 503 }) }
+    if (holdRead) return new Promise<Response>(resolve => { finish = resolve; started() })
+    return failRead ? new Response('', { status: 500 }) : Response.json({ items: [item] })
+  })
+  let completions!: ReturnType<typeof useWorkCompletions>
+  const app = renderer.createApp(defineComponent({ setup() {
+    completions = useWorkCompletions(() => ({ base: 'http://fixture/projects/a', projectId: 'a', active: true }), ref(0))
+    return () => h('span')
+  } }))
+  app.use(createResourceStores()); app.mount({ children: [] }); t.after(() => app.unmount())
+  await completions.refresh()
+  await completions.markRead([item]); assert.equal(completions.error.value, true); assert.equal(posts, 1)
+  failRead = true; await completions.refresh()
+  assert.equal(completions.error.value, true, 'A failed reconciliation must retain the error')
+  failRead = false; await completions.refresh()
+  assert.equal(completions.error.value, false); assert.equal(posts, 1, 'Read recovery never retries acknowledgement')
+  await completions.markRead([item]); assert.equal(posts, 2)
+  const readStarted = new Promise<void>(resolve => { started = resolve })
+  holdRead = true; const pending = completions.refresh(); await readStarted
+  await completions.markRead([item]); assert.equal(posts, 3)
+  holdRead = false; finish(Response.json({ items: [item] })); await pending
+  assert.equal(completions.error.value, true, 'An older refresh must not dismiss a newer command failure')
+  await completions.refresh(); assert.equal(completions.error.value, false); assert.equal(posts, 3)
 })

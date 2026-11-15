@@ -94,7 +94,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
       resolveId: id => id === '/work-fixture.ts' ? '\0work-fixture' : undefined,
       load: id => id !== '\0work-fixture' ? undefined : `
         import '/src/styles.css'; import 'uno.css';
-        import { createApp, h, reactive } from 'vue';
+        import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h, reactive } from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
         import ProjectWorkbench from '/src/components/ProjectWorkbench.vue';
         import ProjectContextCanvas from '/src/components/ProjectContextCanvas.vue';
@@ -156,7 +156,8 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
           apiBase:location.origin,project:{id:'p',name:'Release evidence',createdAt:${JSON.stringify(at)}},
           onClose:() => {state.deleting=false;},onDeleted:() => {state.deleted=true;state.deleting=false;},
         }) : null] });
-        app.provide(Symbol.for('shadow.project-live-state'),live);
+        useProjectResourceStore(app.config.globalProperties.$pinia).owner=live;
+        app.onUnmount(()=>live.dispose());
         app.use(router); app.use(createInstallationContextProvider(installation)); app.mount('#app');`,
       configureServer(server) {
         server.middlewares.use(async (request, response, next) => {

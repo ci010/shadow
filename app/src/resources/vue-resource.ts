@@ -27,6 +27,13 @@ export function resourceViews(maxInactive = 0) {
         read: () => released ? Promise.resolve() : lease.resource.read(),
         refresh: () => released ? Promise.resolve() : lease.resource.refresh(),
         invalidate: (reason?: string) => { if (!released) lease.resource.invalidate(reason) },
+        commit(transform: (value: T) => T) {
+          if (released || !lease.resource.update(transform)) return false
+          // A confirmed command supersedes any read captured before it. Keep the
+          // projection while a new generation reconciles; never replay the command.
+          lease.resource.reset('confirmed-command')
+          return true
+        },
         release() {
           if (released) return
           released = true

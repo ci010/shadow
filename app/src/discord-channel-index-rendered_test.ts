@@ -10,10 +10,15 @@ test('rendered channel index retains separate passive and legacy histories witho
   const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), configFile: false, logLevel: 'error', optimizeDeps: { noDiscovery: true }, plugins: [vue()], server: { middlewareMode: true } })
   try {
     const { default: Index } = await server.ssrLoadModule('/src/components/DiscordChannelIndex.vue')
+    const { createResourceStores } = await server.ssrLoadModule('/src/stores/app.ts')
+    const { useProjectResourceStore } = await server.ssrLoadModule('/src/stores/project.ts')
     const histories = ['channel-inbox:passive-original', 'old-original'].map(sessionId => ({ sessionId, projectId: 'p', label: sessionId, channelAddress: { projectId: 'p', botInstanceId: 'b', platform: 'discord', conversationId: '3' }, discordChannel: { id: '3', type: 11, guildId: '2', parentId: '1', parentName: 'Forum', name: 'Thread content' } }))
     let reads = 0
     const app = createSSRApp({ render: () => h(Index, { apiBase: '', projectId: 'p', channelKey: { projectId: 'p', botInstanceId: 'b', guildId: '2', channelId: '1' }, active: true }) })
-    app.provide(Symbol.for('shadow.project-live-state'), { acquireProject() { return { graph: { state: { value: histories, loading: false, error: '' }, read: async () => { reads++ } }, release() {} } } })
+    app.use(createResourceStores())
+    useProjectResourceStore(app.config.globalProperties.$pinia).owner.acquireProject = () => ({
+      sessions: { state: { value: histories, loading: false, error: '' }, read: async () => { reads++ } }, release() {},
+    })
     const html = await renderToString(app)
     assert.match(html, /Forum/)
     assert.match(html, /Search posts and threads/)

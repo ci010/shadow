@@ -39,7 +39,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
         }
         if (id !== '\0composer-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref} from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import { provideMobileChrome } from '/src/composables/useMobileChrome.ts';
           import { provideModelSelection } from '/src/model-selection.ts';

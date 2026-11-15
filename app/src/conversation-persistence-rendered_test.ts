@@ -26,13 +26,14 @@ test('real composer and diagnosis selections survive page reload and preserve se
   const html = '<!doctype html><html><body style="margin:0">Synthetic HTML preview</body></html>'
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
+    optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'pinia'] },
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'conversation-persistence',
       resolveId: id => id === '/persistence.ts' ? '\0persistence' : undefined,
       load(id) {
         if (id !== '\0persistence') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref, watch } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref, watch} from 'vue';
           import { createRouter, createWebHistory } from 'vue-router';
           import Chat from '/src/components/ChatTab.vue';
           const router = createRouter({history:createWebHistory(),routes:[
@@ -59,7 +60,7 @@ test('real composer and diagnosis selections survive page reload and preserve se
               });
             };
           }});
-          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
+          app.provide(Symbol.for('shadow.live-client-pool'), {onDispose:callback=>{app.onUnmount(callback);return()=>{}},observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
           })});
           app.use(router); await router.isReady(); app.mount('#app');
@@ -80,7 +81,10 @@ test('real composer and diagnosis selections survive page reload and preserve se
           } else if (path === '/fixture-reject') { rejectSend = url.searchParams.get('value') === 'true'; json({ ok: true }) }
           else if (path.endsWith('/api/sessions/summary')) json({ sessions: ['web:chat-one', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
           else if (path.endsWith('/api/sessions/stages')) json({ activity: {} })
-          else if (path.endsWith('/api/chat/session')) json({ history: [{ role: 'assistant', content: '[Preview layout](layout.html)' }], systemPrompt: 'Synthetic persisted system prompt', tools: [] })
+          else if (path.endsWith('/api/chat/session')) json({ revision: 'a'.repeat(64), historyRevision: 'b'.repeat(64),
+            metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
+            data: { chatId: url.searchParams.get('chatId'), currentPhysicalId: 'segment', previousPhysicalId: null, segmentIndex: 0,
+              history: [{ role: 'assistant', content: '[Preview layout](layout.html)' }], systemPrompt: 'Synthetic persisted system prompt', tools: [], commandResults: [], decisionRecords: [] } })
           else if (path.endsWith('/static/layout.html')) {
             response.setHeader('Content-Type', 'text/html')
             response.end(html)
@@ -103,7 +107,9 @@ test('real composer and diagnosis selections survive page reload and preserve se
           else if (path.endsWith('/v1/query/session-spans')) json({ sessionId: url.searchParams.get('sessionId'), physicalSessionId: 'segment', hasMore: false, entries: [] })
           else if (/\/api\/sessions\/[^/]+$/.test(path)) json({ currentPhysicalId: 'segment', previousPhysicalId: null, messages: [] })
           else if (path.endsWith('/api/slash-commands')) json({ commands: [] })
-          else if (path.includes('/api/')) json({})
+          // Frontend dependency URLs can contain /api/ (Vue devtools). Only
+          // synthetic backend routes belong to this fallback.
+          else if (/^\/(?:projects\/[^/]+\/)?api\//.test(path)) json({})
           else next()
         })
       },
