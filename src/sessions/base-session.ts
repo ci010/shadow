@@ -300,6 +300,8 @@ export abstract class BaseSession {
       && this.tools.inferenceRequestLimit !== undefined
     this.boundedLearningTask = boundedLearning
     if (boundedLearning) this.tools.reserveReceipt('learning_result')
+    const boundedReflector = boundedLearning && this.state.agentType === 'reflector'
+    if (boundedReflector) this.tools.reserveReflectorRetention()
     const budget = new InferenceBudget(this.tools.inferenceRequestLimit)
     let contextRecoveryAttempted = false
     let timeoutRecovery: { error: ProviderHttpError; sourcePhysicalId: string } | undefined
@@ -345,6 +347,14 @@ export abstract class BaseSession {
         } : undefined,
       }
       if (!this.boundedSystemTask && this.state.workingContext !== undefined) await this.recordContextEvent('working-context', this.state.workingContext)
+      if (boundedReflector && budget.remaining === 3) {
+        this.tools.enterReflectorRetention()
+        await this.appendMessages(llm, { role: 'user', content: 'Host reflector retention boundary: this fourth inference prepares supported candidates; use necessary exact source evidence, current-memory deduplication and fresh read_wiki now. The fifth inference closes source exploration and protects a save/log opportunity; the sixth is receipt-only. Do not postpone fresh Wiki reads or deduplication until the fifth if a supported candidate is ready. Use evidence already read; unread/unknown scope must remain partial. Current v:memory reads/searches remain available, including in the fifth for safety, but a check alone is not a saved effect. Saves retain normal revision, evidence, provenance, readback and failure checks. Do not force a write or infer authority. Prefer one supported retention over optional further memory browsing; if nothing qualifies, report honestly. Pending Wiki recovery notes remain available in the final receipt.' })
+      }
+      if (boundedReflector && budget.remaining === 2) {
+        this.tools.closeReflectorSources()
+        await this.appendMessages(llm, { role: 'user', content: 'Host reflector save boundary: source exploration is closed. Persist a sufficiently supported prepared candidate now. Current Wiki revision and log dedup checks remain allowed for safety; if these or missing evidence prevent saving, report partial honestly rather than claiming retention. No write is required. Next inference is receipt-only.' })
+      }
       const receiptOnly = boundedLearning && budget.remaining === 1
       if (receiptOnly) {
         this.tools.restrictToReceipt('learning_result')
