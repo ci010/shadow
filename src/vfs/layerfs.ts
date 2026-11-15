@@ -16,9 +16,10 @@ export function createLayerFSHandler(options: {
   projectId: string
   folders: () => FolderRecord[]
   existing: () => LayerFSResources | undefined
+  remote?: (folder: import('../folders/contracts.ts').LayerFSFolderRecord, action: 'branches' | 'history' | 'diff_commits', args: Record<string, unknown>, context: ExecutionContext) => Promise<string>
 }): { read: VirtualFsHandler; list: VirtualFsListHandler } {
   const assert = (context: ExecutionContext) => {
-    if (context.projectId !== options.projectId || context.remoteWorkdir || context.memoryAccess) throw new ToolNoEffectError('Current-Project observation context required.')
+    if (context.projectId !== options.projectId || context.memoryAccess) throw new ToolNoEffectError('Current-Project observation context required.')
     context.signal.throwIfAborted()
   }
   const offset = (text: string | undefined) => {
@@ -47,6 +48,10 @@ export function createLayerFSHandler(options: {
     } else if (parts[1] === 'diff' && parts.length === 5 && parts.slice(2, 4).every(p => /^(?:[a-f0-9]{2})+$/.test(p))) {
       action = 'diff_commits'; args = { ref: parts[2], branch: parts[3], offset: offset(parts[4]) }
     } else throw new ToolNoEffectError('Unknown read-only LayerFS observation path. Read v:layerfs/overview.')
+    if (folder.location) {
+      if (!options.remote) throw new ToolNoEffectError('Remote LayerFS observation unavailable; no local service fallback')
+      return options.remote(folder, action as 'branches' | 'history' | 'diff_commits', args, context)
+    }
     const service = options.existing()
     if (!service) throw new ToolNoEffectError('LayerFS runtime is not active; observation did not initialize it.')
     return service.observe(action, { workspace: folder.mount, ...args }, context)

@@ -21,6 +21,7 @@ export async function prepareWorkingContext(workdir: WorkdirResolution, folderId
     '',
     'Relative paths resolve from this cwd, not Project Home. Keep the working directory tidy. Internal/session-managed storage is draft space, not a durable delivery destination.',
     '',
+    ...(folder?.kind === 'layerfs' && folder.location ? [`- LayerFS execution device: ${JSON.stringify(folder.location.nodeId)}; target Project scope: ${JSON.stringify(folder.location.projectScope)}. Runtime, launcher, artifacts and source paths belong to that device, never Main.`, ''] : []),
     folderId ? 'Default finished deliverables belong in the selected Workspace using its execution directory; do not create a second chat-* output folder.' : 'Without a selected Workspace, use session data for working files. Only when the requested outcome includes a final local file, save that file outside session storage in the appropriate discovered operating-system user folder (Documents, Pictures, Videos, Music or Downloads), under Shadow. Do not create a delivery folder when the requested outcome does not require local files. Desktop only on request.',
     'Reusable runtime binaries and model weights are dependencies, not finished deliverables: prefer existing configured paths/caches; new installs use device-local OS-user tool data directories, not Documents/workspace/Project/session storage. Resolve paths on the executing device; sharing files does not share Project permissions or license approval. Never fall back from a remote executor to Main.',
   ]

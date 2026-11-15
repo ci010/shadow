@@ -241,6 +241,14 @@ import { EvalBridgeRuntime } from '../../script-runtime/bridge.ts'
 import { getProjectScope } from '../../projects/scope.ts'
 import { DEFAULT_PROJECT_ID } from '../../projects/contracts.ts'
 import { DIRECTORY_OPERATIONS, ProjectExecutor } from '../../projects/executor.ts'
+import { RemoteLayerFSGateway, registerRemoteLayerFSGateway } from '../../execution/layerfs/remote-gateway.ts'
+import { remoteLayerFSOwnerVerifier } from '../../execution/layerfs/remote-owner.ts'
+import { LAYERFS_REMOTE_OPERATION, validateRemoteLayerFSCall } from '../../execution/layerfs/remote-contract.ts'
+import { managedProjectScope, projectExecutionKey } from '../../execution/managed-workdir.ts'
+import { RemoteLayerFSJobReservations } from '../../execution/layerfs/remote-jobs.ts'
+import { RemoteLayerFSConsentPlans } from '../../execution/layerfs/remote-consent.ts'
+import { RemoteLayerFSClient } from '../../execution/layerfs/remote-client.ts'
+import { selectFolder } from '../../folders/identifier.ts'
 import { LearningService, type LearningCallbacks } from '../../agent/learning/service.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { IoBroker } from '../../io/broker.ts'
@@ -501,7 +509,66 @@ export async function createProjectRuntime(
   loadable.set('agent_tool_test', agentToolTest)
   loadable.set('session_proxy', new SessionProxyTool())
   let layerfsBootstrap: import('../../execution/layerfs/bootstrap.ts').LayerFSBootstrap | undefined
+  const layerfsTarget = (nodeId: string) => {
+    const node = mainCluster.registry.listNodes().find(node => node.nodeId === nodeId)
+    const live = mainCluster.getNodeInventory().nodes.find(node => node.nodeId === nodeId)
+    if (!node || node.state !== 'approved' || live?.connection !== 'connected' || !live.support.operations.includes(LAYERFS_REMOTE_OPERATION)) throw new Error('Exact LayerFS target offline, revoked or unsupported; no Main fallback')
+    return { nodeId, pairingId: node.credentialId, projectScope: managedProjectScope(project.id) }
+  }
+  const layerfsExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+    if (request.operation !== LAYERFS_REMOTE_OPERATION || request.workdirId !== undefined) return denyAccess()
+    sessions.assertFolderAccess(request.sessionId)
+    validateRemoteLayerFSCall(request.args, layerfsTarget(request.nodeId))
+  }, recordRemoteJob, undefined, () => folderRegistry.acquireAccess())
+  const layerfsHostExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+    const call = validateRemoteLayerFSCall(request.args, layerfsTarget(request.nodeId))
+    if (request.operation !== LAYERFS_REMOTE_OPERATION || request.workdirId !== undefined || call.action !== 'contexts_revoke' || call.authority.kind !== 'project-host') return denyAccess()
+  })
+  const settleLayerFSRequest = (id: string) => {
+    layerfsExecutor.settleVerifiedRemoteOperation(id)
+    dependencies.catalog.settleReconciledRemoteJob(project.id, projectExecutionKey(project.id, 'job', id))
+  }
+  const layerfsJobs = new RemoteLayerFSJobReservations(project.id, dependencies.catalog, settleLayerFSRequest)
+  const layerfsConsent = new RemoteLayerFSConsentPlans(project.id)
+  const layerfsGateway = new RemoteLayerFSGateway({ projectId: project.id, jobs: layerfsJobs, consent: layerfsConsent, settleRequest: settleLayerFSRequest, acquireAccess: () => folderRegistry.acquireAccess(), localExecutionAllowed: dependencies.localExecutor !== false, folders: () => folderRegistry.list(), executor: layerfsExecutor, target: layerfsTarget,
+    revokeContexts: async targets => {
+      const settled = await Promise.allSettled(targets.map(async target => {
+        const node = mainCluster.registry.listNodes().find(node => node.nodeId === target.nodeId)
+        const live = mainCluster.getNodeInventory().nodes.find(node => node.nodeId === target.nodeId)
+        // Disconnect/re-pair revokes the target connection epoch. Never address a new pairing.
+        if (!node || node.state !== 'approved' || node.credentialId !== target.pairingId || live?.connection !== 'connected') return
+        const context = { projectId: project.id, sessionId: `host-project-runtime:${project.id}`, signal: AbortSignal.timeout(10000) } as import('../../tools/context.ts').ExecutionContext
+        const result = await new RemoteLayerFSClient(target, layerfsHostExecutor, async () => ({ actorId: `project-runtime:${project.id}`, authorityKind: 'project-host' })).call('contexts_revoke', {}, context) as { revoked?: boolean; targetNodeId?: string; projectScope?: string }
+        if (result.revoked !== true || result.targetNodeId !== target.nodeId || result.projectScope !== target.projectScope) throw new Error('Target context revocation unconfirmed; retained capabilities expire, no cleanup success claimed')
+      }))
+      const errors = settled.filter(result => result.status === 'rejected')
+      if (errors.length) throw new AggregateError(errors.map(result => result.reason), 'Remote LayerFS context revocation unconfirmed')
+    },
+    verify: remoteLayerFSOwnerVerifier({ projectId: project.id, consent: layerfsConsent, state: id => sessions.getSessionState(id), assertFolderAccess: id => sessions.assertFolderAccess(id), records: (id, physical) => sessions.getYieldRecords(id, physical) }),
+    register: async (mount, location, context, description) => {
+      const binding = JSON.parse(Buffer.from(mount.slice('layerfs:'.length), 'base64url').toString())
+      if (binding.version !== 3 || binding.ownerProject !== location.projectScope) throw new Error('Target workspace Project identity mismatch')
+      return dependencies.catalog.registerLayerFSFolder(project.id, mount, { path: `layerfs-branch:${binding.branch}`, name: `LayerFS ${binding.branch}`, location }, context.signal, description)
+    }, validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
+  })
+  const unregisterLayerFSGateway = registerRemoteLayerFSGateway(project.id, workspace, layerfsGateway)
+  cleanup.push(async () => { unregisterLayerFSGateway(); await layerfsGateway.revokeContexts() })
+  const layerfsObservationExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+    const call = validateRemoteLayerFSCall(request.args, layerfsTarget(request.nodeId))
+    const folder = folderRegistry.list().find(folder => folder.kind === 'layerfs' && folder.mount === call.input.workspace)
+    if (request.operation !== LAYERFS_REMOTE_OPERATION || request.workdirId !== undefined || call.action !== 'status' || folder?.kind !== 'layerfs' || folder.location?.nodeId !== request.nodeId || folder.location.pairingId !== call.authority.pairingId) return denyAccess()
+  })
   const layerFSMountAvailable = async (mount: string, signal: AbortSignal) => {
+    const registered = folderRegistry.list().find(folder => folder.kind === 'layerfs' && folder.mount === mount)
+    if (registered?.kind === 'layerfs' && registered.location) {
+      const target = layerfsTarget(registered.location.nodeId)
+      if (target.pairingId !== registered.location.pairingId || target.projectScope !== registered.location.projectScope) throw new Error('LayerFS target binding changed; no adoption or fallback')
+      const context = { projectId: project.id, sessionId: `host-layerfs-observation:${project.id}`, signal } as import('../../tools/context.ts').ExecutionContext
+      const result = await new RemoteLayerFSClient(target, layerfsObservationExecutor, async () => ({ actorId: `host-workspace-registry:${project.id}`, authorityKind: 'workspace-session' })).call('status', { workspace: mount }, context) as { ok?: boolean }
+      if (result.ok !== true) throw new Error('Target LayerFS resource unavailable; no fallback')
+      const identity = JSON.parse(Buffer.from(mount.slice('layerfs:'.length), 'base64url').toString())
+      return { path: `layerfs-branch:${identity.branch}`, name: registered.name }
+    }
     const { LayerFSTool } = await import('../../tools/layerfs.ts')
     const { isCompletedToolFailure, toolResultText } = await import('../../tools/tool.ts')
     const result = await new LayerFSTool(project.id, workspace).execute({ action: 'status', workspace: mount }, {
@@ -514,33 +581,56 @@ export async function createProjectRuntime(
     return { path: `layerfs-branch:${identity.branch}`, name: `LayerFS ${identity.branch}` }
   }
   folderRegistry.configureLayerFS({
+    lookup: folder => {
+      if (folder.location) {
+        try { const target = layerfsTarget(folder.location.nodeId); if (target.pairingId !== folder.location.pairingId || target.projectScope !== folder.location.projectScope) return { node: 'revoked' } }
+        catch { return { node: 'offline' } }
+      }
+      return { node: 'online', workdir: { online: true, backend: 'layerfs', workspace: folder.mount } }
+    },
     authorize: layerFSMountAvailable,
     requireAvailable: async (folder, signal) => { await layerFSMountAvailable(folder.mount, signal) },
   })
   const { layerFSToolContracts } = await import('../../tools/layerfs.ts')
   loadable.set('layerfs', {
-    contracts: layerFSToolContracts(),
+    contracts: layerFSToolContracts().map(contract => ({ ...contract, supportsRemoteWorkdir: true })),
     factory: async () => {
-      const { createLayerFSTools } = await import('../../tools/layerfs.ts')
-      const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
-      const { LayerFSBootstrap, matchesBootstrapApproval } = await import('../../execution/layerfs/bootstrap.ts')
-      const managed = managedLayerFS(project.id, workspace)
-      const verify: import('../../execution/layerfs/bootstrap.ts').BootstrapApprovalVerifier = async (question, reference, context) => matchesBootstrapApproval(question, reference,
-        await sessions.getYieldRecords(reference.sessionId, reference.physicalId), context.sessionId)
-      layerfsBootstrap ??= new LayerFSBootstrap(project.id, workspace, backgroundTasks, managed, undefined, process.platform, process.arch, verify)
-      const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
-      const { createLayerFSResourceTools } = await import('../../tools/layerfs-resource.ts')
-      const { createLayerFSFSTools } = await import('../../tools/layerfs-fs.ts')
-      const resources = layerfsResources(project.id, workspace)
-      return [...createLayerFSTools(project.id, workspace, managed, layerfsBootstrap),
-        ...createLayerFSResourceTools(resources), ...createLayerFSFSTools(resources)]
+      // Discovering/invoking a remote contract must not create even an empty Main catalog.
+      let localTools: Promise<import('../../tools/tool.ts').Tool<import('../../tools/tool.ts').ToolResult>[]> | undefined
+      const local = async () => {
+        const { createLayerFSTools } = await import('../../tools/layerfs.ts')
+        const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
+        const { LayerFSBootstrap, matchesBootstrapApproval } = await import('../../execution/layerfs/bootstrap.ts')
+        const managed = managedLayerFS(project.id, workspace)
+        const verify: import('../../execution/layerfs/bootstrap.ts').BootstrapApprovalVerifier = async (question, reference, context) => matchesBootstrapApproval(question, reference,
+          await sessions.getYieldRecords(reference.sessionId, reference.physicalId), context.sessionId)
+        layerfsBootstrap ??= new LayerFSBootstrap(project.id, workspace, backgroundTasks, managed, undefined, process.platform, process.arch, verify)
+        const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
+        const { createLayerFSResourceTools } = await import('../../tools/layerfs-resource.ts')
+        const { createLayerFSFSTools } = await import('../../tools/layerfs-fs.ts')
+        const resources = layerfsResources(project.id, workspace)
+        return [...createLayerFSTools(project.id, workspace, managed, layerfsBootstrap), ...createLayerFSResourceTools(resources), ...createLayerFSFSTools(resources)]
+      }
+      return layerFSToolContracts().map(contract => {
+        const tool = layerfsGateway.wrap({ ...contract, async execute(input, context) {
+          if (coordinator) throw new Error('Main local LayerFS execution disabled; select a supported remote target. No fallback.')
+          localTools ??= local()
+          const target = (await localTools).find(tool => tool.name === contract.name)
+          if (!target) throw new Error('LayerFS local contract unavailable')
+          return target.execute(input, context)
+        } })
+        coordinator?.allow(tool)
+        return tool
+      })
     },
   })
+  if (coordinator) coordinator.allow(loadable.get('layerfs')!)
   // Ordinary LayerFS routes share this Project-owned worker; sessions never close it.
   const closeLayerFS = async () => {
+    unregisterLayerFSGateway()
     const { closeManagedLayerFS } = await import('../../execution/layerfs/managed.ts')
     const { closeLayerFSResources } = await import('../../execution/layerfs/resource-service.ts')
-    const settled = await Promise.allSettled([closeManagedLayerFS(project.id, workspace), closeLayerFSResources(project.id, workspace)])
+    const settled = await Promise.allSettled([closeManagedLayerFS(project.id, workspace), closeLayerFSResources(project.id, workspace), layerfsGateway.revokeContexts()])
     const failures = settled.filter(result => result.status === 'rejected')
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'LayerFS runtime shutdown retained unresolved resources.')
   }
@@ -1020,7 +1110,11 @@ export async function createProjectRuntime(
   }
   const { createLayerFSHandler } = await import('../../vfs/layerfs.ts')
   const { existingLayerFSResources } = await import('../../execution/layerfs/resource-service.ts')
-  const layerfsVfs = createLayerFSHandler({ projectId: project.id, folders: () => folderRegistry.list(), existing: () => existingLayerFSResources(project.id, workspace) })
+  const layerfsVfs = createLayerFSHandler({ projectId: project.id, folders: () => folderRegistry.list(), existing: () => existingLayerFSResources(project.id, workspace), remote: async (folder, action, args, context) => {
+    const result = await layerfsGateway.tryCall(action, { ...args, workspace: folder.mount }, context)
+    if (typeof result !== 'string') throw new Error('Remote LayerFS observation unavailable; no local fallback')
+    return result
+  } })
   vfs.mount('v:layerfs', 'read-only registered LayerFS branch/history/immutable commit diffs; bounded pages, no runtime activation; read v:layerfs/overview', layerfsVfs.read, layerfsVfs.list)
   const worksVfs = createWorksHandler(alignment)
   vfs.mount('v:works', 'read-only current Project Work; bounded index/context and encoded key goal/notes/ancestor paths; read v:works/overview', worksVfs.read, worksVfs.list)
@@ -1047,6 +1141,7 @@ export async function createProjectRuntime(
     workspace,
     getProject: () => dependencies.catalog.get(project.id),
     registry: folderRegistry,
+    remoteLayerFSJobs: () => layerfsJobs.list(),
     getNodeInventory: () => sessions.getNodeInventory(),
     workdirLookup,
   })
@@ -1256,13 +1351,29 @@ export async function createProjectRuntime(
     validateWork: key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') },
   })
   const createLayerFSWorkspace = async (args: Record<string, unknown>, context: import('../../tools/context.ts').ExecutionContext, sourceBinding?: string) => {
+    const remote = await layerfsGateway.createWorkspace(args, context, sourceBinding)
+    if (remote !== undefined) return remote
+    if (coordinator) throw new Error('Main local LayerFS execution disabled; select a registered remote LayerFS target. No fallback.')
     const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
     return layerfsResources(project.id, workspace).createWorkspace(args, context,
       (mount, ctx, description) => folderRegistry.registerLayerFS(mount, ctx.signal, description),
       key => { if (!initiatives.workRecords().some(record => record.key === key)) throw new Error('Work key does not exist in this Project.') }, sourceBinding)
   }
-  importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor, createLayerFSWorkspace))
-  importTool.registerBuiltin('workspace_fork', new WorkspaceForkTool(derivedWorkspaces, project.id, canAuthor, folderRegistry, createLayerFSWorkspace))
+  const canCreateWorkspace = (id: string) => isOwnerSession(sessions.getSessionState(id), project.id) && !sessions.isManagedConversation(id)
+  const workspaceCreate = new WorkspaceCreateTool(derivedWorkspaces, project.id, canCreateWorkspace, createLayerFSWorkspace)
+  const workspaceFork = new WorkspaceForkTool(derivedWorkspaces, project.id, canCreateWorkspace, folderRegistry, createLayerFSWorkspace)
+  const remoteCreate = coordinator ? { ...workspaceCreate, execute: async (args: Record<string, unknown>, context: import('../../tools/context.ts').ExecutionContext) => {
+    if (args.backend !== 'layerfs' || !layerfsGateway.location({}, context)) throw new Error('Coordinator workspace_create requires an explicitly selected remote LayerFS target; no Main fallback')
+    return workspaceCreate.execute(args, context)
+  } } : workspaceCreate
+  const remoteFork = coordinator ? { ...workspaceFork, execute: async (args: Record<string, unknown>, context: import('../../tools/context.ts').ExecutionContext) => {
+    const source = selectFolder(folderRegistry.list(), String(args.source))
+    if (source.kind !== 'layerfs' || !source.location) throw new Error('Coordinator workspace_fork requires a registered remote LayerFS source; no Main fallback')
+    return workspaceFork.execute(args, context)
+  } } : workspaceFork
+  coordinator?.allow(remoteCreate); coordinator?.allow(remoteFork)
+  importTool.registerBuiltin('workspace_create', remoteCreate)
+  importTool.registerBuiltin('workspace_fork', remoteFork)
   importTool.registerBuiltin('workspace_remove', new WorkspaceRemoveTool(dependencies.catalog, project.id, canAuthor))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
@@ -1440,7 +1551,7 @@ export async function createProjectRuntime(
       const folder = state.folderId ? folderRegistry.get(state.folderId) : undefined
       return folder && folder.kind !== 'remote' && folder.kind !== 'layerfs' ? folder.path : undefined
     },
-    protected: id => backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
+    protected: id => backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs || layerfsExecutor.hasPendingJobs || layerfsJobs.list().length > 0 ||
       processManager.list().some(process => !process.exitedAt) ||
       !!credentialRequests.pending() ||
       cronService.listJobs().some(job => job.enabled !== false &&
@@ -1816,12 +1927,12 @@ export async function createProjectRuntime(
     assertRemovalIdle: (folder, callerId) => {
       folders.assertIdle()
       // Preserve inactive history, but never delete the caller’s selected/delegated resource.
-      if (sessions.workspaceRemovalBlocked(folder.id, callerId) || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
+      if (sessions.workspaceRemovalBlocked(folder.id, callerId) || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs || layerfsExecutor.hasPendingJobs || layerfsJobs.list().length > 0 ||
         processManager.list().some(process => !process.exitedAt)) throw new FolderError('folder_busy', 'The calling conversation depends on this Workspace, or other Project work is active/uncertain; retained.', 409)
     },
     assertIdle: () => {
       folders.assertIdle()
-      if (sessions.hasFolderWork || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
+      if (sessions.hasFolderWork || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs || layerfsExecutor.hasPendingJobs || layerfsJobs.list().length > 0 ||
         processManager.list().some(process => !process.exitedAt)) {
         throw new FolderError('folder_busy', 'Wait for active conversations, background work and remote jobs in this project to finish or stop them, then retry.', 409)
       }
@@ -1893,6 +2004,7 @@ export async function createProjectRuntime(
       if (tool) coordinator.allow(tool)
     }
     coordinator.allowRemoteShell(tools.get('exec')!)
+    coordinator.allowRemoteLayerFS(mount => folderRegistry.list().some(folder => folder.kind === 'layerfs' && folder.mount === mount && !!folder.location))
     context.register({ name: 'coordinator-execution', getPromptSection: () =>
       'Main local executor is disabled. Main provides inference, coordination and file storage. Host executable tools, scripts, MCP and browser execution are unavailable on Main. Use an explicitly selected online Child workdir for supported remote shell/filesystem operations; never fall back to Main. Remote Node scripts and remote leaf-call exec are not supported.' })
   }

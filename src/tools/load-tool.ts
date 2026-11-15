@@ -86,7 +86,7 @@ function isScriptLoadable(entry: LoadableEntry): entry is ScriptLoadable {
  */
 export interface FactoryLoadable {
   factory: () => Promise<Tool | Tool[]>
-  contracts?: Array<Pick<Tool, 'name' | 'description' | 'parameters' | 'supportsLayerFSWorkdir'>>
+  contracts?: Array<Pick<Tool, 'name' | 'description' | 'parameters' | 'supportsLayerFSWorkdir' | 'supportsRemoteWorkdir'>>
 }
 
 function isMcpLoadable(entry: LoadableEntry): entry is McpLoadable {
@@ -924,6 +924,10 @@ export class ImportTool implements Tool {
   }
 
   canInvokeFromRemote(toolName: string): boolean {
+    const layerfs = this.loadable.get('layerfs')
+    if (layerfs && layerfs === this.builtins.get('layerfs') && isFactoryLoadable(layerfs) && (toolName === 'layerfs' || layerfs.contracts?.some(tool => tool.name === toolName && tool.supportsRemoteWorkdir === true))) return true
+    const workspace = this.loadable.get(toolName)
+    if (['workspace_create', 'workspace_fork'].includes(toolName) && workspace && workspace === this.builtins.get(toolName) && !isMcpLoadable(workspace) && !isFactoryLoadable(workspace) && !isScriptLoadable(workspace) && workspace.supportsRemoteWorkdir === true) return true
     const entry = this.loadable.get(toolName)
     return (toolName === 'session' || isWorkTool(toolName)) && entry !== undefined && entry === this.builtins.get(toolName) &&
       !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
@@ -931,8 +935,8 @@ export class ImportTool implements Tool {
 
   /** Explicit source initialization returns contracts, never executes an MCP tool. */
   async initializeSource(name: string, args: Record<string, unknown>, context: ExecutionContext, explicit = false): Promise<string | undefined> {
-    if (context.remoteWorkdir) return undefined
-    await this.prepareFolder(context.tools, context.folderId)
+    if (context.remoteWorkdir && (name !== 'layerfs' || !this.canInvokeFromRemote(name))) return undefined
+    if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const entry = this.catalogFor(context.tools).get(name)
     if (!entry || (!isMcpLoadable(entry) && !(explicit && isFactoryLoadable(entry)))) return undefined
     if (Object.keys(args).length) return 'Error: source initialization requires args: {}; invoke a returned exact tool name to execute a tool.'

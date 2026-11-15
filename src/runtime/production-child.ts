@@ -1,4 +1,7 @@
 import { assertExecutionSupported } from '../execution/workdir-contracts.ts'
+import { RemoteLayerFSService } from '../execution/layerfs/remote-service.ts'
+import { RemoteLayerFSRuntimes } from '../execution/layerfs/remote-runtime.ts'
+import { LAYERFS_REMOTE_OPERATION, LAYERFS_REMOTE_FEATURE } from '../execution/layerfs/remote-contract.ts'
 import { childWorkspacePlugin } from './child-workspace.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import { join } from 'node:path'
@@ -73,15 +76,29 @@ export async function startProductionChildRuntime(
     join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, config.workdirs ?? [],
   )
   await workdirs.init()
-  const support = (): ExecutionSupport => ({ operations: ['process.execute', ...workdirs.support.operations] })
+  const layerfsRuntimes = new RemoteLayerFSRuntimes(join(paths.dataDir, 'layerfs-project-services-v1', pairingScope), config.localNodeId, () => ({ online: connection === 'connected', epoch: connectionEpoch, pairingId: reference.credentialId }))
+  const layerfsService = new RemoteLayerFSService({ nodeId: config.localNodeId, pairingId: reference.credentialId,
+    directory: join(paths.dataDir, 'layerfs-service-receipts-v1', pairingScope),
+    // Only the authenticated paired Main can dispatch jobs on this connector. Main
+    // injects Project and owner assertions; model tools cannot address this handler.
+    authorize: async (request, call, signal) => {
+      signal.throwIfAborted()
+      if (process.platform !== 'win32' || request.projectScope !== call.authority.projectScope) throw new Error('Target LayerFS service unavailable or Project mismatch')
+    }, preflight: call => layerfsRuntimes.preflight(call), dispatch: (call, context, observe) => layerfsRuntimes.dispatch(call, context, observe),
+  })
+  const support = (): ExecutionSupport => ({ operations: ['process.execute', ...workdirs.support.operations, ...(process.platform === 'win32' ? [LAYERFS_REMOTE_OPERATION] : [])] })
   const journal = new ShellJournal(join(paths.dataDir, 'shell-executions-v1', pairingScope))
   const executor = new JournaledShellExecutor(new LocalExecutor(
     processManager,
     config.localNodeId,
-    workdirs.operationHandlers,
-    (request, signal) => request.workdirId === undefined && request.operation === 'process.execute'
-      ? assertExecutionSupported(request, workdirs.workdirs, support())
-      : workdirs.assertCanExecute(request, signal),
+    [...workdirs.operationHandlers, layerfsService],
+    async (request, signal) => {
+      if (request.operation === LAYERFS_REMOTE_OPERATION) {
+        assertExecutionSupported(request, workdirs.workdirs, support())
+        await layerfsService.admit(request, signal)
+      } else if (request.workdirId === undefined && request.operation === 'process.execute') assertExecutionSupported(request, workdirs.workdirs, support())
+      else await workdirs.assertCanExecute(request, signal)
+    },
     request => journal.processResultPath(request),
   ), journal)
   const validateCredential = async (signal: AbortSignal): Promise<void> => {
@@ -100,7 +117,7 @@ export async function startProductionChildRuntime(
       protocolMajor: 1,
       protocolMinor: 0,
       implementationVersion: '0.1.0',
-      features: ['workdir-execution-v2'],
+      features: ['workdir-execution-v2', ...(process.platform === 'win32' ? [LAYERFS_REMOTE_FEATURE] : [])],
     },
     authentication: {
       deviceId: reference.deviceId,
@@ -135,6 +152,7 @@ export async function startProductionChildRuntime(
   let runtime: ChildRuntimeHandle | undefined
   let connection: 'connecting' | 'connected' | 'offline' = 'connecting'
   let connectionError: string | null = null
+  let connectionEpoch = 0
   const localControl = options.localControl
     ? new ChildLocalControlService({
       ...options.localControl,
@@ -160,10 +178,10 @@ export async function startProductionChildRuntime(
     : undefined
   runtime = startChildRuntime(config, {
     nodeIdentity: new CredentialIdentityService(validateCredential),
-    localExecutors: new LocalExecutorService(processManager, workdirs),
+    localExecutors: new LocalExecutorService(processManager, workdirs, () => layerfsRuntimes.close()),
     mainConnector: connector,
     localControl,
-  }, { connectionChanged: (state, error) => { connection = state; connectionError = error } })
+  }, { connectionChanged: (state, error) => { if (connection !== state) connectionEpoch++; connection = state; connectionError = error } })
   if (localControl) {
     runtime.ready.then(() => localControl.markReady(), () => {})
   }
@@ -183,7 +201,7 @@ class CredentialIdentityService implements ChildRuntimeService {
 }
 
 class LocalExecutorService implements ChildRuntimeService {
-  constructor(readonly processManager: ProcessManager, readonly workdirs: ManagedChildWorkdirs) {}
+  constructor(readonly processManager: ProcessManager, readonly workdirs: ManagedChildWorkdirs, readonly closeLayerFS?: () => Promise<void>) {}
 
   start(_signal: AbortSignal): Promise<void> {
     return Promise.resolve()
@@ -195,6 +213,7 @@ class LocalExecutorService implements ChildRuntimeService {
     )
     await Promise.all(running.map((process) => this.processManager.terminate(process)))
     await this.workdirs.settleAllocations()
+    await this.closeLayerFS?.()
   }
 }
 

@@ -4,6 +4,7 @@ import { validateExecutionRequestV2 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
 import { isUnknownShellReceipt } from '../execution/shell-journal.ts'
 import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from '../execution/derived-workspace-contract.ts'
+import { LAYERFS_REMOTE_OPERATION, remoteLayerFSCallSchema, remoteLayerFSReadActions } from '../execution/layerfs/remote-contract.ts'
 
 /** Fixed host-owned directory operation profile; advertisements cannot widen it. */
 export const DIRECTORY_OPERATIONS = Object.freeze([
@@ -34,6 +35,15 @@ export class ProjectExecutor implements Executor {
     return projectExecutionKey(this.projectId, kind, value)
   }
 
+  async assertCanExecute(input: ExecutionRequestV2, signal: AbortSignal): Promise<void> {
+    const validation = validateExecutionRequestV2(input)
+    if (!validation.success) throw new TypeError(`Invalid execution request: ${validation.errors.join('; ')}`)
+    const request = structuredClone(validation.value)
+    await this.assertAccess(request, signal)
+    signal.throwIfAborted()
+    await this.executor.assertCanExecute?.({ ...request, projectScope: managedProjectScope(this.projectId) }, signal)
+  }
+
   async *execute(input: ExecutionRequestV2, signal: AbortSignal): AsyncIterable<JobEventV1> {
     const release = this.acquireAccess?.()
     try { yield* this.#executeAuthorized(input, signal) }
@@ -53,7 +63,9 @@ export class ProjectExecutor implements Executor {
     const reconciliation = request.operation === 'workdir.process.reconcile'
     // Read-only identity and reconciliation queries cannot own a process. A
     // transport failure must not create an unresolvable durable reservation.
+    const layerfs = request.operation === LAYERFS_REMOTE_OPERATION ? remoteLayerFSCallSchema.safeParse(request.args) : undefined
     const readOnlyQuery = reconciliation || request.operation === 'workdir.identity' || derivedAction === 'inspect' || derivedAction === 'verify'
+      || layerfs?.success === true && remoteLayerFSReadActions.has(layerfs.data.action)
     if (!readOnlyQuery) this.recordJob?.(request.jobId, true)
     const jobId = this.#key('job', request.jobId)
     this.#jobs.set(request.jobId, jobId)
@@ -90,6 +102,15 @@ export class ProjectExecutor implements Executor {
       }
       yield { ...event, jobId: request.jobId, ...('receipt' in event ? { receipt: { ...event.receipt, jobId: request.jobId } } : {}) }
     }
+  }
+
+  /** Host-only, after an authenticated target-specific terminal/admission reconciliation.
+   * Does not synthesize/overwrite transport history or authorize another execution. */
+  settleVerifiedRemoteOperation(jobId: string): void {
+    if (!this.#jobs.has(jobId)) return
+    this.recordJob?.(jobId, false)
+    this.#pending.delete(jobId)
+    this.#executionKeys.delete(jobId)
   }
 
   async getStatus(jobId: string): Promise<JobStatusV1 | null> {

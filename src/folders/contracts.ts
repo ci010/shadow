@@ -28,6 +28,8 @@ export interface RemoteFolderRecord extends FolderBase {
 /** Non-host resource. path is sandbox display metadata, never a Main path. */
 export interface LayerFSFolderRecord extends FolderBase {
   kind: 'layerfs'
+  /** Target-owned LayerFS service binding; absent means the local Project service. */
+  location?: import('../execution/layerfs/remote-contract.ts').RemoteLayerFSLocation
   mount: string
   workdir: WorkdirRefV2
 }

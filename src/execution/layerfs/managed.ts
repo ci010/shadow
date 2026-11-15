@@ -91,7 +91,7 @@ export function spawnManagedDriver(options: { launch?: typeof spawn; requestTime
     if (authorizeSource) {
       if (action !== 'context') throw new ToolNoEffectError('Source scope is context-only.')
       const sourceToken = randomUUID(); sourceScopes.set(sourceToken, authorizeSource)
-      input = { sourceToken }
+      input = { ...(input && typeof input === 'object' ? input : {}), sourceToken }
     }
     if (ended || !child.connected) return Promise.reject(unknown())
     return new Promise((resolve, reject) => {
@@ -270,9 +270,9 @@ export class ManagedLayerFS {
     if (this.closed || !this.driver || await this.phase() !== 'running') throw new ToolNoEffectError('Runtime owner is not running; no native source probe.')
     return this.driver.request('source_identity', { path }, signal)
   }
-  async execContext(signal: AbortSignal, authorizeSource?: () => Promise<string>) {
+  async execContext(signal: AbortSignal, authorizeSource?: () => Promise<string>, options?: { guardProfile?: boolean }) {
     if (this.closed || !this.driver || await this.phase() !== 'running') throw new ToolNoEffectError('Runtime owner is not running; no implicit start.')
-    const profile = z.object({ port: z.number().int().min(1).max(65535), token: z.string().regex(/^[a-f0-9]{64}$/), sdkModule: absoluteHost }).strict().parse(await this.driver.request('context', {}, signal, authorizeSource))
+    const profile = z.object({ port: z.number().int().min(1).max(65535), token: z.string().regex(/^[a-f0-9]{64}$/), sdkModule: absoluteHost }).strict().parse(await this.driver.request('context', options?.guardProfile ? { guardProfile: true } : {}, signal, authorizeSource))
     const installation = await this.approvedInstallation()
     return { profile, installation }
   }

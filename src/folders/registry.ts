@@ -110,6 +110,7 @@ function parseRecords(value: unknown): FolderRecord[] {
  * Availability is asynchronous; synchronous lookup only declares registry membership.
  */
 export interface LayerFSFolderService {
+  lookup?: (folder: LayerFSFolderRecord) => WorkdirState
   authorize: (mount: string, signal: AbortSignal) => Promise<{ path: string; name?: string }>
   requireAvailable: (folder: LayerFSFolderRecord, signal: AbortSignal) => Promise<void>
 }
@@ -345,7 +346,8 @@ export class FolderRegistry {
 
   lookupWorkdir(ref: WorkdirRefV2): WorkdirState | undefined {
     if (ref.nodeId === 'layerfs') {
-      const folder = this.list().find(folder => folder.kind === 'layerfs' && folder.mount === ref.workdirId)
+      const folder = this.list().find((folder): folder is LayerFSFolderRecord => folder.kind === 'layerfs' && folder.mount === ref.workdirId)
+      if (folder && this.#layerfs?.lookup) return this.#layerfs.lookup(folder)
       return { node: 'online', ...(folder && this.#layerfs ? { workdir: { online: true, backend: 'layerfs' as const, workspace: ref.workdirId } } : {}) }
     }
     if (ref.version !== 2 || ref.nodeId !== 'local' || !ref.workdirId.startsWith(FOLDER_PREFIX)) {

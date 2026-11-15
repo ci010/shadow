@@ -5,6 +5,35 @@ contracts before invocation. This guide does not grant installation or publicati
 permission. Git/Docker/SDK operations below are explicit ordinary exec commands,
 not a Shadow build/import pipeline.
 
+## Remote Windows target
+
+When Main runs on Mac and the selected registered Workspace is on Windows, LayerFS
+management routes through the authenticated typed Windows service, not Mac execution.
+Artifacts, WSL source paths and runtime_context launcher paths belong to that Windows
+device. Never evaluate them on Main. The exact installation question names the target,
+Project scope and plan; submit it unchanged to ask. Existing-installation remote setup
+uses layerfs_setup_plan {installation}, then layerfs_setup {plan,approval,approved:true,
+allowRootWorker:true}; flags alone are not consent. Missing installation uses the normal
+bootstrap_plan/bootstrap sequence. Routine runtime reuse needs owner authority, not a
+second installation decision. After creating a remote LayerFS branch Workspace, select
+its registered Workspace ID for ordinary tools. Do not treat its display path as native.
+
+Remote bootstrap returns targetNodeId/targetJobId, not a Main v:bg task. Inspect
+layerfs_bootstrap_status on that exact target; layerfs_bootstrap_cancel {targetJobId}
+requests cancellation, never rollback. No Main background completion event is promised.
+Main persists a Project deletion guard before bootstrap dispatch, including across restart
+or disconnect. Read v:project/remote-layerfs-jobs from an available same-Project session
+for target/job/request IDs even offline. layerfs_bootstrap_reconcile {targetJobId} releases
+only a matching verified clean terminal target journal/approval; unknown, cancellation,
+missing evidence and changed pairing retain the guard and surface target inspection details.
+For a lost typed-service mutation response, layerfs_reconcile {requestId} inspects its
+target-retained receipt without replay. runtime_context launchers carry a five-minute
+target/pairing/connection/Project/runtime/installation/source capability lease; obtain
+a new context after expiry, disconnect/reconnect, re-pairing or source identity changes.
+Source-less contexts permit inspection but refuse Init. Run the returned private
+launcher only using ordinary native Windows exec, not inside a LayerFS sandbox or on
+Mac. Do not print/copy its capability-bearing contents.
+
 ## 1. Installation and Project-scoped runtime management
 
 `layerfs_doctor` reports installation configuration with `runtime:"not_checked"`.

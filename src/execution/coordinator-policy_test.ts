@@ -59,7 +59,7 @@ test('coordinator exec denies foreground, background and inline Node locally; re
       dispatched++
       if (offline) throw new Error('Child offline')
       assert.equal(request.nodeId, 'child')
-      assert.deepEqual(request.args, { script: 'pwd' })
+      assert.deepEqual(request.args, tools.executionMode === 'call' ? { script: 'pwd' } : { script: 'pwd', lifetime: 'until-exit' })
       yield { version: 1, jobId: request.jobId, sequence: 0, timestamp: new Date().toISOString(), type: 'completed',
         receipt: { version: 1, jobId: request.jobId, nodeId: 'child', state: 'completed', exitCode: 0, finishedAt: new Date().toISOString() } }
     },
@@ -74,12 +74,12 @@ test('coordinator exec denies foreground, background and inline Node locally; re
   assert.equal(dispatched, 2)
   assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', shell: 'node' }, remote)), /not supported on remote/)
   tools.setExecutionScope('call', [])
-  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd' }, remote)), /remote workdirs/)
-  assert.equal(dispatched, 2)
+  assert.equal(await tools.execute('exec', { script: 'pwd' }, remote), '(no output, exit code 0)')
+  assert.equal(dispatched, 3)
   tools.setExecutionScope('task', [])
   offline = true
   assert.match(requireToolText(await tools.execute('exec', { script: 'pwd' }, remote)), /Child offline/)
-  assert.equal(dispatched, 3)
+  assert.equal(dispatched, 4)
 })
 
 test('coordinator import gate precedes factory, MCP, JSON config loading and invoke_tool auto-import; reviewed builtins still work', async () => {
@@ -129,4 +129,16 @@ test('coordinator refuses virtual MCP configuration writes before executable ind
     assert.match(requireToolText(await tools.execute('write', { path, content: '{}' }, context)), /MCP configuration writes are unavailable/)
   }
   assert.equal(await tools.execute('write', { path: 'notes.md', content: 'retained' }, context), 'file stored')
+})
+
+test('coordinator allows registered remote LayerFS exec only through an exact host-owned target predicate', () => {
+  const { policy, context } = fixture()
+  const exec = tool('exec', async () => assert.fail('policy test must not execute'))
+  policy.allowRemoteShell(exec)
+  const selected = { ...context, layerfsWorkdir: { workspace: 'layerfs:remote-registered' } }
+  assert.match(String(policy.check(exec, {}, selected)), /local executor is disabled/)
+  policy.allowRemoteLayerFS(workspace => workspace === 'layerfs:remote-registered')
+  assert.equal(policy.check(exec, {}, selected), undefined)
+  assert.match(String(policy.check(exec, {}, { ...selected, layerfsWorkdir: { workspace: 'layerfs:local-or-forged' } })), /local executor is disabled/)
+  assert.match(String(policy.check(tool('exec', async () => ''), {}, selected)), /local executor is disabled/)
 })

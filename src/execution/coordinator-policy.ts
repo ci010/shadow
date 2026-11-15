@@ -8,6 +8,8 @@ export const LOCAL_EXECUTOR_DISABLED = 'Main local executor is disabled. Select 
 export class CoordinatorExecutionPolicy {
   private readonly allowed = new WeakSet<object>()
   private readonly remoteShells = new WeakSet<object>()
+  private remoteLayerFS?: (workspace: string) => boolean
+  allowRemoteLayerFS(check: (workspace: string) => boolean): void { this.remoteLayerFS = check }
 
   allow(tool: object): void { this.allowed.add(tool) }
   allowRemoteShell(tool: object): void { this.remoteShells.add(tool) }
@@ -21,7 +23,7 @@ export class CoordinatorExecutionPolicy {
       return `Error: ${LOCAL_EXECUTOR_DISABLED} Executable MCP configuration writes are unavailable.`
     }
     if (this.allowed.has(tool)) return undefined
-    if (this.remoteShells.has(tool) && context.remoteWorkdir) return undefined
+    if (this.remoteShells.has(tool) && (context.remoteWorkdir || context.layerfsWorkdir && this.remoteLayerFS?.(context.layerfsWorkdir.workspace))) return undefined
     return `Error: ${LOCAL_EXECUTOR_DISABLED} Tool "${tool.name}" is not available in the coordinator capability profile.`
   }
 }

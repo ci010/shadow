@@ -58,7 +58,7 @@ export class InvokeTool implements Tool<ToolResult> {
       if (!args.args || typeof args.args !== 'object' || Array.isArray(args.args) || Object.keys(args.args).length) {
         return 'Error: source initialization requires args: {}.'
       }
-      if (context.remoteWorkdir) return 'Error: source initialization is unavailable for remote workdirs.'
+      if (context.remoteWorkdir && (args.source !== 'layerfs' || !this.importer?.canInvokeFromRemote?.('layerfs'))) return 'Error: source initialization is unavailable for remote workdirs except the host-owned LayerFS service.'
       if (context.layerfsWorkdir && args.source !== 'layerfs') return 'Error: only the LayerFS maintenance source can be initialized from this workspace; no host source fallback.'
       return await this.importer?.initializeSource?.(args.source, args.args as Record<string, unknown>, context, true)
         ?? 'Error: unknown or unavailable source; read v:tools/@sources__ for initialization metadata.'
