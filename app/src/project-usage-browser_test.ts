@@ -67,6 +67,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
   context.after(async () => { server.httpServer?.closeAllConnections(); await server.close() })
   await server.listen()
   const url = new URL('__usage', server.resolvedUrls!.local[0]).href
+  // Windows needs a shown native fixture for focus, scroll layout and viewport frames.
   await build({
     stdin: { contents: `
       const { app, BrowserWindow } = require('electron');
@@ -75,7 +76,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
       const { join } = require('node:path');
       app.setPath('userData', ${JSON.stringify(resolve(directory, 'profile'))});
       app.whenReady().then(async () => {
-        const win = new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});
+        const win = new BrowserWindow({show:process.platform==='win32',width:1280,height:1000,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});
         win.webContents.on('console-message', event => console.log('renderer:',event.message));
         try {
           await win.loadURL(${JSON.stringify(url)});

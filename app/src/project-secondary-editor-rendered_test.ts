@@ -104,8 +104,9 @@ test('all resources share Project editor groups without remount, child panes or 
   }], server: { host: '127.0.0.1', port: 0 } })
   await server.listen(); t.after(() => { server.httpServer?.closeAllConnections(); return server.close() })
   const url = server.resolvedUrls?.local[0]; assert(url)
+  // Windows needs a shown native fixture for focus, scroll layout and viewport frames.
   const script = `const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});
-    (async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1600,height:950,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.webContents.on('console-message',d=>console.error('Renderer:',d.message));const run=async s=>{try{return await win.webContents.executeJavaScript(s)}catch(e){throw new Error(s+' '+e)}};const wait=async s=>{for(let i=0;i<240;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw new Error('Timeout '+s+' '+await run('document.body.innerText'))};
+    (async()=>{await app.whenReady();const win=new BrowserWindow({show:process.platform==='win32',width:1600,height:950,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.webContents.on('console-message',d=>console.error('Renderer:',d.message));const run=async s=>{try{return await win.webContents.executeJavaScript(s)}catch(e){throw new Error(s+' '+e)}};const wait=async s=>{for(let i=0;i<240;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw new Error('Timeout '+s+' '+await run('document.body.innerText'))};
     const visible=s=>'[...document.querySelectorAll('+JSON.stringify(s)+')].find(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height)';
     const route=()=>run('JSON.parse(JSON.stringify(window.fixture.router.currentRoute.value))');
     const primary=async()=>{const s=visible('.conversation-tab button');await wait(s);await run(s+'.click()')};
@@ -273,7 +274,9 @@ test('all resources share Project editor groups without remount, child panes or 
     await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
   await build({ stdin: { contents: script, resolveDir: directory, sourcefile: 'fixture-run.cjs' }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
-  const child = spawn(desktopRequire('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(desktopRequire('electron') as string, [entry], { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
   child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 80_000)
