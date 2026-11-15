@@ -220,3 +220,34 @@ its real Node/Electron subprocess tests do not establish the status of a real SD
 Remote execution parity, UI/Git routes and scoped skill/MCP behavior remain separate
 unfinished boundaries. No automatic Git merge-back or resource removal is provided.
 LayerFS is not a backup system or universal security sandbox.
+
+## macOS managed bootstrap and acceptance boundary
+
+The managed entry now supports macOS arm64/x64 with a native local Linux Docker
+Engine. Planning is read-only. Initial bootstrap still requires its exact recorded
+human decision, downloads/build consent and root-container consent; owner flags
+alone cannot authorize it. It builds pinned upstream
+`73d974dea8a8d0b056a16dc6b2380d89438ce484` through the official worktree tools,
+verifies sealed artifact hashes and stages matching host APIs. Windows retains its
+separate WSL path. There is no backend restart, Docker installation/reconfiguration,
+repository import or cleanup implicit in bootstrap. See the bundled
+[setup guide](../src/skills/builtin/layerfs/setup.md#macos-host-management).
+
+macOS source bindings are exact children of the returned private host APFS
+`sourceRoot`, checked again before Init against canonical ancestry, uid/mode and
+device/inode identity. They are read-only Init mounts, not WSL ext4 inputs or
+Docker VM Store paths. Runtime ownership, immutable resource identity, no-replay
+admissions, and standard workspace/VFS routing remain unchanged.
+
+2026-11-15 bounded local verification: LayerFS management/SDK adapter/source,
+bootstrap approval gates, sandbox reuse, routing and VFS tests passed (115 passed,
+2 Windows-shell tests skipped on Mac). These are fixture/static tests, not live
+SDK acceptance. Docker inspection found OrbStack Linux arm64 Engine 29.8.2/API
+1.56, but no image with the requested pinned bootstrap provenance. Historical
+Mac builds were not adopted. A new independent PureLauncher checkout at
+`/Users/honx/Workspaces/PureLauncher-layerfs-a315aa95` was fetched at exact commit
+`a315aa959df55549f4e9f655fe298b2333761202`; Git fsck and clean-worktree checks passed.
+Its Electron 8/Parcel 1/npm tooling is legacy. No dependency install or full app
+build was attempted. Live Init/resource/workspace/exec-reuse/isolation acceptance
+is blocked on explicit backend activation and subsequent recorded installation
+approval, not reported as passed by these tests.

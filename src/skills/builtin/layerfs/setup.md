@@ -60,6 +60,40 @@ per exec process preserves the official SDK singleton constraint. Always close i
 finally. It never opens another Runtime or starts another worker. Do not use a host
 path as a LayerFS cwd, and do not invoke this host launcher from a LayerFS workspace.
 
+## macOS host management
+
+macOS arm64/x64 uses the same Project-owned management tools and exact recorded
+human bootstrap decision. `bootstrap_plan` discovers a local Unix Docker context
+without provisioning. The official worker is a Linux container on the native
+Engine, not WSL. The approved bootstrap builds the pinned official Linux bundle
+with the official worktree tooling and stages its matching host JavaScript API.
+It does not install Docker/OS packages, restart Shadow or import a repository.
+Existing matching artifacts may instead be approved with installation
+`{platform:"darwin",apiRoot,bundle,image,docker}`. `docker` is the discovered local
+Unix socket path; `image` is an immutable installed image ID. Do not reuse a
+historically patched build or infer trust from an image tag.
+
+After runtime plan/start, obtain `runtime_context` **without sourceName** first.
+On macOS its dedicated `sourceRoot` is a host APFS directory beneath the private
+runtime home, not `/var/lib`, a Docker VM volume path or a WSL source directory.
+Use ordinary host Git to prepare a new child checkout there, with standalone
+metadata, pinned HEAD and no alternates, hooks or copied credentials. Do not
+chmod/chown existing user paths. Bind its single directory name using another
+`runtime_context` call. Every Init rechecks canonical APFS ancestors, host/root
+ownership, non-group/world-write permissions and stable device/inode identity.
+The official Runtime receives that exact host path and mounts it read-only for
+Init. There is no UNC transport or Linux root/ext4 requirement on macOS.
+
+Save the exact SDK script below in local session working storage. Run the returned
+executable/launcher with ordinary host exec and `ELECTRON_RUN_AS_NODE=1`, passing
+that script, official project name, returned `sourcePath`, immutable image,
+repository URL and fixed commit. Do not instantiate a second Runtime, read the
+private launcher, replay an unknown Init, or replace the real SDK with a fixture.
+Registration/workspace/VFS checks in section 5 are platform-independent. Workspace
+acceptance is distinct from a legacy application's dependency install/full build.
+
+The following WSL preparation and PowerShell commands apply **only to Windows**.
+
 ## 2. Fixed source with standard Git and Git LFS
 
 Read the Git skill. The default and only Init input is a native ext4 directory in

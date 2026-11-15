@@ -4,7 +4,7 @@ import type { LayerFSResources } from '../execution/layerfs/resource-service.ts'
 
 const fields = {
   runtimeId: { type: 'string', description: 'Explicit current-Project runtime ID.' },
-  sourceName: { type: 'string', description: 'Optional single directory name beneath this runtime’s dedicated WSL-native sourceRoot. Direct owner binding for Init, rechecked against native ext4 filesystem identity on every dispatch. No arbitrary paths, UNC, different distro or DrvFS. Omit to obtain sourceRoot before standard source preparation.' },
+  sourceName: { type: 'string', description: 'Optional single directory name beneath this runtime’s dedicated platform-native sourceRoot. Direct owner binding for Init, rechecked against platform-native filesystem identity (WSL ext4 or host macOS APFS) on every dispatch. No arbitrary paths, UNC, different distro or DrvFS. Omit to obtain sourceRoot before standard source preparation.' },
   name: { type: 'string' }, resourceId: { type: 'string', description: 'Immutable registered resource ID.' },
   layerfsProject: { type: 'string', description: 'Existing official project in the selected runtime.' },
   image: { type: 'string', description: 'Exact installed sha256 image ID, checked against official project metadata.' },
@@ -13,7 +13,7 @@ const fields = {
 }
 const intents: Record<string, { description: string; required: string[]; optional?: string[] }> = {
   runtime_plan: { description: 'Record isolated runtime binding from approved installation artifacts; no downloads, Git or Docker build.', required: ['runtimeId'] },
-  runtime_start: { description: 'Start a planned runtime or explicitly restart its confirmed normal stop, only from the original owner session. Running/concurrent starts and unknown ownership are not replayed.', required: ['runtimeId'] },
+  runtime_start: { description: 'Start a planned runtime or explicitly restart its confirmed normal stop, from a direct authorized session in this Project. Running/concurrent starts and unknown ownership are not replayed.', required: ['runtimeId'] },
   runtime_status: { description: 'Inspect runtime without starting it.', required: ['runtimeId'] },
   runtime_context: { description: 'Return a controlled ordinary-exec launcher for official SDK calls using the existing runtime owner. No endpoint secret is returned.', required: ['runtimeId'], optional: ['sourceName'] },
   resource_register: { description: 'Register existing official project/image/immutable baseline after official identity checks. Does not build, import or smoke-test a recipe. Source provenance is caller supplied.', required: ['runtimeId', 'name', 'layerfsProject', 'image', 'baselineRef', 'source'] },

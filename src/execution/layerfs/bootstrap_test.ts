@@ -119,7 +119,7 @@ test('read-only discovery handles ambiguity, internal distros, unsupported platf
     assert.equal(selection.status, 'needs_selection'); assert.deepEqual('distributions' in selection ? selection.distributions : [], ['Debian', 'Ubuntu'])
     await assert.rejects(b.plan(ctx, 'docker-desktop'), /returned by bootstrap_plan/)
     assert.equal((await b.plan(ctx, 'Debian')).status, 'needs_approval')
-    const unsupported = new LayerFSBootstrap('p', home, bg, m, async () => { throw Error('must not execute') }, 'darwin', 'arm64')
+    const unsupported = new LayerFSBootstrap('p', home, bg, m, async () => { throw Error('must not execute') }, 'linux', 'arm64')
     assert.equal((await unsupported.plan(ctx)).status, 'blocked')
     const none = new LayerFSBootstrap('p', home, bg, m, async () => reply('docker-desktop\n'), 'win32', 'x64', testConsent)
     assert.equal((await none.plan(ctx)).status, 'blocked'); assert.equal(bg.tasks.length, 0)
@@ -252,5 +252,64 @@ test('private evidence-write failures never mask probe exit codes or trusted pre
     assert.ok('evidenceWriteFailed' in status); assert.equal(status.evidenceWriteFailed, true)
     assert.equal(status.phase, failedStep === 'wsl_ready' ? 'probe_failed' : 'blocked')
     if (failedStep === 'wsl_ready') assert.equal(status.diagnostic?.exitCode, 7)
+  })
+})
+
+// These tests use injected command/worker fixtures only; no Docker, SDK or install runs.
+test('macOS plan uses local Docker, exact recorded consent and no WSL; failed build is not replayed', async () => {
+  await fixture(async home => {
+    const ctx = context(home), bg = new BackgroundFixture(), m = managed(home, [])
+    const commands: string[][] = []
+    const run: BootstrapRun = async command => {
+      commands.push([command.file, ...command.args])
+      assert.notEqual(command.file, 'wsl.exe')
+      if (command.args[0] === 'context') return reply('unix:///Users/test/.orbstack/run/docker.sock\n')
+      if (command.args.includes('info')) return reply(JSON.stringify({ OSType: 'linux', Architecture: 'aarch64', DockerRootDir: '/var/lib/docker', SecurityOptions: ['name=seccomp'] }))
+      assert.equal(command.file, '/bin/bash')
+      assert.equal(command.args.at(-2), '/Users/test/.orbstack/run/docker.sock')
+      assert.equal(command.args.at(-1), 'arm64')
+      assert.match(command.input!, /MACOS_USER_REQUIRED/)
+      assert.doesNotMatch(command.input!, /wsl\.exe|WSL2_REQUIRED|\/var\/lib\/shadow-layerfs-bootstrap/)
+      return reply('SHADOW_LAYERFS_BOOTSTRAP_FAILED={"code":"OPERATION_FAILED","phase":"build","state":"unknown"}', 1)
+    }
+    const b = new LayerFSBootstrap('p', home, bg, m, run, 'darwin', 'arm64', testConsent)
+    for (const patch of [{ admin: false }, { channel: 'a2a' }, { scriptInvocation: true }, { tools: { executionMode: 'task' } }]) await assert.rejects(b.plan({ ...ctx, ...patch } as ExecutionContext))
+    assert.equal(commands.length, 0)
+    const plan = await b.plan(ctx)
+    assert.equal(plan.status, 'needs_approval')
+    if (plan.status !== 'needs_approval' || !('approvalRequest' in plan) || !plan.approvalRequest) throw Error('missing plan')
+    assert.match(plan.approvalRequest.question, /root Linux worker container on this Mac/)
+    assert.match(plan.approvalRequest.question, /arm64/)
+    assert.match(plan.approvalRequest.question, /will not.*restart Shadow/)
+    assert.equal(commands.length, 2)
+    const args = { plan: plan.plan, approval: decisionReference, approved: true, allowDownloads: true, allowRootWorker: true }
+    for (const patch of [{ approval: undefined }, { allowRootWorker: false }, { allowDownloads: false }, { approval: { ...decisionReference, requestId: 'unrelated' } }]) await assert.rejects(b.start({ ...args, ...patch }, ctx))
+    assert.equal(commands.length, 2)
+    await b.start(args, ctx)
+    await assert.rejects(bg.tasks[0]!.promise, /uncertain.*build/)
+    assert.equal((await b.status(ctx)).phase, 'uncertain')
+    assert.equal((await b.plan(ctx)).status, 'existing_attempt')
+    await assert.rejects(b.start(args, ctx), /missing, expired/)
+    assert.equal(commands.length, 3)
+    await m.close()
+  })
+})
+
+test('macOS discovery refuses remote engines, nonnative architecture and custom volume roots without provisioning', async () => {
+  for (const kind of ['remote', 'architecture', 'root', 'rootless']) await fixture(async home => {
+    const ctx = context(home), bg = new BackgroundFixture(), m = managed(home, [])
+    let calls = 0
+    const run: BootstrapRun = async command => {
+      calls++
+      assert.equal(command.file, 'docker')
+      if (command.args[0] === 'context') return reply(kind === 'remote' ? 'ssh://other-machine' : 'unix:///Users/test/docker.sock')
+      return reply(JSON.stringify({ OSType: 'linux', Architecture: kind === 'architecture' ? 'x86_64' : 'aarch64', DockerRootDir: kind === 'root' ? '/other' : '/var/lib/docker', SecurityOptions: kind === 'rootless' ? ['name=rootless'] : [] }))
+    }
+    const b = new LayerFSBootstrap('p', home, bg, m, run, 'darwin', 'arm64', testConsent)
+    assert.equal((await b.plan(ctx)).status, 'blocked')
+    assert.equal(calls, kind === 'remote' ? 1 : 2)
+    assert.equal(bg.tasks.length, 0)
+    await assert.rejects(b.plan(ctx, 'Ubuntu'), /not a WSL/)
+    await m.close()
   })
 })

@@ -9,6 +9,8 @@ import { projectDataPaths } from '../../utils/data-paths.ts'
 import { writePrivateFile } from '../../utils/private-file.ts'
 import { ManagedLayerFS, installationSchema, type LayerFSInstallation } from './managed.ts'
 import { bootstrapPins, bootstrapScript } from './bootstrap-script.ts'
+import { hasLayerFSHostAuthority } from './host-authority.ts'
+import { bootstrapMacOSScript } from './bootstrap-macos.ts'
 import { parseYieldReference, type YieldReference, type YieldQuestion, type YieldDecisionRecord } from '../../sessions/yield-contract.ts'
 
 import { BootstrapCommandError, runBootstrapCommand, type BootstrapRun, type BootstrapCommand, type BootstrapReceipt } from './bootstrap-command.ts'
@@ -26,12 +28,13 @@ const journalSchema = z.object({ version: z.literal(1), projectId: z.string(), s
   phase: z.enum(['running', 'ready', 'blocked', 'failed', 'uncertain', 'probe_failed', 'recovered']), step: z.string(),
   provisioningStarted: z.boolean().optional(), diagnostic: diagnosticSchema.optional(), evidenceWriteFailed: z.boolean().optional(),
   recoveredBy: z.string().optional(), recoveredAt: z.string().optional(),
+  platform: z.literal('darwin').optional(), docker: z.string().optional(), architecture: z.enum(['arm64', 'amd64']).optional(),
   key: z.string().regex(/^[a-f0-9]{32}$/), distribution: distroName, executionId: z.string(),
   code: z.string().optional(), installation: installationSchema.optional(),
   approval: z.object({ sessionId: z.string(), physicalId: z.string(), requestId: z.string() }).strict(),
 }).strict()
 type Journal = z.infer<typeof journalSchema>
-type Plan = { id: string; sessionId: string; distribution: string; createdAt: number }
+type Plan = { id: string; sessionId: string; distribution: string; createdAt: number; platform?: 'darwin'; docker?: string; architecture?: 'arm64' | 'amd64' }
 export type BootstrapApprovalVerifier = (question: YieldQuestion, reference: YieldReference, context: ExecutionContext) => Promise<boolean>
 /** Match the recorded human decision, not model assertions or a linked unrelated approval. */
 export function matchesBootstrapApproval(question: YieldQuestion, reference: YieldReference, records: YieldDecisionRecord[], sessionId: string): boolean {
@@ -43,6 +46,12 @@ export function matchesBootstrapApproval(question: YieldQuestion, reference: Yie
     && !record.answer.custom && !record.answer.revisedQuestion && record.answer.option === question.options[0]
 }
 function approvalQuestion(plan: Plan): YieldQuestion {
+  if (plan.platform === 'darwin') return {
+    question: `May Shadow download/build pinned LayerFS ${bootstrapPins.revision} using the official rust/node images for Linux ${plan.architecture}, through the local Docker socket ${plan.docker}, run the official root Linux worker container on this Mac, retain private artifacts/volumes and reuse it across sessions? This can take a long time and several GiB. It will not install OS packages, reconfigure Docker, import your repository or restart Shadow. Plan ${plan.id}.`,
+    options: ['Approve this macOS LayerFS bootstrap plan, downloads/build and root Linux worker container.', 'Do not provision LayerFS on this machine.'],
+    defaultOption: 'Approve this macOS LayerFS bootstrap plan, downloads/build and root Linux worker container.',
+  }
+
   const approve = 'Approve this LayerFS bootstrap plan, downloads/build and root WSL worker.'
   return { question: `May Shadow download/build pinned LayerFS ${bootstrapPins.revision} using the official rust/node images in ${plan.distribution}, run the root WSL worker, retain private resources and reuse it across sessions? This can take a long time and several GiB. It will not install OS packages, reconfigure Docker or import your repository. Plan ${plan.id}.`,
     options: [approve, 'Do not provision LayerFS on this machine.'], defaultOption: approve }
@@ -52,6 +61,7 @@ class BuildRefusal extends Error {
 }
 
 export function assertLayerFSSetupOwner(context: ExecutionContext) {
+  if (hasLayerFSHostAuthority(context)) return
   if (context.channel !== 'web' || context.admin !== true || context.isGroup || context.remoteWorkdir || context.tools?.executionMode !== 'session' || context.tools.dynamicOwner !== context.tools || context.scriptInvocation || context.recoveringToolCall) throw new ToolNoEffectError('LayerFS provisioning requires a direct durable local owner Web session, not a task, script, replay or borrowed tool context.')
 }
 function decodeInventory(value: Buffer) {
@@ -109,10 +119,11 @@ export class LayerFSBootstrap {
   async plan(context: ExecutionContext, selected?: unknown) {
     this.assertProject(context); assertLayerFSSetupOwner(context)
     if (process.env.SHADOW_LAYERFS_CONFIG) throw new ToolNoEffectError('Explicit operator LayerFS configuration takes precedence; bootstrap will not replace it.')
-    if (this.platform !== 'win32' || this.arch !== 'x64') return { status: 'blocked', code: 'UNSUPPORTED_PLATFORM', message: 'Automated source bootstrap targets Windows x64 with an existing WSL2 Linux distribution. No commands were run.' }
+    if (!(this.platform === 'win32' && this.arch === 'x64') && !(this.platform === 'darwin' && ['arm64', 'x64'].includes(this.arch))) return { status: 'blocked', code: 'UNSUPPORTED_PLATFORM', message: 'Automated source bootstrap targets Windows x64/WSL2 and macOS arm64/x64 with a native local Linux Docker Engine. No commands were run.' }
     if (await this.managed.configured()) return { status: 'configured', next: 'connect' }
     const previous = await this.journal()
     if (previous && !['blocked', 'recovered'].includes(previous.phase)) return { status: 'existing_attempt', ...(await this.status(context)) }
+    if (this.platform === 'darwin') return this.macPlan(context, selected)
     const inventory = await this.run({ file: 'wsl.exe', args: ['--list', '--quiet'], timeoutMs: 10000 }, context.signal)
     if (inventory.code !== 0) return { status: 'blocked', code: 'WSL_UNAVAILABLE', message: 'WSL inventory is unavailable. WSL/OS installation needs a separate approved platform setup; no system setting was changed.' }
     const candidates = [...new Set(decodeInventory(inventory.stdout).split(/\r?\n/).map(s => s.trim()).filter(s => distroName.safeParse(s).success && !/^docker-desktop(?:-data)?$/i.test(s)))].sort()
@@ -136,10 +147,30 @@ export class LayerFSBootstrap {
       requirements: ['Existing WSL2 with Python3, git, Docker Engine API >=1.48, FUSE, and supported local Linux filesystem.', 'Several GiB of free disk and potentially a lengthy first build; download size is not fixed.'],
       next: 'Call ask with the exact approvalRequest fields, without rewriting the question/options. After explicit owner approval, call bootstrap with this plan, the answer receipt reference as approval, and approved/allowRootWorker/allowDownloads true. The saved human decision is checked; flags alone cannot authorize setup. No manual paths, JSON, environment variables or backend restart are required.' }
   }
+  private async macPlan(context: ExecutionContext, selected?: unknown) {
+    if (selected !== undefined) throw new ToolNoEffectError('macOS uses a local Docker worker, not a WSL distribution.')
+    const endpoint = await this.run({ file: 'docker', args: ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'], timeoutMs: 10000 }, context.signal)
+    const address = endpoint.stdout.toString('utf8').trim()
+    if (endpoint.code !== 0 || !/^unix:\/\/(\/[^\0\r\n]+)$/.test(address) || address.slice(7).split('/').includes('..')) return { status: 'blocked', code: 'LOCAL_DOCKER_SOCKET_REQUIRED', message: 'A local Unix Docker context is required; remote engines are not provisioned.' }
+    const docker = address.slice(7), architecture = this.arch === 'arm64' ? 'arm64' as const : 'amd64' as const
+    const probe = await this.run({ file: 'docker', args: ['-H', address, 'info', '--format', '{{json .}}'], timeoutMs: 10000 }, context.signal)
+    let info: Record<string, unknown> = {}
+    try { info = JSON.parse(probe.stdout.toString('utf8')) } catch { /* fail closed */ }
+    if (probe.code !== 0 || info.OSType !== 'linux' || !(architecture === 'arm64' ? ['arm64', 'aarch64'] : ['amd64', 'x86_64']).includes(String(info.Architecture)) || info.DockerRootDir !== '/var/lib/docker' || !Array.isArray(info.SecurityOptions) || info.SecurityOptions.some(v => String(v).includes('rootless'))) return { status: 'blocked', code: 'LOCAL_ROOTFUL_DOCKER_REQUIRED', message: 'The pinned official macOS worker requires a matching native Linux rootful Docker Engine with default VM volume root. No provisioning ran.' }
+    const plan: Plan = { id: randomBytes(16).toString('hex'), sessionId: context.sessionId, distribution: 'macos', createdAt: Date.now(), platform: 'darwin', docker, architecture }
+    for (const [id, prior] of this.plans) if (prior.sessionId === context.sessionId || Date.now() - prior.createdAt > 15 * 60_000) this.plans.delete(id)
+    this.plans.set(plan.id, plan)
+    const question = approvalQuestion(plan)
+    return { status: 'needs_approval', plan: plan.id, platform: 'darwin', docker, architecture, revision: bootstrapPins.revision,
+      approvalRequest: { kind: 'decision', question: question.question, options: question.options, default_option: question.defaultOption },
+      source: bootstrapPins.repository, images: [bootstrapPins.buildImage, bootstrapPins.runtimeImage],
+      effects: ['Download pinned official source and Docker images; native Linux build may download locked dependencies.', 'Run official worktree build in Docker and the root Linux worker container; no WSL.', 'Retain private artifacts, caches, runtime homes and Docker volumes; no repository imported, no cleanup or replay.'],
+      next: 'Call ask with the exact approvalRequest. After its recorded human decision, call bootstrap with plan, approval receipt and approved/allowRootWorker/allowDownloads true. No backend restart is performed.' }
+  }
   async start(args: Record<string, unknown>, context: ExecutionContext) {
     this.assertProject(context); assertLayerFSSetupOwner(context)
     if (process.env.SHADOW_LAYERFS_CONFIG) throw new ToolNoEffectError('Explicit operator configuration must not be replaced by bootstrap.')
-    if (args.approved !== true || args.allowRootWorker !== true || args.allowDownloads !== true) throw new ToolNoEffectError('Bootstrap requires explicit approval of the plan, downloads/build and root WSL execution; no provisioning was started.')
+    if (args.approved !== true || args.allowRootWorker !== true || args.allowDownloads !== true) throw new ToolNoEffectError('Bootstrap requires explicit approval of the plan, downloads/build and root worker execution; no provisioning was started.')
     const plan = typeof args.plan === 'string' ? this.plans.get(args.plan) : undefined
     if (!plan || plan.sessionId !== context.sessionId || Date.now() - plan.createdAt > 15 * 60_000) throw new ToolNoEffectError('Bootstrap plan is missing, expired or belongs to another session. Obtain a fresh plan and approval.')
     let reference: YieldReference
@@ -159,7 +190,7 @@ export class LayerFSBootstrap {
       context.signal.throwIfAborted()
       const controller = new AbortController(), execution = Promise.withResolvers<string>()
       const key = randomBytes(16).toString('hex')
-      const state: Journal = { version: 1, projectId: this.projectId, sessionId: context.sessionId, phase: 'running', step: 'admitted', provisioningStarted: false, key, distribution: plan.distribution, executionId: '', approval: reference }
+      const state: Journal = { version: 1, projectId: this.projectId, sessionId: context.sessionId, phase: 'running', step: 'admitted', provisioningStarted: false, key, distribution: plan.distribution, ...(plan.platform === 'darwin' ? { platform: plan.platform, docker: plan.docker, architecture: plan.architecture } : {}), executionId: '', approval: reference }
       const taskId = this.background.runPromiseTask({ kind: 'tool', title: 'LayerFS approved first-run bootstrap', sessionId: context.sessionId, inputId: context.messageId,
         onCancel: async () => {
           controller.abort(new Error('LayerFS bootstrap cancelled'))
@@ -210,18 +241,23 @@ export class LayerFSBootstrap {
       signal.throwIfAborted()
       // The script reserves the output leaf exclusively; only its parent is made here.
       await mkdir(staging, { recursive: true, mode: 0o700 })
-      const prefix = ['--distribution', state.distribution, '--user', 'root', '--exec']
-      const ready = await runStep('wsl_ready', { file: 'wsl.exe', args: [...prefix, '/bin/true'], timeoutMs: 120000 })
-      if (ready.code !== 0) throw new Error('WSL_READY_EXIT_NONZERO')
-      const mapped = await runStep('resolve_paths', { file: 'wsl.exe', args: [...prefix, 'wslpath', '-a', '-u', output], timeoutMs: 30000 })
-      if (mapped.code !== 0) throw new Error('PATH_MAPPING_EXIT_NONZERO')
-      const linuxOutput = mapped.stdout.toString('utf8').trim()
-      if (!linuxOutput.startsWith('/') || linuxOutput.includes('\0') || /[\r\n]/.test(linuxOutput) || linuxOutput.split('/').includes('..')) throw new Error('INVALID_PATH_MAPPING')
-      signal.throwIfAborted()
-      // Persist the irreversible boundary BEFORE dispatch. A crash here must never
-      // make a possibly started source build look like a recoverable path probe.
-      state.provisioningStarted = true
-      const built = await runStep('source_build', { file: 'wsl.exe', args: [...prefix, 'bash', '-s', '--', state.key, linuxOutput], input: bootstrapScript, timeoutMs: 60 * 60_000 })
+      let built: BootstrapReceipt
+      if (state.platform === 'darwin') {
+        if (!state.docker || !state.architecture) throw new ToolOutcomeUnknownError('Missing retained macOS Docker binding; no replay.')
+        state.provisioningStarted = true
+        built = await runStep('source_build', { file: '/bin/bash', args: ['-s', '--', state.key, output, state.docker, state.architecture], input: bootstrapMacOSScript, timeoutMs: 60 * 60_000 })
+      } else {
+        const prefix = ['--distribution', state.distribution, '--user', 'root', '--exec']
+        const ready = await runStep('wsl_ready', { file: 'wsl.exe', args: [...prefix, '/bin/true'], timeoutMs: 120000 })
+        if (ready.code !== 0) throw new Error('WSL_READY_EXIT_NONZERO')
+        const mapped = await runStep('resolve_paths', { file: 'wsl.exe', args: [...prefix, 'wslpath', '-a', '-u', output], timeoutMs: 30000 })
+        if (mapped.code !== 0) throw new Error('PATH_MAPPING_EXIT_NONZERO')
+        const linuxOutput = mapped.stdout.toString('utf8').trim()
+        if (!linuxOutput.startsWith('/') || linuxOutput.includes('\0') || /[\r\n]/.test(linuxOutput) || linuxOutput.split('/').includes('..')) throw new Error('INVALID_PATH_MAPPING')
+        signal.throwIfAborted()
+        state.provisioningStarted = true
+        built = await runStep('source_build', { file: 'wsl.exe', args: [...prefix, 'bash', '-s', '--', state.key, linuxOutput], input: bootstrapScript, timeoutMs: 60 * 60_000 })
+      }
       try { writePrivateFile(join(staging, 'build-tail.log'), built.stdout.toString('utf8') + '\n[stderr]\n' + built.stderr.toString('utf8')) }
       catch { state.evidenceWriteFailed = true }
       const lines = built.stdout.toString('utf8').split(/\r?\n/)
@@ -241,12 +277,21 @@ export class LayerFSBootstrap {
       }
       const receipts = lines.filter(line => line.startsWith('SHADOW_LAYERFS_BOOTSTRAP_RESULT='))
       if (receipts.length !== 1) throw new ToolOutcomeUnknownError('LayerFS build completed without one valid installation receipt; inspect retained state.')
-      let parsed: z.infer<typeof resultSchema>
-      try { parsed = resultSchema.parse(JSON.parse(receipts[0]!.slice('SHADOW_LAYERFS_BOOTSTRAP_RESULT='.length))) }
-      catch { throw new ToolOutcomeUnknownError('LayerFS installation receipt is invalid; do not replay provisioning.') }
-      const root = `/var/lib/shadow-layerfs-bootstrap/${state.key}/`
-      if (!parsed.bundle.startsWith(root) || !parsed.node.startsWith(root) || [parsed.bundle, parsed.node].some(path => path.includes('\0') || path.split('/').includes('..'))) throw new ToolOutcomeUnknownError('LayerFS build returned paths outside its private root; activation refused.')
-      const installation: LayerFSInstallation = { apiRoot: output, bundle: parsed.bundle, node: parsed.node, image: parsed.image, distribution: state.distribution }
+      let installation: LayerFSInstallation
+      if (state.platform === 'darwin') {
+        const schema = z.object({ bundle: z.string(), docker: z.literal(state.docker!), image: z.string().regex(/^sha256:[a-f0-9]{64}$/), revision: z.literal(bootstrapPins.revision) }).strict()
+        const parsed = schema.safeParse((() => { try { return JSON.parse(receipts[0]!.slice('SHADOW_LAYERFS_BOOTSTRAP_RESULT='.length)) } catch { return null } })())
+        const root = join(staging, 'artifacts', state.key) + '/'
+        if (!parsed.success || !parsed.data.bundle.startsWith(root) || parsed.data.bundle.includes('\0') || parsed.data.bundle.split('/').includes('..')) throw new ToolOutcomeUnknownError('Invalid macOS installation receipt; inspect retained state, no replay.')
+        installation = installationSchema.parse({ platform: 'darwin', apiRoot: output, bundle: parsed.data.bundle, docker: state.docker, image: parsed.data.image })
+      } else {
+        let parsed: z.infer<typeof resultSchema>
+        try { parsed = resultSchema.parse(JSON.parse(receipts[0]!.slice('SHADOW_LAYERFS_BOOTSTRAP_RESULT='.length))) }
+        catch { throw new ToolOutcomeUnknownError('LayerFS installation receipt is invalid; do not replay provisioning.') }
+        const root = `/var/lib/shadow-layerfs-bootstrap/${state.key}/`
+        if (!parsed.bundle.startsWith(root) || !parsed.node.startsWith(root) || [parsed.bundle, parsed.node].some(path => path.includes('\0') || path.split('/').includes('..'))) throw new ToolOutcomeUnknownError('LayerFS build returned paths outside its private root; activation refused.')
+        installation = { apiRoot: output, bundle: parsed.bundle, node: parsed.node, image: parsed.image, distribution: state.distribution }
+      }
       state.installation = installation
       step('connect_worker')
       const connected = await this.managed.setup(installation, signal, owner)

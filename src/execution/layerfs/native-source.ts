@@ -3,7 +3,8 @@ import { z } from 'zod'
 import { ToolNoEffectError } from '../../tools/tool.ts'
 
 /** Dedicated native source area, separate from the SDK Store and runtime home. */
-export function nativeSourceRoot(project: string, runtime: string) {
+export function nativeSourceRoot(project: string, runtime: string, macHome?: string) {
+  if (macHome) return macHome + '/sources'
   return '/var/lib/shadow-layerfs-sources/' + createHash('sha256').update(JSON.stringify([project, runtime])).digest('hex')
 }
 export function nativeSourcePath(root: string, name: string) {
@@ -11,16 +12,16 @@ export function nativeSourcePath(root: string, name: string) {
   return `${root}/${name}`
 }
 const evidenceSchema = z.array(z.object({ path: z.string(), real: z.string(), directory: z.boolean(), linked: z.boolean(), device: z.string(), inode: z.string(), uid: z.number(), mode: z.number(), filesystem: z.string() }).strict()).min(1)
-export function verifyNativeSource(path: string, evidence: unknown) {
+export function verifyNativeSource(path: string, evidence: unknown, macUid?: number) {
   const entries = evidenceSchema.parse(evidence)
   const paths = ['/', ...path.split('/').filter(Boolean).map((_, i, parts) => '/' + parts.slice(0, i + 1).join('/'))]
   if (entries.length !== paths.length) throw new ToolNoEffectError('Incomplete native source filesystem evidence.')
   for (const [i, entry] of entries.entries()) {
     if (entry.path !== paths[i] || entry.real !== entry.path || entry.linked || !entry.directory) throw new ToolNoEffectError('Linked or rebound native source refused.')
-    // WSL default ext4 only. Fail closed on DrvFS/9p, bind mounts to foreign
-    // filesystems and unrecognized evidence; pathname checks are insufficient.
-    if (entry.filesystem !== '61267') throw new ToolNoEffectError('Native ext4 source required; DrvFS and unknown filesystems refused.')
-    if (entry.uid !== 0 || (entry.mode & 0o022) !== 0) throw new ToolNoEffectError('Native source ancestors must be root-owned and not group/world writable.')
+    // WSL ext4 or macOS APFS only. Fail closed on foreign/unknown filesystems;
+    // pathname checks alone are insufficient.
+    if (entry.filesystem !== (macUid === undefined ? '61267' : '26')) throw new ToolNoEffectError('Platform-native source required (WSL ext4 or macOS APFS); DrvFS and foreign filesystems refused.')
+    if ((entry.uid !== 0 && entry.uid !== macUid) || (entry.mode & 0o022) !== 0) throw new ToolNoEffectError('Native source ancestors must have approved host ownership and not be group/world writable.')
   }
   return JSON.stringify(entries)
 }
@@ -45,3 +46,9 @@ const fs = require('node:fs/promises');
  process.stdout.write(JSON.stringify(result));
 })().catch(() => { process.exitCode = 1; });
 `
+
+/** macOS source is host APFS, read-only mounted by official Init. No Linux root
+ * ownership or ext4 assumptions. Rechecked before each admission; not an OS sandbox. */
+export const macSourceProbe = nativeSourceProbe
+  .replace("s.uid !== 0n", "(s.uid !== 0n && s.uid !== BigInt(process.getuid()))")
+  .replace('f.type !== 61267n', 'f.type !== 26n')
