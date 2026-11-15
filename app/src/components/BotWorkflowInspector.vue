@@ -4,6 +4,7 @@
       <div><h2>{{ displayName }}</h2><p>{{ entry.graph?.[0]?.nodeType === 'connection' ? t('Connection') : t('Published BOT / Agent') }}</p></div>
       <HoverInfo :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="btn btn-ghost btn-sm close-action" :aria-label="t('Close')" @click="$emit('close')"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
     </header>
+    <p v-if="referenceUnavailable" class="bot-explanation" role="status">{{ t('Selected object cannot be referenced. Refresh and select a current published object.') }}</p>
     <p class="bot-explanation">{{ entry.sinkProjection && !relatedNodes.some(node => node.nodeType === 'deployment') ? t('Records messages without model reactions') : t('Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.') }}</p>
     <nav class="bot-actions" :aria-label="t('Connection')">
       <RouterLink v-if="entry.connectionSettingsId" class="btn btn-sm" :aria-label="t('Configure BOT connection')" :to="{ name: 'project-settings', params: { projectId, section: 'connections' }, query: { connectionId: entry.connectionSettingsId } }">{{ t('Configure BOT connection') }}<span class="i-lucide-arrow-up-right" aria-hidden="true" /></RouterLink>
@@ -25,7 +26,7 @@
     </template>
     <template v-if="!entry.sinkProjection || relatedNodes.length">
       <section v-for="node in relatedNodes" :key="node.id" class="bot-section" :data-node="node.id" :data-selected="selectedNode === node.id">
-        <h3>{{ node.nodeType === 'deployment' ? field(deployment(node.config), 'agent') || node.label : node.label }}</h3>
+        <h3><button class="bot-choice" :aria-pressed="selectedNode === node.id" @click="$emit('select', node.id)">{{ node.nodeType === 'deployment' ? field(deployment(node.config), 'agent') || node.label : node.label }}</button></h3>
         <dl v-if="node.nodeType === 'connection'"><dt>{{ t('Platform') }}</dt><dd>{{ field(node.config, 'platform') || t('Unavailable') }}</dd><dt>{{ t('Connection state') }}</dt><dd>{{ connectionState(node.config) }}</dd></dl>
         <dl v-else-if="node.nodeType === 'deployment'"><dt>{{ t('BOT entry configuration') }}</dt><dd>{{ entryLabel(node) }}</dd><dt>{{ t('Mode') }}</dt><dd>{{ field(deployment(node.config), 'mode') || t('Unavailable') }}</dd><dt>{{ t('Package state') }}</dt><dd>{{ packageState(node.config) }}</dd><template v-if="field(node.config, 'kind')"><dt>{{ t('Entry type') }}</dt><dd>{{ field(node.config, 'kind') === 'host-owner-ingress' ? t('Host owner ingress') : t('Conversation entry') }}</dd><dt>{{ t('Configuration') }}</dt><dd>{{ flag(node.config, 'enabled', 'Enabled', 'Disabled') }}</dd><dt>{{ t('Subscription') }}</dt><dd>{{ flag(node.config, 'subscribed', 'Subscribed', 'Not subscribed') }}</dd><dt>{{ t('Listener') }}</dt><dd>{{ flag(node.config, 'listener', 'Listener projected', 'No listener') }}</dd></template></dl>
         <p v-else>{{ node.nodeType === 'session' ? t('Existing conversation recorded') : t('Configured entry; receipt unknown') }}</p>
@@ -53,7 +54,7 @@ import { sinkNavigationLabel, sinkNavigationLocation } from '../connection-sinks
 import { channelStateLabel } from '../channel-settings.ts'
 import { t } from '../i18n.ts'
 import HoverInfo from './HoverInfo.vue'
-const props = defineProps<{ entry: WorkflowCanvasEntry; projectId: string; connection?: BotProjection['connections'][number]; selectedNode?: string }>()
+const props = defineProps<{ entry: WorkflowCanvasEntry; projectId: string; connection?: BotProjection['connections'][number]; selectedNode?: string; referenceUnavailable?: boolean }>()
 defineEmits<{ close: []; select: [id: string] }>()
 const displayName = computed(() => {
   const connection = props.connection
@@ -88,7 +89,8 @@ p { margin: 0; color: var(--c-text-secondary); }.bot-explanation { margin-top: 1
 .bot-section { margin-top: 24px; }.bot-section[data-selected=true] { border-top: 1px solid var(--c-selection-border); padding-top: 12px; }.bot-section h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: baseline; }.bot-section h3>span { font-weight: 400; color: var(--c-text-muted); }
 .receiver-list { list-style: none; padding: 0; margin: 0; }.receiver-list li { border-top: 1px solid var(--c-border-soft); padding: 10px 0 14px; }.receiver-choice { width: 100%; display: flex; align-items: center; gap: 8px; text-align: start; color: var(--c-text); font: inherit; background: transparent; border: 0; cursor: pointer; min-height: 32px; padding: 4px; }.receiver-choice>span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }.receiver-choice>span:first-child { flex-shrink: 0; }.receiver-platform { color: var(--c-text-secondary); font-size: 12px; }.receiver-choice:hover { background: var(--c-bg-muted); }.receiver-choice[aria-pressed=true] { color: var(--c-primary); background: var(--c-selection-bg); }.receiver-evidence { margin: 6px 0; font-size: 12px; }.history-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--c-primary); }
 .execution-sessions h4 { margin: 16px 0 6px; font-size: 13px; }.execution-sessions a { display: flex; overflow-wrap: anywhere; }
+.bot-choice { font: inherit; text-align: start; color: inherit; border: 1px solid var(--c-border); background: transparent; padding: 6px 8px; cursor: pointer; min-height: 32px; width: 100%; overflow-wrap: anywhere; }.bot-choice[aria-pressed=true] { border-color: var(--c-primary); background: var(--c-selection-bg); color: var(--c-primary); }
 .bot-technical { margin-top: 24px; border-top: 1px solid var(--c-border); }.bot-technical summary { cursor: pointer; min-height: 44px; padding: 10px 0; box-sizing: border-box; overflow-wrap: anywhere; }.node-technical { border-top: 1px solid var(--c-border-soft); }.node-technical summary { color: var(--c-text-secondary); }
 dl { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 8px 16px; margin: 12px 0; }dt { color: var(--c-text-secondary); }dd { margin: 0; overflow-wrap: anywhere; }code, pre { font-size: 12px; overflow-wrap: anywhere; }pre { padding: 12px; background: var(--c-bg-soft); color: var(--c-text-body); white-space: pre-wrap; overflow: auto; max-height: 280px; }button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-@media (max-width: 700px), (pointer: coarse) { .receiver-choice, .history-link, .close-action { min-height: 44px; }.close-action { min-width: 44px; } }
+@media (max-width: 700px), (pointer: coarse) { .receiver-choice, .history-link, .close-action, .bot-choice { min-height: 44px; }.close-action { min-width: 44px; } }
 </style>

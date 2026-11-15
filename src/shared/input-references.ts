@@ -2,7 +2,11 @@
 export const workflowNodeKinds = ['transform', 'inbox', 'record', 'work-map', 'schedule-action', 'github-notify', 'host-action'] as const
 export type WorkflowNodeKind = typeof workflowNodeKinds[number]
 export type WorkflowReferenceSelector = { kind: 'source' } | { kind: 'gate' } | { kind: 'node'; index: number; nodeKind: WorkflowNodeKind }
-export type InputReference = WorkflowInputReference | ConnectionSinkInputReference
+export type InputReference = WorkflowInputReference | ConnectionSinkInputReference | BotInputReference
+export interface BotInputReference {
+  kind: 'bot-deployment'; projectId: string; botId: string; revision: string
+  bindingId?: string; selector?: 'entry'
+}
 export interface ConnectionSinkInputReference { kind: 'connection-sink'; projectId: string; connectionId: string; receiverId?: string }
 export interface WorkflowInputReference {
   kind: 'workflow'
@@ -19,6 +23,14 @@ export function parseInputReferences(value: unknown): InputReference[] {
   if (value === undefined) return []
   if (!Array.isArray(value) || value.length > 8) throw new TypeError('invalid_references')
   return value.map((v): InputReference => {
+    if (object(v) && v.kind === 'bot-deployment') {
+      if (!keys(v, ['kind', 'projectId', 'botId', 'revision', 'bindingId', 'selector']) || !id(v.projectId) ||
+        typeof v.botId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(v.botId) || !id(v.revision) ||
+        (v.bindingId !== undefined && (typeof v.bindingId !== 'string' || !v.bindingId.length || v.bindingId.length > 512 || /[\x00-\x1f\x7f]/.test(v.bindingId))) ||
+        (v.selector !== undefined && (v.selector !== 'entry' || v.bindingId === undefined))) throw new TypeError('invalid_references')
+      return { kind: 'bot-deployment', projectId: v.projectId, botId: v.botId, revision: v.revision,
+        ...(v.bindingId !== undefined ? { bindingId: v.bindingId as string } : {}), ...(v.selector ? { selector: 'entry' } : {}) }
+    }
     if (object(v) && v.kind === 'connection-sink') {
       if (!keys(v, ['kind', 'projectId', 'connectionId', 'receiverId']) || !id(v.projectId) || (v.receiverId !== undefined && !id(v.receiverId)) || typeof v.connectionId !== 'string' ||
         !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(v.connectionId)) throw new TypeError('invalid_references')

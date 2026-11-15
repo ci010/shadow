@@ -14,11 +14,11 @@
       <RouterLink class="btn" :to="chatLocation">{{ t('Open chat') }}</RouterLink>
     </div>
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
-      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
+      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-node-id="selectedBot ? botSelectedNode : inspectedNode" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
       <p v-if="documentQuery.bot && !selectedBot || documentQuery.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="selectedBot" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
-        <BotWorkflowInspector :entry="selectedBot" :connection="snapshot?.bots?.connections.find(connection => connection.id === selectedBot?.connectionSettingsId)" :project-id="projectId" :selected-node="botSelectedNode" @select="inspectedNode = $event" @close="closeInspector" />
+        <BotWorkflowInspector :reference-unavailable="!referenceSelection" :entry="selectedBot" :connection="snapshot?.bots?.connections.find(connection => connection.id === selectedBot?.connectionSettingsId)" :project-id="projectId" :selected-node="botSelectedNode" @select="inspectedNode = $event" @close="closeInspector" />
       </aside>
       <aside v-if="inspectorOpen && !selectedBot && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
@@ -94,7 +94,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, useId, onActivated, onDeactivated, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useWorkflowResourceStore } from '../stores/workflow.ts'
-import { WorkflowInputReferencesKey, workflowInputReference, connectionSinkInputReference } from '../workflow-input-references.ts'
+import { WorkflowInputReferencesKey, workflowInputReference, botInputReference } from '../workflow-input-references.ts'
 import WorkflowGraph from './WorkflowGraph.vue'
 import BotWorkflowInspector from './BotWorkflowInspector.vue'
 import { botCanvas } from '../bot-workflows.ts'
@@ -146,9 +146,7 @@ watch(() => documentQuery.value.bot, () => { inspectedNode.value = undefined })
 const inspectorOpen = computed(() => !!selectedBot.value || typeof documentQuery.value.workflow === 'string' && !!definition.value)
 const referenceSelection = computed(() => {
   if (!props.active || !activated.value || !inspectorOpen.value) return
-  const sink = selectedBot.value?.sinkProjection
-  if (sink) return connectionSinkInputReference(props.projectId, sink.connectionId, selectedBot.value!.definition.name ?? sink.connectionId,
-    botSelectedNode.value?.startsWith('receiver:') ? botSelectedNode.value.slice('receiver:'.length) : selectedBot.value?.graph?.find(node => node.id === botSelectedNode.value)?.receiverId)
+  if (selectedBot.value) return botInputReference(props.projectId, selectedBot.value, botSelectedNode.value)
   return !selectedBot.value && displayed.value ? workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value) : undefined
 })
 watch(referenceSelection, item => referenceHub?.select?.(item, () => { void closeInspector() }, props.projectId), { immediate: true, flush: 'sync' })
