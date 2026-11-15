@@ -151,7 +151,12 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await wait(visible('.reference-composer'));
 
     await run('window.fixture.chatInput=('+visible('.reference-composer')+');window.fixture.chatInput.textContent="Right unsent draft";window.fixture.chatInput.dispatchEvent(new Event("input",{bubbles:true}))');
-    await wait('('+visible('.editor-group-content .chat-messages')+').textContent.includes("Retained history scroll fixture")');await delay(250);await run('window.fixture.historyNode=('+visible('.editor-group-content .chat-messages')+');window.fixture.historyNode.scrollTop=120');
+    await wait('('+visible('.editor-group-content .chat-messages')+').textContent.includes("Retained history scroll fixture")');
+    // Programmatic scrolling is not synchronous user browsing: wait for loaded
+    // layout, deliver the scroll event, and observe the retained browsing state.
+    await wait('(()=>{const e=('+visible('.editor-group-content .chat-messages')+');let c=window.fixture.chatInput.__vueParentComponent;while(c&&c.type.__name!=="ChatTab")c=c.parent;return !!e&&e.scrollHeight-e.clientHeight>=120&&!!c&&!c.setupState.loadingHistory})()');
+    await run('(()=>{window.fixture.historyNode=('+visible('.editor-group-content .chat-messages')+');let c=window.fixture.chatInput.__vueParentComponent;while(c&&c.type.__name!=="ChatTab")c=c.parent;window.fixture.historyState=c.setupState;window.fixture.historyNode.scrollTop=120;window.fixture.historyNode.dispatchEvent(new Event("scroll"))})()');
+    await wait('window.fixture.historyState.historyBrowsing&&window.fixture.historyNode.scrollTop===120');
     assert.equal(await run('window.fixture.historyNode.scrollTop'),120,'Fixture has scrollable loaded history before move');
     const ordinary='[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.getAttribute("aria-selected")==="true"&&e.getBoundingClientRect().width&&e.textContent.includes("Conversation"))';
     await run(ordinary+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.editor-menu'));await run('document.querySelector(".editor-menu button").click()');
