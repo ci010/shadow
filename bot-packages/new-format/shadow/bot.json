@@ -2,5 +2,12 @@
   "connection": "750b310b-d6ee-4a4a-a6fc-5455dbfe2915",
   "allowedModules": [],
   "tools": [],
-  "bindings": []
+  "bindings": [],
+  "connectionPolicies": {
+    "750b310b-d6ee-4a4a-a6fc-5455dbfe2915": {
+      "adminChats": [],
+      "trustedChats": [],
+      "triggerMode": "mention"
+    }
+  }
 }
