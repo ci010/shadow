@@ -33,7 +33,7 @@ test('background chips and sidebar delegated activity update without making an i
       load(id) {
         if (id !== '\0activity') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue';
           import { createRouter, createWebHistory } from 'vue-router';
           import Chat from '/src/components/ChatTab.vue';
           import ProjectGroup from '/src/components/ProjectGroup.vue';
@@ -120,7 +120,7 @@ test('background chips and sidebar delegated activity update without making an i
           else if (path.endsWith('/git/status')) json({ available: false, reason: 'not_repository' })
           else if (/\/api\/sessions\/[^/]+$/.test(path)) json({ currentPhysicalId: 'segment', previousPhysicalId: null, messages: [] })
           else if (path.endsWith('/api/slash-commands')) json({ commands: [] })
-          else if (path.includes('/api/')) json({})
+          else if (/^\/(?:projects\/[^/]+\/)?api\//.test(path)) json({})
           else next()
         })
       },

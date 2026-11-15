@@ -24,3 +24,30 @@ test('app disposal publishes cleared state before disconnecting readonly views',
   assert.equal(lease.state.value.status, 'disposed')
   await lease.refresh(); lease.release()
 })
+
+test('confirmed command publication cancels stale reads and survives failed reconciliation without command replay', async () => {
+  const views = resourceViews()
+  let reads = 0, finish!: (value: string[]) => void
+  const a = views.acquire('catalog', async () => {
+    if (++reads === 1) return ['kept', 'deleted']
+    if (reads === 2) return new Promise<string[]>(resolve => { finish = resolve })
+    throw new Error('reconciliation unavailable')
+  })
+  const b = views.acquire('catalog', async () => [])
+  try {
+    await a.read()
+    const pending = b.refresh(); await tick()
+    assert.equal(reads, 2)
+    let commands = 0
+    assert.equal(a.commit(value => { commands++; return value.filter(id => id !== 'deleted') }), true)
+    await b.read()
+    assert.equal(commands, 1); assert.equal(reads, 3)
+    assert.equal(b.state.value.status, 'error')
+    assert.deepEqual(b.state.value.value, ['kept'])
+    finish(['kept', 'deleted']); await pending; await tick()
+    assert.deepEqual(b.state.value.value, ['kept'], 'The read captured before the command cannot resurrect a deleted entry')
+    a.release()
+    assert.equal(a.commit(() => []), false)
+    assert.deepEqual(b.state.value.value, ['kept'])
+  } finally { a.release(); b.release(); views.dispose() }
+})

@@ -67,7 +67,7 @@ test('Electron issues codes through native IPC; browser pairs with cookies, pres
       },
     }, vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') })],
     server: { host: '127.0.0.1', port: 0, hmr: false },
-    optimizeDeps: { include: ['vue', 'vue-router'], entries: [] },
+    optimizeDeps: { include: ['vue', 'vue-router', 'pinia'], entries: [] },
     cacheDir: resolve(directory, 'vite-cache'),
   })
   t.after(() => vite.close())

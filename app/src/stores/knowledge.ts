@@ -8,6 +8,9 @@ import { createKnowledgeClient } from '../knowledge.ts'
  * neither an idle timer nor a hidden detail prefetch is introduced. */
 export function createKnowledgeResources(request: typeof fetch = fetch) {
   const views = resourceViews()
+  // Immutable revision-scoped details remain reusable when another page is
+  // selected. Retention uses the registry's TTL/UTF-8 budget, not a second cache.
+  const details = resourceViews(16)
   const key = (base: string, projectId: string, projection: string, entityId?: string) =>
     canonicalResourceKey({ host: base, authGeneration: 0, projectId, resource: 'knowledge', projection, entityId })
   async function load<T>(base: string, read: (client: ReturnType<typeof createKnowledgeClient>) => Promise<T>) {
@@ -24,19 +27,24 @@ export function createKnowledgeResources(request: typeof fetch = fetch) {
     catalog(base: string, projectId: string) {
       const lease = views.acquire(key(base, projectId, 'catalog-v1'), signal => load(base, client => client.list(signal)))
       void lease.read()
-      return lease
+      return { ...lease, removeEntry(id: string) {
+        // A confirmed delete must remain visible even if reconciliation fails.
+        // Preserve incoming edges so references to the deleted target remain explicit.
+        lease.commit(catalog => ({ entries: catalog.entries.filter(entry => entry.id !== id),
+          links: catalog.links.filter(link => link.source !== id) }))
+      } }
     },
     detail(base: string, projectId: string, id: string, revision: string) {
       // Revision keeps a changed catalog entry from borrowing an old detail body.
-      const lease = views.acquire(key(base, projectId, `detail-v1:${revision}`, id), signal => load(base, async client => {
+      const lease = details.acquire(key(base, projectId, `detail-v1:${revision}`, id), signal => load(base, async client => {
         const detail = await client.read(id, signal)
         if (detail.entry.revision !== revision) throw new Error('Knowledge entry revision changed. Refresh the catalog.')
         return detail
       }))
-      void lease.read()
+      void (lease.state.value.error ? lease.refresh() : lease.read())
       return lease
     },
-    dispose: views.dispose,
+    dispose() { views.dispose(); details.dispose() },
   }
 }
 export const useKnowledgeResourceStore = defineStore('resource-knowledge', () => {

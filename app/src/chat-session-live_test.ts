@@ -28,7 +28,10 @@ function fixture(t: TestContext, canWrite = false) {
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
     requests.push({ path: new URL(url).pathname, body: init.body, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
-  const pool = { client: (): Pick<LiveClient, 'subscribe'> => ({
+  const poolDisposers = new Set<() => void>()
+  t.after(() => { for (const dispose of poolDisposers) dispose() })
+  const pool = { onDispose: (dispose: () => void) => { poolDisposers.add(dispose); return () => { poolDisposers.delete(dispose) } },
+    client: (): Pick<LiveClient, 'subscribe'> => ({
     subscribe: (topic, observer) => {
       assert.notEqual(topic.kind, 'projects')
       const subscription = { projectId: topic.projectId!, observer, closed: false }
@@ -525,10 +528,24 @@ test('first history load ignores layout scroll events and opens at the latest me
   const container = { scrollTop: 0, scrollHeight: 2400, clientHeight: 500 }
   state.messagesContainer = container
   const loading = state.loadDirectChat()
-  await settle()
-  const history = f.requests.find(request => request.path === '/projects/a/api/chat/session')!
+  // Wait for the readiness gate's actual GET, not a particular scheduler delay.
+  const requestAt = async (path: string) => {
+    const deadline = Date.now() + 2000
+    while (!f.requests.some(request => request.path === path) && Date.now() < deadline) await settle()
+    return f.requests.find(request => request.path === path)
+  }
+  const history = await requestAt('/projects/a/api/chat/session')
   assert.ok(history)
-  history.finish({ history: [{ role: 'assistant', content: 'Latest message' }], previousPhysicalId: 'previous-segment' })
+  history.finish({ revision: 'a'.repeat(64), historyRevision: 'b'.repeat(64),
+    metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
+    data: { chatId: root.slice(4), currentPhysicalId: 'current-segment', segmentIndex: 0,
+      history: [{ role: 'assistant', content: 'Latest message' }], previousPhysicalId: 'previous-segment',
+      systemPrompt: '', tools: [], commandResults: [], decisionRecords: [] } })
+  await settle()
+  // Recent compacted history is seeded through its explicit physical ID.
+  const seed = await requestAt('/projects/a/api/sessions/previous-segment')
+  assert.ok(seed)
+  seed.finish({ messages: [], previousPhysicalId: null })
   await settle()
   // Inline navigation metadata must not require another session GET.
   state.trackHistoryScroll()

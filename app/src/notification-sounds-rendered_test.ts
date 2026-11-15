@@ -26,7 +26,7 @@ test('notification sounds render local controls and schedule distinct, bounded, 
         resolveId: id => id === '/sounds-fixture.ts' ? '\0sounds-fixture' : undefined,
         load: id => id !== '\0sounds-fixture' ? undefined : `
           import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, onUnmounted } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, onUnmounted} from 'vue';
           import { createRouter, createMemoryHistory, RouterView } from 'vue-router';
           import Settings from '/src/components/SettingsView.vue';
           import { createNotificationSounds, notificationSoundsKey } from '/src/notification-sounds.ts';

@@ -32,7 +32,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
       load(id) {
         if (id !== '\0usage-fixture') return
         return `import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h } from 'vue';
           import { getInstanceByDom } from 'echarts/core';
           import Usage from '/src/components/ProjectUsage.vue';
           import { i18n, setLocalePreference } from '/src/i18n.ts';

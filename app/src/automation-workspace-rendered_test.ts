@@ -69,7 +69,7 @@ for (const variant of [
         if (id === '\0fixture-pdf-assets') return 'export const cMapUrl = "", standardFontDataUrl = "", wasmUrl = "";'
         if (id !== '\0automations-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import ProjectsWorkspace from '/src/components/ProjectsWorkspace.vue';
 

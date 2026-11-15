@@ -16,6 +16,8 @@ async function main() {
   const origin = process.env.WEB_AUTH_SMOKE_URL!
   const code = process.env.WEB_AUTH_SMOKE_CODE!
   const route = '/projects/default/logs?filter=kept#trace'
+  const errors: string[] = []
+  window.webContents.on('console-message', event => { if (errors.length < 50) errors.push(event.message) })
   const execute = (source: string) => window.webContents.executeJavaScript(source)
   const wait = async (source: string) => {
     const deadline = Date.now() + 20_000
@@ -23,7 +25,7 @@ async function main() {
       if (await execute(source)) return
       await delay(50)
     }
-    throw new Error(`Timed out: ${source}\n${await execute('document.body.innerText')}`)
+    throw new Error(`Timed out: ${source}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
   }
   const checkBrowserChrome = async () => {
     assert.equal(await execute('typeof window.shadowDesktop'), 'undefined')

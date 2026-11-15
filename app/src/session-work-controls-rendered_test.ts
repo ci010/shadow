@@ -27,7 +27,7 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
       name: 'subagent-popup-fixture',
       resolveId: id => id === '/popup-entry.ts' ? '\0popup-entry' : id === '/popup-fixture.vue' ? normalizePath(resolve(directory, 'fixture.vue')) : undefined,
       load(id) {
-        if (id === '\0popup-entry') return `import '/src/styles.css'; import {createApp} from 'vue'; import Fixture from '/popup-fixture.vue'; createApp(Fixture).mount('#app');`
+        if (id === '\0popup-entry') return `import '/src/styles.css'; import {createResourceApp as createApp} from '/src/stores/app.ts'; import Fixture from '/popup-fixture.vue'; createApp(Fixture).mount('#app');`
         if (id !== normalizePath(resolve(directory, 'fixture.vue'))) return
         return `<script setup>
           import SessionWorkControls from '/src/components/SessionWorkControls.vue';

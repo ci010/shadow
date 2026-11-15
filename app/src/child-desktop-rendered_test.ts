@@ -28,7 +28,7 @@ test('Child wizard validates consent; workspace recovery replaces the old local 
       resolveId: id => id === '/child-fixture.ts' ? '\0child-fixture' : undefined,
       load: id => id !== '\0child-fixture' ? undefined : `
         import 'uno.css'; import '/src/styles.css';
-        import { createApp, h } from 'vue';
+        import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue';
         import Wizard from '/src/FirstRunWizard.vue';
         import Child from '/src/ChildWorkspace.vue';
         import Recovery from '/src/RuntimeRecovery.vue';

@@ -24,7 +24,7 @@ test('quick open lazily searches full automation history independently of naviga
       resolveId: id => id === '/automation-entry.ts' ? '\0automation-entry' : undefined,
       load(id) {
         if (id !== '\0automation-entry') return
-        return `import {createApp,h,ref} from 'vue';
+        return `import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h, ref} from 'vue';
           import SessionQuickOpen from '/src/components/SessionQuickOpen.vue';
           import {createProjectLiveState} from '/src/project-live-state.ts';
           window.paths=[];window.selected=[];window.pending=false;
@@ -42,7 +42,7 @@ test('quick open lazily searches full automation history independently of naviga
           const nav=state.acquireProject(location.origin,'a');window.nav=nav;nav.read();
           const open=ref(false);window.open=()=>open.value=true;
           const app=createApp({render:()=>open.value?h(SessionQuickOpen,{apiBase:location.origin,projects:[{id:'a',name:'Alpha'},{id:'b',name:'Beta'}],onClose:()=>open.value=false,onSelect:(...args)=>window.selected.push(args)}):h('button',{onClick:()=>open.value=true},'Open')});
-          app.provide(Symbol.for('shadow.project-live-state'),state);app.onUnmount(()=>state.dispose());app.mount('#app');`
+          useProjectResourceStore(app.config.globalProperties.$pinia).owner=state;app.onUnmount(()=>state.dispose());app.mount('#app');`
 
       },
       configureServer(server) { server.middlewares.use((req,res,next) => {

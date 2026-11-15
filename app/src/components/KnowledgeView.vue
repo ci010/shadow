@@ -196,8 +196,9 @@ async function refresh() {
   await detailLease.value?.refresh()
 }
 async function loadDetail() { await detailLease.value?.refresh() }
-async function deleted(_id: string) {
+async function deleted(id: string) {
   deletion.value = undefined
+  catalogLease.value?.removeEntry(id)
   notice.value = t('File deleted. Other entries and their references were kept.')
   maintenanceRevision.value++
   await refresh()

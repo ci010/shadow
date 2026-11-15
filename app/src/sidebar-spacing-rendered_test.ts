@@ -48,7 +48,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
       },
       load(id) {
         if (id === '\0folder-loading-fixture') return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref} from 'vue';
           import FoldersSidebar from '/src/components/FoldersSidebar.vue';
           const revision = ref(0), grouped = ref(true);
           window.__folderFixture = {refresh:() => revision.value++, group:value => grouped.value = value};
@@ -76,7 +76,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
           });`
         if (id !== '\0sidebar-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref} from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import ProjectsWorkspace from '/src/components/ProjectsWorkspace.vue';
           import { botSidebarStorageKey } from '/src/bot-sidebar.ts';

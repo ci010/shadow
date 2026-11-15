@@ -34,7 +34,7 @@ test('desktop and mobile language controls update real screens, retain drafts, a
       load(id) {
         if (id !== '\0localization-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref, nextTick } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref, nextTick} from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import { i18n, initializeI18n, t } from '/src/i18n.ts';
           import BrowserAuth from '/src/BrowserAuth.vue';

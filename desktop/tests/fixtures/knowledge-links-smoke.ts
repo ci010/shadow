@@ -14,11 +14,14 @@ async function main() {
   const opened: string[] = []
   window.webContents.on('console-message', (_event, level, message) => { if (level >= 2) errors.push(message) })
   window.webContents.setWindowOpenHandler(({ url }) => { opened.push(url); return { action: 'deny' } })
-  const execute = (code: string) => window.webContents.executeJavaScript(code, true)
+  const execute = async (code: string) => {
+    try { return await window.webContents.executeJavaScript(code, true) }
+    catch (error) { throw new Error(`Renderer script failed: ${code}\n${errors.join('\n')}`, { cause: error }) }
+  }
   const wait = async (code: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
-    throw new Error(`Timed out: ${code}\n${await execute('JSON.stringify({route:window.__knowledge.router.currentRoute.value.fullPath,links:[...document.querySelectorAll(".knowledge-preview a")].map(a=>({text:a.textContent,href:a.getAttribute("href"),data:a.dataset}))})')}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
+    throw new Error(`Timed out: ${code}\n${await execute('JSON.stringify({route:window.__knowledge?.router.currentRoute.value.fullPath,links:[...document.querySelectorAll(".knowledge-preview a")].map(a=>({text:a.textContent,href:a.getAttribute("href"),data:a.dataset}))})')}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
   }
   const anchor = (label: string) => `[...document.querySelectorAll('.knowledge-preview a')].find(a=>a.textContent===${JSON.stringify(label)})`
   const click = (label: string) => execute(`${anchor(label)}.click()`)
@@ -49,9 +52,16 @@ async function main() {
     await loaded('Operations wiki')
     assert.equal(await execute(`window.__visible('.knowledge-preview') && window.__visible('.detail-heading h2')`), true)
     assert.equal(await execute(`!!window.__unsafe || !!document.querySelector('.knowledge-preview script, .knowledge-preview img, .knowledge-preview [onclick]')`), false)
-    for (const label of ['Unsafe', 'Data', 'File', 'Unsafe HTML']) {
-      assert.equal(await execute(`${anchor(label)}.hasAttribute('href')`), false, label)
+    // markdown-exit rejects unsafe Markdown destinations before link_open: these
+    // remain literal text, not anchors. Raw HTML still exercises DOMPurify.
+    for (const source of ['[Unsafe](javascript:alert%281%29)', '[Data](data:text/html,bad)', '[File](file:///etc/passwd)']) {
+      assert.equal(await execute(`document.querySelector('.knowledge-preview').textContent.includes(${JSON.stringify(source)})`), true, source)
     }
+    for (const label of ['Unsafe', 'Data', 'File']) {
+      assert.equal(await execute(`!!${anchor(label)}`), false, label)
+    }
+    assert.equal(await execute(`${anchor('Unsafe HTML')}.hasAttribute('href')`), false)
+    assert.equal(await execute(`!!document.querySelector('.knowledge-preview a[href^="javascript:"], .knowledge-preview a[href^="data:"], .knowledge-preview a[href^="file:"]')`), false)
     const href = await execute(`${anchor('Relative page')}.getAttribute('href')`)
     assert.equal(new URL(href, 'http://fixture').searchParams.get('entry'), 'memory/topics/guide.md')
     assert.equal(new URL(href, 'http://fixture').hash, '#install')
@@ -88,6 +98,10 @@ async function main() {
     await click('Missing section')
     await wait(`document.querySelector('.detail [role="alert"]')?.textContent.includes('was not found')`)
     await click('Invalid section')
+    // The parser escapes a literal '%' to '%25' in Markdown destinations.
+    await wait(`document.querySelector('.detail [role="alert"]')?.textContent.includes('Section "#bad%escape" was not found')`)
+    // A malformed incoming deep link still exercises the invalid-URI guard.
+    await execute(`window.__knowledge.select('memory/topics/index.md','#bad%escape')`)
     await wait(`document.querySelector('.detail [role="alert"]')?.textContent.includes('invalid section address')`)
     await click('Chinese section')
     await wait(`document.activeElement?.id==='中文章节'`)
@@ -109,6 +123,16 @@ async function main() {
     await window.loadURL(deepLink.href)
     await loaded('Linked guide')
     await wait(`document.activeElement?.id==='install' && document.querySelector('.knowledge-preview').scrollTop>0`)
+    // Exercise the real component's lease lifecycle, not only store factories.
+    await execute(`window.__knowledge.active.value=false`)
+    await wait(`!document.querySelector('.knowledge-preview')?.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})`)
+    await execute(`window.__knowledge.active.value=true`)
+    await loaded('Linked guide')
+    assert.equal(await execute(`document.querySelector('.knowledge-preview').checkVisibility({checkOpacity:true,checkVisibilityCSS:true})`), true)
+    await execute(`window.__knowledge.scope.value='other'`)
+    await loaded('Other Linked guide')
+    await execute(`window.__knowledge.scope.value='fixture'`)
+    await loaded('Linked guide')
     assert.deepEqual(errors, [])
     console.log('KNOWLEDGE_LINKS_OK')
   } finally { window.destroy() }
