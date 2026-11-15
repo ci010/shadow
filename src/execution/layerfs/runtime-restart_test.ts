@@ -9,7 +9,7 @@ import { ToolNoEffectError, ToolOutcomeUnknownError } from '../../tools/tool.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
 
 const ready = { worker: 'running', answering: true, docker: 'ok', ready: true, sandboxVerified: false }
-test('runtime start resumes only a clean stop under the original exclusive owner', async () => {
+test('runtime start permits same-Project direct sessions while preserving exclusive admission and no replay', async () => {
   const dir = await mkdtemp(join(process.cwd(), '.layerfs-restart-test-'))
   const tools: any = { executionMode: 'session' }; tools.dynamicOwner = tools
   const context = { projectId: 'one', sessionId: 'owner', admin: true, channel: 'web', isGroup: false, tools, signal: new AbortController().signal } as ExecutionContext
@@ -39,8 +39,26 @@ test('runtime start resumes only a clean stop under the original exclusive owner
     }
     const first = create()
     await first.runtimePlan('test', context)
-    await assert.rejects(first.runtimeStart('test', { ...context, sessionId: 'foreign' }), /another session/)
-    assert.equal((await first.runtimeStart('test', context)).ready, true)
+    const other = { ...context, sessionId: 'other' }
+    for (const denied of [
+      { ...other, projectId: 'two' }, { ...other, admin: false },
+      { ...other, channel: 'qq' }, { ...other, isGroup: true },
+      { ...other, tools: { executionMode: 'task' } }, { ...other, tools: { executionMode: 'session' } },
+      { ...other, remoteWorkdir: {} }, { ...other, scriptInvocation: true },
+      { ...other, recoveringToolCall: true },
+    ]) {
+      await assert.rejects(first.runtimeStart('test', denied as ExecutionContext), ToolNoEffectError)
+      await assert.rejects(first.runtimeContext('test', denied as ExecutionContext), ToolNoEffectError)
+    }
+    assert.equal(opens, 0)
+    assert.equal((await first.runtimeStart('test', other)).ready, true)
+    assert.equal(JSON.parse(await readFile(record, 'utf8')).owner, 'owner')
+    assert.throws(() => new LayerFSResources('two', home), /another Project/)
+    const saved = await readFile(record, 'utf8')
+    await writeFile(record, JSON.stringify({ ...JSON.parse(saved), projectId: 'two' }))
+    await assert.rejects(first.runtimeStart('test', other), /identity mismatch/)
+    await assert.rejects(first.runtimeContext('test', other), /identity mismatch/)
+    await writeFile(record, saved)
     assert.equal(opens, 1)
     await assert.rejects(first.runtimeStart('test', context), /already consumed/)
     await first.close()
@@ -49,12 +67,11 @@ test('runtime start resumes only a clean stop under the original exclusive owner
     assert.equal(stopped.recordPhase, 'ready'); assert.equal(stopped.phase, 'stopped'); assert.equal(stopped.ready, false)
     assert.equal(stopped.next, 'layerfs_runtime_start')
     await assert.rejects(second.runtimeContext('test', context), /not running/)
-    await assert.rejects(second.runtimeStart('test', { ...context, sessionId: 'foreign' }), /another session/)
     // The old one-shot admission remains untouched and does not block clean restart.
     await writeFile(join(runtimeHome, 'start-admission.json'), 'historical admission')
     release = () => {}
     const admitted = new Promise<void>(resolve => { entered = resolve })
-    const start = second.runtimeStart('test', context)
+    const start = second.runtimeStart('test', other)
     await admitted
     const contender = create()
     await assert.rejects(contender.runtimeStart('test', context), /already admitted/)

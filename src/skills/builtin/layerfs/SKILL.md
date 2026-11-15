@@ -25,7 +25,7 @@ repositories/images coexist within one Shadow Project without an active namespac
 Registration checks official identity/existence, not recipe smoke or source truth.
 
 Git fixed checkouts/LFS, Docker builds and standard LayerFS init/history/merge/publish
-are explicit ordinary exec scripts, not bundled business tools. The runtime owner
+are explicit ordinary exec scripts, not bundled business tools. Any direct authorized session in the same Project
 obtains a thin SDK launcher from `layerfs_runtime_context`; setup.md gives runnable
 scripts. Installation and approved runtime lifecycle remain host-owned. Workers
 use ordinary tools with registered workspace IDs, never host paths as LayerFS cwd.

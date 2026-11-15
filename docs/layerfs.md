@@ -29,13 +29,16 @@ bootstrap. Existing approved installation artifacts can be reused.
 
 Runtime: `layerfs_runtime_plan`, `layerfs_runtime_start`, `layerfs_runtime_status`,
 `layerfs_runtime_context`. Plan/start are routine artifact reuse, with no second
-approval object. They require the direct owner authority boundary. The original
-owner session can call `layerfs_runtime_start` again on the same runtime after a
+approval object. They require the direct owner authority boundary. Any session in the same
+Project satisfying that boundary can call `layerfs_runtime_start` again on the same runtime after a
 confirmed normal worker stop (including a clean backend close/reopen). Concurrent
 starts are exclusively admitted; running starts are refused without dispatch.
 Starting, uncertain, unknown or crash-retained leases are not treated as stops and
 are never replayed or cleared. Historical one-shot admissions remain untouched.
-No cross-session ownership transfer is supported; resume the original session.
+Runtime management is Project-scoped, not exclusive to the planning session.
+Legacy saved `owner` fields remain readable as provenance, not authorization.
+Direct local durable owner Web authority is still required; tasks, borrowed tools,
+scripts, recovery replays and other Projects cannot manage the runtime.
 
 Runtime status separates `recordPhase` (saved configuration/start receipt) from
 `phase` and `ready` (observed worker readiness). A saved `ready` record with a
@@ -79,7 +82,7 @@ Canonical executable instructions and the tiny live fixture entry are in
 [`sdk-init.mjs`](../src/skills/builtin/layerfs/sdk-init.mjs). Scenario navigation:
 `v:skills/layerfs`, `layerfs-worker`, `layerfs-manager`, `layerfs-setup`.
 
-The runtime owner gets a private launcher from runtime_context. Returned parameters
+A direct authorized session in the same Project gets a private launcher from runtime_context. Returned parameters
 include the actual executable/launcher paths and WSL distribution/Node, not endpoint
 secrets. An ordinary local script exports `default async ({runtime,open,args}) => ...`:
 - `runtime.project.list/start_init/get_init` delegate directly to the one already
