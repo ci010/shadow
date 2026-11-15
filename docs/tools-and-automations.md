@@ -1424,6 +1424,64 @@ that content is authorized. No internal records should be edited to recover.
 For a separate LayerFS baseline destination, use this tool and then the automated
 [baseline sequence](../src/skills/builtin/layerfs/setup.md#planned-separate-baseline-preparation).
 
+### Removing a derived Git Workspace
+
+Import `workspace_remove` from `v:tools/workspace_remove`, then invoke it **alone**
+with `workspaceId` (the exact registered UUID) and `integratedRef` (the explicitly
+intended existing `refs/heads/...` or `refs/remotes/...` integration target).
+This operation removes the checkout **from disk** and unregisters it; the UI's
+existing Remove/DELETE operation only unregisters a Workspace and retains files.
+User authority to implement this capability is not authority to delete an existing
+Workspace. Obtain authority for the particular target before invoking it.
+
+The host requires a sole direct administrator user turn in a durable owner Web
+session. Scripts, task/child sessions, event/recovery turns, remote contexts and
+LayerFS are refused. Only a local registered, Shadow-derived Git worktree with its
+registered same-Project parent is supported. A primary checkout, arbitrary path,
+linked ancestor, overlapping registration, unknown lineage or changed repository
+identity fails closed. Remote display paths are never interpreted on Main.
+
+The latest target commit must be an ancestor of the explicit integration ref;
+squash/rebase equivalence is not inferred, refs are not fetched, and the target's
+own branch cannot be its integration target. The branch is always retained. Git
+removal is never forced. Tracked, untracked **and ignored** contents block removal,
+including ignored `node_modules` and build outputs. Move/remove such files only
+with appropriate separate authority; this tool does not silently discard them or
+inspect their contents. Abnormal index flags (including skip-worktree and
+assume-unchanged) are refused. Git-locked worktrees/submodules may also be refused.
+
+The invoking session cannot remove its own selected Workspace or a resource it
+depends on through its parent chain. Switch to a retained Workspace in a separate
+sole `workspace_use` call first when appropriate. Other conversations and work in
+this **Project** must be quiescent, with no background tasks, running commands,
+creation reservations or uncertain remote jobs. This deliberately conservative
+boundary is needed because commands in another directory can access the target;
+it does not require every Project on the device to be idle. Project admission is
+excluded throughout validation, disk mutation and registry commit. The sole-call
+stamp is supplied by the session host, never by model arguments.
+
+Inactive conversation history is preserved without rewriting JSONL/SQLite session
+records or migrating conversations. Existing catalog `retiredFolders` and
+`retiredSessions` revoke only the target's dependent identities. History remains
+readable, but those conversations cannot execute or re-enter the removed resource.
+Unrelated managed topics retain their own directories. New work requires a valid
+registered Workspace and conversation.
+
+Success reports `diskRemoved`, `unregistered`, `branchRetained`, the removed `tip`
+and `integratedCommit`. A Git failure/cancellation can have an uncertain disk
+outcome: registration is retained and the error requires inspecting the directory
+and Git worktree metadata before retrying. If disk removal succeeds but catalog
+persistence fails, the error explicitly says the registration remains; restore
+the checkout, or reconcile it through the existing owner's metadata-only UI
+unregister operation. A missing checkout is never recreated on retry. Failure
+following both commits reports that removal/unregister completed, not that files
+were retained. Process crashes likewise leave either the committed retired state
+or an unavailable retained registration; no automatic deletion replay is offered.
+
+These checks coordinate Shadow's Project admissions, not hostile external
+filesystem/Git writers. Do not concurrently rename targets or mutate repository
+metadata outside Shadow while removal is running.
+
 ### Derived Workspaces
 
 Prefer builtin `workspace_fork` (`v:tools/workspace_fork`) for a stable registered-source

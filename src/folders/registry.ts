@@ -241,6 +241,7 @@ export class FolderRegistry {
   async changeProject(id: string, targetProjectId?: string, signal = new AbortController().signal): Promise<FolderRecord | undefined> {
     this.#assertReady()
     if (!this.scope) throw new FolderError('projects_unavailable', 'Project folder ownership is not configured.', 503)
+    if (this.scope) this.scope.catalog.assertFolderAdmission(this.scope.projectId)
     const folder = this.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
     if (folder.kind === 'layerfs' && targetProjectId !== undefined) throw new FolderError('layerfs_project_bound', 'LayerFS mounts cannot move between Projects.', 409)
@@ -249,6 +250,7 @@ export class FolderRegistry {
   }
 
   assertSessionFolder(state: { sessionId?: string; folderId?: string; workdir?: WorkdirRefV2 }): void {
+    if (this.scope) this.scope.catalog.assertFolderAdmission(this.scope.projectId)
     if (state.folderId) {
       const folder = this.get(state.folderId)
       if (!folder) throw new FolderError('folder_access_revoked', 'This conversation’s folder was removed or moved. Its history is preserved.', 409)
@@ -313,6 +315,7 @@ export class FolderRegistry {
 
   /** Existing-target admission; ownership registration/transfer keeps its full refresh. */
   async requireExecutionAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<FolderRecord> {
+    if (this.scope) this.scope.catalog.assertFolderAdmission(this.scope.projectId)
     const folder = this.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
     if (folder.kind !== 'remote') return this.requireAvailable(id, signal)
@@ -321,6 +324,7 @@ export class FolderRegistry {
   }
 
   async requireAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<FolderRecord> {
+    if (this.scope) this.scope.catalog.assertFolderAdmission(this.scope.projectId)
     const folder = this.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
     if (folder.kind === 'remote') {

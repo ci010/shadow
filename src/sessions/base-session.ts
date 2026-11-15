@@ -666,6 +666,7 @@ export abstract class BaseSession {
             ? 'workspace_use' : tc.name
           const context: ExecutionContext = {
             ...executionContext, toolCallId: tc.id, toolCallName: executionName,
+            soleDirectToolCall: calls.length === 1,
             switchProjectFolder: calls.length === 1 && executionName === 'workspace_use' ? async prepared => {
               signal.throwIfAborted()
               const automatic = this.state.automaticWork

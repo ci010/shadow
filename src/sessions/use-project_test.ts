@@ -72,7 +72,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       bus.on('session.changed', e => { changes.push(e.sessionId) })
       const base = new Tools(home)
       base.register(new UseProjectTool({ projectId: 'test-project', folders }))
-      base.register(new ReadTool(home))
+      const read = new ReadTool(home), soleCalls = new Map<string, boolean | undefined>()
+      const readExecute = read.execute.bind(read)
+      read.execute = (args, context) => { soleCalls.set(context.toolCallId!, context.soleDirectToolCall); return readExecute(args, context) }
+      base.register(read)
       base.register(new ExecTool(home, 10000, new CommandHandlerManager(), new ProcessManager(), defaultManagedShell(), {} as BackgroundTaskManager))
       const tools = new SessionTools(base, home)
       const requests: ChatMessage[][] = []
@@ -107,6 +110,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.match(state.workingContext!, /Selected-folder skills/)
         assert.match(state.workingContext!, /supersedes the old default/)
         assert.equal(result('read-a'), 'a')
+        assert.equal(soleCalls.get('read-a'), true, 'host stamps a sole top-level call')
+        assert.equal(soleCalls.get('parallel-read'), false, 'parallel batch cannot claim sole-call authority')
         assert.match(result('bad'), /Unknown/)
         assert.match(result('parallel'), /sole direct top-level/)
         assert.match(result('parallel-read'), /a/)

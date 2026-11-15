@@ -295,6 +295,13 @@ export class SessionManager {
       Object.values(this.sessions).some(session => !(session instanceof Session) || !session.quiescent)
   }
 
+  workspaceRemovalBlocked(folderId: string, callerId: string): boolean {
+    if (this.folderDependentSessions(folderId, [localFolderWorkdirRef(folderId)]).includes(callerId)) return true
+    return this.yieldDiscussions.active || this.preparations.size > 0 || this.executionAdmissions.size > 0 || this.stateCreations.size > 0 ||
+      this.reporting.size > 0 || this.calls.size > 0 || Object.entries(this.sessions).some(([id, session]) =>
+        id !== callerId && (!(session instanceof Session) || !session.quiescent))
+  }
+
   invalidateFolderSessions(): void {
     for (const [id, session] of Object.entries(this.sessions)) {
       try { this.assertFolderAccess(id) } catch { session.stop() }
