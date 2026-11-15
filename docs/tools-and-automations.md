@@ -1439,7 +1439,9 @@ session. Scripts, task/child sessions, event/recovery turns, remote contexts and
 LayerFS are refused. Only a local registered, Shadow-derived Git worktree with its
 registered same-Project parent is supported. A primary checkout, arbitrary path,
 linked ancestor, overlapping registration, unknown lineage or changed repository
-identity fails closed. Remote display paths are never interpreted on Main.
+identity fails closed. A Workspace with any registered derived child is refused:
+remove leaves first so descendants never lose their registered parent. Lineage is
+never automatically migrated. Remote display paths are never interpreted on Main.
 
 The latest target commit must be an ancestor of the explicit integration ref;
 squash/rebase equivalence is not inferred, refs are not fetched, and the target's
