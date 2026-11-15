@@ -274,7 +274,7 @@ export class ManagedLayerFS {
     if (this.closed) throw new ToolNoEffectError('LayerFS runtime is closing.')
     // A different project may be importing. Its busy status is not evidence
     // that this initialized project is unhealthy; query its explicit binding.
-    if (!this.driver) throw new ToolNoEffectError('Runtime owner is not running; use explicit runtime_start from its original owner session. No implicit start.')
+    if (!this.driver) throw new ToolNoEffectError('Runtime owner is not running; use explicit runtime_start from a direct authorized session in this Project. No implicit start.')
     else if (await this.phase() !== 'running') throw new ToolOutcomeUnknownError('Runtime worker ownership is unresolved; no configuration fallback.')
     const operation = this.driver!.request('configuration', { project }, signal)
     this.active.add(operation)
