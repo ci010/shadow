@@ -390,6 +390,7 @@ test('closing a Knowledge tab aborts pending reads and never sends deletion', as
     return new Promise<Response>(() => {})
   })
   const view = mount(t, 'KnowledgeView.vue', { apiBase: 'http://fixture/projects/a', projectId: 'a' })
+  await settle() // The shared engine schedules its first read; abort a real flight.
   assert.equal(calls.length, 1)
   view.unmount()
   assert.equal(calls[0].signal?.aborted, true)
@@ -402,6 +403,7 @@ test('knowledge tab isolates late responses on project changes without a retired
     requests.push({ signal: init.signal, finish: value => resolve(Response.json(value)) })
   }))
   const view = mount(t, 'KnowledgeView.vue', { apiBase: 'http://fixture/projects/a', projectId: 'a' })
+  await settle() // Start the old scope's flight before testing its cancellation.
   view.props.apiBase = 'http://fixture/projects/b'
   view.props.projectId = 'b'
   await settle()
@@ -578,6 +580,7 @@ test('maintenance ignores stale responses after project switches and reports sca
   const pending: Array<{ signal?: AbortSignal | null; resolve: (response: Response) => void }> = []
   t.mock.method(globalThis, 'fetch', (_input: URL, init: RequestInit) => new Promise<Response>(resolve => pending.push({ signal: init.signal, resolve })))
   const view = mount(t, 'KnowledgeMaintenance.vue', { apiBase: 'http://fixture/projects/a', projectId: 'a' })
+  await settle() // Start the old scope's flight before testing its cancellation.
   view.props.apiBase = 'http://fixture/projects/b'
   await settle()
   assert.equal(pending[0]!.signal?.aborted, true)

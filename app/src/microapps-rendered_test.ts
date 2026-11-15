@@ -114,7 +114,7 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
       resolveId: id => id === '/microapp-fixture.ts' ? '\0microapp-fixture' : undefined,
       load: id => id !== '\0microapp-fixture' ? undefined : `
         import '/src/styles.css';
-        import { createApp, h, reactive } from 'vue';
+        import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, reactive} from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
         import ProjectMicroApps from '/src/components/ProjectMicroApps.vue';
         const state=reactive({canWrite:true});

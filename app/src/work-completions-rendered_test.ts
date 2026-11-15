@@ -27,7 +27,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
       name: 'completion-fixture', resolveId: id => id === '/completion-entry.ts' ? '\0completion-entry' : undefined,
       load: id => id !== '\0completion-entry' ? undefined : `
         import '/src/styles.css'; import 'uno.css';
-        import {createApp,h,reactive} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
+        import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h, reactive} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
         import ProjectWorkbench from '/src/components/ProjectWorkbench.vue'; import {i18n} from '/src/i18n.ts';
         const record={key:'topic:web:done',subject:{kind:'topic',sessionId:'web:done'},revision:1,sequence:2,
           definition:{objective:'Finished outcome',acceptance:[],boundaries:[],evidence:[]},origin:'human',changedBy:'human',changedAt:'2026-01-01T00:00:00Z',change:'goal',reason:'Fixture',paused:false,
@@ -49,7 +49,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
         const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:{render:()=>null}}]});
         await router.push('/');await router.isReady();
         const app=createApp({render:()=>h(ProjectWorkbench,{apiBase:location.origin,projectId:'test',projectName:'Completion fixture',visible:true})});
-        app.use(router);app.provide(Symbol.for('shadow.project-live-state'),{acquireProject:()=>({work:{state,refresh:async()=>{}},release(){}})});
+        app.use(router);useProjectResourceStore(app.config.globalProperties.$pinia).owner.acquireProject=()=>({work:{state,refresh:async()=>{}},release(){}});
         app.provide(Symbol.for('shadow.live-client-pool'),{client:()=>({subscribe:()=>({ready:async()=>{},close(){}})})});app.mount('#app');`,
       configureServer(server) { server.middlewares.use((request,response,next)=>{
         if(request.url!=='/__completions')return next();response.setHeader('Content-Type','text/html');response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0"><div id="app" style="height:100vh;display:flex"></div><script type="module" src="/completion-entry.ts"></script></body></html>')

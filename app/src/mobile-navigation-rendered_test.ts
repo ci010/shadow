@@ -36,7 +36,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
       load(id) {
         if (id !== '\0mobile-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import App from '/src/App.vue';
           import ProjectsWorkspace from '/src/components/ProjectsWorkspace.vue';

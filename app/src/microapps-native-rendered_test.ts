@@ -59,7 +59,7 @@ test('native Apps use a branded isolated window and Windows tasks launch warm an
       name: 'native-microapp-fixture',
       resolveId: id => id === '/native-fixture.ts' ? '\0native-fixture' : undefined,
       load: id => id !== '\0native-fixture' ? undefined : `
-        import '/src/styles.css';import {createApp,h} from 'vue';
+        import '/src/styles.css';import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue';
         import {createRouter,createMemoryHistory} from 'vue-router';
         import {microAppNavigation} from '/src/microapp-navigation.ts';
         const router=createRouter({history:createMemoryHistory(),routes:[

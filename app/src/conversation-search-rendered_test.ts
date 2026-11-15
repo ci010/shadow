@@ -56,7 +56,7 @@ test('conversation search and split panes survive cached heavy-history activatio
       load(id) {
         if (id !== '\0search-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import {createApp, h, KeepAlive, reactive, ref} from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, KeepAlive, reactive, ref} from 'vue';
           import {createRouter, createMemoryHistory} from 'vue-router';
           import ChatWorkspace from '/src/components/ChatWorkspace.vue';
           const router = createRouter({history:createMemoryHistory(), routes:[
