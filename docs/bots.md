@@ -38,21 +38,25 @@ per-message persistence, admission or execution. Projection nodes are not `ready
 execution nodes; their status is `unknown`.
 
 Connection/BOT **management VFS** remains restricted to the owning Project's live,
-user-owned durable Web administrator session. The separate read-only
-`bot_observe` tool is discoverable in `v:tools/bot_observe` for host-granted full
-tool sessions, including QQ. Invoke with `invoke_tool({ name: 'bot_observe', args: {} })`.
-It accepts no Project, conversation, owner or `full` argument. The runtime binds
-its source to the current Project and rejects mismatched execution contexts.
+user-owned durable Web administrator session. Redacted observation uses the existing
+read/search VFS, not a separate tool. `read({ path: 'v:connections/overview' })`
+describes the paths. `read({ path: 'v:connections/observation.json' })` returns the
+current Project inventory. `read({ path: 'v:connections', flag: 'l' })` or
+`search({ handler: 'glob', query: '**', path: 'v:connections' })` discovers it;
+`search({ handler: 'grep', query: 'unknown', path: 'v:connections/observation.json' })`
+searches its content.
 
-There is no model-controlled `full` permission field: existing `SessionTools`
-allow/block policy governs catalog visibility, explicit import and invocation.
-An allowlisted agent without `invoke_tool`, or one blocking `bot_observe`, cannot
-discover or invoke it. Existing remote-workdir dynamic-tool routing restrictions
-still apply; this change adds no remote executor route. It does not require an
-owner-Web role or per-conversation live guard to inspect the Project projection.
+Existing host `SessionTools` read/search allow/block filtering governs reachability,
+including restricted agents granted read or search. There is no model-controlled
+`full` flag, new permission system, owner-Web requirement or per-conversation
+check for this redacted projection. A session without either tool cannot reach it;
+cross-Project contexts and memory leases are rejected before source access. The
+runtime binds the source to the current Project. Non-owner root listing/search
+contains only `overview` and `observation.json`; old Connection/BOT navigation and
+all deployment/management operations retain their existing restrictions.
 
-The tool and UI use the same runtime `botSnapshot` and receiver `evidence` DTO.
-UI names and navigation addresses are presentation-only. Tool output reconstructs
+VFS and UI use the same runtime `botSnapshot` and receiver `evidence` DTO.
+UI names and navigation addresses are presentation-only. Observation reconstructs
 a narrower allowlist: opaque hashed identifiers, transport health, receiver
 evidence, deployment mode/state and configured binding/listener/session counts.
 It omits raw conversation/session/user IDs, names, message bodies, URLs, credentials,
