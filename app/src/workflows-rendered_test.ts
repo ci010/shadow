@@ -37,8 +37,9 @@ test('workflow visualization renders durable revisions, safe controls, real reso
     }, configureServer(server) { server.middlewares.use((req,res,next)=>{if(!req.url?.startsWith('/__workflows'))return next();res.setHeader('Content-Type','text/html');res.end('<html><body style="margin:0"><div id="app" style="display:flex;width:100%;height:100vh"></div><script type="module" src="/workflow-entry.ts"></script></body></html>')}) },
   }], server: { host: '127.0.0.1', port: 0, watch: null, hmr: false } })
   await server.listen(); t.after(() => server.close())
+  // Windows needs a shown native fixture for focus, scroll layout and viewport frames.
   const main = resolve(directory, 'main.cjs')
-  await writeFile(main, `const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict');app.setPath('userData',${JSON.stringify(directory)});app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1200,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.webContents.on('console-message',event=>console.log(event.message));const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');const wait=()=>new Promise(r=>setTimeout(r,250));try{
+  await writeFile(main, `const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict');app.setPath('userData',${JSON.stringify(directory)});app.whenReady().then(async()=>{const win=new BrowserWindow({show:process.platform==='win32',width:1200,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.webContents.on('console-message',event=>console.log(event.message));const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');const wait=()=>new Promise(r=>setTimeout(r,250));try{
     await win.loadURL(${JSON.stringify(new URL('__workflows',server.resolvedUrls!.local[0]).href)});
     for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('.graph-node').length===12))break;await wait()}
     assert.equal(await run(()=>document.querySelectorAll('.graph-node').length),12);
