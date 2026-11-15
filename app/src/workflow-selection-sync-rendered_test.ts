@@ -327,7 +327,10 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await win.close();console.log('WORKFLOW_SELECTION_SYNC_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
   await build({ stdin: { contents: script, resolveDir: directory, sourcefile: 'fixture-run.cjs' }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
-  const child = spawn(desktopRequire('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const env = { ...process.env }
+  // Windows Electron treats an existing empty key as run-as-Node too.
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(desktopRequire('electron') as string, [entry], { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
   child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 80_000)
