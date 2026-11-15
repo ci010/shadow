@@ -40,7 +40,7 @@ export async function committedFixture() {
  const image='sha256:'+'a'.repeat(64)
  const service=layerfsResources('one',dir,()=>new LayerFSResources('one',dir,{
   installation:async()=>({apiRoot:dir,bundle:'/bundle',node:'/bin/node',distribution:'fixture',image}),
-  runtime:()=>({setup:async()=>({}),status:async()=>({}),close:async()=>{},sourceIdentity: async () => { throw Error('No native source in committed fixture') }, execContext:async()=>{throw Error('not needed')},projectConfiguration:async()=>({sdkModule,env:{}})})
+  runtime:()=>({setup:async()=>({}),status:async()=>({}),close:async()=>{},sourceIdentity: async () => { throw Error('No native source in committed fixture') }, execContext:async()=>{throw Error('not needed')},projectConfiguration:async()=>({sdkModule,env:{LAYERFS_IMAGE:image}})})
  }))
  await service.runtimePlan('fixture',context);await service.runtimeStart('fixture',context)
  const resource=await service.register({name:'fixture',runtimeId:'fixture',layerfsProject:layerfsName('one'),baselineRef:'aa',image,source:{repository:'https://example.com/repo',commit:'a'.repeat(40)}},context)

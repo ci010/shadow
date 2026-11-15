@@ -19,7 +19,7 @@ async function fixture() {
  const wait=async path=>{while(!existsSync(path))await new Promise(r=>setTimeout(r,10))};
  export const isRefusal=e=>e.code==='Busy';
  export const LayerFS={open:async(project)=>({
- project:{list_sandboxes:async()=>({items:mounts().filter(m=>m.project===project).map(m=>({sandbox:m.sandbox,workspaces:1})),hasMore:false})},
+ project:{list_sandboxes:async()=>({items:mounts().filter(m=>m.project===project).map(m=>({sandbox:m.sandbox,image:'sha256:'+'a'.repeat(64),workspaces:16})),hasMore:false})},
  sandbox:{list_workspaces:async id=>({items:mounts().filter(m=>m.sandbox===id),hasMore:false}),
  create:async()=>{log('create',process.pid);if(existsSync(dir+'/hold-create')){process.send?.({type:'output',text:'create'});await wait(dir+'/release-create')}if(existsSync(dir+'/unknown-create'))throw Object.assign(Error('upstream allocation intent unresolved'),{code:'Unknown'});return {sandbox:String(process.pid)}},close:async id=>log('close',id)},
  workspace:{mount:async(sandbox,branch)=>{const m={project,sandbox,branch,path:'/workspaces/1'};writeFileSync(dir+'/mount-'+sandbox,JSON.stringify(m));return m},
@@ -29,7 +29,8 @@ async function fixture() {
  fs:{stat:async()=>({type:'file',size:2,root:'aa'}),read:async()=>({text:'ok',root:'aa',truncated:false,lineTruncated:false}),
  write:async(branch,path,content)=>{log('write',branch);return {kind:'UpToDate',branch,head:null,root:'aa'}}},
  branch:{merge:async(...a)=>{log('merge',...a);if(existsSync(dir+'/hold-merge')){process.send?.({type:'output',text:'merge'});await wait(dir+'/release-merge')}if(existsSync(dir+'/unknown-merge'))throw Object.assign(Error('merge uncertain'),{code:'Unknown'});return {kind:'Merged',branch:a[2],fastForward:true,head:null,root:'aa',mergeBase:'bb',sources:[{ref:a[0],node:'cc'},{ref:a[1],node:'dd'}],conflicts:[],lww:[],units:[],conflictsTruncated:false,lwwTruncated:false,unitsTruncated:false}},publish:async(...a)=>{log('publish',...a);if(existsSync(dir+'/hold-publish')){process.send?.({type:'output',text:'publish'});await wait(dir+'/release-publish')}return {kind:'UpToDate',layer:'aa'}},fork:async(...a)=>{log('fork',...a);return {}}},close:async()=>{}})};`)
- const config:LayerConfig={sdkModule,env:{}}
+ // Saturated mock sandboxes preserve this suite's independent-placement checks.
+ const config:LayerConfig={sdkModule,env:{LAYERFS_IMAGE:'sha256:'+'a'.repeat(64)}}
  const call=(action:string,branch='A',args:Record<string,unknown>={},signal=new AbortController().signal,observe?:(text:string)=>void,project='p')=>runBridge(config,project,action,{workspace:branchWorkspace(project,branch),journal:project==='p'?journal:join(dir,project+'.jsonl'),path:'/a',...args},signal,10000,observe?{observe}:undefined)
  return {dir,journal,call,release:(branch:string)=>writeFile(join(dir,'release-'+branch),''),close:()=>rm(dir,{recursive:true,force:true})}
 }

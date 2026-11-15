@@ -32,6 +32,10 @@ export class LayerFSResourceCatalog {
     const db = new DatabaseSync(this.file)
     try { db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE'); const result = fn(db); db.exec('COMMIT'); return result } finally { db.close() }
   }
+  private read<T>(fn: (db: DatabaseSync) => T): T {
+    const db = new DatabaseSync(this.file, { readOnly: true })
+    try { return fn(db) } finally { db.close() }
+  }
   private decode(row: Record<string, unknown> | undefined) {
     if (!row) throw Error('Unknown resource ID')
     const value = resourceRecordSchema.parse(JSON.parse(String(row.document)))
@@ -43,7 +47,7 @@ export class LayerFSResourceCatalog {
     return this.transaction(db => { db.prepare('INSERT INTO resources VALUES (?, ?)').run(value.revision, JSON.stringify(value)); return value })
   }
   bindWorkspace(binding: string) { this.transaction(db => { db.prepare('INSERT OR IGNORE INTO resource_workspaces VALUES (?)').run(binding) }) }
-  hasWorkspace(binding: string) { return this.transaction(db => !!db.prepare('SELECT binding FROM resource_workspaces WHERE binding = ?').get(binding)) }
-  get(id: string) { return this.transaction(db => this.decode(db.prepare('SELECT * FROM resources WHERE revision = ?').get(id))) }
-  list() { return this.transaction(db => db.prepare('SELECT * FROM resources ORDER BY rowid').all().map(row => this.decode(row))) }
+  hasWorkspace(binding: string) { return this.read(db => !!db.prepare('SELECT binding FROM resource_workspaces WHERE binding = ?').get(binding)) }
+  get(id: string) { return this.read(db => this.decode(db.prepare('SELECT * FROM resources WHERE revision = ?').get(id))) }
+  list() { return this.read(db => db.prepare('SELECT * FROM resources ORDER BY rowid').all().map(row => this.decode(row))) }
 }

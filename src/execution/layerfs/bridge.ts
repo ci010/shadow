@@ -77,14 +77,14 @@ let cancelRequested = false;
 process.on('message', msg => { if (msg?.type === 'cancel') cancelRequested = true; });
 let client, definiteRefusal = () => false;
 const checkCancellation = () => { if (cancelRequested) throw Object.assign(Error('Cancellation observed; retained lifecycle evidence requires reconciliation'), {code:'Unknown'}); };
-let ws = ['status', 'read', 'write', 'search', 'exec', 'commit', 'close'].includes(action) ? JSON.parse(Buffer.from(a.workspace.replace(/^layerfs:/, ''), 'base64url').toString()) : undefined;
+let ws = ['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'status', 'read', 'write', 'search', 'exec', 'commit', 'close'].includes(action) ? JSON.parse(Buffer.from(a.workspace.replace(/^layerfs:/, ''), 'base64url').toString()) : undefined;
 ${coordinationRunner}
 ${committedRunner}
 // tsx/esbuild may annotate local function names in toString(); the annotation
 // is cosmetic and scoped here, never an additional runtime dependency.
 const validatePublicationReceipt = (() => { const __name = fn => fn; return ${validatePublicationReceipt.toString()}; })();
 try {
- if (!['list', 'branches', 'history', 'status', 'diff', 'validate_ref'].includes(action)) await acquireJournal();
+ if (!['list', 'branches', 'history', 'status', 'diff', 'diff_commits', 'validate_ref'].includes(action)) await acquireJournal();
  const sdk = await import(pathToFileURL(sdkModule).href);
  const { LayerFS } = sdk;
  definiteRefusal = error => sdk.isRefusal?.(error) === true && error.code !== 'Unknown';
@@ -97,6 +97,7 @@ try {
  case 'validate_ref': await client.fs.stat(a.ref, '/'); result = { ref: a.ref }; break;
  case 'list': result = await client.project.list_sandboxes(100, a.offset || 0); break;
  case 'branches': result = await client.project.list_branches(100, a.offset || 0); break;
+ case 'diff_commits': result = await client.branch.diff_commits(a.ref, a.branch, 100, a.offset || 0, { hunks: false }); break;
  case 'history': result = await client.branch.list_commits(a.branch, 100, a.offset || 0); break;
  case 'fork': case 'load': result = await client.branch.fork(a.branch, a.ref); break;
  case 'branch_workspace': {
@@ -111,10 +112,7 @@ try {
    if (branch === 'main') throw Error('LayerFS main is readonly; fork a branch');
    await ensureUnmounted();
    keepJournal = true;
-   await phase('sandbox-create-dispatched');
-   const sandbox = await client.sandbox.create();
-   await phase('mount-dispatched', {sandbox: sandbox.sandbox});
-   ws = await client.workspace.mount(sandbox.sandbox, branch);
+   ws = await mountForExec(branch);
    await phase('exec-dispatched', {branch, sandbox:ws.sandbox, path:ws.path});
    let command = a.command, cancelCommand;
    if (a.managedExec) {
@@ -144,12 +142,11 @@ try {
    if (cancelRequested) throw Object.assign(Error('Cancellation during checkpoint; inspect retained journal'), {code:'Unknown'});
    await phase('unmount-dispatched', {branch, sandbox:ws.sandbox, path:ws.path, checkpoint:result.checkpoint});
    await client.workspace.unmount(ws, false);
-   await phase('sandbox-close-dispatched', {branch, sandbox:ws.sandbox});
-   await client.sandbox.close(ws.sandbox);
+   // Keep the reusable sandbox alive; the official daemon closes it when idle.
    keepJournal = false;
    break;
  }
- case 'read': case 'write': case 'search': result = await committedFile(); break;
+ case 'mkdir': case 'rm': case 'cp': case 'mv': case 'apply': case 'diff_files': case 'blame': case 'read': case 'write': case 'search': result = await committedFile(); break;
  case 'diff': result = await client.branch.diff_branches(a.ref, a.branch, 100, a.offset || 0, { hunks: false }); break;
  case 'merge': result = await client.branch.merge(a.ref, a.branch, a.name, a.message); break;
  case 'publish': result = await client.branch.publish(a.branch, a.ref); break;

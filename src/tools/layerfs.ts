@@ -1,3 +1,4 @@
+import { layerfsFSContracts } from './layerfs-fs.ts'
 import { layerfsResourceContracts } from './layerfs-resource.ts'
 import { parseBranchWorkspace } from '../execution/layerfs/workspace-identity.ts'
 import { configuration, LayerFSConfigurationError } from '../execution/layerfs/bridge.ts'
@@ -86,7 +87,7 @@ export class LayerFSTool implements Tool<ToolResult> {
 }
 
 export function layerFSToolContracts() {
-  return [...layerfsResourceContracts(), ...Object.entries(installationIntents).map(([action, value]) => ({
+  return [...layerfsFSContracts(), ...layerfsResourceContracts(), ...Object.entries(installationIntents).map(([action, value]) => ({
     name: `layerfs_${action}`, description: value.description, supportsLayerFSWorkdir: true,
     parameters: { type: 'object' as const, additionalProperties: false, properties: Object.fromEntries([...value.required, ...value.optional].map(key => [key, fields[key]])), required: [...value.required] },
   }))]
@@ -96,7 +97,7 @@ export function createLayerFSTools(...args: ConstructorParameters<typeof LayerFS
   return layerFSToolContracts().filter(contract => Object.hasOwn(installationIntents, contract.name.slice('layerfs_'.length))).map(contract => ({
     ...contract, async execute(input, context) {
       for (const key of Object.keys(input)) if (!Object.hasOwn(contract.parameters.properties, key)) throw new ToolNoEffectError(`Unexpected ${key}.`)
-      for (const key of contract.parameters.required) if (input[key] === undefined) throw new ToolNoEffectError(`Missing ${key}.`)
+      for (const key of contract.parameters.required ?? []) if (input[key] === undefined) throw new ToolNoEffectError(`Missing ${key}.`)
       for (const [key, value] of Object.entries(input)) {
         const type = contract.parameters.properties[key].type
         if (type === 'object' ? value === null || typeof value !== 'object' || Array.isArray(value) : typeof value !== type) throw new ToolNoEffectError(`Invalid ${key}.`)

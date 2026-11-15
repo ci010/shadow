@@ -30,7 +30,13 @@ implicit installation, catalog migration or cleanup occurs.
 
 ## Inspect and integrate
 
-Use a same-Project direct authorized session’s `layerfs_runtime_context` launcher and explicit SDK scripts shown in
+Read `v:layerfs/overview` to discover registered workspaces, live paged branches and
+history, and immutable commit-diff paths. These observations require an existing
+running runtime and never initialize tools, mount, merge or publish. Live history
+positions may shift; retain commit IDs for stable comparisons.
+
+For merge/publication, use a same-Project direct authorized session’s
+`layerfs_runtime_context` launcher and explicit SDK scripts shown in
 `v:skills/layerfs/setup.md`: `open(officialProject)` gives the real agent SDK client.
 Call `project.list_branches`, `branch.list_commits`, `branch.diff_branches`, `branch.merge` and
 `branch.publish` directly as needed; consult pinned official signatures rather than
@@ -70,10 +76,7 @@ Registration baselines remain fixed after publication. Register a new immutable
 resource if a different baseline is deliberately selected.
 
 Independent ordinary-tool branches can run concurrently. Overlapping ordinary-tool
-operations are reserved and unknown receipts block replay. Do not run external SDK
-mutations concurrently against branches used by ordinary tools: the host's coordination
-journal is not a cross-client transaction. Finish/inspect external operations before
-handing the resource back. Never clear reservations by hand.
-
-Synthetic fixtures are not real SDK/image/import qualification. Report tests actually
-run and preserve backups; LayerFS is not a universal security sandbox or backup service.
+operations are reserved and unknown receipts block replay. Finish external SDK
+mutations before handing branches back: host coordination is not a cross-client
+transaction. Recovery/approval reference: `v:skills/layerfs/setup.md`.
+Report tests actually run; fixtures do not qualify real SDK/images/imports.

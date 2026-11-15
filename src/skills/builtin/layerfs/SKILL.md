@@ -24,7 +24,11 @@ baseline Layer, image ID and supplied repository/commit provenance. Multiple
 repositories/images coexist within one Shadow Project without an active namespace.
 Registration checks official identity/existence, not recipe smoke or source truth.
 
-Git fixed checkouts/LFS, Docker builds and standard LayerFS init/history/merge/publish
+Read `v:layerfs/overview` for bounded read-only branches/history/immutable diffs.
+Lazy `layerfs_fs_*` contracts expose mkdir/rm/cp/mv/apply/diff_files/blame on
+registered workspaces without extending ordinary tool schemas.
+
+Git fixed checkouts/LFS, Docker builds and standard LayerFS init/merge/publish
 are explicit ordinary exec scripts, not bundled business tools. Any direct authorized session in the same Project
 obtains a thin SDK launcher from `layerfs_runtime_context`; setup.md gives runnable
 scripts. Installation and approved runtime lifecycle remain host-owned. Workers

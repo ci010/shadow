@@ -1,78 +1,53 @@
 ---
 name: layerfs-worker
-description: "Work and test in an assigned LayerFS branch with ordinary read/write/search/exec; checkpoint and failure boundaries. No installation management."
+description: "Work and test in an assigned LayerFS branch with ordinary workspace tools and lazy official FS operations."
 metadata:
   category: tools
 ---
 
 # LayerFS worker
 
-Use this scenario after a manager supplies a registered branch-backed workspaceId.
-Use ordinary `read`, `write`, `search` and `exec` with that workspace selector,
-or `workspace_use` for ongoing work. Children inherit the selected workdir.
-Read root AGENTS.md if not already loaded and nested instructions before entering
-subtrees. Display locations and `/workspaces/1` are never Main host paths.
-Never fall back to Main. Do not install, connect, import, provision or repair the
-runtime for an assigned coding task: report the blocker to the owner/manager.
-For branch creation/integration read `v:skills/layerfs-manager`; for lifecycle
-work the authorized owner reads `v:skills/layerfs-setup`.
+Use the assigned registered workspace selector with ordinary `read`, `write`,
+`search`, `exec`, or `workspace_use`. Children inherit the selected workdir.
+Read applicable AGENTS.md before editing. Workspace display paths are not host paths.
+For workspace creation/integration use `v:skills/layerfs-manager`; missing runtime
+or resource bindings go to the owner, not a host-filesystem fallback.
 
-No LayerFS-specific discovery is needed for ordinary work. The assigned version 3
-workspace binds one exact owning Project/runtime/resource/project/branch.
-Do not substitute a raw branch or namespace. For catalog diagnostics, the manager
-uses `layerfs_resource_inspect` with the exact resourceId; reading a skill is guidance,
-not permission or runtime activation. Old mount-status repair tools are not public
-workflow intents.
+## Files and inspection
 
-## Work, test and checkpoint
+Files use official committed-state SDK APIs. UTF-8 reads are bounded to 256 KiB
+and reject clipped lines or changing snapshots. Binary/image reads and encoding
+conversion are unsupported. AGENTS.md must fit the complete 128000-byte instruction
+bound. Writes (64 KiB maximum) overwrite or exact-unique edit and auto-checkpoint;
+append, global replacement and newline/BOM conversion are unsupported. Main is readonly.
 
-Files use official @layerfs/agent v1.1 fs APIs against the committed branch, not
-shell/Python file emulation. UTF-8 reads are bounded to 256 KiB; SDK pages are
-assembled, clipped lines or changed snapshots are refused. Binary/image reads
-and encoding conversion are unsupported. Root AGENTS.md must be complete and
-within the instruction bound (128000 bytes); no partial instructions are loaded.
-Writes (64 KiB maximum) overwrite or exact-unique edit and create a checkpoint
-automatically. No append, global replacement, BOM conversion, newline-normalized
-match, or host edit patch is promised. Parent directories must exist; explicitly
-run exec `mkdir -p` (auto-checkpoint) before writing a new nested path. No hidden
-shell mkdir or fs.mkdir/fs.apply tool is provided. Main is readonly: fork first.
+Read `v:tools/layerfs_fs_mkdir`, `layerfs_fs_rm`, `layerfs_fs_cp`, `layerfs_fs_mv`,
+`layerfs_fs_apply`, `layerfs_fs_diff_files` or `layerfs_fs_blame` for lazy official
+FS contracts, then invoke the chosen tool with the registered workspace selector.
+Mkdir creates parents; apply publishes 1–100 ordered text changes atomically
+(64 KiB request bound). Copy/move destinations must not exist.
 
-Search uses SDK glob or **literal** grep (not regex); no include filter. Directory
-and search receipts preserve items/hasMore/nextPagePos, binary skipped counts and
-lineTruncated markers. Continue search offset=nextPagePos; directory read
- offset=nextPagePos+1. No rg installation is needed.
+Search is SDK glob or **literal** grep, without an include filter. Receipts retain
+items/hasMore/nextPagePos, binary skips and lineTruncated. Continue search with
+offset=nextPagePos; directory read with offset=nextPagePos+1.
+Read `v:layerfs/overview` for read-only branch/history/immutable-diff inspection.
 
-Exec supports sh/bash, args and branch-relative cwd. It creates a sandbox, mounts
-the current branch, runs once, checkpoints changes **even on nonzero command exit**,
-unmounts without discard and closes the sandbox. The command's nonzero exit is
-still a tool failure, with its checkpoint receipt. Follow the live exec contract's
-wait-window and background rules; leaf calls cannot detach work. Where the owning
-session supports background transfer, it retains the same complete lifecycle.
-Do not resubmit. Read v:bg for owned background output. Cancellation or lost receipts retain the
-journal/mount for reconciliation; neither cancellation nor UNKNOWN means rollback.
-No automatic forced cleanup runs on an aborted signal. The tool shell=node runtime is unsupported; installed Node commands inside sh/bash are ordinary sandbox commands.
+## Exec and coordination
 
-Independent branches support concurrent file operations and full exec lifetimes.
-Same-branch overlap is refused while reserved. Workspace forks reserve source + output;
-merge reserves both inputs + output; publish reserves source + main. Durable
-branch-scoped reservations/journals survive restart and UNKNOWN without blocking
-unrelated branches. Known unrelated mounts are allowed; matching mounts (even
-clean), missing branch metadata or unreadable inventory fail closed. Ownership is
-from official SDK branch metadata, never a mount number/path. Unknown native sandbox
-allocation may retain upstream create.intent and block new exec starts globally;
-unrelated committed-file tools can still proceed. No guard is automatically cleared.
-Do not mutate this Project concurrently through an external SDK/client; Shadow's
-coordination is not a cross-client transaction.
-Scoped skill/MCP and UI file/Git routes remain unsupported; no Main fallback.
+Exec supports sh/bash, args and branch-relative cwd. Each call selects a live
+same-project/deployment/image sandbox with capacity (or creates one), mounts the
+branch, runs once, checkpoints **even on nonzero exit**, and unmounts without discard.
+Nonzero remains a tool failure with its checkpoint receipt. Sandboxes are reused,
+not closed per call; upstream closes them after two idle minutes without mounts.
+Commit does not require unmount. The tool shell=node runtime is unsupported;
+installed Node commands inside sh/bash are ordinary commands.
 
-There is no persistent mount to manually commit/close for new workspaces.
-Report the workspace/branch, changed files, test results, checkpoint receipts and
-any retained UNKNOWN/background execution ID. Do not claim a failed command
-rolled back changes. Legacy mount IDs require manager reconciliation, not worker
-migration, inferred branch IDs or ad hoc cleanup.
+Follow the exec wait-window/background contract; inspect owned output at `v:bg`.
+Independent branches can overlap; same-branch operations are reserved. Unknown or
+cancelled operations retain journals/mount evidence and are not rollback evidence.
+Do not replay uncertain mutations, clear reservations or mutate coordinated branches
+concurrently through external SDK clients. Canonical recovery and approval reference:
+`v:skills/layerfs/setup.md`. Scoped skill/MCP and UI/Git routes remain unsupported.
 
-Unknown receipts are not rollback evidence; daemon commands may continue. Never
-replay mutations automatically or edit/delete private profiles, journals, staging
-or Store resources. LayerFS is disposable working state, not a reliable backup
-or universal security sandbox. Preserve original and durable backed-up outputs.
-Full approval/recovery constraints: `v:skills/layerfs/setup.md`.
+Report workspace/branch, changed files, actual tests, checkpoint receipts and any
+retained UNKNOWN/background execution ID. LayerFS working state is not a backup.

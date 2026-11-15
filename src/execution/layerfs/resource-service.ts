@@ -154,15 +154,31 @@ export class LayerFSResources {
     const value = this.catalog.get(revision)
     return value
   }
+  /** Dedicated observational allowlist. No tool loading, journal admission, mount or runtime start. */
+  async observe(action: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+    if (!['branches', 'history', 'diff_commits'].includes(action)) throw new ToolNoEffectError('Observation is read-only.')
+    if (typeof args.workspace !== 'string') throw new ToolNoEffectError('Registered workspace required.')
+    const binding = parseBranchWorkspace(args.workspace)
+    if (action === 'diff_commits' && ![args.ref, args.branch].every(ref => typeof ref === 'string' && /^(?:[a-f0-9]{2})+$/.test(ref) && ref.length <= 256)) throw new ToolNoEffectError('Immutable commit IDs required.')
+    const result = await this.execute(action, { ...args, ...(action === 'history' ? { branch: binding.branch } : {}) }, context)
+    if (typeof result !== 'string') throw new Error('Invalid observation receipt.')
+    return result
+  }
   async execute(action: string, args: Record<string, unknown>, context: ExecutionContext, lifecycle?: { observe: (text: string) => void }): Promise<ToolResult> {
     if (context.projectId !== this.projectId || context.remoteWorkdir || context.recoveringToolCall) throw new ToolNoEffectError('Invalid resource execution context; no replay/fallback.')
-    if (!['list', 'branches', 'history', 'diff', 'merge', 'publish', 'fork', 'branch_workspace', 'status', 'read', 'write', 'search', 'exec'].includes(action)) throw new ToolNoEffectError('Unsupported resource operation.')
+    if (!['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'diff_commits', 'list', 'branches', 'history', 'diff', 'merge', 'publish', 'fork', 'branch_workspace', 'status', 'read', 'write', 'search', 'exec'].includes(action)) throw new ToolNoEffectError('Unsupported resource operation.')
     for (const key of ['branch', 'ref', 'name']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,255}$/.test(String(args[key])) || String(args[key]).split('/').includes('..'))) throw new ToolNoEffectError(`Invalid ${key}.`)
     const required: Record<string, string[]> = { history: ['branch'], diff: ['ref', 'branch'], merge: ['ref', 'branch', 'name'], publish: ['branch'], fork: ['branch', 'ref'], branch_workspace: ['branch'] }
     for (const key of required[action] ?? []) if (!args[key]) throw new ToolNoEffectError(`Missing ${key}.`)
     if (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || Number(args.offset) < 0)) throw new ToolNoEffectError('Invalid page offset.')
+    if (['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame'].includes(action)) {
+      const { validateFSInput } = await import('../../tools/layerfs-fs.ts')
+      validateFSInput(action, args)
+    }
     const binding = typeof args.workspace === 'string' ? parseBranchWorkspace(args.workspace) : undefined
     if (binding && !this.catalog.hasWorkspace(String(args.workspace))) throw new ToolNoEffectError('Workspace was not minted by this Project resource service; forged identity refused.')
+    if (['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame'].includes(action) && !binding) throw new ToolNoEffectError('Registered workspace required.')
+    if (['mkdir', 'rm', 'cp', 'mv', 'apply'].includes(action) && binding?.branch === 'main') throw new ToolNoEffectError('main is readonly.')
     const value = this.ready(String(binding?.resourceId ?? args.resourceId))
     if (binding && (binding.version !== 3 || binding.ownerProject !== this.projectId || binding.runtimeId !== value.runtimeId || binding.project !== value.layerfsProject)) throw new ToolNoEffectError('Workspace immutable catalog binding mismatch.')
     if ((await this.record(value.runtimeId)).phase !== 'ready') throw new ToolNoEffectError('Runtime catalog is not ready.')
@@ -210,4 +226,9 @@ export async function closeLayerFSResources(project: string, home: string) {
   const key = `${resolve(home)}\0${project}`, service = services.get(key)
   if (!service) return
   try { await service.close() } finally { if (services.get(key) === service) services.delete(key) }
+}
+
+/** Observation never constructs a service/catalog or starts a worker. */
+export function existingLayerFSResources(project: string, home: string) {
+  return services.get(`${resolve(home)}\0${project}`)
 }
