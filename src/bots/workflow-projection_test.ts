@@ -16,6 +16,7 @@ import { botWorkflowProjection } from './workflow-projection.ts'
 import { channelSessionId } from '../bus/events.ts'
 import { registerWorkflowRoutes } from '../workflows/management.ts'
 import { WorkflowRuntime } from '../workflows/runtime.ts'
+import { passiveChannelId } from '../channels/passive-contract.ts'
 import { connectionSinkProjection } from '../channels/sink-projection.ts'
 
 const tree = (path: string): unknown => readdirSync(path).sort().map(name => { const p = join(path, name); return [name, statSync(p).isDirectory() ? tree(p) : readFileSync(p, 'utf8')] })
@@ -89,6 +90,20 @@ test('real immutable BOT packages project shared connection, distinct groups/Age
     assert.equal(ingress?.topic, undefined)
     assert.equal(personalView.deployments.find(d => d.id === 'personal')?.agent, 'general')
     assert.doesNotMatch(JSON.stringify(personalView), /PRIVATE_/)
+    const ownerSource = { version: 1 as const, projectId: 'p', botInstanceId: personal.id, platform: 'qq' as const, conversationId: 'PRIVATE_OWNER_TOPIC', kind: 'direct' as const }
+    const groupSource = { ...ownerSource, kind: 'group' as const, conversationId: 'group:one' }
+    const otherDM = { ...ownerSource, conversationId: 'dm:someone-else' }
+    const metadata = [ownerSource, groupSource, otherDM].map(channelSource => ({ sessionId: passiveChannelId(channelSource), projectId: 'p', channelSource }))
+    const ownerOptions = { ...options, personalListeners: [{ source: { type: 'qq', id: personal.id }, kind: 'message', topic: ownerSource.conversationId, target: { kind: 'session' as const, id: personalSession } }],
+      sinkLookup: (id: string) => connectionSinkProjection({ projectId: 'p', connectionId: id, platform: 'qq', histories: metadata, observations: [] }) }
+    const ownerView = botWorkflowProjection(ownerOptions)
+    const ownerSink = ownerView.sinks.find(sink => sink.connectionId === personal.id)!
+    assert.deepEqual(ownerView.bindings.find(b => b.deploymentId === 'personal')?.receiverIds, [ownerSink.receivers.find(r => r.address.conversationId === ownerSource.conversationId)!.id])
+    for (const listener of [
+      { ...ownerOptions.personalListeners[0]!, topic: 'unknown-owner' },
+      { ...ownerOptions.personalListeners[0]!, source: { type: 'discord', id: personal.id } },
+      { ...ownerOptions.personalListeners[0]!, topic: groupSource.conversationId },
+    ]) assert.deepEqual(botWorkflowProjection({ ...ownerOptions, personalListeners: [listener] }).bindings.find(b => b.deploymentId === 'personal')?.receiverIds, [])
     const brokenApp = new Hono()
     registerWorkflowRoutes(brokenApp, runtime, () => true, undefined, () => { throw Error('PRIVATE_STORAGE_ERROR') })
     const unavailable = await (await brokenApp.request('/api/workflows')).json()

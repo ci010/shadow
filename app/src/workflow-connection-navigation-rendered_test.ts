@@ -7,6 +7,8 @@ import { mkdir, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { BotProjection } from './bot-workflows.ts'
+import type { ChannelSinkReceiver } from '../../src/channels/sink-contract.ts'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
@@ -37,6 +39,19 @@ test('Workflow connection inspector opens exact configured cards without effects
     configureServer(server) { server.middlewares.use((req, res, next) => {
       const path = new URL(req.url!, 'http://127.0.0.1').pathname
       const json = (body: unknown) => {
+        if (path.endsWith('/api/workflows')) {
+          const fixture = body as { projectId: string; bots: BotProjection }
+          const sink = fixture.bots.sinks![0]!
+          sink.receivers[0].kind = 'group'
+          const receiver = (id: string, conversationId: string, kind: ChannelSinkReceiver['kind'], name?: string): ChannelSinkReceiver => ({
+            id, address: { projectId: fixture.projectId, botInstanceId: 'qq-shared', platform: 'qq', conversationId }, kind, name,
+            path: `v:connections/qq-shared/receivers/${id}.json`,
+            navigation: { kind: 'conversation', address: { projectId: fixture.projectId, botInstanceId: 'qq-shared', platform: 'qq', conversationId }, inboxSessionId: `channel-inbox:${fixture.projectId}:qq-shared:qq:${encodeURIComponent(conversationId)}` },
+          })
+          sink.receivers.push(receiver('named', 'group:named', 'group', 'Design team'), receiver('owner', 'dm:owner', 'direct', 'Owner private chat'), receiver('other', 'dm:other', 'direct'))
+          fixture.bots.deployments.push({ id: 'personal', mode: 'personal', state: 'valid', agent: 'general' })
+          fixture.bots.bindings.push({ id: 'personal-owner', deploymentId: 'personal', connectionId: 'qq-shared', platform: 'qq', kind: 'host-owner-ingress', enabled: true, subscribed: true, listener: true, sessionIds: ['web:owner-execution'], receiverIds: ['owner'] })
+        }
         if (path.endsWith('/api/workflows') && req.headers.referer?.includes('passive=1')) { const fixture = body as { definitions: unknown[]; bots: { bindings: unknown[]; deployments: unknown[]; connections: {id: string}[] } }; fixture.definitions = []; fixture.bots.bindings = []; fixture.bots.deployments = []; fixture.bots.connections = fixture.bots.connections.filter(connection => connection.id === 'qq-shared') }
         const sync = path.endsWith('/api/workflows') && new URL(req.url!, 'http://fixture').searchParams.get('sync') === '1'
         res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(sync ? { version: 1, kind: 'full', cursor: 'fixture', snapshot: body } : body))
@@ -96,9 +111,16 @@ test('Workflow connection inspector opens exact configured cards without effects
     // Real inspector: anonymous receiver uses an honest label, IDs and payloads
     // are folded, exact history navigation remains separate from selection.
     assert.equal(await run('document.querySelector(".bot-technical").open'),false);
-    assert.equal(await run('document.querySelector(".receiver-choice").textContent.includes("Message receiver 1")'),true);
+    assert.equal(await run('document.querySelector(".receiver-choice").textContent.includes("qq · Group · group:one")'),true);
     assert.equal(await run('document.querySelector(".receiver-directory").textContent.includes("ABCDEFGHIJKLMNOPQRSTUVWXYZ")'),false);
     assert.equal(await run('document.querySelector(".receiver-directory a").getAttribute("href").includes("web:ordinary")'),true);
+    assert.equal(await run('Array.from(document.querySelectorAll(".graph-node[data-node-type=sink] strong")).some(e=>e.textContent==="Design team")'),true);
+    assert.equal(await run('Array.from(document.querySelectorAll(".receiver-choice")).some(e=>e.textContent.includes("Design team"))'),true);
+    assert.equal(await run('document.querySelectorAll(".graph-node[data-node-type=session]").length'),0);
+    assert.equal(await run('Array.from(document.querySelectorAll(".graph-node[data-node-type=sink] strong")).some(e=>e.textContent.includes("group:two"))'),true);
+    assert.equal(await run('Array.from(document.querySelectorAll(".execution-sessions a")).some(e=>e.getAttribute("href").includes("web:ordinary"))'),true);
+    assert.equal(await run('document.querySelector(".execution-sessions").textContent.includes("separate from passive message history")'),true);
+    assert.equal(await run('Array.from(document.querySelectorAll(".execution-sessions a")).some(e=>e.getAttribute("href").includes("web:owner-execution"))'),true);
     await run('document.querySelector(".receiver-choice").click()');
     await wait('document.querySelector(".receiver-choice").getAttribute("aria-pressed")==="true"');
     win.setSize(1800,950);await delay(200);
@@ -124,6 +146,12 @@ test('Workflow connection inspector opens exact configured cards without effects
     await run('document.querySelector(".bot-technical").open=false;document.documentElement.classList.remove("dark")');
     await run('document.querySelector(".graph-canvas").dispatchEvent(new KeyboardEvent("keydown",{key:"@",code:"Digit2",shiftKey:true,bubbles:true}));document.querySelector(".workflow-inspector").scrollTop=0');await delay(300);
     if(process.env.BOT_INSPECTOR_SCREENSHOTS) require('node:fs').writeFileSync(require('node:path').join(process.env.BOT_INSPECTOR_SCREENSHOTS,'bot-topology.png'),(await win.webContents.capturePage()).toPNG());
+    await run('document.querySelector(".execution-sessions").scrollIntoView({block:"center"})');await delay(100);
+    if(process.env.BOT_INSPECTOR_SCREENSHOTS) require('node:fs').writeFileSync(require('node:path').join(process.env.BOT_INSPECTOR_SCREENSHOTS,'bot-execution-sessions.png'),(await win.webContents.capturePage()).toPNG());
+    await run('Array.from(document.querySelectorAll(".execution-sessions a")).find(e=>e.getAttribute("href").includes("web:ordinary")).click()');
+    await wait('window.fixture.router.currentRoute.value.name==="chat"');
+    assert.equal((await route()).params.sessionId,'web:ordinary');
+    await open('a',{bot:'connection:qq-shared'});await wait(visible('.workflow-inspector'));
     win.setSize(360,780);await delay(150);
     await run('document.querySelector(".workflow-inspector").scrollTop=0');
     assert.equal(await run('document.documentElement.scrollWidth<=window.innerWidth'),true);

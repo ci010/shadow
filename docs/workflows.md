@@ -65,7 +65,7 @@ and rendered-fixture stability tests do not establish production latency/FPS gai
 ## BOT topology (read-only first stage)
 
 The existing Project Workflow tab and shared canvas also show the live BOT topology:
-**Connection → receiver → BOT (including its entry/binding configuration) → optional existing Session**.
+**Connection → receiver → BOT (including its entry/binding configuration) (execution Sessions in details only)**.
 These are inspection entries, **not saved Workflow definitions or Workflow runs**.
 `GET /api/workflows` adds an optional `bots` DTO under the same authenticated,
 Project-scoped route. `botWorkflowProjection` reads `BotInstanceStore` IDs,
@@ -80,8 +80,11 @@ unbinding because their history/discovery evidence is independent of BOT configu
 Only exact connection/platform/conversation identity matches attach a BOT to an observed
 receiver (Discord also matches the explicit guild/channel selector). An unmatched
 binding appears through **Configured entry; receipt unknown**, not as a claimed message
-receipt. Observation selectors and personal **Host owner ingress** remain separate
-configured entries; an owner's DM ingress is never attached to every group. Missing
+receipt; its title includes the saved target IDs. Observation selectors remain
+configured entries. Personal owner ingress is internal BOT configuration: only a
+validated direct inbox matching the exact live owner listener receives the BOT
+branch. Bare discovery IDs, unrelated DMs and groups never imply owner matching.
+Without a match the personal BOT stays at the connection root; no receiver is invented. Missing
 connection references remain separate diagnostic groups and cannot fall back to another
 connection. Edges use explicit parents, not array order, so sibling receivers/BOTs are
 branches rather than sequential processing stages.
@@ -91,9 +94,12 @@ subscription and listener fields. It is not a second publishing lifecycle. The s
 BOT shown after different receiver entries retains the same package identity/revision.
 Legacy `bot-binding:<id>` and `bot-connection:<id>` inspection URLs resolve by exact ID
 to the new group and node. Selecting an actual receiver (or its matched BOT) retains
-that receiver's Project-scoped dynamic chat context. Raw IDs, paths and complete node
-JSON remain in **Technical details**, collapsed by default; anonymous receivers use an
-honest type/ordinal label instead of an invented friendly name. The inspector groups
+that receiver's Project-scoped dynamic chat context. Paths and complete node JSON remain in **Technical details**, collapsed by default.
+Receiver titles share one naming function between canvas and directory: use the
+metadata-backed name, otherwise the conversation type and original ID, never
+an anonymous ordinal or another scope's name. Existing BOT execution Session IDs
+remain precise links in **Execution sessions**, explicitly distinct from passive
+message history; no Session stage appears in the main graph. The inspector groups
 connection state, receiver/history navigation and BOT entry summaries, with a sticky
 name/type/close header and one scrolling pane.
 

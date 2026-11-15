@@ -4409,7 +4409,7 @@
   "Turn off phone access": "关闭手机接入",
   "BOT reference": "BOT 引用",
   "BOT.md controls subscriptions; this reference does not add listeners.": "订阅由 BOT.md 管理，此引用不会新增监听。",
-  "Message receiver": "消息接收器",
+  "Message receiver": "消息接收者",
   "Records messages without model reactions": "仅记录消息，不调用模型回复",
   "No received conversations yet": "尚未收到会话消息，等待消息接入",
   "Open message history": "打开消息记录",
@@ -4422,7 +4422,7 @@
   "Session metadata exists; message receipt, persistence and execution are unknown.": "存在会话元数据；消息接收、持久化和执行情况未知。",
   "Discovery only; message receipt, persistence and execution are unknown.": "仅有发现证据；消息接收、持久化和执行情况未知。",
   "No conversation evidence available": "暂无可用的会话证据",
-  "Message receivers": "消息接收器",
+  "Message receivers": "消息接收者",
   "Associated BOTs": "关联 BOT",
   "BOT associations are configuration, not execution evidence.": "BOT 关联属于配置信息，不代表执行证据。",
   "No BOT association recorded": "暂无 BOT 关联记录",
@@ -4438,5 +4438,12 @@
   "Configured entry": "已配置入口",
   "Configured entry; receipt unknown": "已配置入口；收件情况未知",
   "Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.": "连接状态不代表消息送达。BOT 入口展示配置关系；收件和执行情况仍未知。",
-  "Entry type": "入口类型"
+  "Entry type": "入口类型",
+  "Group": "群组",
+  "Channel": "频道",
+  "Guild": "服务器",
+  "Owner message target unavailable": "所有者私聊目标不可用",
+  "Configured target unavailable": "配置目标不可用",
+  "Execution sessions": "执行会话",
+  "Existing BOT execution conversations, separate from passive message history. Not execution receipts.": "现有 BOT 执行会话，与被动消息历史不同；不代表执行凭据。"
 }

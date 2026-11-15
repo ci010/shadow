@@ -9,7 +9,7 @@ export function sinkReceiverId(address: ChannelSinkAddress): string {
   return createHash('sha256').update(JSON.stringify([address.projectId, address.botInstanceId, address.platform, address.conversationId])).digest('hex')
 }
 
-/** Pure projection of actual receipt/discovery facts. No connectors, BOT modules,
+/** Pure projection of actual receipt/discovery facts. Includes direct histories only with validated ChannelSource identity. No connectors, BOT modules,
  * storage writes, Session creation, guessed platform ancestry or binding fallback.
  * Child receipts retain their own histories; graph receivers aggregate the parent.
  */
@@ -34,7 +34,7 @@ export function connectionSinkProjection(options: {
     if (history.projectId !== projectId || history.channelSource === undefined) continue
     let source: ChannelSource | undefined
     try { source = parseChannelSource(history.channelSource, history.sessionId, projectId) } catch { continue }
-    if (!source || source.botInstanceId !== connectionId || source.platform !== platform || source.kind === 'direct') continue
+    if (!source || source.botInstanceId !== connectionId || source.platform !== platform) continue
     const value = fact(source.parentId ?? source.conversationId)
     if (source.parentId) { value.children = true; value.source ??= source }
     else { value.source = source; value.inboxSessionId = history.sessionId }
@@ -63,6 +63,7 @@ export function connectionSinkProjection(options: {
       channelType: null, guildId: source?.guildId ?? null, view: 'messages-and-threads' }
     else continue // Never invent an empty parent chat for a discovery-only source.
     result.receivers.push({ id, address, path: `${base}/receivers/${encodeURIComponent(id)}.json`, navigation,
+      ...(source ? { kind: source.kind === 'thread' ? 'channel' as const : source.kind, ...(source.guildId ? { guildId: source.guildId } : {}) } : {}),
       evidence: { discovery: value.discovered ? 'observed' : 'unknown', sessionMetadata: source ? 'present' : 'unknown',
         received: 'unknown', persisted: 'unknown', bound: 'unknown', executed: 'unknown' },
       ...(source?.conversationId === address.conversationId && source.name ? { name: safeName(source.name) } : {}) })

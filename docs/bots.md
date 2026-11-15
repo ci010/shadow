@@ -7,7 +7,7 @@ role, thread, history, output-audience and conversation-epoch checks.
 ## Workflow inspection
 
 The existing Project → Workflows workbench includes a read-only live connection,
-binding/listener, published BOT/Agent and existing Session topology. Multiple
+receiver and published BOT/Agent topology; existing execution Sessions remain inspector links. Multiple
 conversations share one connection identity without copying connection configuration.
 Transport health, binding/subscription enablement and package validity are independent;
 this projection is not a delivery probe or execution migration. See
@@ -17,9 +17,13 @@ DTO, bounds, security exclusions and existing-session link limitations.
 ### Evidence limits and personal ingress
 
 A common connection sink does not replace the published personal Agent, owner
-ingress, listener or existing Session relationship in the graph. Those remain
-separate read-only inventory rows alongside group receivers. Owner ingress does
-not authorize replies in every group sharing the transport.
+ingress, listener or existing execution Session relationship. Owner ingress is BOT
+configuration, not a second receiver entity. A validated direct history can appear
+as a private receiver; the personal BOT attaches only when its live owner listener
+exactly matches that connection/platform/conversation. Otherwise it remains at the
+connection root, with the owner target unavailable. Execution Session links live
+in BOT details, separate from passive message history. No sessions are created.
+Owner ingress does not authorize replies in every group sharing the transport.
 
 Receiver `evidence` is a small allowlisted DTO shared by the graph and
 `v:connections/<id>/sink.json` / receiver reads. `sessionMetadata: present` means a

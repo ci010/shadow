@@ -14,8 +14,8 @@
       <section class="bot-section receiver-directory">
         <h3>{{ t('Message receivers') }} <span>{{ entry.sinkProjection.receivers.length }}</span></h3>
         <p v-if="!entry.sinkProjection.receivers.length">{{ t('No received conversations yet') }}</p>
-        <ul class="receiver-list"><li v-for="(receiver, index) in entry.sinkProjection.receivers" :key="receiver.id" :data-selected="selectedNode === `receiver:${receiver.id}`">
-          <button class="receiver-choice" :aria-pressed="selectedNode === `receiver:${receiver.id}`" @click="$emit('select', `receiver:${receiver.id}`)"><span class="i-lucide-messages-square" aria-hidden="true" /><span>{{ receiver.name || `${t('Message receiver')} ${index + 1}` }}</span><span class="receiver-platform">{{ receiver.address.platform }}</span></button>
+        <ul class="receiver-list"><li v-for="receiver in entry.sinkProjection.receivers" :key="receiver.id" :data-selected="selectedNode === `receiver:${receiver.id}`">
+          <button class="receiver-choice" :aria-pressed="selectedNode === `receiver:${receiver.id}`" @click="$emit('select', `receiver:${receiver.id}`)"><span class="i-lucide-messages-square" aria-hidden="true" /><span>{{ receiverLabel(receiver) }}</span><span class="receiver-platform">{{ receiver.address.platform }}</span></button>
           <p class="receiver-evidence">{{ entry.graph?.find(node => node.id === `receiver:${receiver.id}`)?.description }}</p>
           <RouterLink v-if="sinkNavigationLocation(receiver.navigation)" class="history-link" :to="sinkNavigationLocation(receiver.navigation)!">{{ sinkNavigationLabel(receiver.navigation) }}<span class="i-lucide-arrow-up-right" aria-hidden="true" /></RouterLink>
           <p v-else>{{ t('Channel metadata unavailable. Waiting for received content.') }}</p>
@@ -29,6 +29,10 @@
         <dl v-if="node.nodeType === 'connection'"><dt>{{ t('Platform') }}</dt><dd>{{ field(node.config, 'platform') || t('Unavailable') }}</dd><dt>{{ t('Connection state') }}</dt><dd>{{ connectionState(node.config) }}</dd></dl>
         <dl v-else-if="node.nodeType === 'deployment'"><dt>{{ t('BOT entry configuration') }}</dt><dd>{{ entryLabel(node) }}</dd><dt>{{ t('Mode') }}</dt><dd>{{ field(deployment(node.config), 'mode') || t('Unavailable') }}</dd><dt>{{ t('Package state') }}</dt><dd>{{ packageState(node.config) }}</dd><template v-if="field(node.config, 'kind')"><dt>{{ t('Entry type') }}</dt><dd>{{ field(node.config, 'kind') === 'host-owner-ingress' ? t('Host owner ingress') : t('Conversation entry') }}</dd><dt>{{ t('Configuration') }}</dt><dd>{{ flag(node.config, 'enabled', 'Enabled', 'Disabled') }}</dd><dt>{{ t('Subscription') }}</dt><dd>{{ flag(node.config, 'subscribed', 'Subscribed', 'Not subscribed') }}</dd><dt>{{ t('Listener') }}</dt><dd>{{ flag(node.config, 'listener', 'Listener projected', 'No listener') }}</dd></template></dl>
         <p v-else>{{ node.nodeType === 'session' ? t('Existing conversation recorded') : t('Configured entry; receipt unknown') }}</p>
+        <div v-if="node.nodeType === 'deployment' && executionSessions(node.config).length" class="execution-sessions">
+          <h4>{{ t('Execution sessions') }}</h4><p>{{ t('Existing BOT execution conversations, separate from passive message history. Not execution receipts.') }}</p>
+          <RouterLink v-for="sessionId in executionSessions(node.config)" :key="sessionId" class="history-link" :to="{ name: 'chat', params: { projectId, sessionId } }">{{ sessionId }}<span class="i-lucide-arrow-up-right" aria-hidden="true" /></RouterLink>
+        </div>
         <p v-if="node.description" class="node-evidence">{{ node.description }}</p>
         <RouterLink v-if="node.targetSessionId" class="history-link" :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Open conversation') }}</RouterLink>
       </section>
@@ -41,8 +45,9 @@
   </div>
 </template>
 <script setup lang="ts">
+import { receiverLabel } from '../receiver-label.ts'
 import { computed } from 'vue'
-import type { BotProjection } from '../bot-workflows.ts'
+import { configuredTarget, type BotProjection } from '../bot-workflows.ts'
 import type { WorkflowCanvasEntry } from '../workflow-canvas.ts'
 import { sinkNavigationLabel, sinkNavigationLocation } from '../connection-sinks.ts'
 import { channelStateLabel } from '../channel-settings.ts'
@@ -59,7 +64,15 @@ const displayName = computed(() => {
 })
 function field(config: unknown, key: string): string { const value = config && typeof config === 'object' ? (config as Record<string, unknown>)[key] : undefined; return typeof value === 'string' ? value : '' }
 const associatedBotCount = computed(() => new Set([...(props.entry.sinkProjection?.bots.map(bot => bot.botId) ?? []), ...(props.entry.graph ?? []).filter(node => node.nodeType === 'deployment').map(node => field(deployment(node.config), 'id')).filter(Boolean)]).size)
-function entryLabel(node: NonNullable<WorkflowCanvasEntry['graph']>[number]) { const receivers = props.entry.sinkProjection?.receivers ?? []; const index = receivers.findIndex(receiver => receiver.id === node.receiverId); return index >= 0 ? receivers[index]!.name || `${t('Message receiver')} ${index + 1}` : field(node.config, 'kind') === 'host-owner-ingress' ? t('Host owner ingress') : t('Configured entry; receipt unknown') }
+function entryLabel(node: NonNullable<WorkflowCanvasEntry['graph']>[number]) {
+  const receiver = props.entry.sinkProjection?.receivers.find(receiver => receiver.id === node.receiverId)
+  return receiver ? receiverLabel(receiver) : configuredTarget({ platform: field(node.config, 'platform'), topic: field(node.config, 'topic'), kind: field(node.config, 'kind') })
+}
+function executionSessions(config: unknown): string[] {
+  const ids = config && typeof config === 'object' ? (config as Record<string, unknown>).sessionIds : undefined
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+}
+
 const relatedNodes = computed(() => (props.entry.graph ?? []).filter(node => node.nodeType === 'deployment' || node.nodeType === 'session'))
 function deployment(config: unknown): unknown { return config && typeof config === 'object' ? (config as Record<string, unknown>).deployment : undefined }
 function packageState(config: unknown) { const state = field(deployment(config), 'state'); return state === 'valid' ? t('Validated package') : state === 'quarantined' ? t('Quarantined package') : t('Unavailable') }
@@ -74,6 +87,7 @@ p { margin: 0; color: var(--c-text-secondary); }.bot-explanation { margin-top: 1
 .bot-actions { margin: 16px 0 24px; }.bot-actions a { display: inline-flex; gap: 8px; align-items: center; white-space: normal; }
 .bot-section { margin-top: 24px; }.bot-section[data-selected=true] { border-top: 1px solid var(--c-selection-border); padding-top: 12px; }.bot-section h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: baseline; }.bot-section h3>span { font-weight: 400; color: var(--c-text-muted); }
 .receiver-list { list-style: none; padding: 0; margin: 0; }.receiver-list li { border-top: 1px solid var(--c-border-soft); padding: 10px 0 14px; }.receiver-choice { width: 100%; display: flex; align-items: center; gap: 8px; text-align: start; color: var(--c-text); font: inherit; background: transparent; border: 0; cursor: pointer; min-height: 32px; padding: 4px; }.receiver-choice>span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }.receiver-choice>span:first-child { flex-shrink: 0; }.receiver-platform { color: var(--c-text-secondary); font-size: 12px; }.receiver-choice:hover { background: var(--c-bg-muted); }.receiver-choice[aria-pressed=true] { color: var(--c-primary); background: var(--c-selection-bg); }.receiver-evidence { margin: 6px 0; font-size: 12px; }.history-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--c-primary); }
+.execution-sessions h4 { margin: 16px 0 6px; font-size: 13px; }.execution-sessions a { display: flex; overflow-wrap: anywhere; }
 .bot-technical { margin-top: 24px; border-top: 1px solid var(--c-border); }.bot-technical summary { cursor: pointer; min-height: 44px; padding: 10px 0; box-sizing: border-box; overflow-wrap: anywhere; }.node-technical { border-top: 1px solid var(--c-border-soft); }.node-technical summary { color: var(--c-text-secondary); }
 dl { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 8px 16px; margin: 12px 0; }dt { color: var(--c-text-secondary); }dd { margin: 0; overflow-wrap: anywhere; }code, pre { font-size: 12px; overflow-wrap: anywhere; }pre { padding: 12px; background: var(--c-bg-soft); color: var(--c-text-body); white-space: pre-wrap; overflow: auto; max-height: 280px; }button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @media (max-width: 700px), (pointer: coarse) { .receiver-choice, .history-link, .close-action { min-height: 44px; }.close-action { min-width: 44px; } }
