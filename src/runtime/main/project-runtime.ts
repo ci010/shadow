@@ -13,7 +13,6 @@ import { learningInterval, updateLearningInterval, updateLearningEnabled } from 
 import { InputRouter } from '../../input/router.ts'
 import { createBotsHandler } from '../../vfs/bots.ts'
 import { createConnectionsHandler } from '../../vfs/connections.ts'
-import { BotObserveTool } from '../../tools/bot-observe.ts'
 import { connectionSinkProjection } from '../../channels/sink-projection.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
 import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
@@ -1539,7 +1538,6 @@ export async function createProjectRuntime(
     personalListeners: sessionInputListeners(project.id, sessions, botStore, directoryBots), sinkLookup: connectionSink,
   })
   registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled, botSnapshot)
-  importTool.registerBuiltin('bot_observe', new BotObserveTool(project.id, botSnapshot))
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
@@ -1649,13 +1647,13 @@ export async function createProjectRuntime(
         return { sessionId: row.sessionId, projectId: state?.projectId, channelSource: state?.channelSource }
       }) })
   }
-  const connectionsVfs = createConnectionsHandler({ projectId: project.id, assertSession: assertBotSession,
+  const connectionsVfs = createConnectionsHandler({ projectId: project.id, assertSession: assertBotSession, observation: botSnapshot,
     index: () => { const result = botStore.ids(1000); return { ids: result.ids, ...(result.truncated ? { warning: 'connection-index-limit' } : {}) } },
     overview: id => { const status = channels.botStatus(id); return { id: status.id, displayName: status.displayName,
       platform: status.platform, purpose: status.purpose ?? 'unknown', enabled: status.enabled, health: status.state, ownerVerified: status.ownerVerified === true } },
     sink: connectionSink,
   })
-  vfs.mount('v:connections', 'read-only current Project transport Connections and common receipt sinks; read v:connections/overview', connectionsVfs.read, connectionsVfs.list)
+  vfs.mount('v:connections', 'read-only current Project transport Connections and common receipt sinks; read v:connections/overview', connectionsVfs.read, connectionsVfs.list, undefined, connectionsVfs.directory)
   const botsVfs = createBotsHandler({ projectId: project.id, store: botStore, channels, directory: directoryBots, assertSession: assertBotSession })
   vfs.mount('v:bots', 'read-only current Project Bot connections/deployments/listeners; owner durable Web management only; read v:bots/overview', botsVfs.read, botsVfs.list)
   const channelStreamDeps: ConstructorParameters<typeof ChannelStreamTool>[3] = {

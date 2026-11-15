@@ -1,8 +1,10 @@
 import { z } from 'zod'
 import { assertBotManagementAccess } from '../bots/access.ts'
+import { botObservation } from '../bots/observation.ts'
+import type { BotWorkflowProjection } from '../bots/workflow-projection.ts'
 import { parseConnectionSinkProjection } from '../shared/connection-sink.ts'
 import type { ConnectionSinkProjection } from '../channels/sink-contract.ts'
-import type { VirtualEntry, VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
+import type { VirtualEntry, VirtualFsHandler, VirtualFsListHandler, VirtualDirectoryHandler } from './virtual-fs.ts'
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/
 const serialize = (value: unknown) => JSON.stringify(value, (_key, field: unknown) => typeof field === 'string'
@@ -20,14 +22,26 @@ Indexes contain at most 50 connections per page; follow next paths. Broad search
 
 export interface ConnectionsVfsOptions {
   projectId: string
+  observation(): BotWorkflowProjection
   assertSession(id: string): void
   index(): { ids: string[]; warning?: string }
   overview(id: string): z.input<typeof overviewSchema>
   sink(id: string): ConnectionSinkProjection
 }
 /** Pure inspection adapter: callbacks must not connect, start sessions or mutate storage. */
-export function createConnectionsHandler(options: ConnectionsVfsOptions): { read: VirtualFsHandler; list: VirtualFsListHandler } {
+export function createConnectionsHandler(options: ConnectionsVfsOptions): { read: VirtualFsHandler; list: VirtualFsListHandler; directory: VirtualDirectoryHandler } {
   const authorize = (context: Parameters<VirtualFsHandler>[1]) => assertBotManagementAccess(options.projectId, context, options.assertSession)
+  const observeAccess = (context: Parameters<VirtualFsHandler>[1]) => {
+    context.signal.throwIfAborted()
+    if (context.projectId !== options.projectId) throw new Error('BOT observation Project mismatch')
+    if (context.memoryAccess || !(context.tools.has('read') || context.tools.has('search'))) throw new Error('BOT observation read/search is unavailable')
+  }
+  const publicGuide = `Current Project read-only, redacted BOT/Connection evidence: v:connections/observation.json.
+Use read (including flag=l) or search handler=glob/grep with path=v:connections.
+Existing host read/search tool grants apply; no owner-Web or per-conversation check is required for redacted observation.
+Opaque identifiers only; no message bodies, raw user IDs or navigation. UI and observation share receiver evidence. Missing evidence is unknown, not zero; inventory is not admission, receipt or execution success.
+Other Connection paths are owner-Web management inspection and retain their existing restrictions.`
+  const observation = () => serialize(botObservation(options.projectId, options.observation()))
   const inventory = () => {
     const source = options.index()
     return { ids: [...new Set(source.ids.filter(id => ID.test(id)))].slice(0, 1000),
@@ -63,18 +77,34 @@ export function createConnectionsHandler(options: ConnectionsVfsOptions): { read
     return serialize(match[2] === 'sink' ? sink : { ...overview, projectId: options.projectId,
       connectionPath: sink.connectionPath, sinkPath: sink.sinkPath, guidePath: sink.guidePath })
   }
-  return {
-    read: (path, context) => { authorize(context); return render(path) },
+  const handler: { read: VirtualFsHandler; list: VirtualFsListHandler } = {
+    read: (path, context) => {
+      observeAccess(context)
+      if (!path || path === 'overview') {
+        try { authorize(context) } catch { return publicGuide }
+        return publicGuide + '\n\n' + GUIDE
+      }
+      if (path === 'observation.json') return observation()
+      authorize(context); return render(path)
+    },
     list: (context, query) => {
-      authorize(context)
+      observeAccess(context)
       const scope = query?.subpath ?? '', entries: VirtualEntry[] = []
+      const publicEntries = () => ['overview', 'observation.json'].filter(name => !scope || name === scope || name.startsWith(`${scope}/`)).map(name => ({ name,
+        content: query?.content === false ? '' : name === 'overview' ? publicGuide : observation() }))
+      if (scope === 'overview' || scope === 'observation.json') return publicEntries()
+      try { authorize(context) } catch {
+        if (scope) throw new Error('Connection management path is unavailable. Read v:connections/overview.')
+        return publicEntries()
+      }
+      entries.push(...publicEntries().filter(entry => entry.name === 'observation.json'))
       const add = (name: string, warning?: string) => {
         if (!scope || name === scope || name.startsWith(`${scope}/`)) {
           context.signal.throwIfAborted()
           entries.push({ name, content: query?.content === false ? '' : render(name), ...(warning ? { warning } : {}) })
         }
       }
-      add('overview')
+      if (!scope || scope === 'overview') entries.push({ name: 'overview', content: query?.content === false ? '' : publicGuide + '\n\n' + GUIDE })
       const object = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})(?:\/(?:overview\.json|sink\.json|receivers(?:\/[^/]+\.json)?))?$/.exec(scope)
       if (object && !['overview', 'index'].includes(object[1]!)) {
         // Explicit searches do not enumerate siblings; validate even name-only lists.
@@ -91,4 +121,8 @@ export function createConnectionsHandler(options: ConnectionsVfsOptions): { read
       return entries
     },
   }
+  return { ...handler, directory: async (path, context) => ({
+    header: publicGuide,
+    items: (await handler.list(context, { subpath: path, content: false })).map(entry => `v:connections/${entry.name}`),
+  }) }
 }
