@@ -4,7 +4,7 @@ import { botConnectionDraft, botConnectionFields, botConnectionPatch, type BotIn
 import { mountBotUi, settleBotUi } from './bot-ui-test-helpers.ts'
 
 const fixture = (patch: Partial<BotInstanceStatus> = {}): BotInstanceStatus => ({ id: 'qq-bot', projectId: 'p', platform: 'qq', displayName: 'Existing QQ', purpose: 'personal', ownerVerified: true, label: 'QQ', enabled: false, configured: true, state: 'disabled', config: { appId: 'saved-id', sandbox: true, allowFrom: ['alice'], adminChats: ['room'], trustedChats: ['trusted'], intents: 123 }, secrets: { secret: true }, ...patch })
-const props = { apiBase: 'http://localhost/projects/p', projectId: 'p', active: true, available: true }
+const props = { apiBase: 'http://localhost/projects/p', projectId: 'p', active: true, available: true, compact: true }
 const calls: (url: URL | RequestInfo, init?: RequestInit) => { path: string; method: string; body: any } = (url, init) => ({ path: new URL(String(url)).pathname, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
 
 test('connection-only patches preserve hidden access, purpose, owner and saved credentials without replaying them', () => {
@@ -211,5 +211,27 @@ test('deep-linked connection selects exact ID after load, restores on mount, and
   assert.match(restored.text(), /requested connection is unavailable/)
   assert(!restored.nodes().some(n => n.props.class === 'selected-connection'))
   assert(requests.some(r => r.path === '/projects/q/api/channels'))
+  assert(requests.every(r => r.method === 'GET'))
+})
+
+test('configured connection cards stay visible across platforms and configure exact IDs without effects', async t => {
+  const requests: ReturnType<typeof calls>[] = []
+  t.mock.method(globalThis, 'fetch', async (url: URL | RequestInfo, init?: RequestInit) => {
+    requests.push(calls(url, init))
+    return Response.json({ channels: [fixture(), fixture({ id: 'discord-bot', platform: 'discord', displayName: 'Discord service', purpose: 'service', state: 'connected', config: {}, secrets: { token: true } })] })
+  })
+  const view = mountBotUi(t, 'BotConnectionSetup.vue', { ...props, compact: false, requestedConnectionId: 'discord-bot' })
+  await settleBotUi()
+  assert.equal(view.nodes().filter(n => n.props.class === 'connection-card').length, 2)
+  assert.equal(view.nodes().filter(n => n.tag === 'select').length, 0)
+  assert.equal(view.nodes().find(n => n.props.class === 'connection-id')?.text, 'discord-bot')
+  const configure = view.nodes().find(n => n.tag === 'button' && n.props['aria-label'] === 'Configure Existing QQ')!
+  await configure.props.onClick(); await settleBotUi()
+  assert.equal(view.nodes().find(n => n.props.class === 'connection-id')?.text, 'qq-bot')
+  assert.equal(view.nodes().filter(n => n.props.class === 'connection-card').length, 2)
+  await view.click('Create a new connection')
+  assert.equal(view.nodes().filter(n => n.props.class === 'connection-card').length, 2)
+  await view.select(0, 'qq')
+  assert(view.nodes().some(n => n.props.class === 'new-connection'))
   assert(requests.every(r => r.method === 'GET'))
 })

@@ -33,6 +33,10 @@
         <p v-else class="workflow-explanation">{{ t('Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.') }}</p>
         <details v-for="node in selectedBot.graph" :key="node.id" class="workflow-node" :open="!inspectedNode || inspectedNode === node.id">
           <summary>{{ node.label }} · {{ node.detail }}</summary><pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
+          <template v-if="node.nodeType === 'connection'">
+            <RouterLink v-if="selectedBot.connectionSettingsId" class="btn btn-sm" :aria-label="t('Configure BOT connection')" :to="{ name: 'project-settings', params: { projectId, section: 'connections' }, query: { connectionId: selectedBot.connectionSettingsId } }">{{ t('Configure BOT connection') }}</RouterLink>
+            <p v-else role="status">{{ t('Connection unavailable') }}</p>
+          </template>
           <RouterLink v-if="node.targetSessionId" :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Open conversation') }}</RouterLink>
         </details>
       </aside>

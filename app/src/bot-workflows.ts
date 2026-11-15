@@ -35,7 +35,7 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
   // Suppress only the duplicate isolated connection, never its Agent/listener/session.
   const legacyRows = rows.filter(row => row.binding || !row.connection || !bots.sinks?.some(sink => sink.connectionId === row.connection!.id))
   return [...(bots.sinks ?? []).map(sink => connectionSinkCanvas(sink, sink.projectId,
-    bots.connections.find(connection => connection.id === sink.connectionId)?.displayName ?? sink.connectionId)), ...legacyRows.map(({ id, binding, connection, deployment }): WorkflowCanvasEntry => {
+    bots.connections.find(connection => connection.id === sink.connectionId)?.displayName ?? sink.connectionId)).map(entry => ({ ...entry, connectionSettingsId: bots.connections.some(c => c.id === entry.sinkProjection?.connectionId) ? entry.sinkProjection!.connectionId : undefined })), ...legacyRows.map(({ id, binding, connection, deployment }): WorkflowCanvasEntry => {
     const enabled = !!connection?.enabled && deployment?.state === 'valid' && !!binding?.enabled && binding.subscribed
     const node = (id: WorkflowNodeType, label: string, detail: string, config: unknown, targetSessionId?: string): NonNullable<WorkflowCanvasEntry['graph']>[number] => ({ id, nodeType: id, label, detail, config, status: 'unknown' as const, targetSessionId })
     const graph = connection || binding ? [node('connection', t('BOT connection'), connection ? `${connection.displayName} · ${connection.platform} · ${healthLabel(connection.health)} · ${connection.enabled ? t('Enabled') : t('Disabled')}` : t('Connection unavailable'), connection ?? { id: binding?.connectionId })] : []
@@ -45,7 +45,7 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
     for (const item of graph) item.description = binding?.kind === 'host-owner-ingress'
       ? t('Owner ingress is not permission to reply in every group. Admission and execution are unknown.')
       : t('Configuration and existing sessions are not message admission or execution receipts.')
-    return { definition: { id, name: binding ? `${deployment?.id ?? binding.deploymentId} · ${binding.topic ?? t('Host owner ingress')}` : connection?.displayName ?? deployment!.id, enabled }, graph, enabled, projection: true, configureConnectionId: !binding ? connection?.id : undefined,
+    return { definition: { id, name: binding ? `${deployment?.id ?? binding.deploymentId} · ${binding.topic ?? t('Host owner ingress')}` : connection?.displayName ?? deployment!.id, enabled }, graph, enabled, projection: true, connectionSettingsId: connection?.id, configureConnectionId: !binding ? connection?.id : undefined,
       conversation: binding?.sessionIds[0] ? { kind: 'fixed', sessionId: binding.sessionIds[0] } : undefined }
   })]
 }

@@ -8,7 +8,7 @@ export type WorkflowNodeType = 'sink' | 'connection' | 'binding' | 'deployment' 
 type ProjectionGraph = Array<{ id: string; nodeType?: WorkflowNodeType; label: string; detail: string; config: unknown; status: 'ready' | 'unknown'; description?: string; targetSessionId?: string }>
 export type WorkflowCanvasEntry = ({ definition: WorkflowDefinition; graph?: never; projection?: false } |
   { definition: Pick<WorkflowDefinition, 'id' | 'name' | 'enabled'>; graph: ProjectionGraph; projection: true }) &
-  { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl; configureConnectionId?: string; sinkProjection?: ConnectionSinkProjection }
+  { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl; configureConnectionId?: string; connectionSettingsId?: string; sinkProjection?: ConnectionSinkProjection }
 export const workflowColumns = ['cron', 'automation', 'bot'] as const
 export type WorkflowColumn = typeof workflowColumns[number]
 /** Periodic inputs share one source; delivery determines the product column. */
