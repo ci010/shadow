@@ -11,12 +11,15 @@ export function connectionSinkCanvas(raw: unknown, projectId: string, name: stri
   return { definition: { id: projection.id, name, enabled: true }, projection: true,
     graph: [
       { id: 'connection', nodeType: 'connection', label: t('Connection'), detail: projection.connectionId,
-        config: { projectId, connectionId: projection.connectionId, path: projection.connectionPath }, status: 'ready' },
+        config: { projectId, connectionId: projection.connectionId, path: projection.connectionPath }, status: 'unknown' },
       ...projection.receivers.map(receiver => ({ id: `receiver:${receiver.id}`, nodeType: 'sink' as const,
         label: t('Message receiver'), detail: receiver.name ?? receiver.address.conversationId,
-        config: receiver, status: 'ready' as const })),
+        description: receiver.evidence?.sessionMetadata === 'present' ? t('Session metadata exists; message receipt, persistence and execution are unknown.')
+          : receiver.evidence?.discovery === 'observed' ? t('Discovery only; message receipt, persistence and execution are unknown.')
+          : t('Configuration and existing sessions are not message admission or execution receipts.'),
+        config: receiver, status: 'unknown' as const })),
       ...(projection.receivers.length ? [] : [{ id: 'sink', nodeType: 'sink' as const, label: t('Message receiver'),
-        detail: t('No received conversations yet'), config: { path: projection.sinkPath }, status: 'ready' as const }]),
+        detail: t('No conversation evidence available'), config: { path: projection.sinkPath }, status: 'unknown' as const }]),
     ], sinkProjection: projection,
   }
 }

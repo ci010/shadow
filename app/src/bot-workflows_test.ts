@@ -43,3 +43,30 @@ test('only isolated connector groups expose exact connection configuration, not 
   assert.equal(groups.find(n => n.data.definition.id === 'bot-deployment:second')?.data.configureConnectionId, undefined)
   assert.deepEqual(groups.find(n => n.data.definition.id === 'bot-binding:two')?.data.conversation, { kind: 'fixed', sessionId: 'qq:existing' })
 })
+
+// Regression: the common receipt sink must not replace the real personal Agent.
+test('personal paired DM ingress survives a sink with an extra group, without granting group replies', async () => {
+  const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
+  const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
+  const source = { version: 1 as const, projectId: 'p', botInstanceId: 'qq-shared', platform: 'qq' as const,
+    conversationId: 'group:extra', kind: 'group' as const }
+  const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq',
+    histories: [{ sessionId: passiveChannelId(source), projectId: 'p', channelSource: source }], observations: [] })
+  const snapshot = parseBotProjection({ ...bots, sinks: [sink], deployments: [{ id: 'personal', mode: 'personal', state: 'valid', agent: 'general' }],
+    bindings: [{ id: 'owner', deploymentId: 'personal', connectionId: 'qq-shared', platform: 'qq', kind: 'host-owner-ingress',
+      enabled: true, subscribed: true, listener: true, sessionIds: ['owner-dm-session'] }] }, 'p')
+  const flows = botCanvas(snapshot)
+  assert.equal(flows.length, 2)
+  assert.equal(flows[0]?.sinkProjection?.receivers.length, 1)
+  const owner = flows.find(flow => flow.definition.id === 'bot-binding:owner')!
+  assert.deepEqual(owner.graph?.map(node => node.nodeType), ['connection', 'binding', 'deployment', 'session'])
+  assert.match(JSON.stringify(owner.graph), /general/)
+  assert.match(JSON.stringify(owner.graph), /not permission to reply in every group/)
+  assert.deepEqual(owner.conversation, { kind: 'fixed', sessionId: 'owner-dm-session' })
+  assert(!JSON.stringify(owner.graph).includes('group:extra'))
+  assert(flows.every(flow => flow.graph?.every(node => node.status === 'unknown')))
+  const receiverConfig = flows[0]!.graph![1]!.config as { evidence: unknown }
+  assert.deepEqual(receiverConfig.evidence, sink.receivers[0]!.evidence, 'Graph and read-only DTO share evidence')
+  assert.equal((owner.graph![1]!.config as { listener: boolean }).listener, true)
+  assert.equal((owner.graph![1]!.config as { admission: string }).admission, 'unknown')
+})

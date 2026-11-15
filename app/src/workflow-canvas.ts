@@ -5,7 +5,7 @@ import { workflowGraph, type WorkflowDefinition, type WorkflowRun, type Workflow
 
 export interface WorkflowCanvasControl { enabled: boolean; disabled: boolean; busy: boolean; error?: string; notice?: string }
 export type WorkflowNodeType = 'sink' | 'connection' | 'binding' | 'deployment' | 'session' | 'source' | 'gate' | 'action'
-type ProjectionGraph = Array<{ id: string; nodeType?: WorkflowNodeType; label: string; detail: string; config: unknown; status: 'ready'; description?: string; targetSessionId?: string }>
+type ProjectionGraph = Array<{ id: string; nodeType?: WorkflowNodeType; label: string; detail: string; config: unknown; status: 'ready' | 'unknown'; description?: string; targetSessionId?: string }>
 export type WorkflowCanvasEntry = ({ definition: WorkflowDefinition; graph?: never; projection?: false } |
   { definition: Pick<WorkflowDefinition, 'id' | 'name' | 'enabled'>; graph: ProjectionGraph; projection: true }) &
   { run?: WorkflowRun; enabled?: boolean; snapshot?: boolean; conversation?: WorkflowConversation; control?: WorkflowCanvasControl; configureConnectionId?: string; sinkProjection?: ConnectionSinkProjection }

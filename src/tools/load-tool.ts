@@ -1071,7 +1071,9 @@ export class ImportTool implements Tool {
       })
     }
 
-    // Plain Tool
+    // Plain Tool: same host filter as catalog discovery and invocation. Explicit
+    // imports must not advertise/register a contract withheld from this session.
+    if (!tools.canUseDynamic(entry.name)) return `Error: tool "${entry.name}" is not available for this agent type.`
     options.signal.throwIfAborted()
     tools.registerDynamic(entry)
     return [entry]

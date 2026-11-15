@@ -15,6 +15,7 @@ Canonical paths: v:connections/index.json, v:connections/<id>/overview.json, v:c
 A Connection is transport, not a BOT role. The common receipt sink records received/discovered conversations without model reactions. Linking a BOT does not change receipt addresses.
 BOT.md is the sole BOT subscription/message-admission authority. Follow v:bots/authoring to create or link a BOT; Workflow references that BOT, never copies its bindings.
 Navigation is existing content only, not permission to create a session, send a message or execute a workflow. Connection health is not processing success.
+Receiver evidence distinguishes discovery observations from existing session metadata. Neither proves a particular message was received or persisted. Message received/persisted, binding/admission and execution remain unknown; BOT configured bindings and projected listeners are separate inventory facts, not processing receipts. Missing evidence is unknown, not zero or rejected.
 Indexes contain at most 50 connections per page; follow next paths. Broad search expands at most the first 50 objects; scope to an ID for its detail. Discovery is capped at 1000 IDs; warnings mean incomplete results.`
 
 export interface ConnectionsVfsOptions {

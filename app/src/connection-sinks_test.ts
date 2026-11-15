@@ -36,5 +36,9 @@ test('navigation uses existing inbox or parent channel; zero/multiple content ne
   assert.equal(sinkNavigationLocation({ ...forum, guildId: null } as ChannelSinkNavigation), undefined)
   assert.equal(sinkNavigationLocation(projection().sink.navigation), undefined)
   const empty = projection(); empty.receivers = []
-  assert.equal(connectionSinkCanvas(empty, 'p', 'Empty').graph!.length, 2)
+  const emptyGraph = connectionSinkCanvas(empty, 'p', 'Empty').graph!
+  assert.equal(emptyGraph.length, 2)
+  assert.equal(emptyGraph[1]!.detail, 'No conversation evidence available')
+  assert(emptyGraph.every(node => node.status === 'unknown'))
+  assert(!JSON.stringify(emptyGraph).includes('received conversations'))
 })

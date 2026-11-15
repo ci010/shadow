@@ -31,15 +31,20 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
     ...bots.connections.filter(c => !bots.bindings.some(b => b.connectionId === c.id)).map(connection => ({ id: `bot-connection:${connection.id}`, connection, binding: undefined, deployment: undefined })),
     ...bots.deployments.filter(d => !bots.bindings.some(b => b.deploymentId === d.id)).map(deployment => ({ id: `bot-deployment:${deployment.id}`, deployment, binding: undefined, connection: undefined })),
   ]
-  const legacyRows = bots.sinks ? rows.filter(row => !row.connection || !bots.sinks!.some(sink => sink.connectionId === row.connection!.id)) : rows
+  // A transport sink is orthogonal to BOT owner ingress and binding inventory.
+  // Suppress only the duplicate isolated connection, never its Agent/listener/session.
+  const legacyRows = rows.filter(row => row.binding || !row.connection || !bots.sinks?.some(sink => sink.connectionId === row.connection!.id))
   return [...(bots.sinks ?? []).map(sink => connectionSinkCanvas(sink, sink.projectId,
     bots.connections.find(connection => connection.id === sink.connectionId)?.displayName ?? sink.connectionId)), ...legacyRows.map(({ id, binding, connection, deployment }): WorkflowCanvasEntry => {
     const enabled = !!connection?.enabled && deployment?.state === 'valid' && !!binding?.enabled && binding.subscribed
-    const node = (id: WorkflowNodeType, label: string, detail: string, config: unknown, targetSessionId?: string) => ({ id, nodeType: id, label, detail, config, status: 'ready' as const, targetSessionId })
+    const node = (id: WorkflowNodeType, label: string, detail: string, config: unknown, targetSessionId?: string): NonNullable<WorkflowCanvasEntry['graph']>[number] => ({ id, nodeType: id, label, detail, config, status: 'unknown' as const, targetSessionId })
     const graph = connection || binding ? [node('connection', t('BOT connection'), connection ? `${connection.displayName} · ${connection.platform} · ${healthLabel(connection.health)} · ${connection.enabled ? t('Enabled') : t('Disabled')}` : t('Connection unavailable'), connection ?? { id: binding?.connectionId })] : []
-    if (binding) graph.push(node('binding', t('Conversation binding'), `${binding.topic ?? t('Host owner ingress')} · ${binding.enabled ? t('Enabled') : t('Disabled')} · ${binding.subscribed ? t('Subscribed') : t('Not subscribed')} · ${binding.listener ? t('Listener projected') : t('No listener')}`, binding))
+    if (binding) graph.push(node('binding', t('Conversation binding'), `${binding.topic ?? t('Host owner ingress')} · ${binding.enabled ? t('Enabled') : t('Disabled')} · ${binding.subscribed ? t('Subscribed') : t('Not subscribed')} · ${binding.listener ? t('Listener projected') : t('No listener')}`, { ...binding, admission: 'unknown', executed: 'unknown' }))
     if (deployment) graph.push(node('deployment', t('Published BOT / Agent'), `${deployment.id} · ${deployment.agent ?? t('Unavailable')} · ${deploymentLabel(deployment.state)}`, deployment))
     if (binding) graph.push(node('session', t('Session'), binding.sessionIds.length ? binding.sessionIds.join(', ') : t('No existing session recorded'), { sessionIds: binding.sessionIds }, binding.sessionIds[0]))
+    for (const item of graph) item.description = binding?.kind === 'host-owner-ingress'
+      ? t('Owner ingress is not permission to reply in every group. Admission and execution are unknown.')
+      : t('Configuration and existing sessions are not message admission or execution receipts.')
     return { definition: { id, name: binding ? `${deployment?.id ?? binding.deploymentId} · ${binding.topic ?? t('Host owner ingress')}` : connection?.displayName ?? deployment!.id, enabled }, graph, enabled, projection: true, configureConnectionId: !binding ? connection?.id : undefined,
       conversation: binding?.sessionIds[0] ? { kind: 'fixed', sessionId: binding.sessionIds[0] } : undefined }
   })]

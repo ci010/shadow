@@ -13,6 +13,7 @@ import { learningInterval, updateLearningInterval, updateLearningEnabled } from 
 import { InputRouter } from '../../input/router.ts'
 import { createBotsHandler } from '../../vfs/bots.ts'
 import { createConnectionsHandler } from '../../vfs/connections.ts'
+import { BotObserveTool } from '../../tools/bot-observe.ts'
 import { connectionSinkProjection } from '../../channels/sink-projection.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
 import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
@@ -1532,11 +1533,13 @@ export async function createProjectRuntime(
     },
   }, automationProfiles, { validateAdmission: validateWorkProgram, validate: (settings, signal) => settings.folderId ? validateWorkTarget(settings, signal) : validateWorkProgram(settings, signal), running: () => workDispatcher.isRunning(), cancel: () => workDispatcher.cancel(),
     resume: (key, version, signal, acknowledgeToolReplay) => workDispatcher.resume(key, version, signal, acknowledgeToolReplay) })
-  registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled, () => botWorkflowProjection({
+  const botSnapshot = () => botWorkflowProjection({
     projectId: project.id, store: botStore, channels, directory: directoryBots,
     sessionIds: sessions.listSessions().map(session => session.sessionId),
     personalListeners: sessionInputListeners(project.id, sessions, botStore, directoryBots), sinkLookup: connectionSink,
-  }))
+  })
+  registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled, botSnapshot)
+  importTool.registerBuiltin('bot_observe', new BotObserveTool(project.id, botSnapshot))
   function learningPipeline(id: string): Pipeline {
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
