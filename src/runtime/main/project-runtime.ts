@@ -29,6 +29,7 @@ import { RemoteDerivedWorkspaceBackend } from '../../folders/remote-derived-work
 import { DERIVED_WORKSPACE_OPERATION } from '../../execution/derived-workspace-contract.ts'
 import { WorkspaceCreateTool } from '../../tools/workspace-create.ts'
 import { WorkspaceForkTool } from '../../tools/workspace-fork.ts'
+import { WorkspaceRemoveTool } from '../../tools/workspace-remove.ts'
 import { WorkspaceRegisterTool } from '../../tools/workspace-register.ts'
 import { prepareWorktree, isolationGit } from '../../cron/work-isolation.ts'
 import { WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_ID, type WorkDispatchConfig } from '../../cron/work-dispatch-contract.ts'
@@ -1257,6 +1258,7 @@ export async function createProjectRuntime(
   }
   importTool.registerBuiltin('workspace_create', new WorkspaceCreateTool(derivedWorkspaces, project.id, canAuthor, createLayerFSWorkspace))
   importTool.registerBuiltin('workspace_fork', new WorkspaceForkTool(derivedWorkspaces, project.id, canAuthor, folderRegistry, createLayerFSWorkspace))
+  importTool.registerBuiltin('workspace_remove', new WorkspaceRemoveTool(dependencies.catalog, project.id, canAuthor))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
   workflows.bindHost('work-organizer', {
@@ -1806,6 +1808,12 @@ export async function createProjectRuntime(
   })
   cleanup.push(() => folders.dispose())
   const releaseFolderLifecycle = dependencies.catalog.configureFolderLifecycle(project.id, {
+    assertRemovalIdle: (folder, callerId) => {
+      folders.assertIdle()
+      // Preserve inactive history, but never delete the caller’s selected/delegated resource.
+      if (sessions.workspaceRemovalBlocked(folder.id, callerId) || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
+        processManager.list().some(process => !process.exitedAt)) throw new FolderError('folder_busy', 'The calling conversation depends on this Workspace, or other Project work is active/uncertain; retained.', 409)
+    },
     assertIdle: () => {
       folders.assertIdle()
       if (sessions.hasFolderWork || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||

@@ -36,6 +36,8 @@ export interface ExecutionContext extends MessageContext {
   cwd?: string
   /** Committed selected Folder identity, never an argument or cwd alias. */
   folderId?: string
+  /** Host-stamped sole top-level call; not authority and never trusted from tool args. */
+  soleDirectToolCall?: boolean
   /** Host-only sole-call boundary; never available to nested scripts or parallel batches. */
   switchProjectFolder?: (prepared: { folderId: string; workdir: import('../sessions/locality.ts').WorkdirRefV2; content: string }) => Promise<string>
   /** Resolved resource identity for explicit-target file-change provenance. */

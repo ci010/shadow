@@ -68,10 +68,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await sessions.buildSession('web:child', { id: 'web:root' })
       await sessions.buildSession('web:workspace-child', undefined, { workspaceRoot: 'web:root' })
       await sessions.buildSession('web:scratch')
+      assert.equal(sessions.workspaceRemovalBlocked(folder.id, 'web:root'), true, 'caller may not remove its current Workspace')
+      assert.equal(sessions.workspaceRemovalBlocked(folder.id, 'web:child'), true, 'caller parent-chain is a dependency')
+      assert.equal(sessions.workspaceRemovalBlocked(folder.id, 'web:scratch'), false, 'inactive opaque references do not block removal')
       const admission = sessions.deliver('web:root', input('first'))
       await assert.rejects(registry.changeProject(folder.id, target.id), { code: 'folder_busy' })
       await admission
       await called.promise
+      assert.equal(sessions.workspaceRemovalBlocked(folder.id, 'web:scratch'), true, 'other active conversations block removal')
       await sessions.deliver('web:root', input('queued'))
       await assert.rejects(registry.changeProject(folder.id), { code: 'folder_busy' })
       answer.resolve({ content: 'Finished', toolCalls: [] })
@@ -80,6 +84,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert(Date.now() < until, 'session did not become idle')
         await delay(1)
       }
+      assert.equal(sessions.workspaceRemovalBlocked(folder.id, 'web:scratch'), false)
       assert(sessions.getActiveSession('web:root'))
       const history = async () => JSON.parse(JSON.stringify((await sessions.getHistory('web:root')).messages.filter(message => message.role !== 'system')))
       const historyBefore = await history()

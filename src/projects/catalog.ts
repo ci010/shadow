@@ -1,4 +1,5 @@
 import { parseWorkspaceLineage, type WorkspaceLineage } from '../folders/lineage.ts'
+import { removeDerivedWorktree } from '../folders/remove-worktree.ts'
 import { randomUUID } from 'node:crypto'
 import { parseBranchWorkspace } from '../execution/layerfs/workspace-identity.ts'
 import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
@@ -34,6 +35,7 @@ interface CatalogData {
 
 interface FolderLifecycle {
   assertIdle: () => void
+  assertRemovalIdle?: (folder: FolderRecord, callerId: string) => void
   invalidate: () => void
   sessionsToRetire?: (folder: FolderRecord, claims: RemoteOwnershipClaim[]) => string[]
 }
@@ -108,6 +110,7 @@ export class ProjectCatalog {
   #writes: Promise<unknown> = Promise.resolve()
   #reservations = new Map<string, { projectId: string; path: string }>()
   #access = new Map<string, number>()
+  #removing = new Set<string>()
   #lifecycle = new Map<string, FolderLifecycle>()
   #observers = new Set<() => void>()
   #folderObservers = new Map<string, Set<() => void>>()
@@ -383,6 +386,7 @@ export class ProjectCatalog {
   }
 
   acquireFolderAccess(projectId: string): () => void {
+    this.assertFolderAdmission(projectId)
     if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project is unavailable.', 409)
     this.#access.set(projectId, (this.#access.get(projectId) ?? 0) + 1)
     let released = false
@@ -391,6 +395,45 @@ export class ProjectCatalog {
       released = true
       this.#access.set(projectId, (this.#access.get(projectId) ?? 1) - 1)
     }
+  }
+
+  assertFolderAdmission(projectId: string): void {
+    if (this.#removing.has(projectId)) throw new FolderError('folder_busy', 'Workspace removal in progress; retry after its terminal receipt.', 409)
+  }
+
+  removeWorktree(projectId: string, id: string, integratedRef: string, callerId: string, signal: AbortSignal): Promise<{ workspaceId: string; diskRemoved: true; unregistered: true; branchRetained: string; branch: string; tip: string; integratedCommit: string }> {
+    return this.#transaction(async () => {
+      signal.throwIfAborted()
+      this.assertFolderAdmission(projectId)
+      if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project unavailable.', 409)
+      const folder = this.#current().folders.find(item => item.id === id && item.projectId === projectId)
+      if (!folder) throw new FolderError('folder_not_found', 'Registered Workspace ID not found in this Project.', 404)
+      const parent = this.#current().folders.find(item => item.id === folder.lineage?.parentId && item.projectId === projectId)
+      if (!parent || folder.kind && folder.kind !== 'local' || parent.kind && parent.kind !== 'local') throw new Error('Only local derived Git worktrees with a registered parent are supported; no remote/LayerFS fallback.')
+      if (this.#current().folders.some(item => item.id !== id && item.kind !== 'remote' && item.kind !== 'layerfs' && overlaps(item.path, folder.path))) throw new Error('Overlapping Workspace registration; retained.')
+      if (this.#access.get(projectId) || [...this.#reservations.values()].some(item => item.projectId === projectId) || this.#current().pendingRemoteJobs?.some(item => item.projectId === projectId)) throw new Error('Active or uncertain Project operations; retained.')
+      const lifecycle = this.#lifecycle.get(projectId)
+      if (!lifecycle?.assertRemovalIdle) throw new Error('Workspace removal lifecycle unavailable; retained.')
+      lifecycle.assertRemovalIdle(folder, callerId)
+      const retiredSessions = lifecycle.sessionsToRetire?.(folder, []) ?? []
+      this.#removing.add(projectId)
+      let diskRemoved = false
+      let unregistered = false
+      try {
+        const evidence = await removeDerivedWorktree(folder, parent, integratedRef, signal)
+        diskRemoved = true
+        // The disk mutation completed. Do not let late cancellation prevent metadata commit.
+        this.#commit({ ...this.#current(), folders: this.#current().folders.filter(item => item.id !== id),
+          retiredFolders: [...(this.#current().retiredFolders ?? []), folder],
+          retiredSessions: [...(this.#current().retiredSessions ?? []), ...retiredSessions.filter(sessionId => !this.isRetiredSession(projectId, sessionId)).map(sessionId => ({ projectId, sessionId }))] })
+        unregistered = true
+        this.#removing.delete(projectId)
+        lifecycle.invalidate()
+        return { workspaceId: id, diskRemoved: true, unregistered: true, branchRetained: evidence.branch, ...evidence }
+      } catch (error) {
+        throw new Error(`${error instanceof Error ? error.message : String(error)} Workspace ${id}: ${unregistered ? 'disk removal and unregister completed, but session invalidation failed; history remains preserved and further resource admission is revoked' : diskRemoved ? 'disk removal completed but registration retained; restore the checkout or explicitly reconcile registration through owner UI' : 'registration retained; Git removal may have failed or been interrupted; inspect disk and Git worktree metadata before retrying'}. No branch was deleted.`, { cause: error })
+      } finally { this.#removing.delete(projectId) }
+    })
   }
 
   isRetiredWorkdir(projectId: string, ref: WorkdirRefV2): boolean {
