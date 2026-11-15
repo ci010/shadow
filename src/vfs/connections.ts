@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { assertBotManagementAccess } from '../bots/access.ts'
-import { botObservation } from '../bots/observation.ts'
+import { botObservation, observationEntries } from '../bots/observation.ts'
 import type { BotWorkflowProjection } from '../bots/workflow-projection.ts'
 import { parseConnectionSinkProjection } from '../shared/connection-sink.ts'
 import type { ConnectionSinkProjection } from '../channels/sink-contract.ts'
@@ -40,6 +40,8 @@ export function createConnectionsHandler(options: ConnectionsVfsOptions): { read
 Use read (including flag=l) or search handler=glob/grep with path=v:connections.
 Existing host read/search tool grants apply; no owner-Web or per-conversation check is required for redacted observation.
 Opaque identifiers only; no message bodies, raw user IDs or navigation. UI and observation share receiver evidence. Missing evidence is unknown, not zero; inventory is not admission, receipt or execution success.
+Observation object listings/search expand at most 50 records per scope; truncation is explicit. Scope by kind or follow an exact path from observation.json.
+Exact redacted objects use the typed paths in observation.json: v:connections/observations/<kind>/<opaque>.json. These show current state only, not historical revision bytes.
 Other Connection paths are owner-Web management inspection and retain their existing restrictions.`
   const observation = () => serialize(botObservation(options.projectId, options.observation()))
   const inventory = () => {
@@ -85,6 +87,11 @@ Other Connection paths are owner-Web management inspection and retain their exis
         return publicGuide + '\n\n' + GUIDE
       }
       if (path === 'observation.json') return observation()
+      if (path.startsWith('observations/')) {
+        const entry = observationEntries(options.projectId, options.observation()).find(entry => entry.name === path)
+        if (!entry) throw new Error('Observation object unavailable in current Project.')
+        return entry.content
+      }
       authorize(context); return render(path)
     },
     list: (context, query) => {
@@ -93,6 +100,11 @@ Other Connection paths are owner-Web management inspection and retain their exis
       const publicEntries = () => ['overview', 'observation.json'].filter(name => !scope || name === scope || name.startsWith(`${scope}/`)).map(name => ({ name,
         content: query?.content === false ? '' : name === 'overview' ? publicGuide : observation() }))
       if (scope === 'overview' || scope === 'observation.json') return publicEntries()
+      if (scope === 'observations' || scope.startsWith('observations/')) {
+        const records = observationEntries(options.projectId, options.observation()).filter(entry => entry.name === scope || entry.name.startsWith(`${scope}/`))
+        return records.slice(0, 50).map((entry, index) => ({ ...entry, content: query?.content === false ? '' : entry.content,
+          ...(index === 49 && records.length > 50 ? { warning: `Observation discovery truncated: first 50 of ${records.length} objects. Scope by kind or follow an exact path from v:connections/observation.json.` } : {}) }))
+      }
       try { authorize(context) } catch {
         if (scope) throw new Error('Connection management path is unavailable. Read v:connections/overview.')
         return publicEntries()
@@ -121,8 +133,9 @@ Other Connection paths are owner-Web management inspection and retain their exis
       return entries
     },
   }
-  return { ...handler, directory: async (path, context) => ({
-    header: publicGuide,
-    items: (await handler.list(context, { subpath: path, content: false })).map(entry => `v:connections/${entry.name}`),
-  }) }
+  return { ...handler, directory: async (path, context) => {
+    const entries = await handler.list(context, { subpath: path, content: false })
+    return { header: [publicGuide, ...entries.flatMap(entry => entry.warning ? [entry.warning] : [])].join('\n'),
+      items: entries.map(entry => `v:connections/${entry.name}`) }
+  } }
 }

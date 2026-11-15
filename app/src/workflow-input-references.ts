@@ -1,3 +1,7 @@
+import { configuredTarget } from './bot-workflows.ts'
+import { t } from './i18n.ts'
+import type { WorkflowCanvasEntry } from './workflow-canvas.ts'
+import { receiverLabel } from './receiver-label.ts'
 import type { InjectionKey } from 'vue'
 import { parseInputReferences, type InputReference, type WorkflowReferenceSelector } from '../../src/shared/input-references.ts'
 import type { WorkflowDefinition, WorkflowRun } from './workflows.ts'
@@ -11,7 +15,8 @@ export interface WorkflowInputReferences {
   clearSelection?(): void
 }
 export const WorkflowInputReferencesKey: InjectionKey<WorkflowInputReferences> = Symbol('WorkflowInputReferences')
-export const inputReferenceKey = (item: InputReference): string => item.kind === 'connection-sink'
+export const inputReferenceKey = (item: InputReference): string => item.kind === 'bot-deployment'
+  ? JSON.stringify([item.kind, item.projectId, item.botId, item.revision, item.bindingId ?? null, item.selector ?? null]) : item.kind === 'connection-sink'
   ? JSON.stringify([item.kind, item.projectId, item.connectionId, item.receiverId ?? null]) : JSON.stringify([item.projectId, item.workflowId, item.revision, item.runId ?? null,
   item.selector?.kind === 'node' ? ['node', item.selector.index, item.selector.nodeKind] : item.selector?.kind ?? null])
 
@@ -56,4 +61,29 @@ export function captureInputReferences(items: readonly LabeledInputReference[]):
 export function removeSentInputReferences(items: readonly LabeledInputReference[], sent: readonly InputReference[]): LabeledInputReference[] {
   const keys = new Set(sent.map(inputReferenceKey))
   return items.filter(item => !keys.has(inputReferenceKey(item.reference)))
+}
+
+/** Selection cannot silently widen to the parent Connection or receiver. */
+export function botInputReference(projectId: string, entry: WorkflowCanvasEntry, nodeId?: string): LabeledInputReference | undefined {
+  const node = entry.graph?.find(node => node.id === (nodeId ?? (!entry.sinkProjection && entry.graph?.length === 1 ? entry.graph[0]?.id : undefined)))
+  const sink = entry.sinkProjection
+  if (node?.nodeType === 'deployment' || nodeId?.startsWith('entry:')) {
+    const botNode = node?.nodeType === 'deployment' ? node : entry.graph?.find(item => item.parentId === nodeId && item.nodeType === 'deployment')
+    const config = botNode?.config as { id?: string; platform?: string; topic?: string; kind?: string; deployment?: { id: string; revision?: string; state: string; agent?: string } } | undefined
+    const bot = config?.deployment
+    if (!bot?.revision || bot.state !== 'valid') return
+    try {
+      const [reference] = parseInputReferences([{ kind: 'bot-deployment', projectId, botId: bot.id, revision: bot.revision,
+        ...(config?.id ? { bindingId: config.id } : {}), ...(nodeId?.startsWith('entry:') ? { selector: 'entry' } : {}) }])
+      const target = config?.id ? config.kind === 'host-owner-ingress' ? t('Host owner ingress') : configuredTarget({ platform: config.platform ?? '', topic: config.topic, kind: config.kind ?? '' }) : ''
+      return { reference: reference!, label: `${bot.agent || bot.id} · ${bot.id}${target ? ` · ${target}` : ''}${nodeId?.startsWith('entry:') ? ` · ${t('Conversation entry')}` : ''}` }
+    } catch { return }
+  }
+  if (!sink) return
+  if (nodeId?.startsWith('receiver:')) {
+    const receiver = sink.receivers.find(receiver => receiver.id === nodeId.slice('receiver:'.length))
+    return receiver ? connectionSinkInputReference(projectId, sink.connectionId, receiverLabel(receiver), receiver.id) : undefined
+  }
+  if (nodeId !== undefined && nodeId !== 'connection') return
+  return connectionSinkInputReference(projectId, sink.connectionId, entry.definition.name || sink.connectionId)
 }

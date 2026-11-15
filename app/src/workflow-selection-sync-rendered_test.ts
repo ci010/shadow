@@ -15,6 +15,7 @@ import { Bus } from '../../src/bus/bus.ts'
 import { WebChannel } from '../../src/channels/web.ts'
 import { workflowReferenceResolver } from '../../src/workflows/references.ts'
 import type { ConnectionSinkProjection } from '../../src/channels/sink-contract.ts'
+import type { BotWorkflowProjection } from '../../src/bots/workflow-projection.ts'
 import type { WorkflowRuntime } from '../../src/workflows/runtime.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
@@ -43,7 +44,8 @@ test('workflow selection syncs to the editable split target, replaces and clears
       path: 'v:connections/conn/receivers/forum.json', navigation: { kind: 'channel-content', channelType: 15, guildId: 'guild', view: 'threads',
         address: { projectId, botInstanceId: 'conn', platform: 'discord', conversationId: 'parent' } } }], bots: [], guidePath: 'v:bots/authoring' })
   const bus = new Bus()
-  const channel = new WebChannel(bus, { authorize: () => true, resolveInputReferences: workflowReferenceResolver('a', { inspect: () => referenceState as ReturnType<WorkflowRuntime['inspect']> }, id => { assert.equal(id, 'conn'); return connectionSink('a') }) })
+  const botState: BotWorkflowProjection = { sinks: [connectionSink('a')], connections: [{id:'conn',displayName:'conn',platform:'qq',purpose:'service',enabled:true,health:'connected'}], warnings: [], routing: 'not-probed', processingSuccess: 'unknown', deployments: [{ id: 'sales', state: 'valid' as const, mode: 'service' as const, revision: 'published-sales-1' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }] }
+  const channel = new WebChannel(bus, { authorize: () => true, resolveInputReferences: workflowReferenceResolver('a', { inspect: () => referenceState as ReturnType<WorkflowRuntime['inspect']> }, id => { assert.equal(id, 'conn'); return connectionSink('a') }, () => botState) })
   channel.setReceiver(async message => {
     frozenHistory.push(message.content)
     bus.emit('message.outbound', { event: 'response', channel: 'web', chatId: message.chatId, replyTo: message.messageId, done: true, content: 'ok' })
@@ -94,7 +96,7 @@ test('workflow selection syncs to the editable split target, replaces and clears
       }
       if (path.endsWith('/api/workflows')) {
         const definition = { id: `schedule:${projectId}`, name: `Workflow ${projectId}`, revision: 1, enabled: true, source: { kind: 'schedule', id: projectId }, nodes: [{ kind: 'schedule-action', action: 'session', job: { schedule: 'every 1h', session: 'fresh', task: `Reminder ${projectId}` } }] }
-        json({ projectId, bots: { sinks: [connectionSink(projectId)], connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:chat-ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition, { ...definition, id: `${definition.id}:other`, name: `Other workflow ${projectId}` }], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:chat-ordinary' } }] }); return
+        json({ projectId, bots: { sinks: [connectionSink(projectId)], connections: [{ id: 'isolated-one', displayName: 'First isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'isolated-two', displayName: 'Second isolated', platform: 'qq', purpose: 'service', enabled: false, health: 'disabled' }, { id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }], deployments: [{ id: 'isolated-two', state: 'valid', mode: 'service' }, { id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales', revision: 'published-sales-1' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }], bindings: [{ id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] }, { id: 'two', deploymentId: 'support', connectionId: 'qq-shared', platform: 'qq', topic: 'group:two', enabled: false, subscribed: true, listener: false, kind: 'message', sessionIds: ['web:chat-ordinary'] }], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }, definitions: [definition, { ...definition, id: `${definition.id}:other`, name: `Other workflow ${projectId}` }], runs: [{ id: `run:${projectId}`, workflow: definition.id, definition, timestamp: '2026-11-12T10:00:00Z', status: 'completed', cursor: 1, attempts: 1, nextAt: 0, started: true, output: { sessionId: 'web:chat-ordinary' } }] }); return
       }
       if (path.endsWith('/api/channels')) { json({ channels: (projectId === 'a' ? ['isolated-one', 'isolated-two'] : ['other']).map(id => ({ id, projectId, displayName: id, platform: 'qq', label: 'QQ', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { appId: 'fixture' }, secrets: { secret: true } })) }); return }
       if (path.endsWith('/api/automations')) { json({ automations: [{ id: 'system:session-cleanup', name: 'Session cleanup', source: 'system', session: 'fresh', enabled: true, schedule: 'every 1h', workflow: { id: `schedule:${projectId}`, pending: 0, blocked: 0 } }] }); return }
@@ -314,7 +316,58 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await submitSink('Discuss Connection');
     await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="connection:conn"&&e.textContent.includes("Received group")).click()');
     await wait('window.fixture.chatState.selectedWorkflowReference?.reference.receiverId==="group"');
+    await run('document.querySelectorAll(".receiver-choice")[1].click()');
+    await wait('window.fixture.chatState.selectedWorkflowReference?.reference.receiverId==="forum"');
+    assert.equal(await run('document.querySelector(".graph-node[aria-pressed=true]").dataset.nodeId'),'receiver:forum');
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("Parent forum")'),true);
+    win.show();win.focus();win.webContents.focus();await delay(100);
+    await run('document.querySelector(".receiver-choice").focus()');
+    await wait('document.activeElement?.classList.contains("receiver-choice")');
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+    await wait('window.fixture.chatState.selectedWorkflowReference?.reference.receiverId==="group"');
+
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("Received group")'),true);
+    await wait('document.querySelectorAll(".graph-node[aria-pressed=true]").length===1');
+    assert.equal(await run('document.querySelector(".graph-node[aria-pressed=true]").dataset.nodeId'),'receiver:group');
+    assert.equal(await run('getComputedStyle(document.querySelector(".graph-node[aria-pressed=true]")).borderTopWidth'),'3px');
+    // Merely focusing another block never changes the selected receiver.
+    await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="connection:conn"&&e.dataset.nodeId==="connection").focus()');
+    assert.equal(await run('document.querySelector(".graph-node[aria-pressed=true]").dataset.nodeId'),'receiver:group');
+    await run('document.querySelector(".workflow-graph").dispatchEvent(new KeyboardEvent("keydown",{key:"@",code:"Digit2",shiftKey:true,bubbles:true}))');await delay(400);
+    if(process.env.SELECTION_SCREENSHOT_DIR) require('node:fs').writeFileSync(require('node:path').join(process.env.SELECTION_SCREENSHOT_DIR,'receiver-dark.png'),(await win.webContents.capturePage()).toPNG());
+    const receiverPoint=await run('(()=>{const r=document.querySelector(".graph-node[aria-pressed=true]").getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()');
+    win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...receiverPoint});win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...receiverPoint});
+    await wait('window.fixture.chatState.selectedWorkflowReference?.reference.receiverId==="group"');
+    await run('document.documentElement.classList.remove("dark")');await delay(200);
+    await run('document.querySelector(".workflow-graph").dispatchEvent(new KeyboardEvent("keydown",{key:"@",code:"Digit2",shiftKey:true,bubbles:true}))');await delay(400);
+    if(process.env.SELECTION_SCREENSHOT_DIR) require('node:fs').writeFileSync(require('node:path').join(process.env.SELECTION_SCREENSHOT_DIR,'receiver-light.png'),(await win.webContents.capturePage()).toPNG());
+    await run('document.documentElement.classList.add("dark")');
     await submitSink('Discuss receiver');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"bot-binding:one"}})');
+    await wait('window.fixture.chatState.selectedWorkflowReference?.reference.kind==="bot-deployment"');
+    assert.deepEqual(await run('JSON.parse(JSON.stringify(window.fixture.chatState.selectedWorkflowReference.reference))'),{kind:'bot-deployment',projectId:'a',botId:'sales',revision:'published-sales-1',bindingId:'one'});
+    await wait('!!document.querySelector(".graph-node[aria-pressed=true]")');
+    assert.equal(await run('document.querySelector(".graph-node[aria-pressed=true]").dataset.nodeId'),'bot:one');
+    await run('document.querySelectorAll(".bot-choice")[1].click()');
+    await wait('window.fixture.chatState.selectedWorkflowReference===undefined');
+    assert.equal(await run('document.querySelector(".graph-node[aria-pressed=true]").dataset.nodeId'),'bot:two');
+    assert.equal(await run('document.body.textContent.includes("Selected object cannot be referenced.")'),true,'Missing published revision is explicit, never a parent Connection fallback');
+    win.focus();win.webContents.focus();
+    await run('document.querySelector(".bot-choice").focus()');
+    await wait('document.activeElement?.classList.contains("bot-choice")');
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+    await wait('document.querySelector(".bot-choice").getAttribute("aria-pressed")==="true"');
+    assert.equal(await run('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("BOT:sales")'),true);
+    await submitSink('Discuss BOT');
+    await run('document.querySelector(".workflow-graph").dispatchEvent(new KeyboardEvent("keydown",{key:"@",code:"Digit2",shiftKey:true,bubbles:true}))');await delay(400);
+    if(process.env.SELECTION_SCREENSHOT_DIR) require('node:fs').writeFileSync(require('node:path').join(process.env.SELECTION_SCREENSHOT_DIR,'bot-dark.png'),(await win.webContents.capturePage()).toPNG());
+    win.setSize(680,900);await delay(400);
+    await run('document.querySelector(".mobile-group-switch button").click()');await delay(200);
+    assert.equal(await run('getComputedStyle(document.querySelector(".graph-node[aria-pressed=true]")).borderTopWidth'),'3px');
+    await run('document.querySelector(".workflow-graph").dispatchEvent(new KeyboardEvent("keydown",{key:"@",code:"Digit2",shiftKey:true,bubbles:true}))');await delay(400);
+    if(process.env.SELECTION_SCREENSHOT_DIR) require('node:fs').writeFileSync(require('node:path').join(process.env.SELECTION_SCREENSHOT_DIR,'bot-narrow.png'),(await win.webContents.capturePage()).toPNG());
+    win.setSize(1600,950);await delay(400);
+    await run('window.fixture.groups.focus("a","right")');
     await run('document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Clear selection"]')+').click()');
     await wait('!document.querySelector("[data-editor-group=right] .context-chip")');
     await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"connection:conn"}})');
@@ -341,10 +394,12 @@ test('workflow selection syncs to the editable split target, replaces and clears
   const timer = setTimeout(() => child.kill(), 80_000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); if (code !== 0) console.error(output); assert.equal(code, 0, output); assert.match(output, /WORKFLOW_SELECTION_SYNC_OK/)
-  assert.deepEqual(requests.filter(request => request.method !== 'GET'), Array(3).fill({ path: '/projects/a/api/chat/send', method: 'POST' }), 'Only the explicit send submits; editor movement never forks, prepares or submits')
+  assert.deepEqual(requests.filter(request => request.method !== 'GET'), Array(4).fill({ path: '/projects/a/api/chat/send', method: 'POST' }), 'Only the explicit send submits; editor movement never forks, prepares or submits')
   assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a' }, { kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a', selector: { kind: 'node', index: 0, nodeKind: 'schedule-action' } }])
   assert.deepEqual(sentBodies[1]!.references, [{ kind: 'connection-sink', projectId: 'a', connectionId: 'conn' }])
   assert.deepEqual(sentBodies[2]!.references, [{ kind: 'connection-sink', projectId: 'a', connectionId: 'conn', receiverId: 'group' }])
+  assert.deepEqual(sentBodies[3]!.references, [{ kind: 'bot-deployment', projectId: 'a', botId: 'sales', revision: 'published-sales-1', bindingId: 'one' }])
+  assert.match(frozenHistory[3]!, /observations\/deployment\//)
   assert.match(frozenHistory[1]!, /v:connections\/conn\/sink.json/)
   assert.match(frozenHistory[2]!, /v:connections\/conn\/receivers\/group.json/)
   assert.match(frozenHistory[2]!, /v:bots\/authoring/)

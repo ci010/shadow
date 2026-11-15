@@ -1,3 +1,5 @@
+import { workflowReferenceResolver } from '../workflows/references.ts'
+import type { WorkflowRuntime } from '../workflows/runtime.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createConnectionsHandler } from './connections.ts'
@@ -42,8 +44,26 @@ test('read/list/glob/grep expose only redacted shared evidence to full and filte
       const raw = String(await tools.execute('read', { path: 'v:connections/observation.json', offset: 1, limit: 500 }, context))
       const result = JSON.parse(raw)
       assert.deepEqual(result.connections[0].receivers[0].evidence, sink.receivers[0]!.evidence)
+      const freeze = workflowReferenceResolver('p', { inspect: () => ({ projectId: 'p', definitions: [], runs: [] }) as unknown as ReturnType<WorkflowRuntime['inspect']> }, () => sink, () => snapshot)
+      for (const receiverId of [undefined, sink.receivers[0]!.id]) {
+        const frozen = freeze([{ kind: 'connection-sink', projectId: 'p', connectionId: source.botInstanceId, ...(receiverId ? { receiverId } : {}) }])
+        const record = JSON.parse(frozen.split('\n').at(-2)!)[0]
+        const object = JSON.parse(String(await tools.execute('read', { path: record.path }, context)))
+        assert.equal(object.objectKind, receiverId ? 'receiver' : 'connection')
+        assert.equal(object.id, receiverId ? result.connections[0].receivers[0].id : result.connections[0].id)
+      }
+
       assert.equal(result.bindings[0].listener, true); assert.equal(result.bindings[0].sessionCount, 1)
       assert.equal(result.bindings[0].admission, 'unknown'); assert.equal(result.processingSuccess, 'unknown')
+      for (const record of [...result.connections, ...result.connections.flatMap((connection: { receivers: unknown[] }) => connection.receivers), ...result.deployments, ...result.bindings]) {
+        const exact = String(await tools.execute('read', { path: record.path }, context))
+        const object = JSON.parse(exact)
+        assert.equal(object.id, record.id)
+        assert.equal(object.objectKind, record.objectKind)
+        assert.doesNotMatch(exact, /PRIVATE_|sender|secret|chatId|conversationId|inboxSessionId|sessionIds|topic/)
+        assert.throws(() => handler.read(record.path.slice('v:connections/'.length), { ...context, projectId: 'other' }), /Project mismatch/)
+      }
+
       assert.doesNotMatch(raw, /PRIVATE_|sender|content|secret|chatId|conversationId|inboxSessionId/)
       const guide = String(await tools.execute('read', { path: 'v:connections/overview' }, context))
       assert.match(guide, /v:connections\/observation.json/)

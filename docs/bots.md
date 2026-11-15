@@ -41,6 +41,17 @@ duplicate observations, or unlinking. It cannot verify real group receipt,
 per-message persistence, admission or execution. Projection nodes are not `ready`
 execution nodes; their status is `unknown`.
 
+Individual graph blocks have a blue selection border, selected surface and check
+mark; the containing group retains only a quiet boundary. Keyboard focus alone
+is not selection. Graph buttons, inspector receiver/BOT choices and legacy BOT
+URL aliases share the same selection and composer reference. Receiver references
+use that receiver's real title (or explicit typed identity fallback), never the
+parent Connection name. BOT references retain deployment and current entry
+identity rather than degrading to a Connection/receiver. Unreferenceable objects
+show an explicit notice. Shift+2 fits the selected block, accounting for an
+overlaid inspector where space permits; very narrow panes retain the existing
+single-active-editor/inspector layout.
+
 Connection/BOT **management VFS** remains restricted to the owning Project's live,
 user-owned durable Web administrator session. Redacted observation uses the existing
 read/search VFS, not a separate tool. `read({ path: 'v:connections/overview' })`
@@ -48,7 +59,26 @@ describes the paths. `read({ path: 'v:connections/observation.json' })` returns 
 current Project inventory. `read({ path: 'v:connections', flag: 'l' })` or
 `search({ handler: 'glob', query: '**', path: 'v:connections' })` discovers it;
 `search({ handler: 'grep', query: 'unknown', path: 'v:connections/observation.json' })`
-searches its content.
+searches its content. Each record also includes a typed exact path under
+`v:connections/observations/{connection|receiver|deployment|binding}/<opaque>.json`.
+Follow that host-provided path with read, list its parent directory or scope
+search to the exact path. Object directory/search expansion is bounded to 50
+records per scope and reports truncation; follow exact inventory paths for later
+objects (exact lookup is not limited to those first 50). Locators hash Project, object kind and real identity;
+receiver locators also include their parent Connection. They do not decode into
+management paths. Exact objects expose only the same reconstructed redacted
+fields, plus current published revision when available. They never expose BOT
+source, owner selectors, message bodies or execution-session IDs.
+
+Workflow selection freezes an exact BOT ID, published revision and entry identity
+at send admission, with those real observation paths. Stale, unavailable or
+quarantined BOT revisions and unknown/foreign entries are rejected; the client
+cannot supply paths, policy or execution grants. Frozen context stays unchanged
+if publication changes later. Observation paths deliberately return **current**
+state, not historical package bytes: compare its revision with the frozen one;
+a removed object is unavailable. Canonical `managementPath` values remain under
+the separate owner-Web management gate. References never authorize execution,
+publication, deletion or a broader read scope.
 
 Existing host `SessionTools` read/search allow/block filtering governs reachability,
 including restricted agents granted read or search. There is no model-controlled
@@ -62,7 +92,7 @@ all deployment/management operations retain their existing restrictions.
 VFS and UI use the same runtime `botSnapshot` and receiver `evidence` DTO.
 UI names and navigation addresses are presentation-only. Observation reconstructs
 a narrower allowlist: opaque hashed identifiers, transport health, receiver
-evidence, deployment mode/state and configured binding/listener/session counts.
+evidence, deployment mode/state/published revision and configured binding/listener/session counts.
 It omits raw conversation/session/user IDs, names, message bodies, URLs, credentials,
 module data and navigation. Same-Project group receivers can be enumerated;
 management, sending, deployment and message-content access are not granted.

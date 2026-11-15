@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue'
+import { computed, nextTick, ref, useId } from 'vue'
 import { VueFlow, Handle, Position, useVueFlow } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -9,7 +9,7 @@ import HoverInfo from './HoverInfo.vue'
 import { workflowStatus, workflowConversationLocation } from '../workflows.ts'
 import { createWorkflowCanvas, type WorkflowCanvasEntry } from '../workflow-canvas.ts'
 const router = useRouter()
-const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string; projectId: string }>()
+const props = defineProps<{ flows: WorkflowCanvasEntry[]; selectedId?: string; selectedNodeId?: string; projectId: string }>()
 const emit = defineEmits<{ inspect: [id: string, nodeId?: string]; clear: []; toggle: [id: string, enabled: boolean] }>()
 const id = useId()
 const { fitView, zoomIn, zoomOut, setViewport, viewport } = useVueFlow(id)
@@ -20,10 +20,25 @@ defineExpose({ focusCanvas: () => controls.value?.querySelector('button')?.focus
 function keydown(event: KeyboardEvent) {
   if (editable(event.target) || event.ctrlKey || event.metaKey || event.altKey) return
   if (event.shiftKey && (event.code === 'Digit1' || event.key === '!')) void fitView({ padding: .1 })
-  else if (event.shiftKey && (event.code === 'Digit2' || event.key === '@') && props.selectedId) void fitView({ nodes: [JSON.stringify([props.selectedId, 'group'])], padding: .15 })
+  else if (event.shiftKey && (event.code === 'Digit2' || event.key === '@') && props.selectedId) void fitSelection()
   else if (event.key === 'Escape') emit('clear')
   else return
   event.preventDefault(); event.stopPropagation()
+}
+async function fitSelection() {
+  await fitView({ nodes: [JSON.stringify([props.selectedId, props.selectedNodeId ?? 'group'])], padding: .15, maxZoom: 1 })
+  await nextTick()
+  // The narrow inspector overlays the canvas. Centre the selected block in its
+  // actually visible portion rather than beneath that inspector.
+  const canvas = pane.value, selected = canvas?.querySelector<HTMLElement>('.graph-node[aria-pressed=true]')
+  const inspector = canvas?.closest('.workflow-layout')?.querySelector<HTMLElement>('.workflow-inspector')
+  if (!canvas || !selected || !inspector || getComputedStyle(inspector).position !== 'absolute') return
+  const box = canvas.getBoundingClientRect(), cover = inspector.getBoundingClientRect(), node = selected.getBoundingClientRect()
+  const width = Math.min(box.right, cover.left) - box.left
+  if (width < 120) return // Inspector intentionally owns very narrow panes.
+  const current = viewport.value, ratio = Math.min(1, (width - 24) / node.width)
+  const centre = { x: node.left + node.width / 2 - box.left, y: node.top + node.height / 2 - box.top }
+  await setViewport({ x: width / 2 - (centre.x - current.x) * ratio, y: box.height / 2 - (centre.y - current.y) * ratio, zoom: current.zoom * ratio })
 }
 function wheel(event: WheelEvent) {
   if (!pane.value?.parentElement?.contains(document.activeElement) || editable(event.target)) return
@@ -46,7 +61,7 @@ const canvas = computed(() => buildCanvas(props.flows))
       <button class="btn btn-sm" @click="zoomIn()">{{ t('Zoom in') }}</button>
       <button class="btn btn-sm" @click="zoomOut()">{{ t('Zoom out') }}</button>
       <button class="btn btn-sm" @click="fitView({ padding: .1 })">{{ t('Fit diagram') }}</button>
-      <details class="canvas-help"><summary>{{ t('Canvas shortcuts') }}</summary><p>{{ t('Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.') }}</p></details>
+      <details class="canvas-help"><summary>{{ t('Canvas shortcuts') }}</summary><p>{{ t('Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected node or workflow. Escape clears selection. These shortcuts never edit or run a workflow.') }}</p></details>
     </div>
     <div ref="pane" class="graph-canvas" tabindex="-1" :aria-label="t('Workflow canvas')" @wheel="wheel"
       @pointerdown="event => { if (!editable(event.target) && !(event.target as HTMLElement).closest('button')) focusCanvas() }">
@@ -58,9 +73,9 @@ const canvas = computed(() => buildCanvas(props.flows))
           <h2 class="graph-column-heading" :data-column="data.column">{{ data.column === 'cron' ? t('Cron workflows') : data.column === 'automation' ? t('Automation workflows') : t('BOT workflows') }}</h2>
         </template>
         <template #node-group="{ data }">
-          <div class="graph-group" :class="{ selected: selectedId === data.definition.id }" :data-workflow="data.definition.id" :data-column="data.column" :data-enabled="data.enabled" :data-projection="data.projection || undefined">
+          <div class="graph-group" :class="{ selected: selectedId === data.definition.id, 'group-selected': selectedId === data.definition.id && !selectedNodeId }" :data-workflow="data.definition.id" :data-column="data.column" :data-enabled="data.enabled" :data-projection="data.projection || undefined">
             <div class="group-header">
-            <button class="group-heading nodrag nopan" @click="inspect(data.definition.id)">
+            <button class="group-heading nodrag nopan" :aria-pressed="selectedId === data.definition.id && !selectedNodeId" @click="inspect(data.definition.id)">
               <strong><span :class="data.projection ? (data.projectionType === 'connection' ? 'i-lucide-plug' : data.projectionType === 'deployment' ? 'i-lucide-package' : 'i-lucide-git-branch') : data.enabled ? 'i-lucide-circle-check' : 'i-lucide-circle-pause'" aria-hidden="true" /> {{ data.definition.name || data.definition.id }}</strong>
               <span :class="{ 'projection-type': data.projection }">{{ data.projection ? (data.projectionType === 'connection' ? (data.sinkProjection ? t('Connection') : t('BOT connection')) : data.projectionType === 'deployment' ? t('Published BOT / Agent') : t('Conversation binding')) : data.enabled ? t('Enabled') : t('Paused') }}<template v-if="data.run"> · {{ workflowStatus(data.run.status) }}</template><template v-if="data.snapshot"> · {{ t('This run configuration') }}</template></span>
             </button>
@@ -98,7 +113,7 @@ const canvas = computed(() => buildCanvas(props.flows))
         </template>
         <template #node-workflow="{ data }">
           <Handle type="target" :position="Position.Left" :connectable="false" />
-          <div class="graph-node-shell" :class="{ 'has-target': data.targetSessionId }"><button class="graph-node nodrag nopan" :data-node-type="data.nodeType" :data-state="data.status" :data-flow="data.flowId" :data-enabled="data.enabled" @click="inspect(data.flowId, data.id)"><strong>{{ data.label }}</strong><small>{{ data.detail }}</small><small v-if="data.description" class="node-description">{{ data.description }}</small><span v-if="!data.projection" :data-state="data.status">{{ workflowStatus(data.status) }}</span></button>
+          <div class="graph-node-shell" :class="{ 'has-target': data.targetSessionId }"><button class="graph-node nodrag nopan" :aria-pressed="selectedId === data.flowId && selectedNodeId === data.id" :data-node-id="data.id" :data-node-type="data.nodeType" :data-state="data.status" :data-flow="data.flowId" :data-enabled="data.enabled" @click="inspect(data.flowId, data.id)"><strong><span v-if="selectedId === data.flowId && selectedNodeId === data.id" class="i-lucide-check selection-mark" aria-hidden="true" />{{ data.label }}</strong><small>{{ data.detail }}</small><small v-if="data.description" class="node-description">{{ data.description }}</small><span v-if="!data.projection" :data-state="data.status">{{ workflowStatus(data.status) }}</span></button>
             <RouterLink v-if="data.targetSessionId" class="node-session-link nodrag nopan" :to="{ name: 'chat', params: { projectId, sessionId: data.targetSessionId } }" @pointerdown.stop @mousedown.stop @click.stop @keydown.stop>{{ t('Target session') }}: {{ data.targetSessionId }}</RouterLink>
           </div>
           <Handle type="source" :position="Position.Right" :connectable="false" />
@@ -140,6 +155,9 @@ const canvas = computed(() => buildCanvas(props.flows))
 .graph-node { box-sizing: border-box; width: 240px; height: 120px; padding: 12px; text-align: start; font: inherit; background: var(--node-tint, var(--c-bg-card)); border: 1px solid var(--c-border-hover); color: var(--c-text); display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
 .graph-node strong, .graph-node .node-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }.graph-node small { color: var(--c-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 15px; }.graph-node span { font-size: 12px; color: var(--c-text-secondary); }
 .graph-node[data-node-type=sink] strong { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-shrink: 0; }
+.graph-group.group-selected { border-color: var(--c-primary); }
+.graph-node[aria-pressed=true], .graph-node[aria-pressed=true]:hover { border: 3px solid var(--c-primary); padding: 10px; background: var(--c-selection-bg); }
+.graph-node .selection-mark { display: inline-block; width: 14px; height: 14px; margin-right: 6px; color: var(--c-primary); vertical-align: middle; }
 .graph-node:hover { background: color-mix(in srgb, var(--node-tint, var(--c-bg-card)) 75%, var(--c-bg-muted)); }
 .group-heading:hover { background: var(--c-bg-muted); }
 .graph-node span[data-state] { align-self: flex-start; background: var(--c-bg-card); padding: 1px 4px; }

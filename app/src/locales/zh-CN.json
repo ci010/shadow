@@ -4322,7 +4322,7 @@
   "Hand": "手型",
   "Canvas shortcuts": "画布快捷键",
   "Workflow canvas": "工作流画布",
-  "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "鼠标左键或中键拖动空白画布即可平移；点击节点或工作流标题查看详情。聚焦画布后：滚轮平移；Ctrl/Cmd + 滚轮缩放。Shift+1 适应全部工作流；Shift+2 适应选中工作流；Escape 清除选择。这些快捷键不会编辑或运行工作流。",
+  "Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected node or workflow. Escape clears selection. These shortcuts never edit or run a workflow.": "鼠标左键或中键拖动空白画布即可平移；点击节点或工作流标题查看详情。聚焦画布后：滚轮平移；Ctrl/Cmd + 滚轮缩放。Shift+1 适应全部工作流；Shift+2 适应选中节点或工作流；Escape 清除选择。这些快捷键不会编辑或运行工作流。",
   "Select": "选择",
   "No revision deduplication. Each observation admission can create a new run; recovery resumes its saved run.": "未配置版本去重。每次接纳观测都可创建新运行；恢复继续执行已保存的运行。",
   "Every {count} days": "每{count}天",
@@ -4445,5 +4445,6 @@
   "Owner message target unavailable": "所有者私聊目标不可用",
   "Configured target unavailable": "配置目标不可用",
   "Execution sessions": "执行会话",
-  "Existing BOT execution conversations, separate from passive message history. Not execution receipts.": "现有 BOT 执行会话，与被动消息历史不同；不代表执行凭据。"
+  "Existing BOT execution conversations, separate from passive message history. Not execution receipts.": "现有 BOT 执行会话，与被动消息历史不同；不代表执行凭据。",
+  "Selected object cannot be referenced. Refresh and select a current published object.": "无法引用所选对象。请刷新并选择当前已发布的对象。"
 }
