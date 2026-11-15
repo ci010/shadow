@@ -35,6 +35,46 @@ read coverage and downstream learning usefulness are distinct. A model that omit
 the receipt, misreports coverage or ignores the boundary is not repaired by inventing
 success. Provider failures or invalid final receipts can still fail the run.
 
+## Reflector preparation and save opportunity
+
+Reflector alone reallocates its existing six requests; encapsulator, Soul and
+ordinary sessions keep their prior behavior. The first three requests investigate
+the assigned sources. At request four the host appends a preparation boundary and
+releases protected capacity: prepare a supported candidate with necessary exact
+source details, current-memory deduplication and a fresh `read_wiki`. Request five
+closes further source exploration at execution and hides non-retention tools;
+`learning_memory`, `log`, `learning_result` and canonical `v:memory` read/grep/glob
+remain available. HTTP reads, other virtual roots, workspace overrides, traversal
+and web search cannot bypass that restriction. Request six remains receipt-only,
+including the existing explicit pending-Wiki recovery queue semantics.
+
+During the first three requests, four of the existing 18 tool calls and 48,000 of
+the existing 96,000 argument bytes are protected (including receipt capacity).
+At preparation these become available, still reserving the ordinary one-call /
+8,000-byte receipt capacity. No counter is reset, no extra inference or retry is
+added. This protects one practical check/save/log opportunity, not unlimited
+candidates, a publication quota or a guarantee that every draft fits. Saves may
+also happen earlier. The two formal persistence routes are unchanged: revision-
+bound Wiki save with exact assigned evidence, managed provenance, readback and
+provenance log; or standalone attributed log with batch/origin/key deduplication.
+
+Safety checks remain available at request five, but a fresh Wiki read or dedup
+search alone is not retention. A stale/failed save or a late check with no time
+to save must remain unresolved in an honest partial/blocked receipt. Nothing is
+autosaved from prose. Unknown or unread source evidence never becomes publishable
+just because the save window has arrived.
+
+Tradeoff: request four can still read necessary source details, but request five
+can no longer expand a missing source call. A synthetic 400-line overview that
+still needs an exact call therefore remains partial with zero effects. This does
+not solve arbitrarily long assigned sources, semantic coverage, or repeated reads
+across attempts; it may reduce investigation capacity for those batches. No
+coverage cursor, cross-attempt source-read reuse, journal migration, live replay
+or recovery broadening is introduced. The observed failure receipts motivated
+protecting a save opportunity for already-supported candidates, not a claim that
+real learning quality has improved. Deployment and later real-run auditing remain
+separate.
+
 ## Finite automatic retries
 
 LearningLedger normally stops automatically selecting a batch after three recorded
@@ -141,3 +181,31 @@ authority. Same-page candidates from different dates must merge against the
 current revision, preserving later corrections rather than restoring older claims.
 Compare the resulting page to source, not merely receipt counts; semantic benefit
 and live model compliance remain unverified by synthetic tests.
+
+## Historical Wiki artifact reconciliation
+
+A reflector retry can encounter a Wiki page that legitimately advanced after its
+recorded write. `learning_result.artifactReconciliations` provides a bounded,
+explicit alternative to restoring old content just to satisfy verification.
+After `learning_memory.read_wiki` in the active attempt, supply the exact
+`memory/topics/...md` (or concepts/identities/tools) path, `priorRevision`,
+`currentRevision`, `outcome` (`retained` or `superseded`), and a source-grounded
+`reason`. At most four unique paths are accepted. This is a semantic attestation,
+not automated proof that the newer page is accurate; review raw source evidence
+and preserve newer human choices and assistant attribution.
+
+The runtime matches the prior hash to a recorded memory artifact, matches the
+current hash to a fresh read, and verifies the on-disk content again. It retains
+the original artifact revision and journals the reconciliation with the receipt;
+subsequent verification accepts only that exact newer hash. Missing/empty pages,
+unrelated paths, duplicate entries, stale reads and subsequent edits fail closed.
+Skills, SOUL, decisions and logs do not use this exception. No content is written
+by reconciliation. Nonempty Markdown has no general corruption/semantic validator;
+a readable but damaged page must not be attested as retained or superseded.
+
+This does not resolve unread source scope, candidates, failed tools or missing
+provenance logs, and does not permit `no_change` when historical effects exist.
+It adds neither inference budget nor retries. Repeated full-source reading across
+attempts remains unaddressed: there is no persisted source-coverage optimization.
+No live replay, cron change or data migration is needed for the optional journal
+field; deploying the updated runtime is necessary before scheduling an evaluation.

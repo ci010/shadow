@@ -31,6 +31,12 @@ export type LearningLog = z.infer<typeof logSchema>
 const artifactSchema = z.object({
   path: text, revision: text, kind: z.enum(['memory', 'skill', 'soul']),
 }).strict()
+export const artifactReconciliations = z.array(z.object({
+  path: z.string().regex(/^memory\/(?:topics|concepts|identities|tools)\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/),
+  priorRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  currentRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  outcome: z.enum(['retained', 'superseded']), reason: z.string().trim().min(1).max(1200),
+}).strict()).max(4)
 export type LearningArtifact = z.infer<typeof artifactSchema>
 // Compatibility boundary: events/inputEvents and outcome.events are persisted
 // journal/API keys for memory logs. Keep their spelling to preserve old retries,
@@ -43,6 +49,7 @@ const batchSchema = z.object({
   // One durable continuation per batch, not per candidate/path/rewording.
   candidateContinuationUsed: z.boolean().optional(),
   candidateResolutions: candidateResolutions.optional(),
+  artifactReconciliations: artifactReconciliations.optional(),
   correctionRecovery: correctionRecovery.optional(),
   excluded: z.string().optional(),
   retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative(), paused: z.string().optional() }).optional(),
@@ -235,8 +242,9 @@ export class LearningLedger {
     if (!batch.events.some(item => item.id === log.id)) batch.events.push(logSchema.parse(log))
     this.save()
   }
-  propose(id: string, status: LearningOutcome['status'], summary: string, candidates?: z.infer<typeof pendingCandidates>, resolutions?: z.infer<typeof candidateResolutions>): void {
+  propose(id: string, status: LearningOutcome['status'], summary: string, candidates?: z.infer<typeof pendingCandidates>, resolutions?: z.infer<typeof candidateResolutions>, reconciliations?: z.infer<typeof artifactReconciliations>): void {
     const batch = this.required(id)
+    if (reconciliations !== undefined) batch.artifactReconciliations = artifactReconciliations.parse(reconciliations)
     if (resolutions !== undefined) batch.candidateResolutions = candidateResolutions.parse(resolutions)
     if (candidates !== undefined) batch.pendingCandidates = pendingCandidates.parse(candidates)
     batch.proposal = outcomeSchema.parse({ status, summary, artifacts: batch.artifacts.length,

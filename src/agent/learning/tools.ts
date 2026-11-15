@@ -1,3 +1,4 @@
+import { artifactReconciliations } from './ledger.ts'
 import { pendingCandidates, candidateResolutions } from './pending.ts'
 import { LEARNING_RECEIPT_RECORDED } from './receipt.ts'
 import { validateLogSummary } from '../log-summary.ts'
@@ -69,6 +70,7 @@ function wikiBody(content: string): { body: string; references: string[] } {
 const resultSchema = z.object({
   status: z.enum(['applied', 'no_change', 'partial', 'blocked', 'draft_only']), summary: text,
   pendingCandidates: pendingCandidates.optional(), resolutions: candidateResolutions.optional(),
+  artifactReconciliations: artifactReconciliations.optional(),
 }).strict()
 
 const pendingParameter = { type: 'array', maxItems: 4, items: { type: 'object', properties: { path: { type: 'string' }, correction: { type: 'string', maxLength: 1200 }, action: { type: 'string', maxLength: 1200 }, conditions: { type: 'string', maxLength: 1200 }, evidence: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'object', properties: { sessionId: { type: 'string' }, physicalId: { type: 'string' }, offset: { type: 'integer' }, end: { type: 'integer' } }, required: ['sessionId', 'physicalId', 'offset', 'end'], additionalProperties: false } } }, required: ['path', 'correction', 'action', 'conditions', 'evidence'], additionalProperties: false }, description: 'Reflector partial/blocked/draft_only only: bounded unsaved corrections, next action, conditions and exact assigned message evidence. Not published content. Omission retains earlier candidates.' }
@@ -147,8 +149,8 @@ export class LearningTools {
         const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
         const currentRevision = current ? fingerprint(current) : ''
         if (args.action === 'read_wiki') {
-          if (batch.pendingCandidates?.some(item => item.path === args.path)) {
-            // Only retain the active attempt's at-most-four recovery reads.
+          if (batch.pendingCandidates?.some(item => item.path === args.path) || batch.artifacts.some(item => item.kind === 'memory' && item.path === path)) {
+            // Retain only recovery reads for this active attempt.
             for (const id of this.wikiReads.keys()) if (id !== context.sessionId) this.wikiReads.delete(id)
             const reads = this.wikiReads.get(context.sessionId) ?? new Map<string, string>()
             reads.set(args.path, currentRevision); this.wikiReads.set(context.sessionId, reads)
@@ -282,6 +284,7 @@ export class LearningTools {
       status: { type: 'string', enum: ['applied', 'no_change', 'partial', 'blocked', 'draft_only'] },
       pendingCandidates: pendingParameter,
       resolutions: resolutionsParameter,
+      artifactReconciliations: { type: 'array', maxItems: 4, description: 'Reflector only: after fresh read_wiki, explicitly attest a historical Wiki artifact is retained or superseded by current content. Never restores old content. Supply exact memory/path, priorRevision, currentRevision, outcome and source-grounded reason.', items: { type: 'object', properties: { path: { type: 'string' }, priorRevision: { type: 'string' }, currentRevision: { type: 'string' }, outcome: { type: 'string', description: 'retained or superseded' }, reason: { type: 'string' } }, required: ['path', 'priorRevision', 'currentRevision', 'outcome', 'reason'], additionalProperties: false } },
       summary: { type: 'string', description: 'What changed and why, or why no durable change is justified. Include unresolved blockers.' },
     }, required: ['status', 'summary'] },
     execute: (raw, context) => this.serial(async () => {
@@ -307,6 +310,16 @@ export class LearningTools {
         const artifact = batch.artifacts.find(a => a.path === `memory/${r.path}` && a.revision === current)
         if (r.outcome === 'published' ? !artifact : read !== current) throw new Error('Candidate resolution is stale or publication is unverified; reread current Wiki.')
       }
+      const reconciliations = args.artifactReconciliations ?? batch.artifactReconciliations ?? []
+      if (reconciliations.length || args.artifactReconciliations) {
+        if (batch.pipeline !== 'reflector') throw new Error('Artifact reconciliation is reflector-only.')
+        if (new Set(reconciliations.map(r => r.path)).size !== reconciliations.length) throw new Error('Duplicate artifact reconciliations.')
+        for (const r of reconciliations) {
+          const artifact = batch.artifacts.find(a => a.kind === 'memory' && a.path === r.path && a.revision === r.priorRevision)
+          const read = this.wikiReads.get(context.sessionId)?.get(r.path.slice(7))
+          if (!artifact || read !== r.currentRevision || r.priorRevision === r.currentRevision) throw new Error('Artifact reconciliation requires an exact historical artifact and fresh read_wiki of changed content.')
+        }
+      }
       const remaining = pending.filter(p => !resolutions.some(r => r.path === p.path))
       const candidates = pendingCandidates.parse([...remaining.filter(p => !args.pendingCandidates?.some(n => n.path === p.path)), ...(args.pendingCandidates ?? [])])
       if ((args.status === 'applied' || args.status === 'no_change') && candidates.length) throw new Error('Unresolved candidates require partial, blocked or draft_only; resolve explicitly after rereading.')
@@ -317,9 +330,9 @@ export class LearningTools {
       if (args.status === 'applied' && batch.pipeline === 'reflector' && batch.artifacts.length && !batch.events.length) {
         throw new Error('Record a provenance-bearing log for the direct memory changes before reporting applied.')
       }
-      if (args.status === 'applied' || args.status === 'no_change') await this.runtime.verify(batch, false, context.signal)
+      if (args.status === 'applied' || args.status === 'no_change' || reconciliations.length) await this.runtime.verify({ ...batch, artifactReconciliations: reconciliations }, false, context.signal)
       context.signal.throwIfAborted()
-      this.runtime.ledger.propose(batch.id, args.status, args.summary, candidates, resolutions)
+      this.runtime.ledger.propose(batch.id, args.status, args.summary, candidates, resolutions, reconciliations)
       this.wikiReads.delete(context.sessionId)
       return LEARNING_RECEIPT_RECORDED
     }),

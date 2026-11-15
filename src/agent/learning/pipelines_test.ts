@@ -927,6 +927,47 @@ test('exact lesson corrections preserve unrelated evidence and all save boundari
   await f.runtime.run('encapsulator', signal())
 }))
 
+test('historical Wiki effects reconcile explicitly without rewriting newer content', async () => {
+  await withTempWorkspace(async workspace => {
+    const { fingerprint } = await import('./ledger.ts')
+    const f = fixture(workspace)
+    f.onRun(async id => {
+      const ctx = f.context(id), batch = f.runtime.ledger.batchFor(id)!
+      const path = 'memory/topics/evolved.md', file = join(workspace, path)
+      await mkdir(join(workspace, 'memory/topics'), { recursive: true })
+      const old = '# Evolved\n\nEarlier assistant claim.', current = '# Evolved\n\nLatest human correction supersedes the earlier claim.'
+      const priorRevision = fingerprint(old), currentRevision = fingerprint(current)
+      f.runtime.ledger.artifact(batch.id, { path, kind: 'memory', revision: priorRevision })
+      await writeFile(file, current)
+      const reconciliation = { path, priorRevision, currentRevision, outcome: 'superseded' as const, reason: 'Latest human correction supersedes earlier assistant claim.' }
+      const receipt = { status: 'applied', summary: 'Retained newer correction without restoring old content.', artifactReconciliations: [reconciliation] }
+      await assert.rejects(f.tools.result.execute(receipt, ctx), /fresh read_wiki/)
+      await f.tools.memory.execute({ action: 'read_wiki', path: 'topics/evolved.md' }, ctx)
+      await assert.rejects(f.tools.result.execute({ ...receipt, artifactReconciliations: [reconciliation, reconciliation] }, ctx), /Duplicate artifact/)
+      await assert.rejects(f.tools.result.execute({ ...receipt, status: 'no_change' }, ctx), /persisted effects/)
+      f.runtime.ledger.log(batch.id, { id: 'provenance', path: 'memory/events/test.jsonl', origin: 'web:source', when: '2026-11-12', who: 'assistant', what: 'preserved correction' })
+      await mkdir(join(workspace, 'memory/events'), { recursive: true })
+      await writeFile(join(workspace, 'memory/events/test.jsonl'), JSON.stringify(f.runtime.ledger.batch(batch.id).events[0]) + '\n')
+      await writeFile(file, 'changed after read')
+      await assert.rejects(f.tools.result.execute(receipt, ctx), /changed after writing/)
+      await rm(file)
+      await assert.rejects(f.runtime.verify({ ...f.runtime.ledger.batch(batch.id), artifactReconciliations: [reconciliation] }, false), /verification failed/)
+      await writeFile(file, '')
+      await assert.rejects(f.runtime.verify({ ...f.runtime.ledger.batch(batch.id), artifactReconciliations: [{ ...reconciliation, currentRevision: fingerprint('') }] }, false), /changed after writing/)
+      await writeFile(file, current)
+      await f.tools.result.execute(receipt, ctx)
+      const restored = new LearningLedger(workspace, 'a').batch(batch.id)
+      assert.equal(restored.artifacts[0].revision, priorRevision)
+      assert.deepEqual(restored.artifactReconciliations, [reconciliation])
+      await f.runtime.verify(restored, false)
+      assert.equal(await readFile(file, 'utf8'), current)
+      await assert.rejects(f.tools.result.execute(receipt, ctx), /already submitted/)
+    })
+    await f.runtime.run('reflector', signal())
+  })
+})
+
+
 for (const oldStatus of ['partial', 'blocked'] as const) test(`explicit correction queue replaces old ${oldStatus} receipt through actual learning_result applied`, async () => withTempWorkspace(async workspace => {
   const skills = new SkillsManager(workspace)
   const f = fixture(workspace, 0, skills)
