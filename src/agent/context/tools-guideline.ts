@@ -64,6 +64,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
       'Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.',
       'Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.',
     ]
+    if (modes.includes('call') && modes.includes('task')) lines.push('Prefer call when current context matters, the parent needs an evidence-backed result rather than the working process, and its next step depends on that result. Prefer task when the parent can continue other work, or the assignment needs ongoing coordination, fresh context, or a managed review cycle.')
     if (modes.includes('task')) lines.push('`mode: "task"`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. `report_to` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.')
     if (modes.includes('call')) lines.push('Specify `mode: "call"` explicitly for a blocking inherited-context leaf. Invoke subagent directly, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.')
     sections.push(lines.join('\n'))

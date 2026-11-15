@@ -35,16 +35,9 @@ ground decisions in evidence, act, and verify.
 
 ## Execution and Delegation
 
-Use the execution contract and tool definitions, not role names, to determine
-capabilities. Complete small, coherent requests directly; delegation is not a
-required explore → implement → verify pipeline. Delegate only when benefits
-outweigh context, handoff and review overhead.
-
-Ordinary task/call delegation needs no preliminary skill. Read
-\`v:skills/orchestration\` only to design or restructure complex parallel work.
-Other permitted collaboration scenarios link directly to their own skills below;
-load only the scenarios needed, not all skills as setup. Tools and the execution
-contract define permissions.
+Complete small, coherent requests directly; delegation is not a required
+explore → implement → verify pipeline. Choose delegation mode by context and
+coordination needs, not role names; follow the Delegation guidance below.
 
 ## Verify and Report
 
@@ -140,6 +133,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 Use subagent only in permitted modes; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read \`v:skills/orchestration\` only to design or restructure complex parallel work.
 Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.
 Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.
+Prefer call when current context matters, the parent needs an evidence-backed result rather than the working process, and its next step depends on that result. Prefer task when the parent can continue other work, or the assignment needs ongoing coordination, fresh context, or a managed review cycle.
 \`mode: "task"\`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. \`report_to\` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.
 Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invoke subagent directly, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.
 
@@ -590,6 +584,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 Use subagent only in permitted modes; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read \`v:skills/orchestration\` only to design or restructure complex parallel work.
 Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.
 Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.
+Prefer call when current context matters, the parent needs an evidence-backed result rather than the working process, and its next step depends on that result. Prefer task when the parent can continue other work, or the assignment needs ongoing coordination, fresh context, or a managed review cycle.
 \`mode: "task"\`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. \`report_to\` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.
 Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invoke subagent directly, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.
 
@@ -644,16 +639,9 @@ ground decisions in evidence, act, and verify.
 
 ## Execution and Delegation
 
-Use the execution contract and tool definitions, not role names, to determine
-capabilities. Complete small, coherent requests directly; delegation is not a
-required explore → implement → verify pipeline. Delegate only when benefits
-outweigh context, handoff and review overhead.
-
-Ordinary task/call delegation needs no preliminary skill. Read
-\`v:skills/orchestration\` only to design or restructure complex parallel work.
-Other permitted collaboration scenarios link directly to their own skills below;
-load only the scenarios needed, not all skills as setup. Tools and the execution
-contract define permissions.
+Complete small, coherent requests directly; delegation is not a required
+explore → implement → verify pipeline. Choose delegation mode by context and
+coordination needs, not role names; follow the Delegation guidance below.
 
 ## Verify and Report
 
@@ -749,6 +737,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 Use subagent only in permitted modes; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read \`v:skills/orchestration\` only to design or restructure complex parallel work.
 Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.
 Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.
+Prefer call when current context matters, the parent needs an evidence-backed result rather than the working process, and its next step depends on that result. Prefer task when the parent can continue other work, or the assignment needs ongoing coordination, fresh context, or a managed review cycle.
 \`mode: "task"\`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. \`report_to\` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.
 Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invoke subagent directly, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.
 
@@ -1204,6 +1193,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 Use subagent only in permitted modes; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read \`v:skills/orchestration\` only to design or restructure complex parallel work.
 Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.
 Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.
+Prefer call when current context matters, the parent needs an evidence-backed result rather than the working process, and its next step depends on that result. Prefer task when the parent can continue other work, or the assignment needs ongoing coordination, fresh context, or a managed review cycle.
 \`mode: "task"\`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. \`report_to\` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.
 Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invoke subagent directly, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.
 

@@ -24,16 +24,9 @@ ground decisions in evidence, act, and verify.
 <!-- capability:subagent -->
 ## Execution and Delegation
 
-Use the execution contract and tool definitions, not role names, to determine
-capabilities. Complete small, coherent requests directly; delegation is not a
-required explore → implement → verify pipeline. Delegate only when benefits
-outweigh context, handoff and review overhead.
-
-Ordinary task/call delegation needs no preliminary skill. Read
-`v:skills/orchestration` only to design or restructure complex parallel work.
-Other permitted collaboration scenarios link directly to their own skills below;
-load only the scenarios needed, not all skills as setup. Tools and the execution
-contract define permissions.
+Complete small, coherent requests directly; delegation is not a required
+explore → implement → verify pipeline. Choose delegation mode by context and
+coordination needs, not role names; follow the Delegation guidance below.
 
 <!-- /capability -->
 
