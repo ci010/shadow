@@ -11,7 +11,7 @@ const context = { projectId, signal: new AbortController().signal } as Execution
 
 test('discovery combines installation-only factory and flat explicit template intents without legacy repair aliases', () => {
   const installation = createLayerFSTools(projectId)
-  assert.deepEqual(installation.map(t => t.name), ['layerfs_doctor', 'layerfs_setup', 'layerfs_bootstrap_plan', 'layerfs_bootstrap', 'layerfs_bootstrap_status'])
+  assert.deepEqual(installation.map(t => t.name), ['layerfs_reconcile', 'layerfs_doctor', 'layerfs_setup', 'layerfs_setup_plan', 'layerfs_bootstrap_plan', 'layerfs_bootstrap', 'layerfs_bootstrap_reconcile', 'layerfs_bootstrap_cancel', 'layerfs_bootstrap_status'])
   const templates = createLayerFSResourceTools({ projectId } as LayerFSResources)
   const tools = [...createLayerFSFSTools({ projectId } as LayerFSResources), ...templates, ...installation]
   assert.deepEqual(tools.map(({ name, description, parameters, supportsLayerFSWorkdir }) => ({ name, description, parameters, supportsLayerFSWorkdir })), layerFSToolContracts())

@@ -24,8 +24,14 @@ import type {
 export const PROCESS_EXECUTE_OPERATION = 'process.execute'
 
 export interface LocalJobOperationHandler {
+  /** Once dispatched, loss/cancellation cannot prove rollback or authorize replay. */
+  readonly failureOutcome?: 'unknown'
+  /** Trusted handler-only proof that refusal happened before its durable/effect admission. */
+  isNoEffectError?(error: unknown): boolean
+  /** Explicit host-owned operation lifetime; request deadline still bounds admission. */
+  runsUntilExit?(request: ExecutionRequestV2): boolean
   handles(operation: string): boolean
-  execute(request: ExecutionRequestV2, signal: AbortSignal): Promise<string>
+  execute(request: ExecutionRequestV2, signal: AbortSignal, observe?: (text: string) => void): Promise<string>
 }
 
 export interface LocalProcessOperationHandler {
@@ -270,15 +276,29 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
         0,
         Date.parse(request.deadlineAt) - Date.now(),
       )
-      const timeout = setTimeout(() => {
+      const timeout = operationHandler.runsUntilExit?.(request) ? undefined : setTimeout(() => {
         record.timedOut = true
         controller.abort()
       }, remainingMs)
+      let progressBytes = 0
       try {
         const output = await operationHandler.execute(
           request,
           controller.signal,
+          text => {
+            if (!text) return
+            const bytes = Buffer.from(text)
+            const remaining = MAX_WORKDIR_PROCESS_OUTPUT_BYTES - progressBytes
+            if (remaining <= 0) return
+            const chunk = bytes.subarray(0, remaining).toString('utf8')
+            progressBytes += Buffer.byteLength(chunk)
+            for (let offset = 0; offset < chunk.length; offset += 8192) this.push(record, { type: 'stderr', chunk: chunk.slice(offset, offset + 8192) })
+          },
         )
+        if (operationHandler.failureOutcome === 'unknown' && (record.timedOut || record.cancelRequested)) {
+          this.finish(record, 'failed', 'failed', { code: 'execution-outcome-unknown', message: 'Operation dispatched; cancellation/deadline is not rollback. Inspect retained target receipt; do not replay.', retryable: false })
+          return
+        }
         if (record.timedOut) {
           this.finish(record, 'expired', 'expired', {
             code: 'deadline-expired',
@@ -300,6 +320,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
         }
         this.finish(record, 'completed', 'completed')
       } catch (error) {
+        if (operationHandler.failureOutcome === 'unknown' && !operationHandler.isNoEffectError?.(error)) {
+          this.finish(record, 'failed', 'failed', { code: 'execution-outcome-unknown', message: error instanceof Error ? error.message : 'Operation dispatched; outcome unknown. Inspect target receipt; do not replay.', retryable: false })
+          return
+        }
         if (record.timedOut) {
           this.finish(record, 'expired', 'expired', {
             code: 'deadline-expired',

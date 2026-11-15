@@ -24,9 +24,9 @@ export const IMPLEMENTED_OPERATIONS = [
   'process.execute', 'filesystem.read', 'filesystem.write', 'workdir.git.status',
   'workdir.git.diff', 'workdir.identity', 'workdir.process.execute',
   'workdir.process.execute-once', 'workdir.process.reconcile', 'workdir.git.derive',
-  'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select',
+  'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select', 'layerfs.service',
 ] as const
-export const NODE_OPERATIONS = new Set(['process.execute', 'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select'])
+export const NODE_OPERATIONS = new Set(['process.execute', 'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select', 'layerfs.service'])
 const SHELL_OPERATIONS = new Set(['process.execute', 'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile'])
 const SHELLS = ['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh']
 const PLATFORMS = ['aix', 'android', 'darwin', 'freebsd', 'haiku', 'linux', 'openbsd', 'sunos', 'win32', 'cygwin', 'netbsd']

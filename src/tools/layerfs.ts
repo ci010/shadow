@@ -1,3 +1,4 @@
+import { remoteLayerFSGateway } from '../execution/layerfs/remote-gateway.ts'
 import { layerfsFSContracts } from './layerfs-fs.ts'
 import { layerfsResourceContracts } from './layerfs-resource.ts'
 import { parseBranchWorkspace } from '../execution/layerfs/workspace-identity.ts'
@@ -8,16 +9,21 @@ import type { ExecutionContext } from './context.ts'
 import { ToolNoEffectError, completedToolFailure, type Tool, type ToolParameters, type ToolResult } from './tool.ts'
 
 const installationIntents = {
+  reconcile: { description: 'Remote Windows only: inspect a retained typed-service requestId receipt. Never replays an unknown mutation.', required: ['requestId'], optional: [] },
   doctor: { description: 'Inspect installation configuration without starting a worker.', required: [], optional: [] },
-  setup: { description: 'Connect an existing trusted installation with explicit owner consent; not an installer.', required: ['installation', 'approved', 'allowRootWorker'], optional: [] },
+  setup: { description: 'Connect an existing trusted installation with explicit owner consent; not an installer.', required: ['approved', 'allowRootWorker'], optional: ['installation', 'plan', 'approval'] },
+  setup_plan: { description: 'Remote Windows only: plan connecting a trusted target installation and return the exact target-bound human decision question. No worker starts.', required: ['installation'], optional: [] },
   bootstrap_plan: { description: 'Discover local Docker on macOS or WSL on Windows and return the installation approval request without provisioning.', required: [], optional: ['distribution'] },
   bootstrap: { description: 'Build the exact approved pinned installation. Wait for background completion; never replay an unknown outcome.', required: ['plan', 'approval', 'approved', 'allowRootWorker', 'allowDownloads'], optional: [] },
+  bootstrap_reconcile: { description: 'Remote Windows only: inspect exact target bootstrap journal evidence and release its Main Project deletion guard only for a verified clean terminal state. Unknown/cancellation/disconnect retain the guard; no provisioning replay.', required: ['targetJobId'], optional: [] },
+  bootstrap_cancel: { description: 'Remote Windows only: request cancellation of an exact targetJobId. Cancellation is not rollback; inspect target bootstrap_status and retained resources.', required: ['targetJobId'], optional: [] },
   bootstrap_status: { description: 'Inspect retained installation progress without retry or repair.', required: [], optional: [] },
 } satisfies Record<string, { description: string; required: string[]; optional: string[] }>
 const ordinary = new Set(['status', 'read', 'write', 'search', 'exec'])
 const fields: ToolParameters['properties'] = {
   installation: { type: 'object', description: 'Existing trusted installation: Windows {apiRoot,bundle,image,distribution,node}, macOS {platform:"darwin",apiRoot,bundle,image,docker}; explicit installation approval required.' },
   approved: { type: 'boolean' }, allowRootWorker: { type: 'boolean' }, allowDownloads: { type: 'boolean' },
+  targetJobId: { type: 'string' }, requestId: { type: 'string' },
   plan: { type: 'string' }, approval: { type: 'object', description: 'Exact recorded human decision {sessionId,physicalId,requestId} for the installation plan.' },
   distribution: { type: 'string' },
 }
@@ -45,9 +51,17 @@ export class LayerFSTool implements Tool<ToolResult> {
     this.managed = managed ?? (home ? managedLayerFS(projectId, home) : undefined)
   }
   async execute(args: Record<string, unknown>, context: ExecutionContext, lifecycle?: { observe: (text: string) => void }): Promise<ToolResult> {
+    const actionName = String(args.action)
+    if (['read', 'write', 'search', 'exec', 'status'].includes(actionName)) {
+      const { action: _action, ...input } = args
+      const remote = await remoteLayerFSGateway(this.projectId, this.home)?.tryCall(actionName as 'read' | 'write' | 'search' | 'exec' | 'status', input, context, undefined, lifecycle?.observe)
+      if (remote !== undefined) return remote
+      if (remoteLayerFSGateway(this.projectId, this.home)?.localExecutionAllowed === false) throw new ToolNoEffectError('Main local LayerFS execution disabled; select the exact remote LayerFS target. No fallback.')
+    }
     if (context.projectId !== this.projectId || context.remoteWorkdir) throw new ToolNoEffectError('Current local Project required; no fallback.')
     context.signal.throwIfAborted()
     const action = String(args.action)
+    if (action === 'setup_plan' || action === 'bootstrap_cancel' || action === 'bootstrap_reconcile' || action === 'reconcile') throw new ToolNoEffectError('This contract is for the explicitly selected remote Windows device only; local setup/cancellation retains its existing contract.')
     if (ordinary.has(action)) {
       validateLayerArgs(args, this.projectId)
       if (!this.home) throw new ToolNoEffectError('Project resource catalog unavailable.')
@@ -96,6 +110,7 @@ export function createLayerFSTools(...args: ConstructorParameters<typeof LayerFS
   const dispatcher = new LayerFSTool(...args)
   return layerFSToolContracts().filter(contract => Object.hasOwn(installationIntents, contract.name.slice('layerfs_'.length))).map(contract => ({
     ...contract, async execute(input, context) {
+      if (contract.name === 'layerfs_setup' && input.installation === undefined) throw new ToolNoEffectError('Missing installation.')
       for (const key of Object.keys(input)) if (!Object.hasOwn(contract.parameters.properties, key)) throw new ToolNoEffectError(`Unexpected ${key}.`)
       for (const key of contract.parameters.required ?? []) if (input[key] === undefined) throw new ToolNoEffectError(`Missing ${key}.`)
       for (const [key, value] of Object.entries(input)) {

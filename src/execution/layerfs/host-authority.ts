@@ -21,7 +21,7 @@ export async function withLayerFSHostAuthority<T>(value: unknown, target: { node
 export function hasLayerFSHostAuthority(context: ExecutionContext, action?: RemoteLayerFSAction): boolean {
   const a = admissions.get(context)
   return !!a && a.active && !a.signal.aborted && a.projectId === context.projectId && a.sessionId === context.sessionId && a.signal === context.signal
-    && Date.parse(a.call.authority.expiresAt) > Date.now() && (action === undefined || a.call.action === action)
+    && Date.parse(a.call.authority.expiresAt) > Date.now() && (action === undefined ? a.call.authority.kind === 'direct-owner' : a.call.action === action)
 }
 export function verifyLayerFSHostApproval(question: YieldQuestion, reference: YieldReference, context: ExecutionContext): boolean {
   if (!hasLayerFSHostAuthority(context, 'bootstrap') && !hasLayerFSHostAuthority(context, 'setup')) return false

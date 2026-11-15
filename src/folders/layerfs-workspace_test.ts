@@ -18,6 +18,8 @@ import { Tools } from '../tools/registry.ts'
 import { prepareWorkingContext } from '../agent/context/working-context.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { LayerFSFolderRecord } from './contracts.ts'
+import { managedProjectScope } from '../execution/managed-workdir.ts'
+import { branchWorkspace } from '../execution/layerfs/workspace-identity.ts'
 
 const mount = 'layerfs:' + Buffer.from(JSON.stringify({ project: 'active', sandbox: '42', path: '/workspaces/42' })).toString('base64url')
 const signal = new AbortController().signal
@@ -167,3 +169,30 @@ test('versioned committed-branch identity survives catalog reload without host p
     await assert.rejects(catalog.registerLayerFSFolder(DEFAULT_PROJECT_ID, id, { path: 'layerfs-branch:wrong' }, signal), /mismatch/)
   })
 })
+
+test('remote LayerFS persists backend/location orthogonally and refuses changed Project/pairing without Main path resolution', async () => withTempWorkspace(async home => {
+  const catalog = new ProjectCatalog(home); await catalog.init()
+  const projectScope = managedProjectScope(DEFAULT_PROJECT_ID)
+  const bound = branchWorkspace('repo', 'remote-first', { ownerProject: projectScope, runtimeId: 'target-runtime', resourceId: '11111111-1111-4111-8111-111111111111' })
+  const location = { version: 1 as const, nodeId: 'windows', pairingId: 'paired-one', projectScope }
+  const metadata = { path: 'layerfs-branch:remote-first', location }
+  const folder = await catalog.registerLayerFSFolder(DEFAULT_PROJECT_ID, bound, metadata, signal)
+  const reloaded = new ProjectCatalog(home); await reloaded.init()
+  assert.deepEqual((reloaded.folders(DEFAULT_PROJECT_ID)[0] as LayerFSFolderRecord).location, location)
+  await assert.rejects(catalog.registerLayerFSFolder(DEFAULT_PROJECT_ID, bound, { ...metadata, location: { ...location, pairingId: 'repaired' } }, signal), /pairing/)
+  await assert.rejects(catalog.registerLayerFSFolder(DEFAULT_PROJECT_ID, bound, { ...metadata, location: { ...location, projectScope: 'b'.repeat(32) } }, signal), /binding/)
+  const registry = new FolderRegistry(home, { projectId: DEFAULT_PROJECT_ID, catalog: reloaded }); await registry.init()
+  let online = true
+  registry.configureLayerFS({ authorize: async () => metadata, requireAvailable: async () => { if (!online) throw Error('target offline') }, lookup: folder => online ? { node: 'online', workdir: { online: true, backend: 'layerfs', workspace: folder.mount } } : { node: 'offline' } })
+  const lookup = (ref: typeof folder.workdir) => registry.lookupWorkdir(ref) ?? { node: 'missing' as const }
+  const resolution = resolveSessionLocations(home, { sessionId: 's', workdir: folder.workdir }, undefined, lookup).workdir
+  assert.equal(resolution.available && resolution.locality, 'layerfs')
+  const snapshot = await prepareWorkingContext(resolution, folder.id, folder, signal, true, { content: '' })
+  assert.match(snapshot, /LayerFS execution device: "windows"/)
+  const discovery = new ProjectFolderDiscovery({ projectId: DEFAULT_PROJECT_ID, workspace: home, getProject: () => catalog.get(DEFAULT_PROJECT_ID), registry, workdirLookup: lookup })
+  assert.match(String(await discovery.handlers().read('workspaces', base)), /LayerFS\/remote:windows/)
+  online = false
+  const stopped = resolveSessionLocations(home, { sessionId: 's', workdir: folder.workdir }, undefined, lookup).workdir
+  assert.equal(stopped.available, false)
+  await assert.rejects(registry.requireAvailable(folder.id), /target offline/)
+}))

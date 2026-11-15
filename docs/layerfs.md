@@ -20,6 +20,15 @@ namespace/import/baseline/legacy mount repair dispatch is removed. Existing priv
 resources are not deleted or migrated; old template catalog records are not loaded
 as new resource registrations. No compatibility conversion is attempted.
 
+## Remote Windows execution
+
+A Mac Main can use the typed, target-owned LayerFS service on an explicitly selected
+Windows Child. Backend kind and execution device are separate Workspace metadata.
+Installation consent is bound to the exact target/pairing/Project/plan; runtime,
+artifacts, private launchers and SDK operations remain on Windows, with no Main
+fallback. See [remote Windows authority, lifecycle and recovery](layerfs-remote.md).
+Remote bootstrap jobs are target jobs, not Main `v:bg` executions or completion events.
+
 ## Public contracts
 
 Installation: `layerfs_doctor`, `layerfs_setup`, `layerfs_bootstrap_plan`,
@@ -37,8 +46,9 @@ Starting, uncertain, unknown or crash-retained leases are not treated as stops a
 are never replayed or cleared. Historical one-shot admissions remain untouched.
 Runtime management is Project-scoped, not exclusive to the planning session.
 Legacy saved `owner` fields remain readable as provenance, not authorization.
-Direct local durable owner Web authority is still required; tasks, borrowed tools,
-scripts, recovery replays and other Projects cannot manage the runtime.
+Local management requires direct durable owner Web authority; the remote typed service
+verifies the equivalent Main-owned session/actor assertion on its authenticated pairing.
+Tasks, borrowed tools, scripts, recovery replays and other Projects cannot manage the runtime.
 
 Runtime status separates `recordPhase` (saved configuration/start receipt) from
 `phase` and `ready` (observed worker readiness). A saved `ready` record with a

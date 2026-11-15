@@ -12,13 +12,13 @@ import { isClusterIdentifier } from '../cluster/contracts.ts'
 import { parseWorkdirRef, type WorkdirRefV2 } from '../sessions/locality.ts'
 import { existingDirectory, folderDescription, FolderError } from '../folders/registry.ts'
 import { DEFAULT_PROJECT_ID, projectPaths, type ProjectRecord } from './contracts.ts'
-import { isManagedWorkdir, projectExecutionKey } from '../execution/managed-workdir.ts'
+import { isManagedWorkdir, projectExecutionKey, managedProjectScope } from '../execution/managed-workdir.ts'
 
 function onlyFields(value: object, fields: readonly string[]): boolean {
   return !Array.isArray(value) && Object.keys(value).every(key => fields.includes(key))
 }
 
-const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity', 'mount', 'lineage']
+const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity', 'mount', 'lineage', 'location']
 const claimFields = ['projectId', 'workdir', 'identity']
 
 interface CatalogData {
@@ -58,11 +58,17 @@ function remoteRef(value: unknown): WorkdirRefV2 {
 }
 
 function validateLayerFSFolder(folder: LayerFSFolderRecord): void {
+  const location = folder.location
+  if (location && (!onlyFields(location, ['version', 'nodeId', 'pairingId', 'projectScope']) || location.version !== 1 || !isClusterIdentifier(location.nodeId) || !isClusterIdentifier(location.pairingId) || location.projectScope !== managedProjectScope(folder.projectId!))) throw new Error('Invalid target-owned LayerFS location binding')
   const ref = parseWorkdirRef(folder.workdir)
   if (typeof folder.mount !== 'string' || !folder.mount.startsWith('layerfs:') || folder.mount.length > 1024 ||
     !ref || ref.nodeId !== 'layerfs' || ref.workdirId !== folder.mount ||
     typeof folder.path !== 'string' || 'identity' in folder) {
     throw new Error('Invalid LayerFS folder: non-host resource identity required')
+  }
+  if (location) {
+    const binding = parseBranchWorkspace(folder.mount)
+    if (binding.version !== 3 || binding.ownerProject !== location.projectScope) throw new Error('Remote LayerFS workspace Project binding mismatch')
   }
   if (folder.path.startsWith('layerfs-branch:')) {
     if (folder.path !== `layerfs-branch:${parseBranchWorkspace(folder.mount).branch}`) throw new Error('LayerFS branch display metadata mismatch')
@@ -366,6 +372,8 @@ export class ProjectCatalog {
     return (this.#current().retiredSessions ?? []).some(record => record.projectId === projectId && record.sessionId === sessionId)
   }
 
+  remoteJobIds(projectId: string): string[] { return (this.#current().pendingRemoteJobs ?? []).filter(job => job.projectId === projectId).map(job => job.jobId) }
+
   recordRemoteJob(projectId: string, jobId: string, pending: boolean): void {
     const jobs = (this.#current().pendingRemoteJobs ?? []).filter(job => job.projectId !== projectId || job.jobId !== jobId)
     if (pending) jobs.push({ projectId, jobId })
@@ -558,12 +566,13 @@ export class ProjectCatalog {
   }
 
   /** Internal Project-service admission only; caller must authorize the current namespace first. */
-  registerLayerFSFolder(projectId: string, mount: string, metadata: { path: string; name?: string }, signal: AbortSignal, description?: string): Promise<LayerFSFolderRecord> {
+  registerLayerFSFolder(projectId: string, mount: string, metadata: { path: string; name?: string; location?: LayerFSFolderRecord['location'] }, signal: AbortSignal, description?: string): Promise<LayerFSFolderRecord> {
     return this.#transaction(() => {
       signal.throwIfAborted()
       if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project unavailable.', 409)
       const folder: LayerFSFolderRecord & { projectId: string } = {
         projectId, id: randomUUID(), kind: 'layerfs', mount,
+        ...(metadata.location ? { location: structuredClone(metadata.location) } : {}),
         workdir: { version: 2, nodeId: 'layerfs', workdirId: mount },
         path: metadata.path, name: metadata.name ?? 'LayerFS workspace', createdAt: new Date().toISOString(),
         ...(description !== undefined ? { description: folderDescription(description) } : {}),
@@ -571,7 +580,7 @@ export class ProjectCatalog {
       validateLayerFSFolder(folder)
       const existing = this.#current().folders.find(item => item.kind === 'layerfs' && item.mount === mount)
       if (existing) {
-        if (existing.projectId !== projectId) throw new FolderError('layerfs_project_mismatch', 'Mount belongs to another Project.', 409)
+        if (existing.projectId !== projectId || JSON.stringify((existing as LayerFSFolderRecord).location) !== JSON.stringify(folder.location)) throw new FolderError('layerfs_project_mismatch', 'Mount belongs to another Project or target pairing.', 409)
         return structuredClone(existing) as LayerFSFolderRecord
       }
       this.#commit({ ...this.#current(), folders: [...this.#current().folders, folder] })

@@ -18,6 +18,7 @@ export interface ProjectFolderDiscoveryOptions {
   registry: Pick<FolderRegistry, 'list'> & Partial<Pick<FolderRegistry, 'archived'>>
   workdirLookup: WorkdirLookup
   getNodeInventory?: () => NodeInventoryResponse | undefined
+  remoteLayerFSJobs?: () => unknown[]
 }
 
 export const FOLDER_DISCOVERY_NOTICE =
@@ -69,13 +70,14 @@ export class ProjectFolderDiscovery {
     if (!folders.length) lines.push('', 'No registered workspaces.')
     lines.push(...workspaceTree(folders, folder => {
       const described = this.#describe(folder, folders)
-      const node = this.options.getNodeInventory?.()?.nodes.find(node => folder.kind === 'remote' ? node.nodeId === folder.workdir.nodeId : node.role === 'main')
+      const node = this.options.getNodeInventory?.()?.nodes.find(node => folder.kind === 'layerfs' && folder.location ? node.nodeId === folder.location.nodeId : folder.kind === 'remote' ? node.nodeId === folder.workdir.nodeId : node.role === 'main')
       const nodeLabel = node?.displayName?.trim()
-      const backend = folder.kind === 'layerfs' ? 'LayerFS' : folder.kind === 'remote' ? `Git/remote:${folder.workdir.nodeId}` : folder.lineage?.backend === 'git-worktree' ? 'Git worktree/Main' : 'local/Main'
+      const backend = folder.kind === 'layerfs' ? folder.location ? `LayerFS/remote:${folder.location.nodeId}` : 'LayerFS' : folder.kind === 'remote' ? `Git/remote:${folder.workdir.nodeId}` : folder.lineage?.backend === 'git-worktree' ? 'Git worktree/Main' : 'local/Main'
       const status = described.availability.available ? 'available' : `unavailable: ${described.availability.reason}`
       const description = folder.description ? ` — ${markdownText(folder.description)}` : ''
       return `**${markdownText(described.identifier)}** [${markdownText(backend)}${nodeLabel ? ` (${markdownText(nodeLabel)})` : ''}; ${markdownText(status)}]: ${markdownText(folder.path)}${description}`
     }))
+    if (this.options.remoteLayerFSJobs?.().length) lines.push('', 'Remote LayerFS provisioning guards: read v:project/remote-layerfs-jobs for durable target/job/request IDs and terminal reconciliation recovery (available even when the target is offline).')
     lines.push('', FOLDER_DISCOVERY_NOTICE)
     return lines.join('\n')
   }
@@ -89,6 +91,7 @@ export class ProjectFolderDiscovery {
         if (!subpath || subpath === 'folders' || subpath === 'folders/') {
           return this.#overview(project, folders)
         }
+        if (subpath === 'remote-layerfs-jobs') return JSON.stringify({ project, reservations: this.options.remoteLayerFSJobs?.() ?? [], recovery: 'These are Project deletion guards, not Main v:bg jobs. Select the exact target/pairing and inspect bootstrap_status/reconcile. Cancellation/disconnect/unknown never release a guard.' }, null, 2)
         const archived = this.options.registry.archived?.() ?? []
         if (subpath === 'folders/archive') return JSON.stringify({ project, status: 'archived; unregistered, not necessarily deleted', workspaces: archived }, null, 2)
         const retired = archived.find(folder => subpath === `folders/${folder.id}`)
@@ -101,6 +104,7 @@ export class ProjectFolderDiscovery {
         const { project, folders } = this.snapshot(context.projectId)
         return [
           { name: 'workspaces', content: this.#overview(project, folders) },
+          ...(this.options.remoteLayerFSJobs ? [{ name: 'remote-layerfs-jobs', content: 'Durable current-Project LayerFS target provisioning guards and recovery IDs. Metadata only; does not contact or start the target.' }] : []),
           ...folders.map(folder => ({
             name: `workspaces/${folder.id}`,
             content: JSON.stringify({ project, notice: FOLDER_DISCOVERY_NOTICE, workspace: this.#describe(folder, folders) }, null, 2),

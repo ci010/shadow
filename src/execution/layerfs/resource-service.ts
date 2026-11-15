@@ -14,6 +14,8 @@ import { projectDataPaths } from '../../utils/data-paths.ts'
 import { sdkLauncher } from './sdk-launcher.ts'
 import { parseBranchWorkspace } from './workspace-identity.ts'
 import { LayerFSWorkspaces } from './workspace-create.ts'
+import { hasLayerFSHostAuthority } from './host-authority.ts'
+import type { LayerFSContextLeaseFactory } from './remote-lease.ts'
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/)
 // Legacy owner identifies the planning session for provenance only, never management authority.
@@ -115,18 +117,23 @@ export class LayerFSResources {
       message: phase === 'stopped' ? 'Worker stopped normally. Any direct authorized session in this Project may explicitly start this same runtime; no implicit restart.' : undefined,
       result }
   }
-  async runtimeContext(id: string, context: ExecutionContext, sourceName?: string) {
+  async runtimeContext(id: string, context: ExecutionContext, sourceName?: string, leaseFactory?: LayerFSContextLeaseFactory) {
     this.assertOwner(context)
     const record = await this.record(id)
     if (record.phase !== 'ready') throw new ToolNoEffectError('Only a ready runtime may provide its SDK launcher.')
     const mac = 'platform' in record.installation
     const sourceRoot = nativeSourceRoot(this.projectId, id, mac ? await realpath(join(projectDataPaths(this.runtimeHome(id)).state, 'layerfs', 'runtime')) : undefined)
     const path = sourceName === undefined ? undefined : nativeSourcePath(sourceRoot, sourceName)
-    const source = async () => {
-      this.assertOwner(context)
+    if (leaseFactory && !hasLayerFSHostAuthority(context, 'runtime_context')) throw new ToolNoEffectError('Remote context lease requires exact host action admission')
+    const lease = leaseFactory?.({ projectId: this.projectId, runtimeId: id, sourceRoot, sourcePath: path, installationFingerprint: digest(record.installation) })
+    const access = async () => {
+      if (lease) lease.assert(); else this.assertOwner(context)
       const current = await this.record(id)
       if (current.phase !== 'ready' || digest(current.installation) !== digest(record.installation)) throw new ToolNoEffectError('Runtime source binding changed; obtain a new context.')
-      const identity = verifyNativeSource(path!, await this.runtime(id).sourceIdentity(path!, context.signal), mac ? process.getuid?.() : undefined)
+    }
+    const source = async () => {
+      await access()
+      const identity = verifyNativeSource(path!, await this.runtime(id).sourceIdentity(path!, lease?.signal ?? context.signal), mac ? process.getuid?.() : undefined)
       return { path: path!, identity }
     }
     const initial = path ? await source() : undefined
@@ -135,10 +142,11 @@ export class LayerFSResources {
       if (JSON.stringify(current) !== JSON.stringify(initial)) throw new ToolNoEffectError('Native source directory identity changed; obtain a new context.')
       return current.path
     } : undefined
-    const { profile, installation } = await this.runtime(id).execContext(context.signal, authorizeSource)
+    const authorizeContext = lease ? async () => { await access(); return authorizeSource ? await authorizeSource() : '' } : authorizeSource
+    const { profile, installation } = await this.runtime(id).execContext(context.signal, authorizeContext, lease ? { guardProfile: true } : undefined)
     const launcher = join(this.runtimeHome(id), `sdk-exec-${randomUUID()}.mjs`)
     writePrivateFile(launcher, sdkLauncher(profile))
-    return { runtimeId: id, sourceRoot, sourcePath: initial?.path, executable: process.execPath, launcher, env: { ELECTRON_RUN_AS_NODE: '1' },
+    return { runtimeId: id, sourceRoot, sourcePath: initial?.path, ...(lease ? { leaseExpiresAt: lease.expiresAt } : {}), executable: process.execPath, launcher, env: { ELECTRON_RUN_AS_NODE: '1' },
       distribution: installation.distribution, linuxNode: installation.node,
       usage: 'Run executable launcher absolute-script.mjs [args...] using ordinary exec from a local host workspace. Script exports default async ({runtime,open,args}) => {...}. runtime.project provides official list/start_init/get_init; open(name) opens one official agent SDK client per exec process. Do not log private launcher contents. No worker is started by this launcher.' }
   }

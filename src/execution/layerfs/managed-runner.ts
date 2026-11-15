@@ -19,14 +19,17 @@ async function execContext(input) {
    let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 65536) fail('RequestTooLarge'); }
    const {action,input} = JSON.parse(body);
    if (!['official_project','configuration'].includes(action)) fail('InvalidAction');
-   const result = await execute(action,input,execProfiles.get(token));
+   const profile = execProfiles.get(token);
+   if (profile.guardProfile) await authorizeSource(profile.sourceToken);
+   const result = await execute(action,input,profile.sourceToken);
    respond(200,{ok:true,result});
   } catch(error) { respond(400,{ok:false,code:safeCode(error),message:String(error?.message ?? 'SDK call failed').replaceAll(token,'[redacted]').slice(0,4096)}); }
  });
  await new Promise((resolve,reject) => { execServer.once('error',reject); execServer.listen(0,'127.0.0.1',resolve); });
  }
  const token = randomBytes(32).toString('hex');
- execProfiles.set(token,input?.sourceToken);
+ if (input?.guardProfile === true && !input?.sourceToken) fail('SourceScopeRequired');
+ execProfiles.set(token,{sourceToken:input?.sourceToken,guardProfile:input?.guardProfile===true});
  return {port:execServer.address().port,token,sdkModule:deployment.sdkModule};
 }
 import { join, posix } from 'node:path';
