@@ -4421,5 +4421,22 @@
   "Configuration and existing sessions are not message admission or execution receipts.": "配置和已有会话不是消息准入或执行回执。",
   "Session metadata exists; message receipt, persistence and execution are unknown.": "存在会话元数据；消息接收、持久化和执行情况未知。",
   "Discovery only; message receipt, persistence and execution are unknown.": "仅有发现证据；消息接收、持久化和执行情况未知。",
-  "No conversation evidence available": "暂无可用的会话证据"
+  "No conversation evidence available": "暂无可用的会话证据",
+  "Message receivers": "消息接收器",
+  "Associated BOTs": "关联 BOT",
+  "BOT associations are configuration, not execution evidence.": "BOT 关联属于配置信息，不代表执行证据。",
+  "No BOT association recorded": "暂无 BOT 关联记录",
+  "Connection state": "连接状态",
+  "Existing conversation recorded": "已记录现有会话",
+  "Mode": "模式",
+  "Connection ID": "连接 ID",
+  "BOT entry configuration": "BOT 入口配置",
+  "Conversation entry": "会话入口",
+  "Package state": "发布包状态",
+  "Subscription": "订阅",
+  "Listener": "监听器",
+  "Configured entry": "已配置入口",
+  "Configured entry; receipt unknown": "已配置入口；收件情况未知",
+  "Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.": "连接状态不代表消息送达。BOT 入口展示配置关系；收件和执行情况仍未知。",
+  "Entry type": "入口类型"
 }

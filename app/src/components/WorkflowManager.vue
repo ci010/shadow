@@ -18,27 +18,7 @@
       <p v-if="documentQuery.bot && !selectedBot || documentQuery.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="selectedBot" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
-        <div class="inspector-toolbar"><span>{{ t('BOT topology') }}</span><button class="btn btn-sm" @click="closeInspector">{{ t('Close') }}</button></div>
-        <header class="workflow-title"><h2>{{ selectedBot.definition.name }}</h2></header>
-        <section v-if="selectedBot.sinkProjection" class="receiver-directory">
-          <p>{{ t('Records messages without model reactions') }}</p>
-          <p v-if="!selectedBot.sinkProjection.receivers.length">{{ t('No received conversations yet') }}</p>
-          <ul><li v-for="receiver in selectedBot.sinkProjection.receivers" :key="receiver.id">
-            <button class="btn btn-sm" @click="inspectedNode = `receiver:${receiver.id}`">{{ receiver.name ?? receiver.address.conversationId }}</button>
-            <RouterLink v-if="sinkNavigationLocation(receiver.navigation)" :to="sinkNavigationLocation(receiver.navigation)!">{{ sinkNavigationLabel(receiver.navigation) }}</RouterLink>
-            <span v-else>{{ t('Channel metadata unavailable. Waiting for received content.') }}</span>
-          </li></ul>
-          <p>{{ t('Agent resource') }} <code>{{ selectedBot.sinkProjection.sinkPath }}</code> · <code>{{ selectedBot.sinkProjection.guidePath }}</code></p>
-        </section>
-        <p v-else class="workflow-explanation">{{ t('Read-only BOT projection. Messages still use InputRouter and SessionManager. Connection health is not delivery success; routing is not probed.') }}</p>
-        <details v-for="node in selectedBot.graph" :key="node.id" class="workflow-node" :open="!inspectedNode || inspectedNode === node.id">
-          <summary>{{ node.label }} · {{ node.detail }}</summary><pre>{{ JSON.stringify(node.config, null, 2) }}</pre>
-          <template v-if="node.nodeType === 'connection'">
-            <RouterLink v-if="selectedBot.connectionSettingsId" class="btn btn-sm" :aria-label="t('Configure BOT connection')" :to="{ name: 'project-settings', params: { projectId, section: 'connections' }, query: { connectionId: selectedBot.connectionSettingsId } }">{{ t('Configure BOT connection') }}</RouterLink>
-            <p v-else role="status">{{ t('Connection unavailable') }}</p>
-          </template>
-          <RouterLink v-if="node.targetSessionId" :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Open conversation') }}</RouterLink>
-        </details>
+        <BotWorkflowInspector :entry="selectedBot" :connection="snapshot?.bots?.connections.find(connection => connection.id === selectedBot?.connectionSettingsId)" :project-id="projectId" :selected-node="botSelectedNode" @select="inspectedNode = $event" @close="closeInspector" />
       </aside>
       <aside v-if="inspectorOpen && !selectedBot && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
@@ -116,7 +96,7 @@ import { computed, inject, nextTick, useId, onActivated, onDeactivated, onUnmoun
 import { useWorkflowResourceStore } from '../stores/workflow.ts'
 import { WorkflowInputReferencesKey, workflowInputReference, connectionSinkInputReference } from '../workflow-input-references.ts'
 import WorkflowGraph from './WorkflowGraph.vue'
-import { sinkNavigationLabel, sinkNavigationLocation } from '../connection-sinks.ts'
+import BotWorkflowInspector from './BotWorkflowInspector.vue'
 import { botCanvas } from '../bot-workflows.ts'
 import WorkflowAutomationProfile from './WorkflowAutomationProfile.vue'
 import SidebarResizer from './SidebarResizer.vue'
@@ -160,13 +140,15 @@ watch(() => documentQuery.value.workflow, id => { if (typeof id === 'string' && 
 const referenceHub = inject(WorkflowInputReferencesKey, undefined)
 const inspectorId = useId(), inspectorWidth = ref(380)
 const botFlows = computed(() => botCanvas(snapshot.value?.bots))
-const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot))
+const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot || typeof documentQuery.value.bot === 'string' && Object.hasOwn(flow.selectionAliases ?? {}, documentQuery.value.bot)))
+const botSelectedNode = computed(() => inspectedNode.value ?? (typeof documentQuery.value.bot === 'string' ? selectedBot.value?.selectionAliases?.[documentQuery.value.bot] : undefined))
+watch(() => documentQuery.value.bot, () => { inspectedNode.value = undefined })
 const inspectorOpen = computed(() => !!selectedBot.value || typeof documentQuery.value.workflow === 'string' && !!definition.value)
 const referenceSelection = computed(() => {
   if (!props.active || !activated.value || !inspectorOpen.value) return
   const sink = selectedBot.value?.sinkProjection
   if (sink) return connectionSinkInputReference(props.projectId, sink.connectionId, selectedBot.value!.definition.name ?? sink.connectionId,
-    inspectedNode.value?.startsWith('receiver:') ? inspectedNode.value.slice('receiver:'.length) : undefined)
+    botSelectedNode.value?.startsWith('receiver:') ? botSelectedNode.value.slice('receiver:'.length) : selectedBot.value?.graph?.find(node => node.id === botSelectedNode.value)?.receiverId)
   return !selectedBot.value && displayed.value ? workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value) : undefined
 })
 watch(referenceSelection, item => referenceHub?.select?.(item, () => { void closeInspector() }, props.projectId), { immediate: true, flush: 'sync' })
@@ -199,8 +181,8 @@ const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(f
 const selectedControl = computed(() => canvasFlows.value.find(flow => flow.definition.id === definition.value?.id)?.control)
 async function inspectFlow(id: string, nodeId?: string) {
   inspectedFlow.value = id
-  inspectedNode.value = nodeId
   await router.replace({ name: 'project-workflows', params: { projectId: props.projectId }, query: botFlows.value.some(flow => flow.definition.id === id) ? { bot: id } : { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
+  inspectedNode.value = nodeId
   confirmation.value = ''; operationError.value = ''; notice.value = ''
   await nextTick(); inspector.value?.focus({ preventScroll: true })
 }

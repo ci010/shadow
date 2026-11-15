@@ -4421,5 +4421,22 @@
   "Configuration and existing sessions are not message admission or execution receipts.": "Configuration and existing sessions are not message admission or execution receipts.",
   "Session metadata exists; message receipt, persistence and execution are unknown.": "Session metadata exists; message receipt, persistence and execution are unknown.",
   "Discovery only; message receipt, persistence and execution are unknown.": "Discovery only; message receipt, persistence and execution are unknown.",
-  "No conversation evidence available": "No conversation evidence available"
+  "No conversation evidence available": "No conversation evidence available",
+  "Message receivers": "Message receivers",
+  "Associated BOTs": "Associated BOTs",
+  "BOT associations are configuration, not execution evidence.": "BOT associations are configuration, not execution evidence.",
+  "No BOT association recorded": "No BOT association recorded",
+  "Connection state": "Connection state",
+  "Existing conversation recorded": "Existing conversation recorded",
+  "Mode": "Mode",
+  "Connection ID": "Connection ID",
+  "BOT entry configuration": "BOT entry configuration",
+  "Conversation entry": "Conversation entry",
+  "Package state": "Package state",
+  "Subscription": "Subscription",
+  "Listener": "Listener",
+  "Configured entry": "Configured entry",
+  "Configured entry; receipt unknown": "Configured entry; receipt unknown",
+  "Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.": "Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.",
+  "Entry type": "Entry type"
 }
