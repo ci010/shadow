@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createLayerFSTools, LayerFSTool, layerFSToolContracts } from './layerfs.ts'
+import { createLayerFSFSTools } from './layerfs-fs.ts'
 import { createLayerFSResourceTools, layerfsResourceContracts } from './layerfs-resource.ts'
 import type { LayerFSResources } from '../execution/layerfs/resource-service.ts'
 import type { ExecutionContext } from './context.ts'
@@ -12,7 +13,7 @@ test('discovery combines installation-only factory and flat explicit template in
   const installation = createLayerFSTools(projectId)
   assert.deepEqual(installation.map(t => t.name), ['layerfs_doctor', 'layerfs_setup', 'layerfs_bootstrap_plan', 'layerfs_bootstrap', 'layerfs_bootstrap_status'])
   const templates = createLayerFSResourceTools({ projectId } as LayerFSResources)
-  const tools = [...templates, ...installation]
+  const tools = [...createLayerFSFSTools({ projectId } as LayerFSResources), ...templates, ...installation]
   assert.deepEqual(tools.map(({ name, description, parameters, supportsLayerFSWorkdir }) => ({ name, description, parameters, supportsLayerFSWorkdir })), layerFSToolContracts())
   assert.equal(new Set(tools.map(t => t.name)).size, tools.length)
   for (const name of ['layerfs', 'layerfs_read', 'layerfs_write', 'layerfs_exec', 'layerfs_connect', 'layerfs_import', 'layerfs_mount', 'layerfs_namespace_status', 'layerfs_import_recover']) assert.ok(!tools.some(t => t.name === name))

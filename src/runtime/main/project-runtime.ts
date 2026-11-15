@@ -530,9 +530,10 @@ export async function createProjectRuntime(
       layerfsBootstrap ??= new LayerFSBootstrap(project.id, workspace, backgroundTasks, managed, undefined, process.platform, process.arch, verify)
       const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
       const { createLayerFSResourceTools } = await import('../../tools/layerfs-resource.ts')
+      const { createLayerFSFSTools } = await import('../../tools/layerfs-fs.ts')
       const resources = layerfsResources(project.id, workspace)
       return [...createLayerFSTools(project.id, workspace, managed, layerfsBootstrap),
-        ...createLayerFSResourceTools(resources)]
+        ...createLayerFSResourceTools(resources), ...createLayerFSFSTools(resources)]
     },
   })
   // Ordinary LayerFS routes share this Project-owned worker; sessions never close it.
@@ -1017,6 +1018,10 @@ export async function createProjectRuntime(
     importTool.registerBuiltin(tool.name, tool)
     coordinator?.allow(tool) // Project Work state is control-plane coordination, not host execution.
   }
+  const { createLayerFSHandler } = await import('../../vfs/layerfs.ts')
+  const { existingLayerFSResources } = await import('../../execution/layerfs/resource-service.ts')
+  const layerfsVfs = createLayerFSHandler({ projectId: project.id, folders: () => folderRegistry.list(), existing: () => existingLayerFSResources(project.id, workspace) })
+  vfs.mount('v:layerfs', 'read-only registered LayerFS branch/history/immutable commit diffs; bounded pages, no runtime activation; read v:layerfs/overview', layerfsVfs.read, layerfsVfs.list)
   const worksVfs = createWorksHandler(alignment)
   vfs.mount('v:works', 'read-only current Project Work; bounded index/context and encoded key goal/notes/ancestor paths; read v:works/overview', worksVfs.read, worksVfs.list)
   const conventions = new ProjectConventions(workspace, () => initiatives.workRecords())

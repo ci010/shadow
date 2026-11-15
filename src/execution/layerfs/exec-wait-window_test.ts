@@ -20,7 +20,7 @@ test('lifecycle-managed exec ignores bridge receipt timeout while forwarding liv
       return {code:0};
     }},close:async()=>{}})};`)
     const observed: string[] = []
-    const result = await runBridge({ sdkModule, env: {} }, project, 'exec', { workspace, command: 'fixture-only', journal:join(dir,'operation.jsonl') },
+    const result = await runBridge({ sdkModule, env: { LAYERFS_IMAGE: 'sha256:' + 'a'.repeat(64) } }, project, 'exec', { workspace, command: 'fixture-only', journal:join(dir,'operation.jsonl') },
       new AbortController().signal, 1, { observe: text => observed.push(text) })
     assert.equal(JSON.parse(result).result.code, 0)
     assert.equal(JSON.parse(result).result.stdout.text, 'before-wait;after-wait')
@@ -39,7 +39,7 @@ test('unconfirmed sandbox cancellation remains UNKNOWN rather than reporting can
     }},close:async()=>{}})};`)
     const controller = new AbortController()
     let requested = false
-    const result = runBridge({ sdkModule, env: {} }, project, 'exec', { workspace, command: 'fixture-only', journal:join(dir,'operation.jsonl') }, controller.signal, 1,
+    const result = runBridge({ sdkModule, env: { LAYERFS_IMAGE: 'sha256:' + 'a'.repeat(64) } }, project, 'exec', { workspace, command: 'fixture-only', journal:join(dir,'operation.jsonl') }, controller.signal, 1,
       { observe: () => { if (!requested) { requested = true; controller.abort() } } })
     await assert.rejects(result, error => error instanceof ToolOutcomeUnknownError && /cancellation marker failed/.test(error.message))
     assert.equal(requested, true)

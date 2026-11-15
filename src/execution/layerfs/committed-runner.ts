@@ -41,32 +41,75 @@ async function ensureUnmounted() {
    let mountPos=0;
    for(let mountPages=0;;mountPages++) {
     if(mountPages>=100) throw Error('Workspace inventory bound exceeded');
-    const mounts=await client.sandbox.list_workspaces(sandbox.sandbox,100,mountPos);
+    let mounts;
+    try { mounts=await client.sandbox.list_workspaces(sandbox.sandbox,100,mountPos); }
+    catch (error) {
+     // A daemon that idled out between inventory and this read has no live
+     // mounts. No mutation has been sent; all other uncertainty fails closed.
+     if (definiteRefusal(error) && error.code === 'NoSuchSandbox') break;
+     throw error;
+    }
     if(!Array.isArray(mounts.items) || typeof mounts.hasMore!=='boolean') throw Error('Invalid mount inventory');
     for(const mount of mounts.items) {
      // Official v1.1 daemon metadata, not sandbox number, path or local ledger.
      if(typeof mount.branch!=='string' || !mount.branch || a.resources===null || a.resources.includes(mount.branch)) throw Object.assign(Error('Mounted LayerFS resource overlaps, or has unknown branch ownership; explicitly reconcile/checkpoint/close it. No inferred branch or discard.'), {code:'MountedWorkspace',shadowRefusal:true});
     }
     if(!mounts.hasMore) break;
-    if(!Number.isSafeInteger(mounts.nextPagePos) || mounts.nextPagePos<=mountPos) throw Error('Invalid mount pagination');
-    mountPos=mounts.nextPagePos;
+    if(!mounts.items.length) throw Error('Invalid mount pagination');
+    mountPos+=mounts.items.length;
    }
   }
   if (!page.hasMore) return;
-  if (!Number.isSafeInteger(page.nextPagePos) || page.nextPagePos <= pos) throw Error('Invalid inventory pagination');
-  pos = page.nextPagePos;
+  if (!page.items.length) throw Error('Invalid inventory pagination');
+  pos += page.items.length;
  }
  throw Error('Inventory bound exceeded; cannot prove unmounted state');
+}
+// The client is already bound to the registered resource's project, deployment
+// and Store. Inventory is read-only and the SDK validates the saved daemon
+// incarnation on mount. A mount refusal alone permits trying another placement.
+async function mountForExec(branch) {
+ const image = process.env.LAYERFS_IMAGE;
+ if (typeof image !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(image)) throw Error('Exact resource image required for sandbox placement');
+ const candidates = [];
+ let pos = 0;
+ for (let pages = 0;; pages++) {
+  if (pages >= 100) throw Error('Sandbox inventory bound exceeded');
+  const page = await client.project.list_sandboxes(100, pos);
+  if (!Array.isArray(page.items) || typeof page.hasMore !== 'boolean') throw Error('Invalid sandbox inventory');
+  for (const item of page.items) {
+   if (typeof item.sandbox !== 'string' || typeof item.image !== 'string' || !Number.isSafeInteger(item.workspaces) || item.workspaces < 0 || item.workspaces > 16) throw Error('Invalid sandbox identity or capacity');
+   if (item.image === image && item.workspaces < 16) candidates.push(item.sandbox);
+  }
+  if (!page.hasMore) break;
+  if (!page.items.length) throw Error('Sandbox inventory made no progress');
+  pos += page.items.length;
+ }
+ for (const sandbox of candidates) {
+  await phase('mount-dispatched', {sandbox, image});
+  try { return await client.workspace.mount(sandbox, branch); }
+  catch (error) {
+   if (!definiteRefusal(error) || !['NoSuchSandbox', 'Capacity'].includes(error.code)) throw error;
+   await phase('mount-refused', {sandbox, code:error.code});
+  }
+ }
+ await phase('sandbox-create-dispatched', {image});
+ const sandbox = await client.sandbox.create({image});
+ await phase('mount-dispatched', {sandbox:sandbox.sandbox, image});
+ return await client.workspace.mount(sandbox.sandbox, branch);
 }
 async function committedFile() {
  await ensureUnmounted();
  const ref = ws.branch;
- if (action === 'write') {
+ if (['write','mkdir','rm','cp','mv','apply'].includes(action)) {
   if (ref === 'main') throw Object.assign(Error('LayerFS main is readonly; fork a branch.'), {code:'ReadOnly'});
-  await phase('fs-mutation-dispatched', {path:a.path, operation:a.match === undefined ? 'write' : 'edit'});
+  await phase('fs-mutation-dispatched', {path:a.path, operation:action === 'write' ? (a.match === undefined ? 'write' : 'edit') : action});
   keepJournal = true;
   try {
-   const receipt = a.match === undefined ? await client.fs.write(ref, a.path, a.content, 'Shadow write')
+   const receipt = action === 'apply' ? await client.fs.apply(ref, a.changes, 'Shadow apply')
+    : ['mkdir','rm'].includes(action) ? await client.fs[action](ref, a.path, 'Shadow ' + action)
+    : ['cp','mv'].includes(action) ? await client.fs[action](ref, a.from, a.to, 'Shadow ' + action)
+    : a.match === undefined ? await client.fs.write(ref, a.path, a.content, 'Shadow write')
     : await client.fs.edit(ref, a.path, a.match, a.content, 'Shadow exact edit');
    checkpointReceipt(receipt, ref);
    keepJournal = false;
@@ -78,6 +121,8 @@ async function committedFile() {
    throw e;
   }
  }
+ if (action === 'blame') return await client.fs.blame(ref, a.path, a.fromLine);
+ if (action === 'diff_files') return await client.fs.diff_files(ref, a.leftPath, a.rightRef, a.rightPath);
  if (action === 'search') return a.handler === 'glob'
   ? await client.fs.glob(ref, a.query, a.path, a.limit, a.offset)
   : await client.fs.grep(ref, a.query, a.path, a.limit, a.offset);

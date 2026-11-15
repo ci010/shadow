@@ -121,9 +121,39 @@ within the requested window, and reject clipped or changing snapshots. Binary in
 encoding conversion and regex grep parity are not provided. Writes overwrite or
 exact-unique edit and checkpoint immediately. Append/global replacement are unsupported.
 
+Lazy `layerfs_fs_mkdir/rm/cp/mv/apply/diff_files/blame` tools resolve ordinary
+registered workspace selectors and enforce the same current-Project immutable resource
+binding. Mutations use branch reservations, durable journals and checkpoint receipts;
+main remains readonly. Apply accepts 1–100 ordered text-only official changes, bounded
+to a 64 KiB request. Copy/move destinations must not exist; mkdir creates parents.
+Base read/write/exec schemas are unchanged.
+
+Read `v:layerfs/overview` for workspace discovery (100/page), then:
+- `v:layerfs/<workspace UUID>/branches/<offset>`: live branch inventory.
+- `v:layerfs/<workspace UUID>/history/<offset>`: live first-parent history.
+- `v:layerfs/<workspace UUID>/diff/<from commit>/<to commit>/<offset>`:
+  immutable commit-to-commit path changes, no hunks.
+
+Offsets are zero-based SDK pagePos; advance by returned items.length while hasMore.
+Live positions can shift; retain commit IDs for stable comparisons. SDK byte bounds
+can shorten pages. Observations use existing services and readonly catalog connections,
+never initialize a runtime/catalog, load tools, mount, merge or publish. A stopped
+runtime requires a separate authorized runtime_start. Merge/publish remain explicit
+SDK mutations, not VFS read effects.
+
 Exec mounts the current branch, runs sh/bash, checkpoints even on a nonzero command
-exit, unmounts without discard and closes its sandbox. Nonzero remains a tool failure.
-Cancellation/unknown receipts retain evidence rather than pretending to roll back.
+exit, and unmounts without discard. Placement inventories the resource-bound project's
+running sandboxes and reuses an exact-image match below the 16-mount capacity before
+creating one. SDK mount validation verifies deployment/incarnation; only proven
+NoSuchSandbox/Capacity mount refusals permit another placement. Unknown effects are
+not replayed. Normal completion does not close reusable/shared sandboxes: upstream
+closes them after two idle minutes with no mounts or calls. Commit does not require
+unmount; per-call unmount keeps ordinary committed-file reads consistent.
+Nonzero remains a tool failure with its checkpoint. Cancellation/unknown receipts
+retain evidence rather than pretending to roll back.
+
+These contracts follow the [pinned official agent guide](https://github.com/Ephemeral-AI-Lab/layerfs/blob/73d974dea8a8d0b056a16dc6b2380d89438ce484/api/docs/agent.md).
+Long-lived mount APIs are not exposed by this integration.
 
 Independent branches can overlap. Branch reservations include all affected refs and
 are scoped to runtime plus official project. Crash-safe coordination retains exact

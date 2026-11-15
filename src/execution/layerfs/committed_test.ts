@@ -36,7 +36,7 @@ test('exec lifecycle mounts latest branch, checkpoints nonzero exit, unmounts wi
   assert.equal(isCompletedToolFailure(result),true)
   const receipt=JSON.parse(toolResultText(result));assert.equal(receipt.result.exitCode,7);assert.equal(receipt.result.checkpoint.head,'c'.repeat(64))
   const calls=await f.calls()
-  assert.deepEqual(calls.filter(c=>['create','mount','exec','commit','unmount','sandbox.close'].includes(c[0])).map(c=>c[0]),['create','mount','exec','commit','unmount','sandbox.close'])
+  assert.deepEqual(calls.filter(c=>['create','mount','exec','commit','unmount','sandbox.close'].includes(c[0])).map(c=>c[0]),['create','mount','exec','commit','unmount'])
   assert.deepEqual(calls.find(c=>c[0]==='mount'),['mount','1','feature'])
   assert.equal(calls.find(c=>c[0]==='commit').at(-1),false)
   assert.deepEqual(calls.find(c=>c[0]==='unmount').slice(2),[false])

@@ -5,14 +5,15 @@ import { DatabaseSync } from 'node:sqlite'
 /** null is project-wide; [] is observational. Ref strings are opaque SDK names,
  * never inferred from mount paths. Sources are conservatively reserved too. */
 export function operationResources(action: string, a: Record<string, unknown>): string[] | null {
-  if (['list', 'branches', 'history', 'status', 'diff'].includes(action)) return []
+  if (['list', 'branches', 'history', 'status', 'diff', 'diff_commits'].includes(action)) return []
   let branch: unknown
   if (typeof a.workspace === 'string') {
     try { branch = JSON.parse(Buffer.from(a.workspace.replace(/^layerfs:/, ''), 'base64url').toString()).branch } catch { /* legacy management needs broad exclusion */ }
   }
   let refs: unknown[]
   switch (action) {
-    case 'read': case 'write': case 'search': case 'exec': refs = [branch]; break
+    case 'mkdir': case 'rm': case 'cp': case 'mv': case 'apply': case 'blame': case 'read': case 'write': case 'search': case 'exec': refs = [branch]; break
+    case 'diff_files': refs = [branch, a.rightRef]; break
     case 'branch_workspace': case 'mount': refs = [a.branch]; break
     case 'fork': case 'load': refs = [a.branch, a.ref ?? 'main']; break
     case 'merge': refs = [a.ref, a.branch, a.name]; break
