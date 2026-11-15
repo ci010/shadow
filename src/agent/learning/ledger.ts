@@ -1,4 +1,5 @@
 import { pendingCandidates, candidateResolutions } from './pending.ts'
+import { correctionRequest, correctionRecovery, type CorrectionRequest } from './recovery.ts'
 import { validateLogSummary } from '../log-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -42,6 +43,7 @@ const batchSchema = z.object({
   // One durable continuation per batch, not per candidate/path/rewording.
   candidateContinuationUsed: z.boolean().optional(),
   candidateResolutions: candidateResolutions.optional(),
+  correctionRecovery: correctionRecovery.optional(),
   excluded: z.string().optional(),
   retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative(), paused: z.string().optional() }).optional(),
   proposal: outcomeSchema.optional(), evaluated: z.array(z.string()), error: z.string().optional(),
@@ -121,10 +123,35 @@ export class LearningLedger {
     return batch.pipeline === 'reflector' && batch.retry?.attempts === 3
       && !batch.candidateContinuationUsed && !!batch.pendingCandidates?.length
   }
+  queueCorrection(raw: CorrectionRequest): void {
+    const request = correctionRequest.parse(raw)
+    const batch = this.required(request.batchId)
+    if (batch.pipeline !== 'encapsulator' || batch.state !== 'pending' || batch.excluded
+      || (batch.retry?.attempts ?? 0) < 3) throw new Error('Correction recovery requires a parked encapsulator batch')
+    if (this.state.batches.some(b => b.pipeline === 'encapsulator' && b.state === 'running')) throw new Error('Encapsulator is running; queue after it settles')
+    if (batch.correctionRecovery) throw new Error('Correction recovery already queued or spent; retained for review')
+    const allowed = new Set(batch.inputEvents.flatMap(log => log.refs ?? []))
+    if (request.evidence.some(ref => !allowed.has(ref))) throw new Error('Correction evidence must be an exact original assigned reference')
+    const originalFailure = [batch.error, batch.proposal?.summary].filter(Boolean).join('\n')
+    if (!originalFailure) throw new Error('Correction recovery requires retained original failure evidence')
+    batch.correctionRecovery = { ...request, originalFailure, admitted: false,
+      priorArtifactRevision: batch.artifacts.find(a => a.path === `skills/${request.target}/SKILL.md`)?.revision }
+    this.save()
+  }
+  parkCorrection(id: string, reason: string): void {
+    const batch = this.required(id)
+    if (!batch.correctionRecovery) throw new Error('No correction recovery request')
+    batch.correctionRecovery.closedReason = reason
+    batch.error = reason
+    this.save()
+  }
+  private correctionDue(batch: LearningBatch): boolean {
+    return batch.pipeline === 'encapsulator' && !!batch.correctionRecovery && !batch.correctionRecovery.admitted && !batch.correctionRecovery.closedReason
+  }
   pending(pipeline: Pipeline, dueOnly = false): LearningBatch | undefined {
     return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded
-      && (!dueOnly || batch.state === 'running' || (((batch.retry?.attempts ?? 0) < 3 || this.canContinueCandidates(batch)) && (batch.retry?.notBefore ?? 0) <= Date.now())))
-      .sort((a, b) => (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
+      && (!dueOnly || batch.state === 'running' || (((batch.retry?.attempts ?? 0) < 3 || this.canContinueCandidates(batch) || this.correctionDue(batch)) && (batch.retry?.notBefore ?? 0) <= Date.now())))
+      .sort((a, b) => Number(this.correctionDue(b)) - Number(this.correctionDue(a)) || (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
   }
   /** Selection frontier reserves failed work without acknowledging it. */
   selectionCursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
@@ -145,7 +172,7 @@ export class LearningLedger {
   select(pipeline: Pipeline, sources: LearningSource[], logs: LearningLog[], manual = false): LearningBatch | undefined {
     const due = this.pending(pipeline, !manual)
     const fresh = sources.length > 0 || logs.length > 0
-    const batch = fresh && (!due || this.state.preferFresh?.[pipeline]) ? this.create(pipeline, sources, logs) : due
+    const batch = fresh && (!due || !this.correctionDue(due) && this.state.preferFresh?.[pipeline]) ? this.create(pipeline, sources, logs) : due
     if (batch) {
       this.state.preferFresh ??= {}
       this.state.preferFresh[pipeline] = batch === due
@@ -186,7 +213,9 @@ export class LearningLedger {
   bind(id: string, sessionId: string): void {
     const batch = this.required(id)
     if (batch.excluded) throw new Error('Learning batch is excluded')
+    if (batch.correctionRecovery?.admitted || batch.correctionRecovery?.closedReason) throw new Error('Correction recovery admission already spent; review required')
     this.core().claim(id, sessionId); delete batch.proposal
+    if (batch.correctionRecovery) batch.correctionRecovery.admitted = true
     // Spend at admission, including manual admission, so interruption/restart cannot
     // renew the extra opportunity. Selection alone (before dispatch) spends nothing.
     if (this.canContinueCandidates(batch)) batch.candidateContinuationUsed = true

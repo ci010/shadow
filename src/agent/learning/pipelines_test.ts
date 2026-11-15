@@ -1,3 +1,5 @@
+import { createLearnCommand } from '../../slash-commands/handlers/learn.ts'
+import type { SlashCommandContext } from '../../slash-commands/index.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -923,4 +925,116 @@ test('exact lesson corrections preserve unrelated evidence and all save boundari
     await f.tools.result.execute({ status: 'applied', summary: 'Corrected obsolete fixture requirement, retained evidence and safety; optional expansion deferred.' }, ctx)
   })
   await f.runtime.run('encapsulator', signal())
+}))
+
+for (const oldStatus of ['partial', 'blocked'] as const) test(`explicit correction queue replaces old ${oldStatus} receipt through actual learning_result applied`, async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const name = 'queued-correction'
+  await f.runtime.skillStore!.save(name, { 'SKILL.md': `---\nname: ${name}\ndescription: Review obsolete guidance safely\n---\nOld requirement. Keep safety constraints.` }, null, false, signal())
+  const revision = f.runtime.skillStore!.read(name).revision!
+  const ref = 'v:memory/topics/correction.md'
+  const batch = f.runtime.ledger.create('encapsulator', [], [{ id: 'correction-log', path: 'memory/events/day.jsonl', origin: ref, when: 'then', who: 'fixture', what: 'Correct obsolete requirement', refs: [ref] }])
+  f.runtime.ledger.bind(batch.id, 'cron:old')
+  f.records.set('cron:old', { sessionId: 'cron:old', segmentIndex: 0, projectId: 'a' })
+  f.runtime.ledger.propose(batch.id, oldStatus, `Failed oversized save of ${name}`)
+  f.runtime.ledger.complete(batch.id)
+  assert.equal(f.runtime.ledger.batch(batch.id).proposal!.status, oldStatus)
+  for (let i = 0; i < 3; i++) f.runtime.ledger.defer(batch.id, true)
+  const request = { batchId: batch.id, target: name, revision, correction: 'Replace Old requirement with Current requirement; retain constraints', evidence: [ref], changed: 'Exact patch support now available' }
+  assert.throws(() => f.runtime.queueCorrection({ ...request, revision: '0'.repeat(64) }), /revision/)
+  assert.throws(() => f.runtime.queueCorrection({ ...request, evidence: ['v:unassigned'] }), /assigned reference/)
+  const command = createLearnCommand(f.sessions, async () => assert.fail('queue must not manual-trigger'), value => f.runtime.queueCorrection(value))
+  assert.match(await command.execute({} as SlashCommandContext, `recover ${JSON.stringify(request)}`), /not executed/)
+  assert.throws(() => f.runtime.queueCorrection(request), /already queued/)
+  const restarted = new LearningLedger(workspace, 'a')
+  assert.equal(restarted.batch(batch.id).correctionRecovery?.admitted, false)
+  assert.equal(restarted.batch(batch.id).proposal!.status, oldStatus)
+  assert.deepEqual(restarted.logsFor('encapsulator', batch.inputEvents), [])
+  assert.equal(restarted.pending('soulReflector', true), undefined)
+  f.onRun(async id => {
+    const current = f.runtime.ledger.batchFor(id)!
+    assert.equal(current.id, batch.id)
+    assert.match(learningTask(current), /Explicit bounded correction recovery/)
+    assert(learningTask(current).includes(ref))
+    assert.match(current.correctionRecovery!.originalFailure, /oversized/)
+    // Normal bind removes the previous proposal; its failure remains captured
+    // in the request/outcome. No test-side ledger mutation is needed.
+    assert.equal(current.proposal, undefined)
+    assert.equal(f.runtime.ledger.outcome('cron:old')!.status, oldStatus)
+    await assert.rejects(f.tools.result.execute({ status: 'no_change', summary: 'read only is insufficient' }, f.context(id)), /same-name/)
+    const read = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, f.context(id)))
+    await f.tools.skill.execute({ action: 'patch', name, revision: read.revision, match: 'Old requirement.', replacement: 'Current requirement.' }, f.context(id))
+    await assert.rejects(f.tools.result.execute({ status: 'no_change', summary: 'cannot hide persisted patch' }, f.context(id)), /persisted effects/)
+    await f.tools.result.execute({ status: 'applied', summary: 'Corrected obsolete requirement with safety intact' }, f.context(id))
+    assert.equal(f.runtime.ledger.batchFor(id)!.proposal!.status, 'applied')
+  })
+  const originalNow = Date.now
+  Date.now = () => originalNow() + 4_000_000
+  try { await f.runtime.run('encapsulator', signal()) } finally { Date.now = originalNow }
+  const done = f.runtime.ledger.batch(batch.id)
+  assert.equal(done.state, 'done')
+  assert.equal(done.retry!.attempts, 3)
+  assert.equal(done.correctionRecovery!.admitted, true)
+  assert.notEqual(f.runtime.skillStore!.read(name).revision, revision)
+  const stored = f.runtime.skillStore!.read(name).files['SKILL.md']!.toString()
+  assert.match(stored, /Current requirement\. Keep safety constraints\./)
+  assert.doesNotMatch(stored, /Old requirement/)
+  assert.throws(() => f.runtime.queueCorrection({ ...request, revision: f.runtime.skillStore!.read(name).revision!, changed: 'another version' }), /parked/)
+}))
+
+test('bounded correction preserves parked work across restart and cannot refill on new evidence', async () => withTempWorkspace(async workspace => {
+  const ledger = new LearningLedger(workspace, 'a')
+  const batch = ledger.create('encapsulator', [], [{ id: 'old', path: 'memory/events/day.jsonl', origin: 'fixture', when: 'then', who: 'fixture', what: 'Correction', refs: ['v:memory/topics/a.md'] }])
+  ledger.bind(batch.id, 'old')
+  ledger.interrupt(batch.id, 'old failure')
+  // Non-retryable legacy work can be parked without any human-readable pause.
+  for (let i = 0; i < 3; i++) ledger.defer(batch.id, true)
+  const request = { batchId: batch.id, target: 'existing-lesson', revision: 'a'.repeat(64), correction: 'Correct obsolete instruction', evidence: ['v:memory/topics/a.md'], changed: 'new deployed capability' }
+  ledger.queueCorrection(request)
+  const restarted = new LearningLedger(workspace, 'a')
+  // Advance time without rewriting ledger: recovery must use normal cooldown.
+  const now = Date.now
+  Date.now = () => now() + 4_000_000
+  try {
+    assert.equal(restarted.select('encapsulator', [], [{ ...batch.inputEvents[0], id: 'fresh' }])!.id, batch.id)
+    restarted.bind(batch.id, 'recovery')
+    restarted.interrupt(batch.id, 'correction still failed')
+    const again = new LearningLedger(workspace, 'a')
+    assert.equal(again.pending('encapsulator', true), undefined)
+    assert.throws(() => again.bind(batch.id, 'manual'), /spent/)
+    assert.throws(() => again.queueCorrection({ ...request, changed: 'newer evidence' }), /spent/)
+    assert.equal(again.batch(batch.id).inputEvents[0].id, 'old')
+    assert.equal(again.batch(batch.id).attempts.length, 2)
+  } finally { Date.now = now }
+}))
+
+
+test('queued target revision drift closes visibly without dispatch or fabricated admission', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const name = 'drift-correction'
+  const content = `---\nname: ${name}\ndescription: Check revision before correction\n---\nOld guidance.`
+  const store = f.runtime.skillStore!
+  await store.save(name, { 'SKILL.md': content }, null, false, signal())
+  const revision = store.read(name).revision!
+  const log = { id: 'drift', path: 'memory/events/day.jsonl', origin: 'fixture', when: 'then', who: 'fixture', what: 'Correction', refs: ['v:memory/topics/drift.md'] }
+  const wrong = f.runtime.ledger.create('soulReflector', [], [log])
+  for (let i = 0; i < 3; i++) f.runtime.ledger.defer(wrong.id, true)
+  const request = { batchId: wrong.id, target: name, revision, correction: 'Correct obsolete guidance', evidence: log.refs, changed: 'Patch available' }
+  assert.throws(() => f.runtime.queueCorrection(request), /encapsulator/)
+  const batch = f.runtime.ledger.create('encapsulator', [], [log])
+  f.runtime.ledger.interrupt(batch.id, 'retained failure')
+  for (let i = 0; i < 3; i++) f.runtime.ledger.defer(batch.id, true)
+  f.runtime.queueCorrection({ ...request, batchId: batch.id })
+  await store.save(name, { 'SKILL.md': content + ' Peer change.' }, revision, false, signal())
+  const now = Date.now
+  Date.now = () => now() + 4_000_000
+  try { await assert.rejects(f.runtime.run('encapsulator', signal()), /revision changed/) } finally { Date.now = now }
+  const retained = new LearningLedger(workspace, 'a').batch(batch.id)
+  assert.equal(f.started.length, 0)
+  assert.equal(retained.correctionRecovery!.admitted, false)
+  assert.match(retained.correctionRecovery!.closedReason!, /review required/)
+  assert.equal(retained.state, 'pending')
+  assert.equal(retained.attempts.length, 0)
 }))
