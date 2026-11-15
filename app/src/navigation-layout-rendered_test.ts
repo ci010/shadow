@@ -48,7 +48,7 @@ test('Knowledge and conversation controls preserve layout, navigation and global
         if (id !== '\0/navigation-fixture.ts') return
         return `import 'uno.css'; import '/src/styles.css';
           import '/composer-style.css';
-          import { createApp, computed, h, ref, reactive, toRefs, nextTick } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {computed, h, ref, reactive, toRefs, nextTick} from 'vue';
           import { i18n, t } from '/src/i18n.ts';
           import Knowledge from '/src/components/KnowledgeView.vue';
           import KnowledgeGraph from '/src/components/KnowledgeGraph.vue';

@@ -35,6 +35,14 @@ export function useWorkCompletions(context: () => { base: string; projectId: str
     } catch { if (!controller.signal.aborted && current.value === lease) commandError.value = true }
     finally { if (command === controller) busy.value = false }
   }
+  async function refresh() {
+    const lease = current.value, failedCommand = commandError.value, previousCommand = command
+    if (!lease) return
+    await lease.refresh()
+    // Explicit read recovery dismisses an older command error without replaying
+    // its POST. A newer command/scope must retain its own result and error.
+    if (failedCommand && current.value === lease && command === previousCommand && !lease.state.value.error) commandError.value = false
+  }
   return { items, unread: computed(() => items.value.filter(item => item.unread)), error, busy,
-    refresh: () => current.value?.refresh(), markRead }
+    refresh, markRead }
 }

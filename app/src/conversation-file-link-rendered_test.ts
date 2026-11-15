@@ -48,7 +48,7 @@ test('conversation links open scoped previews and reveal nested files without na
       load(id) {
         if (id !== '\0file-links') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref} from 'vue';
           import { marked } from 'marked';
           import DOMPurify from 'dompurify';
           import Workbench from '/src/components/files/FileWorkbench.vue';

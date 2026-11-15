@@ -25,7 +25,7 @@ test('actual folder sidebar keeps one icon-bearing Workflow route and ordinary c
       resolveId: id => id === '/automation-entry.ts' ? '\0automation-entry' : undefined,
       load(id) {
         if (id !== '\0automation-entry') return
-        return `import 'uno.css';import '/src/styles.css';import {createApp,h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
+        return `import 'uno.css';import '/src/styles.css';import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
           import FoldersSidebar from '/src/components/FoldersSidebar.vue';
           window.patches=[];window.allowed=!location.search.includes('denied');
           const jobs=['work-organizer'].map(kind=>({id:'system:'+kind,name:'话题整理',source:'system',session:'fresh',schedule:'Event-driven / manual',enabled:false,configuredEnabled:true,editable:false,canToggle:true,toggleId:'system:'+kind,toggleEnabled:true}));

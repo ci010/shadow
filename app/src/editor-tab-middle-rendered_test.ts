@@ -24,7 +24,7 @@ test('native middle clicks close only their closable tab across split and standa
     name: 'middle-tabs-fixture', resolveId: id => id === '/fixture.ts' ? '\0fixture' : undefined,
     load(id) {
       if (id !== '\0fixture') return
-      return `import {createApp,h,provide,ref} from 'vue';import Host from '/src/components/EditorGroupHost.vue';import Workbench from '/src/components/files/FileWorkbench.vue';import {createEditorGroups,EditorGroupsKey} from '/src/editor-groups.ts';import {setLocalePreference} from '/src/i18n.ts';import '/src/styles.css';import 'virtual:uno.css';setLocalePreference('en');
+      return `import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, provide, ref} from 'vue';import Host from '/src/components/EditorGroupHost.vue';import Workbench from '/src/components/files/FileWorkbench.vue';import {createEditorGroups,EditorGroupsKey} from '/src/editor-groups.ts';import {setLocalePreference} from '/src/i18n.ts';import '/src/styles.css';import 'virtual:uno.css';setLocalePreference('en');
         const groups=createEditorGroups();window.groups=groups;
         for(const id of ['L1','L2','R1','R2','Pinned'])groups.open({id,projectId:'p',owner:id,label:id,icon:'i-lucide-file',closable:id!=='Pinned',select(){},close(){}},id.startsWith('R')?'right':'left');
         groups.activate('R1');groups.activate('L1');

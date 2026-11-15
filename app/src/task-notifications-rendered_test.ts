@@ -30,7 +30,7 @@ async function renderTaskNotifications(web: boolean) {
         resolveId: id => id === '/task-notification-fixture.ts' ? '\0task-notification-fixture' : undefined,
         load: id => id !== '\0task-notification-fixture' ? undefined : `
           import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h} from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import { i18n } from '/src/i18n.ts';
           import { useAppNotificationSounds } from '/src/composables/useAppNotificationSounds.ts';
@@ -85,7 +85,9 @@ async function renderTaskNotifications(web: boolean) {
             monitor = useAppNotificationSounds(() => ({base:location.origin,allowed:true}));
             return () => h('main', [h('p', monitor.monitoringError.value || 'Task notification fixture'), h(SoundSettings)]);
           }}).provide(Symbol.for('shadow.live-client-pool'),pool)
-            .provide(Symbol.for('shadow.project-live-state'),state).use(router).use(i18n);
+            .use(router).use(i18n);
+          useProjectResourceStore(app.config.globalProperties.$pinia).owner=state;
+          app.onUnmount(()=>state.dispose());
           app.mount('#app');
           window.fixture = {
             ready:() => web ? !!monitor.browserNotifications : monitoring(),

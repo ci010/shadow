@@ -37,7 +37,7 @@ test('tooltip, popup and sheet motion preserves positioning, dismissal, interrup
       name: 'overlay-motion-fixture',
       resolveId: id => id === '/overlay-fixture.vue' ? fixture : id === '/overlay-entry.ts' ? '\0overlay-entry' : undefined,
       load(id) {
-        if (id === '\0overlay-entry') return `import '/src/styles.css';import {createApp} from 'vue';
+        if (id === '\0overlay-entry') return `import '/src/styles.css';import {createResourceApp as createApp} from '/src/stores/app.ts';
           import Fixture from '/overlay-fixture.vue';createApp(Fixture).mount('#app');`
         if (id !== fixture) return
         return `<script setup>

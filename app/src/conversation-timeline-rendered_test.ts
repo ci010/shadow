@@ -43,7 +43,7 @@ test('continuous ChatTab prepends, preserves boundaries and handles live rollove
       load(id) {
         if (id !== '\0persistence') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref, watch } from 'vue';
+          import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref, watch } from 'vue';
           import { createRouter, createWebHistory } from 'vue-router';
           import Chat from '/src/components/ChatTab.vue';
           const router = createRouter({history:createWebHistory(),routes:[
