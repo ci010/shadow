@@ -61,7 +61,8 @@ export const LayerFS={open:async project=>({
     } })
     await service.runtimePlan('test', context); await service.runtimeStart('test', context)
     await assert.rejects(service.runtimeStart('test', context), /consumed/)
-    const entry = await service.runtimeContext('test', context, 'source')
+    const other = { ...context, sessionId: 'other' }
+    const entry = await service.runtimeContext('test', other, 'source')
     assert.equal(entry.sourcePath, sourceDirectory)
     assert.doesNotMatch(JSON.stringify(entry), /token|endpoint\.json|Bearer/)
     const transport = JSON.parse((await readFile(entry.launcher, 'utf8')).match(/const profile = (.*);/)![1]!)
@@ -69,7 +70,8 @@ export const LayerFS={open:async project=>({
     assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer wrong' }, body: '{}' })).status, 403)
     const invalid = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${transport.token}` }, body: JSON.stringify({ action: 'eval', input: { module: '/evil' } }) })
     assert.equal((await invalid.json() as { code: string }).code, 'InvalidAction')
-    await assert.rejects(service.runtimeContext('test', { ...context, sessionId: 'other' }), /owner/)
+    await service.runtimeContext('test', other)
+    await assert.rejects(service.runtimeContext('test', { ...other, projectId: 'two' }), /Project/)
     const secondEntry = await service.runtimeContext('test', context, 'other')
     const secondScript = join(dir, 'second.mjs')
     await writeFile(secondScript, `export default async ({runtime})=>{await runtime.project.start_init('second',${JSON.stringify(secondEntry.sourcePath)},{image:${JSON.stringify(otherImage)},timeout:1000})}`)
@@ -78,6 +80,7 @@ export const LayerFS={open:async project=>({
     assert.notEqual(secondEntry.sourcePath, entry.sourcePath)
     const script = join(dir, 'init.mjs')
     await writeFile(script, `export default async ({runtime})=>{for(const [name,image] of [['first',${JSON.stringify(image)}],['foreign',${JSON.stringify(image)}]]){const job=await runtime.project.start_init(name,${JSON.stringify(sourceDirectory)},{image,timeout:1000});console.log(JSON.stringify(await runtime.project.get_init(job.id)))}try{await runtime.project.start_init('lost',${JSON.stringify(sourceDirectory)},{image:${JSON.stringify(image)},timeout:1000})}catch(e){console.error(e.message)}try{await runtime.project.start_init('lost',${JSON.stringify(sourceDirectory)},{image:${JSON.stringify(image)},timeout:1000})}catch(e){console.error(e.message)}}`)
+    other.sessionId = 'third' // Revalidation uses direct authority, not the issuing/planning session ID.
     const result = await promisify(execFile)(entry.executable, [entry.launcher, script], { env: { ...process.env, ...entry.env }, windowsHide: true, timeout: 10000 })
     assert.equal(result.stdout.trim().split('\n').length, 2)
     assert.match(result.stderr, /lost init receipt/); assert.match(result.stderr, /ImportAlreadyAttempted/)
@@ -94,9 +97,9 @@ export const LayerFS={open:async project=>({
     const guarded = join(dir, 'guarded.mjs')
     await writeFile(guarded, `export default async({runtime})=>{await runtime.project.start_init('guarded',${JSON.stringify(sourceDirectory)},{image:${JSON.stringify(image)},timeout:1000})}`)
     const runGuarded = () => promisify(execFile)(entry.executable, [entry.launcher, guarded], { env: { ...process.env, ...entry.env }, windowsHide: true })
-    context.admin = false
+    other.admin = false
     await assert.rejects(runGuarded(), /SourceScopeRequired/)
-    context.admin = true
+    other.admin = true
     allowed = false
     await assert.rejects(runGuarded(), /SourceScopeRequired/)
     allowed = true; inode = '2'

@@ -15,6 +15,7 @@ import { parseBranchWorkspace } from './workspace-identity.ts'
 import { LayerFSWorkspaces } from './workspace-create.ts'
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/)
+// Legacy owner identifies the planning session for provenance only, never management authority.
 const runtimeSchema = z.object({ version: z.literal(1), projectId: z.string(), runtimeId: idSchema, owner: z.string(), installation: installationSchema, phase: z.enum(['planned', 'starting', 'ready', 'unknown']) }).strict()
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
@@ -65,8 +66,7 @@ export class LayerFSResources {
   }
   async runtimeStart(id: string, context: ExecutionContext) {
     this.assertOwner(context)
-    const value = await this.record(id)
-    if (value.owner !== context.sessionId) throw new ToolNoEffectError('Runtime is owned by another session; ownership transfer is not supported.')
+    await this.record(id)
     // A transient exclusive lease covers preflight as well as dispatch across service
     // instances. A crash retains it; never steal it or clear historical admissions.
     const lease = join(this.runtimeHome(id), 'start-lease.json')
@@ -77,7 +77,6 @@ export class LayerFSResources {
     }
     try {
       const current = await this.record(id)
-      if (current.owner !== context.sessionId) throw new ToolNoEffectError('Runtime is owned by another session.')
       if (current.phase !== 'planned' && current.phase !== 'ready') throw new ToolOutcomeUnknownError('Runtime startup is unresolved; inspect retained state, no replay.')
       if (current.phase === 'ready') {
         const status = await this.runtime(id).status(context.signal)
@@ -94,7 +93,7 @@ export class LayerFSResources {
         // this completed start for an outstanding/crash-retained admission.
       } catch (error) {
         // A proven pre-dispatch refusal must not poison an otherwise retryable
-        // plan/stopped runtime. All other failures retain unknown ownership.
+        // plan/stopped runtime. All other failures retain unknown startup state.
         writePrivateFile(this.runtimeFile(id), JSON.stringify({ ...current, phase: error instanceof ToolNoEffectError ? current.phase : 'unknown' }))
         throw error
       }
@@ -112,19 +111,19 @@ export class LayerFSResources {
     const phase = admissionRetained ? (value.phase === 'starting' ? 'starting' : 'unknown') : ready ? 'ready' : value.phase === 'ready' ? (live.phase === 'stopped' ? 'stopped' : 'unknown') : value.phase
     return { runtimeId: id, recordPhase: value.phase, phase, ready, owner: value.owner,
       next: phase === 'planned' || phase === 'stopped' ? 'layerfs_runtime_start' : ready ? 'layerfs_runtime_context' : 'inspect_retained_state',
-      message: phase === 'stopped' ? 'Worker stopped normally. The original direct owner session may explicitly start this same runtime; no ownership transfer or implicit restart.' : undefined,
+      message: phase === 'stopped' ? 'Worker stopped normally. Any direct authorized session in this Project may explicitly start this same runtime; no implicit restart.' : undefined,
       result }
   }
   async runtimeContext(id: string, context: ExecutionContext, sourceName?: string) {
     this.assertOwner(context)
     const record = await this.record(id)
-    if (record.phase !== 'ready' || record.owner !== context.sessionId) throw new ToolNoEffectError('Only the running runtime owner may obtain its SDK launcher.')
+    if (record.phase !== 'ready') throw new ToolNoEffectError('Only a ready runtime may provide its SDK launcher.')
     const sourceRoot = nativeSourceRoot(this.projectId, id)
     const path = sourceName === undefined ? undefined : nativeSourcePath(sourceRoot, sourceName)
     const source = async () => {
       this.assertOwner(context)
       const current = await this.record(id)
-      if (current.phase !== 'ready' || current.owner !== context.sessionId || digest(current.installation) !== digest(record.installation)) throw new ToolNoEffectError('Runtime source binding changed; obtain a new context.')
+      if (current.phase !== 'ready' || digest(current.installation) !== digest(record.installation)) throw new ToolNoEffectError('Runtime source binding changed; obtain a new context.')
       const identity = verifyNativeSource(path!, await this.runtime(id).sourceIdentity(path!, context.signal))
       return { path: path!, identity }
     }

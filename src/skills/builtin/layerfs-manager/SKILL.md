@@ -30,7 +30,7 @@ implicit installation, catalog migration or cleanup occurs.
 
 ## Inspect and integrate
 
-Use the owner's `layerfs_runtime_context` launcher and explicit SDK scripts shown in
+Use a same-Project direct authorized session’s `layerfs_runtime_context` launcher and explicit SDK scripts shown in
 `v:skills/layerfs/setup.md`: `open(officialProject)` gives the real agent SDK client.
 Call `project.list_branches`, `branch.list_commits`, `branch.diff_branches`, `branch.merge` and
 `branch.publish` directly as needed; consult pinned official signatures rather than

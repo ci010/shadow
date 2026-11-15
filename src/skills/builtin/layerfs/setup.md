@@ -5,7 +5,7 @@ contracts before invocation. This guide does not grant installation or publicati
 permission. Git/Docker/SDK operations below are explicit ordinary exec commands,
 not a Shadow build/import pipeline.
 
-## 1. Installation and one runtime owner
+## 1. Installation and Project-scoped runtime management
 
 `layerfs_doctor` reports installation configuration with `runtime:"not_checked"`.
 For missing artifacts, use `layerfs_bootstrap_plan`; pass its exact approvalRequest
@@ -26,10 +26,11 @@ do not edit it to select repositories or evade the installation boundary.
 Reuse the approved artifacts without another routine approval:
 - `layerfs_runtime_plan {runtimeId:"repos-1"}`
 - `layerfs_runtime_start {runtimeId:"repos-1"}` for initial start; after a clean
-  backend close/reopen, the same original owner session may explicitly start this
-  same runtime again only when status reports `phase:"stopped"`, `ready:false`.
-  `recordPhase:"ready"` alone is not live readiness. Do not create another runtime
-  to bypass ownership; foreign sessions cannot take ownership. Running/concurrent,
+  backend close/reopen, any direct authorized session in the same Project may explicitly
+  start this same runtime again only when status reports `phase:"stopped"`, `ready:false`.
+  `recordPhase:"ready"` alone is not live readiness. The planning session has no exclusive management right; saved `owner` is
+  provenance only. Other Projects and sessions lacking direct owner authority
+  cannot manage this runtime. Running/concurrent,
   starting/uncertain/unknown and crash-retained starts are refused, not replayed.
 - `layerfs_runtime_context {runtimeId:"repos-1"}` returns inspection access and the
   dedicated native `sourceRoot`. After authorized source preparation, add
@@ -41,8 +42,8 @@ and exactly one host-owned official Runtime/worker process. Existing resources a
 old catalogs are retained, not migrated, adopted, overwritten or deleted.
 
 `runtime_context` returns `executable`, `launcher`, `env`, `distribution` and
-`linuxNode`. It returns no bearer/worker endpoint secret. Only the owning direct
-session can obtain this launcher. It is a private same-user capability: do not read,
+`linuxNode`. It returns no bearer/worker endpoint secret. Any direct authorized session in the same
+Project can obtain this launcher. It is a private same-user capability: do not read,
 print, copy to a sandbox or share its contents. No extra network service installation
 is involved. The existing child IPC channel is parent-only and cannot be inherited
 by independently launched ordinary exec processes; the small authenticated loopback
@@ -216,7 +217,7 @@ permissions for the distribution's UNC user; a root-only probe does not establis
 that access. Do not chmod user sources or bypass the official scan to hide a failure.
 A pre-job refusal may have no job ID; the consumed Shadow admission is still retained.
 
-Every Init dispatch rechecks owner/runtime/installation binding and all ancestor
+Every Init dispatch rechecks direct management authority and Project/runtime/installation binding and all ancestor
 realpaths, lstat identities, ext4 statfs type, root ownership and non-group/world-write
 permissions. Symlinks, renamed/recreated directories, DrvFS even mounted at a native-
 looking path, unknown filesystems, source substitutions and cross-distro UNC paths
