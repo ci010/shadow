@@ -361,3 +361,103 @@ record the loaded build and admitted window, same-name oversized attempts before
 first correction, actual saved revision/discovery/receipt, unsaved corrections,
 remaining parked batches and budget consumption. Without deployment report
 baseline only; do not retry parked batches or mutate knowledge during monitoring.
+
+
+## Sixth pass: explicit, bounded correction recovery (2026-11-13)
+
+Prompt/size improvements do not reopen old parked reservations. Retained Wiki
+inputs remain revision-hashed by path/content; `logsFor` excludes consumed or
+reserved IDs and unfinished reflector effects. Neither a newer prompt nor a fresh
+Wiki candidate proves that a specific failed skill correction was scheduled.
+This change adds **explicit review-driven recovery**, not automatic semantic
+identification of every obsolete lesson. No production queue was populated.
+
+The existing administrator-only `/learn` command now exposes:
+
+- `/learn recover` — schema/help and an illustrative JSON request.
+- `/learn recover <JSON>` — validate and queue only; never invokes manual `/learn`
+  or immediately dispatches a session.
+- `/learn recover-status <batchId>` — original batch state, retries, retained
+  recovery request, admission flag, closure reason, error and proposal.
+
+Example (placeholders must be replaced with actual reviewed values):
+
+```text
+/learn recover {"batchId":"<parked encapsulator UUID>","target":"existing-lesson","revision":"<current learned_skill read SHA256>","correction":"Replace the obsolete requirement; preserve safety conditions","evidence":["v:<exact original assigned reference>"],"changed":"Deployed patch support or specifically identified evidence change"}
+```
+
+The runtime verifies the target revision through the existing shared edit store;
+this command does not offer a raw Skill reader or bypass durable raw-skill
+permissions. A durable authorized owner must obtain/review the target revision
+through its permitted route. Evidence refs must exactly match original assigned
+input refs. This deliberately does not admit arbitrary new history or bypass an
+unfinished reflector. `changed` records a review explanation, not a host-verified
+claim that deployment occurred. Unsupported new evidence scope must be reviewed
+separately rather than smuggled into this request.
+
+Only an unexcluded pending encapsulator batch already at >=3 deferrals qualifies.
+Requests retain the original failure/proposal and target, correction, evidence,
+revision and change explanation. Existing reservations, attempts, retry counts,
+artifacts and input IDs are not reset, cloned or acknowledged. Duplicate requests
+are rejected; no queue is accepted while that pipeline is running. On the next
+normal enabled encapsulator schedule, a due queued recovery takes priority over
+fresh inputs while honoring its cooldown. Other pipelines keep their selection
+rules. Queueing does not turn learning on or unpause an unrelated service error.
+
+There is **one recovery slot per original batch**, not one per evidence string,
+version or target name. Binding spends it atomically, before model execution;
+restart, interruption, a different change explanation and even ordinary manual
+retry cannot refill that slot. A target revision that changes before dispatch
+closes the request visibly, without fabricating admission/session or retrying it
+forever. Failure retains parked evidence/effects for review. New evidence after
+this slot fails is deliberately **not automatically retried**: a separately
+reviewed future recovery policy is required; this implementation offers no reset
+command. This conservative limitation prevents hidden infinite retry but does
+not promise eventual correction of every future version.
+
+Acceptance is observable: original batch selected -> task carries named correction
+and exact refs -> target revision checked again before dispatch -> actual same-name
+`learned_skill patch/save` creates a new revision -> ordinary effect/discovery and
+cross-attempt failure audit -> applied receipt. No-change, read/check, a historical
+artifact, or a differently named save cannot satisfy recovery. Semantic correctness
+still requires review of the actual diff; revision change alone cannot establish
+that obsolete guidance was corrected. Tool/script publication permissions and
+finish budgets are unchanged.
+
+Local fixtures exercise command queueing through runtime selection/task, real
+shared-store patch and receipt, restart/deduplication, exhausted admission and
+changed evidence, cross-pipeline rejection, original reservation retention, target
+revision drift and no fabricated admission. Existing tests cover unfinished
+reflector isolation and read/check/different-name non-recovery. These are synthetic
+fixtures, not production repairs. Known parked `7ba14e0b`, `6838ed78`, `cc71d395`
+and obsolete `mixed-version-execution-gate-audit` guidance remain unchanged by this
+work. No production ledger/raw skill/history access, queue, `/learn` execution,
+knowledge write, commit/push, build, restart or deployment was performed. Parent
+owns finite 24/48-hour monitoring and any separately authorized production queue;
+monitoring must distinguish queued, admitted, actual revised target and verified
+receipt, and report unchanged baseline when this source has not been deployed.
+
+Sixth-pass final verification: 67/67 tests passed across `pipelines`,
+`batch-isolation`, `read-coverage`, `pending`, `inputs`, `skill-edit`,
+`learning-finish` (under `src/tools`) and slash-command `learn` tests. Final
+`pnpm typecheck` passed backend/scripts, A2A bridge, desktop and Vue. Scoped
+`git -c core.whitespace=cr-at-eol diff --check` passed (slash-command files retain
+their existing CRLF; plain diff-check reports those added CRLF lines as whitespace).
+Existing concurrent reflector artifact-reconciliation
+changes in ledger/pipelines/tools/tests and unrelated worktree edits were
+preserved, not attributed to this recovery change. Initial new-fixture failures
+(missing old attempt session record, premature proposal before tool writes,
+asserting the wrong validation precedence) were fixed; the receipt verification
+now allows the normal pre-proposal tool verification while still requiring a
+new target artifact and an applied final receipt.
+
+Review follow-up: added separate real-tool end-to-end cases starting from retained
+`partial` and `blocked` proposals (created by propose/complete, not interrupt).
+Both survive queue/restart with the old proposal intact, then normal select/bind
+clears that proposal at admission while preserving the original outcome and
+captured failure. Consequently the suspected stale-proposal verification blocker
+does not occur on the actual dispatch path; no production-code relaxation was
+needed. Both cases use actual `learned_skill patch` and `learning_result applied`,
+not direct verify as a substitute. Actual no_change receipts fail before a patch
+(missing same-name revision) and after it (persisted effects). Final focused suite
+now passes 68/68; final full `pnpm typecheck` passes all four stages.

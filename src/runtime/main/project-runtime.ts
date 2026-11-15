@@ -1567,7 +1567,10 @@ export async function createProjectRuntime(
       id => sessions.isManagedConversation(id), project.id) && !state?.channelBoundary) || !!state?.channelBoundary?.learning
   }, learningRuntime.ledger, { deferStart: true, changed: () => { realtime.invalidateSessions(); realtime.invalidateResource?.('automations') },
     pending: pipeline => discordLearning.hasPending(pipeline) })
-  commandDispatcher.register(createLearnCommand(sessions, pipeline => learning.trigger(pipeline)))
+  commandDispatcher.register(createLearnCommand(sessions, pipeline => learning.trigger(pipeline), request => learningRuntime.queueCorrection(request), id => {
+    const batch = learningRuntime.ledger.batch(id)
+    return { id: batch.id, pipeline: batch.pipeline, state: batch.state, retry: batch.retry, recovery: batch.correctionRecovery, error: batch.error, proposal: batch.proposal }
+  }))
   cleanup.push(() => learning.stop())
   app.get('/api/learning', c => c.json(learning.status()))
 

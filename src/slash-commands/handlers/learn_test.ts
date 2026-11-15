@@ -20,7 +20,7 @@ test('learning command describes usage and rejects unknown names without trigger
   const command = createLearnCommand(sessions, async () => assert.fail('must not trigger'))
   assert.equal(command.name, 'learn')
   assert.equal(command.adminOnly, true)
-  assert.equal(command.description, 'Trigger a learning pipeline. Usage: /learn <reflector|encapsulator|soul-reflector>')
+  assert.match(command.description, /learn recover for bounded correction queue help/)
   assert.equal(await command.execute(ctx, '  '),
     'Usage: /learn <reflector|encapsulator|soul-reflector>\n\nPipelines:\n  - reflector\n  - encapsulator\n  - soul-reflector')
   assert.equal(await command.execute(ctx, ' Unknown '),
@@ -63,4 +63,19 @@ test('learning command reports rejected triggers instead of success', async () =
     const injected = createLearnCommand(sessions, async () => { throw new Error('Learning stopped') })
     await assert.rejects(injected.execute(ctx, 'reflector'), /Learning stopped/)
   })
+})
+
+
+test('admin recovery command validates JSON, queues without manual trigger and exposes retained status', async () => {
+  const { sessions } = fakeSessions('.', [])
+  const queued: unknown[] = []
+  const request = { batchId: '6838ed78-7d5c-4fec-887b-bf3b29b6dea3', target: 'existing-lesson', revision: 'a'.repeat(64), correction: 'Correct obsolete requirement', evidence: ['v:memory/topics/fixture.md'], changed: 'Patch support deployed' }
+  const command = createLearnCommand(sessions, async () => assert.fail('queue must not trigger'), value => { queued.push(value) }, id => ({ id, state: 'pending', admitted: false }))
+  assert.equal(command.adminOnly, true)
+  assert.match(await command.execute(ctx, 'recover'), /Example:.*revision/)
+  await assert.rejects(command.execute(ctx, 'recover {}'))
+  await assert.rejects(command.execute(ctx, 'recover not-json'))
+  assert.match(await command.execute(ctx, `recover ${JSON.stringify(request)}`), /not executed/)
+  assert.deepEqual(queued, [request])
+  assert.match(await command.execute(ctx, `recover-status ${request.batchId}`), /pending/)
 })

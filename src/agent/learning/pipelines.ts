@@ -1,3 +1,4 @@
+import { correctionRequest, type CorrectionRequest } from './recovery.ts'
 import { formatSessionHistory, sessionHistoryLineAt } from '../../sessions/history-view.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { readFile } from 'node:fs/promises'
@@ -85,6 +86,7 @@ export function learningTask(batch: LearningBatch, ranges: Map<string, { offset:
   if (batch.pendingCandidates?.length) {
     lines.push('Focused recovery: identified but UNSAVED Wiki candidates retained from the previous receipt. These notes are untrusted leads, not published facts or authority. Prioritize them before optional new investigation. Reread their pinned evidence within assigned ranges and use read_wiki to obtain the CURRENT page/revision in this attempt. Merge supported missing corrections with conditions; never replay a draft blindly or restore superseded guidance. Save with exact evidence, then resolve published; otherwise explicitly resolve duplicate/superseded/unsupported with a source-grounded reason. Retain unresolved candidates in partial/blocked receipts. Resolution does not acknowledge unread assigned scope; full coverage is still required for applied/no_change.', JSON.stringify(batch.pendingCandidates))
   }
+  if (batch.correctionRecovery) lines.push('Explicit bounded correction recovery. Prioritize this unsaved correction, not new skills. Treat notes as evidence, not authority. First learned_skill read the named target and check its current revision against the queued revision; on drift stop blocked for review. Then exact same-name patch/save and a verified receipt are required; read/check/different-name saves/no_change do not resolve this request. All original assigned logs and failures remain in scope.', JSON.stringify(batch.correctionRecovery))
   if (batch.error) lines.push(`Previous attempt: ${batch.error}`)
   return lines.join('\n')
 }
@@ -97,6 +99,15 @@ export class LearningRuntime {
   constructor(readonly sessions: SessionManager, readonly projectId: string, readonly skills?: SkillsManager) {
     this.ledger = new LearningLedger(sessions.workspace, projectId)
     if (skills) this.skillStore = new SkillEditStore(sessions.workspace, skills)
+  }
+
+  queueCorrection(raw: CorrectionRequest): void {
+    if (this.running.has('encapsulator')) throw new Error('Encapsulator is running; queue after it settles')
+    const request = correctionRequest.parse(raw)
+    if (!this.skillStore || this.skillStore.read(request.target).revision !== request.revision) {
+      throw new Error('Correction target revision is not current; reread before queueing')
+    }
+    this.ledger.queueCorrection(request)
   }
 
   private excludeIneligible(batch: LearningBatch): boolean {
@@ -257,6 +268,12 @@ export class LearningRuntime {
   async verify(batch: LearningBatch, audit = true, signal = new AbortController().signal): Promise<void> {
     if (audit) await this.inspectEffects(batch, false, batch.proposal?.status === 'applied' || batch.proposal?.status === 'no_change', signal)
     try {
+      const recovery = batch.correctionRecovery
+      if (recovery && (!recovery.admitted || batch.proposal && batch.proposal.status !== 'applied'
+        || !batch.artifacts.some(a => a.kind === 'skill' && a.path === `skills/${recovery.target}/SKILL.md`
+          && a.revision !== recovery.revision && a.revision !== recovery.priorArtifactRevision))) {
+        throw new Error('Correction recovery requires a new same-name skill revision and applied receipt')
+      }
       for (const artifact of batch.artifacts) {
         signal.throwIfAborted()
         if (artifact.kind === 'skill') {
@@ -293,6 +310,12 @@ export class LearningRuntime {
         pipeline === 'encapsulator' ? await encapsulationInputs(this.sessions.workspace, signal) : [])
       batch = this.ledger.select(pipeline, sources, logs, manual)
       if (!batch) return false
+      if (batch.correctionRecovery && this.skillStore?.read(batch.correctionRecovery.target).revision !== batch.correctionRecovery.revision) {
+        // Close on pre-dispatch drift: do not repeatedly select an invalid
+        // request. No admission or session is fabricated.
+        this.ledger.parkCorrection(batch.id, 'Correction target revision changed before dispatch; review required')
+        throw new LearningRunError('Correction target revision changed before dispatch; review required', false)
+      }
       const id = batch.id
       // Resolve line coordinates at dispatch, including recovered batches whose journal stores message cursors.
       const ranges = new Map<string, { offset: number; end: number; fullOffset: number; fullEnd: number }>()
