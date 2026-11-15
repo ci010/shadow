@@ -65,15 +65,37 @@ and rendered-fixture stability tests do not establish production latency/FPS gai
 ## BOT topology (read-only first stage)
 
 The existing Project Workflow tab and shared canvas also show the live BOT topology:
-**connection → conversation binding/listener → published BOT/Agent → existing Session**.
+**Connection → receiver → BOT (including its entry/binding configuration) → optional existing Session**.
 These are inspection entries, **not saved Workflow definitions or Workflow runs**.
 `GET /api/workflows` adds an optional `bots` DTO under the same authenticated,
 Project-scoped route. `botWorkflowProjection` reads `BotInstanceStore` IDs,
 `ChannelManager.botStatus`, pure `DirectoryBots.inspect` verification and its
 canonical `botInputListeners` projection. There is no new binding database or
 persisted topology cache. Connections are one inventory object referenced by all
-bindings; one QQ account can serve different groups with different deployed BOTs
+receiver branches; one QQ account can serve different groups with different deployed BOTs
 and deterministic published Agent identities.
+
+Each transport appears once, using its `connection:<id>` group. Receivers survive
+unbinding because their history/discovery evidence is independent of BOT configuration.
+Only exact connection/platform/conversation identity matches attach a BOT to an observed
+receiver (Discord also matches the explicit guild/channel selector). An unmatched
+binding appears through **Configured entry; receipt unknown**, not as a claimed message
+receipt. Observation selectors and personal **Host owner ingress** remain separate
+configured entries; an owner's DM ingress is never attached to every group. Missing
+connection references remain separate diagnostic groups and cannot fall back to another
+connection. Edges use explicit parents, not array order, so sibling receivers/BOTs are
+branches rather than sequential processing stages.
+
+A BOT node contains the package identity/revision and the relevant binding's enablement,
+subscription and listener fields. It is not a second publishing lifecycle. The same
+BOT shown after different receiver entries retains the same package identity/revision.
+Legacy `bot-binding:<id>` and `bot-connection:<id>` inspection URLs resolve by exact ID
+to the new group and node. Selecting an actual receiver (or its matched BOT) retains
+that receiver's Project-scoped dynamic chat context. Raw IDs, paths and complete node
+JSON remain in **Technical details**, collapsed by default; anonymous receivers use an
+honest type/ordinal label instead of an invented friendly name. The inspector groups
+connection state, receiver/history navigation and BOT entry summaries, with a sticky
+name/type/close header and one scrolling pane.
 
 The inspector keeps transport health/connection enablement, binding enablement,
 subscription selection, projected listener presence and package validity separate.
@@ -92,7 +114,7 @@ ordinary Agent, using host Session listeners; private owner topics are omitted.
 No existing-session link prepares, restores or sends to a session. The BOT inspector
 selection is retained with the Project's existing Workflow document tab.
 
-An isolated BOT connection group's ellipsis opens the existing **Project settings → Connections** form at `/projects/:projectId/settings/connections?connectionId=:connectionId`. The authorized Project connection list resolves that exact ID after loading, including on refresh; unavailable/deleted IDs show a notice and never fall back to another connection. Navigation only reads status: it does not save credentials, connect, enable or reconnect. Published BOT/deployment groups do not use this connector shortcut, and complete binding chains retain their existing conversation links.
+A connection group's ellipsis opens the existing **Project settings → Connections** form at `/projects/:projectId/settings/connections?connectionId=:connectionId`. The authorized Project connection list resolves that exact ID after loading, including on refresh; unavailable/deleted IDs show a notice and never fall back to another connection. Navigation only reads status: it does not save credentials, connect, enable or reconnect. Published BOT/deployment groups do not use this connector shortcut, and BOT branches retain their existing conversation links.
 
 The DTO is an explicit allowlist: no credentials/config, prompts, tools, grants,
 allowlists, parameters, source paths, exception bodies or message content. URL-bearing

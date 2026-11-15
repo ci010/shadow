@@ -145,15 +145,15 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     assert.equal(await run('Array.from(document.querySelectorAll(".graph-group[data-workflow^=bot-]")).every(el=>el.dataset.column==="bot")'),true);
     // BOTs are inspection-only rows in the same canvas/tab, with binding-specific
     // Agent identity and only real existing Session links. No control POST exists.
-    await wait('document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"]')+')');
-    await run('('+visible('[data-workflow="bot-binding:two"] .group-heading')+').click()');
+    await wait('document.querySelector('+JSON.stringify('[data-workflow="connection:qq-shared"]')+')');
+    await run('window.fixture.router.push({name:"project-workflows",params:{projectId:"a"},query:{bot:"bot-binding:two"}})');
     await wait('window.fixture.router.currentRoute.value.query.bot==="bot-binding:two"');
     await wait(visible('.workflow-inspector'));
     assert.equal(await run('('+visible('.workflow-inspector')+').textContent.includes("BOT:support")'),true);
-    assert.equal(await run('!!document.querySelector('+JSON.stringify('[data-workflow="bot-binding:two"] .group-toggle')+')'),false);
+    assert.equal(await run('!!document.querySelector('+JSON.stringify('[data-workflow="connection:qq-shared"] .group-toggle')+')'),false);
     await primary();await sidebar('a');await wait(visible('.workflow-inspector'));
     assert.equal((await route()).query.bot,'bot-binding:two');
-    await run('('+visible('.inspector-toolbar button')+').click()');
+    await run('('+visible('.bot-heading button')+').click()');
     await wait('!window.fixture.router.currentRoute.value.query.bot');
     await run('window.fixture.workflowElement=('+visible('.workflow-manager')+')');
     // Ellipsis is direct, precise, Project-scoped navigation into the existing settings form.
@@ -161,7 +161,7 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     for (const id of ['isolated-one','isolated-two']) {
       await sidebar('a');
       assert.equal(await run('window.fixture.workflowElement===('+visible('.workflow-manager')+')'),true,'Settings navigation retains the Workflow instance');
-      const selector='[data-workflow="bot-connection:'+id+'"] .group-connection';
+      const selector='[data-workflow="connection:'+id+'"] .group-connection';
       await wait('document.querySelector('+JSON.stringify(selector)+')');
       assert.equal(await run('document.querySelector('+JSON.stringify(selector)+').getAttribute("aria-label")'),'Configure BOT connection');
       await run('('+visible(selector)+').click()');
