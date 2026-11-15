@@ -49,15 +49,22 @@ test('unbound Discord discovery is visible without inventing inbox or channel ty
   assert.equal(connectionSinkProjection({ ...base, histories: [{ ...history(source), sessionId: 'forged' }] }).receivers.length, 0)
 })
 
-test('direct receipts stay in common history but never become top-level group/channel graph receivers', () => {
-  const direct: ChannelSource = { ...source, conversationId: 'dm:one', kind: 'direct' }
-  assert.deepEqual(connectionSinkProjection({ ...base, histories: [history(direct)],
-    observations: [{ connection: 'conn', platform: 'qq', conversation: direct.conversationId }] }).receivers, [])
+test('only validated direct history projects a private receiver, never bare observed IDs', () => {
+  const direct: ChannelSource = { ...source, conversationId: 'dm:one', kind: 'direct', name: 'Owner DM' }
+  const qq = connectionSinkProjection({ ...base, histories: [history(direct)],
+    observations: [{ connection: 'conn', platform: 'qq', conversation: 'unknown-dm' }] })
+  assert.equal(qq.receivers.length, 1)
+  assert.equal(qq.receivers[0]?.kind, 'direct')
+  assert.equal(qq.receivers[0]?.name, 'Owner DM')
+  assert.equal(qq.receivers[0]?.navigation.kind, 'conversation')
+  assert.deepEqual(parseConnectionSinkProjection(qq, 'p'), qq)
   const discordDirect: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'conn', platform: 'discord',
     conversationId: '401', kind: 'direct', recipientId: '501', botUserId: '900' }
-  assert.deepEqual(connectionSinkProjection({ ...base, platform: 'discord', histories: [history(discordDirect)],
-    observations: [{ connection: 'conn', platform: 'discord', conversation: '401' },
-      { connection: 'conn', platform: 'discord', conversation: '402' }] }).receivers, [])
+  const discord = connectionSinkProjection({ ...base, platform: 'discord', histories: [history(discordDirect)],
+    observations: [{ connection: 'conn', platform: 'discord', conversation: '402' }] })
+  assert.deepEqual(discord.receivers.map(r => [r.kind, r.address.conversationId]), [['direct', '401']])
+  assert.equal(connectionSinkProjection({ ...base, histories: [{ ...history(direct), sessionId: 'forged' }] }).receivers.length, 0)
+  assert.equal(connectionSinkProjection({ ...base, observations: [{ connection: 'conn', platform: 'qq', conversation: 'dm:one' }] }).receivers.length, 0)
 })
 test('parent messages and public-thread history share only the parent receiver, independent of receipt order', () => {
   const parent: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'conn', platform: 'discord',

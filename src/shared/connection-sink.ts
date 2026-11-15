@@ -17,6 +17,7 @@ export const connectionSinkProjectionSchema = z.object({
   sink: z.object({ kind: z.literal('common-receipt'), reacts: z.literal(false), navigation:
     z.object({ kind: z.literal('connection-content'), projectId: z.string().min(1), connectionId: id }).strict() }).strict(),
   receivers: z.array(z.object({ id: z.string().min(1).max(256), address, name: z.string().max(512).optional(),
+    kind: z.enum(['direct', 'group', 'channel']).optional(), guildId: z.string().min(1).max(512).optional(),
     path: z.string(), navigation: channelSinkNavigationSchema,
     evidence: z.object({ discovery: z.enum(['observed', 'unknown']), sessionMetadata: z.enum(['present', 'unknown']),
       received: z.literal('unknown'), persisted: z.literal('unknown'), bound: z.literal('unknown'), executed: z.literal('unknown') }).strict().optional(),

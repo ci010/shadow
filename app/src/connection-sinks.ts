@@ -2,10 +2,11 @@ import type { ChannelSinkNavigation } from '../../src/channels/sink-contract.ts'
 import { parseConnectionSinkProjection } from '../../src/shared/connection-sink.ts'
 import type { WorkflowCanvasEntry } from './workflow-canvas.ts'
 import { discordChannelId } from './discord-navigation.ts'
+import { receiverLabel } from './receiver-label.ts'
 import { t } from './i18n.ts'
 export { parseConnectionSinkProjection }
 
-/** One transport root with real top-level receiver children; never thread/BOT nodes. */
+/** One transport root with metadata-backed conversations and observed parent channels; never thread/BOT nodes. */
 export function connectionSinkCanvas(raw: unknown, projectId: string, name: string): WorkflowCanvasEntry {
   const projection = parseConnectionSinkProjection(raw, projectId)
   return { definition: { id: projection.id, name, enabled: true }, projection: true,
@@ -13,7 +14,7 @@ export function connectionSinkCanvas(raw: unknown, projectId: string, name: stri
       { id: 'connection', nodeType: 'connection', label: t('Connection'), detail: projection.connectionId,
         config: { projectId, connectionId: projection.connectionId, path: projection.connectionPath }, status: 'unknown' },
       ...projection.receivers.map(receiver => ({ id: `receiver:${receiver.id}`, nodeType: 'sink' as const,
-        label: t('Message receiver'), detail: receiver.name ?? receiver.address.conversationId,
+        label: receiverLabel(receiver), detail: t('Message receiver'),
         description: receiver.evidence?.sessionMetadata === 'present' ? t('Session metadata exists; message receipt, persistence and execution are unknown.')
           : receiver.evidence?.discovery === 'observed' ? t('Discovery only; message receipt, persistence and execution are unknown.')
           : t('Configuration and existing sessions are not message admission or execution receipts.'),

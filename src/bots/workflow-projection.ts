@@ -13,7 +13,7 @@ export interface BotWorkflowProjection {
   sinks: ConnectionSinkProjection[]
   connections: Array<{ id: string; displayName: string; platform: string; purpose: string; enabled: boolean; health: string }>
   deployments: Array<{ id: string; state: 'valid' | 'quarantined' | 'unavailable'; mode?: 'service' | 'personal'; agent?: string; revision?: string }>
-  bindings: Array<{ id: string; deploymentId: string; connectionId: string; platform: string; topic?: string; enabled: boolean; subscribed: boolean; listener: boolean; kind: string; sessionIds: string[] }>
+  bindings: Array<{ id: string; deploymentId: string; connectionId: string; platform: string; topic?: string; enabled: boolean; subscribed: boolean; listener: boolean; kind: string; sessionIds: string[]; receiverIds?: string[] }>
   warnings: string[]
   routing: 'not-probed'
   processingSuccess: 'unknown'
@@ -61,9 +61,12 @@ export function botWorkflowProjection(options: {
     if (!bot) continue
     if (result.bindings.length >= 5000) { if (!result.warnings.includes('binding-index-limit')) result.warnings.push('binding-index-limit'); continue }
     if (bot.mode === 'personal') {
-      const listeners = options.personalListeners.filter(listener => listener.source.id === bot.connection && listener.target.kind === 'session')
+      const listeners = options.personalListeners.filter(listener => listener.source.id === bot.connection && listener.source.type === result.connections.find(c => c.id === bot.connection)?.platform && listener.kind === 'message' && listener.target.kind === 'session')
       result.bindings.push({ id: JSON.stringify([id, 'personal']), deploymentId: id, connectionId: bot.connection, platform: result.connections.find(c => c.id === bot.connection)?.platform ?? 'unknown',
         enabled: result.connections.find(c => c.id === bot.connection)?.enabled ?? false, subscribed: true, listener: listeners.length > 0, kind: 'host-owner-ingress',
+        // Associate only an existing direct inbox with the exact live owner topic.
+        // Never export private owner selectors or infer a receiver from a Session ID.
+        receiverIds: (result.sinks.find(sink => sink.connectionId === bot.connection)?.receivers ?? []).filter(receiver => receiver.kind === 'direct' && listeners.some(listener => listener.topic === receiver.address.conversationId && listener.source.type === receiver.address.platform)).map(receiver => receiver.id),
         sessionIds: listeners.map(listener => listener.target.id).filter(id => sessions.has(id)) })
       continue
     }

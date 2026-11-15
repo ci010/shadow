@@ -4438,5 +4438,12 @@
   "Configured entry": "Configured entry",
   "Configured entry; receipt unknown": "Configured entry; receipt unknown",
   "Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.": "Connection health is not delivery success. BOT entries show configuration; receipt and execution remain unknown.",
-  "Entry type": "Entry type"
+  "Entry type": "Entry type",
+  "Group": "Group",
+  "Channel": "Channel",
+  "Guild": "Guild",
+  "Owner message target unavailable": "Owner message target unavailable",
+  "Configured target unavailable": "Configured target unavailable",
+  "Execution sessions": "Execution sessions",
+  "Existing BOT execution conversations, separate from passive message history. Not execution receipts.": "Existing BOT execution conversations, separate from passive message history. Not execution receipts."
 }

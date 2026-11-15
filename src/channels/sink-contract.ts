@@ -24,6 +24,8 @@ export interface ChannelSinkReceiver {
   id: string
   address: ChannelSinkAddress
   name?: string
+  kind?: 'direct' | 'group' | 'channel'
+  guildId?: string
   path: string
   navigation: ChannelSinkNavigation
   /** Inventory evidence, NOT per-message receipts. Optional for older projections. */
@@ -48,7 +50,7 @@ export interface ConnectionSinkProjection {
   /** v:connections/<encoded connectionId>/sink.json */
   sinkPath: string
   sink: { kind: 'common-receipt'; reacts: false; navigation: Extract<ChannelSinkNavigation, { kind: 'connection-content' }> }
-  /** Real observed top-level groups/channels only; never thread assign objects. */
+  /** Real metadata-backed conversations and observed parent channels only; never thread assign objects. */
   receivers: ChannelSinkReceiver[]
   /** References only. BOT.md remains the sole subscription/admission authority. */
   bots: Array<{ botId: string; path: string; workflowIds: string[] }>
