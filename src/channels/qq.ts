@@ -589,6 +589,11 @@ export class QQChannel extends AbstractChannel {
         || typeof part.presigned_url !== 'string' || !part.presigned_url) {
         // Wire shape only: never expose signed upload URLs or response bodies.
         console.warn('[qq] Invalid upload part metadata', {
+          // Numeric protocol evidence only. Keep the actual rejected index so
+          // a server/documentation mismatch can be diagnosed without logging
+          // upload IDs, signed URLs, or arbitrary response values.
+          index: typeof index === 'number' && Number.isSafeInteger(index) ? index : null,
+          blockSize,
           indexType: typeof part.index, validInteger: typeof index === 'number' && Number.isSafeInteger(index),
           inRange: typeof index === 'number' && index >= 0 && index < prepared.parts!.length,
           duplicate: typeof index === 'number' && indices.has(index),
