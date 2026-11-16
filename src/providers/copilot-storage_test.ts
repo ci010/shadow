@@ -65,3 +65,21 @@ test('retired credentials are encrypted on access but remain rejected for infere
   // Untouched legacy files migrate lazily, not by scanning user directories.
   assert.equal(storage.read(join(root, 'access-token')), 'synthetic-legacy-access\n')
 })
+
+
+test('credential filename overrides cannot target plaintext active-host metadata', t => {
+  const root = join(process.cwd(), '.test-data', `copilot-collision-${randomUUID()}`)
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  for (const variable of ['GITHUB_COPILOT_ACCESS_TOKEN_FILE', 'GITHUB_COPILOT_API_KEY_FILE', 'GITHUB_COPILOT_MODELS_CACHE_FILE']) {
+    const previous = process.env[variable]
+    try {
+      for (const value of ['active-host', 'ACTIVE-HOST', '../outside', '/absolute', 'C:\\outside', '..\\outside', 'nested/token', 'token.protected', '.protected-key-created', '.protected-key-lock', 'master-key.dpapi', 'NUL', 'token:stream', 'token.']) {
+        process.env[variable] = value
+        assert.throws(() => new CopilotAuthenticatorV2(root), /Protected credentials/, `${variable}: ${value}`)
+      }
+    } finally {
+      if (previous === undefined) delete process.env[variable]
+      else process.env[variable] = previous
+    }
+  }
+})

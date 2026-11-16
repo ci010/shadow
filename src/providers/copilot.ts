@@ -217,28 +217,32 @@ export abstract class CopilotAuthenticator {
       env.GITHUB_COPILOT_TOKEN_DIR ??
       join(homeDir, '.config', 'openclaw', 'github_copilot')
 
-    this.accessTokenFile = join(
-      this.tokenDir,
-      (!options.isolated ? env.GITHUB_COPILOT_ACCESS_TOKEN_FILE : undefined) ?? 'access-token',
-    )
-    this.apiKeyFile = join(
-      this.tokenDir,
-      (!options.isolated ? env.GITHUB_COPILOT_API_KEY_FILE : undefined) ?? 'api-key.json',
-    )
-    this.modelsCacheFile = join(
-      this.tokenDir,
-      (!options.isolated ? env.GITHUB_COPILOT_MODELS_CACHE_FILE : undefined) ?? 'models.json',
-    )
+    const filename = (variable: string, fallback: string) => {
+      const name = (!options.isolated ? env[variable] : undefined) ?? fallback
+      // Overrides are basenames, never arbitrary paths. Reject Windows aliases too,
+      // so a name accepted on one OS cannot escape or collide when moved to another.
+      if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,127}$/.test(name) || name.endsWith('.') ||
+        name.toLowerCase().endsWith('.protected') ||
+        ['active-host', 'master-key.dpapi'].includes(name.toLowerCase()) ||
+        /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(name)) throw new CopilotAuthError('storage')
+      return join(this.tokenDir, name)
+    }
+    this.accessTokenFile = filename('GITHUB_COPILOT_ACCESS_TOKEN_FILE', 'access-token')
+    this.apiKeyFile = filename('GITHUB_COPILOT_API_KEY_FILE', 'api-key.json')
+    this.modelsCacheFile = filename('GITHUB_COPILOT_MODELS_CACHE_FILE', 'models.json')
+    if (new Set([this.accessTokenFile, this.apiKeyFile, this.modelsCacheFile].map(name => name.toLowerCase())).size !== 3) {
+      throw new CopilotAuthError('storage')
+    }
     this.request = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.wait = options.wait ?? ((ms, signal) => delay(ms, undefined, { signal }))
+    this.activeHostFile = join(this.tokenDir, 'active-host')
     const protectedStorage = options.storage ?? createCopilotAuthStorage(this.tokenDir)
     this.storage = {
       read: name => { try { return protectedStorage.read(name) } catch { throw new CopilotAuthError('storage') } },
       write: (name, value) => { try { protectedStorage.write(name, value) } catch { throw new CopilotAuthError('storage') } },
       remove: name => { try { protectedStorage.remove(name) } catch { throw new CopilotAuthError('storage') } },
     }
-    this.activeHostFile = join(this.tokenDir, 'active-host')
     this.activeHost = authHost(this.storage.read(this.activeHostFile))
   }
 
