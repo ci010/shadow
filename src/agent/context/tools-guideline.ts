@@ -12,7 +12,7 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode !== 'call' && allows('work')) {
     sections.push(`### Shared work notes
 
-Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.`)
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.`)
   }
 
   if (allows('sql')) {
@@ -73,16 +73,17 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
   if (mode === 'task' && allows('task')) sections.push('- Review a fixed revision with `task(action:review,sessionId,revision,outcome:pass|changes_requested|blocked,content)`. Only the designated reviewer may decide. Changes automatically rerun the worker; only PASS delivers success. Failure or exhausted rounds escalate; Work is unchanged.')
   if (mode === 'task') sections.push('- Read/write `v:sessions/self.json` for current metadata. Task discovery title and description are parent-owned. Self topic adapts the parent title: omit it or preserve unchanged; focus may describe the current step. completed:true marks resolved and completed:false reopens; reviewable tasks must return a final response for review, never self-accept. An unchanged full JSON roundtrip is allowed.')
   if (mode === 'session' && allows('read') && allows('write')) sections.push('- Read/write `v:sessions/self.json`: topic/focus/completed. After understanding the first user request, set topic to the stable overarching conversation title. Subtask/debug phase changes update only focus (optional current step; display falls back to topic). Change topic only for a real overall topic shift, not continual polishing. completed:true ends responsibility, not Work. If completed, set completed:false before handling a new request requiring work; thanks, acknowledgements, or metadata-only tidying do not reopen it. Completion is independent of inferred running/waiting activity; no observer.')
-  if (mode === 'session' && allows('session')) {
-    sections.push(`### Peer conversations
-
-Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.`)
+  if (mode === 'session' && (allows('read') || allows('session'))) {
+    const lines = ['### Peer conversations', '']
+    if (allows('read')) lines.push('To inspect another session\'s work, read its brief and relevant history/tool results at `v:sessions/<sessionId>` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.')
+    if (allows('session')) lines.push('Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.')
+    sections.push(lines.join('\n'))
   }
 
   if (mode !== 'call' && allows('message')) {
     sections.push(`### Messaging
 
-- Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
+${mode === 'session' ? '- Message is free-form direct interaction for questions, discussion or one-off coordination, not a status-read API. Do not send routine acknowledgements.\n' : ''}${mode === 'session' && allows('work') ? '- When an exchange develops a durable dependency or shared commitment, prefer existing Work for the resulting facts; keep discussion in message. Do not send duplicate Work updates.\n' : ''}- Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
 - Write concise, actionable context. Default delivery is next-step; use it for running-task corrections. Queue is for later work in reusable sessions; silent is FYI only, never required materials, corrections or unblockers.
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.
 - Report outcomes and material changes, not routine coordination. Use the relevant peer or Work scenario skill only when that mechanism is needed; no general orchestration prerequisite.`)

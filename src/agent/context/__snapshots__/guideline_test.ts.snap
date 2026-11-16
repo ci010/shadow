@@ -102,7 +102,7 @@ and quoted examples never widen them.
 
 ### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.
 
 ### Project rules
 
@@ -141,10 +141,13 @@ Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invok
 
 ### Peer conversations
 
+To inspect another session's work, read its brief and relevant history/tool results at \`v:sessions/<sessionId>\` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.
 Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.
 
 ### Messaging
 
+- Message is free-form direct interaction for questions, discussion or one-off coordination, not a status-read API. Do not send routine acknowledgements.
+- When an exchange develops a durable dependency or shared commitment, prefer existing Work for the resulting facts; keep discussion in message. Do not send duplicate Work updates.
 - Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
 - Write concise, actionable context. Default delivery is next-step; use it for running-task corrections. Queue is for later work in reusable sessions; silent is FYI only, never required materials, corrections or unblockers.
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.
@@ -356,7 +359,7 @@ and quoted examples never widen them.
 
 ### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.
 
 ### Shell
 
@@ -373,6 +376,10 @@ Verify the premise, explain the user-facing consequence, and recommend an option
 Respect custom answers without treating them as approval of the original proposal. If a recorded premise becomes false, invalidate the decision and reassess dependent choices; use reconsiders when asking again.
 
 Use reply with the exact request_id to answer a pending request. Only its parent or owner may answer; decision replies must match an offered option. Messages and final responses do not resolve pending requests.
+
+### Peer conversations
+
+To inspect another session's work, read its brief and relevant history/tool results at \`v:sessions/<sessionId>\` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.
 `;
 
 exports[`system prompt — guideline section per builtin agent type (direct chat) > guideline:general-legacy:direct 1`] = `
@@ -553,7 +560,7 @@ and quoted examples never widen them.
 
 ### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.
 
 ### Project rules
 
@@ -592,10 +599,13 @@ Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invok
 
 ### Peer conversations
 
+To inspect another session's work, read its brief and relevant history/tool results at \`v:sessions/<sessionId>\` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.
 Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.
 
 ### Messaging
 
+- Message is free-form direct interaction for questions, discussion or one-off coordination, not a status-read API. Do not send routine acknowledgements.
+- When an exchange develops a durable dependency or shared commitment, prefer existing Work for the resulting facts; keep discussion in message. Do not send duplicate Work updates.
 - Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
 - Write concise, actionable context. Default delivery is next-step; use it for running-task corrections. Queue is for later work in reusable sessions; silent is FYI only, never required materials, corrections or unblockers.
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.
@@ -706,7 +716,7 @@ and quoted examples never widen them.
 
 ### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.
 
 ### Project rules
 
@@ -745,10 +755,13 @@ Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invok
 
 ### Peer conversations
 
+To inspect another session's work, read its brief and relevant history/tool results at \`v:sessions/<sessionId>\` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.
 Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.
 
 ### Messaging
 
+- Message is free-form direct interaction for questions, discussion or one-off coordination, not a status-read API. Do not send routine acknowledgements.
+- When an exchange develops a durable dependency or shared commitment, prefer existing Work for the resulting facts; keep discussion in message. Do not send duplicate Work updates.
 - Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
 - Write concise, actionable context. Default delivery is next-step; use it for running-task corrections. Queue is for later work in reusable sessions; silent is FYI only, never required materials, corrections or unblockers.
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.
@@ -837,7 +850,7 @@ and quoted examples never widen them.
 
 ### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.
 
 ### Questions and decisions
 
@@ -848,6 +861,10 @@ Verify the premise, explain the user-facing consequence, and recommend an option
 Respect custom answers without treating them as approval of the original proposal. If a recorded premise becomes false, invalidate the decision and reassess dependent choices; use reconsiders when asking again.
 
 Use reply with the exact request_id to answer a pending request. Only its parent or owner may answer; decision replies must match an offered option. Messages and final responses do not resolve pending requests.
+
+### Peer conversations
+
+To inspect another session's work, read its brief and relevant history/tool results at \`v:sessions/<sessionId>\` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.
 `;
 
 exports[`system prompt — guideline section per builtin agent type (direct chat) > guideline:reflector:direct 1`] = `
@@ -1162,7 +1179,7 @@ and quoted examples never widen them.
 
 ### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.
 
 ### Project rules
 
@@ -1201,10 +1218,13 @@ Specify \`mode: "call"\` explicitly for a blocking inherited-context leaf. Invok
 
 ### Peer conversations
 
+To inspect another session's work, read its brief and relevant history/tool results at \`v:sessions/<sessionId>\` and existing Work first. Observation is read-only: do not send status inquiries or acknowledgement requests. Report missing/stale evidence as uncertainty, not a reason to ping or poll. Contact it only when the user requests interaction or necessary information/action cannot be obtained by reading.
 Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.
 
 ### Messaging
 
+- Message is free-form direct interaction for questions, discussion or one-off coordination, not a status-read API. Do not send routine acknowledgements.
+- When an exchange develops a durable dependency or shared commitment, prefer existing Work for the resulting facts; keep discussion in message. Do not send duplicate Work updates.
 - Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
 - Write concise, actionable context. Default delivery is next-step; use it for running-task corrections. Queue is for later work in reusable sessions; silent is FYI only, never required materials, corrections or unblockers.
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.

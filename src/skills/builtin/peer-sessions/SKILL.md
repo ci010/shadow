@@ -12,6 +12,18 @@ or ongoing responsibility. For a bounded one-off assignment, prefer task/call
 without creating a durable peer. This guidance grants no capabilities; the live
 execution contract and tool schemas remain authoritative.
 
+## Observe before contacting
+
+When asked to inspect another session's work, use `read`/`search` on its brief,
+relevant history and exact tool results at `v:sessions/<sessionId>`, plus existing
+Work. Start with the overview and narrow to relevant evidence; do not replay the
+whole history by default. Observation does not require the peer to respond.
+Do not send "how is it going?", request acknowledgement, or repeatedly poll to
+make a report look current. State the last observable result and any uncertainty.
+Contact the peer only when the user requests interaction or necessary information
+or action cannot be obtained from the available records. A user request to look
+at a session is not by itself a request to contact it.
+
 ## Find or create a peer
 
 1. Search `v:sessions` for an existing relevant conversation. Read its brief and
@@ -48,7 +60,11 @@ completion routing or ownership transfer. Admission is not task completion.
 
 ## Work with the peer
 
-Use `message` to send an assignment or correction with enough context to act.
+Use `message` for free-form questions, discussion and one-off coordination that
+needs the peer's participation, or an authorized assignment/correction with enough
+context to act. It is not a progress-query API. Send the actionable delta and
+reference unchanged scope/evidence rather than repeating the whole agreement.
+Do not send routine acknowledgements or request them merely to confirm admission.
 Distinguish a correction to active work from a request for subsequent work;
 use the live delivery options accordingly. Silent delivery is FYI, not an
 unblocker or a correction requiring action.
@@ -63,8 +79,13 @@ then reread them. A message does not cancel work.
 
 ## When coordination becomes durable
 
-A peer does not require Work bookkeeping. If multiple owners, dependencies or
-recovery needs justify a shared goal map, read `v:skills/work-coordination`.
+A peer does not require Work bookkeeping. When an exchange develops a durable
+shared commitment, deliverable dependency, blocker or recovery need, prefer Work
+for those shared facts; reuse relevant Work before creating a record. The need to
+maintain shared facts, not elapsed time or message count, is the trigger. Keep
+open-ended discussion in message and record its agreed outcome in Work within
+each writer's authority. Read `v:skills/work-coordination` for this path. Do not
+mirror the conversation into notes or send "I updated Work" after a notification.
 Optional `work:{key}` on creation binds an existing unassigned note coordinated
 by the creator before kickoff; use the live tool contract for requirements.
 
