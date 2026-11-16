@@ -21,7 +21,7 @@ export const installationSchema = z.object({
 export type LayerFSInstallation = z.infer<typeof installationSchema>
 const savedSchema = z.object({ version: z.literal(1), projectId: z.string(), installation: installationSchema,
   approvedRootWorker: z.literal(true) }).strict()
-const phaseSchema = z.object({ phase: z.enum(['starting', 'running', 'uncertain', 'stopped']) }).strict()
+const phaseSchema = z.object({ phase: z.enum(['starting', 'recovering', 'running', 'uncertain', 'stopped']) }).strict()
 export interface ManagedDriver {
   request(action: string, input: unknown, signal: AbortSignal, authorizeSource?: () => Promise<string>): Promise<unknown>
   close(): Promise<void>
@@ -170,7 +170,7 @@ export class ManagedLayerFS {
     // alone may start without a journal; status must never advertise that as restartable.
     const saved = await this.saved(), phase = saved ? await this.phase('uncertain') : 'unconfigured'
     return { configured: !!saved, mode: 'managed', platform: this.platform, runtime: 'not_checked', project: layerfsName(this.projectId),
-      phase,
+      phase, ownerAttached: !!this.driver,
       next: saved ? 'layerfs_runtime_status' : 'layerfs_setup',
       message: saved ? 'Saved installation approval is available. Worker, Docker and sandbox health are not verified by doctor.' :
         'Approve an existing matching LayerFS installation with setup. Shadow manages private homes, worker lifecycle and configuration; no environment variable or backend restart is needed. There is no upstream prebuilt download; do not invent an installer URL.' }
@@ -225,7 +225,23 @@ export class ManagedLayerFS {
     this.connecting = operation
     try { return await operation } finally { this.connecting = undefined }
   }
-  private async start(signal: AbortSignal) {
+  /** Explicit control-plane recovery, never Init/startup replay or resource repair.
+   * Caller must hold the catalog's cross-instance start/recovery lease. */
+  async recover(installation: unknown, signal: AbortSignal) {
+    const lease = this.acquireSetup()
+    try {
+      signal.throwIfAborted()
+      if (this.driver || this.connecting) throw new ToolNoEffectError('Runtime owner is already attached or connecting; recovery refused.')
+      const saved = await this.saved()
+      const parsed = installationSchema.safeParse(installation)
+      if (!saved || !parsed.success || JSON.stringify(saved.installation) !== JSON.stringify(parsed.data)) throw new ToolNoEffectError('Recovery installation identity differs from the retained approval.')
+      if (await this.phase('uncertain') !== 'running') throw new ToolNoEffectError('Recovery requires a previously running owner; uncertain startup and missing evidence are not replayed.')
+      const operation = this.start(signal, true)
+      this.connecting = operation
+      try { return await operation } finally { this.connecting = undefined }
+    } finally { lease.release() }
+  }
+  private async start(signal: AbortSignal, recovery = false) {
     // Retired namespace selection is not interpreted or migrated. Its presence
     // cannot be used to bypass retained ownership by starting a different home.
     for (const name of ['active-generation.json', 'generations']) {
@@ -235,18 +251,29 @@ export class ManagedLayerFS {
     const saved = await this.saved()
     if (!saved) throw new ToolNoEffectError('LayerFS has no approved installation. Use setup; no SDK was loaded.')
     if (this.platform !== 'win32') throw new ToolNoEffectError('Saved managed LayerFS installation requires Windows/WSL.')
-    if (await this.phase() !== 'stopped') throw new ToolOutcomeUnknownError('LayerFS previous worker ownership is unresolved; automatic restart is refused. Inspect runtime_status and retained ownership evidence. Retained worker/Store resources must not be cleared or replayed.')
+    if (await this.phase(recovery ? 'uncertain' : 'stopped') !== (recovery ? 'running' : 'stopped')) throw new ToolOutcomeUnknownError('LayerFS previous worker ownership is unresolved; automatic restart is refused. Inspect runtime_status and retained ownership evidence. Retained worker/Store resources must not be cleared or replayed.')
     signal.throwIfAborted()
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no worker was dispatched.')
     signal.throwIfAborted()
-    this.savePhase('starting')
+    this.savePhase(recovery ? 'recovering' : 'starting')
     try {
       this.driver = this.factory()
-      const result = runtimeStatusSchema.parse(await this.driver.request('open', this.deployment(saved.installation), signal))
+      const result = runtimeStatusSchema.parse(await this.driver.request(recovery ? 'recover_open' : 'open', this.deployment(saved.installation), signal))
+      signal.throwIfAborted()
       this.savePhase('running')
       return result
-    } catch (error) { this.savePhase('uncertain'); throw error }
+    } catch (error) {
+      // These receipts originate before SDK open/start, not from worker failures.
+      // Close the unused helper; never close/adopt a competing SDK owner.
+      if (recovery && error instanceof ManagedRuntimeError && ['RecoveryEvidenceUnavailable', 'RecoveryIdentityMismatch', 'RecoveryOwnerUnknown', 'RecoveryOwnerLive'].includes(error.code)) {
+        try { await this.driver!.close() } catch { this.savePhase('uncertain'); throw new ToolOutcomeUnknownError('Recovery preflight refused but helper close was not confirmed; inspect retained state.') }
+        this.driver = undefined
+        this.savePhase('running')
+        throw new ToolNoEffectError(`LayerFS recovery refused (${error.code}); no SDK worker was started. Retained operations are unchanged.`)
+      }
+      this.savePhase('uncertain'); throw error
+    }
   }
   async status(signal: AbortSignal) {
     signal.throwIfAborted()

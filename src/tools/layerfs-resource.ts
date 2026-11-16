@@ -13,7 +13,8 @@ const fields = {
 }
 const intents: Record<string, { description: string; required: string[]; optional?: string[] }> = {
   runtime_plan: { description: 'Record isolated runtime binding from approved installation artifacts; no downloads, Git or Docker build.', required: ['runtimeId'] },
-  runtime_start: { description: 'Start a planned runtime or explicitly restart its confirmed normal stop, only from the original owner session. Running/concurrent starts and unknown ownership are not replayed.', required: ['runtimeId'] },
+  runtime_start: { description: 'Start a planned runtime or explicitly restart its confirmed normal stop from a direct authorized session in this Project. Running/concurrent starts and unknown ownership are not replayed.', required: ['runtimeId'] },
+  runtime_recover: { description: 'Explicitly restore a previously ready runtime after owner loss in this Project and same home. Requires retained running state, no attached owner and confirmed absent recorded PID. No replay of startup/Init, cleanup, sweep or resolution of uncertain resource operations. External SDK owners must not race lifecycle management.', required: ['runtimeId'] },
   runtime_status: { description: 'Inspect runtime without starting it.', required: ['runtimeId'] },
   runtime_context: { description: 'Return a controlled ordinary-exec launcher for official SDK calls using the existing runtime owner. No endpoint secret is returned.', required: ['runtimeId'], optional: ['sourceName'] },
   resource_register: { description: 'Register existing official project/image/immutable baseline after official identity checks. Does not build, import or smoke-test a recipe. Source provenance is caller supplied.', required: ['runtimeId', 'name', 'layerfsProject', 'image', 'baselineRef', 'source'] },
@@ -34,6 +35,7 @@ export function createLayerFSResourceTools(service: LayerFSResources): Tool<Tool
     switch (contract.name) {
       case 'layerfs_runtime_plan': result = await service.runtimePlan(String(input.runtimeId), context); break
       case 'layerfs_runtime_start': result = await service.runtimeStart(String(input.runtimeId), context); break
+      case 'layerfs_runtime_recover': result = await service.runtimeRecover(String(input.runtimeId), context); break
       case 'layerfs_runtime_status': result = await service.runtimeStatus(String(input.runtimeId), context.signal); break
       case 'layerfs_runtime_context': result = await service.runtimeContext(String(input.runtimeId), context, typeof input.sourceName === 'string' ? input.sourceName : undefined); break
       case 'layerfs_resource_register': result = await service.register(input, context); break

@@ -38,7 +38,21 @@ async function sourceIdentity(input) {
  const {stdout} = await promisify(execFile)('wsl.exe', ['--distribution',w.distribution,'--user','root','--exec',w.node,'-e',nativeSourceProbe,input.path], {windowsHide:true,timeout:8000,maxBuffer:65536});
  return JSON.parse(stdout);
 }
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+// Recovery only: retained endpoint evidence must name this exact home and an
+// absent recorded owner. Never expose endpoint contents (including its secret).
+// Pinned windows/index.js stores child.pid from spawn('wsl.exe'): this is the
+// Windows launcher PID, NOT the Linux worker PID. Probe it in the host namespace.
+// The public SDK repeats its PID check at start. This is not an external-client fence.
+async function recoveryOwner(input) {
+ let old;
+ try { old = JSON.parse(await readFile(join(input.settings.home, 'worker', 'endpoint.json'), 'utf8')); }
+ catch { fail('RecoveryEvidenceUnavailable'); }
+ if (!old || old.home !== input.settings.wsl.home || !Number.isSafeInteger(old.pid) || old.pid <= 0) fail('RecoveryIdentityMismatch');
+ try { process.kill(old.pid, 0); }
+ catch(error) { if (error.code === 'ESRCH') return; fail('RecoveryOwnerUnknown'); }
+ fail('RecoveryOwnerLive');
+}
 let runtime, deployment, healthQuery;
 const attemptedProjects = new Set();
 let queue = Promise.resolve(), queued = 0;
@@ -58,14 +72,17 @@ async function authorizeSource(token) {
  });
 }
 async function execute(action, input, sourceToken) {
- if (action === 'open') {
+ if (action === 'open' || action === 'recover_open') {
   if (runtime) fail('AlreadyOpen');
+  if (action === 'recover_open') await recoveryOwner(input);
   deployment = input;
   const { LayerFSRuntime } = await import(pathToFileURL(input.runtimeModule).href);
   runtime = await LayerFSRuntime.open(input.settings);
   await runtime.worker.start();
   return inspect();
  }
+ // A preflight-refused helper has no runtime but must still close cleanly.
+ if (action === 'close') { await shutdown(); return { closed: true }; }
  if (!runtime) fail('NotConnected');
  if (action === 'context') return execContext(input);
  if (action === 'official_project') {
@@ -109,7 +126,6 @@ async function execute(action, input, sourceToken) {
    LAYERFS_WORKER_ENDPOINT: join(s.home, 'worker', 'endpoint.json')
   } };
  }
- if (action === 'close') { await shutdown(); return { closed: true }; }
  fail('InvalidAction');
 }
 async function shutdown() {
