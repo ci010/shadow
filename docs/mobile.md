@@ -125,6 +125,24 @@ resource tickets. Listing sessions does not return their secrets. Browser
 cookies, browser PINs, launch credentials and Child keys cannot authenticate
 at the mobile gateway.
 
+## Project and workspace navigation on phones
+
+After pairing, the menu in the single phone header opens Main's existing project
+catalog and conversations. The project toolbar's **Group chats by folder** action
+reveals registered workspaces, including workspaces without a conversation; its
+plus action starts a draft in that workspace. Unified chats is the default view,
+so the absence of folder rows there is not evidence that pairing lost them.
+
+The header title opens the retained editor views. Conversation actions belong to
+the focused conversation, while explorer files and project documents use the
+shared editor header. **Browse files** opens a dismissible sheet on phones rather
+than reserving a desktop-width blank column. A draft without file roots explains
+how to choose a workspace or start a conversation. Native Android system-bar
+insets use Capacitor's injected safe-area variables, with browser `env()` fallback.
+Rendered regression tests exercise the mobile client context, initial drafts,
+project/workspace selection, retained documents and narrow layouts; they do not
+replace a real Android/iOS status-bar, keyboard and pairing check.
+
 ## Transport and mobile lifecycle
 
 The bundled app connects to a validated HTTPS Main origin, or an explicitly

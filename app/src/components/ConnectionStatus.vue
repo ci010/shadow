@@ -60,8 +60,8 @@ onUnmounted(() => {
 
 <style scoped>
 .connection-status {
-  position: absolute; top: 12px; right: max(12px, env(safe-area-inset-right, 0px)); z-index: 60;
-  width: min(380px, calc(100% - max(12px, env(safe-area-inset-left, 0px)) - max(12px, env(safe-area-inset-right, 0px))));
+  position: absolute; top: 12px; right: max(12px, var(--safe-area-inset-right, env(safe-area-inset-right, 0px))); z-index: 60;
+  width: min(380px, calc(100% - max(12px, var(--safe-area-inset-left, env(safe-area-inset-left, 0px))) - max(12px, var(--safe-area-inset-right, env(safe-area-inset-right, 0px)))));
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none;
   color: var(--c-text); font-size: 13px; line-height: 1.5;
 }

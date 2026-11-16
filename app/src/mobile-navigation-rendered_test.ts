@@ -39,27 +39,31 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import App from '/src/App.vue';
+          import {createInstallationContextProvider} from '/src/composables/useInstallationContext.ts';
+          import {createMobileClientContext} from '/src/installation-context.ts';
           import ProjectsWorkspace from '/src/components/ProjectsWorkspace.vue';
           const destination = { render:() => h('section', {class:'fixture-destination'}, 'Synthetic route destination') };
           const router = createRouter({history:createMemoryHistory(), routes:[
             {path:'/chat', redirect:'/projects/work/chat/web%3Achat-one'},
             {path:'/projects/:projectId/chat/:sessionId?', name:'chat', component:ProjectsWorkspace},
             {path:'/projects', name:'projects', component:ProjectsWorkspace},
+            {path:'/projects/:projectId/workflows', name:'project-workflows', component:ProjectsWorkspace},
+            {path:'/projects/:projectId/dashboard', name:'project-dashboard', component:ProjectsWorkspace},
             {path:'/nodes', name:'nodes', component:destination},
             {path:'/settings/:section?', name:'settings', component:destination},
             {path:'/projects/:projectId/settings/:section?', name:'project-settings', component:destination},
             ...['agents','spans','logs'].map(name => ({path:'/projects/:projectId/' + name, name, component:destination})),
           ]});
-          await router.push('/projects/work/chat/web%3Achat-one');
+          await router.push('/projects/work/chat');
           window.__mobileFixture = {router, errors:[]};
           addEventListener('error', event => window.__mobileFixture.errors.push(event.message));
           addEventListener('unhandledrejection', event => window.__mobileFixture.errors.push(String(event.reason)));
           const app = createApp(App);
           app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },
-            client:() => ({subscribe:() => ({close(){}})}),
+            client:() => ({subscribe:() => ({close(){}, ready:async () => {}})}),
             observe:fn => { fn([]); return () => {} }, retry(){}, dispose(){},
           });
-          app.use(router).mount('#app');`
+          app.use(router).use(createInstallationContextProvider(createMobileClientContext(location.origin))).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use(async (request, response, next) => {
@@ -78,6 +82,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           const operation = session?.[2]
           let data: unknown
           if (path === '/api/web-auth/session') data = { version: 1, required: false, authenticated: true }
+          else if (path === '/api/chat/presence' && request.method === 'POST') data = { ok: true }
           else if (path === '/api/projects') data = { projects: [
             { id: 'work', name: 'Workspace', createdAt: '' }, { id: 'other', name: 'Other project', createdAt: '' },
           ] }
@@ -89,13 +94,21 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (/^\/api\/computer\/[^/]+$/.test(path)) data = { projectId: scope?.[1] ?? 'work', sessionId: decodeURIComponent(path.split('/').at(-1)!), available: false, busy: false, grant: null, pending: null, executing: false, lastAction: null }
           else if (path === '/api/audio/status') data = { asr: { ready: false, route: 'local' }, tts: { ready: false, route: 'local' } }
           else if (operation === 'work') data = { records: [], effects: [] }
-          else if (path === '/api/folders') data = { folders: [] }
+          else if (path === '/api/folders') data = { folders: [{ id: 'source', name: 'Source workspace', path: '/synthetic/source', createdAt: '', kind: 'local' }] }
+          else if (path === '/api/folders/picker/devices') data = { devices: [] }
+          else if (path === '/api/credential-requests') data = { request: null }
+          else if (operation === 'scheduled-tasks') data = { sessionId, tasks: [] }
           else if (path === '/api/service-groups') data = { revision: 'fixture', agents: [], groups: [] }
           else if (path === '/api/channels') data = { channels: [] }
           else if (path === '/api/automations') data = { automations: [] }
           else if (path === '/api/sessions/summary') data = { sessions: [...names].map(([sessionId, title]) => ({ sessionId, title })), nodes: [] }
           else if (path === '/api/sessions/stages') data = { activity: {} }
-          else if (path === '/api/chat/session') data = { history, tools: [], systemPrompt: 'Synthetic mobile test prompt' }
+          else if (path === '/api/chat/session') data = {
+            revision: 'a'.repeat(64), historyRevision: 'b'.repeat(64),
+            metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
+            data: { chatId: url.searchParams.get('chatId'), currentPhysicalId: 'physical-fixture', previousPhysicalId: null, segmentIndex: 0,
+              history, tools: [], commandResults: [], decisionRecords: [], systemPrompt: 'Synthetic mobile test prompt' },
+          }
           else if (path === '/api/chat/commands') data = { commands: [] }
           else if (path === '/api/io/runs') data = { runs: [] }
           else if (path === '/api/io/clients') data = { clientToken: 'synthetic-test-client' }
@@ -151,5 +164,5 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
   assert.match(output, /MOBILE_NAVIGATION_OK/)
   assert.deepEqual(unexpected, [])
   assert.equal(names.get('web:chat-one'), 'Renamed on phone')
-  assert.equal(requests.filter(request => request.startsWith('POST ') && !request.startsWith('POST /api/io/clients')).length, 0, 'No turns, uploads or device work are started')
+  assert.equal(requests.filter(request => request.startsWith('POST ') && !request.startsWith('POST /api/io/clients') && request !== 'POST /api/chat/presence').length, 0, 'No turns, uploads or device work are started')
 })
