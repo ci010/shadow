@@ -27,7 +27,7 @@ export class MessageTool implements Tool {
   readonly name = 'message'
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Send concise actionable context to an agent in this Project: sessionId + content normally suffice. Relevant context enters its next safe step, without interrupting tools. Your running task accepts corrections to its existing assignment, not another task. Use delivery=queue for subsequent work. Routine progress/acknowledgements archive. Admission is not application or ownership transfer; wait for completion or confirmed cancellation before taking over its files.'
+  readonly description = 'Free-form direct interaction with an agent in this Project: questions, discussion or one-off coordination. To inspect peer progress, read v:sessions history and existing Work first; do not ping for readable status. Prefer Work for durable shared facts/dependencies; do not duplicate its notifications or send routine acknowledgements. sessionId + content normally suffice. Context enters the next safe step without interrupting tools. Your running task accepts same-assignment corrections only; queue is for subsequent work. Routine progress/acknowledgements archive. Admission is not application or ownership transfer; wait for completion or confirmed cancellation before taking over files.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

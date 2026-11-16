@@ -26,7 +26,37 @@ Version-5 and other unsupported databases fail explicitly before schema changes
 or WAL configuration. The runtime does not migrate, replace or remove their
 records. Preserve the file and resolve the storage choice explicitly.
 
+## Interaction routing
+
+The system prompt, `message`/typed Work tool descriptions and the `peer-sessions`
+and `work-coordination` Skills share one selection rule:
+
+- **Observe:** inspect relevant session history/tool results and existing Work.
+  Looking at a peer's work does not imply contacting or waking it. Missing/stale
+  evidence is reported as uncertainty, not repaired with routine status pings.
+- **Discuss:** use free-form Message for questions, discussion or one-off
+  coordination that needs participation. Routine acknowledgements are unnecessary.
+- **Maintain shared facts:** prefer existing Work when an exchange develops a
+  durable commitment, deliverable dependency, blocker or recovery need. A first
+  conversation does not require Work, and longevity alone is not the criterion.
+  Discussion can continue in Message; agreed state belongs in Work, not both.
+
+This is prompt/tool guidance, not a semantic classifier that blocks Message calls
+or guarantees model tool selection. Work and messages grant no new permissions.
+
 ## Low-noise coordination delivery
+
+State persistence, recipient/transition matching and action notification are
+separate host responsibilities, not three calls required from an agent.
+`InitiativeStore` persists state and notification facts transactionally;
+`workNotifications` selects meaningful responsibility/context transitions,
+`currentWorkNotification` expires obsolete ones, and SessionManager admits the
+remaining targeted updates. A change is necessary but not sufficient for a wake.
+This is the existing manager/assignee/ancestor routing, not arbitrary peer
+subscriptions: `work_link` associations and dependency edges do not themselves
+subscribe sessions. A necessary recipient outside supported routing can receive
+one direct actionable message referencing the Work, without duplicating an
+already-routed notification. No new subscription API is introduced here.
 
 - summary/plan/next/artifacts and ordinary in_progress updates are silent.
 - Entering done or blocked routes one notice to the Work manager, not the session parent. A blocked transition plus attention in one write produces one manager fact.

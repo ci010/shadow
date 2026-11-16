@@ -30,8 +30,8 @@ const schemas: Record<Operation, ToolParameters> = {
   link: object({ key }, ['key']) as ToolParameters,
 }
 const descriptions: Record<Operation, string> = {
-  create: 'Create shared Work and associate this session. Optional idempotencyKey replays only the same normalized request in this Project/creator. Child notes need a causal relation. No new authorization.',
-  update: 'Update only changed Work fields with its current version from v:works. Workers edit their branch; structural changes need coordinator authority. status done reports completion, not human acceptance. Routine progress stays silent; entering done/blocked or a new coordination attention can notify the Work manager.',
+  create: 'Create shared Work for durable coordination facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work first; one-off discussion belongs in message and observation in read. Associates this session. Optional idempotencyKey replays only the same normalized request in this Project/creator. Child notes need a causal relation. No new authorization.',
+  update: 'Persist only changed shared facts using the current version from v:works. Workers edit their branch; structural changes need coordinator authority. Routine progress stays silent; entering done/blocked or a new coordination attention can notify the Work manager. Do not send a duplicate message. done reports completion, not acceptance or permission to execute.',
   assign: 'Assign Work using its current version. Only coordinator/human; never stops running operations or transfers file ownership. null clears assignment.',
   review: 'Record coordinator review of current Work attention using version and conclusion. Optional disposition record|return_to_assignee defaults to return for awaitingResponse=true, otherwise record. Does not change status, assignment or authorization; no acknowledgement is required.',
   link: 'Associate this durable conversation with existing Work. Does not change focus, assignment, authority or completion.',

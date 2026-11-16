@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { InitiativeStore } from './store.ts'
 import { WorkAlignment } from '../sessions/work-alignment.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { currentWorkNotification, workNotifications } from './work-notifications.ts'
+import { currentWorkNotification, workNotificationContent, workNotifications } from './work-notifications.ts'
 import type { WorkRecord } from './work-contract.ts'
 
 const worker = { kind: 'session' as const, sessionId: 'worker' }
@@ -128,5 +128,27 @@ test('ancestor re-review creates a fresh return and expires old review/context h
     assert(!store.pendingWorkNotifications().some(n => n.kind === 'context'), 'review retires old reassessment notice')
     parent = await alignment.assignNote(manager, parent.key, parent.sequence, 'other')
     assert(!currentWorkNotification(context, store.workRecords()), 'old ancestor assignment episode is obsolete')
+  } finally { store.close() }
+}))
+
+
+test('state persistence is not broadcast: only matching transitions notify, then consumers reread latest Work', async () => withTempWorkspace(async home => {
+  const { store, create } = setup(home)
+  try {
+    const prior = await create()
+    const dependent: WorkRecord = { ...prior, key: 'work:dependent',
+      workflow: { ...prior.workflow!, manager: 'other-manager', assignee: 'observer', dependencies: [prior.key] } }
+    const progress: WorkRecord = { ...prior, sequence: prior.sequence + 1, changedBy: 'worker',
+      notes: { ...prior.notes!, summary: 'Updated development evidence' } }
+    assert.deepEqual(workNotifications(progress, prior, [progress, dependent]), [], 'persisted notes alone must not wake readers')
+    const done: WorkRecord = { ...progress, workflow: { ...progress.workflow!, status: 'done' } }
+    const notices = workNotifications(done, progress, [done, dependent])
+    assert.deepEqual(notices.map(notice => [notice.kind, notice.target]), [['done', 'manager']], 'a dependency edge is not a peer subscription')
+    const content = workNotificationContent(notices, [done, dependent])
+    assert.match(content, /Read latest Work before acting/)
+    assert.match(content, /No acknowledgement or duplicate status message is required/)
+    assert.match(content, /not authorization or human acceptance/)
+    assert(currentWorkNotification(notices[0], [done, dependent]))
+    assert(!currentWorkNotification(notices[0], [progress, dependent]), 'a withdrawn result cannot be acted on from its old notice')
   } finally { store.close() }
 }))
