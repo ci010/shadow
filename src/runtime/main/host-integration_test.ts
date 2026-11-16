@@ -16,6 +16,40 @@ import type { AutomationSummary } from '../../cron/contracts.ts'
 import type { WebSearchStatus } from '../../config/web-search.ts'
 import { IntegrationOverviewSchema } from '../../channels/integration-contract.ts'
 
+test('real Main starts and reopens fresh BOT metadata with healthy default Project APIs', { timeout: 30_000 }, async () => {
+  await withTempWorkspace(async root => {
+    const config = ConfigSchema.parse({
+      agent: { workspace: join(root, 'home'), model: 'fixture@openai' },
+      providers: { openai: { apiKey: 'synthetic-unused-key', baseUrl: 'http://127.0.0.1:1/v1' } },
+      channels: {}, mcp: {},
+    })
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const reservation = createServer().listen(0, '127.0.0.1')
+      await once(reservation, 'listening')
+      const address = reservation.address()
+      assert(address && typeof address !== 'string')
+      await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+      const credential = randomUUID()
+      const runtime = await startMainRuntime(config, {
+        gateway: { host: '127.0.0.1', port: address.port, launchCredential: credential },
+      })
+      try {
+        await runtime.ready
+        const request = (path: string) => fetch(`http://127.0.0.1:${address.port}${path}`, {
+          headers: { authorization: `Bearer ${credential}` }, signal: AbortSignal.timeout(5000),
+        })
+        const status = await request('/api/projects/default/status')
+        assert.equal(status.status, 200)
+        assert.deepEqual(await status.json(), { state: 'ready' })
+        for (const resource of ['folders', 'sessions', 'microapps', 'audio/status']) {
+          const response = await request(`/projects/default/api/${resource}`)
+          assert.equal(response.status, 200, `${resource}: ${await response.text()}`)
+        }
+      } finally { await runtime.shutdown() }
+    }
+  })
+})
+
 test('real Main concurrently isolates Project folders, Home prompts, defaults, bots and restart state', { timeout: 90_000 }, async () => {
   await withTempWorkspace(async root => {
     const previousCwd = process.cwd()
