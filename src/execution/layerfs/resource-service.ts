@@ -249,7 +249,7 @@ export class LayerFSResources {
   }
   async execute(action: string, args: Record<string, unknown>, context: ExecutionContext, lifecycle?: { observe: (text: string) => void }): Promise<ToolResult> {
     if (context.projectId !== this.projectId || context.remoteWorkdir || context.recoveringToolCall) throw new ToolNoEffectError('Invalid resource execution context; no replay/fallback.')
-    if (!['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'diff_commits', 'list', 'branches', 'history', 'diff', 'merge', 'publish', 'fork', 'branch_workspace', 'status', 'read', 'write', 'search', 'exec'].includes(action)) throw new ToolNoEffectError('Unsupported resource operation.')
+    if (!['ensure_ready', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'diff_commits', 'list', 'branches', 'history', 'diff', 'merge', 'publish', 'fork', 'branch_workspace', 'status', 'read', 'write', 'search', 'exec'].includes(action)) throw new ToolNoEffectError('Unsupported resource operation.')
     for (const key of ['branch', 'ref', 'name']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,255}$/.test(String(args[key])) || String(args[key]).split('/').includes('..'))) throw new ToolNoEffectError(`Invalid ${key}.`)
     const required: Record<string, string[]> = { history: ['branch'], diff: ['ref', 'branch'], merge: ['ref', 'branch', 'name'], publish: ['branch'], fork: ['branch', 'ref'], branch_workspace: ['branch'] }
     for (const key of required[action] ?? []) if (!args[key]) throw new ToolNoEffectError(`Missing ${key}.`)
@@ -261,10 +261,12 @@ export class LayerFSResources {
     const binding = typeof args.workspace === 'string' ? parseBranchWorkspace(args.workspace) : undefined
     if (binding && !this.catalog.hasWorkspace(String(args.workspace))) throw new ToolNoEffectError('Workspace was not minted by this Project resource service; forged identity refused.')
     if (['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame'].includes(action) && !binding) throw new ToolNoEffectError('Registered workspace required.')
-    if (['mkdir', 'rm', 'cp', 'mv', 'apply'].includes(action) && binding?.branch === 'main') throw new ToolNoEffectError('main is readonly.')
+    if (['write', 'exec', 'mkdir', 'rm', 'cp', 'mv', 'apply'].includes(action) && binding?.branch === 'main') throw new ToolNoEffectError('main is readonly.')
     const value = this.ready(String(binding?.resourceId ?? args.resourceId))
     if (binding && (binding.version !== 3 || binding.ownerProject !== this.projectId || binding.runtimeId !== value.runtimeId || binding.project !== value.layerfsProject)) throw new ToolNoEffectError('Workspace immutable catalog binding mismatch.')
-    if (binding && ['read', 'write', 'search', 'exec'].includes(action)) await this.ensureWorkspaceRuntime(value.runtimeId, context)
+    if (action === 'ensure_ready' && !binding) throw new ToolNoEffectError('Registered workspace required.')
+    if (binding && ['ensure_ready', 'read', 'write', 'search', 'exec', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame'].includes(action)) await this.ensureWorkspaceRuntime(value.runtimeId, context)
+    if (action === 'ensure_ready') return JSON.stringify({ ok: true, runtimeId: value.runtimeId })
     if ((await this.record(value.runtimeId)).phase !== 'ready') throw new ToolNoEffectError('Runtime catalog is not ready.')
     const config = await this.runtime(value.runtimeId).projectConfiguration(value.layerfsProject, value.image!, context.signal)
     // Configuration may have been in flight when shutdown/cancellation began.

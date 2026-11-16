@@ -7,9 +7,9 @@ export const LAYERFS_REMOTE_FEATURE = 'layerfs-service-v1'
 export interface RemoteLayerFSLocation { version: 1; nodeId: string; pairingId: string; projectScope: string }
 export const remoteLayerFSActions = ['doctor', 'setup_plan', 'setup', 'bootstrap_plan', 'bootstrap', 'bootstrap_status', 'bootstrap_cancel', 'bootstrap_reconcile',
   'runtime_plan', 'runtime_start', 'runtime_recover', 'runtime_status', 'runtime_context', 'resource_register', 'resource_list',
-  'resource_inspect', 'workspace_create', 'workspace_fork', 'read', 'write', 'search', 'exec', 'status',
+  'resource_inspect', 'workspace_create', 'workspace_fork', 'ensure_ready', 'read', 'write', 'search', 'exec', 'status',
   'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits', 'reconcile', 'contexts_revoke'] as const
-export const remoteLayerFSBranchActions = new Set<RemoteLayerFSAction>(['read', 'write', 'search', 'exec', 'status', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits'])
+export const remoteLayerFSBranchActions = new Set<RemoteLayerFSAction>(['ensure_ready', 'read', 'write', 'search', 'exec', 'status', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits'])
 export const remoteLayerFSProjectReadActions = new Set<RemoteLayerFSAction>(['doctor', 'bootstrap_status', 'runtime_status', 'resource_list', 'resource_inspect'])
 const id = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
 const reference = z.object({ sessionId: id, physicalId: id, requestId: id }).strict()

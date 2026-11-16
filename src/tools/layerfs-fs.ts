@@ -13,7 +13,7 @@ const operations: Record<string, Record<string, typeof path | typeof changes | {
 }
 export function layerfsFSContracts() {
   return Object.entries(operations).map(([action, fields]) => ({ name: `layerfs_fs_${action}`, supportsLayerFSWorkdir: true,
-    description: `Official LayerFS fs.${action} on a registered current-Project workspace. ${['blame', 'diff_files'].includes(action) ? 'Read-only committed state.' : 'Commits automatically; main is readonly. Unknown outcomes are never replayed.'}`,
+    description: `Official LayerFS fs.${action} on a registered current-Project workspace; lazily ensures its previously-ready runtime after validation. ${['blame', 'diff_files'].includes(action) ? 'Read-only committed state.' : 'Commits automatically; main is readonly. Unknown outcomes are never replayed.'}`,
     parameters: { type: 'object', additionalProperties: false, properties: { workspace: executionTargetParameters.workspace, ...fields }, required: Object.keys(fields).filter(key => key !== 'fromLine') } as ToolParameters,
   }))
 }
