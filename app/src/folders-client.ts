@@ -22,12 +22,12 @@ export function parseFolder(value: unknown): FolderRecord {
     || typeof value.name !== 'string' || !value.name || typeof value.path !== 'string' || !value.path
     || typeof value.createdAt !== 'string'
     || (value.projectId !== undefined && (typeof value.projectId !== 'string' || !value.projectId))
-    || (value.kind !== undefined && value.kind !== 'local' && value.kind !== 'remote')) throw invalidResponse()
+    || (value.kind !== undefined && value.kind !== 'local' && value.kind !== 'remote' && value.kind !== 'layerfs')) throw invalidResponse()
   const base = {
     id: value.id, name: value.name, path: value.path, createdAt: value.createdAt,
     ...(typeof value.projectId === 'string' ? { projectId: value.projectId } : {}),
   }
-  if (value.kind === 'remote') {
+  if (value.kind === 'remote' || value.kind === 'layerfs') {
     const workdir = value.workdir
     if (isRecord(workdir) && workdir.version === 1) {
       throw new Error(t('This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.'))
@@ -37,16 +37,20 @@ export function parseFolder(value: unknown): FolderRecord {
       || typeof workdir.workdirId !== 'string' || !workdir.workdirId.trim()
       || (workdir.displayName !== undefined && typeof workdir.displayName !== 'string')
       || (workdir.displayPathSnapshot !== undefined && typeof workdir.displayPathSnapshot !== 'string')) throw invalidResponse()
-    return {
-      ...base, kind: 'remote', identity: parseWorkdirIdentity(value.identity),
-      workdir: {
-        version: 2, nodeId: workdir.nodeId, workdirId: workdir.workdirId,
-        ...(typeof workdir.displayName === 'string' ? { displayName: workdir.displayName } : {}),
-        ...(typeof workdir.displayPathSnapshot === 'string' ? { displayPathSnapshot: workdir.displayPathSnapshot } : {}),
-      },
+    const parsedWorkdir = {
+      version: 2 as const, nodeId: workdir.nodeId, workdirId: workdir.workdirId,
+      ...(typeof workdir.displayName === 'string' ? { displayName: workdir.displayName } : {}),
+      ...(typeof workdir.displayPathSnapshot === 'string' ? { displayPathSnapshot: workdir.displayPathSnapshot } : {}),
     }
+    if (value.kind === 'layerfs') {
+      if (typeof value.mount !== 'string' || !value.mount.startsWith('layerfs:') || value.mount.length > 1024
+        || workdir.nodeId !== 'layerfs' || workdir.workdirId !== value.mount || value.identity !== undefined) throw invalidResponse()
+      return { ...base, kind: 'layerfs', mount: value.mount, workdir: parsedWorkdir }
+    }
+    if (value.mount !== undefined) throw invalidResponse()
+    return { ...base, kind: 'remote', identity: parseWorkdirIdentity(value.identity), workdir: parsedWorkdir }
   }
-  if (value.workdir !== undefined || value.identity !== undefined) throw invalidResponse()
+  if (value.workdir !== undefined || value.identity !== undefined || value.mount !== undefined) throw invalidResponse()
   return { ...base, ...(value.kind === 'local' ? { kind: 'local' as const } : {}) }
 }
 
@@ -56,7 +60,7 @@ export function parseCloneOperation(value: unknown, id: string): CloneOperation 
     || typeof value.destination !== 'string'
     || (value.error !== undefined && typeof value.error !== 'string')) throw invalidResponse()
   const folder = value.folder === undefined ? undefined : parseFolder(value.folder)
-  if (folder?.kind === 'remote') throw invalidResponse()
+  if (folder?.kind === 'remote' || folder?.kind === 'layerfs') throw invalidResponse()
   if (value.state === 'succeeded' && !folder) throw invalidResponse()
   return {
     id, state: value.state as CloneOperation['state'], destination: value.destination, folder,
