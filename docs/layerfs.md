@@ -61,11 +61,24 @@ the approved installation and retained home.
 
 ### Lazy activation on workspace use
 
-An ordinary `read`, `write`, `search` or `exec` against an existing registered
-LayerFS workspace ensures that workspace's runtime is available before dispatch.
-Merely opening session history, selecting a workspace, listing resources or inspecting
-runtime status does not eagerly start runtimes. An actual filesystem access (including
-reading workspace instructions) is workspace use and can trigger activation.
+Selecting an existing registered LayerFS workspace (`workspace_use` or new-session
+workspace selection) ensures its runtime is ready before committing the selection.
+Ordinary `read`, `write`, `search`, `exec` and all `layerfs_fs_*` operations
+(`mkdir/rm/cp/mv/apply/diff_files/blame`) share this lazy readiness path after input,
+Project and immutable resource-binding validation. Selection uses a host-owned
+readiness hook, not a filesystem probe or fabricated owner-session authority;
+remote Windows selection uses a typed `ensure_ready` request with target-owned
+workspace binding and workspace-session authority. No Main runtime fallback occurs.
+If readiness, availability or instruction preparation fails, `workspace_use` retains
+the prior selection/snapshot. New-session selection checks readiness and availability
+before creating the session; its initial instruction snapshot retains the existing
+session-start preparation flow.
+Activation already admitted may finish even if selection fails or its waiter cancels.
+
+Opening Main-owned session history, listing resources, runtime/workspace status and
+read-only LayerFS VFS observation remain nonactivating. Observation may report an
+unavailable/stopped runtime; it does not ensure readiness. Workspace instruction
+reads are actual filesystem use and can activate, independently of selection.
 
 The host first validates the current Project, minted workspace identity and immutable
 resource/runtime binding, then reuses the attached running helper, starts a confirmed

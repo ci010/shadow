@@ -589,6 +589,26 @@ export async function createProjectRuntime(
       return { node: 'online', workdir: { online: true, backend: 'layerfs', workspace: folder.mount } }
     },
     authorize: layerFSMountAvailable,
+    ensureSelected: async (folder, signal) => {
+      // Host-owned selection readiness, not session management authority. The
+      // target validates its own minted resource binding before lazy activation.
+      const ctx = { projectId: project.id, sessionId: `host-workspace-selection:${project.id}`, signal } as import('../../tools/context.ts').ExecutionContext
+      if (folder.location) {
+        const target = layerfsTarget(folder.location.nodeId)
+        if (target.pairingId !== folder.location.pairingId || target.projectScope !== folder.location.projectScope) throw new Error('LayerFS target binding changed; selection unchanged')
+        const executor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+          const call = validateRemoteLayerFSCall(request.args, layerfsTarget(request.nodeId))
+          const current = folderRegistry.list().find(value => value.id === folder.id)
+          if (request.operation !== LAYERFS_REMOTE_OPERATION || request.workdirId !== undefined || call.action !== 'ensure_ready' || Object.keys(call.input).length !== 1 || call.input.workspace !== folder.mount || current?.kind !== 'layerfs' || current.mount !== folder.mount || current.location?.nodeId !== request.nodeId || current.location.pairingId !== call.authority.pairingId || current.location.projectScope !== call.authority.projectScope) return denyAccess()
+        })
+        const result = await new RemoteLayerFSClient(target, executor, async () => ({ actorId: `host-workspace-selection:${project.id}`, authorityKind: 'workspace-session' })).call('ensure_ready', { workspace: folder.mount }, ctx) as { ok?: boolean }
+        if (result.ok !== true) throw new Error('Target runtime readiness was not confirmed; selection unchanged')
+      } else {
+        if (dependencies.localExecutor === false) throw new Error('Main LayerFS execution disabled; no fallback')
+        const { layerfsResources } = await import('../../execution/layerfs/resource-service.ts')
+        await layerfsResources(project.id, workspace).execute('ensure_ready', { workspace: folder.mount }, ctx)
+      }
+    },
     requireAvailable: async (folder, signal) => { await layerFSMountAvailable(folder.mount, signal) },
   })
   const { layerFSToolContracts } = await import('../../tools/layerfs.ts')

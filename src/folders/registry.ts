@@ -112,6 +112,7 @@ function parseRecords(value: unknown): FolderRecord[] {
 export interface LayerFSFolderService {
   lookup?: (folder: LayerFSFolderRecord) => WorkdirState
   authorize: (mount: string, signal: AbortSignal) => Promise<{ path: string; name?: string }>
+  ensureSelected?: (folder: LayerFSFolderRecord, signal: AbortSignal) => Promise<void>
   requireAvailable: (folder: LayerFSFolderRecord, signal: AbortSignal) => Promise<void>
 }
 
@@ -319,9 +320,32 @@ export class FolderRegistry {
     if (this.scope) this.scope.catalog.assertFolderAdmission(this.scope.projectId)
     const folder = this.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
+    if (folder.kind === 'layerfs') {
+      signal.throwIfAborted()
+      const state = this.#layerfs?.lookup?.(folder)
+      if (state?.node !== 'online' || !state.workdir?.online) throw new FolderError('layerfs_unavailable', 'LayerFS execution target unavailable; no fallback.', 503)
+      // Resolve identity only: the validated filesystem operation owns lazy
+      // readiness. Status here would reject a legitimately stopped runtime.
+      return folder
+    }
     if (folder.kind !== 'remote') return this.requireAvailable(id, signal)
     if (!this.#remoteOwnership) throw new FolderError('remote_folders_unavailable', 'Remote folder ownership is not configured.', 503)
     return this.#remoteOwnership.requireExecutionAvailable(folder, signal)
+  }
+
+  /** Selection-only readiness. Observation and historical access remain nonactivating. */
+  async requireSelectionAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<FolderRecord> {
+    signal.throwIfAborted()
+    if (this.scope) this.scope.catalog.assertFolderAdmission(this.scope.projectId)
+    const folder = this.get(id)
+    if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
+    if (folder.kind === 'layerfs') {
+      if (!this.#layerfs?.ensureSelected) throw new FolderError('layerfs_unavailable', 'Workspace readiness is not configured; selection unchanged.', 503)
+      await this.#layerfs.ensureSelected(folder, signal)
+    }
+    signal.throwIfAborted()
+    if (JSON.stringify(this.get(id)) !== JSON.stringify(folder)) throw new FolderError('folder_unavailable', 'Workspace changed during readiness; selection unchanged.', 409)
+    return this.requireAvailable(id, signal)
   }
 
   async requireAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<FolderRecord> {

@@ -148,7 +148,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.throws(() => service.assertActor('p', 'foreign:session'), /does not belong/)
     await assert.rejects(service.create(request, worker.sessionId), /Temporary tasks/)
     await assert.rejects(service.create({ ...request, agentType: 'missing' }), /Unknown agent/)
-    await assert.rejects(service.create({ ...request, requestId: randomUUID(), folderId: randomUUID() }), /folder/i)
+    await assert.rejects(service.create({ ...request, requestId: randomUUID(), folderId: randomUUID() }), /workspace|folder/i)
     const matches = await service.search({ query: 'MCP skill' })
     assert.equal(matches.totalMatches, 1)
     assert.equal(matches.sessions[0].sessionId, created.sessionId)
@@ -338,6 +338,7 @@ test('session tool resolves Project selectors across nodes without fallback and 
       list: () => records,
       acquireAccess: () => () => {},
       register: async () => { throw new Error('Not used') },
+      requireSelectionAvailable: async (id, signal) => options.folders.requireAvailable(id, signal),
       requireAvailable: async id => {
         lookups++
         if (offline) throw new Error('node-offline')

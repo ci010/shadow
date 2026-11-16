@@ -196,3 +196,32 @@ test('remote LayerFS persists backend/location orthogonally and refuses changed 
   assert.equal(stopped.available, false)
   await assert.rejects(registry.requireAvailable(folder.id), /target offline/)
 }))
+
+test('selection-only readiness precedes availability and failure never commits working context', async () => {
+  await withTempWorkspace(async root => {
+    const home = join(root, 'home'), catalog = new ProjectCatalog(home); await catalog.init()
+    const folders = new FolderRegistry(home, { projectId: DEFAULT_PROJECT_ID, catalog }); await folders.init()
+    let starts = 0, available = false, fail = false, commits = 0
+    folders.configureLayerFS({
+      authorize: async () => ({ path: '/workspaces/42' }),
+      lookup: () => ({ node: 'online', workdir: { online: true, backend: 'layerfs', workspace: mount } }),
+      ensureSelected: async () => { starts++; if (fail) throw new Error('target offline'); available = true },
+      requireAvailable: async () => { if (!available) throw new Error('stopped') },
+    })
+    const folder = await folders.registerLayerFS(mount, signal)
+    assert.equal(folders.list().length, 1)
+    await folders.requireExecutionAvailable(folder.id, signal)
+    await assert.rejects(folders.requireAvailable(folder.id, signal), /stopped/)
+    assert.equal(starts, 0, 'listing, target resolution and availability do not activate')
+    await assert.rejects(folders.requireSelectionAvailable('foreign', signal), /not found/)
+    assert.equal(starts, 0)
+    const tool = new UseProjectTool({ projectId: DEFAULT_PROJECT_ID, folders, readLayerFSInstructions: async () => ({ content: '' }) })
+    const ctx = { ...base, toolCallName: 'workspace_use', switchProjectFolder: async () => { commits++; return 'selected' } }
+    fail = true
+    await assert.rejects(tool.execute({ workspace: folder.id }, ctx), /offline/)
+    assert.equal(commits, 0)
+    fail = false
+    assert.equal(await tool.execute({ workspace: folder.id }, ctx), 'selected')
+    assert.equal(commits, 1); assert.equal(starts, 2)
+  })
+})

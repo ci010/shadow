@@ -36,3 +36,5 @@ use ordinary tools with registered workspace IDs, never host paths as LayerFS cw
 
 No replay of unknown effects, manual lock clearing or deletion of old resources.
 Current boundaries and verification: `docs/layerfs.md`.
+
+Selecting a registered LayerFS workspace and actual ordinary/`layerfs_fs_*` filesystem operations lazily ensure its previously-ready runtime. Selection failure retains the prior context; session history, listings, status and read-only VFS observation do not activate. Installation, first startup and Init still require their explicit approval paths.

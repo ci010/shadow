@@ -69,7 +69,7 @@ export interface TopicServiceOptions {
     'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment' | 'validateExecutionInference'>
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
-  folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess' | 'list'>
+  folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess' | 'list'> & Partial<Pick<FolderRegistry, 'requireSelectionAvailable'>>
   resolveAgent: (name: string) => ({ defaultMode: string } & InferenceSettings) | undefined
   changed: (sessionId?: string) => void
 }
@@ -175,7 +175,7 @@ export class TopicService {
           try { folderId = selectFolder(this.options.folders.list(), parsed.folderId).id }
           catch (error) { throw new TopicError(error instanceof Error ? error.message : String(error)) }
         }
-        const folder = folderId ? await this.options.folders.requireAvailable(folderId, signal) : undefined
+        const folder = folderId ? await (this.options.folders.requireSelectionAvailable?.(folderId, signal) ?? this.options.folders.requireAvailable(folderId, signal)) : undefined
         signal?.throwIfAborted()
         const alignment = this.options.sessions.alignment
         if (parsed.work && (!createdBySessionId || !alignment)) throw new TopicError('Managed creation requires a Project session controller and Work service.')

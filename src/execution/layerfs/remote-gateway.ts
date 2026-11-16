@@ -64,7 +64,7 @@ export class RemoteLayerFSGateway {
   private async dispatchCall(action: RemoteLayerFSAction, input: Record<string, unknown>, context: ExecutionContext, sourceBinding?: string, observe?: (text: string) => void): Promise<ToolResult | undefined> {
     const selected = this.location(input, context, sourceBinding)
     if (!selected) return undefined
-    const branchAction = ['read', 'write', 'search', 'exec', 'status', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits'].includes(action)
+    const branchAction = ['ensure_ready', 'read', 'write', 'search', 'exec', 'status', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits'].includes(action)
     const args = { ...input, ...(branchAction && selected.workspace ? { workspace: selected.workspace } : {}) }
     if (sourceBinding) delete args.workspace
     let requestId: string | undefined

@@ -136,6 +136,8 @@ export class RemoteLayerFSRuntimes {
         if (!existing) throw new ToolNoEffectError('Target LayerFS runtime is not active; observation did not initialize a catalog or worker')
         return JSON.parse(await existing.observe(call.action, input, context))
       }
+      case 'ensure_ready':
+        return JSON.parse(toolResultText(await resources().execute(call.action, input, context)))
       case 'mkdir': case 'rm': case 'cp': case 'mv': case 'apply': case 'diff_files': case 'blame':
         validateFSInput(call.action, input)
         return JSON.parse(toolResultText(await resources().execute(call.action, input, context)))

@@ -54,6 +54,7 @@ test('typed remote production adapters route lifecycle, resource, workspace, ord
       else if (action === 'write') { branches.set(branch, args.content); checkpoints++; result = { checkpoint: checkpoints } }
       else if (action === 'search') result = { items: branches.get(branch)?.includes(args.query) ? ['/README.md'] : [], hasMore: false }
       else if (action === 'exec') { lifecycle?.observe('live target progress\n'); checkpoints++; result = { code: 7, stdout: { text: 'target stdout\n' }, checkpoint: checkpoints } }
+      else if (['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame'].includes(action)) result = { action }
       else if (action === 'history') result = { items: [{ id: 'aa' }], hasMore: false }
       else if (action === 'branches') result = { items: [...branches.keys()].map(name => ({ name })), hasMore: false }
       else if (action === 'diff_commits') result = { items: ['/README.md'], hasMore: false }
@@ -99,14 +100,24 @@ test('typed remote production adapters route lifecycle, resource, workspace, ord
     phase = 'stopped'; ownerAttached = false
     await assert.rejects(async () => vfs.read(`${folder.id}/history/0`, context), /runtime not attached/)
     assert.equal(starts, 1, 'VFS must not lazily start a stopped remote runtime')
+    const readySelection = await gateway.tryCall('ensure_ready', { workspace: folder.mount }, selected)
+    assert.equal(JSON.parse(toolResultText(readySelection!)).ok, true)
+    assert.equal(starts, 2, 'registered remote selection uses target-owned lazy activation')
     await layerfsRoute('read', { path: 'README.md' }, selected, dir)
-    assert.equal(starts, 2, 'registered remote ordinary operation lazily starts runtime')
+    assert.equal(starts, 2, 'subsequent read reuses selection activation')
     phase = 'running'; ownerAttached = false
     assert.equal((await invoke('runtime_recover', { runtimeId: 'fixture' })).result.ready, true)
     assert.equal(recoveries, 1, 'explicit recovery traverses typed owner-authorized remote route')
     ownerAttached = false
     await layerfsRoute('read', { path: 'README.md' }, selected, dir)
     assert.equal(recoveries, 2, 'ordinary remote workspace use shares lazy recovery without owner authority')
+    for (const [action, input] of Object.entries({ mkdir: { path: '/dir' }, rm: { path: '/a' }, cp: { from: '/a', to: '/b' }, mv: { from: '/a', to: '/b' }, apply: { changes: [{ op: 'mkdir', path: '/dir' }] }, diff_files: { leftPath: '/a', rightPath: '/b', rightRef: 'first' }, blame: { path: '/a' } })) {
+      phase = 'stopped'; ownerAttached = false
+      const before = starts
+      const result = await gateway.tryCall(action as 'mkdir', { workspace: folder.mount, ...input }, selected)
+      assert.equal(JSON.parse(toolResultText(result!)).ok, true)
+      assert.equal(starts, before + 1, `${action} activates exact target runtime`)
+    }
     const history = await vfs.read(`${folder.id}/history/0`, context)
     assert.match(String(history), /aa/)
     online = false; epoch++

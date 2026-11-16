@@ -13,14 +13,14 @@ export class UseProjectTool implements Tool {
   readonly name = 'workspace_use'
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Set a registered Workspace in the current Project as this session\'s ongoing working context, switching the default cwd and workspace-scoped instructions together. Use when this session will keep working in that workspace, not as a prerequisite for every workspace task. For cross-workspace work, consider explicit paths or separate workspace-bound subagents/sessions instead of serial switching; choose what fits the task. Use the short identifier from Project workspaces or its full workspace ID, never a path. Call alone, directly, not in a parallel batch or script. Applies to subsequent calls only; running processes and children retain their context. Does not change Project scope.'
+  readonly description = 'Set a registered Workspace in the current Project as this session\'s ongoing working context, switching the default cwd and workspace-scoped instructions together. Use when this session will keep working in that workspace, not as a prerequisite for every workspace task. For cross-workspace work, consider explicit paths or separate workspace-bound subagents/sessions instead of serial switching; choose what fits the task. Use the short identifier from Project workspaces or its full workspace ID, never a path. Call alone, directly, not in a parallel batch or script. Applies to subsequent calls only; running processes and children retain their context. Does not change Project scope. Selecting LayerFS ensures its previously-ready runtime before committing; readiness/instruction failure retains the prior context. No installation or first startup is implicit.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: executionTargetParameters,
     required: ['workspace'], additionalProperties: false,
   }
   constructor(private readonly options: {
     projectId: string
-    folders: Pick<FolderRegistry, 'list' | 'requireAvailable' | 'requireExecutionAvailable' | 'acquireAccess'>
+    folders: Pick<FolderRegistry, 'list' | 'requireAvailable' | 'requireExecutionAvailable' | 'acquireAccess'> & Partial<Pick<FolderRegistry, 'requireSelectionAvailable'>>
     readLayerFSInstructions?: (folder: LayerFSFolderRecord, context: ExecutionContext) => Promise<{ content: string }>
     beforeSwitch?: (context: ExecutionContext, folderId: string) => Promise<void>
     switched?: (context: ExecutionContext) => void
@@ -45,7 +45,7 @@ export class UseProjectTool implements Tool {
     try {
       context.signal.throwIfAborted()
       const target = selectFolder(this.options.folders.list(), args.workspace)
-      const folder = await this.options.folders.requireAvailable(target.id, context.signal)
+      const folder = await (this.options.folders.requireSelectionAvailable?.(target.id, context.signal) ?? this.options.folders.requireAvailable(target.id, context.signal))
       const workdir = folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id)
       let remoteInstructions: { content: string } | undefined
       if (folder.kind === 'layerfs') {

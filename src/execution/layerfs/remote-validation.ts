@@ -30,6 +30,7 @@ const schemas: Partial<Record<RemoteLayerFSCall['action'], z.ZodTypeAny>> = {
   write: z.object({ workspace, path: text, content: z.string(), match: z.string().min(1).optional() }).strict(),
   search: z.object({ workspace, path: text, handler: z.enum(['grep', 'glob']), query: text, offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
   exec: z.object({ workspace, command: z.string().min(1).max(65536).refine(v => !v.includes('\0')), captureLimit: z.number().int().min(1).max(8388608).optional() }).strict(),
+  ensure_ready: z.object({ workspace }).strict(),
   status: z.object({ workspace }).strict(),
   branches: z.object({ workspace, offset: z.number().int().nonnegative().optional() }).strict(),
   history: z.object({ workspace, offset: z.number().int().nonnegative().optional() }).strict(),
@@ -45,7 +46,7 @@ export function validateRemoteLayerFSInput(call: RemoteLayerFSCall): void {
   else if (['mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame'].includes(call.action)) validateFSInput(call.action, call.input)
   else if (['read', 'write', 'search', 'exec', 'status'].includes(call.action)) validateLayerArgs({ ...call.input, action: call.action }, call.authority.projectScope)
   else throw new ToolNoEffectError('Unsupported typed LayerFS input')
-  const branchOperation = ['read', 'write', 'search', 'exec', 'status', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits'].includes(call.action)
+  const branchOperation = ['ensure_ready', 'read', 'write', 'search', 'exec', 'status', 'mkdir', 'rm', 'cp', 'mv', 'apply', 'diff_files', 'blame', 'branches', 'history', 'diff_commits'].includes(call.action)
   if (branchOperation && typeof call.input.workspace !== 'string') throw new ToolNoEffectError('Registered LayerFS workspace required')
   const bound = call.input.workspace ?? call.input.sourceBinding
   if (bound !== undefined) {

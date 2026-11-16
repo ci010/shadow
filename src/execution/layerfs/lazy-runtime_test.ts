@@ -259,3 +259,38 @@ for (const phase of ['stopped', 'running']) test(`macOS lazy activation preserve
     await assert.rejects(service.runtimeRecover('A', f.agent), ToolNoEffectError)
   } finally { await f.cleanup() }
 })
+
+for (const [action, input] of Object.entries({
+  mkdir: { path: '/dir' }, rm: { path: '/file' }, cp: { from: '/a', to: '/b' }, mv: { from: '/a', to: '/b' },
+  apply: { changes: [{ op: 'mkdir', path: '/dir' }] },
+  diff_files: { leftPath: '/a', rightPath: '/b', rightRef: 'first' }, blame: { path: '/a' },
+})) test(`${action} activates a stopped registered runtime only after input/identity checks`, async () => {
+  const f = await fixture()
+  try {
+    const service = f.create(), workspace = f.args().workspace
+    await assert.rejects(service.execute(action, { workspace, ...input, unexpected: true }, f.agent))
+    await assert.rejects(service.execute(action, { workspace, ...input }, { ...f.agent, projectId: 'foreign' }))
+    assert.equal(f.launches.length, 0); assert.equal(f.commands.length, 0)
+    await service.execute(action, { workspace, ...input }, f.agent)
+    assert.equal(f.launches.length, 1); assert.equal(f.commands.length, 1)
+    assert.equal(f.commands[0].action, action)
+  } finally { await f.cleanup() }
+})
+
+test('selection readiness shares activation with filesystem calls without dispatching an artificial read', async () => {
+  const f = await fixture(), held = gate()
+  try {
+    const service = f.create()
+    f.hook(async () => held.hold())
+    const selection = service.execute('ensure_ready', { workspace: f.args().workspace }, f.agent)
+    await held.entered
+    const read = service.execute('read', f.args(), f.agent)
+    assert.equal(f.launches.length, 1); assert.equal(f.commands.length, 0)
+    held.release()
+    assert.deepEqual(JSON.parse(String(await selection)), { ok: true, runtimeId: 'A' })
+    await read
+    assert.equal(f.commands.length, 1); assert.equal(f.commands[0].action, 'read')
+    await service.execute('ensure_ready', { workspace: f.args().workspace }, f.agent)
+    assert.equal(f.launches.length, 1); assert.equal(f.commands.length, 1)
+  } finally { held.release(); await f.cleanup() }
+})
