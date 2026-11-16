@@ -1,6 +1,7 @@
 <template>
   <div class="editor-workspace" @keydown="shortcut">
-    <header class="editor-workspace-header">
+    <MobileEditorChrome :project-id="projectId" :active="!!active" />
+    <header v-if="!mobile?.enabled.value" class="editor-workspace-header">
       <HoverInfo v-if="apiBase" :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
         <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
@@ -15,7 +16,10 @@
       </div>
     </header>
     <div class="editor-workspace-body">
+      <MobileSheet v-if="mobile?.enabled.value" :open="groups.explorers.has(projectId)" :label="t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
+      <Teleport :to="mobileExplorerTarget || 'body'" :disabled="!mobile?.enabled.value || !mobileExplorerTarget">
       <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="groups.explorers.has(projectId)" :explorer-id="`${hostId}-explorer`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
+      </Teleport>
   <div ref="root" class="editor-groups">
     <nav v-if="state.left.length && state.right.length" class="mobile-group-switch" :aria-label="t('Open documents')"><button v-for="side in sides" :key="side" :aria-pressed="state.active === side" @click="groups.focus(projectId, side)">{{ t(side === 'left' ? 'Left editor group' : 'Right editor group') }}</button></nav>
     <section v-for="side in sides" :key="side" v-show="state[side].length" class="editor-group" :class="{ 'active-group': state.active === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" :data-editor-group="side" @pointerdown.capture="groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
@@ -39,12 +43,17 @@ import { scrollEditorTabs, revealEditorTab } from '../editor-tab-scroll.ts'
 import { createEditorTabDrag } from '../editor-tab-drag.ts'
 import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
+import MobileSheet from './MobileSheet.vue'
+import MobileEditorChrome from './MobileEditorChrome.vue'
 import SessionActivity from './SessionActivity.vue'
 import ProjectFileExplorer from './files/ProjectFileExplorer.vue'
 import { t } from '../i18n.ts'
+import { useMobileChrome } from '../composables/useMobileChrome.ts'
 const props = defineProps<{ projectId: string; active?: boolean; apiBase?: string; folderRevision?: number }>()
 const emit = defineEmits<{ quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
+const mobile = useMobileChrome()
+const mobileExplorerTarget = ref<HTMLElement>()
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
 const drag = createEditorTabDrag(groups, () => props.projectId)
@@ -162,6 +171,8 @@ function shortcut(event: KeyboardEvent) {
 .editor-menu button { text-align: left; padding: 8px; border: 0; background: transparent; color: var(--c-text); }
 .editor-menu button:hover { background: var(--c-bg-muted); }
 .editor-menu button:disabled { color: var(--c-text-muted); }
+.mobile-explorer-target { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.mobile-explorer-target :deep(.project-file-explorer) { width: 100%; flex: 1; border: 0; }
 .mobile-group-switch { display: none; }
 @media (max-width: 700px) {
   .editor-header-group { flex: 1 !important; flex-basis: 0 !important; }

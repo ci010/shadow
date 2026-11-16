@@ -9,6 +9,7 @@
       </button>
     </Teleport>
     <MobileSheet v-if="mobileLayout" :open="viewsOpen" :label="t('Open views')" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
+      <div v-for="entry in otherEditors" :key="entry.id" class="mobile-view-row"><button @click="groups?.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups?.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
       <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || t('Conversation') }}</span></button></div>
       <div v-if="diagnosisEnabled" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="openDiagnosis(); viewsOpen = false"><span class="i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
@@ -218,7 +219,8 @@ const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosi
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
 const viewRoot = ref<HTMLElement>()
-const mobileHeader = useMobileHeader(() => props.active && !groups)
+// Only the focused resource owns phone chrome; background conversations stay mounted.
+const mobileHeader = useMobileHeader(() => props.active && (!groups || groups.active(props.projectId ?? '')?.owner === (owner || id)))
 const mobileLayout = computed(() => !!mobileHeader.chrome?.enabled.value)
 const mobileTitleButton = ref<HTMLButtonElement>()
 const mobileActionsButton = ref<HTMLButtonElement>()
@@ -259,6 +261,14 @@ function editorId(key: string) {
   }
   return `${owner || id}:${key}`
 }
+const otherEditors = computed(() => {
+  if (!groups) return []
+  const state = groups.state(props.projectId ?? '')
+  return [...state.left, ...state.right].flatMap(editorKey => {
+    const entry = groups.descriptors.get(editorKey)
+    return entry && entry.owner !== (owner || id) ? [entry] : []
+  })
+})
 const descriptorCache = new Map<string, EditorDescriptor>()
 function descriptor(key: string, label: string, icon: string): EditorDescriptor {
   const previous = descriptorCache.get(key)
@@ -298,7 +308,8 @@ function chooseMobileKnowledge() {
 }
 async function showMobileFiles() {
   actionsOpen.value = false
-  if (props.remote) remoteExpanded.value = true
+  if (groups) groups.explorers.add(props.projectId ?? '')
+  else if (props.remote) remoteExpanded.value = true
   else preference.value = true
   await nextTick()
   ;(groups ? viewRoot.value : root.value)?.querySelector<HTMLElement>('.workbench-explorer button')?.focus()

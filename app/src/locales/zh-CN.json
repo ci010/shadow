@@ -3944,6 +3944,7 @@
   "Agent setup incomplete": "Agent 配置待完善",
   "No tools or external access": "无工具或外部访问权限",
   "No folders": "无文件夹",
+  "Choose a workspace in navigation or start a conversation to browse its files.": "请在导航中选择工作区，或开始对话后浏览其文件。",
   "Restricted to approved senders": "仅限已批准的发送者",
   "Source: reviewed Agent capability profile": "来源：已审核的 Agent 能力配置",
   "The Agent creator must complete its private connection before this group can enable it. Never send secrets in chat.": "Agent 创建者需先完成私密连接配置，此群才能启用。请勿在聊天中发送秘密。",

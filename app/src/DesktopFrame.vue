@@ -58,7 +58,7 @@ onBeforeUnmount(() => unsubscribe?.())
 .desktop-frame { --desktop-title-height: 44px; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .desktop-frame.mobile-frame { height: var(--mobile-viewport-height, 100dvh); }
 .desktop-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
-.mobile-title-bar { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-height: 56px; padding: env(safe-area-inset-top, 0px) max(8px, env(safe-area-inset-right, 0px)) 0 max(4px, env(safe-area-inset-left, 0px)); box-sizing: content-box; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
+.mobile-title-bar { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-height: 56px; padding: var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) max(8px, var(--safe-area-inset-right, env(safe-area-inset-right, 0px))) 0 max(4px, var(--safe-area-inset-left, env(safe-area-inset-left, 0px))); box-sizing: content-box; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
 .desktop-title-bar { flex: 0 0 var(--desktop-title-height); min-width: 0; display: flex; align-items: center; gap: 10px; padding-left: 12px; background: var(--c-bg-card, #f7f9f7); color: var(--c-text, #18211d); border-bottom: 1px solid var(--c-border, #d8ddd9); z-index: 100; user-select: none; }
 .native-desktop .desktop-title-bar { -webkit-app-region: drag; }
 .desktop-brand { display: block; width: 24px; height: 24px; object-fit: contain; }

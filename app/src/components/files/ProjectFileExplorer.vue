@@ -1,5 +1,6 @@
 <template>
   <aside v-show="open" :id="explorerId" class="project-file-explorer" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
+    <p v-if="!sessions.length && !relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
     <ProjectExplorerRoot v-for="session in sessions" :key="`session:${session.sessionId}`" :root-id="`session:${session.sessionId}`" :api-base="apiBase" :session-id="session.sessionId" :label="session.label" :hint="`${t('Session files')}: ${session.label}`" :reveal="active && open && mainSessionId === session.sessionId" :active="active && open" @open="openFile" />
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
     <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
@@ -10,6 +11,7 @@
 </template>
 <script setup lang="ts">
 import { computed, inject, onUnmounted, ref, watch } from 'vue'
+import { useMobileChrome } from '../../composables/useMobileChrome.ts'
 import { EditorGroupsKey, type EditorDescriptor } from '../../editor-groups.ts'
 import { createFoldersClient, type FolderRecord } from '../../folders-client.ts'
 import { fileTabKey, type OpenFile } from '../../file-workbench.ts'
@@ -22,6 +24,7 @@ import ProjectExplorerFile from './ProjectExplorerFile.vue'
 const props = defineProps<{ apiBase: string; projectId: string; active: boolean; open: boolean; explorerId: string; folderRevision?: number; canQuote?: boolean }>()
 const emit = defineEmits<{ close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
+const mobile = useMobileChrome()
 // Follow the selected document in the main (left) group, never the last
 // focused group/reference target or a resource owner's hidden conversation.
 const mainSessionId = computed(() => {
@@ -34,13 +37,14 @@ const conversations = computed(() => {
   const state = groups.state(props.projectId)
   return [...state.left, ...state.right].flatMap(id => {
     const editor = groups.descriptors.get(id)
-    return editor?.conversation?.sessionId ? [editor] : []
+    return editor?.conversation ? [editor] : []
   })
 })
 const sessions = computed(() => {
   const unique = new Map<string, { sessionId: string; label: string }>()
   for (const editor of conversations.value) {
     const sessionId = editor.conversation!.sessionId
+    if (!sessionId) continue // A workspace-bound draft has folder files, not a session root yet.
     unique.set(sessionId, { sessionId, label: editor.label })
   }
   return [...unique.values()]
@@ -121,10 +125,12 @@ function openFile(file: OpenFile) {
   if (!file.source?.folderId && !(file.source?.sessionWorkspace && file.source.sessionId)) return
   if (!files.value.some(item => fileTabKey(item) === fileTabKey(file))) files.value.push(file)
   groups.open(descriptor(file), groups.state(props.projectId).active)
+  if (mobile?.enabled.value) emit('close')
 }
 </script>
 <style scoped>
 .project-file-explorer { display: flex; flex-direction: column; width: 240px; flex: 0 0 240px; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--c-border); background: var(--c-bg-soft); }
 .catalog-error { padding: 8px; color: var(--c-error); font-size: 12px; }
+.catalog-empty { padding: 16px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
 @media (max-width: 700px) { .project-file-explorer { width: min(240px, 60vw); flex-basis: min(240px, 60vw); } }
 </style>

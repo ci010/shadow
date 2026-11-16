@@ -3670,11 +3670,11 @@ function resendLastMessage() {
 
 .mobile-chat { --conversation-item-max-width: 100%; }
 .mobile-chat .chat-messages { scrollbar-gutter: auto; }
-.mobile-chat .chat-message-list { width: auto; margin-inline: max(8px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-right, 0px)); }
+.mobile-chat .chat-message-list { width: auto; margin-inline: max(8px, var(--safe-area-inset-left, env(safe-area-inset-left, 0px))) max(8px, var(--safe-area-inset-right, env(safe-area-inset-right, 0px))); }
 .mobile-chat .chat-bubble { box-sizing: border-box; max-width: 100%; }
 .mobile-chat .chat-user { max-width: 92%; }
-.mobile-chat .session-status-row, .mobile-chat .chat-composer { width: calc(100% - max(8px, env(safe-area-inset-left, 0px)) - max(8px, env(safe-area-inset-right, 0px))); }
-.mobile-chat .chat-composer { margin: 8px auto max(8px, env(safe-area-inset-bottom, 0px)); }
+.mobile-chat .session-status-row, .mobile-chat .chat-composer { width: calc(100% - max(8px, var(--safe-area-inset-left, env(safe-area-inset-left, 0px))) - max(8px, var(--safe-area-inset-right, env(safe-area-inset-right, 0px)))); }
+.mobile-chat .chat-composer { margin: 8px auto max(8px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 .mobile-history summary { min-height: 44px; box-sizing: border-box; padding: 12px 10px; font-size: 14px; cursor: pointer; }
 .mobile-history summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-chat .composer-box { position: relative; padding: 8px; }

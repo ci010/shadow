@@ -3944,6 +3944,7 @@
   "Agent setup incomplete": "Agent setup incomplete",
   "No tools or external access": "No tools or external access",
   "No folders": "No folders",
+  "Choose a workspace in navigation or start a conversation to browse its files.": "Choose a workspace in navigation or start a conversation to browse its files.",
   "Restricted to approved senders": "Restricted to approved senders",
   "Source: reviewed Agent capability profile": "Source: reviewed Agent capability profile",
   "The Agent creator must complete its private connection before this group can enable it. Never send secrets in chat.": "The Agent creator must complete its private connection before this group can enable it. Never send secrets in chat.",
