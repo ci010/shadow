@@ -305,3 +305,40 @@ for (const kind of ['group', 'c2c'] as const) {
       { file_info: 'completed' })
   })
 }
+
+// Official contract: index is zero-based, including upload_part_finish.
+// https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_id_upload_prepare.post.html
+for (const index of [1, '1', -1, 0.5, 'signed-secret', { url: 'signed-secret' }]) {
+  test(`QQ rejects invalid single-part index ${JSON.stringify(index)} with numeric-only diagnostics`, async t => {
+    const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture' })
+    t.after(() => channel.stop())
+    const warnings: unknown[][] = []
+    t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args) })
+    let requests = 0
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input)
+      requests++
+      assertEquals(url.pathname, '/v2/users/recipient/upload_prepare')
+      return Response.json({
+        upload_id: 'private-upload-id', block_size: '1024',
+        parts: [{ index, presigned_url: 'https://upload.example.test/?signature=signed-secret' }],
+      })
+    })
+    await rejects(channel['uploadNamedMedia']({ kind: 'c2c', id: 'recipient' }, {}, 'test.png', Buffer.from('image'), 1),
+      /invalid part/)
+    assertEquals(requests, 1) // No PUT, finish, completion or message after rejection.
+    const numericIndex = typeof index === 'string' && /^\d+$/.test(index) ? Number(index) : index
+    assertEquals(warnings, [['[qq] Invalid upload part metadata', {
+      index: typeof numericIndex === 'number' && Number.isSafeInteger(numericIndex) ? numericIndex : null,
+      blockSize: 1024,
+      indexType: typeof index,
+      validInteger: typeof numericIndex === 'number' && Number.isSafeInteger(numericIndex),
+      inRange: typeof numericIndex === 'number' && numericIndex >= 0 && numericIndex < 1,
+      duplicate: false,
+      hasUploadUrl: true,
+      parts: 1,
+    }]])
+    assertEquals(JSON.stringify(warnings).includes('signed-secret'), false)
+    assertEquals(JSON.stringify(warnings).includes('private-upload-id'), false)
+  })
+}
