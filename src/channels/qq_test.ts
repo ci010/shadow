@@ -260,15 +260,17 @@ test('QQ sends a local file from the originating non-mention group message', asy
   })
 })
 
-for (const kind of ['group', 'c2c'] as const) {
-  test(`QQ ${kind} uploads large files with the official hash prefix and indexed parts`, async t => {
+for (const kind of ['group', 'c2c'] as const) for (const base of [0, 1]) for (const count of [2, 3]) {
+  test(`QQ ${kind} base-${base} uploads ${count} parts for large files with the official hash prefix and indexed parts`, async t => {
     const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture' })
     t.after(() => channel.stop())
-    const data = Buffer.alloc(10_485_760 + 123, 97)
+    const blockSize = count === 2 ? 10_485_760 : 5_242_880
+    const tailSize = count === 2 ? 3_198_292 : 123
+    const data = Buffer.alloc(blockSize * (count - 1) + tailSize, 97)
     data.fill(98, 10_002_432)
-    const blockSize = 5_242_880
-    const indices = [2, 0, 1]
+    const indices = (count === 2 ? [1, 0] : [2, 0, 1]).map(index => index + base)
     const uploaded = new Map<number, Buffer>()
+    const finished: number[] = []
     const resource = kind === 'group' ? '/v2/groups/recipient' : '/v2/users/recipient'
     t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : input)
@@ -277,7 +279,7 @@ for (const kind of ['group', 'c2c'] as const) {
         assertEquals(init?.method, 'PUT')
         assertEquals(new Headers(init?.headers).has('authorization'), false)
         const bytes = Buffer.from(init?.body as Uint8Array)
-        assertEquals(bytes, data.subarray(index * blockSize, (index + 1) * blockSize))
+        assertEquals(bytes, data.subarray((index - base) * blockSize, (index - base + 1) * blockSize))
         uploaded.set(index, bytes)
         return new Response(null)
       }
@@ -291,13 +293,17 @@ for (const kind of ['group', 'c2c'] as const) {
           parts: indices.map(index => ({ index: kind === 'c2c' ? String(index) : index, presigned_url: `https://upload.example.test/${index}` })) })
       }
       if (url.pathname === `${resource}/upload_part_finish`) {
+        finished.push(body.part_index)
         const bytes = uploaded.get(body.part_index)!
         assertEquals(body.block_size, String(bytes.length))
         assertEquals(body.md5, createHash('md5').update(bytes).digest('hex'))
         return Response.json({})
       }
       assertEquals(url.pathname, `${resource}/files`)
-      assertEquals(uploaded.size, 3)
+      assertEquals(uploaded.size, count)
+      assertEquals(finished, indices)
+      assertEquals(Buffer.concat([...uploaded].sort(([a], [b]) => a - b).map(([, bytes]) => bytes)), data)
+      assertEquals(uploaded.get(base + count - 1)!.length, tailSize)
       assertEquals(body, { upload_id: 'upload' })
       return Response.json({ file_info: 'completed' })
     })
@@ -306,9 +312,10 @@ for (const kind of ['group', 'c2c'] as const) {
   })
 }
 
-// Official contract: index is zero-based, including upload_part_finish.
+// Official example is zero-based; live C2C returned index 2 for two parts.
+// Compatibility accepts only complete zero-based or one-based sets.
 // https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_id_upload_prepare.post.html
-for (const index of [1, '1', -1, 0.5, 'signed-secret', { url: 'signed-secret' }]) {
+for (const index of [2, '2', -1, 0.5, Number.MAX_SAFE_INTEGER + 1, '9007199254740992', 'signed-secret', { url: 'signed-secret' }]) {
   test(`QQ rejects invalid single-part index ${JSON.stringify(index)} with numeric-only diagnostics`, async t => {
     const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture' })
     t.after(() => channel.stop())
@@ -333,12 +340,68 @@ for (const index of [1, '1', -1, 0.5, 'signed-secret', { url: 'signed-secret' }]
       blockSize: 1024,
       indexType: typeof index,
       validInteger: typeof numericIndex === 'number' && Number.isSafeInteger(numericIndex),
-      inRange: typeof numericIndex === 'number' && numericIndex >= 0 && numericIndex < 1,
+      inRange: typeof numericIndex === 'number' && numericIndex >= 0 && numericIndex <= 1,
       duplicate: false,
       hasUploadUrl: true,
       parts: 1,
     }]])
     assertEquals(JSON.stringify(warnings).includes('signed-secret'), false)
     assertEquals(JSON.stringify(warnings).includes('private-upload-id'), false)
+  })
+}
+
+// No network writes may happen until the entire metadata set is validated.
+for (const fixture of [
+  { name: 'duplicate zero', indices: [0, 0], blockSize: 4 },
+  { name: 'duplicate one', indices: [1, 1], blockSize: 4 },
+  { name: 'mixed bases / gap', indices: [0, 2], blockSize: 4 },
+  { name: 'missing part', indices: [0], blockSize: 4 },
+  { name: 'empty parts', indices: [], blockSize: 4 },
+  { name: 'out of range', indices: [1, 3], blockSize: 4 },
+  { name: 'unsafe index', indices: [1, Number.MAX_SAFE_INTEGER + 1], blockSize: 4 },
+  { name: 'zero block size', indices: [0, 1], blockSize: 0 },
+  { name: 'negative block size', indices: [0, 1], blockSize: -4 },
+  { name: 'fractional block size', indices: [0, 1], blockSize: 3.5 },
+  { name: 'unsafe block size', indices: [0], blockSize: Number.MAX_SAFE_INTEGER + 1 },
+]) {
+  test(`QQ rejects ${fixture.name} before any upload`, async t => {
+    const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture' })
+    t.after(() => channel.stop())
+    t.mock.method(console, 'warn', () => {})
+    let requests = 0
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+      requests++
+      assertEquals(new URL(input instanceof Request ? input.url : input).pathname,
+        '/v2/users/recipient/upload_prepare')
+      return Response.json({ upload_id: 'private', block_size: fixture.blockSize,
+        parts: fixture.indices.map(index => ({ index, presigned_url: 'https://upload.example.test/' })) })
+    })
+    await rejects(channel['uploadNamedMedia']({ kind: 'c2c', id: 'recipient' }, {}, 'test.zip', Buffer.from('1234567'), 4), /preparation response/)
+    assertEquals(requests, 1)
+  })
+}
+
+for (const index of [0, '0', 1, '1']) {
+  test(`QQ accepts complete single-part wire index ${JSON.stringify(index)}`, async t => {
+    const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture' })
+    t.after(() => channel.stop())
+    const data = Buffer.from('single-part')
+    let requests = 0
+    t.mock.method(globalThis, 'fetch', async (_input: unknown, init?: RequestInit) => {
+      requests++
+      if (requests === 1) return Response.json({ upload_id: 'private', block_size: 1024,
+        parts: [{ index, presigned_url: 'https://upload.example.test/' }] })
+      if (requests === 2) {
+        assertEquals(init?.method, 'PUT')
+        assertEquals(Buffer.from(init?.body as Uint8Array), data)
+      }
+      if (requests === 3) assertEquals(JSON.parse(String(init?.body)), {
+        upload_id: 'private', part_index: Number(index), block_size: String(data.length),
+        md5: createHash('md5').update(data).digest('hex'),
+      })
+      return Response.json(requests === 4 ? { file_info: 'complete' } : {})
+    })
+    assertEquals(await channel['uploadNamedMedia']({ kind: 'c2c', id: 'recipient' }, {}, 'image.png', data, 1), { file_info: 'complete' })
+    assertEquals(requests, 4)
   })
 }
