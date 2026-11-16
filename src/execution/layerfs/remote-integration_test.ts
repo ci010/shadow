@@ -113,7 +113,7 @@ test('typed remote production adapters route lifecycle, resource, workspace, ord
     assert.equal(recoveries, 2, 'ordinary remote workspace use shares lazy recovery without owner authority')
     for (const [action, input] of Object.entries({ mkdir: { path: '/dir' }, rm: { path: '/a' }, cp: { from: '/a', to: '/b' }, mv: { from: '/a', to: '/b' }, apply: { changes: [{ op: 'mkdir', path: '/dir' }] }, diff_files: { leftPath: '/a', rightPath: '/b', rightRef: 'first' }, blame: { path: '/a' } })) {
       phase = 'stopped'; ownerAttached = false
-      const before = starts
+      const before: number = starts
       const result = await gateway.tryCall(action as 'mkdir', { workspace: folder.mount, ...input }, selected)
       assert.equal(JSON.parse(toolResultText(result!)).ok, true)
       assert.equal(starts, before + 1, `${action} activates exact target runtime`)
