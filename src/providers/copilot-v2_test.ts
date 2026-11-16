@@ -13,6 +13,13 @@ function fixture(oauth: Record<string, unknown> = {}, user: Record<string, unkno
     storage: { read: p => files.get(p), write: (p, v) => { files.set(p, v) }, remove: p => { files.delete(p) } },
     fetch: async (url, init) => {
       urls.push(String(url))
+      const headers = new Headers(init?.headers)
+      assert.doesNotMatch(JSON.stringify([...headers]), /vscode|copilot-chat|GitHubCopilotChat|conversation-panel/i)
+      assert.equal(headers.has('editor-version'), false)
+      assert.equal(headers.has('editor-plugin-version'), false)
+      if (String(url).endsWith('/device/code') || String(url).endsWith('/access_token')) {
+        assert.equal(headers.get('user-agent'), 'Shadow')
+      }
       if (String(url).endsWith('/device/code')) {
         assert.deepEqual(JSON.parse(String(init?.body)), { client_id: 'Ov23ctr1Udn5GokVCVJf', scope: 'copilot' })
         return Response.json({ device_code: 'device', user_code: 'ABCD-1234', verification_uri: 'https://msft.ghe.com/login/device', expires_in: 60, interval: 1 })

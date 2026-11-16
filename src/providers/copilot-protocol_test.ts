@@ -51,6 +51,13 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
   t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
     init?.signal?.throwIfAborted()
     const path = new URL(String(url)).pathname
+    const headers = new Headers(init?.headers)
+    assert.equal(headers.get('copilot-integration-id'), 'copilot-developer-app')
+    assert.equal(headers.get('user-agent'), 'Shadow')
+    assert.equal(headers.has('editor-version'), false)
+    assert.equal(headers.has('editor-plugin-version'), false)
+    assert.equal(headers.has('openai-intent'), false)
+    assert.doesNotMatch(JSON.stringify([...headers]), /vscode|copilot-chat|GitHubCopilotChat|conversation-panel/i)
     if (path === '/models') {
       modelReads++
       return modelResponse instanceof Response ? modelResponse.clone() : Response.json(modelResponse)
