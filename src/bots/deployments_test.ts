@@ -12,6 +12,20 @@ function fixture(t: { after: (fn: () => void) => void }, runGit?: GitRunner) {
 }
 const missing: GitRunner = async () => { throw new Error('ENOENT'); };
 
+test('fresh ownership metadata can be opened and reopened without rewriting it', t => {
+  const root = fs.mkdtempSync(path.resolve('.deployment-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const owner = path.join(root, '.store.json');
+  const original = JSON.stringify({ projectId: 'project' });
+  fs.writeFileSync(owner, original, { flag: 'wx' });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const store = new BotDeployments({ directory: root, projectId: 'project', runGit: missing });
+    assert.deepEqual(store.list(), []);
+    assert.equal(fs.readFileSync(owner, 'utf8'), original);
+  }
+  assert.throws(() => new BotDeployments({ directory: root, projectId: 'other' }), /ownership/);
+});
+
 test('bounded frozen deployment, optimistic confirmation, previous restore and separate data', async t => {
   const { root, store } = fixture(t, missing);
   const mutable = { 'bot.ts': 'one' }; const frozen = store.freeze(mutable); mutable['bot.ts'] = 'edited';

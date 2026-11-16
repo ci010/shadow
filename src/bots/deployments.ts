@@ -100,7 +100,9 @@ function readJson(target: string): unknown {
   const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16384 || stat.ino !== before.ino || stat.dev !== before.dev || stat.ctimeMs !== before.ctimeMs || stat.mtimeMs !== before.mtimeMs) throw new Error('Invalid bounded metadata');
+    // Windows path stats can cache an older change time until the last handle closes.
+    // Compare ctime across handle reads below, not across path/handle APIs on Windows.
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16384 || stat.size !== before.size || stat.ino !== before.ino || stat.dev !== before.dev || (process.platform !== 'win32' && stat.ctimeMs !== before.ctimeMs) || stat.mtimeMs !== before.mtimeMs) throw new Error('Invalid bounded metadata');
     const buffer = Buffer.alloc(16385); const count = fs.readSync(fd, buffer, 0, buffer.length, 0); const after = fs.fstatSync(fd);
     if (count !== stat.size || after.size !== stat.size || after.ctimeMs !== stat.ctimeMs || after.mtimeMs !== stat.mtimeMs) throw new Error('Metadata changed or exceeds bound');
     return JSON.parse(buffer.subarray(0, count).toString('utf8'));

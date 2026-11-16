@@ -86,6 +86,7 @@ test('desktop store persists only protected synthetic material and removes publi
   const directory = resolve(`.web-publication-test-配对-${randomUUID()}`)
   await mkdir(directory, { mode: 0o700 })
   t.after(() => rm(directory, { recursive: true, force: true }))
+  await mkdir(resolve(directory, 'control', 'web-access'), { recursive: true, mode: 0o700 })
   const published = await new DesktopConnectionStore(directory).publish(authorization)
   const descriptor = parseConnectionDescriptor(JSON.parse((await readBoundedLocalFile(published.path)).toString()))
   assert.ok('credentialProtection' in descriptor)
