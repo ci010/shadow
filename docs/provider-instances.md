@@ -103,15 +103,57 @@ has not been established by synthetic tests. The consent page may name the offic
 GitHub Copilot App because that is the public OAuth client, not a Shadow-owned app.
 Requesting permission does not override enterprise OAuth/SSO policy or grant a license.
 
-Previously saved credentials are not silently upgraded or deleted on failed attempts.
-Explicitly start a new sign-in to create the direct OAuth profile and verify its granted
-scope. A successful sign-in replaces that instance/host's credential files atomically;
-it does not preserve a second archived copy of the old v1 credential.
+Old authentication profiles are not upgraded into valid v2 grants. Explicitly start a
+new sign-in to create the direct OAuth profile and verify its granted scope. Storage
+migration below changes protection, not authorization or scope. Successful sign-in
+replaces credentials without an archived plaintext copy.
 
-Storage remains private-file based. This change does not implement Windows Credential
-Manager, extract credentials from the official App, or claim to reproduce its complete
-runtime token protocol. Existing Chat/Responses serialization and billing remain in the shared Copilot
-base; v2 supplies credential acquisition and integration headers.
+### Copilot credential protection
+
+Production Copilot storage encrypts access tokens, API credential profiles and model
+caches with AES-256-GCM in `<original-name>.protected` files. A random 32-byte master
+key per instance directory is held in the current user's macOS Keychain or Linux
+Secret Service (`secret-tool` required). Windows (and WSL) protects that master with
+DPAPI **CurrentUser**, storing only its DPAPI ciphertext in `master-key.dpapi`.
+No plaintext key is stored beside the encrypted credentials. This is not Windows
+Credential Manager integration. LocalService and interactive desktop users do not
+share a DPAPI identity; provision/sign in separately in the intended user context.
+Never switch to LocalMachine protection to bypass this separation.
+
+The authenticated data binds the absolute instance directory and full credential
+filename, separating hosts, instances and token/cache types. Copying ciphertext to
+another path, machine or OS user is not credential portability. The nonsecret
+`active-host` selection stays plaintext and does not unlock the OS store at startup.
+Protected storage is loaded lazily; unavailable/locked stores cause explicit
+`storage`/`storage_error` failures, never plaintext fallback. Provider inventory
+contains a failing Copilot entry rather than blocking unrelated providers. OS helper
+commands are bounded to 15 seconds each but are synchronous to preserve setup's
+commit/rollback transaction; an OS prompt/timeout can temporarily delay the backend.
+
+Legacy files migrate **on access**, not by scanning all hosts or instances. Migration
+atomically writes ciphertext, rereads and authenticates it, and only then removes the
+plaintext original. No plaintext backup is created. Failure leaves the legacy file
+untouched where possible and refuses its use. If deletion fails after encryption,
+both files can remain: the operation reports failure and subsequent reads retry
+cleanup before returning a credential. Untouched instances/hosts and unused old
+credential files can therefore remain plaintext until accessed or explicitly removed.
+Filesystem deletion does not securely erase old blocks, external backups or snapshots.
+Sign-out removes both legacy and protected active-host files, not other hosts/accounts.
+Rollback restores encrypted storage and retains the existing revision/epoch fences.
+The OS master key is retained after logout. A missing master key fails closed; no
+replacement is generated once `.protected-key-created` exists. A crash during key
+initialization can leave `.protected-key-lock`: after confirming no Shadow process is
+using that directory, an operator may remove the empty lock directory and retry.
+
+This change does **not** revoke an already exposed token, prove that no leak occurred,
+or protect against a process running as the same OS user with credential-store access.
+Suspected exposure requires a separate authorized GitHub revocation/reauthorization
+response. No actual user credentials or Keychain entries were read or modified for
+implementation tests; tests use synthetic files and injected OS command runners.
+
+Existing Chat/Responses serialization and billing remain in the shared Copilot base;
+v2 supplies credential acquisition and integration headers. This does not extract
+credentials from the official App or reproduce its complete runtime token protocol.
 Real operator-assisted verification on `msft.ghe.com` passed onboarding, readiness
 recheck, 17 selectable models and one `gpt-5-mini` Chat-completions request using the
 production classes with isolated in-memory storage. It did not sign the running
