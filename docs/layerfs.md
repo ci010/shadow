@@ -27,8 +27,8 @@ Installation: `layerfs_doctor`, `layerfs_setup`, `layerfs_bootstrap_plan`,
 consent remains host-verified; an agent task or a boolean alone does not authorize
 bootstrap. Existing approved installation artifacts can be reused.
 
-Runtime: `layerfs_runtime_plan`, `layerfs_runtime_start`, `layerfs_runtime_status`,
-`layerfs_runtime_context`. Plan/start are routine artifact reuse, with no second
+Runtime: `layerfs_runtime_plan`, `layerfs_runtime_start`, `layerfs_runtime_recover`,
+`layerfs_runtime_status`, `layerfs_runtime_context`. Plan/start are routine artifact reuse, with no second
 approval object. They require the direct owner authority boundary. Any session in the same
 Project satisfying that boundary can call `layerfs_runtime_start` again on the same runtime after a
 confirmed normal worker stop (including a clean backend close/reopen). Concurrent
@@ -37,15 +37,101 @@ Starting, uncertain, unknown or crash-retained leases are not treated as stops a
 are never replayed or cleared. Historical one-shot admissions remain untouched.
 Runtime management is Project-scoped, not exclusive to the planning session.
 Legacy saved `owner` fields remain readable as provenance, not authorization.
-Direct local durable owner Web authority is still required; tasks, borrowed tools,
-scripts, recovery replays and other Projects cannot manage the runtime.
+The explicit management tools still require direct local durable owner Web authority;
+tasks, borrowed tools, scripts, recovery replays and other Projects cannot invoke them
+to manage the runtime. Ordinary registered-workspace use has a separate, host-owned
+lazy activation path described below; it does not grant management-tool authority.
 
 Runtime status separates `recordPhase` (saved configuration/start receipt) from
 `phase` and `ready` (observed worker readiness). A saved `ready` record with a
 normally stopped worker reports `phase: stopped`, `ready: false`, and
-`next: layerfs_runtime_start`. Status, SDK context and ordinary resource operations
-never implicitly start that stopped runtime. Initial installation consent is
-unchanged; clean restart reuses the approved installation and retained home.
+`next: layerfs_runtime_start`. Status and SDK context never implicitly start that
+stopped runtime. Initial installation consent is unchanged; clean restart reuses
+the approved installation and retained home.
+
+### Lazy activation on workspace use
+
+An ordinary `read`, `write`, `search` or `exec` against an existing registered
+LayerFS workspace ensures that workspace's runtime is available before dispatch.
+Merely opening session history, selecting a workspace, listing resources or inspecting
+runtime status does not eagerly start runtimes. An actual filesystem access (including
+reading workspace instructions) is workspace use and can trigger activation.
+
+The host first validates the current Project, minted workspace identity and immutable
+resource/runtime binding, then reuses the attached running helper, starts a confirmed
+clean stop, or attempts the same guarded process-loss recovery described below.
+Only previously ready runtimes with retained approved installation evidence qualify.
+No automatic install, runtime plan, first startup, new home, Init retry or resource
+repair is performed. Cross-Project, forged workspace and saved-tool-replay requests
+are refused before activation. A task may use an authorized workspace without being
+allowed to invoke installation or runtime-management tools directly; no creating
+session ownership is reintroduced.
+
+Concurrent workspace calls in the same Project service await the same in-flight
+activation (including an explicit start/recover already underway). Different runtimes
+activate independently. The shared durable start/recovery lease still excludes other
+service instances; a retained or externally owned lease is refused, never stolen or
+polled into an automatic takeover. An attached helper is not replaced because an
+aggregate health probe is temporarily busy or fails to answer. Normal per-project
+configuration and ordinary branch-operation guards still decide whether work can run.
+
+Workspace-triggered activation is one bounded attempt. Cancelling its initiating
+caller before admission prevents dispatch; after admission, cancelling a workspace
+caller cancels its wait/workspace operation, not the shared activation. The host
+observes that attempt to completion or timeout, and shutdown drains it before closing
+the helper. A workspace caller waiting on an explicit start/recover likewise does not
+cancel that explicit call. However, the explicit lifecycle initiator retains its own
+cancellation semantics: cancelling it can make the activation outcome uncertain and
+fail all workspace callers waiting on it. Failed/lost startup receipts remain
+unknown and are not automatically retried. A successful reconnect does not clear Init
+admissions, branch reservations or uncertain mount/operation evidence. Status and
+explicit lifecycle tools remain available for diagnostics and maintenance. SDK launcher
+access, resource-only calls and workspace creation still use their explicit readiness
+checks; lazy activation is scoped to use of already-registered workspaces.
+
+### Explicit owner-loss recovery
+
+`layerfs_runtime_recover {runtimeId}` restores only the worker/control plane for a
+previously ready runtime whose managed state still records `running` but whose
+Shadow owner is no longer attached (for example, after backend loss). Status reports
+`recoveryCandidate: true` and suggests this tool; this is **not** a live-owner probe
+or a promise that recovery will succeed. Ordinary start remains stopped-only.
+
+Explicit recovery-tool invocation requires the same direct local durable owner Web
+authority as explicit start. Both explicit and workspace-triggered recovery require
+the same Project/runtime/approved installation and derived host/WSL homes. A shared
+exclusive start/recovery lease covers preflight through completion across Shadow
+service instances. Retained leases, missing/invalid evidence, starting/recovering/
+uncertain managed states and planned/starting/unknown catalog states are refused.
+An attached helper is refused even if it has stopped answering; this path does not
+kill or replace it. No runtime records are manually reset to manufacture eligibility.
+
+The helper validates retained endpoint home/PID evidence without returning its
+contents. The pinned Windows SDK records the **Windows `wsl.exe` launcher PID**
+(`child.pid`), not a Linux worker PID; the probe uses that same host PID namespace.
+A live PID or anything other than a confirmed absent PID refuses before
+SDK open. Only then does it call pinned public `LayerFSRuntime.open` with
+`sweep:false` and `worker.start`, which repeats the SDK owner check. Proven preflight
+refusals keep the old running evidence; failed/lost/aborted dispatch becomes unknown
+and cannot be retried automatically. Worker/Docker connectivity alone defines
+readiness: **it does not settle Init, mount, branch or startup operations**. Init
+admissions, operation journals, reservations and registered resources are untouched;
+a missing upstream `get_init` result remains failure, never inferred success.
+Existing ordinary-operation guards still apply after reconnection.
+
+The pinned Windows SDK's PID check is check-then-spawn, not an atomic external-client
+fence. Shadow's lease excludes Shadow lifecycle calls, not independently launched
+SDK owners. Do not race external SDK lifecycle operations against this recovery.
+Uncertain external ownership must be resolved by the operator before attempting it;
+recovery neither adopts an ambiguous owner nor claims global operation settlement.
+
+For rollout, first review the diff and focused synthetic SDK tests. Coordinate any
+app-wide restart through the supported development restart workflow and shared-host
+owners; do not run private SDK scripts to bypass the old guard. After deployment,
+inspect status and resource/workspace bindings, invoke the supported recovery tool
+once if eligible, then inspect readiness and compare retained bindings. Perform
+branch reads only where ordinary operation guards permit. Stop on unknown receipts;
+never clear locks/admissions, retry Init, sweep, or choose a replacement home.
 
 Resources: `layerfs_resource_register`, `layerfs_resource_list`,
 `layerfs_resource_inspect`. Registration input:
