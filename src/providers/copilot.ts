@@ -23,7 +23,7 @@ import { Span } from '../otel/tracing.ts'
 import { normalizeCopilotHost, copilotVerificationUri } from '../shared/copilot-host.ts'
 
 // ---------------------------------------------------------------------------
-//  Constants (matches litellm / VS Code Copilot extension)
+//  Copilot API constants (App OAuth; no editor impersonation)
 // ---------------------------------------------------------------------------
 
 function defaultApiBase(host: string): string {
@@ -36,12 +36,8 @@ function authHost(value: unknown): string {
 }
 const GITHUB_COPILOT_API_BASE = 'https://api.githubcopilot.com'
 
-const COPILOT_VERSION = '0.26.0'
-const VSCODE_VERSION = '1.95.0'
 const API_VERSION = '2025-04-01'
-const EDITOR_VERSION = `vscode/${VSCODE_VERSION}`
-const PLUGIN_VERSION = `copilot-chat/${COPILOT_VERSION}`
-const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
+const USER_AGENT = 'Shadow'
 
 /** Shape of a single entry in the Copilot `GET /models` response. */
 interface CopilotModelInfo {
@@ -819,11 +815,8 @@ async function inlineExternalImages(
 
 function copilotHeaders(): Record<string, string> {
   return {
-    'copilot-integration-id': 'vscode-chat',
-    'editor-version': EDITOR_VERSION,
-    'editor-plugin-version': PLUGIN_VERSION,
+    'copilot-integration-id': 'copilot-developer-app',
     'user-agent': USER_AGENT,
-    'openai-intent': 'conversation-panel',
     'x-github-api-version': API_VERSION,
   }
 }
