@@ -115,6 +115,7 @@ export class RemoteLayerFSRuntimes {
         return { ok: true, result: await managedLayerFS(project, home).setup(plan.installation, context.signal) }
       }
       case 'runtime_plan': exact(['runtimeId']); return { ok: true, result: await resources().runtimePlan(z.string().parse(input.runtimeId), context) }
+      case 'runtime_recover': exact(['runtimeId']); return { ok: true, result: await resources().runtimeRecover(z.string().parse(input.runtimeId), context) }
       case 'runtime_start': exact(['runtimeId']); return { ok: true, result: await resources().runtimeStart(z.string().parse(input.runtimeId), context) }
       case 'runtime_status': exact(['runtimeId']); return { ok: true, result: await resources().runtimeStatus(z.string().parse(input.runtimeId), context.signal) }
       case 'runtime_context': exact(['runtimeId'], ['sourceName']); return { ok: true, targetNodeId: this.nodeId, result: await resources().runtimeContext(z.string().parse(input.runtimeId), context, input.sourceName === undefined ? undefined : z.string().parse(input.sourceName), remoteLayerFSLeaseFactory(call, () => { const live = this.connection(); return { ...live, epoch: `${live.epoch}:${this.contextEpochs.get(project) ?? 0}` } })) }

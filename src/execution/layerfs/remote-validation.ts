@@ -21,7 +21,7 @@ const schemas: Partial<Record<RemoteLayerFSCall['action'], z.ZodTypeAny>> = {
   bootstrap: z.object({ plan: text, approval: reference, approved: z.literal(true), allowRootWorker: z.literal(true), allowDownloads: z.literal(true) }).strict(),
   bootstrap_cancel: z.object({ targetJobId: z.string().regex(/^layerfs-target:[a-f0-9-]{36}$/) }).strict(),
   bootstrap_reconcile: z.object({ targetJobId: z.string().regex(/^layerfs-target:[a-f0-9-]{36}$/) }).strict(),
-  runtime_plan: z.object({ runtimeId: name }).strict(), runtime_start: z.object({ runtimeId: name }).strict(), runtime_status: z.object({ runtimeId: name }).strict(),
+  runtime_plan: z.object({ runtimeId: name }).strict(), runtime_start: z.object({ runtimeId: name }).strict(), runtime_recover: z.object({ runtimeId: name }).strict(), runtime_status: z.object({ runtimeId: name }).strict(),
   runtime_context: z.object({ runtimeId: name, sourceName: name.optional() }).strict(),
   resource_register: resourceSchema, resource_inspect: z.object({ resourceId: z.string().uuid() }).strict(),
   workspace_create: z.object({ ...create, source: z.string().uuid() }).strict(), workspace_fork: z.object({ ...create, source: branch, sourceBinding: workspace }).strict(),

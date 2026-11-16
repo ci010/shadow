@@ -23,6 +23,8 @@ const runtimeSchema = z.object({ version: z.literal(1), projectId: z.string(), r
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 export interface ResourceRuntime {
+  describe?: ManagedLayerFS['describe']
+  recover?: ManagedLayerFS['recover']
   sourceIdentity: ManagedLayerFS['sourceIdentity']; setup: ManagedLayerFS['setup']; execContext: ManagedLayerFS['execContext']; status: (signal: AbortSignal) => Promise<unknown>; projectConfiguration: ManagedLayerFS['projectConfiguration']; close: ManagedLayerFS['close']
 }
 export interface ResourceDependencies {
@@ -38,6 +40,8 @@ export class LayerFSResources {
   private readonly root: string
   private readonly runtimes = new Map<string, ResourceRuntime>()
   private readonly workspaces = new Map<string, LayerFSWorkspaces>()
+  private readonly lifecycle = new Map<string, Promise<unknown>>()
+  private closed = false
   constructor(readonly projectId: string, readonly home: string, private readonly dependencies: ResourceDependencies = {}) {
     this.root = join(home, 'layerfs-catalog')
     this.catalog = new LayerFSResourceCatalog(this.root, projectId)
@@ -69,11 +73,26 @@ export class LayerFSResources {
   }
   async runtimeStart(id: string, context: ExecutionContext) {
     this.assertOwner(context)
+    return this.beginLifecycle(id, () => this.runtimeTransition(id, context, false))
+  }
+  async runtimeRecover(id: string, context: ExecutionContext) {
+    this.assertOwner(context)
+    return this.beginLifecycle(id, () => this.runtimeTransition(id, context, true))
+  }
+  private beginLifecycle<T>(id: string, run: () => Promise<T>): Promise<T> {
+    if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no runtime activation.')
+    if (this.lifecycle.has(id)) throw new ToolNoEffectError('Runtime start/recovery is already admitted; inspect status.')
+    const operation = run().finally(() => { if (this.lifecycle.get(id) === operation) this.lifecycle.delete(id) })
+    this.lifecycle.set(id, operation)
+    return operation
+  }
+  private async runtimeTransition(id: string, context: Pick<ExecutionContext, 'sessionId' | 'signal'>, recovery: boolean, admissionSignal = context.signal, trigger: 'explicit' | 'workspace' = 'explicit') {
+    if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no runtime activation.')
     await this.record(id)
     // A transient exclusive lease covers preflight as well as dispatch across service
     // instances. A crash retains it; never steal it or clear historical admissions.
     const lease = join(this.runtimeHome(id), 'start-lease.json')
-    try { await writeFile(lease, JSON.stringify({ owner: context.sessionId }), { flag: 'wx', mode: 0o600 }) }
+    try { await writeFile(lease, JSON.stringify({ owner: context.sessionId, action: recovery ? 'recover' : 'start', trigger }), { flag: 'wx', mode: 0o600 }) }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new ToolNoEffectError('Runtime start is already admitted or unresolved; inspect status, no replay.')
       throw error
@@ -81,16 +100,24 @@ export class LayerFSResources {
     try {
       const current = await this.record(id)
       if (current.phase !== 'planned' && current.phase !== 'ready') throw new ToolOutcomeUnknownError('Runtime startup is unresolved; inspect retained state, no replay.')
+      if ((recovery || trigger === 'workspace') && current.phase !== 'ready') throw new ToolNoEffectError('Recovery/lazy activation requires a previously ready runtime; initial startup cannot be replayed.')
       if (current.phase === 'ready') {
         const status = await this.runtime(id).status(context.signal)
-        if (!status || typeof status !== 'object' || !('phase' in status) || status.phase !== 'stopped') {
+        if (recovery) {
+          if (!status || typeof status !== 'object' || !('phase' in status) || status.phase !== 'running' || !('ownerAttached' in status) || status.ownerAttached !== false || !this.runtime(id).recover) {
+            throw new ToolNoEffectError('Recovery requires retained running state with no attached owner; stopped, attached or uncertain owners cannot be recovered.')
+          }
+        } else if (!status || typeof status !== 'object' || !('phase' in status) || status.phase !== 'stopped') {
           throw new ToolNoEffectError('Runtime start already consumed; only a confirmed normally stopped worker can restart. Inspect runtime_status.')
         }
       }
       context.signal.throwIfAborted()
+      admissionSignal.throwIfAborted()
+      if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no worker was dispatched.')
       writePrivateFile(this.runtimeFile(id), JSON.stringify({ ...current, phase: 'starting' }))
       try {
-        await this.runtime(id).setup(current.installation, context.signal)
+        if (recovery) await this.runtime(id).recover!(current.installation, context.signal)
+        else await this.runtime(id).setup(current.installation, context.signal)
         writePrivateFile(this.runtimeFile(id), JSON.stringify({ ...current, phase: 'ready' }))
         // Report after releasing the admission lease, so status does not mistake
         // this completed start for an outstanding/crash-retained admission.
@@ -103,6 +130,51 @@ export class LayerFSResources {
     } finally { await unlink(lease) }
     return this.runtimeStatus(id, context.signal)
   }
+  /** Host-owned QoL path, called only after a registered workspace binding has
+   * passed the normal Project/resource checks. It does not grant SDK management
+   * authority to the calling session or manufacture a direct-owner context. */
+  private async ensureWorkspaceRuntime(id: string, context: ExecutionContext) {
+    context.signal.throwIfAborted()
+    if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no workspace dispatch.')
+    const operation = this.lifecycle.get(id) ?? this.beginLifecycle(id, () => this.activateWorkspaceRuntime(id, context.sessionId, context.signal))
+    // Each caller owns only its wait and subsequent workspace operation. After
+    // admission, activation is bounded and shared; one cancelled read must not
+    // abandon a start another session is awaiting. No workspace command is replayed.
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => { context.signal.removeEventListener('abort', abort); reject(context.signal.reason) }
+      context.signal.addEventListener('abort', abort, { once: true })
+      operation.then(() => { context.signal.removeEventListener('abort', abort); resolve() }, error => { context.signal.removeEventListener('abort', abort); reject(error) })
+      if (context.signal.aborted) abort()
+    })
+    context.signal.throwIfAborted()
+    if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no workspace dispatch.')
+  }
+  private async activateWorkspaceRuntime(id: string, sessionId: string, admissionSignal: AbortSignal) {
+    // Initial installation and first startup remain explicit. Registered workspace
+    // use can only reactivate the exact previously ready runtime and approved home.
+    if ((await this.record(id)).phase !== 'ready') throw new ToolNoEffectError('Runtime startup is not settled; inspect runtime_status. No automatic startup replay.')
+    try {
+      await stat(join(this.runtimeHome(id), 'start-lease.json'))
+      throw new ToolNoEffectError('Runtime start/recovery admission is retained outside this service; inspect status, no automatic takeover.')
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    admissionSignal.throwIfAborted()
+    const signal = AbortSignal.timeout(360000)
+    const runtime = this.runtime(id)
+    // Do not probe aggregate health on every workspace call: another project's
+    // Init may make health temporarily not_checked while this binding is usable.
+    // An attached helper is never replaced based on a missed health observation.
+    const state = runtime.describe ? await runtime.describe() : await runtime.status(signal)
+    if (!state || typeof state !== 'object') throw new ToolNoEffectError('Runtime attachment evidence is unavailable; inspect runtime_status.')
+    if ('phase' in state && state.phase === 'running' && 'ownerAttached' in state && state.ownerAttached === true) return
+    // Dependency adapters without managed-state evidence may reuse proven health,
+    // but cannot infer an absent owner or a clean stop from ready:false.
+    if (!('phase' in state) && 'ready' in state && state.ready === true) return
+    const stopped = 'phase' in state && state.phase === 'stopped'
+    const recoverable = 'phase' in state && state.phase === 'running' && 'ownerAttached' in state && state.ownerAttached === false
+    if (!stopped && !recoverable) throw new ToolNoEffectError('Runtime ownership/startup is unresolved; inspect runtime_status. No automatic recovery or resource repair.')
+    const result = await this.runtimeTransition(id, { sessionId, signal }, recoverable, admissionSignal, 'workspace')
+    if (!result.ready) throw new ToolOutcomeUnknownError('Runtime activation returned without confirmed worker/Docker readiness; no workspace operation was dispatched. Inspect runtime_status; do not replay uncertain operations.')
+  }
   async runtimeStatus(id: string, signal: AbortSignal) {
     const value = await this.record(id)
     const result = await this.runtime(id).status(signal)
@@ -112,9 +184,10 @@ export class LayerFSResources {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     const ready = !admissionRetained && value.phase === 'ready' && live.ready === true && live.worker === 'running' && live.answering === true && live.docker === 'ok'
     const phase = admissionRetained ? (value.phase === 'starting' ? 'starting' : 'unknown') : ready ? 'ready' : value.phase === 'ready' ? (live.phase === 'stopped' ? 'stopped' : 'unknown') : value.phase
-    return { runtimeId: id, recordPhase: value.phase, phase, ready, owner: value.owner,
-      next: phase === 'planned' || phase === 'stopped' ? 'layerfs_runtime_start' : ready ? 'layerfs_runtime_context' : 'inspect_retained_state',
-      message: phase === 'stopped' ? 'Worker stopped normally. Any direct authorized session in this Project may explicitly start this same runtime; no implicit restart.' : undefined,
+    const recoveryCandidate = !admissionRetained && value.phase === 'ready' && live.phase === 'running' && live.ownerAttached === false
+    return { runtimeId: id, recordPhase: value.phase, phase, ready, owner: value.owner, recoveryCandidate,
+      next: phase === 'planned' || phase === 'stopped' ? 'layerfs_runtime_start' : ready ? 'layerfs_runtime_context' : recoveryCandidate ? 'layerfs_runtime_recover' : 'inspect_retained_state',
+      message: phase === 'stopped' ? 'Worker stopped normally. Registered workspace use can lazily activate this same runtime; a direct authorized session may also use runtime_start. Status itself never starts it.' : undefined,
       result }
   }
   async runtimeContext(id: string, context: ExecutionContext, sourceName?: string, leaseFactory?: LayerFSContextLeaseFactory) {
@@ -191,8 +264,13 @@ export class LayerFSResources {
     if (['mkdir', 'rm', 'cp', 'mv', 'apply'].includes(action) && binding?.branch === 'main') throw new ToolNoEffectError('main is readonly.')
     const value = this.ready(String(binding?.resourceId ?? args.resourceId))
     if (binding && (binding.version !== 3 || binding.ownerProject !== this.projectId || binding.runtimeId !== value.runtimeId || binding.project !== value.layerfsProject)) throw new ToolNoEffectError('Workspace immutable catalog binding mismatch.')
+    if (binding && ['read', 'write', 'search', 'exec'].includes(action)) await this.ensureWorkspaceRuntime(value.runtimeId, context)
     if ((await this.record(value.runtimeId)).phase !== 'ready') throw new ToolNoEffectError('Runtime catalog is not ready.')
     const config = await this.runtime(value.runtimeId).projectConfiguration(value.layerfsProject, value.image!, context.signal)
+    // Configuration may have been in flight when shutdown/cancellation began.
+    // Check at the dispatch boundary, with no await before starting the bridge.
+    context.signal.throwIfAborted()
+    if (this.closed) throw new ToolNoEffectError('LayerFS Project is shutting down; no workspace dispatch.')
     const output = await (this.dependencies.bridge ?? runBridge)(config, value.layerfsProject, action, { ...args, journal: this.journal(value), binding: { ownerProject: this.projectId, runtimeId: value.runtimeId, resourceId: value.revision } }, context.signal, undefined, lifecycle)
     if (action === 'branch_workspace') {
       const receipt = JSON.parse(output)
@@ -219,6 +297,10 @@ export class LayerFSResources {
     return service.create({ ...args, source: binding?.branch ?? value.baselineRef }, context, sourceBinding)
   }
   async close() {
+    this.closed = true
+    // Drain bounded admitted activation before closing its helper; callers cannot
+    // dispatch a workspace command once shutdown has begun.
+    await Promise.allSettled([...this.lifecycle.values()])
     const results = await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.close()))
     const failures = results.filter(result => result.status === 'rejected')
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime shutdown retained unresolved resources.')

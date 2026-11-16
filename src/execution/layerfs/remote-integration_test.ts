@@ -35,11 +35,13 @@ test('typed remote production adapters route lifecycle, resource, workspace, ord
   const tools: any = { executionMode: 'session' }; tools.dynamicOwner = tools
   const context = { projectId, sessionId: 'web:owner', channel: 'web', senderId: 'human-owner', admin: true, isGroup: false, tools, signal: AbortSignal.timeout(30000), remoteWorkdir: { nodeId: target.nodeId, workdirId: 'registered-native', executor: {} } } as ExecutionContext
   const state = { projectId, sessionId: context.sessionId, mode: 'session' } as SessionState
+  let phase = 'stopped', ownerAttached = false, starts = 0, recoveries = 0
+  const ready = { ready: true, worker: 'running', answering: true, docker: 'ok', sandboxVerified: false } as const
   let resources: LayerFSResources | undefined
   const runtimes = new RemoteLayerFSRuntimes(join(dir, 'target'), target.nodeId, () => ({ online, epoch, pairingId: target.pairingId }), { platform: 'win32', resources: (project, home) => resources = new LayerFSResources(project, home, {
     installation: async () => ({ apiRoot: dir, bundle: '/fixture', node: '/bin/node', distribution: 'Fixture', image }),
-    runtime: () => ({ setup: async () => ({ ready: true }), status: async () => ({ ready: true, worker: 'running', answering: true, docker: 'ok' }), close: async () => {},
-      sourceIdentity: async () => { throw Error('unused source probe') }, execContext: async () => { throw Error('unused launcher') }, projectConfiguration: async () => ({ sdkModule: '/fixture/agent.mjs', env: {} }) as any }),
+    runtime: () => ({ setup: async () => { starts++; phase = 'running'; ownerAttached = true; return ready }, recover: async () => { recoveries++; ownerAttached = true; return ready }, describe: async () => ({ configured: true, mode: 'managed', platform: 'win32', runtime: 'not_checked', project: scope, phase, ownerAttached, next: 'layerfs_runtime_status', message: 'fixture' }), status: async () => ({ ...ready, ready: ownerAttached, phase, ownerAttached }), close: async () => {},
+      sourceIdentity: async () => { throw Error('unused source probe') }, execContext: async () => { throw Error('unused launcher') }, projectConfiguration: async () => { if (!ownerAttached) throw Error('runtime not attached'); return { sdkModule: '/fixture/agent.mjs', env: {} } as any } }),
     bridge: async (_config, officialProject, action, input, _signal, _timeout, lifecycle) => {
       const args = input as any
       const branch = args.workspace ? JSON.parse(Buffer.from(args.workspace.slice(8), 'base64url').toString()).branch : args.branch
@@ -94,6 +96,17 @@ test('typed remote production adapters route lifecycle, resource, workspace, ord
     const secondFolder = folders.find(f => f.id === second.workspaceId) as LayerFSFolderRecord
     assert.equal(branches.get('second'), 'baseline\n')
     const vfs = createLayerFSHandler({ projectId, folders: () => folders, existing: () => { throw Error('Main service must not be used') }, remote: async (f, action, args, ctx) => toolResultText((await gateway.tryCall(action, { ...args, workspace: f.mount }, ctx))!) })
+    phase = 'stopped'; ownerAttached = false
+    await assert.rejects(async () => vfs.read(`${folder.id}/history/0`, context), /runtime not attached/)
+    assert.equal(starts, 1, 'VFS must not lazily start a stopped remote runtime')
+    await layerfsRoute('read', { path: 'README.md' }, selected, dir)
+    assert.equal(starts, 2, 'registered remote ordinary operation lazily starts runtime')
+    phase = 'running'; ownerAttached = false
+    assert.equal((await invoke('runtime_recover', { runtimeId: 'fixture' })).result.ready, true)
+    assert.equal(recoveries, 1, 'explicit recovery traverses typed owner-authorized remote route')
+    ownerAttached = false
+    await layerfsRoute('read', { path: 'README.md' }, selected, dir)
+    assert.equal(recoveries, 2, 'ordinary remote workspace use shares lazy recovery without owner authority')
     const history = await vfs.read(`${folder.id}/history/0`, context)
     assert.match(String(history), /aa/)
     online = false; epoch++
