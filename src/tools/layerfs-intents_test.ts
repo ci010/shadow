@@ -24,6 +24,7 @@ test('discovery combines installation-only factory and flat explicit template in
   }
   const find = (name: string) => tools.find(t => t.name === `layerfs_${name}`)!
   assert.deepEqual(find('runtime_start').parameters.required, ['runtimeId'])
+  assert.deepEqual(find('runtime_recover').parameters.required, ['runtimeId'])
   for (const contract of layerfsResourceContracts()) assert.ok(!('namespace' in contract.parameters.properties))
   assert.ok(!('allowDownloads' in find('setup').parameters.properties))
   assert.ok(!('installation' in find('bootstrap').parameters.properties))
@@ -69,4 +70,15 @@ test('LayerFS invocation allows maintenance discovery but refuses unmarked host 
   assert.equal(initialized, 0)
   assert.equal(await tool.execute({ source: 'layerfs', args: {} }, context), 'contracts')
   assert.equal(initialized, 1)
+})
+
+
+test('runtime recovery tool routes only explicit runtime identity and refuses replay/borrowed script paths', async () => {
+  const calls: unknown[] = []
+  const tool = createLayerFSResourceTools({ projectId, runtimeRecover: async (id: string, ctx: ExecutionContext) => { calls.push([id, ctx]); return { ready: false } } } as unknown as LayerFSResources).find(t => t.name === 'layerfs_runtime_recover')!
+  for (const input of [{}, { runtimeId: 'test', home: 'replacement' }, { runtimeId: 'test', force: true }]) await assert.rejects(tool.execute(input, context), /Missing|Unexpected/)
+  for (const patch of [{ projectId: 'other' }, { remoteWorkdir: {} }, { scriptInvocation: true }, { recoveringToolCall: true }]) await assert.rejects(tool.execute({ runtimeId: 'test' }, { ...context, ...patch } as ExecutionContext), /Direct current-Project/)
+  assert.equal(calls.length, 0)
+  assert.equal(await tool.execute({ runtimeId: 'test' }, context), JSON.stringify({ ok: true, result: { ready: false } }))
+  assert.deepEqual(calls, [['test', context]])
 })
