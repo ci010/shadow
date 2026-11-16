@@ -1,11 +1,10 @@
 import { httpFailure } from './http-failure.ts'
 import { estimateUsageCost } from './cost.ts'
-import { dirname, join } from 'node:path'
-import { chmodSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { env } from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 // Credential persistence must not load config/store: its provider factory imports Copilot V2.
-import { writePrivateFile } from '../utils/private-file.ts'
+import { createCopilotAuthStorage } from './copilot-auth-storage.ts'
 import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { openaiChat } from './openai-compatible.ts'
@@ -126,7 +125,7 @@ const AUTH_MESSAGES: Record<CopilotAuthFailure, string> = {
   network: 'GitHub could not be reached. Check your connection and try again.',
   proxy: 'The system proxy could not connect to GitHub. Check the proxy or PAC service, then retry. Signing in again will not fix this connection problem.',
   invalid: 'GitHub returned an invalid authentication response. Try again.',
-  storage: 'Credentials could not be saved. Check access to the application data directory.',
+  storage: 'Protected credentials could not be read, saved, or removed. Check the OS user credential store and application data directory; legacy plaintext cleanup may be incomplete.',
 }
 
 export type CopilotAuthStage = 'oauth_device' | 'oauth_token' | 'copilot_token' | 'copilot_access'
@@ -233,24 +232,11 @@ export abstract class CopilotAuthenticator {
     this.request = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.wait = options.wait ?? ((ms, signal) => delay(ms, undefined, { signal }))
-    this.storage = options.storage ?? {
-      read: (name) => {
-        try { return readFileSync(name, 'utf8') } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-          throw new CopilotAuthError('storage')
-        }
-      },
-      write: (name, value) => {
-        try {
-          mkdirSync(dirname(name), { recursive: true, mode: 0o700 })
-          chmodSync(this.tokenDir, 0o700)
-          chmodSync(dirname(name), 0o700)
-          writePrivateFile(name, value)
-        } catch { throw new CopilotAuthError('storage') }
-      },
-      remove: (name) => {
-        try { rmSync(name, { force: true }) } catch { throw new CopilotAuthError('storage') }
-      },
+    const protectedStorage = options.storage ?? createCopilotAuthStorage(this.tokenDir)
+    this.storage = {
+      read: name => { try { return protectedStorage.read(name) } catch { throw new CopilotAuthError('storage') } },
+      write: (name, value) => { try { protectedStorage.write(name, value) } catch { throw new CopilotAuthError('storage') } },
+      remove: name => { try { protectedStorage.remove(name) } catch { throw new CopilotAuthError('storage') } },
     }
     this.activeHostFile = join(this.tokenDir, 'active-host')
     this.activeHost = authHost(this.storage.read(this.activeHostFile))

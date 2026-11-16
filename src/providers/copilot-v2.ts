@@ -12,8 +12,8 @@ export interface CopilotCredentialLease {
 }
 /**
  * Direct App OAuth credential broker. Legacy credentials require explicit sign-in.
- * Existing files are preserved until a successful replacement sign-in. This is private
- * file-backed storage, NOT an OS keychain implementation.
+ * Legacy files are migrated on access to authenticated encryption protected by an
+ * OS-user master key. Unavailable secure storage fails closed; no plaintext fallback.
  */
 export class CopilotAuthenticatorV2 extends CopilotAuthenticator {
   private readonly children = new Map<string, CopilotAuthenticatorV2>()

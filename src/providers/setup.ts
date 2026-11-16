@@ -209,16 +209,23 @@ export class ProviderSetup {
         continue
       }
       const auth = isCopilotProviderType(type) ? copilotAuthForInstance(config, provider, this.rootAuth) : undefined
-      const cachedCopilot = auth && (auth.hasAccessToken() || auth.hasValidApiKey())
+      let cachedCopilot = false
+      let credentialStorageError = false
+      try { cachedCopilot = !!auth && (auth.hasAccessToken() || auth.hasValidApiKey()) }
+      catch (error) {
+        if (!(error instanceof CopilotAuthError) || error.code !== 'storage') throw error
+        credentialStorageError = true
+      }
       const settings = resolveProviderSettings(config, provider)
       const explicit = entry && (entry.type || type === 'deepseek-account' || isCopilotProviderType(type) || entry.apiKey?.trim() ||
         entry.baseUrl?.trim() || entry.quickModel?.trim() ||
         Object.keys(entry.modelContextWindows ?? {}).length > 0)
-      if (!explicit && !settings.apiKey.trim() && !(isCopilotProviderType(type) && cachedCopilot)) continue
+      if (!explicit && !settings.apiKey.trim() && !(isCopilotProviderType(type) && (cachedCopilot || credentialStorageError))) continue
       const baseUrl = safeBaseUrl(settings.baseUrl)
       providers.push({
         provider, ...(entry?.type ? { type } : {}), ...(entry?.name ? { name: entry.name } : {}),
         authMode: settings.authMode,
+        ...(credentialStorageError ? { reason: 'storage_error' } : {}),
         ...(isCopilotProviderType(type) ? { host: auth!.getHost() } : {}),
         hasApiKey: !!settings.apiKey,
         selected: provider === selected,

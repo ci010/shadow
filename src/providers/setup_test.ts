@@ -10,7 +10,7 @@ import { AppProviderConfigStore } from '../projects/config-store.ts'
 import { ConfigStore } from '../config/store.ts'
 import { configPlugin } from '../config/routes.ts'
 import { CopilotAuthenticatorV2 } from './copilot-v2.ts'
-import { COPILOT_VERIFICATION_URI } from './copilot.ts'
+import { COPILOT_VERIFICATION_URI, CopilotAuthError } from './copilot.ts'
 import { ProviderSetup } from './setup.ts'
 import { providerPlugin } from './routes.ts'
 import { createProvider, resolveProviderSettings } from './factory.ts'
@@ -912,4 +912,16 @@ test('normalized custom endpoint type saves and edits while preserving display n
     method: 'POST', body: JSON.stringify({ provider: 'another-account', type: 'Nvidia', name: 'Nvidia', model: 'test-model', baseUrl: 'http://localhost:1234/v1' }),
   })
   assert.equal(invalid.status, 400)
+})
+
+
+test('locked Copilot secure storage does not hide unrelated configured providers', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@openai' }, providers: { openai: { apiKey: 'synthetic-openai-key' }, copilot: { type: 'copilot' } } })
+  t.mock.method(f.auth.auth, 'hasAccessToken', () => { throw new CopilotAuthError('storage') })
+  const response = await f.app.request('/api/provider/configured')
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.ok(body.providers.some((p: { provider: string }) => p.provider === 'openai'))
+  assert.equal(body.providers.find((p: { provider: string }) => p.provider === 'copilot').reason, 'storage_error')
+  assert.doesNotMatch(JSON.stringify(body), /synthetic-openai-key/)
 })
