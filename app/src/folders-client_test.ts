@@ -39,6 +39,46 @@ test('remote folder parsing retains opaque ownership and display metadata withou
   assert.throws(() => parseCloneOperation({ ...running, state: 'succeeded', folder: remote }, running.id), /invalid folder response/)
 })
 
+test('LayerFS folders retain their non-host mount reference and reject mismatched resource identities', () => {
+  const layerfs = {
+    ...folder, kind: 'layerfs', projectId: 'default', path: 'layerfs-branch:fixture',
+    mount: 'layerfs:opaque-reference',
+    workdir: { version: 2, nodeId: 'layerfs', workdirId: 'layerfs:opaque-reference' },
+  }
+  assert.deepEqual(parseFolder(layerfs), layerfs)
+  assert.deepEqual(parseFolder({ ...layerfs, path: '/workspaces/42' }), { ...layerfs, path: '/workspaces/42' })
+  for (const invalid of [
+    { ...layerfs, mount: undefined }, { ...layerfs, mount: 'C:\\fixtures\\mount' },
+    { ...layerfs, mount: 'layerfs:' + 'x'.repeat(1024) },
+    { ...layerfs, workdir: undefined },
+    { ...layerfs, workdir: { ...layerfs.workdir, nodeId: 'local' } },
+    { ...layerfs, workdir: { ...layerfs.workdir, workdirId: 'different-mount' } },
+    { ...layerfs, workdir: { ...layerfs.workdir, capabilityId: 'legacy' } },
+    { ...layerfs, identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] } },
+    { ...layerfs, kind: 'local' }, { ...layerfs, kind: undefined, workdir: undefined },
+    { ...layerfs, kind: 'remote', identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] } },
+  ]) assert.throws(() => parseFolder(invalid), /invalid folder response/)
+  assert.throws(() => parseCloneOperation({ ...running, state: 'succeeded', folder: layerfs }, running.id), /invalid folder response/)
+})
+
+test('folder client accepts mixed local, remote and LayerFS folder lists', async () => {
+  const folders = [
+    folder,
+    {
+      ...folder, id: 'remote-folder', kind: 'remote', path: '/display/only',
+      workdir: { version: 2, nodeId: 'child', workdirId: 'remote-workdir' },
+      identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
+    },
+    {
+      ...folder, id: 'layerfs-folder', kind: 'layerfs', path: 'layerfs-branch:fixture',
+      mount: 'layerfs:opaque-reference',
+      workdir: { version: 2, nodeId: 'layerfs', workdirId: 'layerfs:opaque-reference' },
+    },
+  ]
+  const client = createFoldersClient('http://fixture/projects/default/', async () => response({ folders }))
+  assert.deepEqual(await client.list(), folders)
+})
+
 test('client uses real folder sessions and a caller-created clone ID, with no arbitrary workdir or session ID', async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = []
   const client = createFoldersClient('http://main.invalid', async (path, init) => {
