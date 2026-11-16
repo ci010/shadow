@@ -47,7 +47,10 @@ key or explicitly configured keyless endpoint; no other instance's key is borrow
 
 Each instance has its own login attempts, credential refreshes, sign-out revision,
 active GitHub host, persisted tokens, and model cache. The legacy `copilot` instance
-retains the existing token-directory and filename environment behavior. Additional
+retains the token-directory environment setting. Credential filename overrides must
+be distinct safe basenames (letters/digits, `_`, `-`, and internal dots): paths,
+reserved metadata/Windows device names and `.protected` suffixes fail closed.
+Nonstandard accepted filenames are encrypted exactly like the defaults. Additional
 instances use `instances/<instanceId>/` below that token directory, with fixed token
 and cache filenames; filename environment overrides do not redirect these accounts
 to legacy files. Enterprise host subdirectories remain within each instance.

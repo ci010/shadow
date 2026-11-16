@@ -112,3 +112,15 @@ test('migration readback verification failure preserves original and refuses pla
   assert.equal(existsSync(`${name}.protected`), true)
   assert.throws(() => storage.read(name))
 })
+
+
+test('encryption is independent of extension or conventional credential names', t => {
+  const f = fixture(t)
+  for (const filename of ['custom-oauth', 'unusual.profile', 'models-metadata-v2']) {
+    const name = join(f.root, filename)
+    f.storage.write(name, 'synthetic-sensitive-value')
+    assert.equal(existsSync(name), false)
+    assert.equal(f.storage.read(name), 'synthetic-sensitive-value')
+    assert.equal(readFileSync(`${name}.protected`, 'utf8').includes('synthetic-sensitive-value'), false)
+  }
+})
