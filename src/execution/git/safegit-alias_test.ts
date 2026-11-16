@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { delimiter, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { availableExecShells } from '../processes/shells.ts'
 import { localExecSafegitAliasEnv } from './safegit-alias.ts'
 import { requestedSafegitBinary, SAFEGIT_VERSION } from './safegit.ts'
@@ -14,6 +14,25 @@ function runAlias(env: NodeJS.ProcessEnv) {
     ? exec('cmd.exe', ['/d', '/c', 'safegit --version'], { env: { ...process.env, ...env } })
     : exec('/bin/sh', ['-c', 'safegit --version'], { env: { ...process.env, ...env } })
 }
+
+test('native command uses its existing directory across sessions without creating copies', async t => {
+  const source = requestedSafegitBinary(import.meta.url, '')
+  try { await readFile(source) } catch { t.skip('native archive not prepared'); return }
+  const root = await mkdtemp(resolve('.tmp/safegit-direct-'))
+  try {
+    const hostPath = process.env.PATH ?? ''
+    const input = { SHADOW_SAFEGIT_PATH: source, PATH: hostPath }
+    for (const session of ['session-a', 'session-b']) {
+      const sessionDir = join(root, session)
+      const env = await localExecSafegitAliasEnv(input, sessionDir, {})
+      assert.equal(env.SHADOW_SAFEGIT_ERROR, undefined)
+      assert.equal(env.PATH, `${dirname(source)}${delimiter}${hostPath}`)
+      assert((await runAlias(env)).stdout.includes(SAFEGIT_VERSION))
+      await assert.rejects(stat(sessionDir), { code: 'ENOENT' })
+    }
+    assert.equal(process.env.PATH ?? '', hostPath)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
 
 test('native alias handles spaces, arbitrary override filename, reuse and changed binary', async t => {
   const source = requestedSafegitBinary(import.meta.url, '')

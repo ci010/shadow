@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { SafegitRunner } from './safegit.ts'
 
 const verified = new Set<string>()
@@ -14,22 +14,33 @@ export async function localExecSafegitAliasEnv(
   try {
     const binary = env.SHADOW_SAFEGIT_PATH
     if (!binary || !isAbsolute(binary)) throw new Error('Pinned safegit is missing or SHADOW_SAFEGIT_PATH is not absolute')
-    const bytes = await readFile(binary)
-    const digest = createHash('sha256').update(bytes).digest('hex')
-    directory = join(sessionDataDir, 'cli', 'safegit', digest)
-    const alias = join(directory, process.platform === 'win32' ? 'safegit.exe' : 'safegit')
-    await mkdir(directory, { recursive: true })
-    // Content-addressed copies support arbitrary override names and filesystems
-    // without symlink privileges. Unchanged binaries are never copied again.
-    try { await writeFile(alias, bytes, { flag: 'wx', mode: 0o755 }) } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
-      if (!bytes.equals(await readFile(alias))) throw new Error('Corrupt safegit alias cache')
-    }
-    await chmod(alias, 0o755)
-    if (!verified.has(alias)) {
-      const status = await new SafegitRunner(() => alias).status()
+    const name = process.platform === 'win32' ? 'safegit.exe' : 'safegit'
+    const nativeName = process.platform === 'win32'
+      ? basename(binary).toLowerCase() === name : basename(binary) === name
+    if (nativeName) {
+      // The bundled executable already has the command's native name. Expose
+      // its existing directory only to this child; do not materialize a copy.
+      const status = await new SafegitRunner(() => binary).status()
       if (!status.supported) throw new Error(status.reason)
-      verified.add(alias)
+      directory = dirname(binary)
+    } else {
+      const bytes = await readFile(binary)
+      const digest = createHash('sha256').update(bytes).digest('hex')
+      directory = join(sessionDataDir, 'cli', 'safegit', digest)
+      const alias = join(directory, process.platform === 'win32' ? 'safegit.exe' : 'safegit')
+      await mkdir(directory, { recursive: true })
+      // Content-addressed copies support arbitrary override names and filesystems
+      // without symlink privileges. Unchanged binaries are never copied again.
+      try { await writeFile(alias, bytes, { flag: 'wx', mode: 0o755 }) } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+        if (!bytes.equals(await readFile(alias))) throw new Error('Corrupt safegit alias cache')
+      }
+      await chmod(alias, 0o755)
+      if (!verified.has(alias)) {
+        const status = await new SafegitRunner(() => alias).status()
+        if (!status.supported) throw new Error(status.reason)
+        verified.add(alias)
+      }
     }
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error)
