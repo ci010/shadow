@@ -585,7 +585,7 @@ export class QQChannel extends AbstractChannel {
       const index = typeof part.index === 'string' && /^\d+$/.test(part.index)
         ? Number(part.index) : part.index
       if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0
-        || index >= prepared.parts!.length || indices.has(index)
+        || index > prepared.parts!.length || indices.has(index)
         || typeof part.presigned_url !== 'string' || !part.presigned_url) {
         // Wire shape only: never expose signed upload URLs or response bodies.
         console.warn('[qq] Invalid upload part metadata', {
@@ -595,7 +595,7 @@ export class QQChannel extends AbstractChannel {
           index: typeof index === 'number' && Number.isSafeInteger(index) ? index : null,
           blockSize,
           indexType: typeof part.index, validInteger: typeof index === 'number' && Number.isSafeInteger(index),
-          inRange: typeof index === 'number' && index >= 0 && index < prepared.parts!.length,
+          inRange: typeof index === 'number' && index >= 0 && index <= prepared.parts!.length,
           duplicate: typeof index === 'number' && indices.has(index),
           hasUploadUrl: typeof part.presigned_url === 'string' && !!part.presigned_url,
           parts: prepared.parts!.length,
@@ -606,11 +606,20 @@ export class QQChannel extends AbstractChannel {
       return { index, presigned_url: part.presigned_url }
     })
 
+    // The official prepare example uses 0..N-1, but the live C2C API
+    // returned index 2 for a two-part file (2026-11-16). Accept only a
+    // complete contiguous set in either convention, never an arbitrary
+    // in-range subset. Preserve the server's index for finish; only byte
+    // offsets are normalized. Response ordering does not define offsets.
+    const indexBase = indices.has(0) ? 0 : 1
+    if (!parts.every(part => part.index >= indexBase
+      && part.index < indexBase + parts.length)) {
+      throw new Error('Media upload preparation response has an invalid part sequence')
+    }
+
     for (const part of parts) {
-      const bytes = data.subarray(
-        part.index * blockSize,
-        (part.index + 1) * blockSize,
-      )
+      const offset = (part.index - indexBase) * blockSize
+      const bytes = data.subarray(offset, offset + blockSize)
       const uploadBytes = new Uint8Array(new ArrayBuffer(bytes.byteLength))
       uploadBytes.set(bytes)
       const putRes = await this.request(part.presigned_url, {
