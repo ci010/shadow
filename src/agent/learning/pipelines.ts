@@ -1,3 +1,4 @@
+import { MaintenanceFenceError, MaintenanceGate } from './maintenance-gate.ts'
 import { correctionRequest, type CorrectionRequest } from './recovery.ts'
 import { formatSessionHistory, sessionHistoryLineAt } from '../../sessions/history-view.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
@@ -122,6 +123,11 @@ export class LearningRuntime {
   }
 
   async recover(): Promise<void> {
+    try { await new MaintenanceGate(this.sessions.workspace).write([], () => this.recoverAdmitted()) }
+    catch (error) { if (!(error instanceof MaintenanceFenceError)) throw error }
+  }
+
+  private async recoverAdmitted(): Promise<void> {
     for (const batch of this.ledger.unfinished()) {
       if (this.excludeIneligible(batch)) continue
       if (batch.state !== 'running') continue
@@ -328,6 +334,11 @@ export class LearningRuntime {
 
   async run(pipeline: Pipeline, signal: AbortSignal, job = learningJob(pipeline),
     accepted?: (sessionId: string) => void, dispatcher = new CronDispatcher(this.sessions, async () => {}), manual = false): Promise<string | false> {
+    return new MaintenanceGate(this.sessions.workspace).write([], () => this.runAdmitted(pipeline, signal, job, accepted, dispatcher, manual))
+  }
+
+  private async runAdmitted(pipeline: Pipeline, signal: AbortSignal, job: ReturnType<typeof learningJob>,
+    accepted: ((sessionId: string) => void) | undefined, dispatcher: CronDispatcher, manual: boolean): Promise<string | false> {
     if (this.running.has(pipeline)) throw new Error('Learning pipeline is already running')
     this.running.add(pipeline)
     let batch: LearningBatch | undefined

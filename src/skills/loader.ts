@@ -1,3 +1,7 @@
+import { readSafe } from '../knowledge/service.ts'
+import { parseSkillFile } from './parse.ts'
+import { getArch, getOs } from '../utils/runtime.ts'
+import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -88,10 +92,13 @@ export class SkillsManager {
   private generation = 0
   private categories = new Map<string, CategoryInfo>()
   private workspaceDir: string
+  private readonly maintenance: MaintenanceGate
+  private visibility = ''
   private watcher: SkillsWatcher
   private readonly disclosure = new SkillDisclosure()
 
   constructor(workspace: string) {
+    this.maintenance = new MaintenanceGate(workspace)
     this.workspaceDir = workspacePath(workspace, 'skills')
     this.watcher = new SkillsWatcher(this)
   }
@@ -129,9 +136,42 @@ export class SkillsManager {
   }
 
   /** Lets asynchronous scans discard reads that raced a direct save or deletion. */
-  get mutationGeneration(): number { return this.generation }
+  get mutationGeneration(): number { this.synchronizeMaintenance(); return this.generation }
+
+  private synchronizeMaintenance(): void {
+    const visibility = this.maintenance.visibilityRevision()
+    if (visibility === this.visibility) return
+    const paths = new Set(this.maintenance.status().operation?.paths ?? [])
+    const refreshed = new Map(this.skills)
+    for (const path of paths) {
+      const match = /^skills\/([^/]+)\/SKILL\.md$/.exec(path)
+      if (!match || this.maintenance.isHidden(path)) continue
+      const name = match[1]!, directory = join(this.workspaceDir, name)
+      // A watcher can have dropped this path while it was fenced. Rebuild from
+      // the durable operation scope, not only from entries still in the map.
+      const parsed = parseSkillFile(readSafe(join(directory, 'SKILL.md')).content, name)
+      for (const [oldName, skill] of refreshed) if (this.documentPath(skill) === path) refreshed.delete(oldName)
+      if ((!parsed.meta.platform?.length || parsed.meta.platform.includes(getOs())) &&
+        (!parsed.meta.arch?.length || parsed.meta.arch.includes(getArch()))) {
+        refreshed.set(parsed.meta.name, { ...parsed, dirPath: directory, isLearned: !!parsed.learnedMeta })
+      }
+    }
+    this.maintenance.assertView(visibility)
+    this.skills = refreshed
+    this.visibility = visibility
+    this.generation++
+  }
+
+  private documentPath(skill: Skill): string {
+    const within = relative(this.workspaceDir, resolve(skill.dirPath)).split('\\').join('/')
+    // Folder-scoped/disclosed metadata may be supplied outside this root. Its
+    // own manager owns that resource; do not reinterpret a foreign display path.
+    return within && within !== '..' && !within.startsWith('../') && !isAbsolute(within)
+      ? `skills/${within}/SKILL.md` : `skills/${skill.meta.name}/SKILL.md`
+  }
 
   private acceptSkill(skill: Skill): boolean {
+    if (this.maintenance.isHidden(this.documentPath(skill))) return false
     const directory = resolve(skill.dirPath)
     if (!this.removedDirectories.has(directory)) return true
     // A watcher read started before deletion must not resurrect its stale body.
@@ -179,7 +219,11 @@ export class SkillsManager {
    * same name.
    */
   private resolveSkill(name: string): Skill | undefined {
-    return this.skills.get(name) ?? this.builtins.get(name)
+    this.synchronizeMaintenance()
+    if (this.maintenance.isHidden(`skills/${name}/SKILL.md`)) return undefined
+    const skill = this.skills.get(name)
+    if (skill && this.maintenance.isHidden(this.documentPath(skill))) return undefined
+    return skill ?? this.builtins.get(name)
   }
 
   /**
@@ -187,9 +231,13 @@ export class SkillsManager {
    * the same name.
    */
   private allSkills(): Skill[] {
+    this.synchronizeMaintenance()
     const merged = new Map<string, Skill>()
-    for (const [k, v] of this.builtins) merged.set(k, v)
-    for (const [k, v] of this.skills) merged.set(k, v)
+    for (const [k, v] of this.builtins) if (!this.maintenance.isHidden(`skills/${k}/SKILL.md`)) merged.set(k, v)
+    for (const [k, v] of this.skills) {
+      if (this.maintenance.isHidden(this.documentPath(v))) merged.delete(k)
+      else merged.set(k, v)
+    }
     return [...merged.values()]
   }
 
@@ -252,7 +300,7 @@ export class SkillsManager {
 
   /** All discovered skill names (workspace + builtin, deduped). */
   skillNames(): string[] {
-    return [...new Set([...this.builtins.keys(), ...this.skills.keys()])]
+    return this.allSkills().map(skill => skill.meta.name)
   }
 
   /**
@@ -325,10 +373,12 @@ export class SkillsManager {
    */
   async saveLearnedSkill(skillName: string, content: string): Promise<void> {
     const skillDir = this.getLearnedSkillPath(skillName)
-    await mkdir(skillDir, { recursive: true })
-    const skillFile = join(skillDir, 'SKILL.md')
-    await writeFile(skillFile, content)
-    console.info(`[skills-loader] Saved learned skill: ${skillName}`)
+    await this.maintenance.write([this.maintenance.path(join(skillDir, 'SKILL.md'))], async () => {
+      await mkdir(skillDir, { recursive: true })
+      const skillFile = join(skillDir, 'SKILL.md')
+      await writeFile(skillFile, content)
+      console.info(`[skills-loader] Saved learned skill: ${skillName}`)
+    })
   }
 
   /**

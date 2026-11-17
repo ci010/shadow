@@ -180,9 +180,13 @@ Dreams API 生成独立输出 store；cookbook 夜间示例则原地更新。不
 - 关键词入口可读取有界的 authored description / 标题；无 Work / working-set 信号时不自动注入其他会话日志。
 - 保留原有来源游标、重试语义、六轮预算和物理范围，未改为完整语义阶段综合。
 
-尚未交付：跨分片语义进度与最终整合、独立语义 organizer、结构化复用收益归因，以及已选定的旧知识归档/种子切换。尤其归档还缺少统一学习 epoch、所有消费入口的可见性隔离和可恢复维护操作；不得先删文件再补状态。
+尚未验收交付：跨分片语义进度与最终整合、独立语义 organizer、结构化复用收益归因，以及真实旧知识归档/种子切换的部署与人类确认执行。现有[受保护 owner 文档维护入口](learning-maintenance-owner-entry.md)已在代码中连接 durable local owner、现有 ownerOnly 人类 Ask UI、完整计划内容/保护分类与独立执行确认；代码及合成验证不等于部署、真人批准或真实归档。epoch/history 边界仍须另行审批，不得先删文件再补状态。
 
-另有未接入运行时的 [维护基础协议](learning-maintenance-foundation.md)：提供纯 manifest/epoch 契约、全物理段 cutoff 捕获、不可变证据快照与可恢复 prepare 收据。它不改变活跃集合或学习状态，所有 apply 均明确 unsupported；真实归档仍须完成统一栅栏、epoch 与各消费入口隔离。基础测试不代表真实归档已执行或收益已验证。
+另有 [维护基础协议、审核内容 preview 与文档安全链](learning-maintenance-foundation.md)：已有 JSONL/SQLite 全物理段只读历史适配及受 Project 授权的状态、观察、preview、显式历史快照读取。自动 artifact 仍不证明独占所有权，因此自动候选继续为空；另以明确的用户审核内容选择语义承载未知来源，分别绑定 native source、完整 snapshot 和原文 digest，不伪造自动 provenance。
+
+独立内部文档协议现已接入持久 operation/正式 writer 栅栏、完整 seed preimage、native-CAS 替换/提交前回滚及独立确认的提交后恢复、retired path 与各文档消费者可见性、并发/故障恢复合成验证。内容审核与完整 plan 的正式执行确认分离；受保护入口通过现有宿主 ownerOnly 人类结果适配，并将本 Project 完整受支持清单的保留/保护/归档/精简分类、精确 native/text/snapshot 版本及完整 seed 正文 CAS 持久化和审计。未覆盖、新增、变化、硬保护及 unsupported 来源默认保护；普通审核不能降级既有已知手工保护。分类不证明创作来源，unknown 仍是 unknown。文档选择默认 history:none、epoch 不变，不自动退役日志、session summaries/.files 或全局历史；未完成 learning batch 使准备拒绝，而非伪造 done 或丢弃 effects。普通 writer 清理只对自身 reservation 做有界 CAS 重试，清理失败不重放源动作或回退已落盘 ledger；恢复保留原 operation/快照及独立历史收据。旧日志文本和保留 seed 的历史引用仍可能成为学习证据，不声称已实现全历史语义隔离。SQLite 空 live 段仍因无法证明存在性而保守拒绝历史 capture。
+
+旧 HTTP apply 恒503 disabled，不暴露 prepare/resume；实际文档维护仅通过 session-only 动态 `learning_maintenance` 受保护入口。plan/token 重启失效；旧 status 可读，但 resume/rollback/restore 必须重新生成绑定完整 receipt/版本的计划并取得新的独立人类明确确认，不自动重放未知结果。含资源的 Skill package 不在支持范围；任一合成测试通过都不表示真实归档或收益。没有真实保护策略/维护写入、审批操作、后端重启或主分支/Windows 发布。完整行为、恢复前提和未验证边界以上述源代码对应文档为准。
 
 源码、单元测试和 Git 同步不能证明当前后端已加载，也不能证明模型实际产出的质量。部署后以真实会话及知识产物复查。
 

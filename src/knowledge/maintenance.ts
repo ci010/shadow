@@ -1,3 +1,4 @@
+import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
@@ -196,13 +197,15 @@ export class KnowledgeMaintenanceService {
     if (!hashSchema.safeParse(revision).success) throw new KnowledgeError('invalid_knowledge_revision', 'A SHA-256 preview revision is required')
     const preview = this.preview(reportId, sourceId)
     if (preview.revision !== revision) throw new KnowledgeError('maintenance_changed', 'The preview revision is stale', 409)
-    const file = workspacePath(this.workspace, ...preview.sourceId.split('/'))
-    // These checks and the atomic replacement are synchronous: another service
-    // operation cannot interleave between confirmation and the write.
-    if (readSafe(file).revision !== preview.revision) throw new KnowledgeError('maintenance_changed', 'The source changed before repair', 409)
-    safePath(file)
-    writePrivateFile(file, preview.after)
-    return { updated: preview.sourceId }
+    return new MaintenanceGate(this.workspace).writeSync([preview.sourceId], () => {
+      const file = workspacePath(this.workspace, ...preview.sourceId.split('/'))
+      // These checks and the atomic replacement are synchronous: another service
+      // operation cannot interleave between confirmation and the write.
+      if (readSafe(file).revision !== preview.revision) throw new KnowledgeError('maintenance_changed', 'The source changed before repair', 409)
+      safePath(file)
+      writePrivateFile(file, preview.after)
+      return { updated: preview.sourceId }
+    })
   }
 
   async stop(): Promise<void> {

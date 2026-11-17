@@ -1,3 +1,4 @@
+import { MaintenanceGate } from './learning/maintenance-gate.ts'
 import { dirname, join } from 'node:path'
 import { appendFile, mkdir, open, readdir, stat, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
@@ -91,8 +92,10 @@ function keywordPurpose(prefix: string, truncated: boolean): string {
  */
 export class MemoryStore {
   private memoryDir: string
+  private readonly maintenance: MaintenanceGate
 
   constructor(workspace: string) {
+    this.maintenance = new MaintenanceGate(workspace)
     this.memoryDir = workspacePath(workspace, MEMORY_DIR)
   }
 
@@ -316,6 +319,7 @@ export class MemoryStore {
    * (main-agent-only, lazy lookup, grouped by source).
    */
   async readKeywords(maxPerGroup = 40): Promise<string> {
+    const visibility = this.maintenance.visibilityRevision()
     const dirs = ['decisions', 'topics', 'identities', 'concepts', 'tools']
     const heading = '**Long-term keywords** (lazy — expand via `v:memory/<group>/<kw>.md`):'
     const groups: string[] = []
@@ -334,6 +338,7 @@ export class MemoryStore {
       const entries: string[] = []
       for (const name of names.filter(n => n.endsWith('.md')).sort().slice(0, perGroup)) {
         if (!remainingEntries) break
+        if (this.maintenance.isHidden(`memory/${d}/${name}`)) continue
         // Unusual names remain readable via VFS, but must not break index syntax.
         const keyword = name.slice(0, -3)
         if (keyword.length > 120 || /[\x00-\x1f`<>]/u.test(keyword)) continue
@@ -361,6 +366,7 @@ export class MemoryStore {
       }
       if (entries.length) groups.push(`- ${d}: ${entries.join(', ')}`)
     }
+    this.maintenance.assertView(visibility)
     return groups.length ? [heading, ...groups].join('\n') : ''
   }
 }

@@ -1,9 +1,10 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { toolResultText, isCompletedToolFailure } from './tool.ts'
 import { layerfsRoute } from './layerfs-route.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { isUtf8 } from 'node:buffer'
-import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, lstat, mkdir, open, readFile, realpath, writeFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { isNotFoundError, isWindows } from '../utils/runtime.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
@@ -235,6 +236,49 @@ export class WriteTool implements Tool {
     const restriction = this.checkWriteAllowed(filePath)
     if (restriction) return restriction
 
+    let resolvedPath = filePath, probe = filePath
+    // Resolve existing aliases only for classification; unreadable ordinary
+    // write-only paths retain the existing overwrite semantics.
+    for (;;) {
+      try { resolvedPath = resolve(await realpath(probe), relative(probe, filePath)); break }
+      catch (error) {
+        if (!isNotFoundError(error) || dirname(probe) === probe) break
+        probe = dirname(probe)
+      }
+    }
+    for (const candidate of new Set([filePath, resolvedPath])) for (const root of ['memory', 'skills']) {
+      const base = projectStoragePath(this.workspace, root)
+      const folded = relative(base.toLowerCase(), candidate.toLowerCase()).replace(/\\/g, '/')
+      if (folded && folded !== '..' && !folded.startsWith('../') && !isAbsolute(folded)) {
+        if (candidate.slice(0, base.length) !== base) {
+          const { safePath } = await import('../knowledge/service.ts')
+          const expected = safePath(base), alias = safePath(candidate.slice(0, base.length))
+          if (expected.dev !== alias.dev || expected.ino !== alias.ino) continue
+        }
+        const inside = candidate.slice(base.length + 1).replace(/\\/g, '/')
+        const { MaintenanceGate } = await import('../agent/learning/maintenance-gate.ts')
+        return new MaintenanceGate(this.workspace).write([`${root}/${inside}`], async () => {
+          const { safePath } = await import('../knowledge/service.ts')
+          let existing = filePath
+          for (;;) {
+            try {
+              const info = await lstat(existing)
+              safePath(existing)
+              if (existing === filePath && info.isFile() && info.nlink !== 1) throw new Error('Project knowledge writes cannot modify hard links')
+              break
+            } catch (error) {
+              if (!isNotFoundError(error) || dirname(existing) === existing) throw error
+              existing = dirname(existing)
+            }
+          }
+          return this.writeLocal(args, context, filePath)
+        })
+      }
+    }
+    return this.writeLocal(args, context, filePath)
+  }
+
+  private async writeLocal(args: Record<string, unknown>, context: ExecutionContext, filePath: string): Promise<string> {
     const content = String(args.content)
     const flags = typeof args.flag === 'string' ? args.flag : ''
     const match = args.match != null ? String(args.match) : undefined

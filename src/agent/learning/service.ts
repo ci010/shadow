@@ -1,3 +1,4 @@
+import { MaintenanceCleanupError, MaintenanceFenceError, MaintenanceGate } from './maintenance-gate.ts'
 import type { Bus } from '../../bus/bus.ts'
 import type { ProjectScope } from '../../projects/scope.ts'
 import type { CronService, CronJob } from '../../cron/service.ts'
@@ -163,6 +164,7 @@ export class LearningService {
   async trigger(pipeline: Pipeline): Promise<unknown> {
     if (this.stopped) throw new Error('LearningService is stopped')
     if (!this.started) throw new Error('Learning recovery has not finished')
+    if (this.ledger) new MaintenanceGate(this.ledger.workspace).assertIdle()
     const accepted = this.accepted.get(pipeline)
     if (accepted) return accepted
     const admission = Promise.withResolvers<string>()
@@ -206,6 +208,13 @@ export class LearningService {
     const state = this.states[pipeline]
     if ((!this.pipelineEnabled(pipeline) && !this.manual.has(pipeline)) || this.stopped || (!state.pending && !this.ledger) || this.running.has(pipeline)) return
     if (!this.manual.has(pipeline) && (state.paused || state.retryAt && Date.parse(state.retryAt) > Date.now())) return
+    if (this.ledger) {
+      try { new MaintenanceGate(this.ledger.workspace).assertIdle() }
+      catch (error) {
+        if (!(error instanceof MaintenanceFenceError)) throw error
+        state.pending = true; state.lastError = error.message; return
+      }
+    }
     state.pending = false
     this.results.delete(pipeline)
     state.dispatching = true
@@ -241,7 +250,22 @@ export class LearningService {
       }
     }).catch((error: unknown) => {
       state.lastError = error instanceof Error ? error.message : String(error)
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted && !(error instanceof MaintenanceCleanupError)) return
+      if (error instanceof MaintenanceFenceError) { state.pending = true; return }
+      if (error instanceof MaintenanceCleanupError) {
+        // A completed callback is not a failed learning execution. Keep both
+        // errors/result available in diagnostics, pause rather than replay it,
+        // and never spend a retry or roll back its already published ledger.
+        state.pending = !error.actionReturned
+        state.paused = 'Admission cleanup requires explicit repair; source action must not be replayed'
+        state.retryAt = undefined
+        if (error.actionReturned) {
+          if (!this.results.has(pipeline)) this.results.set(pipeline, error.actionResult)
+          state.lastCheckedAt = new Date().toISOString()
+        }
+        console.error(`[learning] ${pipeline} admission cleanup failed (${this.scope.projectId}):`, error)
+        return
+      }
       this.enqueue(pipeline)
       const attempts = (this.ledger?.retry(pipeline).attempts ?? 0) + 1
       state.paused = undefined

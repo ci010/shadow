@@ -37,6 +37,8 @@ function acquireLock(lock: string): void {
   }
 }
 
+export class JournalConflictError extends Error {}
+
 /** Synchronous project-local optimistic journal. Reclaim only a recorded same-host
  * owner whose PID probe returns ESRCH. Live/reused PIDs, foreign hosts, legacy or
  * incomplete metadata fail closed. Requires a local filesystem and unique host
@@ -62,7 +64,7 @@ export class Journal<T> {
       writeFileSync(ownerFile, JSON.stringify({ version: 1, pid: process.pid, hostname: hostname(), acquiredAt: new Date().toISOString() }) + '\n', { flag: 'wx', mode: 0o600 })
       ownerWritten = true
       const current = existsSync(this.file) ? readFileSync(this.file, 'utf8') : undefined
-      if (current !== this.revision) throw new Error('Watermark journal conflict; reload before retrying')
+      if (current !== this.revision) throw new JournalConflictError('Watermark journal conflict; reload before retrying')
       const next = JSON.stringify(state) + '\n'
       writePrivateFile(this.file, next)
       this.revision = next

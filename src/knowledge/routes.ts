@@ -8,6 +8,7 @@ import type { ProjectRuntimeDependencies } from '../projects/runtime.ts'
 import type { SkillsManager } from '../skills/loader.ts'
 import { KnowledgeError, KnowledgeService } from './service.ts'
 import type { KnowledgeMaintenanceService } from './maintenance.ts'
+import { maintenanceApplyRequest, type LearningMaintenancePreview } from '../agent/learning/maintenance-preview.ts'
 
 const repairSource = z.object({
   reportId: z.string().uuid(),
@@ -27,6 +28,8 @@ export function registerKnowledgeRoutes(app: Hono, options: {
   skills: SkillsManager
   authorize: ProjectRuntimeDependencies['authorize']
   maintenance?: KnowledgeMaintenanceService
+  learningMaintenance?: LearningMaintenancePreview
+  ownerMaintenancePlan?: (revision: string) => unknown
 }): void {
   const routes = new Hono()
   const service = new KnowledgeService(options.workspace, options.skills)
@@ -41,7 +44,10 @@ export function registerKnowledgeRoutes(app: Hono, options: {
     c.header('Cache-Control', 'no-store')
     return next()
   })
-  routes.use('*', bodyLimit({ maxSize: 4096, onError: c => c.json({ error: 'body_too_large' }, 413) }))
+  const smallBody = bodyLimit({ maxSize: 4096, onError: c => c.json({ error: 'body_too_large' }, 413) })
+  const previewBody = bodyLimit({ maxSize: 512 * 1024, onError: c => c.json({ error: 'body_too_large' }, 413) })
+  routes.use('*', (c, next) => c.req.path === '/api/knowledge/learning-maintenance/preview'
+    ? previewBody(c, next) : smallBody(c, next))
   routes.get('/', c => c.json(service.catalog()))
   const maintenance = () => {
     if (!options.maintenance) throw new KnowledgeError('maintenance_unavailable', 'Knowledge maintenance is not enabled for this Project', 503)
@@ -76,6 +82,43 @@ export function registerKnowledgeRoutes(app: Hono, options: {
   routes.post('/maintenance/apply', async c => {
     const body = repairSource.extend({ revision: z.string().regex(/^[a-f0-9]{64}$/) }).parse(await requestJson(c.req.raw))
     return c.json(maintenance().apply(body.reportId, body.sourceId, body.revision))
+  })
+  const learningMaintenance = () => {
+    if (!options.learningMaintenance) throw new KnowledgeError('learning_maintenance_unavailable', 'Learning maintenance preview is unavailable', 503)
+    return options.learningMaintenance
+  }
+  routes.get('/learning-maintenance/owner-plans/:revision', c => {
+    if (!options.ownerMaintenancePlan) throw new KnowledgeError('owner_plan_unavailable', 'Owner maintenance is not available in this loaded instance', 503)
+    try { return c.json(options.ownerMaintenancePlan(c.req.param('revision'))) }
+    catch { throw new KnowledgeError('owner_plan_unavailable', 'Host plan missing or expired; inspect status and generate a new plan', 409) }
+  })
+  routes.get('/learning-maintenance/status', c => c.json(learningMaintenance().status()))
+  routes.get('/learning-maintenance/candidates', async c => c.json(await learningMaintenance().candidates()))
+  routes.get('/learning-maintenance/snapshots/:revision', c => c.json(learningMaintenance().readDocumentSnapshot(c.req.param('revision'))))
+  routes.post('/learning-maintenance/documents', async c => {
+    const body = await requestJson(c.req.raw)
+    try { return c.json(learningMaintenance().inspectDocuments(body)) }
+    catch (error) {
+      if (error instanceof ZodError || error instanceof KnowledgeError) throw error
+      throw new KnowledgeError('learning_maintenance_conflict', 'Document cannot be observed safely; inspect host protection policy or source revisions', 409)
+    }
+  })
+  routes.post('/learning-maintenance/preview', async c => {
+    const body = await requestJson(c.req.raw)
+    try {
+      if (body && typeof body === 'object' && Object.hasOwn(body, 'documents')) return c.json(learningMaintenance().previewDocuments(body))
+      return c.json(await learningMaintenance().preview(body))
+    }
+    catch (error) {
+      if (error instanceof ZodError || error instanceof KnowledgeError) throw error
+      throw new KnowledgeError('learning_maintenance_conflict', 'Cannot attest complete unchanged sources/history; refresh candidates or inspect host diagnostics', 409)
+    }
+  })
+  routes.post('/learning-maintenance/apply', async c => {
+    // Strictly reject provenance/source payloads even while apply is disabled.
+    maintenanceApplyRequest.parse(await requestJson(c.req.raw))
+    learningMaintenance()
+    throw new KnowledgeError('learning_maintenance_disabled', 'Learning maintenance integration is partial; apply is disabled and no state was changed', 503)
   })
   routes.get('/entry', c => c.json(service.detail(c.req.query('id'))))
   routes.delete('/entry', async c => {

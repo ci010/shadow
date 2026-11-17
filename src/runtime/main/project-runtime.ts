@@ -130,6 +130,13 @@ import { ProjectFolderDiscovery } from '../../folders/discovery.ts'
 import { folderAccessMiddleware } from '../../folders/access.ts'
 import { SkillsManager } from '../../skills/loader.ts'
 import { registerKnowledgeRoutes } from '../../knowledge/routes.ts'
+import { SessionStoreMaintenanceHistory } from '../../agent/learning/maintenance-history.ts'
+import { ProjectMaintenanceSources } from '../../agent/learning/maintenance-sources.ts'
+import { DocumentMaintenanceOperation, DocumentMaintenanceRestoration } from '../../agent/learning/maintenance-documents.ts'
+import { MaintenanceGate } from '../../agent/learning/maintenance-gate.ts'
+import { DocumentMaintenanceProtection } from '../../agent/learning/maintenance-protection.ts'
+import { LearningMaintenanceTool, maintenanceOwnerAccess } from '../../tools/learning-maintenance.ts'
+import { LearningMaintenancePreview } from '../../agent/learning/maintenance-preview.ts'
 import { KnowledgeMaintenanceService } from '../../knowledge/maintenance.ts'
 import { scheduleKnowledgeMaintenance } from './knowledge-maintenance.ts'
 import { ContinuationTool } from '../../tools/background.ts'
@@ -673,7 +680,6 @@ export async function createProjectRuntime(
   const knowledgeMaintenance = new KnowledgeMaintenanceService(workspace, skills)
   await knowledgeMaintenance.init()
   cleanup.push(() => knowledgeMaintenance.stop())
-  registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
   const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport, id => { const folder = folderRegistry.list().find(folder => folder.id === id); return folder?.kind === 'local' ? { id: folder.id, path: folder.path } : undefined })
   cleanup.push(() => importTool.shutdownBrowser())
   tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
@@ -720,6 +726,22 @@ export async function createProjectRuntime(
   cleanup.push(startupStates.close)
   cleanup.push(() => sessionStore.close?.())
   await startup.measure('ownership', () => assertSessionProjectOwnership(sessionStore, project.id))
+  // HTTP remains read-only/disabled for apply. The owner-only dynamic document
+  // entry below is separate; constructors never classify, prepare or recover.
+  // Epoch/history activation remains unsupported.
+  const maintenanceProtection = new DocumentMaintenanceProtection(workspace, project.id)
+  const maintenanceAssessmentSources = new ProjectMaintenanceSources(workspace, project.id, skills,
+    new SessionStoreMaintenanceHistory(persistentSessionStore, { projectId: project.id,
+      sessionsDirectory: sessionsDir, format: config.agent.sessionStorage === 'sqlite' ? 'sqlite' : 'jsonl' }))
+  const maintenanceSources = new ProjectMaintenanceSources(workspace, project.id, skills,
+    maintenanceAssessmentSources.history, undefined, path => maintenanceProtection.assertUnprotected(path))
+  const learningMaintenance = new LearningMaintenancePreview(workspace, project.id, maintenanceSources)
+  let ownerMaintenance: LearningMaintenanceTool | undefined
+  registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance, learningMaintenance,
+    ownerMaintenancePlan: revision => {
+      if (!ownerMaintenance) throw new Error('Owner maintenance is not available in this loaded instance')
+      return ownerMaintenance.ownerPlan(revision)
+    } })
 
   const handoffManager = new HandoffManager(
     provider,
@@ -1407,6 +1429,17 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('workspace_remove', new WorkspaceRemoveTool(dependencies.catalog, project.id, canAuthor))
   importTool.registerBuiltin('workspace_register', new WorkspaceRegisterTool(folderRegistry, project.id, canAuthor))
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
+  ownerMaintenance = new LearningMaintenanceTool(project.id, maintenanceAssessmentSources,
+    new DocumentMaintenanceOperation(workspace, project.id, maintenanceSources, skills),
+    new DocumentMaintenanceRestoration(workspace, project.id, maintenanceSources, skills),
+    new MaintenanceGate(workspace), maintenanceProtection, sessions.yields, context => {
+      const state = sessions.getSessionState(context.sessionId)
+      if (!state) return false
+      const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
+      return maintenanceOwnerAccess(context, project.id, state, sessions.isManagedConversation(context.sessionId),
+        locations.workdir.available && locations.workdir.locality === 'local')
+    })
+  importTool.registerBuiltin('learning_maintenance', ownerMaintenance)
   workflows.bindHost('work-organizer', {
     current: () => organizationController.status().enabled,
     execute: async (observation, signal) => {
