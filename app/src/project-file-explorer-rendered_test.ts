@@ -12,7 +12,7 @@ import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const require = createRequire(new URL('../../desktop/package.json', import.meta.url))
-test('Project explorer roots stay left, expand independently and preserve session/folder source', { timeout: 90000, skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY }, async t => {
+test('Project explorer roots stay left, expand independently and show only bound workspace sources', { timeout: 90000, skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY }, async t => {
   const directory = resolve(root, '.test-artifacts', `project-explorer-${randomUUID()}`)
   await mkdir(directory, { recursive: true }); t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const requests: string[] = []
@@ -39,32 +39,16 @@ test('Project explorer roots stay left, expand independently and preserve sessio
   await server.listen(); t.after(() => { server.httpServer?.closeAllConnections(); return server.close() })
   const url = server.resolvedUrls!.local[0]
   const script = String.raw`const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});(async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1300,height:800,webPreferences:{backgroundThrottling:false}});const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<200;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw Error('Timeout '+s+' '+await run('document.body.innerText'))};await win.loadURL(${JSON.stringify(url)});
-    await wait('document.querySelectorAll(".explorer-root").length===4');await run('document.querySelector(".project-explorer-toggle").click()');
+    await wait('document.querySelectorAll(".explorer-root").length===2');await run('document.querySelector(".project-explorer-toggle").click()');
     const expanded = id => run('document.querySelector('+JSON.stringify('[data-root-id="'+id+'"] .root-toggle')+').getAttribute("aria-expanded")');
-    assert.equal(await expanded('session:web:A'),'true','opening explorer reveals main A');
-    assert.equal(await expanded('session:web:B'),'false');
-    assert.equal(await expanded('folder:one'),'false','bound folder is not auto-expanded');
+    assert.equal(await run('document.querySelectorAll(\'[data-root-id^="session:"]\').length'),0,'conversation data is not an explorer root');
     await run('window.groups.move("B","right");window.groups.focus("p","right")');await delay(80);
-    assert.equal(await expanded('session:web:B'),'false','right focus never reveals B');
+    assert.equal(await run('document.querySelectorAll(".explorer-root").length'),2,'split focus does not add session roots');
     await run('window.groups.move("B","left")');await delay(80);
-    assert.equal(await expanded('session:web:B'),'true','main selection follows B');
-    assert.equal(await expanded('session:web:A'),'true','previous expansion is retained');
-    await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').click();document.querySelector(\'[data-root-id="session:web:B"] .root-toggle\').click()');
-    assert.equal(await expanded('session:web:B'),'false','manual collapse remains possible');
-    await run('window.groups.toggleExplorer("p");window.groups.activate("A")');await delay(50);
-    await run('window.groups.activate("B");window.groups.toggleExplorer("p")');await delay(80);
-    assert.equal(await expanded('session:web:B'),'true','reopening restores main root');
+    for(const id of ['folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';if(await expanded(id)==='false')await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
+    await run('window.groups.toggleExplorer("p");window.groups.activate("A");window.groups.toggleExplorer("p")');await delay(80);
     assert.equal(await expanded('folder:one'),'true','manual folder expansion survives reopen');
-    // Non-conversation documents share A ownership but must not fall back to A.
-    await run('window.groups.open({id:"workflow-test",projectId:"p",owner:"A",label:"Workflow",icon:"",closable:true,select(){},close(){}});document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').click();window.groups.toggleExplorer("p")');await delay(50);
-    await run('window.groups.toggleExplorer("p")');await delay(80);
-    assert.equal(await expanded('session:web:A'),'false','workflow never reveals hidden owner conversation');
-    await run('window.groups.open({id:"other-project",projectId:"q",owner:"A",label:"A",conversation:{sessionId:"web:A",editable:true},icon:"",closable:true,select(){},close(){}})');await delay(80);
-    assert.equal(await expanded('session:web:A'),'false','other Project selection cannot reveal this root');
-    await run('window.groups.unregister("other-project");window.groups.close("workflow-test");window.groups.activate("A")');await delay(80);
-    assert.equal(await expanded('session:web:A'),'true');
-    for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';if(await expanded(id)==='false')await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
-    assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),4);
+    assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),2);
     // Real layout/scroll regression: every dynamic resource heading stays visible,
     // not just the first sticky row. Exercise both desktop and narrow panes.
     for (const width of [1300, 500]) {
@@ -74,10 +58,10 @@ test('Project explorer roots stay left, expand independently and preserve sessio
       await run('document.querySelectorAll(".file-tree-body").forEach(body=>body.scrollTop=0)');
     }
     win.setSize(1300,800);await delay(100);
-    for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const selector=JSON.stringify('[data-root-id="'+id+'"] .tree-row[data-path="same.md"]');await run('document.querySelector('+selector+').click()');await delay(150);}
-    await wait('document.querySelectorAll(".file-markdown").length===4');
-    for(const id of ['session:web:A','session:web:B','folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';await run(root+'.querySelectorAll(".file-tree-modes button")[1].click()');await wait(root+'.querySelector(".tree-row[data-path]")');await run(root+'.querySelector(".tree-row[data-path]").click()');await delay(150);}
-    await wait('document.querySelectorAll(".file-diff").length===4');
+    for(const id of ['folder:one','folder:two']){const selector=JSON.stringify('[data-root-id="'+id+'"] .tree-row[data-path="same.md"]');await run('document.querySelector('+selector+').click()');await delay(150);}
+    await wait('document.querySelectorAll(".file-markdown").length===2');
+    for(const id of ['folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';await run(root+'.querySelectorAll(".file-tree-modes button")[1].click()');await wait(root+'.querySelector(".tree-row[data-path]")');await run(root+'.querySelector(".tree-row[data-path]").click()');await delay(150);}
+    await wait('document.querySelectorAll(".file-diff").length===2');
     assert.equal(await run('document.querySelectorAll(".view-explorer-toggle").length'),0);
     assert.equal(await run('document.querySelector(".project-file-explorer").closest(".editor-group-content")===null'),true);
     const sameRow = '(()=>{const b=document.querySelector(".project-explorer-toggle").getBoundingClientRect();const tabs=[...document.querySelectorAll(".editor-tab")].map(e=>e.getBoundingClientRect()).filter(r=>r.width);return tabs.length>0&&tabs.every(r=>Math.abs(r.top-b.top)<2&&b.right<=r.left)})()';
@@ -94,8 +78,6 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').focus()');
     await wait('document.querySelector(".shared-hover-info")?.textContent.includes("windows-node")');
     assert.match(await run('document.querySelector(".shared-hover-info").textContent'),/C:/,'keyboard hint exposes full source path');
-    await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').focus()');
-    await wait('document.querySelector(".shared-hover-info")?.textContent.includes("Session files: A")');
     await run('window.groups.move("A","right")');await delay(100);assert.equal(await run(sameRow),true,'split groups keep the same header row');
     await run('window.groups.move("A","left")');await delay(100);
     await run('document.querySelector(\'[data-root-id="folder:one"] .root-toggle\').click()');assert.equal(await run('document.querySelector(\'[data-root-id="folder:two"] .root-toggle\').getAttribute("aria-expanded")'),'true');
@@ -111,7 +93,7 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     await wait('!!document.querySelector(\'[data-root-id="folder:two-alias"]\')&&!document.querySelector(\'[data-root-id="folder:two"]\')');
     await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true}});void 0');
     await wait('!document.querySelector(\'[data-root-id^="folder:"]\')');
-    assert.equal(await run('!!document.querySelector(\'[data-root-id="session:web:A"]\')'),true,'unbound session keeps only session data');
+    assert.equal(await run('!!document.querySelector(\'[data-root-id="session:web:A"]\')'),false,'unbound session adds no session-data root');
     await run('window.groups.open({id:"project-only",projectId:"p",owner:"project",label:"Settings",icon:"i-lucide-settings",closable:true,select(){},close(){}});void 0');
     assert.equal(await run('document.querySelectorAll(\'[data-root-id^="folder:"]\').length'),0,'project-only tabs never expose the catalog');
     await run('window.groups.close("project-only");window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"one"}});void 0');
@@ -120,17 +102,14 @@ test('Project explorer roots stay left, expand independently and preserve sessio
     win.setSize(500,800);await delay(100);assert.equal(await run(sameRow),true,'narrow header stays inline');
     const wasOpen=await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")');await run('document.querySelector(".project-explorer-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'E',modifiers:['control','shift']});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'E',modifiers:['control','shift']});await delay(100);assert.notEqual(await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")'),wasOpen,'keyboard shortcut toggles');
     await run('window.groups.explorers.add("p");void 0');await delay(50);await run('document.querySelector(".root-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(50);assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true,'Escape returns focus to header toggle');
-    await run('window.groups.explorers.add("p");window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),label:"A full long conversation title ".repeat(8)});void 0');
-    await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').focus()');
-    await wait('document.querySelector(".shared-hover-info")?.textContent.includes("A full long conversation title")');
-    assert.equal(await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').getBoundingClientRect().height<=32'),true,'long session title also stays single-line');
     await run('for(const id of [...window.groups.descriptors.keys()])window.groups.close(id)');await delay(100);assert.equal(await run('document.querySelectorAll(".editor-tab").length'),0);assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().width>0'),true);await win.close();console.log('PROJECT_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs'); await writeFile(entry, script)
   const child = spawn(require('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 75000); t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); assert.equal(code, 0, output); assert.match(output, /PROJECT_EXPLORER_OK/)
-  for (const source of ['sessions/web%3AA/workspace', 'sessions/web%3AB/workspace', 'folders/one', 'folders/two']) {
+  assert.equal(requests.some(path => path.includes('/sessions/')), false, 'explorer never fetches session data')
+  for (const source of ['folders/one', 'folders/two']) {
     assert(requests.some(path => path.startsWith('/projects/p/api/' + source + '/preview')), source + ' preview stays source scoped')
     assert(requests.some(path => path.startsWith('/projects/p/api/' + source + '/git/status')), source + ' Git stays source scoped')
     assert(requests.some(path => path.startsWith('/projects/p/api/' + source + '/git/diff')), source + ' diff stays source scoped')

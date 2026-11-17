@@ -2845,12 +2845,14 @@ Blank drafts omit it until a session exists. Opening Diagnosis hides the compose
 without discarding its draft or conversation scroll position.
 
 The centralized Project file explorer uses compact single-line root names with
-session/folder icons and a short device source label. Optional public picker
+workspace icons and a short device source label. Optional public picker
 device names are preferred; unavailable metadata falls back to Main, LayerFS, or
 a remote node short ID. Full names, paths, and remote node IDs are available in
 shared HoverInfo on pointer hover and keyboard focus, not as wrapped row text.
-Only conversations actually open in this Project's editor groups contribute
-session roots. Folder roots are the union of their explicit `folderId` bindings,
+Only Folder/Workspace resources appear as explorer roots; per-conversation
+session-data roots are not listed. Existing attachments and session-file previews
+remain available without adding a separate explorer layer. Folder roots are the
+union of explicit `folderId` bindings from conversations open in this Project's editor groups,
 filtered against the catalog before deduplication by canonical local IDs or remote
 node/root identity. Closing or rebinding the last owning conversation removes its
 folder root; unbound conversations and project-only tabs do not expose unrelated
