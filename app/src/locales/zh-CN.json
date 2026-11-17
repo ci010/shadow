@@ -4447,5 +4447,10 @@
   "Configured target unavailable": "配置目标不可用",
   "Execution sessions": "执行会话",
   "Existing BOT execution conversations, separate from passive message history. Not execution receipts.": "现有 BOT 执行会话，与被动消息历史不同；不代表执行凭据。",
-  "Selected object cannot be referenced. Refresh and select a current published object.": "无法引用所选对象。请刷新并选择当前已发布的对象。"
+  "Selected object cannot be referenced. Refresh and select a current published object.": "无法引用所选对象。请刷新并选择当前已发布的对象。",
+  "Paste the complete phone pairing details copied on Main, including the address and one-use code.": "请粘贴电脑端复制的完整手机配对信息，包含地址和一次性配对码。",
+  "On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.": "在电脑端打开「节点 → 手机访问」，复制手机配对信息并完整粘贴到这里。配对码五分钟内有效且只能使用一次。",
+  "Copy the pairing details below and send them privately to your phone. Paste once in the Shadow phone app. For HTTP, also enable Allow LAN HTTP on the phone.": "复制下方配对信息并私密发送到手机，在 Shadow 手机端粘贴一次即可。HTTP 连接还需在手机端勾选「允许局域网 HTTP」。",
+  "Phone access settings": "手机访问设置",
+  "Pair your phone": "配对手机"
 }

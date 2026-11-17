@@ -4447,5 +4447,10 @@
   "Configured target unavailable": "Configured target unavailable",
   "Execution sessions": "Execution sessions",
   "Existing BOT execution conversations, separate from passive message history. Not execution receipts.": "Existing BOT execution conversations, separate from passive message history. Not execution receipts.",
-  "Selected object cannot be referenced. Refresh and select a current published object.": "Selected object cannot be referenced. Refresh and select a current published object."
+  "Selected object cannot be referenced. Refresh and select a current published object.": "Selected object cannot be referenced. Refresh and select a current published object.",
+  "Paste the complete phone pairing details copied on Main, including the address and one-use code.": "Paste the complete phone pairing details copied on Main, including the address and one-use code.",
+  "On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.": "On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.",
+  "Copy the pairing details below and send them privately to your phone. Paste once in the Shadow phone app. For HTTP, also enable Allow LAN HTTP on the phone.": "Copy the pairing details below and send them privately to your phone. Paste once in the Shadow phone app. For HTTP, also enable Allow LAN HTTP on the phone.",
+  "Phone access settings": "Phone access settings",
+  "Pair your phone": "Pair your phone"
 }

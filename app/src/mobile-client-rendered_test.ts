@@ -99,13 +99,13 @@ test('rendered mobile connection clears pairing code at submission and exposes e
   await session.load()
   const view = mount(t, './MobileConnection.vue', { session })
   assert.match(view.text(), /Sessions and tasks run on your Main computer/)
-  const inputs = view.nodes().filter(node => node.tag === 'input' && node.props.type !== 'checkbox')
-  inputs[0].props['onUpdate:modelValue']('http://insecure.example')
-  inputs[1].props['onUpdate:modelValue']('abcdef-abcdef-abcdef-abcdef')
+  const inputs = view.nodes().filter(node => node.tag === 'textarea')
+  assert.equal(inputs.length, 1)
+  inputs[0].props['onUpdate:modelValue']('http://insecure.example\nabcdef-abcdef-abcdef-abcdef')
   await nextTick()
   await view.find('form').props.onSubmit({ preventDefault() {} })
   await flush()
-  assert.equal((inputs[1] as Element & { value: string }).value, '')
+  assert.equal((inputs[0] as Element & { value: string }).value, '')
   assert.equal(session.view.value, 'pairing')
   assert.match(view.text(), /HTTPS origin/)
   assert.doesNotMatch(view.text(), /Set up Main|Set up Child|Administrator PIN/)
@@ -206,4 +206,24 @@ test('native capture requests show unsupported state without microphone controls
   assert.equal(view.find('button', 'Unavailable on mobile').props.disabled, true)
   assert.equal(view.nodes().some(node => node.tag === 'select'), false)
   assert.ok(view.find('button', 'Not now'))
+})
+
+test('rendered single-paste pairing requires independent LAN consent and sends only the code', async t => {
+  const requests: Array<{ url: string; body: string }> = []
+  const session = sessionFixture(t, async (input, init) => {
+    requests.push({ url: String(input), body: String(init?.body) })
+    return Response.json({ version: 1, accessToken: 'synthetic-opaque-mobile-token', expiresAt: new Date(Date.now() + 3600000).toISOString() })
+  })
+  await session.load()
+  const view = mount(t, './MobileConnection.vue', { session })
+  const paste = () => view.nodes().find(node => node.props.id === 'phone-pairing')!.props['onUpdate:modelValue'](
+    `Shadow-Phone/1\nhttp://192.168.1.10:3125\nabcdef-abcdef-abcdef-abcdef\n${new Date(Date.now() + 300000).toISOString()}`)
+  const submit = async () => { await nextTick(); await view.find('form').props.onSubmit({ preventDefault() {} }); await flush() }
+  paste(); await submit()
+  assert.equal(requests.length, 0)
+  assert.match(view.text(), /explicitly enable LAN HTTP/)
+  view.nodes().find(node => node.props.id === 'allow-lan-http')!.props['onUpdate:modelValue'](true)
+  paste(); await submit()
+  assert.equal(session.view.value, 'connected')
+  assert.deepEqual(requests, [{ url: 'http://192.168.1.10:3125/mobile/v1/pair', body: JSON.stringify({ code: 'abcdef-abcdef-abcdef-abcdef' }) }])
 })
