@@ -456,3 +456,16 @@ test('ranked bars show top ten, exact counts and whole-period shares without hid
   await settle()
   assert.equal(rows().length, 10)
 })
+
+
+test('Project dashboard excludes the mounted conversation workspace from its height allocation', () => {
+  const source = readFileSync(new URL('./components/ProjectsWorkspace.vue', import.meta.url), 'utf8')
+  const { descriptor, errors } = parse(source)
+  assert.deepEqual(errors, [])
+  const automation = descriptor.template!.content.match(/<AutomationDetail\b[^>]*>/)?.[0]
+  assert.ok(automation)
+  assert.match(automation, /v-show="!dashboardProject"/)
+  // Keep the editor hosts mounted when switching between chat and the dashboard.
+  assert.doesNotMatch(automation, /v-if=/)
+  assert.match(descriptor.template!.content, /<ProjectWorkbench v-if="dashboardProject"/)
+})

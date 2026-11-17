@@ -64,7 +64,7 @@
         <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">{{ t('Start in') }} {{ project.name }}</button>
         <button v-if="!projects.length && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
-      <AutomationDetail :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
+      <AutomationDetail v-show="!dashboardProject" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
       <EditorGroupHost @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
       </AutomationDetail>
       <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
