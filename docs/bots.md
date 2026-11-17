@@ -802,8 +802,11 @@ category parent is not a thread relationship. Histories without verified ancestr
 remain accessible rather than being assigned by title or guessed from bindings.
 
 This is a display projection, not a subscription change or history migration.
-Legacy `bot:` history and passive `channel-inbox:` history remain separate; grouping
-never replays messages, grants access, starts a synthetic session, or enables a
+New platform receipts and bound BOT replies share the fixed `channel-inbox:` ID.
+Existing legacy `bot:` histories require the reviewed
+[channel identity migration](channel-session-migration.md); sidebar grouping alone
+does not migrate history. Neither grouping nor migration
+replays messages, grants access, starts a synthetic session, or enables a
 quarantined BOT. Parent names come from persisted metadata where available, with
 an explicit channel-ID fallback otherwise. New graph ancestry metadata requires
 the updated backend as well as the updated renderer.

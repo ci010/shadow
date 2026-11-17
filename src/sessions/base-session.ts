@@ -1,3 +1,4 @@
+import { isRecordedChannelInput } from '../channels/recorded-input.ts'
 import { LEARNING_RECEIPT_RECORDED } from '../agent/learning/receipt.ts'
 import { resolveExplicitToolTarget, resolveWorkdirToolTarget } from '../execution/tool-target.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
@@ -138,6 +139,8 @@ export abstract class BaseSession {
     await this.persistMessages(llm, ...messages)
   }
 
+  private recordedChannelMessages = new WeakMap<ChatMessage, string>()
+
   private async persistMessages(
     _llm: LlmRuntimeConfig,
     ...messages: ChatMessage[]
@@ -168,9 +171,15 @@ export abstract class BaseSession {
         timestamp: now,
         usage: e.role === 'assistant' ? e.usage ?? this.usage : undefined,
       }))
-      await this.store.appendMessages(this.physicalSessionId, stored)
-      for (const message of stampedMessages) {
-        if (message.role === 'user') this.bus.emit('session.message.appended', {
+      const recorded = messages.map(message => this.recordedChannelMessages.get(message))
+      if (recorded.some(Boolean)) {
+        for (let index = 0; index < stored.length; index++) {
+          if (recorded[index]) await this.store.appendRawEvents(this.physicalSessionId, [{ channel_input_admitted: { id: recorded[index], message: stampedMessages[index] } }])
+          else await this.store.appendMessages(this.physicalSessionId, [stored[index]!])
+        }
+      } else await this.store.appendMessages(this.physicalSessionId, stored)
+      for (const [index, message] of stampedMessages.entries()) {
+        if (!recorded[index] && message.role === 'user') this.bus.emit('session.message.appended', {
           sessionId: this.id, physicalSessionId: this.physicalSessionId, message,
         })
       }
@@ -891,14 +900,25 @@ export abstract class BaseSession {
         const message = await buildUserChatMessage(
           input, this.workspace, messageWorkdir,
         )
-        if (silent) {
+        if (isRecordedChannelInput(input)) {
+          // Normal append/compaction/image preparation, but persist admission
+          // as an event: the platform message already has one durable receipt.
+          this.recordedChannelMessages.set(message, input.id)
+          try {
+            if (silent || signal.aborted) await this.persistMessages(llm, message)
+            else await this.appendMessages(llm, message)
+          } finally { this.recordedChannelMessages.delete(message) }
+          if (silent) return
+        } else if (silent) {
           // A silent admission must not trigger compaction/model inference.
           await this.persistMessages(llm, message)
           console.info(`[${this.id}] Recorded silent message`)
           return
         }
-        if (signal.aborted) await this.persistMessages(llm, message)
-        else await this.appendMessages(llm, message)
+        if (!isRecordedChannelInput(input)) {
+          if (signal.aborted) await this.persistMessages(llm, message)
+          else await this.appendMessages(llm, message)
+        }
         if (!this.messagePersistenceFailed) this.inputPersisted?.(input)
       }
 

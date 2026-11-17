@@ -24,9 +24,9 @@ export const PASSIVE_CHANNEL_PREFIX = 'channel-inbox:'
 export function passiveChannelId(source: Pick<ChannelAddress, 'projectId' | 'botInstanceId' | 'platform' | 'conversationId'>): string {
   return PASSIVE_CHANNEL_PREFIX + [source.projectId, source.botInstanceId, source.platform, source.conversationId].map(encodeURIComponent).join(':')
 }
-export function parseChannelSource(value: unknown, sessionId?: string, projectId?: string): ChannelSource | undefined {
+export function parseChannelSource(value: unknown, sessionId?: string, projectId?: string, migrated?: 1): ChannelSource | undefined {
   if (value === undefined) {
-    if (sessionId?.startsWith(PASSIVE_CHANNEL_PREFIX)) throw new Error('Passive channel origin metadata is missing')
+    if (sessionId?.startsWith(PASSIVE_CHANNEL_PREFIX) && migrated !== 1) throw new Error('Passive channel origin metadata is missing')
     return undefined
   }
   const source = ChannelSourceSchema.parse(value)

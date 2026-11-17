@@ -37,7 +37,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import { AgentApp, type AgentOptions } from '../agent/app.ts'
 
-for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passive ingress -> trusted owner source assignment -> exact deployment -> new inputs only (${Store.name})`, async t => {
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated of [false, true]) test(`real QQ passive ingress -> trusted owner source assignment -> exact deployment -> new inputs only (${Store.name}, migrated=${migrated})`, async t => {
   await withTempWorkspace(async workspace => {
     const projectId = 'p', bus = new Bus(), bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
     const connection = bots.create('qq', 'Shared QQ', { appId: 'synthetic', secret: 'synthetic', enabled: true }, undefined, 'service')
@@ -53,7 +53,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
     const provider: LLMProvider = { name: 'fixture', listModels: () => [], chat: async messages => { prompts.push(JSON.stringify(messages)); started?.resolve(); await block?.promise; return { content: 'new input reply', toolCalls: [] } } }
     const store = new Store(join(workspace, 'sessions')), events = new EventService(workspace, bus, async () => { throw new Error('No fanout') }), backgroundTasks = new BackgroundTaskManager(bus, events)
     const handoff = new HandoffManager(provider, 128000, { autoHandoff: false }, workspace, store)
-    const makeSessions = () => new SessionManager({ projectId, workspace, store, bus, provider, tools, agentTypes: agents, context, identity: new IdentityManager(workspace), handoffManager: handoff, events, backgroundTasks,
+    const legacyId = `bot:${[projectId, connection.id, 'qq', 'group:one'].map(encodeURIComponent).join(':')}`
+    const makeSessions = () => new SessionManager({ sessionIdentityAliases: { [legacyId]: passiveChannelId({projectId,botInstanceId:connection.id,platform:'qq',conversationId:'group:one'}) }, projectId, workspace, store, bus, provider, tools, agentTypes: agents, context, identity: new IdentityManager(workspace), handoffManager: handoff, events, backgroundTasks,
       conversationPolicies: botConversationPolicies(bots, service, directory), getLlmRuntimeConfig: () => ({ model: 'fixture', temperature: 0, contextWindow: 128000 }) })
     let sessions = makeSessions(), commands = 0, replies = 0, outbound = 0
     bus.on('message.outbound', message => { if (!message.inferenceError && message.content.trim()) outbound++ })
@@ -90,6 +91,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       return { ...result, sourceUpdated: true }
     }
     try {
+      if (migrated) {
+        await store.init()
+        const initial = {sessionId:inboxId,projectId,ownershipVersion:2 as const,physicalIdVersion:2 as const,segmentIndex:0,channelIdentityMigration:1 as const}
+        await store.saveState(inboxId,initial)
+        await store.createSessionLog(SessionManager.currentPhysicalId(initial),[{sessionId:inboxId,channel_identity_migration:1}])
+      }
       await agent.start(); let send = await connect()
       await Promise.all([send('old', '/cancel OLD_PASSIVE'), send('old', '/cancel OLD_PASSIVE')])
       assert.equal(prompts.length, 0); assert.equal(commands, 0); assert.equal(replies, 0); assert.equal(sessions.listActiveSessions().length, 0)
@@ -97,6 +104,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       assert.equal(sessions.isManagedConversation(inboxId), true)
       assert.equal(isLearningSourceEligible(state, () => null), false, 'Passive messages cannot start automatic learning inference')
       assert.equal((await sessions.getHistory(inboxId)).total, 1, 'Owner Web can inspect the real stored history')
+      assert.equal((await sessions.getHistory(legacyId)).total, 1, 'Old external history references resolve to the canonical session')
+      assert.equal(sessions.getSessionState(legacyId)?.sessionId, inboxId)
       const physical = SessionManager.currentPhysicalId(state)
       const before = await Array.fromAsync(store.readSessionLog(physical)); assert.equal(before.filter(row => row.channel_input_id === 'old').length, 1)
       assert.match(JSON.stringify(before), /cdn.invalid/); assert.doesNotMatch(JSON.stringify(before), /signed|image_url/)
@@ -131,6 +140,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       await send('unmentioned', 'NEW_UNMENTIONED'); assert.equal(prompts.length, 0)
       const finished = Promise.withResolvers<void>(); bus.on('session.turn.finished', fact => { if (fact.inputId === 'new') finished.resolve() })
       await send('new', 'NEW_TRIGGER', 'one', true); await finished.promise
+      assert.equal(channelSessionId({ projectId, botInstanceId: connection.id, platform: 'qq', conversationId: 'group:one' }), inboxId)
+      assert.equal(Object.keys(await store.listAllStates()).filter(id => id.startsWith('bot:')).length, 0)
+      assert.equal((await sessions.getHistory(inboxId)).messages.filter(message => JSON.stringify(message.content).includes('NEW_TRIGGER')).length, 1, 'One displayed receipt for an admitted platform input')
       assert.equal(prompts.length, 1); assert.match(prompts[0]!, /NEW_TRIGGER/); assert.doesNotMatch(prompts[0]!, /OLD_PASSIVE|NO_BOT_LINK|ARRIVED_BEFORE_ASSIGNMENT/)
       await send('other', 'OTHER_GROUP', 'two', true); assert.equal(prompts.length, 1)
       // Stop transport and session manager, then recover the same durable inbox and dedup set.
@@ -151,7 +163,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       assert.equal(outbound, beforeRevokeOutput, 'Revoked in-flight inference cannot emit a reply')
       await send('after-unassign', 'AFTER_UNASSIGN', 'one', true)
       assert.equal(prompts.length, 3)
-      assert.match(JSON.stringify(await Array.fromAsync(store.readSessionLog(physical))), /AFTER_UNASSIGN/)
+      assert.match(JSON.stringify((await sessions.getHistory(inboxId)).messages), /AFTER_UNASSIGN/)
       const executionId = channelSessionId({ projectId, botInstanceId: connection.id, platform: 'qq', conversationId: 'group:one' })
       const oldGeneration = sessions.getSessionState(executionId)!.serviceGeneration
       await assign(true, (await inspect()).sourceRevision, deployments.read('support')!.deployment.revision)
@@ -177,6 +189,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`real QQ passi
       assert.equal(prompts.length, 4)
       const transferred = Promise.withResolvers<void>(); bus.on('session.turn.finished', fact => { if (fact.inputId === 'beta') transferred.resolve() })
       await send('beta', 'BETA_ONLY', 'one', true); await transferred.promise
+      assert.match(JSON.stringify((await sessions.getHistory(inboxId)).messages), /OLD_PASSIVE/, 'Receipt history survives model context epochs')
       assert.equal(prompts.length, 5); assert.doesNotMatch(prompts[4]!, /REENABLED_ONLY|NEW_TRIGGER|AFTER_RESTART|INFLIGHT|OLD_PASSIVE|ARRIVED_UNDER_A/)
       await assert.rejects(() => packageTool.execute({ action: 'source', folderId: 'folder', channelSessionId: inboxId }, { ...owner, projectId: 'foreign' }), /authenticated owner/)
       await assert.rejects(() => packageTool.execute({ action: 'source', folderId: 'folder', channelSessionId: inboxId }, { ...owner, channel: 'qq' }), /authenticated owner/)

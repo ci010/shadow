@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto'
 import { ChannelAdmissionError, ChannelConnectionError, type BaseChannel, type ChannelDecision } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { YieldError } from '../sessions/yield.ts'
-import { channelSessionId, type ChannelAddress, type OutboundMessage } from '../bus/events.ts'
+import { channelAddressFromSessionId, channelSessionId, type ChannelAddress, type OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { Config } from '../config/schema.ts'
 import type { Hono } from 'hono'
@@ -288,7 +288,8 @@ export class ChannelManager {
     const seen = new Set<string>()
     let id: string | undefined = sessionId
     while (id && !seen.has(id)) {
-      if (id.startsWith(`bot:${encodeURIComponent(bot.projectId)}:${encodeURIComponent(bot.id)}:`) ||
+      const address = channelAddressFromSessionId(id)
+      if (address?.projectId === bot.projectId && address.botInstanceId === bot.id ||
         (bot.legacySessionId && id.startsWith(`${bot.platform}:`))) return true
       seen.add(id)
       const state = this.sessionManager.getSessionState(id)

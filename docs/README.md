@@ -51,6 +51,7 @@ Start with the [project README](../README.md) for installation and commands,
 
 - [Session diagnosis](diagnostics.md), [handoff recovery](handoff-recovery.md),
   and [session retirement](session-retirement.md)
+- [Offline channel session identity migration](channel-session-migration.md) (reviewed mappings, backup and reference-scope limitations)
 - [Startup profiling](startup-profiling.md)
 - [Desktop release verification](release.md) and [desktop bundling](desktop-bundling.md)
 - [Two-device Electron pairing](desktop-pairing.md) and [desktop Main / Child profiles](desktop-roles.md)

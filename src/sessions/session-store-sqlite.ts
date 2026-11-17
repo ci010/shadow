@@ -48,6 +48,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'retirement',
   'channelBoundary',
   'channelSource',
+  'channelIdentityMigration',
   'serviceGeneration',
   'workPolicy',
   'automaticWork',
@@ -118,6 +119,10 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (value.lastUserMessageAt !== undefined) metadata.lastUserMessageAt = parseContextResetAt(value.lastUserMessageAt)
   if (value.retirement !== undefined) metadata.retirement = retirementReceiptSchema.parse(value.retirement)
   if (value.serviceGeneration !== undefined) metadata.serviceGeneration = parseServiceGeneration(value.serviceGeneration)
+  if (value.channelIdentityMigration !== undefined) {
+    if (value.channelIdentityMigration !== 1) throw new Error('Invalid channel identity migration marker')
+    metadata.channelIdentityMigration = 1
+  }
   if (value.channelSource !== undefined) metadata.channelSource = parseChannelSource(value.channelSource)
   if (value.channelBoundary !== undefined) metadata.channelBoundary = parseChannelBoundary(value.channelBoundary)
   if (value.automaticWork !== undefined) metadata.automaticWork = automaticWorkSessionSchema.parse(value.automaticWork)
@@ -379,7 +384,7 @@ export class SqliteSessionStore implements SessionStore {
         throw new OwnershipValidationError('Invalid session prototype metadata')
       }
     }
-    parseChannelSource(metadata.channelSource, row.key, metadata.projectId)
+    parseChannelSource(metadata.channelSource, row.key, metadata.projectId, metadata.channelIdentityMigration)
     return normalizeWorkExecutorMetadata({
       sessionId: row.key,
       segmentIndex: row.segment_count ?? 0,
@@ -427,7 +432,8 @@ export class SqliteSessionStore implements SessionStore {
         focus: state.focus === undefined ? undefined : parseSessionFocus(state.focus),
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
         serviceGeneration: parseServiceGeneration(state.serviceGeneration),
-        channelSource: parseChannelSource(state.channelSource, state.sessionId, state.projectId),
+        channelIdentityMigration: state.channelIdentityMigration,
+        channelSource: parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration),
         chatName: state.chatName === undefined ? undefined : parseSessionName(state.chatName),
         decisionOwnerSessionId: parseDecisionOwner(state.decisionOwnerSessionId),
         ...parseTopicSessionFields(state),

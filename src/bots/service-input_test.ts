@@ -65,10 +65,18 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${platform} s
       getLlmRuntimeConfig: () => ({ model: 'default', temperature: 0, contextWindow: 128000 }),
     })
     let agent = makeAgent()
-    const makeInputs = () => channelInputFixture({ projectId, sessions, bots, directory, receive: message => agent.receiveChannelMessage(message) })
+    const makeInputs = () => {
+      const routed = channelInputFixture({ projectId, sessions, bots, directory, receive: message => agent.receiveChannelMessage(message) })
+      return { ...routed, receive: async (message: InboundMessage) => {
+        const receipt = await sessions.recordPassiveChannel({version:1,projectId,botInstanceId:bot.id,platform,conversationId:message.chatId,kind:'group'},message,()=>{})
+        if (receipt.disposition === 'filtered') return receipt
+        if (message.silent) { await routed.policy(message, async()=>{}); return receipt }
+        return routed.receive(message)
+      } }
+    }
     let inputs = makeInputs()
     const address = { projectId, botInstanceId: bot.id, platform, conversationId: 'group:one' }
-    const message: InboundMessage = { channelAddress: address, channel: platform, chatId: address.conversationId, isGroup: true, admin: false, senderId: 'owner', content: 'hello', messageId: 'native', platformMessageId: 'native', timestamp: new Date().toISOString() }
+    const message: InboundMessage = { channelInputGuard:()=>{}, channelAddress: address, channel: platform, chatId: address.conversationId, isGroup: true, admin: false, senderId: 'owner', content: 'hello', messageId: 'native', platformMessageId: 'native', timestamp: new Date().toISOString() }
     try {
       await agent.start()
       let policies = 0
@@ -79,17 +87,22 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${platform} s
       await deploy()
       await assert.rejects(inputs.policy({ ...message, senderId: 'stranger' }, runPolicy), /not authorized/)
       assert.equal(policies, 0)
-      await assert.rejects(inputs.receive({ ...message, senderId: 'stranger', silent: true }), /not authorized/)
-      await assert.rejects(inputs.receive({ ...message, chatId: 'group:unbound', channelAddress: { ...address, conversationId: 'group:unbound' }, silent: true }), /subscription/)
-      assert.equal(sessions.listSessions().length, 0)
+      await assert.rejects(inputs.receive({ ...message, messageId:'stranger', senderId: 'stranger', silent: true }), /not authorized/)
+      await assert.rejects(inputs.receive({ ...message, messageId:'unbound', chatId: 'group:unbound', channelAddress: { ...address, conversationId: 'group:unbound' }, silent: true }), /subscription/)
+      assert.equal(sessions.listSessions().length, 2, 'Denied and unbound arrivals still have common receipt histories')
       await inputs.policy(message, async () => {
         assert.equal((await inputs.receive({ ...message, messageId: 'history', content: '/new historical context', silent: true })).delivery, 'silent')
         await inputs.receive({ ...message, messageId: 'history', content: '/new historical context', silent: true })
       })
       assert.equal(calls.length, 0)
-      assert.equal(sessions.listSessions().length, 1)
-      const historyId = SessionManager.currentPhysicalId(sessions.getSessionState(channelSessionId(address))!)
-      const history = await Array.fromAsync(store.readSessionLog(historyId))
+      assert.equal(sessions.listSessions().length, 2, 'BOT binding does not create an execution conversation')
+      const allRecords = async () => {
+        const state = sessions.getSessionState(channelSessionId(address))!
+        const records: Record<string,unknown>[] = []
+        for (let segment = 0; segment <= state.segmentIndex; segment++) records.push(...await Array.fromAsync(store.readSessionLog(SessionManager.currentPhysicalId({...state,segmentIndex:segment}))))
+        return records
+      }
+      const history = await allRecords()
       assert.equal(history.filter(record => record.channel_input_id === 'history').length, 1)
       assert.match(JSON.stringify(history), /historical context/)
       assert.equal(sessions.listActiveSessions().length, 0)
@@ -97,7 +110,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${platform} s
       sessions = makeSessions(); agent = makeAgent(); await agent.start(); inputs = makeInputs()
       await inputs.receive({ ...message, messageId: 'history', content: '/new historical context', silent: true })
       assert.equal(calls.length, 0)
-      assert.equal((await Array.fromAsync(store.readSessionLog(historyId))).filter(record => record.channel_input_id === 'history').length, 1)
+      assert.equal((await allRecords()).filter(record => record.channel_input_id === 'history').length, 1)
       assert.equal(sessions.listActiveSessions().length, 0)
       assert.equal(commands, 0)
       assert.equal(outbound, 0)
@@ -110,7 +123,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${platform} s
       assert.deepEqual(calls[0]?.inference, inference)
       assert.deepEqual(calls[0]?.tools, [])
       assert.match(calls[0]!.prompt, /Service-only prompt/)
-      assert.match(calls[0]!.prompt, /historical context/)
+      assert.doesNotMatch(calls[0]!.prompt, /historical context/, 'Passive receipts are not replayed into admitted BOT context')
       assert.doesNotMatch(calls[0]!.prompt, /PRIVATE_CONTEXT/)
       assert.ok(sessions.getSessionState(channelSessionId(address)))
       blocked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }
@@ -128,7 +141,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${platform} s
       assert.equal(extraTurns, 0)
       assert.equal(commands, 0)
       assert.equal(calls.length, 2)
-      assert.match(JSON.stringify(await Array.fromAsync(store.readSessionLog(historyId))), /passive context/)
+      assert.match(JSON.stringify(await allRecords()), /passive context/)
       await deploy([])
       await assert.rejects(inputs.policy({ ...message, messageId: 'revoked' }, runPolicy), /subscription/)
       assert.equal(policies, 1)

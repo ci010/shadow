@@ -190,6 +190,12 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
   async function input(chatId = '201', text = 'Hello', instance = bot) {
     const messageId = randomUUID()
     const admitted = await integration.prepareIngress(instance.id, { chatId, senderId: '500', messageId }, signal())
+    const location = admitted.location
+    await sessions.recordPassiveChannel({ version: 1, projectId, botInstanceId: instance.id, platform: 'discord', conversationId: chatId,
+      kind: location.type === 1 ? 'direct' : location.type === 10 || location.type === 11 ? 'thread' : 'channel', botUserId: botUser(instance.id),
+      ...(location.guildId ? {guildId:location.guildId} : {}), ...(location.recipientId ? {recipientId:location.recipientId} : {}),
+      ...(location.type === 10 || location.type === 11 ? {parentId:location.parentId!} : {}) },
+    {channel:'discord',chatId,senderId:'500',messageId,content:text,timestamp:new Date().toISOString()},()=>{})
     return channelMessageInput({ channelAddress: address(chatId, instance), channel: 'discord', chatId, senderId: '500',
       senderName: 'Member', content: text, messageId, timestamp: new Date().toISOString(), isGroup: chatId !== '204',
       admin: true, channelAdmissionId: admitted.admissionId, channelLocation: admitted.location })
@@ -321,7 +327,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 
   test(`${Store.name}: full provider input excludes private Project, old history, sibling memory and unsafe tools`, async t => {
     const f = await fixture(t, Store)
-    await f.sessions.buildSession(f.id(), undefined, { agentType: 'general' })
+    await f.sessions.buildSession(f.id(), undefined, { agentType: 'general', channelSource: {version:1,...f.address(),platform:'discord',kind:'channel',guildId:'100',botUserId:'900'} })
     const old = physicalSessionId(f.sessions.getSessionState(f.id())!)
     await f.storage.appendMessages(old, [{ role: 'user', content: 'OLD_HISTORY_CANARY', timestamp: new Date().toISOString() }])
     const privateDomain = f.memory.createDomain('PRIVATE_TITLE_CANARY', 'project-private')
@@ -896,6 +902,12 @@ async function observationFixture(t:TestContext, enabled = true, includeBots = f
   const makeAdapter = () => {
     const adapter = new DiscordChannel(new Bus(),{token:'fixture',workspace:f.home,triggerMode:'mention',reactionEmoji:''})
     Object.assign(adapter,{botUserId:'900'})
+    adapter.setBotScope({projectId:f.projectId,botInstanceId:f.bot.id,platform:'discord'})
+    adapter.setPassiveCollector(async message => {
+      const receipt = await f.sessions.recordPassiveChannel({version:1,projectId:f.projectId,botInstanceId:f.bot.id,platform:'discord',conversationId:message.chatId,
+        kind:'channel',guildId:'100',botUserId:'900'},message,()=>{})
+      return {eligible:true,fresh:receipt.disposition !== 'filtered',assertCurrent:()=>{}}
+    })
     adapter.setDiscordIntegration({processorStorageId:f.bot.id,
       admit:(input,signal) => f.integration.prepareIngress(f.bot.id,input,signal),
       classifyObservation:(proof,data,signal) => f.integration.classifyObservation(f.bot.id,proof,data,signal),
@@ -937,8 +949,8 @@ test('managed gateway observation: nonparticipant ordinary account cross-channel
     await f.sendObservation(adapter,'201')
     await f.sendObservation(adapter,'205')
     assert.equal(f.requests.length,1,'campaign cooldown prevents additional wakes')
-    await f.sendObservation(adapter,'201',{id:'question-1',author:{id:'501',bot:false},content:'question alpha',attachments:[]})
-    await f.sendObservation(adapter,'201',{id:'question-2',author:{id:'501',bot:false},content:'requirement beta',attachments:[]})
+    await f.sendObservation(adapter,'201',{id:'1001',author:{id:'501',bot:false},content:'question alpha',attachments:[]})
+    await f.sendObservation(adapter,'201',{id:'1002',author:{id:'501',bot:false},content:'requirement beta',attachments:[]})
     await until(() => f.requests.length === 2)
     const question = JSON.stringify(f.requests[1]!.messages)
     assert.match(question,/question alpha/);assert.match(question,/requirement beta/)
@@ -976,21 +988,21 @@ test('managed observation restart preserves campaign state and cooldown; revoked
   const f = await observationFixture(t)
   let adapter = f.makeAdapter()
   try {
-    await f.sendObservation(adapter,'201',{id:'stable-1'})
-    await f.sendObservation(adapter,'202',{id:'stable-2'})
+    await f.sendObservation(adapter,'201',{id:'2001'})
+    await f.sendObservation(adapter,'202',{id:'2002'})
     await adapter.stop()
     adapter = f.makeAdapter()
-    await f.sendObservation(adapter,'205',{id:'stable-3'})
+    await f.sendObservation(adapter,'205',{id:'2003'})
     await until(() => f.outbound.length === 1)
     await adapter.stop();adapter = f.makeAdapter()
-    await f.sendObservation(adapter,'205',{id:'stable-3'})
-    await f.sendObservation(adapter,'201',{id:'stable-4'})
+    await f.sendObservation(adapter,'205',{id:'2003'})
+    await f.sendObservation(adapter,'201',{id:'2004'})
     assert.equal(f.requests.length,1,'raw IDs and cooldown survive adapter restart')
     const output = f.outbound[0]!
     await assert.rejects(f.integration.assertDelivery({...output,chatId:'201'},signal()),/authorization/)
     f.inspections.set('202',{canView:false})
     await assert.rejects(f.integration.assertDelivery(output,signal()))
-    await assert.rejects(f.sendObservation(adapter,'205',{id:'revoked'}),/permission/)
+    await assert.rejects(f.sendObservation(adapter,'205',{id:'2005'}),/permission/)
     f.inspections.delete('202')
     await f.approve({kind:'bindings.save',bindings:[{...f.service,observation:{...f.service.observation!,enabled:false}}]})
     await assert.rejects(f.integration.assertDelivery(output,signal()))

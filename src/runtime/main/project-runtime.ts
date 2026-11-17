@@ -1,3 +1,4 @@
+import { readChannelSessionAliases, withChannelSessionAliases } from '../../sessions/channel-session-aliases.ts'
 import { assertConnectionMigrationSettled } from '../../bots/connection-migration.ts'
 import { workflowReferenceResolver } from '../../workflows/references.ts'
 import { scheduleAuthoring } from '../../workflows/schedule-authoring.ts'
@@ -714,7 +715,8 @@ export async function createProjectRuntime(
     dependencies.startupSessionStates?.[config.agent.sessionStorage === 'sqlite' ? 'sqlite' : 'jsonl'])
   // Do not retain the host's snapshot through the runtime dependency closure.
   delete dependencies.startupSessionStates
-  const sessionStore = startupStates.store
+  const sessionIdentityAliases = await readChannelSessionAliases(sessionsDir, project.id)
+  const sessionStore = withChannelSessionAliases(startupStates.store, sessionIdentityAliases)
   cleanup.push(startupStates.close)
   cleanup.push(() => sessionStore.close?.())
   await startup.measure('ownership', () => assertSessionProjectOwnership(sessionStore, project.id))
@@ -780,6 +782,7 @@ export async function createProjectRuntime(
 
   }, directoryBots)
   const sessions: SessionManager = new SessionManager({
+    sessionIdentityAliases,
     conversationPolicies: botConversationPolicies(botStore, combineConversationPolicies(discordIntegration, botPolicies), directoryBots),
     projectId: project.id,
     promptCaptures,

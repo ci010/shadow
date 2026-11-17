@@ -55,10 +55,10 @@ private drafts; returning requires a new connection selection. No running
 connection, credential or BOT deployment is changed merely by navigating these
 settings pages.
 
-## Common channel receipt and passive inbox sessions
+## Fixed platform conversations and common receipts
 
 Enabled Project connections record platform-delivered message-create inputs into
-separate, read-only `channel-inbox:` sessions before business sender admission,
+fixed `channel-inbox:` sessions before business sender admission,
 BOT selection, trigger evaluation, processors, attachment downloads or replies.
 This includes personal and unbound connections, not only assigned service BOTs.
 QQ, Feishu, supported Discord locations and WeChat use the existing receipt path;
@@ -76,12 +76,19 @@ applicable. Names are display-only; sender identity is recorded on each message.
 Projects, connections, groups, DMs and threads have separate identities. Feishu
 platform topics use their verified root and outer group rather than merging their
 messages into the group conversation. Source metadata survives both JSONL and
-SQLite persistence; old non-inbox session records need no fabricated migration.
+SQLite persistence. Reviewed legacy identity migration preserves old history without
+fabricating missing ancestry; the next real adapter receipt fills source metadata.
 Old bounded discovery observations are not silently backfilled as trusted inbox
 history.
 
 These inboxes appear in the Web conversation inventory with a **passive inbox**
-suffix. Their history is readable, but they have no send composer or Agent loop.
+suffix. Owner Web history remains read-only (no send composer). A bound BOT
+processes newly admitted platform inputs and records its replies in that same ID;
+it does not create a parallel `bot:` conversation. Unbound receipts never start
+an Agent loop. Common receipts are recorded once, before policy admission;
+model context contains only admitted inputs, not old/unbound/denied receipts.
+Context epochs may change without changing the logical conversation ID. See
+[channel identity migration](channel-session-migration.md) for existing histories.
 They are excluded from automatic learning. In an ordinary owner Web chat, type
 `@` and choose the inbox by its name. The existing session-reference mechanism
 inserts the correct Project/session reference without requiring hand-entered

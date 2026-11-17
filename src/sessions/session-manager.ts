@@ -1,3 +1,4 @@
+import { isDisplayDuplicate, markRecordedChannelInput } from '../channels/recorded-input.ts'
 import { stampPersonalOutput } from '../bots/personal-output.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { parseChannelSource, passiveChannelId, PASSIVE_CHANNEL_PREFIX, type ChannelSource, type PassiveChannelMessage } from '../channels/passive-contract.ts'
@@ -37,7 +38,7 @@ import type { IdentityManager } from '../agent/identity.ts'
 import { inferenceSettings, isContextWindow, resolveInferenceSettings, validateInferenceCapabilities, type InferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { ProjectScope } from '../projects/scope.ts'
-import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
+import { channelSessionId, channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
 import type { HandoffManager } from './handoff/manager.ts'
 import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { ImportTool } from '../tools/load-tool.ts'
@@ -108,6 +109,8 @@ function stripMetaTag(text: string): string {
 }
 
 export interface HistoryQuery {
+  /** Internal model/learning projection: admitted context, never passive receipts. */
+  executionOnly?: boolean
   /** Query a specific physical session segment (bypasses logical chain). */
   physicalId?: string
   /** Pagination offset. */
@@ -137,6 +140,7 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  sessionIdentityAliases?: Readonly<Record<string, string>>
   conversationPolicies?: ConversationPolicies
   promptCaptures?: import('./prompt-capture.ts').PromptCaptureStore
   projectId?: string
@@ -275,6 +279,7 @@ export class SessionManager {
   }
 
   assertFolderAccess(sessionId: string): void {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const visited = new Set<string>()
     const check = (id: string) => {
       if (visited.has(id)) return
@@ -326,6 +331,7 @@ export class SessionManager {
   }
 
   isWaitingForCall(sessionId: string): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return [...this.calls.values()].some(frame => frame.callerId === sessionId)
   }
 
@@ -392,10 +398,12 @@ export class SessionManager {
   }
 
   getDelegationOwner(sessionId: string): string | undefined {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return delegationOwner(this.sessionStates[sessionId])
   }
 
   getAllowedSubagentModes(sessionId: string): readonly ExecutionMode[] {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (this.isManagedConversation(sessionId)) {
       const state = this.sessionStates[sessionId]
       return state?.channelBoundary && state.mode === 'session' &&
@@ -406,6 +414,7 @@ export class SessionManager {
   }
 
   assertCanCreateChild(sessionId: string, mode: ExecutionMode): void {
+    sessionId = this.resolveSessionIdentity(sessionId)
     this.assertFolderAccess(sessionId)
     const state = this.sessionStates[sessionId]
     if (!state) throw new Error('Delegation requires an existing owner session.')
@@ -438,6 +447,7 @@ export class SessionManager {
   }
 
   async startCall(sessionId: string, task: string, context: ExecutionContext): Promise<string> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (this.deps.projectId && context.projectId !== this.deps.projectId) throw new Error('Call context belongs to another project')
     const state = this.sessionStates[sessionId]
     if (!state || state.mode !== 'call' || delegationOwner(state) !== context.sessionId) throw new Error('Call admission requires its actual owner.')
@@ -618,6 +628,7 @@ export class SessionManager {
   }
 
   async startChild(sessionId: string, task: string, context: ExecutionContext): Promise<DeliveryReceipt> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (this.deps.projectId && context.projectId !== this.deps.projectId) throw new Error('Child context belongs to another project')
     const state = this.sessionStates[sessionId]
     if (delegationOwner(state) !== context.sessionId || !state) throw new Error('Child admission requires its actual owner.')
@@ -720,6 +731,7 @@ export class SessionManager {
   }
 
   async decisionContext(sessionId: string) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.getSessionState(sessionId)
     if (!state) throw new YieldError('not_found', 'Decision session not found.')
     this.assertFolderAccess(sessionId)
@@ -734,6 +746,7 @@ export class SessionManager {
   }
 
   decisionOwners(sessionId: string) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.getSessionState(sessionId)
     if (!state) throw new YieldError('not_found', 'Decision session not found.')
     return { reportingSessionId: state.decisionOwnerSessionId ?? sessionId,
@@ -742,6 +755,7 @@ export class SessionManager {
   }
 
   async setDecisionOwner(sessionId: string, reportingSessionId: string): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.getSessionState(sessionId)
     if (!state || !this.decisionOwners(sessionId).candidates.some(item => item.sessionId === reportingSessionId)) {
       throw new YieldError('invalid_request', 'Choose an existing durable Project session for reporting responsibility.')
@@ -918,6 +932,7 @@ ${JSON.stringify(request)}`,
   }
 
   getYieldPolicy(sessionId: string): YieldPolicy {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return parseYieldPolicy(this.getSessionConfig(sessionId).yield ?? this.deps.getYieldPolicy?.() ?? { timeoutMs: null })
   }
 
@@ -1027,10 +1042,12 @@ ${JSON.stringify(request)}`,
     return this.deps.remoteExecutor
   }
   getPromptCaptures(sessionId: string) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     this.assertFolderAccess(sessionId)
     return this.deps.promptCaptures?.list(sessionId)
   }
   getPromptCaptureStatus(sessionId: string) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     this.assertFolderAccess(sessionId)
     return this.deps.promptCaptures?.status(sessionId)
   }
@@ -1051,12 +1068,14 @@ ${JSON.stringify(request)}`,
 
   /** Compatibility query: execution mode, never role, determines reusability. */
   isEphemeralSession(sessionId: string): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.sessionStates[sessionId]
     return !!state && state.mode !== 'session'
   }
 
   /** A task can be corrected by its actual parent only while the original execution runs. */
   canReceiveSessionMessage(sessionId: string, sourceId?: string): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (this.deps.projectId && !this.sessionStates[sessionId]) return false
     const state = this.sessionStates[sessionId]
     if (state?.mode === 'task') return !!sourceId && delegationOwner(state) === sourceId
@@ -1200,6 +1219,7 @@ ${JSON.stringify(request)}`,
 
   /** Called at creation, before admission; no Work lifecycle mutations. */
   async configureTaskReview(sessionId: string, assignment: string, review: { mode: 'parent' | 'agent'; agentType?: string; maxRounds: number; criteria: string }): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.sessionStates[sessionId]
     if (!state?.task || state.executionStatus !== 'pending') throw new Error('Review policy requires a fresh local task')
     const task = parseTaskRecord({ ...state.task, workflow: { ...review, assignment } })
@@ -1495,15 +1515,17 @@ ${JSON.stringify(request)}`,
         await this.buildSession(sessionId, undefined, { channelSource: source, mode: 'session' })
         state = this.sessionStates[sessionId]
       }
-      const old = parseChannelSource(state.channelSource, sessionId, this.deps.projectId)!
+      const old = parseChannelSource(state.channelSource, sessionId, this.deps.projectId, state.channelIdentityMigration)
       // Names refresh; immutable routing ancestry cannot silently drift.
-      for (const key of ['kind', 'parentId', 'guildId', 'recipientId', 'botUserId'] as const) if (old[key] !== source[key]) throw new Error('Passive origin ancestry changed')
+      for (const key of ['kind', 'parentId', 'guildId', 'recipientId', 'botUserId'] as const) if (old && old[key] !== source[key]) throw new Error('Passive origin ancestry changed')
       const physicalId = SessionManager.currentPhysicalId(state)
-      let seen = this.passiveInputIds.get(physicalId)
+      let seen = this.passiveInputIds.get(sessionId)
       if (!seen) {
         seen = new Set<string>()
-        for await (const record of this.store.readSessionLog(physicalId)) if (typeof record.channel_input_id === 'string') seen.add(record.channel_input_id)
-        this.passiveInputIds.set(physicalId, seen)
+        for (let segment = 0; segment <= state.segmentIndex; segment++) {
+          for await (const record of this.store.readSessionLog(physicalSessionId(state, segment))) if (typeof record.channel_input_id === 'string') seen.add(record.channel_input_id)
+        }
+        this.passiveInputIds.set(sessionId, seen)
       }
       if (seen.has(message.messageId)) return { status: 'accepted', disposition: 'filtered', sessionId, inputId: message.messageId, delivery: 'silent' }
       {
@@ -1513,12 +1535,12 @@ ${JSON.stringify(request)}`,
         if (input.kind !== 'message') throw new Error('Passive input must be a message')
         const entry = { ...await buildUserChatMessage(input, this.workspace, this.workspace), timestamp: message.timestamp }
         assertLive()
-        await this.store.appendMessages(physicalId, [{ role: entry.role, content: entry.content, name: entry.name, timestamp: message.timestamp, channel_input_id: message.messageId }])
+        await this.store.appendMessages(physicalId, [{ role: entry.role, content: entry.content, name: entry.name, timestamp: message.timestamp, channel_input_id: message.messageId, channel_receipt: true }])
         seen.add(message.messageId)
         this.deps.bus.emit('session.message.appended', { sessionId, physicalSessionId: physicalId, message: entry })
       }
       assertLive()
-      await this.saveState(sessionId, { ...state, channelSource: source, chatName: source.name ?? state.chatName, lastActivityAt: message.timestamp })
+      await this.saveState(sessionId, Object.assign(state, { channelSource: source, chatName: source.name ?? state.chatName, lastActivityAt: message.timestamp }))
       return { status: 'accepted', sessionId, inputId: message.messageId, delivery: 'silent' }
     })
   }
@@ -1537,6 +1559,7 @@ ${JSON.stringify(request)}`,
   }
   /** Resolves after preparation and admission, never after model completion. */
   deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const admit = (beforeDispatch?: () => void) => this.deliverOwned(sessionId, input, llm, beforeDispatch)
     if (this.sessionStates[sessionId]?.automaticWork) {
       if (!this.automaticWorkAdmission) return Promise.reject(new Error('Automatic Work admission controller is unavailable'))
@@ -1549,13 +1572,14 @@ ${JSON.stringify(request)}`,
     return delivery
   }
   private deliverOwned(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig, beforeDispatch?: () => void): Promise<DeliveryReceipt> {
-    if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) return Promise.reject(new Error('Passive channel inbox is read-only. Configure a BOT from an owner Web chat.'))
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
+      if (input.source.kind === 'user' && input.source.sender.channel === 'web') this.assertChannelInput(sessionId, input)
       if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
       if (await this.store.isConversationArchived?.(sessionId)) {
         throw new Error('Archived conversation is read-only. Start a new conversation and reference its history.')
       }
       this.deps.conversationPolicies?.authorize(sessionId, input)
+      this.assertChannelInput(sessionId, input)
       await this.reconcileChannelContext(sessionId)
       const personal = this.deps.conversationPolicies?.personal?.(sessionId)
       if (personal) {
@@ -1640,7 +1664,7 @@ ${JSON.stringify(request)}`,
       }
       const config = llm ?? this.deps.getLlmRuntimeConfig?.()
       if (!config) throw new Error('Session delivery requires LLM runtime configuration')
-      const deliveryInput = this.isManagedConversation(sessionId) && input.kind === 'message'
+      const deliveryInput = this.isManagedConversation(sessionId) && !personal && input.kind === 'message'
         ? {
           ...input, policy: input.policy === 'silent' ? 'silent' as const : 'queue' as const,
           source: input.source.kind === 'user'
@@ -1648,6 +1672,10 @@ ${JSON.stringify(request)}`,
             : input.source,
         }
         : input
+      if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX) && deliveryInput.kind === 'message'
+        && deliveryInput.source.kind === 'user' && this.passiveInputIds.get(sessionId)?.has(deliveryInput.id)) {
+        markRecordedChannelInput(deliveryInput)
+      }
       let session: Session | EphemeralSession | undefined = this.sessions[sessionId]
       if (resume && session && (!('quiescent' in session) || !session.quiescent)) {
         throw new SessionResumeError('The conversation has active or queued work. Wait before continuing.')
@@ -1781,12 +1809,31 @@ ${JSON.stringify(request)}`,
     return admission
   }
 
+  resolveSessionIdentity(id: string): string {
+    return this.deps.sessionIdentityAliases?.[id] ?? id
+  }
+
   isManagedConversation(sessionId: string): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return sessionId.startsWith(PASSIVE_CHANNEL_PREFIX) || !!this.sessionStates[sessionId]?.channelSource || (this.deps.conversationPolicies?.managed(sessionId) ?? false)
   }
 
+  private assertChannelInput(sessionId: string, input: SessionInput): void {
+    if (!sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) return
+    if (!this.deps.conversationPolicies) throw new Error('Channel inbox is read-only without live BOT policy')
+    if (input.source.kind === 'user') {
+      const sender = input.source.sender
+      if ((!sender.channelInputGuard && !sender.channelAdmissionId) || !sender.channelAddress || channelSessionId(sender.channelAddress) !== sessionId
+        || sender.channel !== sender.channelAddress.platform || sender.chatId !== sender.channelAddress.conversationId) {
+        throw new Error('Channel inbox is read-only outside trusted platform admission')
+      }
+      sender.channelInputGuard?.()
+    }
+  }
+
   authorizeConversationInput(sessionId: string, input: SessionInput): void {
-    if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) throw new Error('Passive channel inbox is read-only')
+    sessionId = this.resolveSessionIdentity(sessionId)
+    this.assertChannelInput(sessionId, input)
     if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
     this.deps.conversationPolicies?.authorize(sessionId, input)
   }
@@ -1963,12 +2010,14 @@ ${JSON.stringify(request)}`,
   }
 
   isWaitingForExternalExecution(sessionId: string): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return !!this.deps.hasPendingExternalExecution?.(sessionId)
       || this.deps.backgroundTasks.listTasks(sessionId).some(task => task.status === 'running' || task.status === 'cancelling')
   }
 
   /** Queued input, preparation, maintenance and external waits are not idle/crashed. */
   isSessionBusy(sessionId: string): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const session = this.sessions[sessionId]
     return this.preparations.has(sessionId) || !!session && (!('quiescent' in session) || !session.quiescent)
       || !!this.inputs.get(sessionId) || !!this.yields.get(sessionId) || this.isWaitingForCall(sessionId)
@@ -1976,12 +2025,14 @@ ${JSON.stringify(request)}`,
   }
 
   getSessionRecovery(sessionId: string): SessionRecovery | undefined {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const session = this.sessions[sessionId]
     if (this.preparations.has(sessionId) || (session && (!('quiescent' in session) || !session.quiescent))) return
     return this.sessionStates[sessionId]?.mode === 'session' ? this.sessionStates[sessionId]?.recovery : undefined
   }
 
   resumeSession(sessionId: string, recoveryId: string, acknowledgeToolReplay = false): Promise<DeliveryReceipt> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const id = crypto.randomUUID()
     return this.deliver(sessionId, {
       id, kind: 'control', command: { type: 'resume', recoveryId, acknowledgeToolReplay }, timestamp: new Date().toISOString(),
@@ -2030,6 +2081,8 @@ ${JSON.stringify(request)}`,
       workPolicy?: WorkPolicy
     },
   ): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
+    if (parent) parent = { ...parent, id: this.resolveSessionIdentity(parent.id), ...(parent.physicalId ? {physicalId: this.resolveSessionIdentity(parent.physicalId)} : {}) }
     const release = this.acquireFolderAccess()
     try { await this.withStateCreation(sessionId, () => this.buildSessionWithAccess(sessionId, parent, stateFields)) }
     finally { release() }
@@ -2222,6 +2275,7 @@ ${JSON.stringify(request)}`,
    */
   /** Internal receipt only; does not alter execution controls or replay the task. */
   async updateAutomationOrganization(sessionId: string, outcome: OrganizationOutcome | undefined, problem?: 'execution_failed' | 'unfinished'): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.sessionStates[sessionId]
     if (!state?.automation || state.automation.config?.source !== 'system' || state.agentType !== 'work-organizer') return
     state.automation = { ...state.automation, organization: parseOrganizationOutcome(outcome), organizationProblem: problem }
@@ -2335,6 +2389,7 @@ ${JSON.stringify(request)}`,
 
   /** Bind only a host-created automatic executor that has never admitted work. */
   async bindAutomaticWorkWorkspace(sessionId: string, folderId: string, workdir = localFolderWorkdirRef(folderId)): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state?.automaticWork || state.mode !== 'session' || state.lastActivityAt || this.acceptedInputs.has(sessionId)
@@ -2407,6 +2462,7 @@ ${JSON.stringify(request)}`,
 
   /** Tool entry point: the caller supplies only its runtime-bound identity, never a target. */
   async updateSelfMetadata(sessionId: string, value: unknown, expected?: string): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
     if (!Object.keys(patch).length || Object.keys(patch).some(key => !['topic', 'focus', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
@@ -2441,6 +2497,7 @@ ${JSON.stringify(request)}`,
   }
 
   async updateConversationMetadata(sessionId: string, metadata: { topic: string; focus?: string }): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const name = parseSessionName(metadata.topic)
     const focus = metadata.focus === undefined ? undefined : parseSessionFocus(metadata.focus)
     await this.withStateCreation(sessionId, async () => {
@@ -2459,6 +2516,7 @@ ${JSON.stringify(request)}`,
   }
 
   async renameSession(sessionId: string, value: string): Promise<string> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const name = parseSessionName(value)
     return this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
@@ -2472,6 +2530,7 @@ ${JSON.stringify(request)}`,
   }
 
   getSessionConfig(sessionId: string): SessionConfig {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.sessionStates[sessionId]
     return state?.config ?? {}
   }
@@ -2486,6 +2545,7 @@ ${JSON.stringify(request)}`,
   }
 
   getSessionInferenceDefaults(sessionId: string) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (!this.sessionStates[sessionId]) throw new Error('session_not_found')
     const defaults = this.deps.getLlmRuntimeConfig?.()
     if (!defaults) return undefined
@@ -2540,6 +2600,7 @@ ${JSON.stringify(request)}`,
   }
 
   async resetSessionConfig(sessionId: string): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state?.config) return
@@ -2573,6 +2634,7 @@ ${JSON.stringify(request)}`,
 
   /** Unknown legacy user timing is protected; role=user also contains system events. */
   async retirementSnapshot(sessionId: string, inactivityDays: number, locked = false) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.sessionStates[sessionId]
     if (!state || this.retirementProtected(state) || !locked && this.preparations.has(sessionId)) return null
     const locations = resolveSessionLocations(this.deps.workspace, state, LOCAL_NODE_ID, this.deps.workdirLookup)
@@ -2640,6 +2702,7 @@ ${JSON.stringify(request)}`,
   }
 
   async readConversationArchive(sessionId: string): Promise<SessionState | null> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (!await this.store.isConversationArchived?.(sessionId)) return null
     const state = await this.readSessionState(sessionId)
     if (!state) return null
@@ -2650,6 +2713,7 @@ ${JSON.stringify(request)}`,
   /** Raw-record coordinates preserve exact historical references; no model-history
    * reconstruction, tool-pair sanitization or whole-transcript materialization. */
   async readConversationArchiveRecords(sessionId: string, segmentIndex: number, offset: number, limit: number) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0 || !Number.isSafeInteger(offset) || offset < 0
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError('Invalid archive record range')
     const state = await this.readConversationArchive(sessionId)
@@ -2658,6 +2722,7 @@ ${JSON.stringify(request)}`,
   }
 
   async restoreRetiredSession(sessionId: string): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     await this.withSessionPreparation(sessionId, async () => {
       if (await this.store.isConversationArchived?.(sessionId)) throw new Error('Archived conversation is immutable; start a new conversation')
       const state = this.sessionStates[sessionId]
@@ -2673,6 +2738,7 @@ ${JSON.stringify(request)}`,
    * @returns The list of session IDs that were deleted.
    */
   async deleteSession(sessionId: string): Promise<string[]> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (this.deleting.has(sessionId)) return []
     const reserved = new Set<string>()
     const deleted: string[] = []
@@ -2711,6 +2777,7 @@ ${JSON.stringify(request)}`,
   }
 
   private async deleteSessionState(sessionId: string, state: SessionState, deleted: string[], visited: Set<string>): Promise<void> {
+    this.passiveInputIds.delete(sessionId)
     await this.yieldDiscussions.cancelSession(sessionId)
     this.yields.cancelSession(sessionId, 'Session deleted.')
     this.inputs.cancelSession(sessionId)
@@ -2770,11 +2837,13 @@ ${JSON.stringify(request)}`,
   // ── Queries (state, history, tools, context) ───────────────────────
 
   getSessionState(sessionId: string): SessionState | null {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return this.sessionStates[sessionId] ?? null
   }
 
   /** History only: never inserts into live maps or grants execution admission. */
   async readSessionState(sessionId: string): Promise<SessionState | null> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.getSessionState(sessionId) ?? await this.store.readArchivedState?.(sessionId) ?? null
     if (state && this.deps.projectId && state.projectId !== this.deps.projectId) return null
     return state
@@ -2817,6 +2886,7 @@ ${JSON.stringify(request)}`,
   }
 
   async assertHistoricalFolderAccess(sessionId: string): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = await this.readSessionState(sessionId)
     if (!state) throw new Error('Historical session not found')
     const visited = new Set<string>()
@@ -2915,6 +2985,7 @@ ${JSON.stringify(request)}`,
 
   /** Caller has durably consumed status/outcome. Pending callbacks keep the pointer live. */
   async finalizeAutomation(sessionId: string): Promise<boolean> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     await this.sessions[sessionId]?.completion
     await this.reporting.get(sessionId)
     return this.withStateCreation(sessionId, async () => {
@@ -2942,10 +3013,13 @@ ${JSON.stringify(request)}`,
   }
 
   async getYieldRecords(sessionId: string, physicalId?: string) {
+    if (physicalId) physicalId = this.resolveSessionIdentity(physicalId)
+    sessionId = this.resolveSessionIdentity(sessionId)
     return this.decisionRecords.read(sessionId, physicalId)
   }
 
   async getFileChanges(sessionId: string, offset: number, limit: number, signal: AbortSignal, toolCallId?: string) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = await this.readSessionState(sessionId)
     if (!state) return null
     return readSessionFileChanges(this.store, state, offset, limit, signal, toolCallId)
@@ -2959,6 +3033,8 @@ ${JSON.stringify(request)}`,
   }
 
   async getSessionDetails(sessionId: string, physicalId?: string) {
+    if (physicalId) physicalId = this.resolveSessionIdentity(physicalId)
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = await this.readSessionState(sessionId)
     if (!state) return null
     const segments = Array.from({ length: state.segmentIndex + 1 }, (_, index) =>
@@ -3043,6 +3119,7 @@ ${JSON.stringify(request)}`,
   }
 
   getActiveSession(sessionId: string): Session | EphemeralSession | undefined {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return this.sessions[sessionId]
   }
 
@@ -3052,6 +3129,7 @@ ${JSON.stringify(request)}`,
   }
 
   async resolveToolEvidence(sessionId: string, sources: import('./decision-brief.ts').ToolEvidenceQuery, signal: AbortSignal) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     this.assertFolderAccess(sessionId)
     const evidence = await this.decisionRecords.resolveToolEvidence(sessionId, sources, signal)
     signal.throwIfAborted()
@@ -3168,6 +3246,7 @@ ${JSON.stringify(request)}`,
 
   /** Start a fresh context without summarizing, deleting history, or changing identity. */
   clearSessionContext(sessionId: string): Promise<'cleared' | 'busy' | 'unsupported'> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     return this.withSessionPreparation(sessionId, () => this.withStateCreation(sessionId, async () => {
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
@@ -3209,6 +3288,7 @@ ${JSON.stringify(request)}`,
   }
 
   requestCompact(sessionId: string, llm: LlmRuntimeConfig): boolean {
+    sessionId = this.resolveSessionIdentity(sessionId)
     this.assertFolderAccess(sessionId)
     const sess = this.sessions[sessionId]
     if (!(sess instanceof Session) || !sess.accepting) return false
@@ -3254,6 +3334,7 @@ ${JSON.stringify(request)}`,
 
   /** Bounded presentation evidence with exact own-log provenance; no model/history fork replay. */
   async getPresentationEvidence(sessionId: string, signal: AbortSignal) {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = this.getSessionState(sessionId)
     if (!state || state.projectId !== this.deps.projectId || !sessionId.startsWith('web:chat-') || state.mode && state.mode !== 'session') return { sources: [], partial: true }
     return readPresentationEvidence(this.store, state, signal)
@@ -3291,6 +3372,7 @@ ${JSON.stringify(request)}`,
 
   /** Get the first user message content for a session (used as title). */
   async getFirstUserMessage(sessionId: string, knownState?: SessionState): Promise<string | null> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = knownState ?? await this.readSessionState(sessionId)
     if (!state) return null
     const physicalId = physicalSessionId(state, 0)
@@ -3328,6 +3410,7 @@ ${JSON.stringify(request)}`,
   /** Last persisted execution receipt, shared by the JSONL and SQLite stores. */
   @Span('session.getExecutionResult')
   async getExecutionResult(sessionId: string): Promise<SessionTurnFact | undefined> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = await this.readSessionState(sessionId)
     if (!state) return undefined
     let result: SessionTurnFact | undefined
@@ -3348,11 +3431,13 @@ ${JSON.stringify(request)}`,
     sessionId: string,
     query?: HistoryQuery,
   ): Promise<HistoryResult> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     trace.getActiveSpan()?.setAttributes({ sessionId })
 
-    const { physicalId, offset, pageSize, maxMessages = MAX_HISTORY, shallow } =
+    let { physicalId, offset, pageSize, maxMessages = MAX_HISTORY, shallow, executionOnly = false } =
       query ?? {}
     let messages: ChatMessage[]
+    if (physicalId) physicalId = this.resolveSessionIdentity(physicalId)
 
     if (physicalId && this.deps.projectId) {
       const supplied = await this.readSessionState(sessionId)
@@ -3366,16 +3451,25 @@ ${JSON.stringify(request)}`,
     }
     if (physicalId) {
       // Physical segment — parse that single segment, no chain traversal
-      const raw = await this.parseSessionLog(physicalId)
+      const raw = await this.parseSessionLog(physicalId, undefined, undefined, executionOnly)
       messages = sanitizeToolPairs(raw)
     } else if (shallow) {
       // Shallow — current physical segment only (no parent/fork chain)
       const state = await this.readSessionState(sessionId)
       if (!state) return { messages: [], total: 0 }
       const raw = await this.parseSessionLog(
-        SessionManager.currentPhysicalId(state),
+        SessionManager.currentPhysicalId(state), undefined, undefined, executionOnly,
       )
       messages = sanitizeToolPairs(raw)
+    } else if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) {
+      // Channel receipt history is one durable conversation across context
+      // epochs. Never replace it with an active model's admitted-only buffer.
+      const state = await this.readSessionState(sessionId)
+      if (!state) return {messages: [], total: 0}
+      messages = []
+      for (let segment = 0; segment <= state.segmentIndex; segment++) {
+        messages.push(...sanitizeToolPairs(await this.parseSessionLog(physicalSessionId(state, segment), undefined, undefined, executionOnly)))
+      }
     } else {
       // Full logical chain (with active session fast path)
       const sess = this.getActiveSession(sessionId)
@@ -3583,6 +3677,8 @@ ${JSON.stringify(request)}`,
     sessionId: string,
     state: SessionState,
   ): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
+    if (state.sessionId !== sessionId) state = { ...state, sessionId }
     if (this.deps.projectId) {
       if (state.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
       state.projectId = this.deps.projectId
@@ -3601,6 +3697,7 @@ ${JSON.stringify(request)}`,
 
   /** Commands need durable identity and local session data, but no model loop. */
   async prepareCommandSession(sessionId: string, sender?: InboundMessage): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     this.assertHistoryWritable(sessionId)
     await this.withStateCreation(sessionId, async () => {
       const state = await this.createMissingState(sessionId)
@@ -3627,6 +3724,7 @@ ${JSON.stringify(request)}`,
   }
 
   async recordCommandResult(sessionId: string, receipt: CommandReceipt): Promise<void> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     if (!isCommandReceipt(receipt)) throw new TypeError('Invalid command receipt')
     await this.withStateCreation(sessionId, async () => {
       this.assertHistoryWritable(sessionId)
@@ -3640,6 +3738,7 @@ ${JSON.stringify(request)}`,
 
   /** Receipts belong to this segment, not inherited/forked model history. */
   async getCommandResults(sessionId: string, physicalId?: string): Promise<CommandReceipt[]> {
+    sessionId = this.resolveSessionIdentity(sessionId)
     const state = await this.readSessionState(sessionId)
     const id = physicalId ?? (state ? SessionManager.currentPhysicalId(state) : undefined)
     if (!id) return []
@@ -3760,7 +3859,9 @@ ${JSON.stringify(request)}`,
     // Execution must retain unfinished tool calls; display/fork sanitization
     // would discard the very batch that Continue needs to finish.
     const continuing = input.kind === 'control' && (input.command.type === 'resume' || input.command.type === 'retry')
-    const history = continuing
+    const history = sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)
+      ? await this.parseSessionLog(SessionManager.currentPhysicalId(state), undefined, undefined, true)
+      : continuing
       ? await this.parseSessionLog(
         SessionManager.currentPhysicalId(state),
         undefined,
@@ -3863,7 +3964,9 @@ ${JSON.stringify(request)}`,
     physicalSessionId: string,
     maxRecords?: number,
     forkInfo?: { parentPhysicalId: string; forkAt: number },
+    executionOnly = false,
   ): Promise<ChatMessage[]> {
+    physicalSessionId = this.resolveSessionIdentity(physicalSessionId)
     const messages: ChatMessage[] = []
     let recordIndex = 0
 
@@ -3875,6 +3978,13 @@ ${JSON.stringify(request)}`,
       recordIndex++
 
       try {
+        if (!executionOnly && isDisplayDuplicate(parsed)) continue
+        if (executionOnly && (parsed.channel_receipt === true || typeof parsed.channel_input_id === 'string')) continue
+        if (executionOnly && parsed.channel_input_admitted && typeof parsed.channel_input_admitted === 'object') {
+          const admitted = parsed.channel_input_admitted as { message?: ChatMessage }
+          if (admitted.message?.role === 'user') messages.push(admitted.message)
+          continue
+        }
         const isMessage = typeof parsed.role === 'string'
         // Detect init context: summary_context on a start event (compacted session)
         const isSessionInit = typeof parsed.summary_context === 'string' &&

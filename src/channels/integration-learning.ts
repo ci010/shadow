@@ -183,7 +183,7 @@ export class DiscordLearning {
       if (range.segmentIndex < scope.state.channelBoundary!.startSegment ||
         range.physicalId !== physicalSessionId(scope.state, range.segmentIndex)) throw new Error('Learning source is outside its conversation epoch.')
       const page = await this.options.sessions.getHistory(scope.state.sessionId, {
-        physicalId: range.physicalId, offset: range.offset, pageSize: range.end - range.offset,
+        executionOnly: true, physicalId: range.physicalId, offset: range.offset, pageSize: range.end - range.offset,
       })
       if (page.messages.length !== range.end - range.offset || hash(page.messages) !== range.hash) {
         throw new Error('A bounded learning source changed. Its cursor was not advanced.')
@@ -205,7 +205,7 @@ export class DiscordLearning {
         await scope.inspect()
         const physicalId = physicalSessionId(scope.state, segment)
         const offset = journal.cursors[physicalId] ?? 0
-        const page = await this.options.sessions.getHistory(scope.state.sessionId, { physicalId, offset, pageSize: 100 })
+        const page = await this.options.sessions.getHistory(scope.state.sessionId, { executionOnly: true, physicalId, offset, pageSize: 100 })
         let messages = page.messages
         while (messages.length > 1 && JSON.stringify(messages).length > 128_000) messages = messages.slice(0, Math.floor(messages.length / 2))
         if (!messages.length) continue

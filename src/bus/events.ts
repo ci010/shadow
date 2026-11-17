@@ -4,7 +4,7 @@ export interface ChannelAddress {
   botInstanceId: string
   platform: string
   conversationId: string
-  /** Only the default project's migrated platform instance retains old IDs. */
+  /** Legacy Connection metadata only; it no longer selects a second session ID. */
   legacySessionId?: boolean
 }
 
@@ -14,13 +14,13 @@ export function channelSessionId(address: ChannelAddress): string {
     || (address.legacySessionId !== undefined && typeof address.legacySessionId !== 'boolean')) {
     throw new TypeError('Incomplete channel address')
   }
-  return address.legacySessionId ? `${address.platform}:${address.conversationId}`
-    : `bot:${[address.projectId, address.botInstanceId, address.platform, address.conversationId].map(encodeURIComponent).join(':')}`
+  return `channel-inbox:${[address.projectId, address.botInstanceId, address.platform, address.conversationId].map(encodeURIComponent).join(':')}`
 }
 
 export function channelAddressFromSessionId(sessionId: string): ChannelAddress | undefined {
-  if (!sessionId.startsWith('bot:')) return undefined
-  const parts = sessionId.slice(4).split(':')
+  const prefix = sessionId.startsWith('channel-inbox:') ? 'channel-inbox:' : sessionId.startsWith('bot:') ? 'bot:' : undefined
+  if (!prefix) return undefined
+  const parts = sessionId.slice(prefix.length).split(':')
   if (parts.length !== 4 || parts.some(part => !part)) throw new TypeError('Invalid bot session ID')
   const [projectId, botInstanceId, platform, conversationId] = parts.map(decodeURIComponent)
   return { projectId, botInstanceId, platform, conversationId }

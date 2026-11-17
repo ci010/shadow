@@ -125,6 +125,8 @@ export interface SessionState {
   /** Current non-Discord execution activation; changes start a fresh model context. */
   serviceGeneration?: string
   /** Passive source evidence; never a BOT binding or an execution grant. */
+  /** Offline identity migration only; missing origin never grants admission. */
+  channelIdentityMigration?: 1
   channelSource?: import('../channels/passive-contract.ts').ChannelSource
   /** Host-created durable isolated Work executor, persisted by both stores. */
   automaticWork?: import('../cron/work-dispatch-contract.ts').AutomaticWorkSession
@@ -240,6 +242,7 @@ export interface SessionStartEvent {
 
 export interface StoredMessage {
   /** Atomic history-only channel input marker, scoped to this physical context. */
+  channel_receipt?: boolean
   channel_input_id?: string
   role: string
   content: string | unknown[] | null
