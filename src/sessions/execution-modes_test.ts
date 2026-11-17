@@ -105,7 +105,10 @@ function fixture(workspace: string, store: SessionStore, settings: {
     handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
     context: {
       buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }),
-      buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic preview', sections: [] }),
+      buildSystemPromptDetails: async (ctx: any) => {
+        const systemPrompt = JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name })
+        return { systemPrompt, sections: [{ name: 'fixture', content: systemPrompt, characters: systemPrompt.length }] }
+      },
     },
     getLlmRuntimeConfig: () => llm,
     hasInitiative: settings.hasInitiative,
@@ -1606,6 +1609,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const actual = await f.sessions.getContext({ sessionId: id })
         const preview = await f.sessions.getContext({ sessionId: id, preview: true })
         assert.equal(actual.source, 'active-history')
+        assert.equal(actual.sections?.map(section => section.content).join('\n\n---\n\n'), actual.systemPrompt)
+        // A preview must not overwrite live provenance; unmatched/legacy text degrades.
+        assert.deepEqual((await f.sessions.getContext({ sessionId: id })).sections, actual.sections)
+        const live = f.sessions.getActiveSession(id)!
+        const original = live.history[0]!
+        live.history[0] = { role: 'system', content: 'Legacy system without provenance' }
+        const legacy = await f.sessions.getContext({ sessionId: id })
+        assert.equal(legacy.systemPrompt, 'Legacy system without provenance')
+        assert.equal(legacy.sections, undefined)
+        live.history[0] = original
         assert.equal(preview.source, 'preview')
         const sorted = (tools: { name: string }[]) => tools.map(tool => tool.name).sort()
         assert.deepEqual(sorted(actual.tools), [...request.names].sort())

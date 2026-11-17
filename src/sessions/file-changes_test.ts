@@ -9,7 +9,7 @@ import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { bindScriptTools } from '../script-runtime/bridge.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ExecutionContext } from '../tools/context.ts'
-import { recordedFileChange } from '../tools/file-change.ts'
+import { recordedFileChange, recordFileWrite } from '../tools/file-change.ts'
 import { WriteTool } from '../tools/filesystem.ts'
 import { ToolOutcomeUnknownError } from '../tools/tool.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
@@ -64,7 +64,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         })
         const sessionTools = new SessionTools(tools, root)
         const responses: LLMResponse[] = [
-          { content: '', toolCalls: [{ id: 'direct', name: 'write', arguments: { path: join(root, 'memory', 'notes.md'), match: '\told', content: 'new' } }] },
+          { content: '', toolCalls: [{ id: 'direct', name: 'write', arguments: { path: join(root, 'memory', 'notes.md'), match: '  old  ', content: 'new' } }] },
           { content: '', toolCalls: [{ id: 'script', name: 'exec', arguments: {} }] },
         ]
         let requestedDetail = false
@@ -94,11 +94,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           const session = new Session(root, state.sessionId, state, [], provider, sessionTools, new Bus(), store)
           await session.run(context)
           const page = await readSessionFileChanges(store, state, 0, 30, context.signal)
-          assert.equal(page.total, 2)
+          assert.equal(page.total, 2, JSON.stringify(session.history.filter(message => message.role === 'tool')))
+          assert.ok(page.changes.every(change => !('what' in change) && !('why' in change)))
           assert.equal(page.changes[0].mode, 'append')
           assert.notEqual(page.changes[0].toolCallId, 'script', 'Nested calls retain their own invocation identity')
           assert.ok(page.changes[0].patch.includes('+tail'))
-          assert.ok(page.changes[1].patch.includes('-  old  '), 'Use actual fuzzy-matched file contents, not requested match text')
+          assert.ok(page.changes[1].patch.includes('-  old  '), 'Preserve observed file whitespace in the recorded patch')
           assert.ok(page.changes[1].patch.includes('+new'))
           assert.equal(page.changes[1].toolCallId, 'direct')
           const ownChanges = []
@@ -254,6 +255,46 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const reopened = new Store(directory)
       try {
         assert.deepEqual(await readSessionFileChange(reopened, state, change.id, new AbortController().signal), change)
+      } finally { reopened.close?.() }
+    })
+  })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: compact file-history writer retains workspace and receipt without semantic event fields`, async () => {
+    await withTempWorkspace(async root => {
+      const directory = join(root, 'sessions')
+      const state: SessionState = { sessionId: 'web:compact', segmentIndex: 0, physicalIdVersion: 2 }
+      const store = new Store(directory)
+      await store.init()
+      let id = ''
+      try {
+        await store.createSessionLog(physicalSessionId(state), [{ sessionId: state.sessionId }])
+        const context = {
+          sessionId: state.sessionId, toolCallId: 'write-call', folderId: 'selected-workspace',
+          fileChangeTarget: { nodeId: 'child', workdirId: 'resource', folderId: 'explicit-workspace' },
+          recordFileChange: change => store.appendRawEvents(physicalSessionId(state), [{ file_change: change }]),
+        } as ExecutionContext
+        const change = await recordFileWrite(context, { path: 'example.md', mode: 'edit', before: 'old', after: 'new' })
+        assert.ok(change)
+        id = change.id
+        assert.equal(change.folderId, 'explicit-workspace')
+        assert.equal(change.toolCallId, 'write-call')
+        assert.ok(change.timestamp)
+        assert.ok(change.patch.includes('+new'))
+        assert.ok(!('what' in change) && !('why' in change) && !('hunks' in change))
+      } finally { store.close?.() }
+      const reopened = new Store(directory)
+      try {
+        const change = await readSessionFileChange(reopened, state, id, new AbortController().signal)
+        assert.equal(change?.folderId, 'explicit-workspace')
+        assert.ok(change?.patch.includes('-old'))
+        assert.equal(await new ViewEditTool().execute({ edit_id: id }, {
+          sessionId: state.sessionId, physicalSessionId: physicalSessionId(state),
+          channel: 'test', chatId: 'fixture', senderId: 'fixture', messageId: 'read',
+          tools: new SessionTools(new Tools(root), root), signal: new AbortController().signal,
+          readFileChange: () => Promise.resolve(change),
+        }), 'Recorded on node "child", workdir "resource", path "example.md".\n' + change?.patch)
       } finally { reopened.close?.() }
     })
   })

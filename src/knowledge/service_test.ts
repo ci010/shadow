@@ -37,13 +37,14 @@ test('catalog classifies actual memory files and arbitrary wiki directories, exc
   await f.put('memory/.private/hidden.md', '# hidden')
   await f.put('memory/custom/asset.json', '{}')
   const catalog = f.service.catalog()
-  assert.equal(catalog.entries.length, 7)
-  assert.equal(catalog.entries.filter(entry => entry.kind === 'memory').length, 6)
+  assert.equal(catalog.entries.length, 6)
+  assert.equal(catalog.entries.filter(entry => entry.kind === 'memory').length, 5)
   assert.equal(catalog.entries.find(entry => entry.kind === 'wiki')?.title, 'Wiki')
   assert.ok(catalog.entries.every(entry => entry.source === 'project' && entry.deletable))
-  assert.deepEqual(catalog.links, [{
-    source: 'memory/sessions/session.files.jsonl', target: 'memory/custom/topic.md', label: 'modified',
-  }])
+  assert.deepEqual(catalog.links, [])
+  assert.equal(f.service.detail('memory/sessions/session.files.jsonl').content,
+    '{"path":"memory/custom/topic.md","action":"write"}\n')
+  assert.ok(f.service.snapshot().some(detail => detail.entry.id.endsWith('.files.jsonl')))
 })
 
 test('graph resolves markdown, event refs, skill aliases and learned related names, retaining missing targets', async t => {
@@ -271,4 +272,35 @@ test('markdown parser ignores code/images, supports balanced paths and reference
   assert.equal(canonicalReference('../../../outside.md', 'memory/topic.md', resolve('.'), new Map()), undefined)
   assert.equal(canonicalReference('mailto:person@example.com', 'memory/topic.md', resolve('.'), new Map()), undefined)
   assert.equal(canonicalReference('../ref.md#section', 'memory/topics/topic.md', resolve('.'), new Map()), 'memory/ref.md')
+})
+
+test('file history is absent from default graph even when referenced; exact legacy detail stays readable', async t => {
+  const f = await fixture(t)
+  const id = 'memory/sessions/old.files.jsonl'
+  const source = '{"when":"2026-01-01","path":"src/main.ts","action":"edit"}\n'
+  const file = await f.put(id, source)
+  await f.put('memory/topics/index.md', `[Legacy working set](${id})`)
+  await f.put('memory/events/day.jsonl', JSON.stringify({ id: 'learning-log', path: 'memory/events/day.jsonl', when: '2026-01-01', what: 'User selected a policy', why: 'Reason', refs: ['v:memory/topics/index.md', id] }))
+  const catalog = f.service.catalog()
+  assert.ok(catalog.entries.every(entry => entry.id !== id))
+  assert.ok(catalog.links.every(link => link.target !== id && link.source !== id))
+  assert.ok(catalog.links.some(link => link.href === 'v:memory/topics/index.md'))
+  assert.ok(catalog.links.every(link => link.label !== 'modified'))
+  assert.equal(f.service.detail(id).content, source)
+  assert.equal(await readFile(file, 'utf8'), source)
+})
+
+
+test('cron edit ledgers are skipped before JSON parsing while semantic event dates stay visible', async t => {
+  const f = await fixture(t)
+  const id = 'memory/sessions/cron_2026-01-01.files.jsonl'
+  const file = await f.put(id, 'malformed legacy edit ledger')
+  await f.put('memory/sessions/cron_2026-01-01.md', '# Session summary')
+  await f.put('memory/events/2026-01-01.jsonl', JSON.stringify({ what: 'Semantic event', when: '2026-01-01' }))
+  const catalog = f.service.catalog()
+  assert.deepEqual(catalog.entries.map(entry => entry.id).filter(id => id.startsWith('memory/')).sort(), [
+    'memory/events/2026-01-01.jsonl', 'memory/sessions/cron_2026-01-01.md',
+  ])
+  assert.equal(f.service.detail(id).content, 'malformed legacy edit ledger')
+  assert.equal(await readFile(file, 'utf8'), 'malformed legacy edit ledger')
 })

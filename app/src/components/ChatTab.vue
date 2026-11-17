@@ -262,7 +262,7 @@
         :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
         :active="visible && (editorGroups ? diagnosisDocumentVisible : activePanel === 'diagnosis') && chatRouteActive" :can-read-trace="true"
-        :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
+        :working="sessionWorking" :system-prompt="systemPrompt" :prompt-sections="promptSections" :prompt-source="promptSource" :project-id="projectId" :compaction-summary="compactionSummary" :tools="tools" />
     </template>
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible, 'mobile-chat': mobileLayout }">
@@ -1280,6 +1280,8 @@ function autoResize() {
   el.style.height = el.scrollHeight + 'px'
 }
 const systemPrompt = ref('')
+const promptSections = ref<unknown>()
+const promptSource = ref('')
 const tools = ref<ToolDef[]>([])
 
 /**
@@ -2233,7 +2235,7 @@ function resetConversation(): void {
   historyLeftBottom = false
   resetStreamPresentation()
   streamingToolCallData.value = null
-  systemPrompt.value = ''
+  systemPrompt.value = ''; promptSections.value = undefined; promptSource.value = ''
   tools.value = []
   resetTimeline()
   previousPhysicalId.value = null
@@ -2343,7 +2345,7 @@ async function loadDirectChat(background = false): Promise<void> {
       streamPhase.value = undefined
       streamingToolCallData.value = null
     }
-    systemPrompt.value = data.systemPrompt ?? ''
+    systemPrompt.value = data.systemPrompt ?? ''; promptSections.value = undefined; promptSource.value = ''
     tools.value = data.tools ?? []
     previousPhysicalId.value = data.previousPhysicalId ?? null
     viewingPhysicalId.value = null
@@ -2374,7 +2376,7 @@ async function loadReadonlySession(background = false): Promise<void> {
   lastReadonlyRefresh = Date.now()
   if (!background) {
     readonlyContextError.value = ''
-    systemPrompt.value = ''
+    systemPrompt.value = ''; promptSections.value = undefined; promptSource.value = ''
     tools.value = []
   }
   try {
@@ -2416,7 +2418,7 @@ async function loadReadonlySession(background = false): Promise<void> {
 
     if (context) {
       readonlyContextError.value = context.failed ? t('Could not load execution context. Reopen it to retry.') : ''
-      systemPrompt.value = context.data?.systemPrompt ?? ''
+      systemPrompt.value = context.data?.systemPrompt ?? ''; promptSections.value = context.data?.sections; promptSource.value = context.data?.source ?? ''
       tools.value = context.data?.tools ?? []
     }
   } catch (cause) {

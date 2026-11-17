@@ -15,6 +15,7 @@ export function agentTypesPlugin(
       const types = agentTypes.all().filter(t => !t.root || t.name === 'general').map((t) => ({
         name: t.name,
         description: t.description,
+        prompt: t.prompt,
         source: t.source,
         allowedTools: t.allowedTools,
         blockedTools: t.blockedTools,

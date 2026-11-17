@@ -32,7 +32,7 @@
     <MobileSheet v-if="mobileLayout" :open="actionsOpen" :label="t('Conversation and document actions')" :return-focus="mobileActionsButton" @update:open="actionsOpen = $event">
       <div class="mobile-workbench-actions">
         <slot name="actions" />
-        <button v-if="explorerAvailable && !knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />{{ t('Browse files') }}</button>
+        <button v-if="explorerAvailable || knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />{{ knowledgeSelected ? t('Knowledge explorer') : t('Browse files') }}</button>
         <button v-if="!isPermanentDocumentTab(tabs.selected)" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />{{ t('Close current document') }}</button>
         <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length || tabs.diagnosis" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">{{ t('Close all documents') }}</button>
         <slot name="mobile-actions" :close="closeMobileActions" />
@@ -115,7 +115,7 @@
         <EditorViewHost :descriptor="descriptor('', primaryLabel || conversationTitle || t('Conversation'), primaryIcon)" :selected="tabs.selected === '' && (!groups || route.name === 'chat' && !route.query.panel && (route.params.sessionId || '') === sessionId)" :active="active">
         <div ref="viewRoot" class="workbench-view-layout">
     <button v-if="expanded && !wide" class="explorer-backdrop" :aria-label="t('Dismiss files')" @click="collapseExplorer" />
-    <aside v-if="(!groups && explorerAvailable) || (tabs.knowledge && knowledgeEnabled)" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? t('Knowledge explorer') : t('File explorer')" @keydown.esc.stop.prevent="collapseExplorer">
+    <aside v-if="!groups && (explorerAvailable || (tabs.knowledge && knowledgeEnabled))" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? t('Knowledge explorer') : t('File explorer')" @keydown.esc.stop.prevent="collapseExplorer">
       <div v-if="!groups && explorerAvailable" v-show="!knowledgeSelected" class="file-spaces">
       <button v-if="folderId" class="file-space-root" :aria-expanded="fileSpace === 'project'" @click="fileSpace = fileSpace === 'project' ? undefined : 'project'"><span class="i-lucide-folder" aria-hidden="true" />{{ t('Project files') }}</button>
       <FileTree v-if="fileSpace === 'project' && folderId" v-show="!knowledgeSelected" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded && !knowledgeSelected"
@@ -148,8 +148,8 @@
         </div></EditorViewHost>
         <EditorViewHost v-for="key in knowledgeKeys" :key="key" :descriptor="descriptor(key, key === KNOWLEDGE_TAB_KEY ? t('Knowledge') : knowledgeLabel(knowledgeEntryId(key)!), 'i-lucide-book-open')" :selected="tabs.selected === key" :active="active">
           <div class="knowledge-document" role="tabpanel" :id="panelId(key)" :aria-labelledby="tabId(key)">
-            <KnowledgeView :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="knowledgeEntryId(key) ?? ''" :active="shown(key)"
-              @select="selectKnowledgeEntry" @home="selectTab(KNOWLEDGE_TAB_KEY)" @catalog="updateKnowledgeLabels" />
+            <KnowledgeView :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="knowledgeEntryId(key) ?? ''" :active="shown(key)" :shared-explorer="!!groups"
+              @select="selectKnowledgeEntry" @home="openKnowledgeHome" @catalog="updateKnowledgeLabels" />
           </div>
         </EditorViewHost>
         <EditorViewHost v-if="!projectDocuments && tabs.projectTabs?.includes('settings')" :descriptor="descriptor(projectTabKey('settings'), projectTabLabel('settings'), projectTabIcon('settings'))" :selected="tabs.selected === projectTabKey('settings')" :active="active">
@@ -206,7 +206,7 @@ import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
 import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, knowledgeEntryTabKey, knowledgeEntryId, projectTabKey, projectTabFromKey, projectTabLabel, projectTabIcon, openProjectTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile, type ProjectTab } from '../../file-workbench.ts'
-import type { KnowledgeEntry } from '../../knowledge.ts'
+import { isFileHistory, type KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; composerHeight?: number; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; primaryActivity?: import('../../session-activity.ts').ConversationActivity; inspection?: boolean; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; editableConversation?: boolean; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
@@ -275,9 +275,17 @@ function descriptor(key: string, label: string, icon: string): EditorDescriptor 
   if (previous && previous.id === editorId(key) && previous.label === label && previous.icon === icon && previous.activity === (key === '' ? props.primaryActivity : undefined) && previous.conversation?.sessionId === (key === '' ? props.sessionId : undefined) && previous.conversation?.editable === (key === '' ? !!props.editableConversation : undefined) && previous.conversation?.folderId === (key === '' ? props.folderId : undefined)) return previous
   const value: EditorDescriptor = { id: editorId(key), projectId: props.projectId ?? '', owner: owner || id, label, icon,
     ...(key === '' && props.primaryActivity ? { activity: props.primaryActivity } : {}),
+    ...(key === KNOWLEDGE_TAB_KEY || knowledgeEntryId(key) ? { explorer: { kind: 'knowledge' as const, entryId: knowledgeEntryId(key), select: selectKnowledgeEntry } } : {}),
     closable: key === '' || !isPermanentDocumentTab(key),
     select: () => { if (tabs.value.selected !== key) tabs.value = { ...tabs.value, selected: key } },
-    close: () => closeFile(key, false),
+    close: () => {
+      if (!groups) { closeFile(key, false); return }
+      // The group chooses its survivor. The source owner's fallback order may
+      // belong to a different split; publishing it would steal focus on close.
+      const selected = tabs.value.selected
+      const remaining = closeFileTab(tabs.value, key)
+      tabs.value = { ...remaining, ...(key === KNOWLEDGE_TAB_KEY ? { knowledgeEntries: tabs.value.knowledgeEntries } : {}), selected }
+    },
     commands: { toggleExplorer: () => { if (groups || explorerAvailable.value) toggleExplorer() } },
     ...(key === '' ? { conversation: { sessionId: props.sessionId, editable: !!props.editableConversation, folderId: props.folderId } } : {}),
   }
@@ -288,7 +296,7 @@ const shown = (key: string) => props.active && (groups ? groups.visible(editorId
 const focused = (key: string) => props.keyboardActive && (groups ? groups.focused(editorId(key)) : tabs.value.selected === key)
 const knowledgeKeys = computed(() => props.knowledgeEnabled ? [...(tabs.value.knowledge ? [KNOWLEDGE_TAB_KEY] : []), ...(tabs.value.knowledgeEntries ?? []).map(knowledgeEntryTabKey)] : [])
 const knowledgeLabels = ref<Record<string, string>>({})
-const knowledgeLabel = (entryId: string) => knowledgeLabels.value[entryId] ?? entryId.split('/').at(-1) ?? entryId
+const knowledgeLabel = (entryId: string) => isFileHistory(entryId) ? t('Not a knowledge document.') : knowledgeLabels.value[entryId] ?? entryId.split('/').at(-1) ?? entryId
 function updateKnowledgeLabels(entries: KnowledgeEntry[]) {
   knowledgeLabels.value = Object.fromEntries(entries.map(entry => [entry.id, entry.title]))
 }
@@ -332,7 +340,7 @@ let observer: ResizeObserver | undefined
 let composing = false
 const tabId = (path: string) => `${id}-tab-${encodeURIComponent(path)}`
 const panelId = (path: string) => `${id}-panel-${encodeURIComponent(path)}`
-function reopen(key: string) { void nextTick(() => { const descriptor = groups?.descriptors.get(editorId(key)); if (descriptor) groups?.open(descriptor) }) }
+function reopen(key: string) { void nextTick(() => { const descriptor = groups?.descriptors.get(editorId(key)); if (descriptor) groups?.open(descriptor, descriptor.explorer ? groups.state(descriptor.projectId).active : undefined) }) }
 function openDiagnosis() {
   if (!props.diagnosisEnabled) return
   tabs.value = { ...withDiagnosisTab(tabs.value, true), selected: DIAGNOSIS_TAB_KEY }
@@ -357,8 +365,13 @@ function openLinkedFile(file: OpenFile) {
     else preference.value = true
   }
 }
+function openKnowledgeHome() {
+  tabs.value = openKnowledgeTab(tabs.value)
+  reopen(KNOWLEDGE_TAB_KEY)
+}
 function selectKnowledgeEntry(entryId: string) {
-  if (tabs.value.knowledge) { tabs.value = openKnowledgeTab(tabs.value, entryId); reopen(knowledgeEntryTabKey(entryId)) }
+  tabs.value = openKnowledgeTab(tabs.value, entryId)
+  reopen(knowledgeEntryTabKey(entryId))
 }
 function openFile(file: OpenFile) {
   tabs.value = openFileTab(tabs.value, file)
@@ -542,7 +555,7 @@ function collapseExplorer() {
   ;(mobileLayout.value ? mobileActionsButton.value : explorerButton.value)?.focus({ preventScroll: true })
 }
 function toggleExplorer() {
-  if (groups && !knowledgeSelected.value) { groups.toggleExplorer(props.projectId ?? ''); return }
+  if (groups) { groups.toggleExplorer(props.projectId ?? ''); return }
   if (knowledgeSelected.value) knowledgeExpanded.value = !knowledgeExpanded.value
   else if (props.remote) remoteExpanded.value = !expanded.value
   else preference.value = !expanded.value

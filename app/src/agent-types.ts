@@ -1,9 +1,11 @@
+import { promptSections, type PromptSection } from './prompt-sections.ts'
 import { t } from './i18n.ts'
 import type { ToolDef } from './components/ToolsCard.vue'
 
 export interface AgentTypeMeta {
   name: string
   description: string
+  prompt?: string
   source: 'builtin' | 'workspace'
   allowedTools?: string[]
   blockedTools?: string[]
@@ -24,6 +26,7 @@ function optionalNumber(value: unknown) {
 }
 function isAgent(value: unknown): value is AgentTypeMeta {
   return record(value) && typeof value.name === 'string' && !!value.name.trim()
+    && (value.prompt === undefined || typeof value.prompt === 'string')
     && typeof value.description === 'string' && (value.source === 'builtin' || value.source === 'workspace')
     && (value.defaultMode === undefined || value.defaultMode === 'session' || value.defaultMode === 'task' || value.defaultMode === 'call')
     && (value.allowedTools === undefined || strings(value.allowedTools))
@@ -46,10 +49,10 @@ export function parseAgentTypes(value: unknown): AgentTypeMeta[] {
   }
   return value
 }
-export function parseAgentContext(value: unknown): { systemPrompt: string; tools: ToolDef[] } {
+export function parseAgentContext(value: unknown): { systemPrompt: string; sections: PromptSection[]; tools: ToolDef[] } {
   if (!record(value) || typeof value.systemPrompt !== 'string' || !Array.isArray(value.tools)
     || !value.tools.every(isTool) || new Set(value.tools.map(tool => tool.name)).size !== value.tools.length) {
     throw new Error(t('Cannot read the assembled agent preview. Retry the preview.'))
   }
-  return { systemPrompt: value.systemPrompt, tools: value.tools }
+  return { systemPrompt: value.systemPrompt, sections: promptSections(value.systemPrompt, value.sections), tools: value.tools }
 }

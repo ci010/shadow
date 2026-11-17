@@ -62,3 +62,22 @@ test('canonical view leases deduplicate a resource across content owners without
   groups.unregisterView(tab.id, second)
   assert.equal(groups.descriptors.has(tab.id), false)
 })
+
+test('closing activates the actual group survivor and closing the last tab never deletes a session', () => {
+  const groups = createEditorGroups(), selected: string[] = [], closed: string[] = []
+  const one = { ...resource('one'), select: () => selected.push('one'), close: () => closed.push('one'), conversation: { sessionId: 'web:one', editable: true } }
+  const home = { ...resource('home'), select: () => selected.push('home') }
+  const entry = { ...resource('entry'), select: () => selected.push('entry') }
+  groups.open(one); groups.open(home); groups.open(entry, 'right')
+  groups.close(entry.id)
+  assert.equal(groups.active('a')?.id, home.id)
+  assert.equal(selected.at(-1), 'home')
+  assert.equal(groups.referenceTarget('a'), one)
+  groups.close(home.id)
+  assert.equal(selected.at(-1), 'one')
+  groups.close(one.id)
+  assert.equal(groups.active('a'), undefined)
+  assert.equal(groups.referenceTarget('a'), undefined)
+  assert.deepEqual(closed, ['one'])
+  assert(groups.descriptors.has(one.id), 'closing a view is not deleting its conversation resource')
+})

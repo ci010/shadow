@@ -54,7 +54,7 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     const built = await builder.buildSystemPromptDetails(ctx)
     assert.deepEqual(built.sections.map(section => section.name), [
       'runtime', 'execution-contract', 'work-context', 'workspace-intro',
-      'guideline', 'capability-discovery', 'memory',
+      'AGENT.md', 'tool-guidance', 'capability-discovery', 'memory',
     ])
     const work = '# Current work contracts (runtime facts)\nRevision 2: current human-confirmed outcome. Boundary: No external publication.'
     const messages = [{ role: 'system' as const, content: built.systemPrompt }, { role: 'user' as const, content: 'Task history' }]

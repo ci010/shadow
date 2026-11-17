@@ -1,5 +1,9 @@
 {
+  "Outside catalog": "Outside catalog",
+  "Open document": "Open document",
+  "Not a knowledge document.": "Not a knowledge document.",
   "Paired until removed on this computer or disconnected on the phone.": "Paired until removed on this computer or disconnected on the phone.",
+  "Session history, semantic logs and conventions; not file-edit history or curated Wiki pages.": "Session history, semantic logs and conventions; not file-edit history or curated Wiki pages.",
   "Open latest conversation": "Open latest conversation",
   "Open the most recent retained run with a recorded session.": "Open the most recent retained run with a recorded session.",
   "Open the configured target session.": "Open the configured target session.",
@@ -4453,5 +4457,20 @@
   "On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.": "On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.",
   "Copy the pairing details below and send them privately to your phone. Paste once in the Shadow phone app. For HTTP, also enable Allow LAN HTTP on the phone.": "Copy the pairing details below and send them privately to your phone. Paste once in the Shadow phone app. For HTTP, also enable Allow LAN HTTP on the phone.",
   "Phone access settings": "Phone access settings",
-  "Pair your phone": "Pair your phone"
+  "Pair your phone": "Pair your phone",
+  "Open AGENT.md in workspace": "Open AGENT.md in workspace",
+  "Open deployed BOT.md in workspace": "Open deployed BOT.md in workspace",
+  "BOT prompt unavailable or deployment changed. Refresh and retry.": "BOT prompt unavailable or deployment changed. Refresh and retry.",
+  "Source metadata unavailable; showing exact prompt without inferred sources.": "Source metadata unavailable; showing exact prompt without inferred sources.",
+  "Current in-memory system message, not a captured provider request.": "Current in-memory system message, not a captured provider request.",
+  "Rebuilt preview, not a historical runtime prompt.": "Rebuilt preview, not a historical runtime prompt.",
+  "Prompt provenance unavailable.": "Prompt provenance unavailable.",
+  "Open prompt in workspace": "Open prompt in workspace",
+  "No recorded events.": "No recorded events.",
+  "When": "When",
+  "Who": "Who",
+  "What happened": "What happened",
+  "Source session": "Source session",
+  "Recorded source": "Recorded source",
+  "Unrecognized event record": "Unrecognized event record"
 }

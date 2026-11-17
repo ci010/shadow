@@ -12,6 +12,7 @@ export interface EditorDescriptor {
   select(): void
   close(): void
   commands?: { toggleExplorer?: () => void }
+  explorer?: { kind: 'knowledge'; entryId?: string; select(id: string): void }
   conversation?: { sessionId: string; editable: boolean; folderId?: string }
 }
 /** Resource identity/lifetime is deliberately independent of group placement. */
@@ -73,8 +74,13 @@ export function createEditorGroups() {
   function close(id: string) {
     const descriptor = descriptors.get(id)
     if (!descriptor?.closable) return
+    const project = state(descriptor.projectId)
+    const wasActive = project.selected[project.active] === id
     remove(id)
     descriptor.close()
+    // Selection belongs to the group, not the closing owner's local tab order.
+    // Notify the surviving owner so routes and reference context follow it too.
+    if (wasActive) activate(project.selected[project.active])
   }
   function visible(id: string) {
     const descriptor = descriptors.get(id), placement = side(id)

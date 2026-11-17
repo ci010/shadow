@@ -34,7 +34,16 @@
       </div>
       <div v-else-if="prompt" :class="embedded ? 'prompt-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
         <pre v-if="raw" class="system-prompt-raw">{{ prompt }}</pre>
-        <div v-else class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="rendered" />
+        <div v-else-if="validatedSections.length" class="prompt-sections">
+          <section v-for="(section, index) in validatedSections" :key="index" class="prompt-section">
+            <header>{{ section.name }}</header>
+            <div class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="renderMarkdown(section.content)" />
+          </section>
+        </div>
+        <template v-else>
+          <p v-if="showProvenance" class="prompt-provenance-note">{{ t('Source metadata unavailable; showing exact prompt without inferred sources.') }}</p>
+          <div class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="rendered" />
+        </template>
       </div>
     </template>
   </div>
@@ -45,6 +54,7 @@ import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { createMarkdown } from '../markdown.ts'
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
+import { promptSections } from '../prompt-sections.ts'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
@@ -68,6 +78,8 @@ const KATEX_ATTRS = ['mathvariant', 'encoding', 'xmlns', 'display', 'stretchy', 
 
 const props = withDefaults(defineProps<{
   prompt: string
+  sections?: unknown
+  showProvenance?: boolean
   emptyMessage?: string
   showTokenEstimate?: boolean
   title?: string
@@ -77,6 +89,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   emptyMessage: '',
   showTokenEstimate: false,
+  showProvenance: true,
   title: '',
   collapsible: false,
 })
@@ -132,11 +145,17 @@ function renderMarkdown(text: string): string {
   }))
 }
 
+const validatedSections = computed(() => promptSections(props.prompt, props.sections))
 const rendered = computed(() => renderMarkdown(props.prompt))
 
 </script>
 
 <style scoped>
+.prompt-sections { display: grid; gap: 16px; }
+.prompt-section { padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border-soft); overflow-wrap: anywhere; min-width: 0; }
+.prompt-section:nth-child(even) { background: var(--c-bg-muted); }
+.prompt-section>header { font-size: 12px; font-weight: 600; color: var(--c-text-secondary); margin-bottom: 16px; }
+.prompt-provenance-note { color: var(--c-text-secondary); font-size: 12px; margin-bottom: 16px; }
 .card-collapsed {
   flex: 0 0 auto !important;
 }

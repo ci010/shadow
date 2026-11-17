@@ -91,6 +91,9 @@
         </div>
       </EditorViewHost>
     </template>
+    <EditorViewHost v-for="item in promptDocuments" :key="item.descriptor.id" :descriptor="item.descriptor" :active="visible && selectedProjectId === item.descriptor.projectId">
+      <PromptDocument :document="item.document" :active="visible && selectedProjectId === item.descriptor.projectId && editorGroups.focused(item.descriptor.id)" :can-quote="!!editorGroups.referenceTarget(item.descriptor.projectId)" @quote="quotePrompt(item.descriptor.projectId, $event)" />
+    </EditorViewHost>
     <SessionQuickOpen v-if="sessionSearchOpen" :api-base="apiBase" :projects="projects"
       @close="sessionSearchOpen = false" @select="quickOpenSession" />
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
@@ -130,6 +133,8 @@ import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { useAutomationNavigation } from '../composables/useAutomationNavigation.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
+import PromptDocument from './PromptDocument.vue'
+import { PromptDocumentsKey, type PromptDocument as PromptDocumentData } from '../prompt-documents.ts'
 import WorkflowManager from './WorkflowManager.vue'
 import ProjectSettings from './ProjectSettings.vue'
 import { createProjectDocuments, ProjectDocumentsKey } from '../project-documents.ts'
@@ -142,6 +147,26 @@ const projectDocuments = createProjectDocuments()
 provide(ProjectDocumentsKey, projectDocuments)
 const editorGroups = createEditorGroups()
 provide(EditorGroupsKey, editorGroups)
+const promptDocuments = ref<Array<{ document: PromptDocumentData; descriptor: EditorDescriptor }>>([])
+provide(PromptDocumentsKey, {
+  open(projectId, document) {
+    const id = `${projectId}:prompt:${document.key}`
+    const existing = promptDocuments.value.find(item => item.descriptor.id === id)
+    if (existing) existing.document = document
+    else promptDocuments.value.push({ document, descriptor: { id, projectId, owner: projectId,
+      label: document.label, icon: 'i-lucide-file-text', closable: true, select() {},
+      close() { promptDocuments.value = promptDocuments.value.filter(item => item.descriptor.id !== id) },
+    } })
+    void nextTick(() => editorGroups.activate(id))
+  },
+})
+function quotePrompt(projectId: string, text: string) {
+  const target = editorGroups.referenceTarget(projectId)
+  if (!target) return
+  instances.get(target.owner)?.appendDraft(text)
+  editorGroups.activate(target.id)
+  void nextTick(() => instances.get(target.owner)?.focusConversation())
+}
 const projectEditorId = (projectId: string, tab: ProjectTab) => `${projectId}:project:${tab}`
 function openProjectDocument(projectId: string, tab: ProjectTab) {
   const state = projectDocuments.get(projectId)
@@ -359,7 +384,8 @@ function publish(resource: ConversationResource) {
   closeSidebar()
   if (route.name === 'chat') void nextTick(() => {
     const key = route.query.panel === 'knowledge' ? (typeof route.query.entry === 'string' ? knowledgeEntryTabKey(route.query.entry) : KNOWLEDGE_TAB_KEY) : route.query.panel === 'diagnosis' ? DIAGNOSIS_TAB_KEY : ''
-    const descriptor = editorGroups.descriptors.get(`${resource.key}:${key}`)
+    const id = route.query.panel === 'knowledge' ? JSON.stringify([resource.projectId, 'knowledge', key]) : `${resource.key}:${key}`
+    const descriptor = editorGroups.descriptors.get(id)
     if (descriptor) editorGroups.open(descriptor)
   })
 }
@@ -518,6 +544,19 @@ function selectSession(projectId: string, sessionId: string) {
   closePreviousSidebarConversation(editorGroups, previous?.id, selected.value?.key,
     () => previous?.owner === current?.key && (instance?.canReplaceSidebarTab() ?? false))
 }
+// Group activation (including close fallback and cross-group focus) is the
+// navigation authority; hidden source workbenches must not publish their tabs.
+watch(() => editorGroups.active(selectedProjectId.value), descriptor => {
+  if (!props.visible || !descriptor || (!descriptor.explorer && !descriptor.conversation)) return
+  const resource = resources.value.find(item => item.key === descriptor.owner)
+  if (!resource) return
+  const entry = descriptor.explorer?.entryId
+  const panel = descriptor.explorer ? 'knowledge' : undefined
+  if (route.name === 'chat' && route.params.projectId === descriptor.projectId
+    && (route.params.sessionId || '') === (resource.sessionId || '')
+    && route.query.panel === panel && route.query.entry === entry) return
+  void router.replace({ ...projectChatLocation(resource), query: { ...conversationQueries.get(resource.key), ...(panel ? { panel } : {}), ...(entry ? { entry } : {}) } })
+})
 function openKnowledge(projectId: string) {
 
   automation.value = undefined

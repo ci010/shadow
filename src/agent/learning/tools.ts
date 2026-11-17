@@ -105,7 +105,7 @@ export class LearningTools {
     if (!batch.sources.some(source => source.sessionId === origin)) throw new Error('Log provenance is outside this learning batch.')
     const id = fingerprint(`${batch.id}:${origin}:${text.parse(key)}`)
     const previous = batch.events.find(log => log.id === id)
-    if (previous) return `Learning log already recorded: ${id}`
+    if (previous) return `Learning log already recorded: ${id}\nReceipt: v:knowledge/logs/record/${batch.createdAt.slice(0, 10)}/id-${encodeURIComponent(id)}~1`
     const summary = validateLogSummary(entry.summary)
     const when = new Date().toISOString()
     const path = `memory/events/${batch.createdAt.slice(0, 10)}.jsonl`
@@ -120,7 +120,7 @@ export class LearningTools {
       appendFileSync(file, JSON.stringify(log) + '\n')
     }
     this.runtime.ledger.log(batch.id, log)
-    return `Logged learning log: ${id}`
+    return `Logged learning log: ${id}\nReceipt: v:knowledge/logs/record/${batch.createdAt.slice(0, 10)}/id-${encodeURIComponent(id)}~1\nOriginal: v:${path}`
   }
 
   readonly memory: Tool = {

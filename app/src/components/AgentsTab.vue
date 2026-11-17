@@ -47,6 +47,7 @@
             <section v-show="activeTab === 'overview'" :id="`${id}-overview-panel`" class="agent-overview" role="tabpanel" :aria-labelledby="`${id}-overview-tab`" tabindex="0">
               <section class="overview-section">
                 <h3>{{ t('Definition') }}</h3>
+                <button v-if="promptDocuments && requestedAgent.prompt !== undefined" type="button" class="text-action" @click="openDefinition">{{ t('Open AGENT.md in workspace') }}</button>
                 <dl class="agent-facts">
                   <div><dt>{{ t('Source') }}</dt><dd>{{ requestedAgent.source === 'builtin' ? t('Built-in') : t('Workspace') }}</dd></div>
                   <div><dt>{{ t('Default mode') }}</dt><dd>{{ enumLabel(requestedAgent.defaultMode ?? t('session')) }}</dd></div>
@@ -102,7 +103,7 @@
             <section v-show="activeTab === 'prompt'" :id="`${id}-prompt-panel`" role="tabpanel" :aria-labelledby="`${id}-prompt-tab`" :aria-busy="loadingContext" tabindex="0">
               <template v-if="activeTab === 'prompt' && selected">
                 <p v-if="renderedSystemPrompt" class="prompt-estimate">{{ t('Approx.') }} {{ formatNumber(Math.round(renderedSystemPrompt.length / 4)) }} {{ t('tokens') }}</p>
-                <SystemPromptCard :key="contextKey" :prompt="renderedSystemPrompt" embedded :raw="rawPrompt" empty-message="No system prompt." />
+                <SystemPromptCard :key="contextKey" :prompt="renderedSystemPrompt" :sections="sections" embedded :raw="rawPrompt" empty-message="No system prompt." />
               </template>
             </section>
             <p v-if="activeTab !== 'overview' && selected" class="preview-scope">{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
@@ -115,10 +116,11 @@
 </template>
 
 <script setup lang="ts">
+import { PromptDocumentsKey } from '../prompt-documents.ts'
 import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatNumber } from '../i18n.ts'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiUrl } from '../api-url.ts'
 import { parseAgentContext, parseAgentTypes, type AgentTypeMeta } from '../agent-types.ts'
@@ -129,6 +131,15 @@ import ToolsCard, { type ToolDef } from './ToolsCard.vue'
 const props = defineProps<{ apiBase: string }>()
 const route = useRoute()
 const router = useRouter()
+const promptDocuments = inject(PromptDocumentsKey, undefined)
+function openDefinition() {
+  const agent = requestedAgent.value
+  const projectId = route.params.projectId
+  if (!agent || typeof agent.prompt !== 'string' || typeof projectId !== 'string') return
+  const source = `${agent.source} / ${agent.name} / AGENT.md (definition prompt)`
+  promptDocuments?.open(projectId, { key: `agent:${agent.source}:${agent.name}`, label: `${agent.name} / AGENT.md`, source,
+    prompt: agent.prompt, sections: [{ name: source, content: agent.prompt, characters: agent.prompt.length }] })
+}
 const id = `agents-${useId()}`
 const views = [{ id: 'overview', get label() { return t('Overview') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'prompt', get label() { return t('System prompt') } }] as const
 type AgentView = typeof views[number]['id']
@@ -150,6 +161,7 @@ const agentTypes = ref<AgentTypeMeta[]>([])
 const requestedAgent = computed(() => agentTypes.value.find(agent => agent.name === route.query.agent) ?? agentTypes.value[0])
 const selected = ref<AgentTypeMeta | null>(null)
 const renderedSystemPrompt = ref('')
+const sections = ref<import('../prompt-sections.ts').PromptSection[]>([])
 const resolvedTools = ref<ToolDef[]>([])
 const resolvedChannel = ref('')
 const loadingContext = ref(false)
@@ -207,6 +219,7 @@ async function loadContext(agent: AgentTypeMeta) {
     selected.value = agent
     resolvedChannel.value = previewChannel
     renderedSystemPrompt.value = data.systemPrompt
+    sections.value = data.sections
     resolvedTools.value = data.tools
   } catch (cause) {
     if (!request.signal.aborted) {

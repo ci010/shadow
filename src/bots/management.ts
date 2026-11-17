@@ -201,6 +201,17 @@ export function botPackageTool(options: Options): Tool {
 /** Read-only owner inventory. Publication has no separate approval/pending state. */
 export function botPackagePlugin(options: Pick<Options,'projectId'|'deployments'|'pending'>, authorize:(request:Request)=>boolean|Promise<boolean>) {
   return (app:Hono) => {
+    app.get('/api/bot-package/:id/prompt', async context => {
+      context.header('Cache-Control', 'no-store')
+      if (!await authorize(context.req.raw)) return context.json({ error: 'Unauthorized' }, 401)
+      try {
+        const snapshot = options.deployments.read(context.req.param('id'))
+        if (!snapshot) return context.json({ error: 'BOT deployment unavailable.' }, 404)
+        if (context.req.query('revision') !== snapshot.deployment.revision) return context.json({ error: 'BOT deployment changed. Refresh the inventory.' }, 409)
+        return context.json({ id: snapshot.deployment.id, revision: snapshot.deployment.revision,
+          source: snapshot.deployment.source, prompt: snapshot.files['BOT.md'] })
+      } catch { return context.json({ error: 'BOT deployment unavailable.' }, 409) }
+    })
     app.get('/api/bot-package',async context => {
       context.header('Cache-Control','no-store')
       if (!await authorize(context.req.raw)) return context.json({error:'Unauthorized'},401)

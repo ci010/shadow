@@ -101,3 +101,21 @@ test('link never creates exact thread or DM assignment and never trusts target k
   const { assignChannelSource } = await import('./channel-assignment.ts')
   assert.throws(() => assignChannelSource(f.deployments.read('support')!.files, { ...base, kind: 'group' }, { platform: 'qq' }), /targets/)
 })
+
+test('BOT prompt tab reads only the authorized exact deployed revision, never later source edits', async t => {
+  const f = fixture(t), app = new Hono()
+  const revision = JSON.parse(await f.propose() as string).deployment.revision
+  f.save('Unpublished source changes')
+  botPackagePlugin(f.options, request => request.headers.get('x-owner') === 'yes')(app)
+  const url = `/api/bot-package/support/prompt?revision=${revision}`
+  assert.equal((await app.request(url)).status, 401)
+  const response = await app.request(url, { headers: { 'x-owner': 'yes' } })
+  assert.equal(response.status, 200)
+  const data = await response.json()
+  assert.equal(data.id, 'support'); assert.equal(data.revision, revision)
+  assert.match(data.prompt, /Frozen instructions/)
+  assert.doesNotMatch(data.prompt, /Unpublished source changes/)
+  assert.deepEqual(Object.keys(data).sort(), ['id', 'prompt', 'revision', 'source'])
+  assert.equal((await app.request('/api/bot-package/support/prompt?revision=stale', { headers: { 'x-owner': 'yes' } })).status, 409)
+  assert.equal((await app.request('/api/bot-package/missing/prompt?revision=stale', { headers: { 'x-owner': 'yes' } })).status, 404)
+})

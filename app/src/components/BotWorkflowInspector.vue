@@ -34,6 +34,7 @@
           <h4>{{ t('Execution sessions') }}</h4><p>{{ t('Existing BOT execution conversations, separate from passive message history. Not execution receipts.') }}</p>
           <RouterLink v-for="sessionId in executionSessions(node.config)" :key="sessionId" class="history-link" :to="{ name: 'chat', params: { projectId, sessionId } }">{{ sessionId }}<span class="i-lucide-arrow-up-right" aria-hidden="true" /></RouterLink>
         </div>
+        <OpenBotPromptButton v-if="node.nodeType === 'deployment' && field(deployment(node.config), 'id')" :api-base="apiBase" :project-id="projectId" :bot-id="field(deployment(node.config), 'id')" :revision="field(deployment(node.config), 'revision')" />
         <p v-if="node.description" class="node-evidence">{{ node.description }}</p>
         <RouterLink v-if="node.targetSessionId" class="history-link" :to="{ name: 'chat', params: { projectId, sessionId: node.targetSessionId } }">{{ t('Open conversation') }}</RouterLink>
       </section>
@@ -46,6 +47,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import OpenBotPromptButton from './OpenBotPromptButton.vue'
 import { receiverLabel } from '../receiver-label.ts'
 import { computed } from 'vue'
 import { configuredTarget, type BotProjection } from '../bot-workflows.ts'
@@ -54,7 +56,7 @@ import { sinkNavigationLabel, sinkNavigationLocation } from '../connection-sinks
 import { channelStateLabel } from '../channel-settings.ts'
 import { t } from '../i18n.ts'
 import HoverInfo from './HoverInfo.vue'
-const props = defineProps<{ entry: WorkflowCanvasEntry; projectId: string; connection?: BotProjection['connections'][number]; selectedNode?: string; referenceUnavailable?: boolean }>()
+const props = defineProps<{ entry: WorkflowCanvasEntry; projectId: string; apiBase: string; connection?: BotProjection['connections'][number]; selectedNode?: string; referenceUnavailable?: boolean }>()
 defineEmits<{ close: []; select: [id: string] }>()
 const displayName = computed(() => {
   const connection = props.connection

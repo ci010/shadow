@@ -14,10 +14,25 @@ const TOOLS = readFileSync(new URL('./AGENTS.tools.md', import.meta.url), 'utf8'
 export function guidelineProvider(): SystemPromptProvider {
   return {
     name: 'guideline',
+    getPromptSections(ctx) {
+      const entries: Array<[string, string]> = [
+        ['AGENT.md', capabilityPrompt(ctx.agent.prompt, ctx)],
+        ...(ctx.personalBotPrompt !== undefined ? [['BOT.md (personal deployment)', capabilityPrompt(`# Personal BOT instructions\n${ctx.personalBotPrompt}`, ctx)] as [string, string]] : []),
+        ['tool-guidance', [capabilityPrompt(TOOLS, ctx), toolsGuideline(ctx)].join('\n\n')],
+      ]
+      return entries.map(([name, text], index) => {
+        // Only the whole provider was trimmed historically, not internal sources.
+        const content = index === 0 ? text.trimStart() : index === entries.length - 1 ? text.trimEnd() : text
+        return { name, content, characters: content.length, separatorBefore: index ? '\n\n' : '' }
+      })
+    },
     getPromptSection(ctx) {
       const agentType = ctx.agent
 
-      const sections = [capabilityPrompt(agentType.prompt, ctx)]
+      // Preserve the original Personal BOT merge before capability expansion.
+      const rolePrompt = ctx.personalBotPrompt !== undefined
+        ? `${agentType.prompt}\n\n# Personal BOT instructions\n${ctx.personalBotPrompt}` : agentType.prompt
+      const sections = [capabilityPrompt(rolePrompt, ctx)]
 
       sections.push(capabilityPrompt(TOOLS, ctx))
       sections.push(toolsGuideline(ctx))

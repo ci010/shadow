@@ -1,5 +1,9 @@
 {
+  "Outside catalog": "目录外",
+  "Open document": "打开文档",
+  "Not a knowledge document.": "不属于知识文档。",
   "Paired until removed on this computer or disconnected on the phone.": "长期配对，直到在这台电脑移除或在手机上断开。",
+  "Session history, semantic logs and conventions; not file-edit history or curated Wiki pages.": "会话历史、语义日志与约定，不包含文件编辑流水，也不是整理后的 Wiki 知识。",
   "Open latest conversation": "打开最近对话",
   "Open the most recent retained run with a recorded session.": "打开保留运行记录中最近有关联会话的对话。",
   "Open the configured target session.": "打开已配置的固定目标会话。",
@@ -4453,5 +4457,20 @@
   "On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.": "在电脑端打开「节点 → 手机访问」，复制手机配对信息并完整粘贴到这里。配对码五分钟内有效且只能使用一次。",
   "Copy the pairing details below and send them privately to your phone. Paste once in the Shadow phone app. For HTTP, also enable Allow LAN HTTP on the phone.": "复制下方配对信息并私密发送到手机，在 Shadow 手机端粘贴一次即可。HTTP 连接还需在手机端勾选「允许局域网 HTTP」。",
   "Phone access settings": "手机访问设置",
-  "Pair your phone": "配对手机"
+  "Pair your phone": "配对手机",
+  "Open AGENT.md in workspace": "在工作区打开 AGENT.md",
+  "Open deployed BOT.md in workspace": "在工作区打开已部署的 BOT.md",
+  "BOT prompt unavailable or deployment changed. Refresh and retry.": "BOT 提示词不可用或部署已变化，请刷新后重试。",
+  "Source metadata unavailable; showing exact prompt without inferred sources.": "来源元数据不可用；显示原始提示词，不推断来源。",
+  "Current in-memory system message, not a captured provider request.": "当前内存中的系统消息，并非捕获的模型请求。",
+  "Rebuilt preview, not a historical runtime prompt.": "重新生成的预览，并非历史运行时提示词。",
+  "Prompt provenance unavailable.": "提示词来源信息不可用。",
+  "Open prompt in workspace": "在工作区打开提示词",
+  "No recorded events.": "暂无事件记录。",
+  "When": "时间",
+  "Who": "主体",
+  "What happened": "发生内容",
+  "Source session": "来源会话",
+  "Recorded source": "原始记录",
+  "Unrecognized event record": "无法识别的事件记录"
 }

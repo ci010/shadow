@@ -3,6 +3,8 @@ import type { KnowledgeCatalog, KnowledgeDetail, KnowledgeEntry, KnowledgeKind, 
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 
+import { isFileHistory, isKnowledgeDocument, visibleKnowledgeCatalog } from '../../src/knowledge/visibility.ts'
+export { isFileHistory, isKnowledgeDocument, visibleKnowledgeCatalog }
 export type { KnowledgeCatalog, KnowledgeDetail, KnowledgeEntry, KnowledgeKind, KnowledgeLink }
 
 const invalid = () => new Error(t('Main returned invalid knowledge data. Refresh and retry.'))
@@ -35,7 +37,7 @@ export function parseKnowledgeCatalog(value: unknown): KnowledgeCatalog {
       ...(typeof link.href === 'string' ? { href: link.href } : {}),
     }
   })
-  return { entries, links }
+  return visibleKnowledgeCatalog({ entries, links })
 }
 
 export function createKnowledgeTransport(base: string, request: typeof fetch = fetch) {
@@ -91,11 +93,12 @@ export function createKnowledgeClient(base: string, request: typeof fetch = fetc
 
 export function filterKnowledge(catalog: KnowledgeCatalog, kind: KnowledgeKind | 'all', query: string): KnowledgeEntry[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
-  return catalog.entries.filter(item => (kind === 'all' || item.kind === kind)
+  return catalog.entries.filter(item => isKnowledgeDocument(item) && (kind === 'all' || item.kind === kind)
     && terms.every(term => `${item.title} ${item.path} ${item.description ?? ''}`.toLocaleLowerCase().includes(term)))
 }
 
 export function knowledgeRelations(catalog: KnowledgeCatalog, id: string) {
+  catalog = visibleKnowledgeCatalog(catalog)
   return {
     incoming: catalog.links.filter(link => link.target === id),
     outgoing: catalog.links.filter(link => link.source === id),
@@ -111,17 +114,46 @@ export interface KnowledgeGraphNode {
 }
 
 export function layoutKnowledgeGraph(catalog: KnowledgeCatalog, visibleIds: readonly string[]) {
-  const visible = new Set(visibleIds)
+  const hidden = new Set(catalog.entries.filter(entry => !isKnowledgeDocument(entry)).map(entry => entry.id))
+  catalog = visibleKnowledgeCatalog(catalog)
+  const visible = new Set(visibleIds.filter(id => !isFileHistory(id) && !hidden.has(id)))
   const links = catalog.links.filter(link => visible.has(link.source) || visible.has(link.target))
   const included = new Set([...visible, ...links.flatMap(link => [link.source, link.target])])
   const entries = new Map(catalog.entries.map(item => [item.id, item]))
-  const columns = ['memory', 'wiki', 'skill', 'missing'] as const
-  const counts = [0, 0, 0, 0]
-  const nodes: KnowledgeGraphNode[] = [...included].sort().map(id => {
-    const item = entries.get(id)
-    const kind = item?.kind ?? 'missing'
-    const column = columns.indexOf(kind)
-    return { id, title: item?.title ?? id, kind, x: 20 + column * 280, y: 52 + counts[column]!++ * 76 }
+  // Stable golden-angle seeds and a bounded relaxation: no random state, timers,
+  // or category forces. Only explicit references attract nodes (O(160*n²)).
+  const nodes: KnowledgeGraphNode[] = [...included].sort().map((id, index) => {
+    const item = entries.get(id), angle = index * 2.399963229728653
+    const radius = 30 * Math.sqrt(index + 1)
+    return { id, title: item?.title ?? id, kind: item?.kind ?? 'missing', x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
   })
-  return { nodes, links, width: 1120, height: Math.max(260, 70 + Math.max(...counts) * 76) }
+  const indices = new Map(nodes.map((node, index) => [node.id, index]))
+  const pairs = links.map(link => [indices.get(link.source)!, indices.get(link.target)!] as const)
+  for (let iteration = 0; iteration < 160; iteration++) {
+    const forces = nodes.map(node => ({ x: -node.x * .008, y: -node.y * .008 }))
+    for (let a = 0; a < nodes.length; a++) for (let b = a + 1; b < nodes.length; b++) {
+      const dx = nodes[a]!.x - nodes[b]!.x, dy = nodes[a]!.y - nodes[b]!.y
+      const distance = Math.max(1, Math.hypot(dx, dy)), force = 1000 / (distance * distance)
+      forces[a]!.x += dx * force; forces[a]!.y += dy * force
+      forces[b]!.x -= dx * force; forces[b]!.y -= dy * force
+    }
+    for (const [a, b] of pairs) {
+      if (a === b) continue
+      const dx = nodes[b]!.x - nodes[a]!.x, dy = nodes[b]!.y - nodes[a]!.y
+      const distance = Math.max(1, Math.hypot(dx, dy)), force = (distance - 85) / distance * .035
+      forces[a]!.x += dx * force; forces[a]!.y += dy * force
+      forces[b]!.x -= dx * force; forces[b]!.y -= dy * force
+    }
+    const step = 10 * (1 - iteration / 160) + .2
+    nodes.forEach((node, index) => {
+      const force = forces[index]!, length = Math.max(1, Math.hypot(force.x, force.y))
+      node.x += force.x / length * Math.min(step, length)
+      node.y += force.y / length * Math.min(step, length)
+    })
+  }
+  const minX = Math.min(0, ...nodes.map(node => node.x)) - 60, minY = Math.min(0, ...nodes.map(node => node.y)) - 60
+  const width = Math.max(240, Math.max(0, ...nodes.map(node => node.x)) - minX + 60)
+  const height = Math.max(240, Math.max(0, ...nodes.map(node => node.y)) - minY + 60)
+  nodes.forEach(node => { node.x -= minX; node.y -= minY })
+  return { nodes, links, width, height }
 }

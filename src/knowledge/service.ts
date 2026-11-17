@@ -6,6 +6,7 @@ import { parseSkillFile } from '../skills/parse.ts'
 import { workspacePath } from '../utils/paths.ts'
 import type { KnowledgeCatalog, KnowledgeDetail, KnowledgeEntry } from './contracts.ts'
 import { extractLinks } from './links.ts'
+import { isFileHistory } from './visibility.ts'
 
 export class KnowledgeError extends Error {
   constructor(
@@ -116,7 +117,8 @@ export class KnowledgeService {
   }
 
   catalog(): KnowledgeCatalog {
-    const records = this.records()
+    // Working-set indexes remain readable by exact ID, not knowledge nodes.
+    const records = this.records(undefined, false)
     const skillIds = new Map(records.filter(record => record.detail.entry.kind === 'skill')
       .map(record => [record.detail.entry.title, record.detail.entry.id]))
     const links = new Map<string, KnowledgeCatalog['links'][number]>()
@@ -130,6 +132,7 @@ export class KnowledgeService {
         throw error
       }
       for (const link of extracted) {
+        if (isFileHistory(link.target)) continue
         links.set(JSON.stringify(link), link)
         if (links.size > KNOWLEDGE_LIMITS.links) throw new KnowledgeError('knowledge_limit', 'Knowledge graph exceeds 100,000 links', 413)
       }
@@ -175,11 +178,12 @@ export class KnowledgeService {
     return record
   }
 
-  private records(only?: string): Record[] {
+  private records(only?: string, includeFileHistory = true): Record[] {
     const records: Record[] = []
     let bytes = 0
     const add = (file: string, entry: Omit<KnowledgeEntry, 'revision'>, related?: string) => {
       if (only && only !== entry.id) return
+      if (!includeFileHistory && isFileHistory(entry.id)) return
       const { content, revision } = readSafe(file)
       bytes += Buffer.byteLength(content)
       if (bytes > KNOWLEDGE_LIMITS.totalBytes || records.length >= KNOWLEDGE_LIMITS.entries) {

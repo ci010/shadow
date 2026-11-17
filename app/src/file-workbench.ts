@@ -165,7 +165,7 @@ export function documentTabDirection(event: DocumentTabKey): DocumentTabDirectio
 }
 
 function isDocumentCloseKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
-  return event.key.toLowerCase() === 'w' && event.ctrlKey && !event.altKey && !event.metaKey
+  return event.key.toLowerCase() === 'w' && (event.ctrlKey !== event.metaKey) && !event.altKey
     && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented && !event.repeat
 }
 
@@ -178,7 +178,7 @@ export function isCloseAllDocumentsKey(event: DocumentTabKey & { repeat?: boolea
 }
 
 export function isToggleExplorerKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
-  return event.key.toLowerCase() === 'e' && event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey
+  return event.key.toLowerCase() === 'e' && (event.ctrlKey !== event.metaKey) && event.shiftKey && !event.altKey
     && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented && !event.repeat
 }
 
