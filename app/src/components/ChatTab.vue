@@ -369,7 +369,7 @@
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
             :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && chatRouteActive"
             @complete="completeSessionReference" />
-          <input ref="attachmentInput" class="composer-file-input" type="file" :accept="remoteConversation ? 'image/png,image/jpeg,image/gif,image/webp' : undefined" multiple @change="handleAttachmentInput">
+          <input ref="attachmentInput" class="composer-file-input" type="file" :accept="remoteConversation ? 'image/png,image/jpeg,image/gif,image/webp' : undefined" multiple @change="handleAttachmentInput" @cancel="closeAttachmentPicker">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" :aria-label="t('Attached files')">
             <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
               <button v-if="attachment.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="t('View image: {name}', { name: attachment.file.name })"
@@ -444,7 +444,7 @@
               <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
-                  <button class="context-action" :disabled="!canOpenComposerPopover" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
+                  <button type="button" class="context-action" :disabled="!canOpenComposerPopover" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
                     <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
                     {{ t('Add file') }}
                   </button>
@@ -452,7 +452,7 @@
                     <span class="context-icon i-lucide-folder-plus" aria-hidden="true" />
                     {{ t('Add folder') }}
                   </button>
-                  <button v-if="canPickContext" class="context-action" @click="close(); openAttachmentPicker()">
+                  <button v-if="canPickContext" type="button" class="context-action" @click="close(); openAttachmentPicker()">
                     <span class="context-icon i-lucide-image-plus" aria-hidden="true" />
                     {{ t('Upload image / file') }}
                   </button>
@@ -531,7 +531,12 @@ import { providerFailureMessage, providerRetryGuidance } from '../provider-setup
 import DOMPurify from 'dompurify'
 import SessionReferenceMenu from './SessionReferenceMenu.vue'
 import { useMobileResources } from '../mobile-resources.ts'
+import { mobileSessionKey } from '../mobile-client.ts'
 const mobileResources = useMobileResources()
+const mobileSession = inject(mobileSessionKey, undefined)
+let finishAttachmentPicker: (() => void) | undefined
+function closeAttachmentPicker() { finishAttachmentPicker?.(); finishAttachmentPicker = undefined }
+onUnmounted(closeAttachmentPicker)
 import { exitAnswerHtml, sanitizeAnswerHtmlRoots } from '../answer-html'
 import MarkdownContent from './MarkdownContent.vue'
 import MessageCopyActions from './MessageCopyActions.vue'
@@ -2080,11 +2085,15 @@ function openAttachmentPicker(): void {
     composerError.value = t('File attachments are unavailable.')
     return
   }
+  closeAttachmentPicker()
+  finishAttachmentPicker = mobileSession?.beginFilePicker()
   attachmentInput.value.value = ''
-  attachmentInput.value.click()
+  try { attachmentInput.value.click() }
+  catch (cause) { closeAttachmentPicker(); throw cause }
 }
 
 function handleAttachmentInput(event: Event): void {
+  closeAttachmentPicker()
   const input = event.target
   if (!(input instanceof HTMLInputElement)) return
   const files = Array.from(input.files ?? [])

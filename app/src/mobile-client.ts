@@ -102,6 +102,10 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
   const error = ref('')
   const resourceError = ref('')
   const busy = ref(false)
+  // Only an explicitly opened system picker may retain an in-memory chat tree.
+  // Network authorization is still suspended and revalidated on every resume.
+  const preserveChat = ref(false)
+  let filePicker: symbol | undefined
   let credentials: MobileCredentials | undefined
   let lifetime = new AbortController()
   let operation: AbortController | undefined
@@ -123,7 +127,8 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     clearTimeout(expiryTimer)
     busy.value = false
   }
-  function fail(message: string) { error.value = message; view.value = 'error' }
+  function clearPicker() { filePicker = undefined; preserveChat.value = false }
+  function fail(message: string) { clearPicker(); error.value = message; view.value = 'error' }
   async function remove() {
     credentials = undefined
     try { await persist(() => store.remove()) }
@@ -131,6 +136,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     return true
   }
   async function loseAuth() {
+    clearPicker()
     stop()
     const id = generation
     busy.value = true
@@ -157,6 +163,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     if (!active || disposed || !credentials) return
     lifetime = new AbortController()
     resourceError.value = ''
+    preserveChat.value = false
     view.value = 'connected'
     expiryTimer = setTimeout(() => { void loseAuth() }, Math.min(2_147_483_647, Date.parse(credentials.expiresAt) - Date.now()))
   }
@@ -231,6 +238,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     finally { if (id === generation) busy.value = false }
   }
   async function disconnect() {
+    clearPicker()
     const previous = credentials
     stop()
     const id = generation
@@ -255,14 +263,22 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     }
   }
   function setActive(value: boolean) {
-    if (disposed) return
+    if (disposed || active === value) return
     active = value
-    if (!value) { stop(); view.value = 'paused' }
+    if (!value) {
+      preserveChat.value = !!filePicker && (view.value === 'connected' || preserveChat.value)
+      stop(); view.value = 'paused'
+    }
     else if (credentials) void refresh()
     else void load()
   }
   return {
-    view, origin, error, resourceError, busy, pair, load, refresh, disconnect, setActive,
+    view, origin, error, resourceError, busy, preserveChat, pair, load, refresh, disconnect, setActive,
+    beginFilePicker() {
+      if (!active || disposed || view.value !== 'connected') return () => {}
+      const token = filePicker = Symbol('file-picker')
+      return () => { if (filePicker === token) filePicker = undefined }
+    },
     credentials: () => credentials,
     signal: () => lifetime.signal,
     unauthorized: () => { if (credentials) void loseAuth() },
@@ -276,7 +292,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
       if (!response.ok) throw new Error(t('Could not authorize this resource. Retry the connection to reload it.'))
       return response.json() as Promise<unknown>
     },
-    dispose() { disposed = true; stop(); credentials = undefined },
+    dispose() { disposed = true; clearPicker(); stop(); credentials = undefined },
   }
 }
 export type MobileSession = ReturnType<typeof createMobileSession>
