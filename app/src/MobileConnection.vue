@@ -23,13 +23,11 @@
       <form v-if="session.view.value === 'pairing'" @submit.prevent="pair">
         <label><input id="allow-lan-http" v-model="allowLanHttp" type="checkbox">{{ t('Allow LAN HTTP (unencrypted; trusted networks only)') }}</label>
         <p v-if="allowLanHttp" role="alert">{{ t('HTTP is not encrypted. Pairing codes, credentials and conversations can be read or changed by others on the network. Use a private/loopback numeric IP only. HTTPS will never automatically downgrade.') }}</p>
-        <label for="main-address">{{ t('Main HTTPS address') }}</label>
-        <input id="main-address" v-model="endpoint" type="url" placeholder="https://shadow.example.com" autocomplete="url" autocapitalize="off" :spellcheck="false" :disabled="session.busy.value" required>
-        <label for="mobile-pair-code">{{ t('One-use pairing code') }}</label>
-        <input id="mobile-pair-code" v-model="code" type="password" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="session.busy.value" required aria-describedby="mobile-pair-help">
-        <p id="mobile-pair-help" class="hint">{{ t('Generate a mobile pairing code in the trusted Main CLI. Codes expire after five minutes and work once. Credentials stay in this device’s secure storage.') }}</p>
+        <label for="phone-pairing">{{ t('Phone pairing details') }}</label>
+        <textarea id="phone-pairing" v-model="pairingText" rows="4" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="session.busy.value" required aria-describedby="mobile-pair-help" />
+        <p id="mobile-pair-help" class="hint">{{ t('On Main, open Nodes → Phone access and copy the phone pairing details. Paste everything here. Codes expire after five minutes and work once.') }}</p>
         <p v-if="session.error.value" class="connection-error" role="alert">{{ session.error.value }}</p>
-        <button class="primary" type="submit" :disabled="session.busy.value || !endpoint.trim() || !code.trim()">{{ session.busy.value ? t('Connecting…') : t('Connect device') }}</button>
+        <button class="primary" type="submit" :disabled="session.busy.value || !pairingText.trim()">{{ session.busy.value ? t('Connecting…') : t('Connect device') }}</button>
       </form>
       <template v-else>
         <p v-if="session.error.value" class="connection-error" role="alert">{{ session.error.value }}</p>
@@ -46,16 +44,21 @@
 <script setup lang="ts">
 import { t } from './i18n.ts'
 import { ref } from 'vue'
+import { parsePhonePairing } from './mobile-pairing.ts'
 import type { MobileSession } from './mobile-client.ts'
 import LanguageSelector from './components/LanguageSelector.vue'
 const props = defineProps<{ session: MobileSession; connected?: boolean }>()
-const endpoint = ref(props.session.origin.value)
-const code = ref('')
+const pairingText = ref('')
 const allowLanHttp = ref(false)
 async function pair() {
-  const submitted = code.value
-  code.value = ''
-  await props.session.pair(endpoint.value, submitted, allowLanHttp.value)
+  const submitted = pairingText.value
+  pairingText.value = ''
+  try {
+    const details = parsePhonePairing(submitted, allowLanHttp.value)
+    await props.session.pair(details.url, details.code, allowLanHttp.value)
+  } catch (cause) {
+    props.session.error.value = cause instanceof Error ? cause.message : ''
+  }
 }
 </script>
 
@@ -67,7 +70,7 @@ h1 { margin: 0 0 14px; font-size: 24px; line-height: 1.25; font-weight: 600; }
 p { margin: 0 0 18px; font-size: 14px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 form { display: grid; gap: 10px; }
 label { font-size: 14px; font-weight: 600; }
-input { width: 100%; min-width: 0; min-height: 48px; padding: 10px 12px; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 16px; }
+input, textarea { width: 100%; min-width: 0; min-height: 48px; padding: 10px 12px; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 16px; }
 .hint { font-size: 13px; margin: 0 0 10px; }
 .connection-error { color: var(--c-error); }
 .connection-actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -75,8 +78,8 @@ button, summary { min-height: 48px; padding: 12px 14px; border: 1px solid var(--
 button.primary { background: var(--c-primary-bg); border-color: var(--c-primary-bg); color: var(--c-text-on-primary); }
 button:not(:disabled):hover, summary:hover { background: var(--c-bg-muted); }
 button.primary:not(:disabled):hover { background: var(--c-primary-bg-hover); }
-button:disabled, input:disabled { opacity: .55; cursor: not-allowed; }
-button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 3px; }
+button:disabled, input:disabled, textarea:disabled { opacity: .55; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 3px; }
 .mobile-connection { position: relative; max-width: calc(100vw - 24px); color: var(--c-text); }
 .connection-content { width: min(360px, calc(100vw - 24px)); padding: 16px; background: var(--c-bg-card); border: 1px solid var(--c-border); box-shadow: 0 8px 24px var(--c-shadow); }
 summary { width: fit-content; margin-left: auto; }

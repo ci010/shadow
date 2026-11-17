@@ -51,12 +51,16 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
         return `
           import 'uno.css'; import '/src/styles.css';
           import {startMobileClient} from '/src/mobile-bootstrap.ts';
+          import {createApp} from 'vue';
+          import MobileAdministration from '/src/components/MobileAdministration.vue';
           import {browserIoCapabilities} from '/src/io/adapters.ts';
           const fixture=window.__mobile={native:new URL(location.href).searchParams.has('native'), stored:null, calls:[], revoked:false};
           window.fetch=async (input, init) => {
             const request = new Request(input,init);
             fixture.calls.push({url:request.url, method:request.method, authorization:request.headers.get('authorization'), signal:request.signal});
             const path = new URL(request.url).pathname;
+            if(path==='/nodes/v1/mobile/settings') return Response.json({enabled:true,port:3125,allowLanHttp:true,managedByEnvironment:false,state:'listening',endpoint:'http://192.168.1.10:3125',error:null,sessions:[]});
+            if(path==='/nodes/v1/mobile/pairing') return Response.json({url:'http://192.168.1.10:3125',code:'abcd-abcd-abcd-abcd-abcd-abcd',expiresAt:new Date(Date.now()+300000).toISOString()});
             if(path==='/mobile/v1/pair') return Response.json({version:1,accessToken:'synthetic-native-access-token',expiresAt:new Date(Date.now()+3600000).toISOString()});
             if(path==='/mobile/v1/session') return fixture.revoked ? new Response(null,{status:401}) : Response.json({version:1,authenticated:true,expiresAt:new Date(Date.now()+3600000).toISOString()});
             if(path==='/api/live') return new Response(new ReadableStream({start(controller){
@@ -65,7 +69,8 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
             if(path==='/api/projects') return Response.json({version:1,projects:[]});
             return Response.json({});
           };
-          fixture.dispose=await startMobileClient(); fixture.capabilities=browserIoCapabilities(); fixture.ready=true;
+          if(new URL(location.href).searchParams.has('admin')) {createApp(MobileAdministration,{apiBase:location.origin}).mount('#app');fixture.ready=true;} else {
+          fixture.dispose=await startMobileClient(); fixture.capabilities=browserIoCapabilities(); fixture.ready=true;}
         `
       },
       configureServer(server) {
@@ -97,12 +102,12 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
         assert.equal(await win.webContents.executeJavaScript('window.__mobile.calls.length'),0);
         await win.loadURL(process.env.MOBILE_FIXTURE_URL+'__mobile?native=1');
         await wait(win,'window.__mobile?.ready');
-        await wait(win,'!!document.querySelector("#main-address")');
+        await wait(win,'!!document.querySelector("#phone-pairing")');
         assert(await win.webContents.executeJavaScript('window.__mobile.capabilities.filter(c=>["camera","microphone","screen"].includes(c.id)).every(c=>!c.available&&c.reason.includes("not supported"))'));
         assert(await win.webContents.executeJavaScript('window.__mobile.capabilities.filter(c=>["file","form"].includes(c.id)).every(c=>c.available)'));
-        const sizes=await win.webContents.executeJavaScript('({overflow:document.documentElement.scrollWidth>innerWidth,inputs:[...document.querySelectorAll("input")].map(n=>n.getBoundingClientRect().height),button:document.querySelector("form button").getBoundingClientRect().height})');
+        const sizes=await win.webContents.executeJavaScript('({overflow:document.documentElement.scrollWidth>innerWidth,inputs:[...document.querySelectorAll("input,textarea")].map(n=>n.getBoundingClientRect().height),button:document.querySelector("form button").getBoundingClientRect().height})');
         assert.equal(sizes.overflow,false); assert(sizes.inputs.every(h=>h>=48)); assert(sizes.button>=48);
-        await win.webContents.executeJavaScript('document.querySelector("#main-address").value="https://main.example";document.querySelector("#main-address").dispatchEvent(new Event("input"));document.querySelector("#mobile-pair-code").value="abcdef-abcdef-abcdef-abcdef";document.querySelector("#mobile-pair-code").dispatchEvent(new Event("input"));document.querySelector("form").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true}));');
+        await win.webContents.executeJavaScript('document.querySelector("#phone-pairing").value=["Shadow-Phone/1","https://main.example","abcdef-abcdef-abcdef-abcdef"].join(String.fromCharCode(10));document.querySelector("#phone-pairing").dispatchEvent(new Event("input"));document.querySelector("form").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true}));');
         await wait(win,'!!document.querySelector(".app-shell")');
         assert(await win.webContents.executeJavaScript('window.__mobile.stored.includes("synthetic-native-access-token")'));
         assert.equal(await win.webContents.executeJavaScript('Object.values(localStorage).some(value=>value.includes("synthetic-native-access-token"))'),false);
@@ -113,11 +118,25 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
         await win.webContents.executeJavaScript('window.__mobile.revoked=true;window.__mobile.state({isActive:true})');
         await wait(win,'document.body.innerText.includes("Connect to Main")');
         assert.equal(await win.webContents.executeJavaScript('window.__mobile.stored'),null);
+        await win.loadURL(process.env.MOBILE_FIXTURE_URL+'__mobile?admin=1');
+        await wait(win,'document.body.innerText.includes("Phone listener is on")');
+        await win.webContents.executeJavaScript('[...document.querySelectorAll("button")].find(b=>b.textContent.includes("Create phone pairing code")).click()');
+        await wait(win,'!!document.querySelector("textarea")');
+        const payload=await win.webContents.executeJavaScript('document.querySelector("textarea").value');
+        assert.match(payload,/Shadow-Phone\\/1/);
+        assert(payload.includes('http://192.168.1.10:3125')&&payload.includes('abcd-abcd'));
+        for(const width of [390,1100]) {
+          win.setSize(width,900);await new Promise(r=>setTimeout(r,200));
+          assert.equal(await win.webContents.executeJavaScript('document.documentElement.scrollWidth>innerWidth'),false);
+          require('node:fs').writeFileSync(require('node:path').join(process.env.MOBILE_SCREENSHOT_DIR,'phone-pairing-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
+        }
         console.log('MOBILE_CLIENT_SMOKE_OK');
       }finally{win.destroy();app.quit()}
     }).catch(error=>{console.error(error);app.exit(1)});
   `)
-  const env: NodeJS.ProcessEnv = { MOBILE_FIXTURE_URL: origin }
+  const screenshotDir = resolve(root, '.tmp', 'phone-pairing-review')
+  await mkdir(screenshotDir, { recursive: true })
+  const env: NodeJS.ProcessEnv = { MOBILE_FIXTURE_URL: origin, MOBILE_SCREENSHOT_DIR: screenshotDir }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }

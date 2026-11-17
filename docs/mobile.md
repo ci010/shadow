@@ -195,3 +195,16 @@ macOS and Xcode, locally or on CI. An unsigned Android release build or iOS
 simulator build is a compilation artifact, **not a signed installable store
 release**. Store distribution additionally requires publisher identifiers,
 signing credentials, developer accounts and platform acceptance.
+
+### One-copy phone pairing
+
+On Main, open **Nodes → Phone access**, enable access on a trusted network,
+then create a phone pairing code. **Copy phone pairing details** copies one
+`Shadow-Phone/1` payload containing the canonical origin, one-use code and expiry.
+Send it privately to your phone and paste the complete text into the single
+**Phone pairing details** field. HTTP still requires a separate, unchecked-by-default
+**Allow LAN HTTP** confirmation. Nothing in pasted text grants transport consent.
+The original address / code / expiry clipboard format remains accepted, including
+extra whitespace or line breaks. Invalid origins, paths, codes and expired details
+are rejected; create a fresh code on Main if it expired or was already used.
+Pasted secrets are cleared on submission and are never placed in URLs or browser storage.
