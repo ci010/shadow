@@ -1,3 +1,5 @@
+import { safePath } from '../knowledge/service.ts'
+import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
 import { sessionEdits } from './session-edits.ts'
 import { listRemoteFolderSkillResources } from '../skills/remote-folder.ts'
 import { discoverFolderSkills, folderSkillsSummary, readFolderSkillResource, type FolderSkillScope } from '../skills/folder.ts'
@@ -447,21 +449,25 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
   directory: VirtualDirectoryHandler
 } {
   const memoryRoot = join(workspace, 'memory')
+  const maintenance = new MaintenanceGate(workspace)
+  const visibleFiles = async (signal: AbortSignal, subpath = '') => (await walkResourceFiles(memoryRoot, signal, subpath)).filter(path => !maintenance.isHidden(`memory/${path}`))
   const writer = new WriteTool(workspace, true)
 
   const read: VirtualFsHandler = async (subpath, context) => {
     if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
     if (!subpath || subpath === 'overview') return 'Project memory\n- Knowledge navigation: v:knowledge/overview\n- Wiki originals: v:memory/topics/ (and concepts/, decisions/, identities/, tools/)\n- Semantic logs: v:knowledge/logs; raw JSONL: v:memory/events/\n- Session context/raw edit ledgers: v:memory/sessions/; edit index: v:sessions/<id>/edits\n- Skills remain separate: v:skills/\nUse flag l, explicit directory reads, or glob/grep at v:memory/ for exhaustive raw discovery. Wiki Markdown writes remain unchanged.'
     if (subpath.includes('..')) return 'Invalid path.'
+    maintenance.assertReadable(`memory/${subpath}`)
     const target = subpath ? join(memoryRoot, subpath) : memoryRoot
     let info
     try {
-      info = await stat(target)
-    } catch {
-      return `Not found: memory/${subpath}`
+      info = safePath(target)
+    } catch (error) {
+      if (isNotFoundError(error)) return `Not found: memory/${subpath}`
+      throw error
     }
     if (info.isDirectory()) {
-      const files = await walkResourceFiles(memoryRoot, context.signal, subpath)
+      const files = await visibleFiles(context.signal, subpath)
       if (files.length === 0) {
         return subpath ? `Empty: memory/${subpath}` : 'No memories yet.'
       }
@@ -472,16 +478,19 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
       ]
         .join('\n')
     }
+    if (info.nlink !== 1) throw new Error('Memory paths must be unlinked regular files')
     return await readFile(target, 'utf8')
   }
 
   const list: VirtualFsListHandler = async (context, options) => {
     if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
-    const files = await walkResourceFiles(memoryRoot, context.signal)
+    const files = await visibleFiles(context.signal)
     const entries: Array<{ name: string; content: string }> = []
     for (const f of files) {
       context.signal.throwIfAborted()
       if (options?.subpath && f !== options.subpath && !f.startsWith(`${options.subpath}/`)) continue
+      const info = safePath(join(memoryRoot, f))
+      if (info.nlink !== 1) throw new Error('Memory paths must be unlinked regular files')
       const content = options?.content === false ? '' : await readFile(join(memoryRoot, f), 'utf8')
       entries.push({ name: f, content })
     }
@@ -493,47 +502,54 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
     if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
     if (context.remoteWorkdir) throw new Error('Memory writes require a local workdir.')
     if (context.tools.executionMode === 'call') throw new Error('Memory writes are unavailable in call mode.')
-    const parts = subpath.split('/')
-    if (parts.some(part => !part || part.startsWith('.') || /[<>:"\\|?*\u0000-\u001f\u007f]/.test(part)
-      || /[. ]$/.test(part) || /~\d/.test(part)
-      || /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(part))) {
-      throw new Error('Invalid memory path; use a relative wiki filename under v:memory/.')
-    }
-    if (['sessions', 'events'].includes(parts[0].toLowerCase()) || !/\.md$/i.test(parts.at(-1)!)) {
-      throw new Error('Only wiki Markdown files are writable through v:memory/. Session records and internal state are read-only; use log to append logs.')
-    }
-    // Do not follow an alias into another Project, source records, or internal state.
-    let target = resolve(workspace)
-    for (const part of ['memory', ...parts]) {
-      target = join(target, part)
-      try {
-        const info = await lstat(target)
-        if (info.isSymbolicLink() || info.isFile() && info.nlink > 1) throw new Error('Memory writes cannot follow symlinks, junctions or hard links.')
-      } catch (error) {
-        if (!isNotFoundError(error)) throw error
+    return new MaintenanceGate(workspace).write([`memory/${subpath}`], async () => {
+      const parts = subpath.split('/')
+      if (parts.some(part => !part || part.startsWith('.') || /[<>:"\\|?*\u0000-\u001f\u007f]/.test(part)
+        || /[. ]$/.test(part) || /~\d/.test(part)
+        || /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(part))) {
+        throw new Error('Invalid memory path; use a relative wiki filename under v:memory/.')
       }
-    }
-    if (request.match !== undefined) {
-      const text = await readFile(target, { encoding: 'utf8', signal: context.signal })
-      if (!request.match || !text.includes(request.match)) throw new Error('Exact match not found in memory. Reread the file before editing.')
-      const index = text.indexOf(request.match)
-      if (!request.replaceAll && text.indexOf(request.match, index + request.match.length) !== -1) {
-        throw new Error('Memory match is ambiguous; include more context or use flag "g".')
+      if (['sessions', 'events'].includes(parts[0].toLowerCase()) || !/\.md$/i.test(parts.at(-1)!)) {
+        throw new Error('Only wiki Markdown files are writable through v:memory/. Session records and internal state are read-only; use log to append logs.')
       }
-    }
-    return writer.execute({ path: target, content: request.content, match: request.match,
-      flag: request.replaceAll ? 'g' : '' }, context)
+      // Do not follow an alias into another Project, source records, or internal state.
+      let target = resolve(workspace)
+      for (const part of ['memory', ...parts]) {
+        target = join(target, part)
+        try {
+          const info = await lstat(target)
+          if (info.isSymbolicLink() || info.isFile() && info.nlink > 1) throw new Error('Memory writes cannot follow symlinks, junctions or hard links.')
+        } catch (error) {
+          if (!isNotFoundError(error)) throw error
+        }
+      }
+      if (request.match !== undefined) {
+        const text = await readFile(target, { encoding: 'utf8', signal: context.signal })
+        if (!request.match || !text.includes(request.match)) throw new Error('Exact match not found in memory. Reread the file before editing.')
+        const index = text.indexOf(request.match)
+        if (!request.replaceAll && text.indexOf(request.match, index + request.match.length) !== -1) {
+          throw new Error('Memory match is ambiguous; include more context or use flag "g".')
+        }
+      }
+      return writer.execute({ path: target, content: request.content, match: request.match,
+        flag: request.replaceAll ? 'g' : '' }, context)
+    })
   }
 
   const directory: VirtualDirectoryHandler = async (subpath, context) => {
     if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
     if (subpath.includes('..')) throw new Error('Invalid memory directory path.')
-    try { if (!(await stat(join(memoryRoot, subpath))).isDirectory()) return null }
+    try { if (!safePath(join(memoryRoot, subpath)).isDirectory()) return null }
     catch (error) { if (isNotFoundError(error)) return null; throw error }
-    const files = await walkResourceFiles(memoryRoot, context.signal, subpath)
+    const files = await visibleFiles(context.signal, subpath)
     return { header: 'Raw Project memory files (includes retained history):', items: files.map(file => `v:memory/${file}`) }
   }
-  return { read, list, write, directory }
+  return {
+    read: async (...args) => { const view = maintenance.visibilityRevision(); const value = await read(...args); maintenance.assertView(view); return value },
+    list: async (...args) => { const view = maintenance.visibilityRevision(); const value = await list(...args); maintenance.assertView(view); return value },
+    directory: async (...args) => { const view = maintenance.visibilityRevision(); const value = await directory(...args); maintenance.assertView(view); return value },
+    write,
+  }
 }
 
 // ── Event subscriptions ──────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
 import { createHash } from 'node:crypto'
 import { constants, lstatSync, openSync, closeSync, readSync, fstatSync, readdirSync, unlinkSync, type Stats } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
@@ -70,7 +71,7 @@ export function safePath(path: string): Stats {
 
 export function readSafe(path: string, maxBytes: number = KNOWLEDGE_LIMITS.fileBytes): { content: string; revision: string; bytes: Buffer } {
   const info = safePath(path)
-  if (!info.isFile()) throw new KnowledgeError('unsafe_knowledge_path', 'Knowledge entries must be regular files', 403)
+  if (!info.isFile() || info.nlink !== 1) throw new KnowledgeError('unsafe_knowledge_path', 'Knowledge entries must be unlinked regular files', 403)
   if (info.size > maxBytes) throw new KnowledgeError('knowledge_limit', `Knowledge file exceeds the ${maxBytes} byte limit`, 413)
   const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   try {
@@ -153,15 +154,17 @@ export class KnowledgeService {
       throw new KnowledgeError('invalid_knowledge_revision', 'A SHA-256 revision is required')
     }
     if (id.startsWith('builtin:')) throw new KnowledgeError('knowledge_readonly', 'Built-in skills cannot be deleted', 403)
-    const record = this.find(id)
-    // No await between the final path/content checks, unlink, and runtime invalidation.
-    if (readSafe(record.file).revision !== expectedRevision) {
-      throw new KnowledgeError('knowledge_changed', 'This entry changed; reload it before deleting', 409)
-    }
-    safePath(record.file)
-    unlinkSync(record.file)
-    if (record.detail.entry.kind === 'skill') this.skills.forgetSkillDirectory(dirname(record.file))
-    return { deleted: id }
+    return new MaintenanceGate(this.workspace).writeSync([id], () => {
+      const record = this.find(id)
+      // No await between the final path/content checks, unlink, and runtime invalidation.
+      if (readSafe(record.file).revision !== expectedRevision) {
+        throw new KnowledgeError('knowledge_changed', 'This entry changed; reload it before deleting', 409)
+      }
+      safePath(record.file)
+      unlinkSync(record.file)
+      if (record.detail.entry.kind === 'skill') this.skills.forgetSkillDirectory(dirname(record.file))
+      return { deleted: id }
+    })
   }
 
   private find(id: unknown): Record {
@@ -179,9 +182,11 @@ export class KnowledgeService {
   }
 
   private records(only?: string, includeFileHistory = true): Record[] {
+    const gate = new MaintenanceGate(this.workspace), visibility = gate.visibilityRevision()
     const records: Record[] = []
     let bytes = 0
     const add = (file: string, entry: Omit<KnowledgeEntry, 'revision'>, related?: string) => {
+      if (new MaintenanceGate(this.workspace).isHidden(entry.id)) return
       if (only && only !== entry.id) return
       if (!includeFileHistory && isFileHistory(entry.id)) return
       const { content, revision } = readSafe(file)
@@ -249,6 +254,7 @@ export class KnowledgeService {
         })
       }
     }
+    gate.assertView(visibility)
     return records
   }
 }

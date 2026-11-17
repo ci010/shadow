@@ -1,3 +1,4 @@
+import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import fs from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
@@ -243,6 +244,17 @@ function parseCandidate(name: string, files: Record<string, Buffer>, directory: 
   return { ...parsed, dirPath: directory, isLearned: parsed.learnedMeta !== undefined }
 }
 
+/** Pure single-document maintenance preflight; same package/frontmatter checks
+ * and native revision domain as the formal save path, without writing a file. */
+export function validateSkillDocument(name: string, bytes: Buffer): string {
+  skillName(name)
+  const files = { 'SKILL.md': bytes }, directories = new Set<string>()
+  checkLayout(files, directories)
+  const skill = parseCandidate(name, files, '')
+  if (skill.meta.admin) throw new Error('Admin skills are protected from document maintenance')
+  return revision(files, directories)
+}
+
 function assertVisible(snapshot: PackageSnapshot | undefined, name: string, admin: boolean): void {
   if (!admin && snapshot?.files['SKILL.md']) {
     const { meta } = parseSkillFile(snapshot.files['SKILL.md'].toString('utf8'), name)
@@ -258,9 +270,11 @@ function assertVisible(snapshot: PackageSnapshot | undefined, name: string, admi
  */
 export class SkillEditStore {
   private readonly root: string
+  private readonly gate: MaintenanceGate
   private queue: Promise<void> = Promise.resolve()
 
   constructor(workspace: string, private readonly skills: SkillsManager) {
+    this.gate = new MaintenanceGate(workspace)
     this.root = projectStoragePath(workspace, 'skills')
     if (this.root !== resolve(skills.loadPaths().workspaceDir)) {
       throw new TypeError('SkillEditStore and SkillsManager must use the same workspace')
@@ -285,6 +299,14 @@ export class SkillEditStore {
   }
 
   read(name: string, admin = false): SkillEditSnapshot {
+    this.gate.assertReadable(`skills/${name}/SKILL.md`)
+    return this.readPackage(name, admin)
+  }
+
+  /** Explicit host source snapshot for maintenance evidence, not edit/activation. */
+  readMaintenanceSnapshot(name: string): SkillEditSnapshot { return this.readPackage(name, false) }
+
+  private readPackage(name: string, admin: boolean): SkillEditSnapshot {
     const current = snapshot(this.target(name))
     assertVisible(current, name, admin)
     if (packageRevision(current)) return { name, revision: current!.revision, files: current!.files, source: 'project' }
@@ -323,9 +345,11 @@ export class SkillEditStore {
       if (editBytes > SKILL_EDIT_LIMITS.bytes) throw new TypeError('Skill edit exceeds the byte limit')
       changes[path] = value === null ? null : Buffer.from(value, 'utf8')
     }
-    const result = this.queue.then(() => this.commit(name, changes, expectedRevision, admin, signal))
-    this.queue = result.then(() => undefined, () => undefined)
-    return result
+    return this.gate.write([`skills/${name}/SKILL.md`], () => {
+      const result = this.queue.then(() => this.commit(name, changes, expectedRevision, admin, signal))
+      this.queue = result.then(() => undefined, () => undefined)
+      return result
+    })
   }
 
   private commit(

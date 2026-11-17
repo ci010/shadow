@@ -1,3 +1,4 @@
+import { MaintenanceGate } from './maintenance-gate.ts'
 import { readdir, readFile, lstat } from 'node:fs/promises'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { fingerprint, type LearningLog } from './ledger.ts'
@@ -5,6 +6,7 @@ import { fingerprint, type LearningLog } from './ledger.ts'
 /** Discover knowledge already retained outside reflector receipts. No session,
  * identity, convention or internal-state scan. Revisions are consumed, not paths. */
 export async function encapsulationInputs(workspace: string, signal: AbortSignal): Promise<LearningLog[]> {
+  const gate = new MaintenanceGate(workspace), visibility = gate.visibilityRevision()
   const inputs: LearningLog[] = []
   for (const directory of ['topics', 'concepts', 'tools', 'decisions', 'events']) {
     const root = projectStoragePath(workspace, 'memory', directory)
@@ -16,6 +18,7 @@ export async function encapsulationInputs(workspace: string, signal: AbortSignal
     for (const name of names.sort()) {
       signal.throwIfAborted()
       if (!name.endsWith(directory === 'events' ? '.jsonl' : '.md')) continue
+      if (gate.isHidden(`memory/${directory}/${name}`)) continue
       const file = `${root}/${name}`
       const stat = await lstat(file)
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256 * 1024) continue
@@ -41,5 +44,6 @@ export async function encapsulationInputs(workspace: string, signal: AbortSignal
       }
     }
   }
+  gate.assertView(visibility)
   return inputs
 }

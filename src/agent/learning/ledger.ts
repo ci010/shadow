@@ -1,3 +1,4 @@
+import { MaintenanceGate } from './maintenance-gate.ts'
 import { pendingCandidates, candidateResolutions } from './pending.ts'
 import { correctionRequest, correctionRecovery, type CorrectionRequest } from './recovery.ts'
 import { validateLogSummary } from '../log-summary.ts'
@@ -97,8 +98,11 @@ export class LearningLedger {
   private save(): void {
     try {
       stateSchema.parse(this.state)
-      this.journal.save(this.state)
-      this.committed = structuredClone(this.state)
+      new MaintenanceGate(this.workspace).writeSync([], () => {
+        this.journal.save(this.state)
+        // Publication succeeded even if admission cleanup subsequently fails.
+        this.committed = structuredClone(this.state)
+      })
     } catch (error) {
       this.state = structuredClone(this.committed)
       throw error
@@ -132,6 +136,7 @@ export class LearningLedger {
   }
   queueCorrection(raw: CorrectionRequest): void {
     const request = correctionRequest.parse(raw)
+    new MaintenanceGate(this.workspace).assertReadable(`skills/${request.target}/SKILL.md`)
     const batch = this.required(request.batchId)
     if (batch.pipeline !== 'encapsulator' || batch.state !== 'pending' || batch.excluded
       || (batch.retry?.attempts ?? 0) < 3) throw new Error('Correction recovery requires a parked encapsulator batch')
@@ -191,9 +196,25 @@ export class LearningLedger {
     return structuredClone(this.state.batches.find(batch => batch.attempts.at(-1) === sessionId && batch.state === 'running'))
   }
   unfinished(): LearningBatch[] { return structuredClone(this.state.batches.filter(batch => batch.state !== 'done' && !batch.excluded)) }
+  /** Detached persisted receipts for the trusted maintenance adapter. Not a write or
+   * client provenance API; consumers must independently verify current source bytes. */
+  maintenanceArtifacts(): { batchId: string; artifact: LearningArtifact }[] {
+    return structuredClone(this.state.batches.flatMap(batch => batch.artifacts.map(artifact => ({ batchId: batch.id, artifact }))))
+  }
   outcome(sessionId: string): LearningOutcome | undefined { return structuredClone(this.state.outcomes[sessionId]) }
   retry(pipeline: Pipeline): LearningRetry { return structuredClone(this.state.retries[pipeline] ?? { attempts: 0 }) }
   setRetry(pipeline: Pipeline, retry: LearningRetry): void { this.state.retries[pipeline] = retrySchema.parse(retry); this.save() }
+  private retiredDocumentReference(log: LearningLog): boolean {
+    const gate = new MaintenanceGate(this.workspace)
+    return [log.path, log.origin, ...(log.refs ?? [])].some(reference => {
+      let path = reference.replace(/^v:/, '')
+      if (path.startsWith('knowledge/entry/')) {
+        try { path = decodeURIComponent(path.slice('knowledge/entry/'.length)) } catch { return false }
+      }
+      path = path.split(/[?#]/)[0]!
+      return /^(memory|skills)\//.test(path) && gate.isHidden(path)
+    })
+  }
   logsFor(pipeline: 'encapsulator' | 'soulReflector', retained: LearningLog[] = []): LearningLog[] {
     const consumed = new Set([...this.state.consumed[pipeline], ...this.state.batches
       .filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded).flatMap(batch => batch.inputEvents.map(log => log.id))])
@@ -202,12 +223,13 @@ export class LearningLedger {
         batch.events.some(known => known.id === log.id)))]
     const seen = new Set(consumed)
     return structuredClone(candidates.filter(log => {
-      if (seen.has(log.id)) return false
+      if (seen.has(log.id) || this.retiredDocumentReference(log)) return false
       seen.add(log.id)
       return true
     }).slice(0, pipeline === 'encapsulator' ? 8 : 40))
   }
   create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningLog[]): LearningBatch {
+    if (inputEvents.some(log => this.retiredDocumentReference(log))) throw new Error('Retired document references cannot enter a new learning batch')
     const batch = batchSchema.parse({ id: randomUUID(), createdAt: new Date().toISOString(), pipeline, sources, inputEvents,
       events: [], artifacts: [], evaluated: [], attempts: [], state: 'pending' })
     for (const source of sources) {
