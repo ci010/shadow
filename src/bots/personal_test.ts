@@ -58,7 +58,7 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
     const context=new ContextBuilder(workspace)
     const admins:boolean[]=[]
     let prepareGate: (() => Promise<void>) | undefined
-    context.register({name:'role',getPromptSection:async ctx=>{admins.push(ctx.admin===true);await prepareGate?.();return ctx.agent.prompt}})
+    context.register({name:'role',getPromptSection:async ctx=>{admins.push(ctx.admin===true);await prepareGate?.();return [ctx.agent.prompt, ctx.personalBotPrompt].filter(Boolean).join('\n')}})
     const calls: Array<{prompt:string;tools:string[];model:string}> = []
     const provider:LLMProvider={name:'fixture',listModels:()=>[],chat:async(messages,definitions,options)=>{calls.push({model:options.model,prompt:String(messages[0]?.content),tools:definitions?.map(t=>t.function.name)??[]});return {content:'done',toolCalls:[]}}}
     const sessionStore=new JsonlSessionStore(join(workspace,'sessions'))
@@ -69,12 +69,13 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
     try {
       await sessions.start()
       const address={projectId,botInstanceId:bot.id,platform:'qq',conversationId:'dm'} as const
-      const message={channel:'qq',chatId:'dm',channelAddress:address,senderId:'owner',isGroup:false,admin:true,content:'hello',messageId:'m',timestamp:new Date().toISOString()}
+      const message={channelInputGuard:()=>{},channel:'qq',chatId:'dm',channelAddress:address,senderId:'owner',isGroup:false,admin:true,content:'hello',messageId:'m',timestamp:new Date().toISOString()}
       assert.equal(policies.managed(id),false)
       const finished=Promise.withResolvers<void>()
       bus.on('session.turn.finished',()=>finished.resolve())
       const inputs = channelInputFixture({ projectId, sessions, bots: store, directory: runtime,
         receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
+      await sessions.recordPassiveChannel({version:1,projectId,botInstanceId:bot.id,platform:'qq',conversationId:'dm',kind:'direct'},message,()=>{})
       await inputs.receive(message)
       await finished.promise
       assert.match(calls[0]!.prompt,/Scoped personal instructions/)

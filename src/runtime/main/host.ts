@@ -1,3 +1,5 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
+import { installChannelSessionsAtStartup } from '../../sessions/channel-session-startup.ts'
 import { UserPresence } from '../../sessions/presence.ts'
 import { createProjectDebugBridge } from '../../projects/debug-bridge.ts'
 import { measureStartupProfile, startupProjectOrdinal } from '../startup-profile.ts'
@@ -64,12 +66,19 @@ export async function startProjectHost(
       catch (error) { console.error(`[projects:${project.id}] Pending deletion could not finish; retry from the project catalog`, error) }
     }
   }
+  const channelMigrationFailures = new Set<string>()
+  let initialOwnershipScan = true
   const startupSessionStates = new Map<string, StartupOwnershipStates>()
   const failures = new Map<string, string>()
   const inspectSessionOwnership = async (id: string): Promise<StartupOwnershipStates | undefined> => {
     const snapshot: StartupOwnershipStates = {}
     catalog.setSessionOwnershipAvailable(id, false)
     try {
+      if (channelMigrationFailures.has(id)) throw new Error('Channel migration requires host restart after repair')
+      if (initialOwnershipScan) {
+        try { await installChannelSessionsAtStartup(projectStoragePath(projectPaths(hostHome, id).home, '.sessions'), id) }
+        catch (error) { channelMigrationFailures.add(id); throw error }
+      }
       await measureStartupProfile('ownership-project', () =>
         reserveRemoteSessionWorkdirs(projectPaths(hostHome, id).home, catalog, id, snapshot),
       { projectOrdinal: startupProjectOrdinal(id) })
@@ -90,6 +99,8 @@ export async function startProjectHost(
       if (snapshot) startupSessionStates.set(project.id, snapshot)
     }
   })
+
+  initialOwnershipScan = false
 
   const cleanup: Array<() => unknown> = []
   try {

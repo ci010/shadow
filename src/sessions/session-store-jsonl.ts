@@ -57,7 +57,7 @@ function parseStoredState(raw: string): SessionState {
   parseContextResetAt(state.completedAt)
   if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
   parseServiceGeneration(state.serviceGeneration)
-  parseChannelSource(state.channelSource, state.sessionId, state.projectId)
+  parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration)
   parseChannelBoundary(state.channelBoundary)
   parseDecisionOwner(state.decisionOwnerSessionId)
   if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
@@ -129,7 +129,7 @@ export class JsonlSessionStore implements SessionStore {
     parseContextResetAt(state.completedAt)
     if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
     parseServiceGeneration(state.serviceGeneration)
-  parseChannelSource(state.channelSource, state.sessionId, state.projectId)
+  parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration)
   parseChannelBoundary(state.channelBoundary)
     parseDecisionOwner(state.decisionOwnerSessionId)
     state = { ...state, workPolicy: parseWorkPolicy(state.workPolicy) }
