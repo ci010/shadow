@@ -3501,10 +3501,14 @@ function resendLastMessage() {
    browser's default focus ring from framing the entire conversation canvas. */
 .chat-messages:focus { outline: none; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
-.session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: var(--conversation-max-width); min-width: 0; margin: 0 auto; }
-.chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
+.session-status-row { --session-status-chip-height: 32px; display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: var(--conversation-max-width); min-width: 0; margin: 0 auto; }
+.chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: var(--session-status-chip-height, 32px); margin: 8px 0 0 auto; padding: 5px 10px; font-size: 12px; line-height: 20px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
+/* Match the adjacent disclosure target, including narrow/coarse-pointer density. */
+@media (max-width: 700px), (pointer: coarse) {
+  .session-status-row { --session-status-chip-height: 44px; }
+}
 .chat-working.has-subagents { flex: 1 1 0; max-width: 100%; }
-.subagent-status-label { flex: 0 1 auto; font-size: 12px; }
+.subagent-status-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .subagent-status-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .working-status-divider { color: var(--c-text-muted); }
 .chat-working.waiting { border-color: var(--c-warn); background: var(--c-warn-bg); color: var(--c-warn); }
@@ -3513,6 +3517,9 @@ function resendLastMessage() {
 .execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
 .session-status-row .execution-summary .chat-working-detail { display: block; }
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
+.chat-working :deep(.session-activity) { flex: 0 1 auto; min-width: 0; }
+.chat-working :deep(.activity-label) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-working :deep(.activity-symbol) { flex: 0 0 16px; }
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
 .composer-box { container: chat-composer / inline-size; padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
