@@ -157,10 +157,13 @@
       </template>
     </div>
 
-    <div v-show="section === 'prompt'" :id="domId('diagnosis-prompt')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-prompt-tab')" tabindex="0">
-      <p class="context-note">{{ t('Current session system prompt, not a captured prompt for each historical model call.') }}</p>
-      <SystemPromptCard :prompt="systemPrompt" empty-message="No system prompt loaded for this session." />
-      <SystemPromptCard v-if="compactionSummary" :title="t('Compaction Summary')" :prompt="compactionSummary" :show-token-estimate="true" />
+    <div v-show="section === 'prompt'" :id="domId('diagnosis-prompt')" class="diagnosis-scroll context-view" role="tabpanel" :aria-busy="promptLoading" :aria-labelledby="domId('diagnosis-prompt-tab')" tabindex="0">
+      <p class="context-note">{{ inspectedSource === 'active-history' ? t('Current in-memory system message, not a captured provider request.') : inspectedSource === 'preview' ? t('Rebuilt preview, not a historical runtime prompt.') : t('Prompt provenance unavailable.') }}</p>
+      <button v-if="promptDocuments && projectId && inspectedPrompt" class="btn btn-sm" :disabled="promptLoading" @click="openPrompt">{{ t('Open prompt in workspace') }}</button>
+      <p v-if="promptLoading" role="status">{{ t('Loading') }}…</p>
+      <p v-if="promptError" role="alert">{{ promptError }}</p>
+      <SystemPromptCard :prompt="inspectedPrompt" :sections="inspectedSections" empty-message="No system prompt loaded for this session." />
+      <SystemPromptCard :show-provenance="false" v-if="compactionSummary" :title="t('Compaction Summary')" :prompt="compactionSummary" :show-token-estimate="true" />
     </div>
     <div v-show="section === 'tools'" :id="domId('diagnosis-tools')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-tools-tab')" tabindex="0">
       <p class="context-note">{{ t('Currently available tool definitions. Actual calls, arguments and results are in Trace.') }}</p>
@@ -173,11 +176,13 @@
 </template>
 
 <script setup lang="ts">
+import { PromptDocumentsKey } from '../prompt-documents.ts'
+import { promptSections as validatePromptSections } from '../prompt-sections.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { enumLabel } from '../display-labels.ts'
 import { apiUrl } from '../api-url.ts'
 import { fetchDiagnosisExport } from '../diagnosis-export.ts'
-import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import HoverInfo from './HoverInfo.vue'
 import TraceEventDetails from './TraceEventDetails.vue'
 import SystemPromptCard from './SystemPromptCard.vue'
@@ -198,13 +203,52 @@ const props = defineProps<{
   canReadTrace: boolean
   working: boolean
   systemPrompt: string
+  promptSections?: unknown
+  promptSource?: string
+  projectId?: string
   compactionSummary: string
   tools: ToolDef[]
   idPrefix?: string
 }>()
+const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
+const promptDocuments = inject(PromptDocumentsKey, undefined)
+// Direct-chat snapshots intentionally keep their fixed metadata protocol. Read
+// provenance only while inspecting the prompt, rather than enlarging every delta.
+const inspectedContext = ref<{ systemPrompt: string; sections?: unknown; source?: string }>()
+const promptError = ref('')
+const promptLoading = ref(false)
+let promptRequest: AbortController | undefined
+const inspectedPrompt = computed(() => props.physicalId ? '' : inspectedContext.value?.systemPrompt ?? props.systemPrompt)
+const inspectedSections = computed(() => inspectedContext.value?.sections ?? props.promptSections)
+const inspectedSource = computed(() => inspectedContext.value?.source ?? props.promptSource)
+watch(() => [props.apiBase, props.sessionId, props.physicalId, props.active, section.value, props.working], async () => {
+  promptRequest?.abort()
+  inspectedContext.value = undefined; promptError.value = ''; promptLoading.value = false
+  if (!props.active || section.value !== 'prompt' || props.physicalId || !props.sessionId) return
+  const request = promptRequest = new AbortController()
+  promptLoading.value = true
+  try {
+    const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/context`), { signal: request.signal })
+    if (!response.ok) throw new Error(t('Could not load execution context. Reopen it to retry.'))
+    const data = await response.json()
+    if (request.signal.aborted) return
+    if (!data || typeof data.systemPrompt !== 'string' || !['active-history', 'preview'].includes(data.source)) {
+      throw new Error(t('Could not load execution context. Reopen it to retry.'))
+    }
+    inspectedContext.value = data
+  } catch (cause) { if (!request.signal.aborted) promptError.value = cause instanceof Error ? cause.message : t('Could not load execution context. Reopen it to retry.') }
+  finally { if (promptRequest === request) promptLoading.value = false }
+}, { immediate: true })
+onUnmounted(() => promptRequest?.abort())
+function openPrompt() {
+  if (!props.projectId) return
+  const source = `${props.sessionId} / ${inspectedSource.value || 'unknown provenance'} / system prompt`
+  promptDocuments?.open(props.projectId, { key: `session:${props.sessionId}:${inspectedSource.value}`, label: t('System Prompt'), source,
+    prompt: inspectedPrompt.value, sections: validatePromptSections(inspectedPrompt.value, inspectedSections.value) })
+}
 const domId = (id: string) => props.idPrefix ? `${props.idPrefix}-${id}` : id
 const views = [{ id: 'trace', get label() { return t('Trace') } }, { id: 'prompt', get label() { return t('System prompt') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'stats', get label() { return t('Statistics') } }] as const
-const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
+
 const query = ref('')
 const kinds = ['ALL', 'USER', 'SESSION', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
 const filter = ref('ALL')

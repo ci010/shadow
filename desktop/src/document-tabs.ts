@@ -23,10 +23,13 @@ export function installDocumentTabShortcuts(window: DocumentTabWindow): () => vo
   let disposed = false
   const receive: BeforeInput = (event, input) => {
     if (disposed || window.isDestroyed() || contents.isDestroyed()
-      || input.type !== 'keyDown' || !input.control
-      || input.alt || input.meta || input.isComposing) return
+      || input.type !== 'keyDown' || !(!!input.control !== !!input.meta)
+      || input.alt || input.isComposing) return
     const close = input.key.toLowerCase() === 'w'
+    // Cmd+W is a document command, not Electron's window-close accelerator.
+    // Cmd+Tab remains OS-owned; preserve the established Ctrl+Tab cycle.
     const toggleExplorer = input.key.toLowerCase() === 'e' && input.shift
+    if (input.meta && !close && !toggleExplorer) return
     if (!close && !toggleExplorer && input.key !== 'Tab') return
     // Suppress the DOM keydown so the renderer cannot cycle twice.
     event.preventDefault()

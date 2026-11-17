@@ -330,7 +330,7 @@ export class KnowledgeMaintenanceService {
       const validUtf8 = !wiki || digest(detail.content) === detail.entry.revision
       let refs: Reference[]
       try {
-        refs = detail.entry.path.endsWith('.jsonl') ? jsonlReferences(detail.content) : markdownReferenceSpans(detail.content)
+        refs = detail.entry.path.endsWith('.jsonl') ? jsonlReferences(detail.content, detail.entry.path.endsWith('.files.jsonl')) : markdownReferenceSpans(detail.content)
       } catch (error) {
         if (error instanceof SyntaxError) throw new KnowledgeError('invalid_knowledge_content', `Invalid JSONL in ${detail.entry.id}; maintenance report was not truncated`, 422)
         throw error

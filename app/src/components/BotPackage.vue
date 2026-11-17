@@ -8,6 +8,7 @@
     <p v-if="!loading && !deployments.length">{{ t('No directory BOT deployments.') }}</p>
     <article v-for="bot in deployments" :key="bot.id">
       <strong>{{ bot.id }}</strong>
+      <OpenBotPromptButton :api-base="apiBase" :project-id="projectId" :bot-id="bot.id" :revision="bot.revision" />
       <p>{{ t('Source:') }} {{ bot.source.folderId }}/{{ bot.source.directory || '.' }}</p>
       <details><summary>{{ t('Deployment details') }}</summary>
         <p>{{ t('Revision:') }} {{ bot.revision }}</p>
@@ -18,6 +19,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import OpenBotPromptButton from './OpenBotPromptButton.vue'
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { t } from '../i18n.ts'
 import { apiUrl } from '../api-url.ts'

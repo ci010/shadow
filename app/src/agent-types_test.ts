@@ -22,8 +22,8 @@ test('agent browser validates assembled previews while retaining complete tool s
       options: { type: ['object', 'null'], oneOf: [{ type: 'object' }, { type: 'null' }] } },
   } }]
   const prompt = '# Role\n\n<available_skills>\nExact raw input\n</available_skills>'
-  assert.deepEqual(parseAgentContext({ systemPrompt: prompt, tools }), { systemPrompt: prompt, tools })
-  assert.deepEqual(parseAgentContext({ systemPrompt: '', tools: [] }), { systemPrompt: '', tools: [] })
+  assert.deepEqual(parseAgentContext({ systemPrompt: prompt, tools }), { systemPrompt: prompt, sections: [], tools })
+  assert.deepEqual(parseAgentContext({ systemPrompt: '', tools: [] }), { systemPrompt: '', sections: [], tools: [] })
   for (const value of [null, {}, { systemPrompt: null, tools: [] },
     { systemPrompt: prompt, tools: [{ name: 'read', description: 3 }] },
     { systemPrompt: prompt, tools: [...tools, tools[0]] },

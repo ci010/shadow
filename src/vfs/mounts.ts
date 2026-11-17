@@ -1,3 +1,4 @@
+import { sessionEdits } from './session-edits.ts'
 import { listRemoteFolderSkillResources } from '../skills/remote-folder.ts'
 import { discoverFolderSkills, folderSkillsSummary, readFolderSkillResource, type FolderSkillScope } from '../skills/folder.ts'
 import { delegationOwner } from '../sessions/execution-scope.ts'
@@ -32,7 +33,7 @@ import { formatSessionMessage, formatSessionHistory, shortPhysicalReference } fr
 // ── Sessions ─────────────────────────────────────────────────────────────
 
 export function createSessionsHandler(
-  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getHistory'> & Partial<Pick<SessionManager, 'listHistorySessions' | 'readSessionState'>>,
+  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getHistory'> & Partial<Pick<SessionManager, 'listHistorySessions' | 'readSessionState' | 'getFileChanges'>>,
   topics?: () => TopicService,
   remote?: Pick<A2aSessions, 'read' | 'entries' | 'canDiscover'>,
 ): {
@@ -82,6 +83,9 @@ export function createSessionsHandler(
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
     const requested = options?.subpath
+    if (requested && /\/edits(?:\?|$)/.test(requested)) {
+      return [{ name: requested, content: await sessionEdits(sessions, requested, context) }]
+    }
     // Explicit navigation views only: don't duplicate index text in global grep/glob.
     if (requested && !requested.startsWith('remote:') && isIndex(requested)) {
       return [{ name: requested, content: options?.content === false ? '' : renderSessionDirectory(await index(requested, context)) }]
@@ -165,6 +169,7 @@ export function createSessionsHandler(
     for (const s of all) {
       context.signal.throwIfAborted()
       if (!selected(s.sessionId)) continue
+      entries.push({ name: `${s.sessionId}/edits`, content: options?.content === false ? '' : `Recorded edit index: v:sessions/${s.sessionId}/edits (paged; view_edit remains current-session only).` })
       if (options?.content === false) {
         entries.push({ name: s.sessionId + viewSuffix, content: '' })
         continue
@@ -429,7 +434,7 @@ async function walkResourceFiles(root: string, signal: AbortSignal, rel = ''): P
 /**
  * Browse and search the long-term memory store under `<workspace>/memory/`.
  *
- * - `read('')` / a directory subpath → recursive file listing.
+ * - `read('')` → layered overview; directory subpaths / explicit list mode → raw file listing.
  * - a file subpath → the file's contents.
  * - `list` → every memory file with its content, powering glob/grep search.
  *
@@ -439,11 +444,14 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
   write: VirtualFsWriteHandler
+  directory: VirtualDirectoryHandler
 } {
   const memoryRoot = join(workspace, 'memory')
   const writer = new WriteTool(workspace, true)
 
   const read: VirtualFsHandler = async (subpath, context) => {
+    if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
+    if (!subpath || subpath === 'overview') return 'Project memory\n- Knowledge navigation: v:knowledge/overview\n- Wiki originals: v:memory/topics/ (and concepts/, decisions/, identities/, tools/)\n- Semantic logs: v:knowledge/logs; raw JSONL: v:memory/events/\n- Session context/raw edit ledgers: v:memory/sessions/; edit index: v:sessions/<id>/edits\n- Skills remain separate: v:skills/\nUse flag l, explicit directory reads, or glob/grep at v:memory/ for exhaustive raw discovery. Wiki Markdown writes remain unchanged.'
     if (subpath.includes('..')) return 'Invalid path.'
     const target = subpath ? join(memoryRoot, subpath) : memoryRoot
     let info
@@ -468,6 +476,7 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
   }
 
   const list: VirtualFsListHandler = async (context, options) => {
+    if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
     const files = await walkResourceFiles(memoryRoot, context.signal)
     const entries: Array<{ name: string; content: string }> = []
     for (const f of files) {
@@ -516,7 +525,15 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
       flag: request.replaceAll ? 'g' : '' }, context)
   }
 
-  return { read, list, write }
+  const directory: VirtualDirectoryHandler = async (subpath, context) => {
+    if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
+    if (subpath.includes('..')) throw new Error('Invalid memory directory path.')
+    try { if (!(await stat(join(memoryRoot, subpath))).isDirectory()) return null }
+    catch (error) { if (isNotFoundError(error)) return null; throw error }
+    const files = await walkResourceFiles(memoryRoot, context.signal, subpath)
+    return { header: 'Raw Project memory files (includes retained history):', items: files.map(file => `v:memory/${file}`) }
+  }
+  return { read, list, write, directory }
 }
 
 // ── Event subscriptions ──────────────────────────────────────────────────

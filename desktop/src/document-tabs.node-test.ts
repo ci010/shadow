@@ -140,3 +140,12 @@ test('native Ctrl+Shift+E toggles the explorer once and suppresses duplicate DOM
   window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('disposed shortcut consumed') }, toggle)
   assert.equal(window.webContents.listenerCount('before-input-event'), 0)
 })
+
+test('native Command+W routes to document close while Command+Tab remains OS-owned', () => {
+  const window = new FakeWindow(); installDocumentTabShortcuts(window)
+  let prevented = 0
+  window.webContents.emit('before-input-event', { preventDefault: () => prevented++ }, { ...input, control: false, meta: true, key: 'w' })
+  window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('OS switcher consumed') }, { ...input, control: false, meta: true, key: 'Tab' })
+  assert.equal(prevented, 1)
+  assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'close']])
+})

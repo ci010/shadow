@@ -41,6 +41,8 @@ export const fileChangeSchema = z.object({
   toolCallId: z.string().min(1),
   timestamp: z.string().datetime().optional(),
   path: z.string().min(1).max(4096),
+  /** Selected/explicit registered workspace at write time, not file ownership; absent on legacy writes. */
+  folderId: z.string().min(1).optional(),
   /** Absent in legacy records; never infer their device from current session locality. */
   target: z.union([
     z.object({ nodeId: z.string().min(1), workdirId: z.string().min(1), folderId: z.string().min(1).optional() }).strict(),

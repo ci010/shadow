@@ -284,3 +284,11 @@ test('Workflow is a deduplicated project document with shared navigation and clo
   assert.deepEqual(closeAllFileTabs(workflow), { files: [], selected: '' })
   assert.equal(initial.projectTabs?.includes('workflows'), false, 'Opening a workflow never mutates the previous workbench')
 })
+
+test('Command document close and explorer use the same commands as Control, not Command+Tab', () => {
+  const command = { ...tabKey, ctrlKey: false, metaKey: true }
+  assert.equal(isCloseDocumentKey({ ...command, key: 'w' }), true)
+  assert.equal(isCloseAllDocumentsKey({ ...command, key: 'w', shiftKey: true }), true)
+  assert.equal(isToggleExplorerKey({ ...command, key: 'e', shiftKey: true }), true)
+  assert.equal(documentTabDirection(command), undefined)
+})

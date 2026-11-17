@@ -86,7 +86,9 @@ export class LogTool implements Tool {
     }
 
     const now = new Date()
+    const id = crypto.randomUUID()
     const entry: Record<string, unknown> = {
+      id,
       when: now.toISOString(),
       who,
       what,
@@ -106,6 +108,7 @@ export class LogTool implements Tool {
 
     return `Recorded log: ${who} — ${what}` +
       (why ? ` (why: ${why})` : '') +
-      (challenge ? ` [challenge: ${challenge}]` : '')
+      (challenge ? ` [challenge: ${challenge}]` : '') +
+      `\nReceipt: v:knowledge/logs/record/${dateStr}/id-${encodeURIComponent(id)}~1\nOriginal: v:memory/events/${dateStr}.jsonl`
   }
 }

@@ -73,3 +73,15 @@ test('knowledge client surfaces stale entries, denied access and unconfirmed del
   await assert.rejects(createKnowledgeClient('http://fixture', async () => Response.json({ entry: wiki, content: '' })).read(memory.id), /invalid knowledge/)
   await assert.rejects(createKnowledgeClient('http://fixture', async () => { throw new Error('offline') }).remove(memory), /may already have completed/)
 })
+
+test('network layout is deterministic, finite at catalog scale, and independent of categories', () => {
+  const entries = Array.from({ length: 230 }, (_, index) => ({ ...wiki, id: `memory/topics/${index}.md`, title: String(index) }))
+  const links = Array.from({ length: 814 }, (_, index) => ({ source: entries[index % 230]!.id, target: entries[(index * 17 + 3) % 230]!.id, label: 'reference' }))
+  const ids = entries.map(entry => entry.id), input = { entries, links }
+  const start = performance.now(), first = layoutKnowledgeGraph(input, ids)
+  assert(performance.now() - start < 3000, 'bounded layout must not require an animation loop')
+  assert.deepEqual(layoutKnowledgeGraph(input, ids), first)
+  assert.deepEqual(layoutKnowledgeGraph({ entries: entries.map(entry => ({ ...entry, kind: 'memory' })), links }, ids).nodes.map(({ x, y }) => [x, y]), first.nodes.map(({ x, y }) => [x, y]))
+  assert(first.nodes.every(node => Number.isFinite(node.x) && Number.isFinite(node.y) && node.x >= 0 && node.y >= 0 && node.x <= first.width && node.y <= first.height))
+  assert.equal(first.links.length, 814)
+})

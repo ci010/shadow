@@ -22,6 +22,8 @@ test('agent role API exposes default execution mode rather than a lifetime flag'
       assert(role && typeof role === 'object' && 'name' in role && 'defaultMode' in role)
       assert(isExecutionMode(role.defaultMode))
       assert.equal('ephemeral' in role, false)
+      assert.equal('dirPath' in role, false)
+      assert('prompt' in role && role.prompt === roles.resolve(String(role.name))?.prompt)
       return role
     })
     const verify = listed.find(role => role.name === 'verify')

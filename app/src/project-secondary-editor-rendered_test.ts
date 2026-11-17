@@ -96,7 +96,9 @@ test('all resources share Project editor groups without remount, child panes or 
       if (path.endsWith('/api/models')) { json({ models: ['fixture'], providers: [] }); return }
       if (path.endsWith('/api/service-groups')) { json({ revision: 'r1', agents: [], groups: [] }); return }
       if (path.endsWith('/preview')) { json({ binary: false, size: 31, content: '# Shared file editor fixture\n', sourcePath: 'note.md' }); return }
-      if (path.endsWith('/api/knowledge')) { json({ entries: [], links: [] }); return }
+      const knowledgeEntries = ['Page A', 'Page B'].map((title, index) => ({ id: `memory/topics/${index}.md`, path: `memory/topics/${index}.md`, title, kind: 'wiki', source: 'project', deletable: true, revision: '1' }))
+      if (path.endsWith('/api/knowledge')) { json({ entries: knowledgeEntries, links: [{ source: knowledgeEntries[0]!.id, target: knowledgeEntries[1]!.id, label: 'Page B', href: '1.md#section' }] }); return }
+      if (path.endsWith('/api/knowledge/entry')) { const entry = knowledgeEntries.find(entry => entry.id === new URL(req.url!, 'http://fixture').searchParams.get('id')); json({ entry, content: entry?.id === knowledgeEntries[0]!.id ? '# Page A\n\n[Page B](1.md#section)' : '# Page B\n\n## Section\n\nTarget section' }); return }
       if (path.endsWith('/api/folders')) { json({ folders: [] }); return }
       if (/\/api\/sessions\/web%3Aordinary$/.test(path)) { json({ messages: [{ role: 'user', content: 'Ordinary conversation retained' }] }); return }
       json({ projects, sessions: [], nodes: [], activity: {}, jobs: [], requests: [], messages: [], tools: [], providers: [] })
@@ -212,7 +214,13 @@ test('all resources share Project editor groups without remount, child panes or 
     await move('note.md');await wait(visible('[data-editor-group="left"] .file-markdown'));
 
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"knowledge"}})');
-    await wait(editorTab('Knowledge'));await move('Knowledge');await wait(visible('[data-editor-group="right"] .knowledge-document'));
+    await wait(editorTab('Knowledge'));
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"knowledge",entry:"memory/topics/0.md"}})');await wait(editorTab('Page A'));
+    await wait(visible('.knowledge-preview a'));await run('('+visible('.knowledge-preview a')+').click()');await wait(editorTab('Page B'));await wait('window.fixture.router.currentRoute.value.hash==="#section"');await wait('document.activeElement?.id==="section"');
+    await run('document.dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true,cancelable:true}))');await wait('!('+editorTab('Page B')+')');await wait('window.fixture.router.currentRoute.value.query.entry==="memory/topics/0.md"');
+    await run('document.dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true,cancelable:true}))');await wait('!('+editorTab('Page A')+')');
+    await run(editorTab('Knowledge')+'.click()');await wait('window.fixture.router.currentRoute.value.query.panel==="knowledge"&&!window.fixture.router.currentRoute.value.query.entry');
+    await move('Knowledge');await wait(visible('[data-editor-group="right"] .knowledge-document'));
     await move('Diagnosis');await wait(visible('[data-editor-group="right"] .diagnosis-document'));
     await wait(visible('[data-editor-group="right"] .session-diagnosis'));
     // The active group's shortcut closes only its selected closable resource.

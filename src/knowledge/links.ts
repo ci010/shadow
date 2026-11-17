@@ -227,7 +227,7 @@ export function extractLinks(
 ): KnowledgeLink[] {
   const isMarkdown = !detail.entry.path.endsWith('.jsonl')
   const references = !isMarkdown
-    ? jsonlReferences(detail.content)
+    ? jsonlReferences(detail.content, detail.entry.path.endsWith('.files.jsonl'))
     : markdownReferences(detail.content)
   const markdownCount = isMarkdown ? references.length : 0
   for (const name of related?.split(',').map(value => value.trim()).filter(Boolean) ?? []) {
@@ -238,13 +238,13 @@ export function extractLinks(
     const target = canonicalReference(ref.target, detail.entry.id, workspace, skillIds)
     if (target) links.push({
       source: detail.entry.id, target, label: ref.label,
-      ...(index < markdownCount ? { href: ref.target } : {}),
+      ...(index < markdownCount || ref.label === 'refs' ? { href: ref.target } : {}),
     })
   }
   return links
 }
 
-export function jsonlReferences(content: string): Array<{ target: string; label: string }> {
+export function jsonlReferences(content: string, fileHistory = false): Array<{ target: string; label: string }> {
   const references: Array<{ target: string; label: string }> = []
   for (const line of content.split(/\r?\n/)) {
     if (!line.trim()) continue
@@ -256,7 +256,8 @@ export function jsonlReferences(content: string): Array<{ target: string; label:
         if (typeof ref === 'string') references.push({ target: ref, label: 'refs' })
       }
     }
-    if (typeof record.path === 'string') references.push({ target: record.path, label: 'modified' })
+    // A learning log's path is its own storage location, not a file edit.
+    if (fileHistory && typeof record.path === 'string') references.push({ target: record.path, label: 'modified' })
   }
   return references
 }

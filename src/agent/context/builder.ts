@@ -35,6 +35,8 @@ export interface SessionPromptContext {
   execNodeOnly?: boolean
   /** Resolved agent type definition (from agent-types registry) */
   agent: AgentTypeDefinition
+  /** Personal BOT deployment instructions, separate from the role definition. */
+  personalBotPrompt?: string
   /** Stable Work ID for shared work context (from SessionState). */
   initiativeId?: string
   /** Explicit display/goal metadata for the acting durable session, never authority. */
@@ -61,6 +63,8 @@ export interface SessionPromptContext {
 export interface SystemPromptProvider {
   /** Unique name for logging / debugging. */
   readonly name: string
+  /** Optional annotations of canonical content, never an alternative assembly path. */
+  getPromptSections?(ctx: SessionPromptContext): SystemPromptSection[]
   /**
    * Produce a prompt section for the given session context.
    * Return null or empty string to contribute nothing.
@@ -74,6 +78,8 @@ export interface SystemPromptSection {
   name: string
   content: string
   characters: number
+  /** Exact separator before this segment; absent on legacy metadata. */
+  separatorBefore?: string
 }
 
 /**
@@ -146,6 +152,17 @@ export class ContextBuilder {
       section.characters = section.content.length
     }
 
-    return { systemPrompt: sections.map(section => section.content).join('\n\n---\n\n'), sections }
+    // Preserve the established provider trimming, catalog filtering and joining
+    // byte-for-byte. Source annotations cannot modify the canonical prompt.
+    const systemPrompt = sections.map(section => section.content).join('\n\n---\n\n')
+    const annotated = sections.flatMap((section, index) => {
+      const candidates = this.providers.find(provider => provider.name === section.name)?.getPromptSections?.(ctx)
+      const matches = candidates?.length && candidates.every(part => part.content.length > 0) &&
+        candidates.map((part, i) => (i ? part.separatorBefore ?? '' : '') + part.content).join('') === section.content
+      const parts = matches ? candidates! : [section]
+      return parts.map((part, i) => ({ ...part, characters: part.content.length,
+        separatorBefore: i ? part.separatorBefore ?? '' : index ? '\n\n---\n\n' : '' }))
+    })
+    return { systemPrompt, sections: annotated }
   }
 }

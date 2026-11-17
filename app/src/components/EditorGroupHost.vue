@@ -1,8 +1,8 @@
 <template>
-  <div class="editor-workspace" @keydown="shortcut">
+  <div ref="workspace" class="editor-workspace">
     <MobileEditorChrome :project-id="projectId" :active="!!active" />
     <header v-if="!mobile?.enabled.value" class="editor-workspace-header">
-      <HoverInfo v-if="apiBase" :text="t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-explorer`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
+      <HoverInfo v-if="apiBase" :text="knowledgeContext ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="knowledgeContext ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-${knowledgeContext ? 'explorer' : 'files'}`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
         <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)">
           <div class="editor-tabs" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)" @dragenter="drag.enter($event, side)" @dragover="drag.enter($event, side)" @dragleave="leaveDrop($event, side)" @drop="dropTab($event, side)" role="tablist" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
@@ -16,9 +16,11 @@
       </div>
     </header>
     <div class="editor-workspace-body">
-      <MobileSheet v-if="mobile?.enabled.value" :open="groups.explorers.has(projectId)" :label="t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
+      <MobileSheet v-if="mobile?.enabled.value" :open="!!active && groups.explorers.has(projectId)" :label="knowledgeContext ? t('Knowledge explorer') : t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
       <Teleport :to="mobileExplorerTarget || 'body'" :disabled="!mobile?.enabled.value || !mobileExplorerTarget">
-      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="groups.explorers.has(projectId)" :explorer-id="`${hostId}-explorer`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
+      <KnowledgeExplorer v-if="apiBase && knowledgeContext && groups.explorers.has(projectId)" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="!!active" :explorer-id="`${hostId}-explorer`" :selected-id="knowledgeContext.entryId" @select="selectKnowledge" @close="closeExplorer" />
+      <!-- The file owner stays mounted: its EditorViewHosts own open file lifetimes. -->
+      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="groups.explorers.has(projectId) && !knowledgeContext" :explorer-id="`${hostId}-files`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
       </Teleport>
   <div ref="root" class="editor-groups">
     <nav v-if="state.left.length && state.right.length" class="mobile-group-switch" :aria-label="t('Open documents')"><button v-for="side in sides" :key="side" :aria-pressed="state.active === side" @click="groups.focus(projectId, side)">{{ t(side === 'left' ? 'Left editor group' : 'Right editor group') }}</button></nav>
@@ -39,6 +41,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, watch, type ComponentPublicInstance } from 'vue'
 import { EditorGroupsKey, type EditorSide } from '../editor-groups.ts'
+import { documentTabDirection, isCloseDocumentKey, isCloseAllDocumentsKey, isToggleExplorerKey } from '../file-workbench.ts'
 import { scrollEditorTabs, revealEditorTab } from '../editor-tab-scroll.ts'
 import { createEditorTabDrag } from '../editor-tab-drag.ts'
 import SidebarResizer from './SidebarResizer.vue'
@@ -47,6 +50,7 @@ import MobileSheet from './MobileSheet.vue'
 import MobileEditorChrome from './MobileEditorChrome.vue'
 import SessionActivity from './SessionActivity.vue'
 import ProjectFileExplorer from './files/ProjectFileExplorer.vue'
+import KnowledgeExplorer from './KnowledgeExplorer.vue'
 import { t } from '../i18n.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 const props = defineProps<{ projectId: string; active?: boolean; apiBase?: string; folderRevision?: number }>()
@@ -56,6 +60,13 @@ const mobile = useMobileChrome()
 const mobileExplorerTarget = ref<HTMLElement>()
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
+const knowledgeContext = computed(() => groups.active(props.projectId)?.explorer)
+// Open navigation on entering Knowledge, but allow it to be collapsed while reading.
+watch(() => !!knowledgeContext.value, value => { if (value) groups.explorers.add(props.projectId) }, { immediate: true })
+function selectKnowledge(id: string) {
+  knowledgeContext.value?.select(id)
+  if (mobile?.enabled.value) closeExplorer()
+}
 const drag = createEditorTabDrag(groups, () => props.projectId)
 const dragging = computed(() => !!drag.active.value)
 const dragOver = drag.over
@@ -73,6 +84,11 @@ function hiddenDrag() { if (document.hidden) drag.clear() }
 function cancelDrag(event: KeyboardEvent) { if (event.key === 'Escape') drag.clear() }
 const hostId = `groups-${useId()}`
 const root = ref<HTMLElement>()
+const workspace = ref<HTMLElement>()
+function acceptsShortcut() {
+  return props.active && !!workspace.value?.getClientRects().length && !menu.value
+    && ![...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"], dialog[open], [popover]:popover-open, .composer-popover-backdrop')].some(element => element.getClientRects().length > 0 && (!element.classList.contains('hover-info-popup') || element.contains(document.activeElement)))
+}
 const explorerToggle = ref<HTMLButtonElement>()
 function preventMiddleScroll(event: MouseEvent) {
   if (event.button === 1) event.preventDefault()
@@ -87,8 +103,8 @@ const width = ref(1000), preferredWidth = ref(480)
 const bounds = computed(() => ({ min: 240, max: Math.max(240, width.value - 280) }))
 const rightWidth = computed(() => Math.min(bounds.value.max, Math.max(bounds.value.min, preferredWidth.value)))
 let observer: ResizeObserver | undefined
-onMounted(() => { window.addEventListener('dragend', drag.clear); window.addEventListener('drop', drag.clear); window.addEventListener('visibilitychange', hiddenDrag); window.addEventListener('keydown', cancelDrag, true); window.addEventListener('shadow:cycle-document-tab', nativeDocument); observer = new ResizeObserver(entries => { width.value = entries[0]?.contentRect.width ?? 1000 }); if (root.value) observer.observe(root.value) })
-onUnmounted(() => { drag.clear(); window.removeEventListener('dragend', drag.clear); window.removeEventListener('drop', drag.clear); window.removeEventListener('visibilitychange', hiddenDrag); window.removeEventListener('keydown', cancelDrag, true); observer?.disconnect(); window.removeEventListener('shadow:cycle-document-tab', nativeDocument); for (const side of sides) groups.targets.delete(`${props.projectId}:${side}`) })
+onMounted(() => { document.addEventListener('keydown', shortcut, true); window.addEventListener('dragend', drag.clear); window.addEventListener('drop', drag.clear); window.addEventListener('visibilitychange', hiddenDrag); window.addEventListener('keydown', cancelDrag, true); window.addEventListener('shadow:cycle-document-tab', nativeDocument); observer = new ResizeObserver(entries => { width.value = entries[0]?.contentRect.width ?? 1000 }); if (root.value) observer.observe(root.value) })
+onUnmounted(() => { document.removeEventListener('keydown', shortcut, true); drag.clear(); window.removeEventListener('dragend', drag.clear); window.removeEventListener('drop', drag.clear); window.removeEventListener('visibilitychange', hiddenDrag); window.removeEventListener('keydown', cancelDrag, true); observer?.disconnect(); window.removeEventListener('shadow:cycle-document-tab', nativeDocument); for (const side of sides) groups.targets.delete(`${props.projectId}:${side}`) })
 function entries(side: EditorSide) { return state.value[side].flatMap(id => { const editor = groups.descriptors.get(id); return editor ? [editor] : [] }) }
 function target(side: EditorSide, element: Element | ComponentPublicInstance | null) { if (element instanceof HTMLElement) groups.targets.set(`${props.projectId}:${side}`, element) }
 const menu = ref<{ id: string; x: number; y: number }>()
@@ -106,7 +122,7 @@ function menuKey(event: KeyboardEvent) {
   }
 }
 function nativeDocument(event: Event) {
-  if (!props.active || menu.value || document.querySelector('[aria-modal="true"]')) return
+  if (!acceptsShortcut()) return
   const action = (event as CustomEvent).detail, side = state.value.active, list = [...state.value[side]], current = state.value.selected[side]
   if (action === 'toggle-explorer') { if (props.apiBase) groups.toggleExplorer(props.projectId); else groups.active(props.projectId)?.commands?.toggleExplorer?.() }
   else if (action === 'close') groups.close(current)
@@ -122,11 +138,14 @@ function tabKey(event: KeyboardEvent, side: EditorSide, id: string) {
   if (event.key === 'Delete') { event.preventDefault(); groups.close(id) }
 }
 function shortcut(event: KeyboardEvent) {
-  if (event.defaultPrevented || event.repeat || event.isComposing || menu.value || !(event.ctrlKey || event.metaKey) || event.altKey) return
-  const side = state.value.active, list = state.value[side], current = state.value.selected[side]
-  if (event.key.toLowerCase() === 'e' && event.shiftKey) { const command = props.apiBase ? () => groups.toggleExplorer(props.projectId) : groups.active(props.projectId)?.commands?.toggleExplorer; if (command) { event.preventDefault(); event.stopPropagation(); command() }; return }
-  if (event.key.toLowerCase() === 'w') { event.preventDefault(); event.stopPropagation(); if (event.shiftKey) { for (const id of [...list]) groups.close(id) } else groups.close(current); focusTab(state.value.selected[side]) }
-  if (event.key === 'Tab' && list.length) { event.preventDefault(); event.stopPropagation(); const next = list[(list.indexOf(current) + (event.shiftKey ? list.length - 1 : 1)) % list.length]!; groups.activate(next); focusTab(next) }
+  if (!acceptsShortcut()) return
+  const direction = documentTabDirection(event)
+  const action = isCloseAllDocumentsKey(event) ? 'close-all' : isCloseDocumentKey(event) ? 'close' : isToggleExplorerKey(event) ? 'toggle-explorer' : direction
+  if (action === undefined) return
+  event.preventDefault()
+  event.stopPropagation()
+  nativeDocument(new CustomEvent('shadow:cycle-document-tab', { detail: action }))
+  focusTab(state.value.selected[state.value.active])
 }
 </script>
 <style scoped>
@@ -172,7 +191,7 @@ function shortcut(event: KeyboardEvent) {
 .editor-menu button:hover { background: var(--c-bg-muted); }
 .editor-menu button:disabled { color: var(--c-text-muted); }
 .mobile-explorer-target { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.mobile-explorer-target :deep(.project-file-explorer) { width: 100%; flex: 1; border: 0; }
+.mobile-explorer-target :deep(.knowledge-explorer-pane), .mobile-explorer-target :deep(.project-file-explorer) { width: 100%; flex: 1; border: 0; }
 .mobile-group-switch { display: none; }
 @media (max-width: 700px) {
   .editor-header-group { flex: 1 !important; flex-basis: 0 !important; }

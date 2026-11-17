@@ -1,23 +1,23 @@
 <template>
   <div ref="scroll" class="knowledge-scroll">
-  <section class="knowledge" :class="{ 'sidebar-layout': !!sidebarTarget }" :aria-label="t('Project knowledge')">
-    <header class="heading">
-      <div v-if="!selectedId"><h1>{{ t('Knowledge') }}</h1><p>{{ t('Memory, wiki and skills for this project. References are explicit links, not inferred relationships.') }}</p></div>
-      <div v-else class="page-location"><button type="button" @click="emit('home')">{{ t('Knowledge') }}</button><span aria-hidden="true">/</span><span>{{ title(selectedId) }}</span></div>
+  <section class="knowledge" :class="{ 'sidebar-layout': !!sidebarTarget || sharedExplorer, 'canvas-layout': !selectedId }" :aria-label="t('Project knowledge')">
+    <header v-if="selectedId" class="heading">
+      <button type="button" @click="emit('home')">{{ t('Knowledge') }}</button>
       <div class="heading-actions">
-        <button type="button" :aria-label="t('Back')" :title="t('Back (Alt+Left)')" @click="router.back()">{{ t('Back') }}</button>
-        <button type="button" :aria-label="t('Forward')" :title="t('Forward (Alt+Right)')" @click="router.forward()">{{ t('Forward') }}</button>
-        <button v-if="!selectedId" type="button" :aria-pressed="showGraph" @click="showGraph = !showGraph">{{ t('Relationship graph') }}</button>
+        <HoverInfo :text="t('Back (Alt+Left)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" @click="router.back()">{{ t('Back') }}</button></HoverInfo>
+        <HoverInfo :text="t('Forward (Alt+Right)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" @click="router.forward()">{{ t('Forward') }}</button></HoverInfo>
         <button type="button" :disabled="loading || !!deletion" @click="refresh">{{ t('Refresh') }}</button>
       </div>
     </header>
-      <KnowledgeMaintenance v-show="!selectedId" :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active"
-        @select="select" @changed="refresh" />
+      <aside v-if="showMaintenance && !selectedId" class="maintenance-overlay" :aria-label="t('Link health')">
+        <button type="button" @click="showMaintenance = false">{{ t('Close') }}</button>
+        <KnowledgeMaintenance :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active" @select="select" @changed="refresh" />
+      </aside>
       <p v-if="loading" role="status">{{ t('Loading knowledge...') }}</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
       <div class="workspace">
-        <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget">
+        <Teleport v-if="!sharedExplorer" :to="sidebarTarget || 'body'" :disabled="!sidebarTarget">
           <aside class="knowledge-navigation" :aria-label="t('Knowledge entries')">
             <div class="navigation-controls">
               <div class="filters" :aria-label="t('Knowledge categories')">
@@ -37,12 +37,31 @@
           </aside>
         </Teleport>
         <main class="content">
-          <template v-if="showGraph && !selectedId">
-            <label class="focus-filter"><input v-model="focusGraph" type="checkbox" :disabled="!selectedId" /> {{ t('Focus on selected entry and its direct references') }}</label>
-            <KnowledgeGraph :catalog="catalog" :visible-ids="graphIds" :selected-id="selectedId" @select="select" />
-            <p class="muted graph-hint">{{ t('Filtered graphs also include direct neighbors from other categories. Dashed nodes are outside the catalog, not necessarily missing files. Use Link health to verify them.') }}</p>
-          </template>
-          <section v-if="selectedId" class="detail" :aria-busy="detailLoading" :aria-label="t('Knowledge entry details')">
+          <KnowledgeGraph v-if="!selectedId" :catalog="catalog" :visible-ids="graphIds" :selected-id="graphSelection" @select="graphSelection = $event" @open="select">
+            <template #tools>
+              <HoverInfo :text="t('Search knowledge')" v-slot="{ triggerProps }"><details class="canvas-menu" :name="menuName" @keydown.esc.stop.prevent="closeMenu">
+                <summary v-bind="triggerProps" :aria-label="t('Search knowledge')"><span class="i-lucide-search" aria-hidden="true" /><span v-if="query || kind !== 'all' || focusGraph" class="filter-dot" /></summary>
+                <div class="canvas-popover">
+                  <input v-model="query" type="search" :aria-label="t('Search knowledge')" :placeholder="t('Search knowledge')" />
+                  <div class="filters" :aria-label="t('Knowledge categories')">
+                    <button v-for="tab in tabs" :key="tab.kind" type="button" :aria-pressed="kind === tab.kind" @click="kind = tab.kind">{{ tab.label }} <span>{{ count(tab.kind) }}</span></button>
+                  </div>
+                  <label class="focus-filter"><input v-model="focusGraph" type="checkbox" :disabled="!graphSelection" /> {{ t('Focus on selected entry and its direct references') }}</label>
+                </div>
+              </details></HoverInfo>
+              <HoverInfo :text="t('More information')" v-slot="{ triggerProps }"><details class="canvas-menu" :name="menuName" @keydown.esc.stop.prevent="closeMenu">
+                <summary v-bind="triggerProps" :aria-label="t('More information')"><span class="i-lucide-ellipsis" aria-hidden="true" /></summary>
+                <div class="canvas-popover">
+                  <div class="heading-actions"><button type="button" @click="router.back()">{{ t('Back') }}</button><button type="button" @click="router.forward()">{{ t('Forward') }}</button><button type="button" :disabled="loading || !!deletion" @click="refresh">{{ t('Refresh') }}</button></div>
+                  <button type="button" :aria-expanded="showMaintenance" @click="showMaintenance = !showMaintenance">{{ t('Link health') }}</button>
+                  <p>{{ t('Memory, wiki and skills for this project. References are explicit links, not inferred relationships.') }}</p>
+                  <p>{{ t('Filtered graphs also include direct neighbors from other categories. Dashed nodes are outside the catalog, not necessarily missing files. Use Link health to verify them.') }}</p>
+                </div>
+              </details></HoverInfo>
+            </template>
+          </KnowledgeGraph>
+          <p v-if="excludedSelection" role="status">{{ t('Not a knowledge document.') }}</p>
+          <section v-else-if="selectedId" class="detail" :aria-busy="detailLoading" :aria-label="t('Knowledge entry details')">
             <p v-if="detailLoading" role="status">{{ t('Loading entry...') }}</p>
             <p v-if="detailError" role="alert" class="error">{{ detailError }} <button type="button" @click="loadDetail">{{ t('Retry') }}</button></p>
             <template v-if="detail">
@@ -54,10 +73,10 @@
               <p v-if="detail.entry.description">{{ detail.entry.description }}</p>
               <div class="preview-controls">
                 <button type="button" :aria-pressed="raw" @click="raw = !raw">{{ raw ? t('Show preview') : t('Show source') }}</button>
-                <span class="muted">{{ t('Follow links in the preview or use References below.') }}</span>
               </div>
               <p v-if="linkError" role="alert" class="error">{{ linkError }}</p>
-              <pre v-if="raw || detail.entry.path.endsWith('.jsonl')" class="source">{{ detail.content }}</pre>
+              <KnowledgeEvents v-if="!raw && /^memory\/events\/[^/]+\.jsonl$/.test(detail.entry.path)" :content="detail.content" :links="relations.outgoing" @select="select" />
+              <pre v-else-if="raw || detail.entry.path.endsWith('.jsonl')" class="source">{{ detail.content }}</pre>
               <div v-else ref="previewElement" class="prose max-w-none knowledge-preview" @click="followPreviewLink" v-markdown-link-hints v-html="preview" />
             </template>
             <template v-else-if="!detailLoading && !detailError">
@@ -77,7 +96,7 @@
               </section>
             </div>
           </section>
-          <p v-else class="empty">{{ t('Select an entry to read its content and references.') }}</p>
+
         </main>
       </div>
       <KnowledgeDeleteDialog v-if="deletion" :api-base="apiBase" :project-id="projectId" :target="deletion"
@@ -90,18 +109,20 @@
 import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
-import { computed, nextTick, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, ref, shallowRef, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { filterKnowledge, knowledgeRelations, type KnowledgeCatalog, type KnowledgeDetail, type KnowledgeEntry, type KnowledgeKind } from '../knowledge.ts'
+import { isFileHistory, isKnowledgeDocument, visibleKnowledgeCatalog, filterKnowledge, knowledgeRelations, type KnowledgeCatalog, type KnowledgeDetail, type KnowledgeEntry, type KnowledgeKind } from '../knowledge.ts'
 import { renderKnowledgeMarkdown } from '../knowledge-markdown.ts'
 import { useKnowledgeResourceStore } from '../stores/knowledge.ts'
 import { requireResourcePinia } from '../stores/app.ts'
 import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
 import KnowledgeGraph from './KnowledgeGraph.vue'
+import HoverInfo from './HoverInfo.vue'
+import KnowledgeEvents from './KnowledgeEvents.vue'
 import KnowledgeDeleteDialog from './KnowledgeDeleteDialog.vue'
 import KnowledgeMaintenance from './KnowledgeMaintenance.vue'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId: string; entryId?: string; active?: boolean; sidebarTarget?: string }>(), { active: true })
+const props = withDefaults(defineProps<{ apiBase: string; projectId: string; entryId?: string; active?: boolean; sidebarTarget?: string; sharedExplorer?: boolean }>(), { active: true })
 const emit = defineEmits<{ select: [id: string]; home: []; catalog: [entries: KnowledgeEntry[]] }>()
 const router = useRouter()
 const route = useRoute()
@@ -115,13 +136,23 @@ const owner = useKnowledgeResourceStore(requireResourcePinia()).owner
 const enabled = useCatalogVisibility(() => props.active)
 const catalogLease = shallowRef<ReturnType<typeof owner.catalog>>()
 const detailLease = shallowRef<ReturnType<typeof owner.detail>>()
-const catalog = computed<KnowledgeCatalog>(() => catalogLease.value?.state.value.value ?? { entries: [], links: [] })
-const detail = computed<KnowledgeDetail | undefined>(() => detailLease.value?.state.value.value)
+const catalog = computed<KnowledgeCatalog>(() => visibleKnowledgeCatalog(catalogLease.value?.state.value.value ?? { entries: [], links: [] }))
+const excludedSelection = computed(() => isFileHistory(selectedId.value)
+  || !!catalogLease.value?.state.value.value?.entries.some(entry => entry.id === selectedId.value && !isKnowledgeDocument(entry))
+  || !!(detailLease.value?.state.value.value && !isKnowledgeDocument(detailLease.value.state.value.value.entry)))
+const detail = computed<KnowledgeDetail | undefined>(() => excludedSelection.value ? undefined : detailLease.value?.state.value.value)
 const deletion = ref<KnowledgeEntry>()
 const kind = ref<KnowledgeKind | 'all'>('all')
 const query = ref('')
-const showGraph = ref(true)
+const menuName = `knowledge-tools-${useId()}`
+function closeMenu(event: KeyboardEvent) {
+  const menu = event.currentTarget as HTMLDetailsElement
+  menu.open = false
+  menu.querySelector('summary')?.focus()
+}
 const focusGraph = ref(false)
+const graphSelection = ref('')
+const showMaintenance = ref(false)
 const raw = ref(false)
 const loading = computed(() => catalogLease.value?.state.value.loading ?? false)
 const detailLoading = computed(() => detailLease.value?.state.value.loading ?? false)
@@ -161,7 +192,7 @@ const tabs = [
 ] as const
 const entriesById = computed(() => new Map(catalog.value.entries.map(item => [item.id, item])))
 const filtered = computed(() => filterKnowledge(catalog.value, kind.value, query.value))
-const graphIds = computed(() => focusGraph.value && selectedId.value ? [selectedId.value] : filtered.value.map(item => item.id))
+const graphIds = computed(() => focusGraph.value && graphSelection.value ? [graphSelection.value] : filtered.value.map(item => item.id))
 const relations = computed(() => knowledgeRelations(catalog.value, selectedId.value))
 const preview = computed(() => renderKnowledgeMarkdown(detail.value?.content ?? '', relations.value.outgoing,
   (id, fragment) => router.resolve({
@@ -170,7 +201,9 @@ const preview = computed(() => renderKnowledgeMarkdown(detail.value?.content ?? 
   }).href))
 const title = (id: string) => entriesById.value.get(id)?.title ?? id
 const count = (category: KnowledgeKind | 'all') => category === 'all' ? catalog.value.entries.length : catalog.value.entries.filter(item => item.kind === category).length
-function select(id: string) { selectedId.value = id; emit('select', id) }
+// Each workbench document has a fixed identity. Navigation opens/activates a
+// sibling tab; mutating this view would leave home/A displaying B on return.
+function select(id: string) { emit('select', id) }
 
 function followPreviewLink(event: MouseEvent) {
   if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
@@ -187,8 +220,13 @@ function followPreviewLink(event: MouseEvent) {
   const id = knowledgeId ?? selectedId.value
   pendingAnchor = knowledgeFragment ? { id, fragment: knowledgeFragment } : undefined
   if (!knowledgeId) pendingAnchor = { id, fragment: knowledgeFragment ?? '' }
-  if (id !== selectedId.value) select(id)
-  else restoreScroll(id)
+  if (id !== selectedId.value) {
+    // A section deep link is one route transaction. Activating first would
+    // race the group's route projection and discard the destination fragment.
+    if (knowledgeFragment && props.sharedExplorer) void router.push({ name: 'chat', params: { ...route.params, projectId: props.projectId },
+      query: { ...route.query, panel: 'knowledge', entry: id }, hash: `#${knowledgeFragment}` })
+    else select(id)
+  } else restoreScroll(id)
 }
 
 async function refresh() {
@@ -218,11 +256,14 @@ watch(() => [props.apiBase, props.projectId, enabled.value] as const, ([base, pr
   catalogLease.value = lease
   cleanup(lease.release)
 }, { immediate: true })
-watch(() => catalog.value, value => emit('catalog', value.entries))
+watch(() => catalog.value, value => {
+  // Releasing a hidden document's lease is not an empty catalog update.
+  if (enabled.value && catalogLease.value?.state.value.value) emit('catalog', value.entries)
+})
 watch(() => [props.apiBase, props.projectId, enabled.value, selectedId.value, entriesById.value.get(selectedId.value)?.revision] as const,
   ([base, projectId, active, id, revision], _, cleanup) => {
     detailLease.value = undefined
-    if (!active || !id || revision === undefined) return
+    if (!active || !id || isFileHistory(id) || revision === undefined) return
     const lease = owner.detail(base, projectId, id, revision)
     detailLease.value = lease
     cleanup(lease.release)
@@ -247,7 +288,26 @@ watch(() => [props.entryId, route.query.entry, route.hash] as const, ([id, entry
 
 <style scoped>
 .knowledge-scroll { flex: 1; min-height: 0; min-width: 0; width: 100%; overflow: auto; }
-.knowledge { width: 100%; max-width: 1600px; box-sizing: border-box; padding: 20px; margin: 0 auto; color: var(--c-text); }
+.knowledge { width: 100%; min-height: 100%; box-sizing: border-box; padding: 12px; color: var(--c-text); }
+.knowledge-scroll:has(.canvas-layout) { overflow: hidden; }
+.canvas-layout { height: 100%; padding: 0; display: flex; flex-direction: column; position: relative; }
+.canvas-layout .workspace { flex: 1; min-height: 0; gap: 0; }
+.canvas-layout.sidebar-layout .workspace { display: flex; }
+.canvas-layout .content { flex: 1; height: 100%; min-height: 0; }
+.canvas-layout > p { position: absolute; z-index: 3; top: 60px; left: 12px; right: 12px; padding: 8px; background: var(--c-bg-card); }
+.canvas-menu { position: static; }
+.canvas-menu summary { list-style: none; display: flex; align-items: center; justify-content: center; position: relative; min-width: 32px; min-height: 32px; cursor: pointer; }
+.canvas-menu summary::-webkit-details-marker { display: none; }
+.canvas-menu summary:hover, .canvas-menu[open] summary { background: var(--c-bg-muted); }
+.canvas-menu summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.canvas-popover { position: absolute; left: 0; top: calc(100% + 6px); width: min(340px, calc(100cqw - 24px)); box-sizing: border-box; max-height: min(420px, 60cqh); overflow: auto; padding: 12px; background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); font-size: 12px; }
+.canvas-menu[open] { z-index: 4; }
+.canvas-popover .heading-actions { justify-content: flex-start; margin-bottom: 8px; }
+.canvas-popover p { line-height: 1.6; color: var(--c-text-secondary); }
+.canvas-popover .focus-filter { margin: 12px 0 0; }
+.filter-dot { position: absolute; right: 4px; top: 4px; width: 5px; height: 5px; background: var(--c-primary); }
+.canvas-layout { container-type: size; }
+@media (max-width: 700px), (pointer: coarse) { .canvas-menu summary { min-height: 44px; min-width: 44px; } }
 .heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .page-location { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; color: var(--c-text-secondary); font-size: 13px; }
@@ -277,11 +337,14 @@ input[type=search] { display: block; box-sizing: border-box; width: 100%; margin
 .content { min-width: 0; }
 .focus-filter { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12px; }
 .graph-hint { margin: 8px 0 20px; }
-.detail { padding: 18px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); overflow-wrap: anywhere; }
+.maintenance-overlay { position: absolute; z-index: 5; top: 72px; right: 12px; bottom: 12px; width: min(520px, calc(100% - 24px)); box-sizing: border-box; overflow: auto; padding: 12px; background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
+.heading { position: sticky; top: 0; z-index: 1; align-items: center; padding: 4px; background: var(--c-bg-card); box-shadow: 0 4px 16px var(--c-shadow-soft); margin-bottom: 16px; }
+.detail { max-width: 80ch; margin: 0 auto; padding: 18px; background: var(--c-bg-card); overflow-wrap: anywhere; }
+@media (max-width: 700px) { .heading { gap: 4px; } .heading-actions { gap: 2px; } .heading button { padding: 6px; min-height: 44px; } .detail { padding: 12px; } }
 code { font-size: 12px; overflow-wrap: anywhere; }
 .preview-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0; }
-.source { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; max-height: 60vh; overflow: auto; }
-.knowledge-preview { max-height: 60vh; overflow: auto; }
+.source { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
+.knowledge-preview { min-width: 0; }
 .knowledge-preview :deep(pre) { white-space: pre-wrap; }
 .knowledge-preview :deep(a[href]:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .relations { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; border-top: 1px solid var(--c-border); margin-top: 20px; }

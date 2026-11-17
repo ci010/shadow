@@ -255,12 +255,39 @@ filesystem write records.
 If a file is written but saving its history fails, the turn stops with an
 explicit error instead of automatically retrying and applying the write twice.
 
-Each `file_change` event stores a compact, headerless unified `patch` string in
+Each independent `file_change` history record stores a compact, headerless unified `patch` string in
 the existing JSONL session log or SQLite `session_logs` table. Structured hunks
 are parsed only for display, not stored alongside the patch. There is no separate
 diff store and no reconstruction or compatibility reader for older hunk records.
+These are file-editor history, not semantic `when/who/what/why` knowledge events.
+The readable v1 fields retain `id` (the write receipt's `edit=` ID), `sessionId`,
+`toolCallId`, `timestamp`, `path`, `mode`, and `patch`; optional `folderId` records
+selected/explicit registered workspace context, not ownership of the file.
+Remote `target`, unavailable-diff reasons and bounded fallback content remain intact.
+Older records without workspace or time fields remain readable without inventing
+provenance. `view_edit` still retrieves the recorded patch by receipt ID.
+The separate `memory/sessions/*.files.jsonl` working-set index remains compact
+(`when`, `path`, `action`), not a duplicate diff store. It is omitted from the
+default Knowledge tree and graph, including graph edges to that index; exact-ID
+legacy reads and maintenance snapshots remain available. No history is migrated
+or deleted by this presentation change.
 The patch compares observed pre-write text with submitted write text, not a
 post-write read-back; CRLF-only differences are ignored.
+
+Agents can discover the same retained records through
+`v:sessions/<session ID>/edits?offset=0&limit=30`. This read-only index returns
+edit IDs, paths, recorded times and exact tool-call history links when available;
+it never opens the current file. `view_edit` remains current-session-only.
+
+For knowledge, `v:knowledge/overview` documents bounded catalog, entry and
+explicit-reference/backlink navigation over the existing Project store. Original
+Wiki text remains at `v:memory/`; Skills remain separate at `v:skills/`.
+`v:knowledge/logs` discovers dated semantic logs, also queryable by recorded
+session origin, with When/What/Why and source line locators. New `log` receipts
+link a stable record view; old records use content-derived keys without migration.
+Missing sources remain unknown, and history never grants permission. The default
+`v:memory/` read is a short layered overview; explicit list mode (`flag: 'l'`),
+subdirectory reads and glob/grep still expose raw files, including edit ledgers.
 
 The model receives a short receipt such as `OK edit +2 -1 edit=<id>`, plus match
 counts and any no-op or unavailable-diff notices. Filesystem edits require a
@@ -354,6 +381,25 @@ preview's channel, not an existing conversation.
 Previews do not create sessions or inherit a conversation's history, configuration,
 published bot policy, or Work bindings. Real session context retains those checks.
 
+**Open AGENT.md in workspace** opens the selected definition's prompt body as a
+read-only document tab (not the original frontmatter or an execution snapshot).
+In Workflows, select a BOT node and use **Open deployed BOT.md in workspace** in
+its sidepane. The same action is available in BOT deployment settings. This opens
+the exact published BOT.md revision, not subsequently edited source files; a
+changed deployment requires refreshing the inventory. No internal storage path
+is exposed. These documents reuse the workbench's split/move/close controls.
+Select text and choose **Quote** (or press Q) to append an ordinary, source-labelled
+quote to the last editable conversation in that Project. It does not send input.
+
+Diagnosis can also open its system prompt as a document. The shared prompt viewer
+uses labelled tonal blocks only when recorded sections exactly cover the displayed
+text. Source annotations preserve the established prompt bytes, including internal
+whitespace and provider separators; they are not a second prompt assembly path. Active sessions use matching in-memory assembly provenance, including separate
+role and personal BOT instructions. Preview is explicitly labelled as rebuilt,
+not historical execution. Missing/mismatched provenance falls back to unsplit text;
+source is never guessed from headings. Provenance is not persisted to JSONL or
+SQLite, and these views are not provider HTTP wire captures or debug-capture opt-in.
+
 ## Discord configuration
 
 Open **Project settings > Bots > your Discord Bot > Discord access** to
@@ -381,6 +427,54 @@ skills, and shows explicit references between entries; a graph edge is not a
 semantic inference. Built-in skills are read-only. Deleting an entry removes
 only that file, not its incoming references or already-loaded instructions.
 Agent learning can later recreate deleted knowledge.
+
+Knowledge uses the shared explorer pane, grouped into Wiki, Memory and Skills
+(with Project and Built-in skill branches). Memory retains the catalog's session
+history, semantic logs and conventions, but not file-edit working-set indexes;
+it is not a curated Wiki. Selecting a leaf opens or reuses its
+own document tab. The focused editor group determines whether the pane shows
+Knowledge or ordinary files; switching back keeps already-open file views alive.
+Ctrl/Command+Shift+E toggles that pane, including Knowledge navigation. References
+outside the catalog remain graph/reference targets, not extra explorer roots.
+File-edit ledgers (`memory/sessions/*.files.jsonl`) are excluded from the tree,
+search and graph, including retained catalogs. Restored or already-open ledger
+selections show “Not a knowledge document” rather than a file/source viewer.
+The underlying history and legacy exact-ID API access are preserved.
+
+Knowledge home fills its tab with a relationship canvas, not category columns.
+Only explicit references create edges. Search, category and direct-neighbor
+filters open from the floating search control; the more-information control
+contains Refresh, navigation, Link health and reference semantics. Select a node
+(click, Enter or Space) to highlight its direct neighbors; its compact floating
+selection offers **Open document** without replacing the graph on selection.
+Nodes retain screen-space sizes and hit areas at fit and zoom. Labels prioritize
+selection, hover/focus and neighbors, with a collision-limited overview budget;
+dense overviews do not promise every label or node is individually distinguishable.
+Zoom or filter for crowded regions. Dashed nodes mean outside the catalog, not
+proof of a missing file. Category is available in each node's accessible label
+and selected detail, as well as color.
+Drag empty canvas to pan, use the wheel or minus/plus controls to zoom, and
+**Fit diagram** to restore the overview. On the focused canvas, arrow keys pan,
+Home fits, plus/minus zoom and Escape clears selection. Search/more disclosures
+close on Escape and return focus to their trigger. Link health opens on demand
+over the canvas. Knowledge documents and events share a compact reading shell,
+not the graph's transforms: their text scrolls normally and remains selectable.
+
+Document shortcuts share the active Project editor host: Ctrl+Tab / Ctrl+Shift+Tab
+cycle the focused group's tabs; Ctrl/Command+W closes its current closable tab,
+and Ctrl/Command+Shift+W closes its closable documents. Closing a conversation tab
+never deletes the session. Hidden hosts and visible dialogs/menus do not compete
+for these keys. Browsers may reserve window/tab shortcuts before a page receives
+them; Electron routes native document shortcuts to the same renderer commands.
+
+Semantic logs in `memory/events/*.jsonl` have a dedicated read view: recorded
+When, Who, What happened and Why, plus summary, challenge, source session and
+references when present. Missing fields are labelled Not recorded; unfamiliar
+records fall back to their original source. Fields render as text, never authored
+HTML or executable URLs. Catalog-resolved references open their knowledge entry;
+other references remain readable text. Each record retains a source disclosure,
+and Show source retains the whole JSONL document. These are Project historical
+logs, not external Signals Events; the log and learning writers are unchanged.
 
 This file-backed Project browser is an owner surface, not the scoped Discord
 memory catalog. Restricted Discord Agents do not inherit its files, global

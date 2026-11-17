@@ -79,6 +79,8 @@ import { ContextBuilder } from '../../agent/context/builder.ts'
 import { executionContractProvider, guidelineProvider } from '../../agent/context/guideline.ts'
 import { initiativeProvider } from '../../agent/context/initiative.ts'
 import { memoryProvider } from '../../agent/context/memory-provider.ts'
+import { createKnowledgeHandler } from '../../vfs/knowledge.ts'
+import { KnowledgeService } from '../../knowledge/service.ts'
 import { TopicService } from '../../sessions/topics.ts'
 import { topicsPlugin } from '../../sessions/topic-routes.ts'
 import { UseProjectTool } from '../../tools/use-project.ts'
@@ -1317,6 +1319,10 @@ export async function createProjectRuntime(
   })
   vfs.mount('v:config', 'Project MCP configuration: mcp.json', mcpConfigVfs.read, undefined, mcpConfigVfs.write)
 
+  const knowledgeVfs = createKnowledgeHandler(new KnowledgeService(workspace, skills), project.id,
+    context => topics.assertActor(context.projectId, context.sessionId))
+  vfs.mount('v:knowledge', 'read-only knowledge/log navigation; read v:knowledge/overview', knowledgeVfs.read, knowledgeVfs.list)
+
   const memoryVfs = createMemoryHandler(workspace, project.id)
   vfs.mount(
     'v:memory',
@@ -1324,6 +1330,7 @@ export async function createProjectRuntime(
     memoryVfs.read,
     memoryVfs.list,
     memoryVfs.write,
+    memoryVfs.directory,
   )
 
   // ── Create agent loop ──────────────────────────────────────────────

@@ -18,7 +18,7 @@
       <p v-if="documentQuery.bot && !selectedBot || documentQuery.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="selectedBot" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
-        <BotWorkflowInspector :reference-unavailable="!referenceSelection" :entry="selectedBot" :connection="snapshot?.bots?.connections.find(connection => connection.id === selectedBot?.connectionSettingsId)" :project-id="projectId" :selected-node="botSelectedNode" @select="inspectedNode = $event" @close="closeInspector" />
+        <BotWorkflowInspector :api-base="apiBase" :reference-unavailable="!referenceSelection" :entry="selectedBot" :connection="snapshot?.bots?.connections.find(connection => connection.id === selectedBot?.connectionSettingsId)" :project-id="projectId" :selected-node="botSelectedNode" @select="inspectedNode = $event" @close="closeInspector" />
       </aside>
       <aside v-if="inspectorOpen && !selectedBot && definition && displayed" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
