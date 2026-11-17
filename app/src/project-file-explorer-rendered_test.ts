@@ -104,7 +104,9 @@ test('Project explorer roots stay left, expand independently and show only bound
     await run('window.groups.explorers.add("p");void 0');await delay(50);await run('document.querySelector(".root-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(50);assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true,'Escape returns focus to header toggle');
     await run('for(const id of [...window.groups.descriptors.keys()])window.groups.close(id)');await delay(100);assert.equal(await run('document.querySelectorAll(".editor-tab").length'),0);assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().width>0'),true);await win.close();console.log('PROJECT_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs'); await writeFile(entry, script)
-  const child = spawn(require('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(require('electron') as string, [entry], { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 75000); t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); assert.equal(code, 0, output); assert.match(output, /PROJECT_EXPLORER_OK/)
