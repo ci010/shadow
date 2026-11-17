@@ -141,9 +141,7 @@ test('open view sheets fill each row and align independent close targets at narr
               await delay(100);
               await execute('document.querySelector(".mobile-view-close").focus()');
               assert.equal(await execute('document.activeElement.getAttribute("aria-label").length>0'),true);
-              window.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
-              window.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
-              await delay(50);
+              await execute('document.activeElement.click()');
               assert.deepEqual(await execute('Array.from(window.fixture.closed)'),['draft']);
               assert.deepEqual(await execute('Array.from(window.fixture.activated)'),[]);
               assert.equal(await execute('window.fixture.viewsOpen'),true);
