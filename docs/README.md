@@ -43,6 +43,8 @@ Start with the [project README](../README.md) for installation and commands,
 - [Provider Flash support](providers-flash.md)
 - [Unified Workflows and recovery](workflows.md), [external Signal Sources](signal-source-providers.md)
 - [Fresh automation state persistence](fresh-automation-state.md) and [cold conversation storage](session-archive-storage.md)
+- [Self-reflection: understanding, methods and evaluation](self-reflection-learning.md), including the what/why/how split, provisional goal hypotheses and clean-slate experiment boundaries
+- [Learning finish and retry recovery](learning-finish-boundary.md)
 - [Encapsulation candidates and acceptance](encapsulation-automation.md), including the [tested script-tool draft](encapsulation-tool-handoff.md)
 
 ## Operations and verification

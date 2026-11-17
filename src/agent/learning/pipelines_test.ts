@@ -35,9 +35,9 @@ const decision = {
   action: 'save', name: 'readable-outcomes', revision: '', title: 'Readable outcomes',
   kind: 'motivation', confidence: 'inferred', evaluation: 'new',
   condition: 'When reviewing automation output', goal: 'Understand changes without another workspace',
-  rationale: 'The user requested contextual presentation, not removal of every diff.',
-  guidance: 'Use contextual diffs for files and readable events.', exceptions: 'A dedicated code review can need a full diff.',
-  reviewWhen: 'The user changes the task or corrects this interpretation.', evidence: ['web:source'],
+  rationale: 'The user requested contextual presentation, not removal of every diff. Hypothesis: preserve a coherent workspace. Alternative: this request may only address one crowded screen.',
+  guidance: 'Ask whether contextual diffs would help; this hypothesis is not permission to redesign.', exceptions: 'A dedicated code review can need a full diff.',
+  reviewWhen: 'Refute or narrow this interpretation if the user selects a separate review workspace or says the request was screen-specific.', evidence: ['web:source'],
 }
 
 test('verified no-change advances bounded cursors; legacy history is not replayed or relabelled', async () => {
@@ -95,6 +95,13 @@ test('reflection guidance asks for evidence-backed behavioral learning without f
     assert.match(task, /Do not apply this extra test to Wiki facts or significant logs/)
     assert.match(task, /candidates retained or omitted/)
     assert.doesNotMatch(task, /Before retaining a candidate, answer/)
+    assert.match(task, /Wiki answers what\/why/)
+    assert.match(task, /Skills answer how/)
+    assert.match(task, /not a story of the session/)
+    assert.match(task, /alternative explanation.*falsifying observation/)
+    assert.match(task, /hypothesis need not await user confirmation/)
+    assert.match(task, /never permission or overrides of human choices/)
+    assert.match(task, /reading fragment, not necessarily a complete problem phase/)
     const guideline = (await readFile(new URL('../types/builtin/reflector/AGENT.md', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
     assert.match(guideline, /it need not change a future action/)
     assert.match(guideline, /An unresolved challenge is eligible/)
@@ -102,6 +109,11 @@ test('reflection guidance asks for evidence-backed behavioral learning without f
     assert.match(guideline, /Do not fetch child-only histories/)
     assert.match(guideline, /use a higher bar/)
     assert.match(guideline, /publishable skill needs a reusable procedure/)
+    assert.match(guideline, /hypothesis can be retained before user\nconfirmation/)
+    assert.match(guideline, /plausible alternative explanation/)
+    assert.match(guideline, /falsification condition in reviewWhen/)
+    assert.match(guideline, /never grant permission or override explicit human choices/)
+    assert.match(guideline, /do not infer sensitive traits/)
     assert.doesNotMatch(guideline, /Retain only facts, stated goals or conditional principles that affect future/)
     const downstream = learningTask({ ...batch, pipeline: 'encapsulator' })
     assert.doesNotMatch(downstream, /Look for learning signals/)
@@ -151,6 +163,10 @@ test('decision writes preserve conditions, uncertainty and evidence; downstream 
     assert.deepEqual([outcome.artifacts, outcome.events, outcome.evaluated], [1, 1, 0])
     const content = await readFile(join(workspace, 'memory', 'decisions', 'readable-outcomes.md'), 'utf8')
     assert.match(content, /provisional hypothesis/)
+    assert.match(content, /Kind: motivation/)
+    assert.match(content, /Alternative: this request may only address one crowded screen/)
+    assert.match(content, /hypothesis is not permission to redesign/)
+    assert.match(content, /Refute or narrow this interpretation/)
     assert.match(content, /Exceptions and counterexamples/)
     assert.match(content, /web:source.*\[0, 5\)/)
     assert.equal(await f.runtime.run('reflector', signal()), false)

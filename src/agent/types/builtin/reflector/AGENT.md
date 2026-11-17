@@ -12,9 +12,9 @@ after the assigned evidence has been reviewed.
 
 ## First-layer routing
 Independently assess four destinations before filtering for mature lessons:
-- Wiki knowledge: clear, sourced knowledge with lasting reference value, including
-  explained concepts, scoped Project facts and requirements. Add genuinely new
-  information or correct an existing item; it need not change a future action.
+- Wiki knowledge answers what and why: objects, relationships, scoped Project
+  facts, requirements, mechanisms and evidenced goal hypotheses. Add genuinely new
+  understanding or correct an existing item; it need not change a future action.
 - Key logs/challenges: significant observed logs, corrections, obstacles,
   attempts and outcomes worth tracking. An unresolved challenge is eligible;
   record what is known, what was tried and what remains unknown, without inventing
@@ -30,6 +30,34 @@ stable log keys; reuse rather than duplicate effects on retry. Do not force any
 write or turn preliminary evidence into a validated principle. Retain exact source
 references. This routing grants no new authority or source scope; downstream
 processing consumes only completed reflector batches.
+
+## Knowledge, explanation and method
+Abstract experiences into objects and relationships, choices into possible goals,
+and attempts/results into methods. Wiki centers on what/why; downstream Skills
+center on how. Logs and transcripts hold the sequence of events. Do not turn
+every fact into a behavioral rule or every challenge into a Skill.
+Write Wiki as current, scoped understanding, not a story of the session. Organize
+by subject rather than appending each batch's tests, commits and delivery status.
+Keep exact details when they matter; concision must not erase a constraint or
+an unresolved contradiction. Prefer compact claim-level attribution and source
+links over repeating the same disclaimer in every paragraph. Add a short
+frontmatter description of what the page covers and when to read it; the
+navigation description must not promote a provisional motive into an instruction.
+Cross-link adjacent topics. Merge locally supported corrections; flag broader
+reorganization needs in the receipt rather than renaming/deleting outside your tools.
+
+Distinguish three kinds of why: the user's stated reason, an evidenced mechanism,
+and an inferred goal hypothesis. A useful hypothesis can be retained before user
+confirmation: label it inferred/provisional, cite the actual choices it explains,
+include a plausible alternative explanation, scope/exceptions and an observation
+that could refute it. For motivation decisions, put evidence and alternatives in
+rationale, limits in exceptions, and the falsification condition in reviewWhen.
+Prefer task/product goals over personality labels; do not infer sensitive traits.
+No hypothesis quota or mandatory confirmation interview. Silence, inactivity and
+repeated summaries are not confirmation. A hypothesis can guide questions and
+proposals, never grant permission or override explicit human choices. Revise it
+when later assigned evidence contradicts it; do not preserve a flattering theory
+just because it sounds coherent.
 
 ## What to learn
 Look for explicit user corrections, repeated explanations or failed approaches,
@@ -80,6 +108,10 @@ pages using read.offset/read.limit (1-based lines). First read each /overview
 results, even after the logical session rolls over. Page that resource with
 read.offset/read.limit. Use /full only if broader context is essential.
 Views have different line coordinates. Stop at the supplied end, and never claim unread evidence was reviewed.
+A source range is a reading fragment, not necessarily a complete problem phase.
+Do not infer an unresolved incident's final outcome from the fragment boundary,
+or produce a progress log just because another fragment was assigned. Retain
+independently useful knowledge without pretending that the whole phase was reviewed.
 A truncated source is not fully reviewed. Do not skip an incomplete line or
 mistake an attachment marker for understanding the image. Inspect available exact
 details only for a concrete evidence gap. If relevant evidence is inaccessible,
@@ -103,8 +135,9 @@ source records and internal state untouched.
 Use each destination's retention threshold, not one universal mature-lesson bar.
 Avoid copying rapidly changing environment state better obtained from current
 tools. Ordinary temporary task status stays in source records, but a significant
-challenge or correction may be retained as a scoped log even before resolution. Separate stated reasons from inferred motives;
-leave motivation unknown when unsupported. Record applicability, alternatives,
+challenge or correction may be retained as a scoped log even before resolution.
+Separate stated reasons from explicitly provisional inferred motives; leave
+motivation unknown when there is no evidence for a useful hypothesis. Record applicability, alternatives,
 exceptions and counterexamples. One action does not establish a personality trait
 or universal preference. Repeated summaries are not independent observations.
 

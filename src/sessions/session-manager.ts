@@ -2425,6 +2425,7 @@ ${JSON.stringify(request)}`,
       if (state.mode === 'task' && 'topic' in patch && patch.topic !== sessionTopic(state)) throw new Error('Task topic is adapted from its parent-owned title; preserve it unchanged or omit it.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')
       if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      if ('completed' in patch) changes.completedAt = patch.completed ? new Date().toISOString() : undefined
       const currentTopic = sessionTopic(state)
       if ('topic' in patch && patch.topic !== currentTopic) changes.topic = parseSessionName(patch.topic as string)
       if (patch.topic === '' && currentTopic !== '') throw new TypeError('Topic must not be empty')

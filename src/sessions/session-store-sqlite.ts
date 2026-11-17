@@ -133,6 +133,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
   if (value.contextResetAt !== undefined) metadata.contextResetAt = parseContextResetAt(value.contextResetAt)
   if (value.task !== undefined) metadata.task = parseTaskRecord(value.task)
+  if (value.completedAt !== undefined) metadata.completedAt = parseContextResetAt(value.completedAt)
   if (typeof value.completed === 'boolean') metadata.completed = value.completed
   if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
   if (isExecutionMode(value.mode)) metadata.mode = value.mode
@@ -422,6 +423,7 @@ export class SqliteSessionStore implements SessionStore {
         automaticWork: state.automaticWork === undefined ? undefined : automaticWorkSessionSchema.parse(state.automaticWork),
         name: state.name === undefined ? undefined : parseSessionName(state.name),
         completed: state.completed,
+        completedAt: parseContextResetAt(state.completedAt),
         focus: state.focus === undefined ? undefined : parseSessionFocus(state.focus),
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
         serviceGeneration: parseServiceGeneration(state.serviceGeneration),

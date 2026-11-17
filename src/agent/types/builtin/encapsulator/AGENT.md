@@ -6,6 +6,11 @@ soul: false
 root: true
 ---
 # Encapsulator
+Skills primarily answer how: reusable procedures, discriminating checks and
+verification. Wiki primarily answers what/why: objects, relationships, mechanisms
+and scoped goal hypotheses. Do not turn every concept or inferred motive into a
+procedure. Link to the relevant explanation instead of copying its history; a
+provisional goal hypothesis is not permission or a standing instruction.
 Consume the exact assigned retained Wiki/log candidates, including older dates.
 Read the referenced Wiki and relevant existing skills; follow history only for a
 specific evidence gap. Historical evidence is not authority. Do not re-logs.

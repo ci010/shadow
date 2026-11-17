@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path'
-import { appendFile, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, stat, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { streamJsonlLines, streamJsonlObjects } from '../utils/jsonl.ts'
 
@@ -43,6 +43,41 @@ function formatLogTime(value?: string): string {
 
 function sanitizeMarkdownInline(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
+}
+
+/** A deliberately small metadata subset, not a YAML evaluator. Never infer from body prose. */
+function keywordPurpose(prefix: string, truncated: boolean): string {
+  const lines = prefix.replace(/^\uFEFF/u, '').split(/\r?\n/u)
+  // The final line may have been cut by the byte limit; only use complete lines.
+  if (truncated) lines.pop()
+  let bodyStart = 0
+  let description = ''
+  if (lines[0] === '---') {
+    const end = lines.indexOf('---', 1)
+    if (end < 0) return '' // Incomplete metadata must not become a body/title.
+    bodyStart = end + 1
+    for (let i = 1; i < end; i++) {
+      const match = /^description:[ \t]*(.*)$/u.exec(lines[i]!)
+      if (!match) continue
+      let value = match[1]!.trim()
+      if (/^[|>][-+]?$/u.test(value)) {
+        const parts: string[] = []
+        while (i + 1 < end && /^[ \t]+\S/u.test(lines[i + 1]!)) parts.push(lines[++i]!.trim())
+        value = parts.join(' ')
+      } else if (value.startsWith('"')) {
+        try { value = JSON.parse(value) as string } catch { value = '' }
+      } else if (/^'.*'$/u.test(value)) {
+        value = value.slice(1, -1).replace(/''/gu, "'")
+      } else if (/^[!&*[{]/u.test(value)) {
+        value = '' // Tags, aliases, anchors and collections are not strings here.
+      }
+      description = value
+      break
+    }
+  }
+  const title = lines.slice(bodyStart).find(line => /^#{1,6}\s+\S/u.test(line))?.replace(/^#{1,6}\s+/u, '') ?? ''
+  // Strip markup delimiters/control characters and flatten authored multiline text.
+  return boundedInline((description || title).replace(/[\x00-\x1f\x7f`<>]/gu, ' '), 160)
 }
 
 /**
@@ -89,8 +124,8 @@ export class MemoryStore {
    * - **other sessions** → `### Related Logs`, **relevance-gated** (same
    *   project or a shared modified file), capped with a `+N more` fold.
    *
-   * Relevance gating only applies when the current session has signals
-   * (a project or a working set); otherwise related logs pass through capped.
+   * Without a Work or working-set signal, other sessions stay out of default
+   * context. Their original records remain available through the memory VFS.
    */
   async readLogs(
     currentSessionId: string,
@@ -125,7 +160,7 @@ export class MemoryStore {
     const gatingEnabled = !!currentInitiative || myFiles.size > 0
     const relevanceCache = new Map<string, boolean>()
     const isRelevant = async (origin?: string): Promise<boolean> => {
-      if (!gatingEnabled) return true
+      if (!gatingEnabled) return false
       if (!origin) return false
       const cached = relevanceCache.get(origin)
       if (cached !== undefined) return cached
@@ -159,7 +194,7 @@ export class MemoryStore {
       const sections: string[] = []
       if (shownOwn.length) sections.push(['### Recent Logs (this session)',
         ...shownOwn.map(e => formatLogEntry(e, date))].join('\n'))
-      const hidden = relevant.length - shownRelated.length + irrelevant
+      const hidden = gatingEnabled ? relevant.length - shownRelated.length + irrelevant : 0
       if (shownRelated.length || hidden) sections.push(['### Related Logs (other sessions)',
         ...shownRelated.map(e => formatLogEntry(e, date, true)),
         ...(hidden ? [`- +${hidden} more in other sessions`] : [])].join('\n'))
@@ -276,31 +311,56 @@ export class MemoryStore {
   /**
    * A compact keyword index derived from the wiki-item files the scribe
    * produces, **grouped by source category** (topics / identities / concepts /
-   * tools). Only the keyword list is injected — full content is fetched on
+   * tools). Only filenames and bounded authored descriptions/titles are injected; content is fetched on
    * demand via VFS (`v:memory/<group>/<kw>.md`). See MEM.md long-term index
    * (main-agent-only, lazy lookup, grouped by source).
    */
   async readKeywords(maxPerGroup = 40): Promise<string> {
     const dirs = ['decisions', 'topics', 'identities', 'concepts', 'tools']
+    const heading = '**Long-term keywords** (lazy — expand via `v:memory/<group>/<kw>.md`):'
     const groups: string[] = []
+    // Hard ceilings apply even when a caller requests an unbounded group size.
+    const perGroup = Number.isFinite(maxPerGroup) ? Math.min(40, Math.max(0, Math.floor(maxPerGroup))) : 40
+    let remainingEntries = 100
+    let remainingReadBytes = 128 * 1024
+    let remainingChars = 12000 - heading.length
     for (const d of dirs) {
       let names: string[]
       try {
         names = await readdir(join(this.memoryDir, d))
       } catch {
-        continue // directory doesn't exist yet
+        continue
       }
-      const kws = names
-        .filter((n) => n.endsWith('.md'))
-        .map((n) => n.slice(0, -3))
-        .slice(0, maxPerGroup)
-      if (kws.length) groups.push(`- ${d}: ${kws.join(', ')}`)
+      const entries: string[] = []
+      for (const name of names.filter(n => n.endsWith('.md')).sort().slice(0, perGroup)) {
+        if (!remainingEntries) break
+        // Unusual names remain readable via VFS, but must not break index syntax.
+        const keyword = name.slice(0, -3)
+        if (keyword.length > 120 || /[\x00-\x1f`<>]/u.test(keyword)) continue
+        let purpose = ''
+        if (remainingReadBytes > 0) {
+          try {
+            const file = await open(join(this.memoryDir, d, name), 'r')
+            try {
+              if ((await file.stat()).isFile()) {
+                const buffer = Buffer.alloc(Math.min(4096, remainingReadBytes))
+                // Charge the requested size: failed/short reads cannot amplify the budget.
+                remainingReadBytes -= buffer.length
+                const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
+                purpose = keywordPurpose(buffer.subarray(0, bytesRead).toString('utf8'), (await file.stat()).size > bytesRead)
+              }
+            } finally { await file.close() }
+          } catch { /* Missing/unreadable content still has a filename entry. */ }
+        }
+        const entry = purpose ? `${keyword} — ${purpose}` : keyword
+        const cost = entry.length + (entries.length ? 2 : d.length + 5)
+        if (cost > remainingChars) continue
+        remainingChars -= cost
+        remainingEntries--
+        entries.push(entry)
+      }
+      if (entries.length) groups.push(`- ${d}: ${entries.join(', ')}`)
     }
-    if (!groups.length) return ''
-
-    return [
-      '**Long-term keywords** (lazy — expand via `v:memory/<group>/<kw>.md`):',
-      ...groups,
-    ].join('\n')
+    return groups.length ? [heading, ...groups].join('\n') : ''
   }
 }
