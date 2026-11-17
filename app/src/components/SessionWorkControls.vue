@@ -162,7 +162,7 @@ onDeactivated(() => { expanded.value = null })
 .session-work-controls { min-width: 0; max-width: 100%; margin-top: 8px; }
 .session-work-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .session-work-triggers button {
-  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px;
+  display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; max-width: 100%; min-height: var(--session-status-chip-height, 32px);
   padding: 5px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control);
   background: var(--c-bg-soft); color: var(--c-text-secondary); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer;
 }
