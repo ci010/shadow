@@ -4,7 +4,7 @@
     <HoverInfo :text="t('Conversation and document actions')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="mobile-document-more" :aria-label="t('Conversation and document actions')" aria-haspopup="dialog" :aria-expanded="actionsOpen" @click="actionsOpen = true"><span class="i-lucide-ellipsis" aria-hidden="true" /></button></HoverInfo>
   </Teleport>
   <MobileSheet :open="viewsOpen" :label="t('Open views')" @update:open="viewsOpen = $event">
-    <div v-for="entry in entries" :key="entry.id" class="mobile-view-row"><button :aria-current="entry.id === current?.id ? 'page' : undefined" @click="groups.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
+    <div v-for="entry in entries" :key="entry.id" class="mobile-view-row"><button :aria-current="entry.id === current?.id ? 'page' : undefined" @click="groups.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button class="mobile-view-close" v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
   </MobileSheet>
   <MobileSheet :open="actionsOpen" :label="t('Conversation and document actions')" @update:open="actionsOpen = $event">
     <div class="mobile-workbench-actions"><button @click="groups.explorers.add(projectId); actionsOpen = false">{{ t('Browse files') }}</button><button v-if="current?.closable" @click="groups.close(current.id); actionsOpen = false">{{ t('Close current document') }}</button></div>
@@ -31,8 +31,7 @@ watch(header.visible, visible => { if (!visible) { viewsOpen.value = false; acti
 .mobile-document-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 44px; padding: 8px; border: 0; background: transparent; color: var(--c-text); font: inherit; text-align: left; }
 .mobile-document-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-document-more { display: grid; place-items: center; width: 44px; height: 44px; border: 0; background: transparent; color: var(--c-text); }
-.mobile-view-row { display: flex; }.mobile-view-row button:first-child { flex: 1; text-align: left; }
-.mobile-view-row button, .mobile-workbench-actions button { min-height: 44px; padding: 12px; border: 0; background: transparent; color: var(--c-text); font: inherit; }
+.mobile-workbench-actions button { min-height: 44px; padding: 12px; border: 0; background: transparent; color: var(--c-text); font: inherit; }
 .mobile-workbench-actions { display: flex; flex-direction: column; }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 </style>

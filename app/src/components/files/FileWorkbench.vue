@@ -9,7 +9,7 @@
       </button>
     </Teleport>
     <MobileSheet v-if="mobileLayout" :open="viewsOpen" :label="t('Open views')" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
-      <div v-for="entry in otherEditors" :key="entry.id" class="mobile-view-row"><button @click="groups?.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups?.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
+      <div v-for="entry in otherEditors" :key="entry.id" class="mobile-view-row"><button @click="groups?.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button class="mobile-view-close" v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups?.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
       <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || t('Conversation') }}</span></button></div>
       <div v-if="diagnosisEnabled" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="openDiagnosis(); viewsOpen = false"><span class="i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
@@ -631,14 +631,9 @@ onUnmounted(() => {
 .mobile-document-title > span:last-child { flex-shrink: 0; }
 .mobile-document-more { display: grid; place-items: center; flex: 0 0 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--c-text); }
 .mobile-document-title:focus-visible, .mobile-document-more:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.mobile-view-row { display: flex; min-width: 0; }
-.mobile-view-row button, .mobile-workbench-actions :deep(button) { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; text-align: left; }
-.mobile-view-row button > span:first-child { flex-shrink: 0; }
-.mobile-view-row button > span:last-child { overflow-wrap: anywhere; }
-.mobile-view-row button[aria-current="page"] { background: var(--c-selection-bg); color: var(--c-primary); }
-.mobile-view-row .mobile-view-close { flex: 0 0 44px; justify-content: center; padding: 0; }
+.mobile-workbench-actions :deep(button) { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; text-align: left; }
 .mobile-workbench-actions { display: flex; flex-direction: column; }
-.mobile-view-row button:focus-visible, .mobile-workbench-actions :deep(button:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.mobile-workbench-actions :deep(button:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-workbench .workbench-explorer.drawer, .mobile-workbench .explorer-backdrop { top: 0; }
 .file-spaces { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .file-space-root { display: flex; align-items: center; gap: 8px; min-height: 36px; flex-shrink: 0; border: 0; padding: 6px 12px; background: var(--c-bg-card); color: var(--c-text); text-align: left; font: inherit; font-size: 12px; cursor: pointer; }
