@@ -1,3 +1,4 @@
+import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
@@ -223,6 +224,11 @@ async function withRetry<T>(label: string, fn: () => T): Promise<T> {
  * with exponential backoff, keeping retry logic inside the store layer.
  */
 export class SqliteSessionStore implements SessionStore {
+  declare archiveConversation: NonNullable<SessionStore['archiveConversation']>
+  declare queryConversationArchives: NonNullable<SessionStore['queryConversationArchives']>
+  declare isConversationArchived: NonNullable<SessionStore['isConversationArchived']>
+  declare readArchivedLogRange: NonNullable<SessionStore['readArchivedLogRange']>
+
   private db: Database
   private prototypeMetadataExtras = new Map<string, Record<string, unknown>>()
   private stmtGetState: ReturnType<Database['prepare']>
@@ -230,7 +236,6 @@ export class SqliteSessionStore implements SessionStore {
   private stmtUpsertState: ReturnType<Database['prepare']>
   private stmtListSessions: ReturnType<Database['prepare']>
   private stmtDeleteState: ReturnType<Database['prepare']>
-  private stmtReadLog: ReturnType<Database['prepare']>
   private stmtAppendLog: ReturnType<Database['prepare']>
   private stmtDeleteLog: ReturnType<Database['prepare']>
   private stmtCountLog: ReturnType<Database['prepare']>
@@ -280,9 +285,6 @@ export class SqliteSessionStore implements SessionStore {
     this.stmtDeleteState = this.db.prepare(
       'DELETE FROM session_states WHERE key = ?',
     )
-    this.stmtReadLog = this.db.prepare(
-      'SELECT data FROM session_logs WHERE session_id = ? ORDER BY seq ASC',
-    )
     this.stmtAppendLog = this.db.prepare(
       'INSERT INTO session_logs (session_id, data) VALUES (?, ?)',
     )
@@ -293,6 +295,7 @@ export class SqliteSessionStore implements SessionStore {
     this.stmtReadFirstLog = this.db.prepare(
       'SELECT data FROM session_logs WHERE session_id = ? ORDER BY seq ASC LIMIT 1',
     )
+    new ConversationArchive(sessionsDir, options.readOnly, 'sqlite').install(this, this.readArchiveSource.bind(this))
   }
 
   private initSchema(): void {
@@ -529,11 +532,21 @@ export class SqliteSessionStore implements SessionStore {
   async *readSessionLog(
     sessionId: string,
   ): AsyncIterable<Record<string, unknown>> {
-    const rows = this.stmtReadLog.all(sessionId) as Array<{ data: string }>
+    const rows = this.db.prepare('SELECT data FROM session_logs WHERE session_id = ? ORDER BY seq ASC').iterate(sessionId) as Iterable<{ data: string }>
     for (const row of rows) {
       try {
         yield JSON.parse(row.data) as Record<string, unknown>
       } catch { /* skip malformed */ }
+    }
+  }
+
+  /** Archive admission is strict: never delete source rows that were silently skipped. */
+  private async *readArchiveSource(id: string): AsyncIterable<Record<string, unknown>> {
+    for (const row of this.db.prepare('SELECT data FROM session_logs WHERE session_id = ? ORDER BY seq ASC').iterate(id) as Iterable<{ data: string }>) {
+      if (Buffer.byteLength(row.data) > 16 * 1024 * 1024 - 2) throw new RangeError('Archive record exceeds 16MiB limit')
+      const record: unknown = JSON.parse(row.data)
+      if (!record || typeof record !== 'object' || Array.isArray(record)) throw new TypeError('Invalid archive raw record')
+      yield record as Record<string, unknown>
     }
   }
 

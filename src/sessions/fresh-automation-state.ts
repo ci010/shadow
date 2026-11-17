@@ -357,11 +357,10 @@ export class FreshAutomationStateStore {
   async references(): Promise<ArchiveReference[]> {
     await this.queue
     // Compact columns only: finalized state blobs are not hydrated at startup.
-    const rows = this.database()?.prepare(`SELECT project_id, folder_id, workdir, 'claim' AS source FROM claims
-      UNION SELECT project_id, folder_id, workdir, 'run' AS source FROM runs`).all() as Array<{ project_id: string; folder_id: string | null; workdir: string | null; source: 'claim' | 'run' }> | undefined
-    const refs = (rows ?? []).map(row => ({ projectId: row.project_id, ...(row.folder_id ? { folderId: row.folder_id } : {}),
-      ...(row.workdir !== null && (row.source === 'run' || row.workdir !== '') ? { workdir: this.parseClaim(row.workdir) } : {}) }))
-    return [...new Map(refs.map(ref => [JSON.stringify([ref.projectId, ref.folderId, ref.workdir?.nodeId, ref.workdir?.workdirId]), ref])).values()]
+    const rows = this.database()?.prepare(`SELECT project_id, NULLIF(folder_id, '') AS folder_id, NULLIF(workdir, '') AS workdir FROM claims
+      UNION SELECT project_id, NULLIF(folder_id, ''), NULLIF(workdir, '') FROM runs`).all() as Array<{ project_id: string; folder_id: string | null; workdir: string | null }> | undefined
+    return (rows ?? []).map(row => ({ projectId: row.project_id, ...(row.folder_id ? { folderId: row.folder_id } : {}),
+      ...(row.workdir !== null ? { workdir: this.parseClaim(row.workdir) } : {}) }))
   }
 
   private parseClaim(raw: string) {

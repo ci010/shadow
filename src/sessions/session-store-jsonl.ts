@@ -1,3 +1,4 @@
+import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { parseSessionFocus } from './session-metadata.ts'
@@ -72,10 +73,18 @@ function parseStoredState(raw: string): SessionState {
  * - `<sessionId>.jsonl` — append-only session log (one JSON object per line)
  */
 export class JsonlSessionStore implements SessionStore {
+  declare archiveConversation: NonNullable<SessionStore['archiveConversation']>
+  declare queryConversationArchives: NonNullable<SessionStore['queryConversationArchives']>
+  declare isConversationArchived: NonNullable<SessionStore['isConversationArchived']>
+  declare readArchivedLogRange: NonNullable<SessionStore['readArchivedLogRange']>
+
   private readonly stateWrites = new Map<string, Promise<void>>()
 
   private readonly fresh: FreshAutomationStateStore
-  constructor(private sessionsDir: string) { this.fresh = new FreshAutomationStateStore(sessionsDir, 'jsonl') }
+  constructor(private sessionsDir: string) {
+    this.fresh = new FreshAutomationStateStore(sessionsDir, 'jsonl')
+    new ConversationArchive(sessionsDir).install(this)
+  }
   archiveRevision = () => this.fresh.revision()
   readArchivedState = (id: string) => this.fresh.archived(id)
   queryArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.query(query)

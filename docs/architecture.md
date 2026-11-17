@@ -325,17 +325,21 @@ delivery. This is prompt guidance, not an automatic export, retention guarantee,
 or change to session directory creation/deletion. Internal uploads and drafts
 remain in session-managed storage.
 
-Recoverable [session cleanup](session-retirement.md) is an ordinary disabled
-fresh automation installed once in the Project's persisted cron jobs, not a
-dedicated runtime scheduler or config lifecycle. It uses the normal automation
-inventory, enablement, manual execution/cancellation, `CronDispatcher`,
-`SessionManager` agent/tool loop and JSONL/SQLite run history. Generic persisted
-execution ceilings grant its imported `session_retirement` tool; that tool owns
-only domain inspection, freshness/ownership checks and verified preservation
-before writing a recoverable retirement receipt. Five-day user inactivity is
-eligibility, not evidence of completion. There is no startup scan or physical
-purge. Legacy retirement config is inert; upgrading requires explicit opt-in to
-the ordinary automation.
+[Session cleanup](session-retirement.md) is an ordinary disabled fresh automation
+installed once in the Project's persisted cron jobs, not a dedicated runtime
+scheduler or config lifecycle. It uses the normal automation controls,
+`CronDispatcher`, `SessionManager` loop and JSONL/SQLite run history. Its granted
+`session_retirement` tool owns domain inspection, freshness/ownership checks and
+verified preservation. Newly sealed conversations move into an independent
+[SQLite cold archive](session-archive-storage.md): lightweight indexed directory,
+versioned state snapshots and independently compressed raw-record blocks in a
+worker. Verified publication precedes active state/log removal; a durable pending
+transfer handles interrupted cleanup. Cold archives are read-only, queried by
+cursor or exact ID/range, and never loaded into the ordinary session startup or
+navigation maps. Legacy reversible retirement receipts are not bulk-migrated.
+Five-day user inactivity remains eligibility, not completion evidence. There is
+no automatic archive sweep or history purge at startup. Legacy retirement config
+is inert; enabling the ordinary automation still requires explicit opt-in.
 
 A retained Project layout marker supports bounded access to historical absolute
 paths under that same application's old managed Home; arbitrary remote paths

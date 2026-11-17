@@ -174,7 +174,7 @@ export class SessionRetirement {
       release: () => signal.removeEventListener('abort', abort) })
     signal.addEventListener('abort', abort, { once: true })
     return { token, sessionId, roots,
-      deliveryPolicy: 'Export only explicitly identified final user-requested file deliverables. Intermediate drafts remain in session data through recoverable retirement; files:[] is valid. Do not copy all drafts merely to retire a session, even if an older cleanup task requests it. Leave unresolved final deliveries untouched.',
+      deliveryPolicy: 'Export only explicitly identified final user-requested file deliverables. Intermediate drafts remain in session data through archival; files:[] is valid. Do not copy all drafts merely to retire a session, even if an older cleanup task requests it. Leave unresolved final deliveries untouched.',
       history: snapshot.records, drafts, wiki }
   }
 
@@ -250,7 +250,7 @@ export class SessionRetirement {
       knowledgeProofs.set(path, digest(bytes))
     }
     // Exports are only final user-requested deliverables, not the whole draft inventory.
-    // Recoverable retirement retains intermediate files in session storage.
+    // Cold archival retains intermediate files in session storage.
     if (new Set(proposal.files.map(file => file.source)).size !== proposal.files.length) throw new Error('Duplicate delivery source')
     if (JSON.stringify(await inspectDrafts(root)) !== JSON.stringify(drafts)) throw new Error('Draft inventory changed')
     const saved: Array<{ path: string; hash: string }> = []
@@ -290,6 +290,6 @@ export class SessionRetirement {
       }
       return recheck
     })
-    return 'retired (recoverable; no physical deletion)'
+    return 'archived (immutable read-only history; no in-place restore; session data retained)'
   }
 }
