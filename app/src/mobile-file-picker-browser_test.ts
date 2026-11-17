@@ -59,8 +59,8 @@ test('rendered ChatTab file input survives native picker background, submits con
             const request = new Request(input,init);
             fixture.calls.push({url:request.url, method:request.method, authorization:request.headers.get('authorization'), signal:request.signal});
             const path = new URL(request.url).pathname;
-            if(path==='/mobile/v1/pair') return Response.json({version:1,accessToken:'synthetic-native-access-token',expiresAt:new Date(Date.now()+3600000).toISOString()});
-            if(path==='/mobile/v1/session') { if(fixture.deferResume) await new Promise(resolve=>fixture.resume=resolve); return fixture.revoked ? new Response(null,{status:401}) : Response.json({version:1,authenticated:true,expiresAt:new Date(Date.now()+3600000).toISOString()}); }
+            if(path==='/mobile/v1/pair') return Response.json({version:2,accessToken:'synthetic-native-access-token',expiresAt:null});
+            if(path==='/mobile/v1/session') { if(fixture.deferResume) await new Promise(resolve=>fixture.resume=resolve); return fixture.revoked ? new Response(null,{status:401}) : Response.json({version:2,authenticated:true,expiresAt:null}); }
             if(path==='/api/live') return new Response(new ReadableStream({start(controller){
               controller.enqueue(new TextEncoder().encode('event: realtime\\ndata: '+JSON.stringify({type:'ready',cursor:'00000000-0000-4000-8000-000000000000:0'})+'\\n\\n'));
             }}),{headers:{'content-type':'text/event-stream'}});

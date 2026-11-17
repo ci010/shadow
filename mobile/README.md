@@ -22,6 +22,18 @@ on restart, and exposes session disconnect controls. The desktop management
 entry stays local. See [phone access and HTTPS deployment](../docs/mobile.md).
 Main never changes your system firewall. Do not forward the phone port publicly.
 
+Pairing codes are single-use and expire in five minutes. A successfully paired
+phone has no fixed authorization expiry and stays paired across normal Main and
+phone app restarts, until removed on Main or disconnected on the phone. The
+version-2 credential explicitly records `expiresAt: null` inside the existing
+native secure-storage container; do not change the Keychain account/service,
+Keystore alias or encrypted-envelope version for this protocol change. Valid old
+version-1 credentials are accepted and migrate only after authenticated
+verification by the new Main. Expired or lost old in-memory grants require one
+new pairing. Install an updated phone app for the new protocol. File-access
+tickets still expire after one minute. Offline disconnect clears the local
+credential but cannot confirm remote revocation; remove the session on Main too.
+
 ## Reproducible setup and build
 
 From the repository root:

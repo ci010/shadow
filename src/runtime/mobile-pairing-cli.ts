@@ -51,10 +51,10 @@ export async function manageMobileAccess(
     const lines = result.sessions.map((session: unknown) => {
       if (!session || typeof session !== 'object' || !('id' in session) || typeof session.id !== 'string'
         || !/^[a-f0-9-]{36}$/.test(session.id) || !('expiresAt' in session)
-        || typeof session.expiresAt !== 'string' || !validExpiry(session.expiresAt, 12 * 60 * 60_000)) {
+        || (session.expiresAt !== null && (typeof session.expiresAt !== 'string' || !validExpiry(session.expiresAt, 12 * 60 * 60_000)))) {
         throw new Error('Invalid mobile session')
       }
-      return `${session.id}  expires ${session.expiresAt}`
+      return `${session.id}  ${session.expiresAt === null ? 'paired until explicitly revoked' : `expires ${session.expiresAt}`}`
     })
     return lines.length ? `${lines.join('\n')}\n` : 'No active mobile sessions.\n'
   } catch {

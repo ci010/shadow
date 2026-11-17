@@ -61,8 +61,8 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
             const path = new URL(request.url).pathname;
             if(path==='/nodes/v1/mobile/settings') return Response.json({enabled:true,port:3125,allowLanHttp:true,managedByEnvironment:false,state:'listening',endpoint:'http://192.168.1.10:3125',error:null,sessions:[]});
             if(path==='/nodes/v1/mobile/pairing') return Response.json({url:'http://192.168.1.10:3125',code:'abcd-abcd-abcd-abcd-abcd-abcd',expiresAt:new Date(Date.now()+300000).toISOString()});
-            if(path==='/mobile/v1/pair') return Response.json({version:1,accessToken:'synthetic-native-access-token',expiresAt:new Date(Date.now()+3600000).toISOString()});
-            if(path==='/mobile/v1/session') return fixture.revoked ? new Response(null,{status:401}) : Response.json({version:1,authenticated:true,expiresAt:new Date(Date.now()+3600000).toISOString()});
+            if(path==='/mobile/v1/pair') return Response.json({version:2,accessToken:'synthetic-native-access-token',expiresAt:null});
+            if(path==='/mobile/v1/session') return fixture.revoked ? new Response(null,{status:401}) : Response.json({version:2,authenticated:true,expiresAt:null});
             if(path==='/api/live') return new Response(new ReadableStream({start(controller){
               controller.enqueue(new TextEncoder().encode('event: realtime\\ndata: '+JSON.stringify({type:'ready',cursor:'00000000-0000-4000-8000-000000000000:0'})+'\\n\\n'));
             }}),{headers:{'content-type':'text/event-stream'}});

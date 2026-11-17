@@ -36,7 +36,7 @@
         <h3>{{ t('Paired phone sessions') }}</h3>
         <p v-if="!network.sessions.length">{{ t('No authenticated phone sessions. Refresh after pairing.') }}</p>
         <div v-for="session in network.sessions" :key="session.id" class="phone-session">
-          <code>{{ session.id }}</code><span>{{ t('Expires at') }} {{ new Date(session.expiresAt).toLocaleString() }}</span>
+          <code>{{ session.id }}</code><span v-if="session.expiresAt === null">{{ t('Paired until removed on this computer or disconnected on the phone.') }}</span><span v-else>{{ t('Expires at') }} {{ new Date(session.expiresAt).toLocaleString() }}</span>
           <button type="button" class="btn" :disabled="busy" @click="revoke(session.id)">{{ t('Disconnect phone') }}</button>
         </div>
         <p>{{ t('If the phone cannot connect, check the same LAN, the selected address, port conflicts and OS firewall permission. Shadow does not change your firewall.') }}</p>
@@ -53,7 +53,7 @@ import { deviceAdminRequest } from './device-administration.ts'
 interface State {
   enabled: boolean; port: number; allowLanHttp: boolean; managedByEnvironment: boolean
   state: 'disabled' | 'listening' | 'error'; endpoint: string | null; error: string | null
-  sessions: Array<{ id: string; expiresAt: string }>
+  sessions: Array<{ id: string; expiresAt: string | null }>
 }
 interface Pairing { url: string; code: string; expiresAt: string }
 const props = defineProps<{ apiBase: string }>()

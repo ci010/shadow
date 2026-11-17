@@ -103,9 +103,13 @@ test('phone settings browser verifies opt-in, pairing, revocation and narrow lay
             await wait('!!document.querySelector("textarea")');
             await click('Copy phone pairing details');
             assert.match(await execute('window.fixture.copied'),/192.168.20.12:3125/);
-            await execute('window.fixture.network.sessions=[{id:"phone-1",expiresAt:new Date(Date.now()+10000).toISOString()}]');
+            await execute('window.fixture.network.sessions=[{id:"phone-1",expiresAt:null}]');
             await click('Refresh phone access');
             await wait('document.body.innerText.includes("phone-1")');
+            assert.match(await execute('document.querySelector(".phone-session").innerText'),/Paired until removed on this computer or disconnected on the phone/);
+            assert.match(await execute('document.querySelector(".phone-transfer").innerText'),/Expires at/);
+            assert.match(await execute('document.body.innerText'),/Pairing codes expire in five minutes and work once/);
+            assert.equal(await execute('document.documentElement.scrollWidth <= innerWidth'),true);
             await click('Disconnect phone');
             await wait('!document.body.innerText.includes("phone-1")');
             await click('Turn off phone access');

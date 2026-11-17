@@ -78,13 +78,27 @@ test('phone listener persists, pairs once, revokes and stops without exposing lo
   for (const path of ['/nodes/v1/mobile/settings', '/local/v1/mobile-pairing', '/local/v1/readiness', '/api/web-auth']) {
     assert.equal((await remote(path, authorized)).status, 403, path)
   }
-  const sessions = f.network.state().sessions
-  assert.equal(sessions.length, 1)
-  assert.equal((await f.request(`sessions/${sessions[0]!.id}`, 'DELETE')).status, 200)
-  assert.equal((await remote('/api/private', authorized)).status, 401)
+  // A fresh Main network object must restore grants, not just listener settings.
   await f.network.shutdown()
+  const restarted = new MainMobileNetwork(f.options); t.after(() => restarted.shutdown())
+  await restarted.init()
+  assert.equal((await remote('/mobile/v1/session', authorized)).status, 200)
+  await restarted.shutdown()
+  // Re-enable on the original instance is prohibited after shutdown; manage via a new instance.
+  const manager = new MainMobileNetwork(f.options); t.after(() => manager.shutdown())
+  await manager.init()
+  const sessions = manager.state().sessions
+  assert.equal(sessions.length, 1)
+  assert.equal(manager.state().sessions[0]!.expiresAt, null)
+  const management = new Hono(); manager.plugin()(management)
+  const revoke = new Request(`http://127.0.0.1/nodes/v1/mobile/sessions/${sessions[0]!.id}`, { method: 'DELETE', headers })
+  f.options.clientAddresses.capture(revoke, { transport: 'tcp', hostname: '127.0.0.1' })
+  assert.equal((await management.request(revoke)).status, 200)
+  assert.equal((await remote('/api/private', authorized)).status, 401)
+  await manager.shutdown()
   const restored = new MainMobileNetwork(f.options); t.after(() => restored.shutdown())
   await restored.init(); assert.equal(restored.state().state, 'listening')
+  assert.equal((await remote('/mobile/v1/session', authorized)).status, 401)
   await restored.configure({ ...settings, enabled: false })
   assert.equal(restored.state().state, 'disabled')
   await restored.shutdown()
