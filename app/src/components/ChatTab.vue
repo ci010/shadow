@@ -502,7 +502,6 @@
           <p v-if="stageError && requestBusy" class="composer-error" role="status">{{ stageError }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
           <p v-if="composerDraft.error.value" class="composer-error" role="alert">{{ composerDraft.error.value }}</p>
-          <p v-if="remoteConversation" class="remote-execution-note" role="status">{{ t('Files and commands run on the selected device. Attached images are sent to the model through Main, not copied to that device. Other local files and folder context are not supported.') }}</p>
         </div>
       </div>
     </template>
@@ -3420,7 +3419,6 @@ function resendLastMessage() {
 </script>
 
 <style scoped>
-.remote-execution-note { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
 .chat-workspace {
   position: relative;
   display: grid;
