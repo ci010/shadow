@@ -208,3 +208,13 @@ The original address / code / expiry clipboard format remains accepted, includin
 extra whitespace or line breaks. Invalid origins, paths, codes and expired details
 are rejected; create a fresh code on Main if it expired or was already used.
 Pasted secrets are cleared on submission and are never placed in URLs or browser storage.
+
+### File picker and background safety
+
+Android's system file picker can temporarily background the app without reloading
+the document. Only during an explicit file selection, Shadow retains the original
+file input and attachment draft **in memory**, with the chat hidden and inert.
+Main requests are still aborted immediately. Returning to the app revalidates the
+secure session before showing the draft; failed validation discards it. Ordinary
+backgrounding and process termination do not guarantee draft preservation. Files
+and credentials are never persisted to browser storage to preserve a picker draft.
