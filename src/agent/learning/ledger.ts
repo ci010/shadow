@@ -155,8 +155,8 @@ export class LearningLedger {
   private correctionDue(batch: LearningBatch): boolean {
     return batch.pipeline === 'encapsulator' && !!batch.correctionRecovery && !batch.correctionRecovery.admitted && !batch.correctionRecovery.closedReason
   }
-  pending(pipeline: Pipeline, dueOnly = false): LearningBatch | undefined {
-    return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded
+  pending(pipeline: Pipeline, dueOnly = false, predicate: (batch: LearningBatch) => boolean = () => true): LearningBatch | undefined {
+    return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded && predicate(batch)
       && (!dueOnly || batch.state === 'running' || (((batch.retry?.attempts ?? 0) < 3 || this.canContinueCandidates(batch) || this.correctionDue(batch)) && (batch.retry?.notBefore ?? 0) <= Date.now())))
       .sort((a, b) => Number(this.correctionDue(b)) - Number(this.correctionDue(a)) || (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
   }
@@ -176,8 +176,8 @@ export class LearningLedger {
     this.save()
   }
   batch(id: string): LearningBatch { return structuredClone(this.required(id)) }
-  select(pipeline: Pipeline, sources: LearningSource[], logs: LearningLog[], manual = false): LearningBatch | undefined {
-    const due = this.pending(pipeline, !manual)
+  select(pipeline: Pipeline, sources: LearningSource[], logs: LearningLog[], manual = false, predicate: (batch: LearningBatch) => boolean = () => true): LearningBatch | undefined {
+    const due = this.pending(pipeline, !manual, predicate)
     const fresh = sources.length > 0 || logs.length > 0
     const batch = fresh && (!due || !this.correctionDue(due) && this.state.preferFresh?.[pipeline]) ? this.create(pipeline, sources, logs) : due
     if (batch) {

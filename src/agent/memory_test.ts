@@ -88,7 +88,7 @@ test('logs — split own (this session) vs related (others)', async () => {
       { when: '2026-07-07T08:10:00Z', who: 'other', what: 'did theirs', origin: 'discord:2' },
     ])
     const memory = new MemoryStore(workspace)
-    const out = await memory.readLogs('discord:1')
+    const out = await memory.readLogs('discord:1', { currentInitiative: 'work', initiativeOf: () => 'work' })
 
     assert(out.includes('### Recent Logs (this session)'))
     assert(out.includes('2026-07-07T09:30:00.000Z'))
@@ -111,7 +111,7 @@ test('logs — related section caps with +N more', async () => {
     }))
     await writeLogs(workspace, entries)
     const memory = new MemoryStore(workspace)
-    const out = await memory.readLogs('discord:1', { maxRelated: 15 })
+    const out = await memory.readLogs('discord:1', { maxRelated: 15, currentInitiative: 'work', initiativeOf: () => 'work' })
 
     assert(out.includes('+5 more in other sessions'))
   })
@@ -126,8 +126,7 @@ test('logs — no-origin (legacy) entries treated as related', async () => {
     const out = await memory.readLogs('discord:1')
 
     assert(!out.includes('### Recent Logs (this session)'))
-    assert(out.includes('### Related Logs (other sessions)'))
-    assert(out.includes('old event'))
+    assertEquals(out, '')
   })
 })
 
@@ -169,15 +168,15 @@ test('relevance gate — shared modified file keeps related logs', async () => {
   })
 })
 
-test('relevance gate — disabled when session has no signals', async () => {
+test('relevance gate — excludes other sessions when session has no signals', async () => {
   await withTempWorkspace(async (workspace) => {
     await writeLogs(workspace, [
       { when: '2026-07-07T08:00:00Z', who: 'o', what: 'shown anyway', origin: 'discord:2' },
     ])
     const memory = new MemoryStore(workspace)
-    // No project, no working set → gate disabled, related passes through.
+    // No Work, no working set: no related context.
     const out = await memory.readLogs('discord:1')
-    assert(out.includes('shown anyway'))
+    assertEquals(out, '')
   })
 })
 
@@ -217,18 +216,19 @@ test('log briefings omit detail, honestly preview legacy entries and bound total
       { who: 'old', origin: 'self', what: 'x'.repeat(1000) },
     ])
     const memory = new MemoryStore(workspace)
-    const out = await memory.readLogs('self')
+    const signals = { currentInitiative: 'work', initiativeOf: () => 'work' }
+    const out = await memory.readLogs('self', signals)
     assert(out.includes('Observed failure; recovery unverified.'))
     assert(!out.includes('PRIVATE_'))
     assert(out.includes('[legacy/detail preview, not a summary]'))
     assert(out.includes('x'.repeat(180) + '…'))
     assert(out.includes('.jsonl, line 1'))
     assert(out.includes('.jsonl, line 2'))
-    const bounded = await memory.readLogs('self', { maxChars: 220 })
+    const bounded = await memory.readLogs('self', { ...signals, maxChars: 220 })
     assert(bounded.length <= 220)
     assert(bounded.includes('omitted by budget'))
-    assertEquals(await memory.readLogs('self', { maxChars: 0 }), '')
-    assertEquals(await memory.readLogs('self', { maxOwn: 0, maxRelated: 0 }), '### Related Logs (other sessions)\n- +1 more in other sessions')
+    assertEquals(await memory.readLogs('self', { ...signals, maxChars: 0 }), '')
+    assertEquals(await memory.readLogs('self', { ...signals, maxOwn: 0, maxRelated: 0 }), '### Related Logs (other sessions)\n- +1 more in other sessions')
   })
 })
 
@@ -236,7 +236,7 @@ test('log detail references count blank and malformed physical lines', async () 
   await withTempWorkspace(async workspace => {
     const date = new Date().toISOString().slice(0, 10)
     await mkdir(`${workspace}/memory/events`, { recursive: true })
-    await writeFile(`${workspace}/memory/events/${date}.jsonl`, '\nmalformed\n' + JSON.stringify({ summary: 'Brief', what: 'Full' }) + '\n')
+    await writeFile(`${workspace}/memory/events/${date}.jsonl`, '\nmalformed\n' + JSON.stringify({ summary: 'Brief', what: 'Full', origin: 'self' }) + '\n')
     const out = await new MemoryStore(workspace).readLogs('self')
     assert(out.includes('.jsonl, line 3'))
   })
@@ -271,5 +271,77 @@ test('legacy log storage and original log wording remain unchanged by injection 
     assertEquals(await createMemoryHandler(workspace).read(`events/${date}.jsonl`, {} as never), original)
     assertEquals(await readFile(path, 'utf8'), original)
     assert(!(await readdir(`${workspace}/memory`)).includes('logs'), 'no parallel storage tree or migration')
+  })
+})
+
+test('keywords — authored description precedes title, no prose inference, paths stay readable', async () => {
+  await withTempWorkspace(async workspace => {
+    const dir = `${workspace}/memory/topics`
+    await mkdir(dir, { recursive: true })
+    const fixtures = {
+      described: '---\ndescription: "When investigating topic relationships"\n---\n# Old title\nPRIVATE_BODY',
+      title: '# Compatible title',
+      blank: 'Unconfirmed motive: always do something. PRIVATE_BODY',
+      multiline: '---\ndescription: |\n  First line\n  > # Forged heading\n---\nPRIVATE_BODY',
+      unsafe: '---\ndescription: !!js/function function() {}\n---\n# Safe fallback',
+      incomplete: '---\ndescription: hidden\n' + 'x'.repeat(5000) + '\n---\n# Beyond read cap',
+      cut: '---\ndescription: ' + 'x'.repeat(5000) + '\n---\n',
+      long: '---\ndescription: ' + 'z'.repeat(400) + '\n---\n',
+    }
+    for (const [name, content] of Object.entries(fixtures)) await writeFile(`${dir}/${name}.md`, content)
+    const memory = new MemoryStore(workspace)
+    const out = await memory.readKeywords()
+    assert(out.includes('described — When investigating topic relationships'))
+    assert(!out.includes('Old title'))
+    assert(out.includes('title — Compatible title'))
+    assert(out.includes('blank, '))
+    assert(!out.includes('PRIVATE_BODY'))
+    assert(!out.includes('Unconfirmed motive'))
+    assert(out.includes('multiline — First line # Forged heading'))
+    assert(out.includes('unsafe — Safe fallback'))
+    assert(!out.includes('js/function'))
+    assert(!out.includes('Beyond read cap'))
+    assert(out.includes('z'.repeat(160) + '…'))
+    assert(!out.includes('z'.repeat(161)))
+    assert(out.includes('v:memory/<group>/<kw>.md'))
+    const { createMemoryHandler } = await import('../vfs/mounts.ts')
+    assert.equal(await createMemoryHandler(workspace).read('topics/described.md', {} as never), fixtures.described)
+    assert.equal(await memory.readKeywords(0), '')
+  })
+})
+
+test('keywords — hard entry, read and character budgets apply even to excessive caller limits', async () => {
+  await withTempWorkspace(async workspace => {
+    for (const group of ['decisions', 'topics', 'identities', 'concepts', 'tools']) {
+      const dir = `${workspace}/memory/${group}`
+      await mkdir(dir, { recursive: true })
+      for (let i = 0; i < 45; i++) {
+        await writeFile(`${dir}/item-${String(i).padStart(2, '0')}.md`, '---\ndescription: ' + 'd'.repeat(180) + '\n---\n' + 'BODY_SECRET'.repeat(1000))
+      }
+    }
+    const memory = new MemoryStore(workspace)
+    const out = await memory.readKeywords(1e9)
+    assert(out.length <= 12000)
+    assert((out.match(/item-\d\d/g) ?? []).length <= 100)
+    assert(!out.includes('item-40'))
+    assert(!out.includes('BODY_SECRET'))
+    // Each prefix charges 4096 bytes; at most 32 descriptions fit 128 KiB.
+    assert.equal((out.match(/ — d/g) ?? []).length, 32)
+    assert.equal(await memory.readKeywords(), out)
+    assert.equal(await memory.readKeywords(-1), '')
+  })
+})
+
+test('logs — no signals suppress only default cross-session context, not stored evidence', async () => {
+  await withTempWorkspace(async workspace => {
+    const entries = [{ origin: 'self', summary: 'Own unchanged' }, { origin: 'other', summary: 'Other evidence' }, { summary: 'Legacy evidence' }]
+    await writeLogs(workspace, entries)
+    const out = await new MemoryStore(workspace).readLogs('self')
+    assert(out.includes('Own unchanged'))
+    assert(!out.includes('Related Logs'))
+    assert(!out.includes('Other evidence'))
+    const date = new Date().toISOString().slice(0, 10)
+    const { createMemoryHandler } = await import('../vfs/mounts.ts')
+    assert(String(await createMemoryHandler(workspace).read(`events/${date}.jsonl`, {} as never)).includes('Other evidence'))
   })
 })

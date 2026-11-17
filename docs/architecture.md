@@ -1334,7 +1334,7 @@ that should be checked into the repository.
 | Legacy conventions | `memory/sessions/<safe-id>.conventions.md`, `memory/projects/<initiative>/conventions.md`, `memory/agent.conventions.md`; preserved historical files, not injected as current rules |
 | Personal preferences | Identified user profiles under `memory/identities/`; model-driven memory/learning retains sources and corrections |
 | Daily knowledge logs | `memory/events/YYYY-MM-DD.jsonl`; structured `when/who/what/why/challenge/refs/origin` material |
-| Keyword/wiki index | Markdown names in `memory/decisions`, `topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
+| Keyword/wiki index | Markdown names plus bounded authored descriptions (title fallback) in `memory/decisions`, `topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
 | Learning progress and outcomes | Project `.learning/state.v1.json`; bounded source cursors, pending batches, verified receipts, log consumption and retry state; legacy `memory/.reflect-watermark.json` is imported without replay |
 | Personality/identity | Project-shared `SOUL.md` and identity-manager files; distinct from user authentication |
 
@@ -1345,15 +1345,20 @@ store. See [Project conventions](project-conventions.md) for SQL access,
 human-source validation, limits and legacy handling. Today's own logs are
 included eagerly; other sessions' logs are relevance-gated by
 Work/shared modified paths when such signals exist, and capped. With no
-Work/file signals, related logs can still be included up to the cap.
+Work/file signals, other sessions' logs are not injected; original records remain
+available through memory/knowledge navigation. Own-session logs are unchanged.
 This is **relevance selection within a project, not a privacy boundary
 between its sessions**. Other projects have separate memory stores.
 
 The keyword index is included for the main `general` and `general-legacy` roles,
 independently of their execution mode; it is not a parent/child authorization
-check. The index reads the
-project-wide category directories, not the proposed per-project keyword hierarchy
-everywhere. Working-set tracking captures the `write` tool path, not all edits
+check. The index reads the project-wide category directories: at most 40 entries
+per group, 100 total, 12,000 characters, 160 Unicode code points plus ellipsis per
+description, and 4 KiB per file within a 128 KiB read budget. It uses a restricted
+frontmatter string subset or a heading, never synthesizes guidance from body prose.
+Authored metadata remains historical evidence, not instructions. See the
+[self-reflection design and evaluation protocol](self-reflection-learning.md).
+Working-set tracking captures the `write` tool path, not all edits
 made by shell commands, MCP tools, other applications, or all descendants.
 
 ### Discord memory-domain boundary
@@ -1397,7 +1402,16 @@ can bypass application memory controls through host authority.
 Each project's `LearningService` registers in-process activity aggregation
 and managed fresh jobs on its existing `CronService`:
 
-- **Reflector**, default 30-minute poll: process pinned physical-segment ranges.
+- **Reflector**, default 30-minute poll: process pinned physical-segment ranges
+  only when their sources are ready: non-busy and not pending/running/waiting,
+  after 24 hours since latest recorded user/message activity, or a fresh
+  host-recorded `completedAt` at/after the last human input with `completed: true`.
+  Legacy completion without a marker uses the quiet path. Self metadata clients
+  cannot supply that timestamp. Both stores retain/validate it; later user input
+  invalidates the shortcut without changing completion display semantics.
+  Existing pending batches use the same gate (also on manual runs), waiting
+  without losing effects or consuming retries. Activity fingerprints are checked
+  across history reads and just before dispatch, not continuously during execution.
   New batches target at most four sources and an overview reading budget of
   12,000 characters / 160 lines, retaining message-based consumption cursors.
   A single oversized atomic message is isolated rather than skipped; it can
@@ -1405,8 +1419,12 @@ and managed fresh jobs on its existing `CronService`:
   pausing unrelated new evidence. Existing pending batches
   retain their original scope and effects.
   Independently assess Wiki knowledge updates, key logs/corrections/challenges,
-  long-term memory and downstream skill material. Valuable unresolved evidence
-  need not become a mature decision before it can be logged; uncertainty and
+  long-term memory and downstream skill material. Wiki centers on what/why;
+  Skills center on how. Goal hypotheses may precede user confirmation when
+  explicitly provisional, evidenced, scoped and falsifiable, with alternative
+  explanations. They never become permission or override human choices. A bounded
+  source range is a reading fragment, not proof of a complete problem phase.
+  Valuable unresolved evidence need not become a mature decision before it can be logged; uncertainty and
   source references remain required. Do not build a wiki for every entity or
   force a write to each destination. `learning_memory` stores evidence,
   stated/inferred interpretation, applicability, exceptions and revalidation

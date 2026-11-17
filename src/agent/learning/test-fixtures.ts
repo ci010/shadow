@@ -11,7 +11,8 @@ export interface FakeState {
 export function fakeSessions(workspace: string, states: FakeState[]) {
   const started: Array<{ agentType?: string; task?: string; signal?: AbortSignal }> = []
   const records = new Map<string, SessionState>(states.map(s => [s.sessionId, { sessionId: s.sessionId,
-    segmentIndex: s.segmentIndex, projectId: 'a', physicalIdVersion: 2 }]))
+    segmentIndex: s.segmentIndex, projectId: 'a', physicalIdVersion: 2,
+    lastActivityAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }]))
   let respond: (id: string) => Promise<void> = async () => {}
   const sessions = {
     workspace,
@@ -28,6 +29,7 @@ export function fakeSessions(workspace: string, states: FakeState[]) {
     },
     getSessionState: (id: string) => records.get(id),
     isManagedConversation: () => false,
+    isSessionBusy: () => false,
     getExecutionResult: async () => undefined,
     getFileChanges: async () => ({ changes: [], total: 0, offset: 0 }),
     startSession: async (opts: { chatId: string; agentType?: string; task?: string; signal?: AbortSignal; onAccepted?: (id: string) => void }) => {

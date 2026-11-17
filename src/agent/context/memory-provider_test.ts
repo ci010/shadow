@@ -169,3 +169,26 @@ test('memory provider — returns null when nothing to inject', async () => {
     })
   })
 })
+
+test('memory provider keeps descriptions main-only and historical, and gates related logs', async () => {
+  await withTempWorkspace(async workspace => {
+    await mkdir(`${workspace}/memory/topics`, { recursive: true })
+    await writeFile(`${workspace}/memory/topics/objects.md`, '---\ndescription: When investigating object relationships\n---\n# Objects\nBODY_NOT_FOR_PROMPT')
+    await seedEvent(workspace, 'other')
+    const memory = new MemoryStore(workspace)
+    const provider = memoryProvider(memory, () => 'work')
+    for (const role of ['general', 'general-legacy', 'sub', 'reflector']) {
+      const out = await provider.getPromptSection(ctx('self', agent(role)))
+      if (role === 'general' || role === 'general-legacy') {
+        assert(out?.includes('objects — When investigating object relationships'))
+        assert(out?.includes('memory, not current task state'))
+        assert(out?.includes('Inferred motives remain hypotheses'))
+      } else assert.equal(out, null)
+      assert(!(out ?? '').includes('own event'))
+      assert(!(out ?? '').includes('BODY_NOT_FOR_PROMPT'))
+      const related = await provider.getPromptSection(ctx('self', agent(role), 'work'))
+      assert(related?.includes('### Related Logs'))
+      assert(related?.includes('[other]'))
+    }
+  })
+})

@@ -16,7 +16,7 @@ import type { ChatMessage } from '../../providers/provider.ts'
 
 import { ReadCoverage, rejectedHistoryReference } from './read-coverage.ts'
 import { encapsulationInputs } from './inputs.ts'
-import { isLearningSourceEligible } from './source-eligibility.ts'
+import { isLearningSourceEligible, isLearningSourceReady, learningSourceFingerprint } from './source-eligibility.ts'
 
 export class LearningRunError extends Error {
   constructor(message: string, readonly retryable: boolean) { super(message) }
@@ -46,7 +46,9 @@ export function learningTask(batch: LearningBatch, ranges: Map<string, { offset:
     ] : []),
     ...(batch.pipeline === 'reflector' ? [
       'Plan within six total inferences: source investigation uses the first three; prepare supported candidates in the fourth with necessary exact source evidence, current-memory deduplication and fresh read_wiki. The fifth closes source reads and protects a supported save/log opportunity, while current memory safety checks remain available. The sixth remains receipt-only. Four tool calls and 48000 argument bytes are protected from early investigation (including the receipt reserve); this is an opportunity, not a publication quota. Unsupported or unread candidates remain partial, never fabricate a log or replace a current correction just to save.',
-      'First independently assess Wiki knowledge updates, key logs/corrections/challenges (including valuable evidence not yet mature enough for a rule), long-term memory, and downstream skill material. Preserve source references, uncertainty and deduplication; no destination requires a write and none grants new authority.',
+      'First independently assess Wiki knowledge updates, key logs/corrections/challenges (including valuable evidence not yet mature enough for a rule), long-term memory, and downstream skill material. Wiki answers what/why (objects, relationships, requirements, mechanisms and evidenced goal hypotheses); Skills answer how. Write current scoped understanding by subject, not a story of the session or an accumulation of tests/commits. Add a short page description of what it covers and when to read it, without turning a hypothesis into an instruction. Preserve source references, uncertainty and deduplication; no destination requires a write and none grants new authority.',
+      'Distinguish stated reasons, evidenced mechanisms and inferred goal hypotheses. A useful hypothesis need not await user confirmation: explicitly label it provisional, cite the choices it explains, give an alternative explanation, scope/exceptions and a falsifying observation. For motivation decisions use rationale for support/alternatives, exceptions for limits, reviewWhen for falsification. Prefer task/product goals over personality labels; never infer sensitive traits. Silence, inactivity and repetition are not confirmation. Hypotheses guide questions/proposals, never permission or overrides of human choices.',
+      'A pinned source range is a reading fragment, not necessarily a complete problem phase. Do not infer completion, acceptance or abandonment from its boundary, or manufacture a progress log per fragment. Preserve independently supported knowledge while naming unresolved phase context; do not expand beyond assigned evidence.',
       'Look for learning signals: explicit user corrections, repeated explanations or failed approaches, a gap between promises and execution, assumptions overturned by evidence, and successful methods with reusable conditions. Do not invent a mistake or force a lesson from every source.',
       'Use different retention thresholds: Wiki needs clear sourced information with lasting reference value and a genuine addition/correction; key logs/challenges need significant observed evidence worth tracking, not a resolved lesson; long-term preferences/principles need stronger evidence, conditions and exceptions; publishable skills need reusable procedures and supported outcomes assessed downstream. Unresolved challenges can be retained without inventing causes or success.',
       'Assess requirement stability separately from implementation maturity: an explicit human-selected scoped constraint may merit lasting knowledge before implementation or acceptance. Preserve it as a requirement, not verified behavior. Do not reject it solely because adjacent implementation status is transient. Inspect the applicable existing page/decision; merge missing constraints or correct obsolete claims rather than creating duplicate pages. If already captured accurately, explain duplicate/no update. A log does not replace this consolidation assessment; no dual-write quota is implied.',
@@ -139,14 +141,31 @@ export class LearningRuntime {
     }
   }
 
-  async sources(signal: AbortSignal, reserved = false): Promise<LearningSource[]> {
+  private readyFingerprint(sessionId: string): string | undefined {
+    const state = this.sessions.getSessionState(sessionId)
+    if (!isLearningSourceEligible(state, id => this.sessions.getSessionState(id),
+      id => this.sessions.isManagedConversation(id), this.projectId)
+      || !isLearningSourceReady(state, this.sessions.isSessionBusy(sessionId))) return undefined
+    return learningSourceFingerprint(state!)
+  }
+
+  private unchanged(sessionId: string, snapshots: Map<string, string>): boolean {
+    const current = this.readyFingerprint(sessionId)
+    return current !== undefined && snapshots.get(sessionId) === current
+  }
+
+  async sources(signal: AbortSignal, reserved = false, snapshots = new Map<string, string>()): Promise<LearningSource[]> {
     const sources: LearningSource[] = []
     let characters = 0, lines = 0
-    for (const row of this.sessions.listSessions()) {
+    const stable = () => sources.filter(source => this.unchanged(source.sessionId, snapshots))
+    sessions: for (const row of this.sessions.listSessions()) {
       signal.throwIfAborted()
       const state = this.sessions.getSessionState(row.sessionId)
       if (!state || !isLearningSourceEligible(state, id => this.sessions.getSessionState(id),
         id => this.sessions.isManagedConversation(id), this.projectId)) continue
+      const snapshot = this.readyFingerprint(row.sessionId)
+      if (snapshot === undefined) continue
+      snapshots.set(row.sessionId, snapshot)
       for (let segmentIndex = 0; segmentIndex <= row.segmentIndex; segmentIndex++) {
         const physicalId = physicalSessionId(state, segmentIndex)
         const identity = { sessionId: row.sessionId, physicalId, segmentIndex }
@@ -154,8 +173,11 @@ export class LearningRuntime {
         if (offset === Number.MAX_SAFE_INTEGER) continue
         const { total } = await this.sessions.getHistory(row.sessionId, { physicalId, offset: 0, pageSize: 0 })
         signal.throwIfAborted()
+        if (!this.unchanged(row.sessionId, snapshots)) continue sessions
         if (total <= offset) continue
         const { messages } = await this.sessions.getHistory(row.sessionId, { physicalId, maxMessages: Number.MAX_SAFE_INTEGER })
+        signal.throwIfAborted()
+        if (!this.unchanged(row.sessionId, snapshots)) continue sessions
         let end = offset
         let previous = formatSessionHistory(messages.slice(0, offset), true, physicalId)
         for (let index = offset; index < Math.min(total, offset + 100); index++) {
@@ -167,15 +189,15 @@ export class LearningRuntime {
             if (end > offset) sources.push({ ...identity, offset, end })
             // A single atomic message cannot be split by the persisted message cursor.
             if (!sources.length) sources.push({ ...identity, offset, end: offset + 1 })
-            return sources
+            return stable()
           }
           characters += size; lines += count; end++
         }
         if (end > offset) sources.push({ ...identity, offset, end })
-        if (sources.length === 4) return sources
+        if (sources.length === 4) return stable()
       }
     }
-    return sources
+    return stable()
   }
 
   private memoryPath(path: string): string | undefined {
@@ -313,10 +335,17 @@ export class LearningRuntime {
       signal.throwIfAborted()
       // Also reconcile pending/cooldown batches on manual runs, without dispatch or acknowledgement.
       for (const previous of this.ledger.unfinished()) this.excludeIneligible(previous)
-      const sources = pipeline === 'reflector' ? await this.sources(signal, true) : []
+      const snapshots = new Map<string, string>()
+      const sources = pipeline === 'reflector' ? await this.sources(signal, true, snapshots) : []
       const logs = pipeline === 'reflector' ? [] : this.ledger.logsFor(pipeline,
         pipeline === 'encapsulator' ? await encapsulationInputs(this.sessions.workspace, signal) : [])
-      batch = this.ledger.select(pipeline, sources, logs, manual)
+      const ready = (candidate: LearningBatch) => candidate.sources.every(source => {
+        const snapshot = this.readyFingerprint(source.sessionId)
+        if (snapshot === undefined) return false
+        if (!snapshots.has(source.sessionId)) snapshots.set(source.sessionId, snapshot)
+        return snapshots.get(source.sessionId) === snapshot
+      })
+      batch = this.ledger.select(pipeline, sources.filter(source => this.unchanged(source.sessionId, snapshots)), logs, manual, ready)
       if (!batch) return false
       if (batch.correctionRecovery && this.skillStore?.read(batch.correctionRecovery.target).revision !== batch.correctionRecovery.revision) {
         // Close on pre-dispatch drift: do not repeatedly select an invalid
@@ -324,16 +353,22 @@ export class LearningRuntime {
         this.ledger.parkCorrection(batch.id, 'Correction target revision changed before dispatch; review required')
         throw new LearningRunError('Correction target revision changed before dispatch; review required', false)
       }
+      if (!ready(batch)) return false
       const id = batch.id
       // Resolve line coordinates at dispatch, including recovered batches whose journal stores message cursors.
       const ranges = new Map<string, { offset: number; end: number; fullOffset: number; fullEnd: number }>()
       for (const source of batch.sources) {
         signal.throwIfAborted()
+        if (!ready(batch)) return false
         const { messages } = await this.sessions.getHistory(source.sessionId, { physicalId: source.physicalId, maxMessages: Number.MAX_SAFE_INTEGER })
+        if (!ready(batch)) return false
         const lineAt = (index: number, overview: boolean) => sessionHistoryLineAt(messages, index, overview)
         ranges.set(source.physicalId, { offset: lineAt(source.offset, true), end: lineAt(source.end, true),
           fullOffset: lineAt(source.offset, false), fullEnd: lineAt(source.end, false) })
       }
+      // This is the last synchronous admission check. Later activity does not cancel an
+      // already dispatched reflection and cannot expand its pinned message ranges.
+      if (!ready(batch)) return false
       const sessionId = await dispatcher.dispatch(job, signal, learningTask(batch, ranges), sessionId => {
         this.ledger.bind(id, sessionId)
         accepted?.(sessionId)

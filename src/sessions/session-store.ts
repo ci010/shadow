@@ -146,6 +146,8 @@ export interface SessionState {
   focus?: string
   /** Explicit current-goal completion; independent of inferred runtime activity. Absent means open. */
   completed?: boolean
+  /** Host-stamped self completion freshness; absent on legacy records. Not a public self patch. */
+  completedAt?: string
   /** Legacy background summary title; explicit names and topic titles always take precedence. */
   generatedTitle?: string
   /** Last known platform conversation name; never overrides a user-selected name. */

@@ -5,6 +5,28 @@ this is not a second model loop. Trusted pipeline inference ceilings remain 6 fo
 reflection, 8 for encapsulation and 4 for Soul reflection. No unrestricted extra
 iterations are added.
 
+## Source readiness before reflection
+
+Project reflection checks source readiness separately from source permission.
+A source must not be busy (including the existing queued-input, call and external
+execution checks), nor pending/running/waiting. It can become ready after 24 hours
+since the latest recorded user/message activity, or after a fresh host-recorded
+`completedAt` at or after its last human input while `completed` remains true.
+Legacy completion without the marker uses the quiet path; missing, malformed or
+future activity timestamps do not silently become old. This does not equate
+completion or inactivity with human acceptance.
+
+New ranges and retained pending batches use the same gate, including manual runs.
+Busy batches wait without exclusion, cursor movement or failure-count increments;
+other ready batches can still be selected. Activity fingerprints are checked
+around asynchronous history reads and just before dispatch. Later activity does
+not cancel an already-dispatched reflection or expand its pinned source ranges.
+Existing completed-attempt recovery still verifies already-recorded effects.
+
+This is admission and fixed-range protection, not semantic phase identification
+or cross-fragment synthesis. Reading budgets and the six-inference limit below
+are unchanged. See [the learning design and evaluation protocol](self-reflection-learning.md).
+
 ## Host finish boundary
 
 For task-mode cron runs with learning automation provenance, a dedicated learning
