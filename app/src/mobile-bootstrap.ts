@@ -39,14 +39,45 @@ export async function startMobileClient() {
   globalThis.fetch = adapter
   const restoreLive = installMobileLiveSource(url => createFetchEventSource(url, adapter))
   const removeGuard = router.beforeEach(to => to.name === 'nodes' ? { name: 'chat', params: { projectId: 'default' } } : true)
-  const stop = watch(session.view, view => {
-    mounted?.unmount()
-    mounted = view === 'connected'
-      ? createApp(MainApp).use(router).use(createInstallationContextProvider(createMobileClientContext(session.origin.value)))
-      : createApp(MobileConnection, { session })
-    mounted.use(i18n).provide(mobileSessionKey, session)
-    mounted.mount('#app')
+  const root = document.querySelector('#app')!
+  const chatRoot = document.createElement('div')
+  const connectionRoot = document.createElement('div')
+  chatRoot.style.height = '100%'
+  root.replaceChildren(chatRoot, connectionRoot)
+  let chat: VueApp | undefined
+  let connection: VueApp | undefined
+  // Vue teleports (popovers/previews) live outside chatRoot. Hide those too
+  // during retained suspension so they cannot expose or operate the old chat.
+  const suspendedStyle = document.createElement('style')
+  suspendedStyle.textContent = 'body[data-mobile-chat-suspended] > :not(#app) { display: none !important; }'
+  document.head.append(suspendedStyle)
+  const clearViews = () => {
+    delete document.body.dataset.mobileChatSuspended
+    suspendedStyle.remove()
+    chat?.unmount(); chat = undefined
+    connection?.unmount(); connection = undefined
+  }
+  const stopView = watch(session.view, view => {
+    const connected = view === 'connected'
+    // Android's document picker backgrounds the Activity. Keep its file input
+    // alive, but hide/inert the entire chat until secure resume has succeeded.
+    chatRoot.hidden = !connected
+    chatRoot.inert = !connected
+    if (!connected && session.preserveChat.value) document.body.dataset.mobileChatSuspended = ''
+    else delete document.body.dataset.mobileChatSuspended
+    if (!connected && !session.preserveChat.value) { chat?.unmount(); chat = undefined }
+    if (connected) {
+      connection?.unmount(); connection = undefined
+      if (!chat) {
+        chat = createApp(MainApp).use(router).use(createInstallationContextProvider(createMobileClientContext(session.origin.value)))
+        chat.use(i18n).provide(mobileSessionKey, session).mount(chatRoot)
+      }
+    } else if (!connection) {
+      connection = createApp(MobileConnection, { session })
+      connection.use(i18n).provide(mobileSessionKey, session).mount(connectionRoot)
+    }
   }, { immediate: true, flush: 'sync' })
+  const stop = () => { stopView(); clearViews() }
   let removeListener: (() => Promise<void>) | undefined
   try {
     const listener = await CapacitorApp.addListener('appStateChange', ({ isActive }) => session.setActive(isActive))
