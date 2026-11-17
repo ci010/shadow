@@ -96,7 +96,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: recoverable retirement survives reload and restore, retaining logs`, async () => {
+  test(`${Store.name}: cold archival removes live state, retains exact history and rejects restore`, async () => {
     await withTempWorkspace(async workspace => {
       const store = new Store(join(workspace, 'sessions'))
       const f = await fixture(workspace, store)
@@ -104,12 +104,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const snapshot = (await f.sessions.retirementSnapshot(id, 5))!
         await f.sessions.retireSession(id, snapshot.fingerprint, 5, { ...receipt, fingerprint: snapshot.fingerprint }, async () => {})
         assert.equal(f.sessions.listSessions().some(state => state.sessionId === id), false)
-        assert.equal(f.sessions.listRetiredSessions().length, 1)
-        assert.equal((await store.getState(id))?.retirement?.reason, receipt.reason)
+        assert.equal(f.sessions.listRetiredSessions().length, 0, 'Cold archives never join the legacy restore inventory')
+        assert.equal(await store.getState(id), null)
+        assert.equal((await f.sessions.readSessionState(id))?.retirement?.reason, receipt.reason)
         assert.equal(await store.countSessionLog(physicalSessionId(f.state)), 2)
-        await f.sessions.restoreRetiredSession(id)
-        assert.equal((await store.getState(id))?.retirement, undefined)
-        assert.ok(f.sessions.listSessions().some(state => state.sessionId === id))
+        assert.equal((await f.sessions.queryConversationArchives()).items.length, 1)
+        assert.equal((await f.sessions.getHistory(id)).messages.length, 2)
+        await assert.rejects(f.sessions.restoreRetiredSession(id), /immutable/)
+        assert.equal(f.sessions.getSessionState(id), null)
+        assert.equal((await store.listAllStates())[id], undefined)
       } finally { await f.close() }
     })
   })
@@ -183,7 +186,7 @@ test('draft inventory rejects traversal and linked paths; safe copies are verifi
       await rm(output)
       await assess(service, f)
       assert.equal(await readFile(output, 'utf8'), 'valuable output')
-      assert.ok(f.sessions.getSessionState(id)?.retirement)
+      assert.ok((await f.sessions.readSessionState(id))?.retirement)
       assert.equal(await readFile(join(root, 'result.txt'), 'utf8'), 'valuable output')
       try {
         await symlink(destination, join(root, 'linked'), 'junction')
@@ -211,18 +214,20 @@ test('selective knowledge is saved as discoverable wiki, not compaction; API req
         assert.equal((await app.request('/api/session-retirement')).status, 401)
         assert.equal((await app.request('/api/session-retirement/scan', { method: 'POST' })).status, 401)
         await assess(service, f)
-        assert.ok(f.sessions.getSessionState(id)?.retirement)
+        assert.ok((await f.sessions.readSessionState(id))?.retirement)
         assert.match(await readFile(join(workspace, 'memory', 'retirement', 'fixture-topic.md'), 'utf8'), /useful verified fact/)
         assert.equal((await f.sessions.listHistorySessions()).some(state => state.sessionId === id), false)
         authorized = true
         assert.equal((await app.request('/api/session-retirement/scan', { method: 'POST' })).status, 404)
         const status = await app.request('/api/session-retirement')
         assert.equal(status.status, 200)
-        assert.equal((await status.json()).recentlyDeleted.length, 1)
+        assert.equal((await status.json()).recentlyDeleted.length, 0)
+        const archives = await (await app.request('/api/session-archives?limit=1')).json()
+        assert.equal(archives.items[0].sessionId, id)
         assert.equal((await app.request('/api/session-retirement/restore', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: id }),
-        })).status, 200)
-        assert.equal(f.sessions.getSessionState(id)?.retirement, undefined)
+        })).status, 409)
+        assert.equal(f.sessions.getSessionState(id), null)
       } finally { await f.close() }
     })
   })
@@ -244,7 +249,7 @@ test('a cron/activity change while the agent assesses blocks retirement', async 
     })
   })
 
-test('human admission updates timing and restores; automated delivery cannot reopen retirement', async () => {
+test('neither human nor automated delivery can reopen an immutable cold archive', async () => {
     await withTempWorkspace(async workspace => {
       const f = await fixture(workspace, new JsonlSessionStore(join(workspace, 'sessions')))
       try {
@@ -253,14 +258,16 @@ test('human admission updates timing and restores; automated delivery cannot reo
         await assert.rejects(f.sessions.deliver(id, {
           id: 'event', kind: 'message', content: 'automation', policy: 'queue', timestamp: new Date().toISOString(),
           source: { kind: 'event', eventId: 'event', source: 'test', type: 'test' },
-        }), /retired/)
-        await f.sessions.dispatch({
+        }), /read-only/)
+        await assert.rejects(f.sessions.dispatch({
           channel: 'web', chatId: id.slice(4), senderId: 'owner', admin: true,
           messageId: 'human', timestamp: old, content: 'New user request',
-        }, llm)
-        assert.equal(f.sessions.getSessionState(id)?.retirement, undefined)
-        assert.ok(Date.parse(f.sessions.getSessionState(id)!.lastUserMessageAt!) > Date.now() - 5000)
+        }, llm), /read-only/)
+        assert.equal(f.sessions.getSessionState(id), null)
+        assert.equal((await f.sessions.readSessionState(id))?.lastUserMessageAt, old)
         assert.equal(await f.sessions.retirementSnapshot(id, 5), null)
+        await assert.rejects(f.sessions.prepareCommandSession(id), /cannot be resumed/)
+        await assert.rejects(f.sessions.buildSession(id, undefined, { agentType: 'general', mode: 'session' }), /existing session/)
       } finally { await f.close() }
     })
 })
@@ -326,7 +333,7 @@ await withTempWorkspace(async workspace => {
       role: 'assistant', content: `The remaining work explicitly continues in ${target}.`, timestamp: old,
     }])
     await assess(service, f)
-    assert.ok(f.sessions.getSessionState(id)?.retirement)
+    assert.ok((await f.sessions.readSessionState(id))?.retirement)
     assert.ok(f.sessions.getSessionState(target))
   } finally { await f.close() }
 })
@@ -360,8 +367,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             assert.equal(f.state.retirement, undefined)
             await assert.rejects(readFile(output), { code: 'ENOENT' })
           } else {
-            assert.match(await apply, /recoverable/)
-            assert.ok(f.sessions.getSessionState(id)?.retirement)
+            assert.match(await apply, /immutable/)
+            assert.ok((await f.sessions.readSessionState(id))?.retirement)
             if (mode === 'selective') assert.equal(await readFile(output, 'utf8'), 'requested final')
             else await assert.rejects(readFile(output), { code: 'ENOENT' })
           }
@@ -371,4 +378,53 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       })
     })
   }
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: archive API is authorized, paginated and reads bounded raw ranges without live hydration`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions'))
+      const f = await fixture(workspace, store)
+      const snapshot = (await f.sessions.retirementSnapshot(id, 5))!
+      let authorized = false
+      const app = new Hono()
+      registerRetirementRoutes(app, { sessions: f.sessions, authorize: () => authorized })
+      try {
+        await f.sessions.retireSession(id, snapshot.fingerprint, 5, { ...receipt, fingerprint: snapshot.fingerprint }, async () => {})
+        const path = `/api/session-archives/${encodeURIComponent(id)}`
+        assert.equal((await app.request('/api/session-archives')).status, 401)
+        assert.equal((await app.request(path)).status, 401)
+        assert.equal((await app.request(`${path}/records`)).status, 401)
+        authorized = true
+        const list = await (await app.request('/api/session-archives?limit=1')).json()
+        assert.equal(list.items.length, 1)
+        assert.equal(list.items[0].sessionId, id)
+        assert.equal(list.items[0].config, undefined, 'Directory summaries never contain full state')
+        const detail = await (await app.request(path)).json()
+        assert.equal(detail.state.sessionId, id)
+        assert.equal(detail.readOnly, true)
+        const rawRange = store.readArchivedLogRange!.bind(store)
+        let ranges = 0
+        store.readArchivedLogRange = async (...args) => { ranges++; return rawRange(...args) }
+        store.readSessionLog = async function* () { throw new Error('Archive API must not scan the log') }
+        const result = await app.request(`${path}/records?segmentIndex=0&offset=1&limit=1`)
+        assert.equal(result.status, 200)
+        const page = await result.json()
+        assert.equal(page.total, 2)
+        assert.equal(page.records.length, 1)
+        assert.equal(page.records[0].content, 'Finished')
+        assert.equal(ranges, 1)
+        assert.equal(f.sessions.getSessionState(id), null)
+        assert.equal((await f.sessions.listSummaryStates()).some(state => state.sessionId === id), false)
+        assert.equal((await app.request(`${path}/records?segmentIndex=1`)).status, 404)
+        for (const suffix of ['?limit=0', '?limit=1001', '?offset=-1', '?offset=1e2', '?segmentIndex=NaN']) {
+          assert.equal((await app.request(`${path}/records${suffix}`)).status, 400, suffix)
+        }
+        assert.equal((await app.request('/api/session-archives?limit=201')).status, 400)
+        assert.equal((await app.request('/api/session-archives?cursor=not-valid-json')).status, 400)
+        assert.equal((await app.request('/api/session-archives/web%3Achat-missing')).status, 404)
+        assert.equal((await app.request(`${path}/restore`, { method: 'POST' })).status, 404)
+      } finally { await f.close() }
+    })
+  })
 }

@@ -1535,6 +1535,9 @@ ${JSON.stringify(request)}`,
     if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) return Promise.reject(new Error('Passive channel inbox is read-only. Configure a BOT from an owner Web chat.'))
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
       if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
+      if (await this.store.isConversationArchived?.(sessionId)) {
+        throw new Error('Archived conversation is read-only. Start a new conversation and reference its history.')
+      }
       this.deps.conversationPolicies?.authorize(sessionId, input)
       await this.reconcileChannelContext(sessionId)
       const personal = this.deps.conversationPolicies?.personal?.(sessionId)
@@ -2533,7 +2536,7 @@ ${JSON.stringify(request)}`,
 
   private retirementProtected(state: SessionState): boolean {
     const id = state.sessionId
-    return !!(state.retirement || !/^web:chat-/.test(id) || state.channelBoundary
+    return !!(state.retirement || this.historyConflict(id) || !/^web:chat-/.test(id) || state.channelBoundary
       || state.automation || state.statePersistence || state.initiativeId
       || state.mode && state.mode !== 'session' || state.recovery
       || ['pending', 'running', 'waiting'].includes(state.executionStatus ?? '')
@@ -2596,17 +2599,50 @@ ${JSON.stringify(request)}`,
       if (!final || final.fingerprint !== fingerprint) throw new Error('Session changed during retirement verification')
       recheck?.()
       const next = { ...this.sessionStates[sessionId], retirement: retirementReceiptSchema.parse(receipt) }
-      await this.saveState(sessionId, next)
+      if (!this.store.archiveConversation) throw new Error('Conversation archive storage is unavailable')
+      // Publish the verified immutable archive before dropping the live pointer. The
+      // store journals interrupted transfers; a failed transfer never grants reuse.
+      await this.store.archiveConversation(next)
+      delete this.sessionStates[sessionId]
+      this.acceptedInputs.delete(sessionId)
+      this.deps.promptCaptures?.deleteSession(sessionId)
+      if (next.workdir) this.archivedWorkdirs.add(JSON.stringify([next.workdir.nodeId, next.workdir.workdirId]))
       this.deps.bus.emit('session.changed', { sessionId })
     })
   }
 
+  /** Legacy reversible retirements only. Cold archives have a separate paged index. */
   listRetiredSessions(): SessionState[] {
     return Object.values(this.sessionStates).filter(state => state.retirement).map(state => structuredClone(state))
   }
 
+  /** Never enumerate cold states into navigation or runtime caches. */
+  async queryConversationArchives(query: { cursor?: string; limit?: number } = {}) {
+    if (!this.store.queryConversationArchives) return { items: [] }
+    return this.store.queryConversationArchives({ ...query, projectId: this.deps.projectId })
+  }
+
+  async readConversationArchive(sessionId: string): Promise<SessionState | null> {
+    if (!await this.store.isConversationArchived?.(sessionId)) return null
+    const state = await this.readSessionState(sessionId)
+    if (!state) return null
+    await this.assertHistoricalFolderAccess(sessionId)
+    return state
+  }
+
+  /** Raw-record coordinates preserve exact historical references; no model-history
+   * reconstruction, tool-pair sanitization or whole-transcript materialization. */
+  async readConversationArchiveRecords(sessionId: string, segmentIndex: number, offset: number, limit: number) {
+    if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0 || !Number.isSafeInteger(offset) || offset < 0
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError('Invalid archive record range')
+    const state = await this.readConversationArchive(sessionId)
+    if (!state || segmentIndex > state.segmentIndex) return null
+    return await this.store.readArchivedLogRange?.(physicalSessionId(state, segmentIndex), offset, limit) ?? null
+  }
+
   async restoreRetiredSession(sessionId: string): Promise<void> {
     await this.withSessionPreparation(sessionId, async () => {
+      if (await this.store.isConversationArchived?.(sessionId)) throw new Error('Archived conversation is immutable; start a new conversation')
       const state = this.sessionStates[sessionId]
       if (!state?.retirement) throw new Error('Retired session not found')
       await this.saveState(sessionId, { ...state, retirement: undefined })

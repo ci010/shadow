@@ -39,7 +39,7 @@ async function fixture(workspace: string, store: SessionStore) {
   const old = new Date(Date.now() - 6 * 86_400_000).toISOString()
   const state: SessionState = { sessionId: candidate, projectId: 'fixture', mode: 'session', segmentIndex: 0,
     physicalIdVersion: 2, executionStatus: 'completed', lastUserMessageAt: old, lastActivityAt: old }
-  if (!await store.getState(candidate)) {
+  if (!await store.getState(candidate) && !await store.isConversationArchived?.(candidate)) {
     await store.saveState(candidate, state)
     await store.createSessionLog(physicalSessionId(state), [
       { role: 'user', content: 'Finish this task', timestamp: old },
@@ -89,8 +89,8 @@ async function fixture(workspace: string, store: SessionStore) {
         assert.ok(text.length > 12_000, 'Inspection evidence must survive the ordinary truncation threshold intact')
         return invoke({ action: 'apply', token: evidence.token, proposal: completed })
       }
-      assert.match(text, /recoverable; no physical deletion/)
-      return { content: 'Verified recoverable retirement of the completed session.', toolCalls: [] }
+      assert.match(text, /immutable read-only history/)
+      return { content: 'Verified immutable archival of the completed session.', toolCalls: [] }
     },
   }
   const manager = new SessionManager({
@@ -135,23 +135,24 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.steps.size, 0, 'Disabled timer must not admit work')
         assert.equal((await f.app.request(`/api/automations/${job.id}/run`, { method: 'POST' })).status, 202)
         await until(async () => (await f.manager.listHistoryStates({ jobId: job.id })).some(state => state.executionStatus === 'completed'))
-        assert.ok(f.manager.getSessionState(candidate)?.retirement)
+        assert.equal(f.manager.getSessionState(candidate), null)
+        assert.ok((await f.manager.readSessionState(candidate))?.retirement)
         const history = await (await f.app.request(`/api/automations/${job.id}/runs`)).json()
         assert.equal(history.runs.length, 1)
         const runId = history.runs[0].sessionId
         assert.ok(runId.startsWith('cron:'))
         const historyText = JSON.stringify(await f.manager.getHistory(runId))
         assert.match(historyText, /session_retirement/)
-        assert.match(historyText, /recoverable/)
-        assert.equal(f.manager.getSessionState(candidate)?.retirement?.assessorSessionId, runId)
-        await f.manager.restoreRetiredSession(candidate)
+        assert.match(historyText, /immutable/)
+        assert.equal((await f.manager.readSessionState(candidate))?.retirement?.assessorSessionId, runId)
+        await assert.rejects(f.manager.restoreRetiredSession(candidate), /immutable/)
         const patch = (enabled: boolean) => f.app.request(`/api/automations/${job.id}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
         })
         assert.equal((await patch(true)).status, 200)
-        await until(async () => !!f.manager.getSessionState(candidate)?.retirement)
+        await until(async () => (await f.manager.listHistoryStates({ jobId: job.id })).length >= 2)
         await patch(false)
-        await until(async () => (await f.manager.listHistoryStates({ jobId: job.id })).length === 2)
+        await until(async () => (await f.manager.listHistoryStates({ jobId: job.id })).every(state => state.executionStatus === 'completed'))
         const count = f.steps.size
         await pause(1100)
         assert.equal(f.steps.size, count)
@@ -183,8 +184,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       } finally { await f.close() }
       const restored = await fixture(workspace, new Store(join(workspace, 'sessions')))
       try {
-        assert.ok((await restored.manager.automationFeatureStates()).length >= 3, 'History survives actual store reload')
-        assert.ok(restored.manager.getSessionState(candidate)?.retirement, 'Retirement receipt survives store reload')
+        assert.ok((await restored.manager.automationFeatureStates()).length >= 2, 'Automation features survive actual store reload independently of the cold conversation')
+        assert.equal(restored.manager.getSessionState(candidate), null, 'Archive stays outside live state after reload')
+        assert.ok((await restored.manager.readSessionState(candidate))?.retirement, 'Archive receipt survives store reload')
       } finally { await restored.close() }
     })
   })

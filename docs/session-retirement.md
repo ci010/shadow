@@ -1,8 +1,14 @@
 # Session cleanup automation
 
-Automatic retirement is **opt-in**, disabled by default. It removes eligible
-conversations from the ordinary session lists, not from disk. No automatic
-physical deletion or disk-space reclamation is implemented.
+Automatic archival is **opt-in**, disabled by default. Newly archived ordinary
+conversations are sealed as immutable history in a separate SQLite cold store,
+not merely hidden from the session list. Their active state and source logs are
+removed only after the archive has been verified and durably published. Session
+data files and attachments remain intact. This is a storage transfer, not a
+history purge, secure erase or promise of total disk-space reclamation.
+
+See [Cold conversation storage](session-archive-storage.md) for the format,
+range access, crash recovery, performance boundaries and verification commands.
 
 Each Project installs **Session cleanup** once as an ordinary, disabled fresh
 automation (`source: cron`). It is persisted with user jobs in the normal
@@ -39,9 +45,11 @@ Existing version-1 cron stores without an installation marker remain readable.
 A generic default-installation marker is saved alongside ordinary jobs; it
 prevents duplicate installation and preserves deletion across restart. A stable
 installation ID also deduplicates interruption between the job and marker
-writes. Existing jobs and enabled preferences are unchanged. Already-retired
-session receipts, user timestamps, logs and restore behavior remain compatible
-in **both JSONL and SQLite**. No history migration or physical purge occurs.
+writes. Existing jobs and enabled preferences are unchanged. Already-retired legacy
+session receipts, user timestamps, logs and their reversible restore behavior
+remain compatible in **both JSONL and SQLite**; they are not automatically moved
+to the cold store. Newly archived conversations are immutable and cannot be
+restored or resumed in place. No bulk history migration or history purge occurs.
 Existing persisted cleanup task text is not replaced on restart, including old
 copy-all instructions; customized jobs are not migrated. The current tool
 contract and fresh inspection guidance specify selective final-deliverable
@@ -83,7 +91,7 @@ exports and session-data retention rather than exporting all drafts.
   intact rather than truncated into an unread output file.
 - Inspect every session-data file, but export only explicitly identified final
   user-requested file deliverables. Intermediate drafts remain in session data
-  through recoverable retirement; `files:[]` is valid when no final deliverable
+  through archival; `files:[]` is valid when no final deliverable
   needs copying. Unresolved or uncertain final deliveries block retirement.
   The host checks freshness of the whole draft inventory, including unexported
   intermediates, and rejects duplicate export sources and unsafe destinations.
@@ -119,23 +127,29 @@ All paths below are Project-scoped and require the normal Project authorization:
 | `POST /api/automations/<id>/run` | Ordinary explicit run, even when timer-disabled; returns 202, not proof of retirement |
 | `POST /api/automations/<id>/cancel` | Abort and drain the current ordinary cron run; returns whether one existed |
 | `GET /api/automations/<id>/runs` | Persisted ordinary executions/status; session transcript contains tool proposals, results and blockers |
-| `GET /api/session-retirement` | Recovery inventory (`recentlyDeleted`), not scan controls or status |
-| `POST /api/session-retirement/restore` with `{"sessionId":"web:chat-..."}` | Clears a persisted retirement receipt and restores listing |
+| `GET /api/session-retirement` | Legacy reversible inventory (`recentlyDeleted`), not cold archives or scan controls |
+| `POST /api/session-retirement/restore` with `{"sessionId":"web:chat-..."}` | Restores only a legacy retirement; cold archives return 409 |
+| `GET /api/session-archives?limit=50&cursor=...` | Lightweight cold directory, keyset pagination; limit 1–200 |
+| `GET /api/session-archives/<encoded-session-id>` | Read-only historical state snapshot |
+| `GET /api/session-archives/<encoded-session-id>/records?segmentIndex=0&offset=0&limit=100` | Original raw records in one segment; limit 1–1000; byte-bounded response may include `nextOffset` |
 
 `POST /api/session-retirement/scan` was removed. Run/Cancel endpoints apply to
 ordinary fresh cron jobs, not managed learning or event-driven controllers.
 Removal uses the existing `cron_remove` tool; a removed default is not recreated.
 
-A new human input also restores a retired conversation. Automated delivery to a
-retired conversation is rejected until it is restored. Logs, physical segments,
-folder permissions and session files are retained. Explicit manual session
-deletion remains a separate existing operation, not a retirement purge.
+New human input can still restore a **legacy** retirement. Neither human input,
+automated delivery nor command preparation can reopen a **cold archive**. Start
+a new conversation and reference the old history instead. Historical logical IDs,
+physical segments, record coordinates and folder authorization remain meaningful;
+reading them never inserts a cold state into the live cache. The existing session
+deletion operation does not purge the cold archive. No cold restore or purge API
+is provided.
 
 ## Deliberate limitations
 
-- This is recoverable list cleanup, **not** a secure eraser, recycle-bin retention
-  timer, automatic purge, universal filesystem sandbox or released multi-device
-  cleanup feature.
+- Cold archival is an immutable storage boundary, **not** a secure eraser,
+  recycle-bin retention timer, automatic purge, universal filesystem sandbox or
+  released multi-device cleanup feature. Legacy list cleanup remains reversible.
 - Histories above 120,000 serialized characters, draft inventories above 100
   files / 80,000 bytes, and public wiki inventories above 100 pages / 80,000 bytes
   block assessment rather than silently truncating evidence. Binary drafts are

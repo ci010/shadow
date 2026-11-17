@@ -42,7 +42,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Image input optimization](image-input-optimization.md)
 - [Provider Flash support](providers-flash.md)
 - [Unified Workflows and recovery](workflows.md), [external Signal Sources](signal-source-providers.md)
-- [Fresh automation state persistence](fresh-automation-state.md)
+- [Fresh automation state persistence](fresh-automation-state.md) and [cold conversation storage](session-archive-storage.md)
 - [Encapsulation candidates and acceptance](encapsulation-automation.md), including the [tested script-tool draft](encapsulation-tool-handoff.md)
 
 ## Operations and verification

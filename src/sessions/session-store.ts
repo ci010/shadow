@@ -104,6 +104,21 @@ export interface ArchivedStateQuery {
   offset?: number
   limit?: number
 }
+export interface ConversationArchiveSummary {
+  sessionId: string
+  projectId?: string
+  topic?: string
+  name?: string
+  archivedAt: string
+  lastActivityAt?: string
+  segmentIndex: number
+  recordCount: number
+  /** Uncompressed canonical raw JSON bytes including record separators. */
+  byteLength: number
+}
+export interface ConversationArchiveQuery { projectId?: string; limit?: number; cursor?: string }
+export interface ConversationArchivePage { items: ConversationArchiveSummary[]; nextCursor?: string }
+export interface ConversationArchiveRange { nextOffset?: number; records: Record<string, unknown>[]; total: number }
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
 export interface SessionState {
@@ -115,7 +130,7 @@ export interface SessionState {
   automaticWork?: import('../cron/work-dispatch-contract.ts').AutomaticWorkSession
   /** Human input admission time, independent of assistant/event activity. Legacy unknown is protected. */
   lastUserMessageAt?: string
-  /** Recoverable retirement only: logs and directories remain intact. */
+  /** Closeout receipt: legacy live entries are reversible; cold archive snapshots are immutable. */
   retirement?: import('./retirement-contract.ts').RetirementReceipt
   /** Future-only opt-in. Never inferred from historical agent names or addresses. */
   statePersistence?: import('./fresh-automation-state.ts').FreshAutomationPolicy
@@ -253,6 +268,11 @@ export interface SessionStore {
 
   // ── State management ──────────────────────────────────────────────────
 
+  archiveConversation?(state: SessionState): Promise<void>
+  queryConversationArchives?(query?: ConversationArchiveQuery): Promise<ConversationArchivePage>
+  isConversationArchived?(sessionId: string): Promise<boolean>
+  /** Original raw-record coordinates. offset >= 0; limit is 1..1000. Missing physical IDs return null. */
+  readArchivedLogRange?(physicalId: string, offset: number, limit: number): Promise<ConversationArchiveRange | null>
   readArchivedState?(sessionKey: string): Promise<SessionState | null>
   queryArchivedStates?(query?: ArchivedStateQuery): Promise<SessionState[]>
   /** Optional authoritative archive invalidation token, including external writes. */
