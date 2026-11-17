@@ -70,6 +70,16 @@ defineExpose({ panel })
 .mobile-sheet-heading button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .mobile-sheet-heading button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-sheet-content { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
+/* Shared by FileWorkbench and MobileEditorChrome. Close controls stay separate
+   from the growing main action, including those wrapped in HoverInfo. */
+.mobile-sheet-content :deep(.mobile-view-row) { display: flex; align-self: stretch; width: 100%; min-width: 0; box-sizing: border-box; }
+.mobile-sheet-content :deep(.mobile-view-row button) { display: flex; align-items: center; gap: 12px; flex: 1 1 0; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; text-align: start; overflow-wrap: anywhere; }
+.mobile-sheet-content :deep(.mobile-view-row button > span:first-child) { flex-shrink: 0; }
+.mobile-sheet-content :deep(.mobile-view-row button > span:last-child) { min-width: 0; overflow-wrap: anywhere; }
+.mobile-sheet-content :deep(.mobile-view-row .mobile-view-close) { flex: 0 0 44px; justify-content: center; padding: 0; }
+.mobile-sheet-content :deep(.mobile-view-row:has(button[aria-current="page"])) { background: var(--c-selection-bg); }
+.mobile-sheet-content :deep(.mobile-view-row button[aria-current="page"]) { color: var(--c-primary); }
+.mobile-sheet-content :deep(.mobile-view-row button:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-sheet-content :deep(button), .mobile-sheet-content :deep(input), .mobile-sheet-content :deep(select) { min-height: 44px; }
 .mobile-sheet-content :deep(input), .mobile-sheet-content :deep(textarea), .mobile-sheet-content :deep(select) { font-size: 16px; }
 .is-drawer { align-items: stretch; background: rgb(0 0 0 / calc(.3 * var(--drawer-progress))); transition: background-color .18s cubic-bezier(.22, 1, .36, 1); }
