@@ -2,13 +2,11 @@ import { isLanHttpHost } from '../../src/shared/lan-http.ts'
 import { t } from './i18n.ts'
 import { ref, type InjectionKey } from 'vue'
 
-export interface MobileCredentials {
-  version: 1
+export type MobileCredentials = {
   origin: string
   allowLanHttp?: boolean
   accessToken: string
-  expiresAt: string
-}
+} & ({ version: 1; expiresAt: string } | { version: 2; expiresAt: null })
 export interface CredentialStore {
   get(): Promise<{ value: string | null }>
   set(options: { value: string }): Promise<void>
@@ -31,14 +29,18 @@ export function validateMainOrigin(value: string, allowLanHttp = false): string 
 function validExpiry(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value)) && Date.parse(value) > Date.now()
 }
+function validAuthorization(data: { version?: unknown; expiresAt?: unknown }): boolean {
+  return (data.version === 2 && data.expiresAt === null)
+    || (data.version === 1 && validExpiry(data.expiresAt))
+}
 export function parseMobileCredentials(value: string): MobileCredentials {
   const data = JSON.parse(value)
-  if (!data || data.version !== 1 || typeof data.origin !== 'string' ||
+  if (!data || !validAuthorization(data) || typeof data.origin !== 'string' ||
     validateMainOrigin(data.origin, data.allowLanHttp === true) !== data.origin || typeof data.accessToken !== 'string' ||
-    !/^[\x21-\x7e]{16,4096}$/.test(data.accessToken) || !validExpiry(data.expiresAt)) {
+    !/^[\x21-\x7e]{16,4096}$/.test(data.accessToken)) {
     throw new Error(t('Saved mobile credentials are invalid or expired. Pair this device again.'))
   }
-  return { version: 1, origin: data.origin, ...(data.allowLanHttp === true ? { allowLanHttp: true } : {}), accessToken: data.accessToken, expiresAt: data.expiresAt }
+  return { version: data.version, origin: data.origin, ...(data.allowLanHttp === true ? { allowLanHttp: true } : {}), accessToken: data.accessToken, expiresAt: data.expiresAt }
 }
 
 export function isMobileBusinessPath(path: string, method = 'GET'): boolean {
@@ -76,7 +78,7 @@ export function createMobileFetch(options: {
     const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
     if (!isMobileBusinessPath(url.pathname, method)) throw new Error(t('This operation is not available to the mobile client.'))
     if (!credentials || options.signal().aborted) throw new Error(t('Connect to Main before continuing.'))
-    if (Date.parse(credentials.expiresAt) <= Date.now()) {
+    if (credentials.version === 1 && Date.parse(credentials.expiresAt) <= Date.now()) {
       options.unauthorized()
       throw new Error(t('Your mobile session expired. Pair this device again.'))
     }
@@ -165,7 +167,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     resourceError.value = ''
     preserveChat.value = false
     view.value = 'connected'
-    expiryTimer = setTimeout(() => { void loseAuth() }, Math.min(2_147_483_647, Date.parse(credentials.expiresAt) - Date.now()))
+    if (credentials.version === 1) expiryTimer = setTimeout(() => { void loseAuth() }, Math.min(2_147_483_647, Date.parse(credentials.expiresAt) - Date.now()))
   }
   async function refresh() {
     if (!active || disposed) return
@@ -179,10 +181,10 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
       if (!response.ok) throw new Error()
       const data = await response.json()
       if (id !== generation) return
-      if (data.version !== 1 || data.authenticated !== true || !validExpiry(data.expiresAt)) {
+      if (data.authenticated !== true || !validAuthorization(data)) {
         fail(t('Main returned an invalid session response. Check that Main supports this mobile client.')); return
       }
-      credentials = { ...credentials, expiresAt: data.expiresAt }
+      credentials = parseMobileCredentials(JSON.stringify({ ...credentials, version: data.version, expiresAt: data.expiresAt }))
       const saved = JSON.stringify(credentials)
       await persist(() => store.set({ value: saved }))
       if (id === generation) connected()

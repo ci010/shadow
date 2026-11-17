@@ -314,3 +314,104 @@ test('LAN HTTP forwards JSON and multipart bodies without streaming Request cons
   assert.match(source, /const body = request.body \? await request.blob\(\) : undefined/)
   assert.doesNotMatch(source, /new Request\(target, new Request/)
 })
+
+
+test('permanent v2 credentials are explicit; malformed permanent and expired legacy grants fail closed', () => {
+  const permanent: MobileCredentials = { ...credential(), version: 2, expiresAt: null }
+  assert.deepEqual(parseMobileCredentials(JSON.stringify(permanent)), permanent)
+  for (const invalid of [
+    { ...permanent, expiresAt: undefined }, { ...permanent, expiresAt: expiresAt() },
+    { ...permanent, version: 1 }, { ...permanent, version: 3 },
+    { ...credential(), expiresAt: new Date(0).toISOString() },
+  ]) assert.throws(() => parseMobileCredentials(JSON.stringify(invalid)))
+})
+
+test('v2 pairing remains connected beyond twelve hours and authenticates after app reload', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] })
+  const saved = storage()
+  const grant = { ...credential(), version: 2, expiresAt: null }
+  const session = createMobileSession(saved.store, async input => String(input).endsWith('/pair')
+    ? Response.json(grant) : Response.json({ version: 2, authenticated: true, expiresAt: null }))
+  t.after(() => session.dispose())
+  await session.load()
+  await session.pair('https://main.example', 'abcdefabcdefabcdefabcdef')
+  assert.equal(session.view.value, 'connected')
+  t.mock.timers.tick(13 * 60 * 60_000)
+  await flush()
+  assert.equal(session.view.value, 'connected')
+  assert.equal(session.signal().aborted, false)
+  let requests = 0
+  const request = createMobileFetch({
+    fetch: async () => { requests++; return response() }, credentials: session.credentials,
+    webviewOrigin: 'https://localhost', signal: session.signal,
+    unauthorized() { assert.fail('permanent credentials must not expire locally') },
+  })
+  await request('/api/projects')
+  assert.equal(requests, 1)
+  const restored = createMobileSession(saved.store, async () => Response.json({ version: 2, authenticated: true, expiresAt: null }))
+  t.after(() => restored.dispose())
+  await restored.load()
+  assert.equal(restored.view.value, 'connected')
+  assert.equal(restored.credentials()?.version, 2)
+})
+
+test('valid legacy credentials migrate only after authenticated v2 verification', async t => {
+  for (const protocol of [
+    { version: 2, authenticated: true, expiresAt: null },
+    { version: 1, authenticated: true, expiresAt: expiresAt() },
+    { version: 2, authenticated: false, expiresAt: null },
+    { version: 2, authenticated: true },
+    { version: 2, authenticated: true, expiresAt: expiresAt() },
+    { version: 1, authenticated: true, expiresAt: new Date(0).toISOString() },
+  ]) {
+    const legacy = credential()
+    const saved = storage(JSON.stringify(legacy))
+    const session = createMobileSession(saved.store, async (_input, init) => {
+      assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${legacy.accessToken}`)
+      assert.equal(saved.writes.length, 0)
+      return Response.json(protocol)
+    })
+    t.after(() => session.dispose())
+    await session.load()
+    const valid = protocol.authenticated && (protocol.version === 1 ? Date.parse(protocol.expiresAt!) > Date.now() : protocol.expiresAt === null)
+    assert.equal(session.view.value, valid ? 'connected' : 'error')
+    if (valid) {
+      const persisted = JSON.parse(saved.get()!)
+      assert.equal(persisted.version, protocol.version)
+      assert.equal(persisted.accessToken, legacy.accessToken)
+      assert.equal(persisted.expiresAt, protocol.expiresAt)
+    } else assert.deepEqual(saved.writes, [])
+  }
+})
+
+test('expired legacy credentials cannot request permanent authorization', async t => {
+  const saved = storage(JSON.stringify({ ...credential(), expiresAt: new Date(0).toISOString() }))
+  const session = createMobileSession(saved.store, async () => { assert.fail('expired grant must not reach network') })
+  t.after(() => session.dispose())
+  await session.load()
+  assert.equal(session.view.value, 'pairing')
+  assert.equal(saved.get(), null)
+})
+
+test('permanent credentials still clear on 401 and disconnect revokes the bearer', async t => {
+  const permanent = { ...credential(), version: 2, expiresAt: null }
+  for (const revoke of [false, true]) {
+    const saved = storage(JSON.stringify(permanent))
+    const methods: string[] = []
+    const session = createMobileSession(saved.store, async (_input, init) => {
+      methods.push(init?.method ?? 'GET')
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 })
+      return methods.length > 1 ? new Response(null, { status: 401 })
+        : Response.json({ version: 2, authenticated: true, expiresAt: null })
+    })
+    t.after(() => session.dispose())
+    await session.load()
+    assert.equal(session.view.value, 'connected')
+    if (revoke) await session.disconnect()
+    else await session.refresh()
+    assert.equal(saved.get(), null)
+    assert.equal(session.credentials(), undefined)
+    assert.equal(session.signal().aborted, true)
+    if (revoke) assert.ok(methods.includes('DELETE'))
+  }
+})

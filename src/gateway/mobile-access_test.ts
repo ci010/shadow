@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { AtomicMobileAuthorizationStore, type MobileAuthorizationStore } from './mobile-authorization-store.ts'
 import { Hono } from 'hono'
 import { MobileAccess, mobileGatewayConfig } from './mobile-access.ts'
 import { GatewayClientAddressRegistry, registerGatewayRoutes, serveGateway } from './server.ts'
@@ -8,11 +12,11 @@ const credential = 'test-owner-launch-credential'
 const publicOrigin = 'https://shadow.example.test'
 const nativeOrigin = 'capacitor://localhost'
 
-function fixture() {
+function fixture(store?: MobileAuthorizationStore) {
   let now = Date.now()
   let liveSignal: AbortSignal | undefined
   const addresses = new GatewayClientAddressRegistry()
-  const access = new MobileAccess({ publicOrigin, launchCredential: credential, clientAddresses: addresses, now: () => now })
+  const access = new MobileAccess({ publicOrigin, launchCredential: credential, clientAddresses: addresses, now: () => now, store })
   const main = new Hono()
   registerGatewayRoutes(main, [access.managementPlugin(), app => {
     app.get('/api/private', c => c.json({ authorized: access.authorizeMain(c.req.raw), cookie: c.req.header('Cookie') ?? null }))
@@ -82,7 +86,7 @@ test('mobile pairing uses single-use expiring owner codes, never browser or laun
   f.advance(300_001)
   assert.equal((await f.pair(expired)).status, 401)
   f.advance(12 * 60 * 60_000)
-  assert.equal((await f.client('/mobile/v1/session', accessToken)).status, 401)
+  assert.equal((await f.client('/mobile/v1/session', accessToken)).status, 200)
 })
 
 test('mobile ingress rejects other origins, non-loopback upstreams, control routes and redirects', async t => {
@@ -264,4 +268,89 @@ test('mobile conditional reads permit validators but preserve origin, header and
   for (const denied of [{ Origin: 'https://evil.test' }, { 'Access-Control-Request-Headers': 'X-Unapproved' }] as Record<string, string>[]) {
     assert.equal((await f.client('/api/private', undefined, { method: 'OPTIONS', headers: { ...headers, ...denied } })).status, 403)
   }
+})
+
+
+test('permanent phone grants survive 12 hours, shutdown/restart and persist both revocation paths', async t => {
+  const root = await mkdtemp(join(process.cwd(), '.mobile-auth-test-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'mobile-authorizations.v1.json')
+  const store = new AtomicMobileAuthorizationStore(path)
+  const first = fixture(store)
+  const token = await first.login()
+  first.advance(13 * 60 * 60_000)
+  assert.deepEqual(await (await first.client('/mobile/v1/session', token)).json(), { version: 2, authenticated: true, expiresAt: null })
+  const saved = await readFile(path, 'utf8')
+  assert(!saved.includes(token))
+  assert.equal((await stat(path)).mode & 0o777, 0o600)
+  const ticket = await (await first.client('/mobile/v1/resource-ticket', token, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: '/projects/default/api/media?path=test' }) })).json()
+  first.access.close()
+  const restored = fixture(store)
+  t.after(() => restored.access.close())
+  assert.equal((await restored.client('/api/private', token)).status, 200)
+  const oldTicket = new URL(ticket.url)
+  assert.equal((await restored.client(oldTicket.pathname + oldTicket.search)).status, 401)
+  assert.equal((await restored.client('/api/private', 'z'.repeat(43))).status, 401)
+  const id = restored.access.listSessions()[0]!.id
+  assert.equal(restored.access.revokeSession(id), true)
+  restored.access.close()
+  const revoked = fixture(store)
+  t.after(() => revoked.access.close())
+  assert.equal((await revoked.client('/mobile/v1/session', token)).status, 401)
+  const next = await revoked.login()
+  assert.equal((await revoked.client('/mobile/v1/session', next, { method: 'DELETE' })).status, 204)
+  const final = fixture(store)
+  t.after(() => final.access.close())
+  assert.equal((await final.client('/api/private', next)).status, 401)
+})
+
+test('legacy persisted deadlines fail closed when expired; only authenticated live grants upgrade', async t => {
+  const token = 'a'.repeat(43), id = '11111111-1111-1111-1111-111111111111'
+  let records = [{ id, accessHash: createHash('sha256').update(token).digest('hex'), expiresAt: Date.now() - 1 as number | null }]
+  const store: MobileAuthorizationStore = { load: () => structuredClone(records), save: value => { records = structuredClone(value) } }
+  const expired = fixture(store)
+  t.after(() => expired.access.close())
+  assert.equal((await expired.client('/mobile/v1/session', token)).status, 401)
+  records[0]!.expiresAt = Date.now() + 60_000
+  const live = fixture(store)
+  t.after(() => live.access.close())
+  assert.equal((await live.client('/mobile/v1/session', 'b'.repeat(43))).status, 401)
+  assert.notEqual(records[0]!.expiresAt, null)
+  assert.equal((await live.client('/mobile/v1/session', token)).status, 200)
+  assert.equal(records[0]!.expiresAt, null)
+})
+
+test('invalid durable authorization and failed grant writes never authenticate a phone', async t => {
+  const root = await mkdtemp(join(process.cwd(), '.mobile-auth-test-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'state.json'), store = new AtomicMobileAuthorizationStore(path)
+  for (const data of ['{', '{"version":2,"authorizations":[]}', '{"version":1,"authorizations":[{}]}']) {
+    await writeFile(path, data)
+    assert.throws(() => fixture(store))
+  }
+  const broken = fixture({ load: () => [], save: () => { throw new Error('synthetic persistence failure') } })
+  t.after(() => broken.access.close())
+  assert.equal((await broken.pair(await broken.code())).status, 500)
+  assert.deepEqual(broken.access.listSessions(), [])
+})
+
+
+test('failed revocation storage is never acknowledged; retry persists the removal', async t => {
+  let records: import('./mobile-authorization-store.ts').MobileAuthorization[] = []
+  let broken = false
+  const store: MobileAuthorizationStore = { load: () => structuredClone(records), save: value => {
+    if (broken) throw new Error('synthetic write failure')
+    records = structuredClone(value)
+  } }
+  const f = fixture(store); t.after(() => f.access.close())
+  const token = await f.login()
+  broken = true
+  assert.equal((await f.client('/mobile/v1/session', token, { method: 'DELETE' })).status, 500)
+  assert.equal(records.length, 1)
+  broken = false
+  assert.equal((await f.client('/mobile/v1/session', token, { method: 'DELETE' })).status, 204)
+  assert.equal(records.length, 0)
+  const restored = fixture(store); t.after(() => restored.access.close())
+  assert.equal((await restored.client('/api/private', token)).status, 401)
 })

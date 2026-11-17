@@ -108,20 +108,43 @@ a multi-user or read-only authorization model. Do not share codes with others.
 Runtime control, device pairing/network administration and cluster endpoints
 are not exposed by the mobile gateway.
 
-Mobile credentials are separate random session tokens, valid for up to twelve
-hours. The phone stores them with the native Keychain/Keystore integration,
-not localStorage or Capacitor Preferences. Main keeps only access-token hashes
-and in-memory session state. Main restart invalidates sessions and requires a
-new pairing code; there is no background refresh token or permanent device grant.
-Signing out revokes the session; a lost phone can also be revoked from Main:
+Successful pairing creates a long-lived authorization with **no fixed expiry**,
+valid until removed on this computer or disconnected on the phone. Pairing codes
+still expire after five minutes and can only be used once; that countdown is not
+an expiry for the paired phone. The phone stores the bearer in native
+Keychain/Keystore storage, not localStorage or Capacitor Preferences. Main
+persists only the necessary token hashes and authorization metadata in its
+versioned `devices/mobile-authorizations.v1.json` device authorization snapshot
+(owner-only atomic writes), alongside the Child registry, not in session history
+JSONL or SQLite. Ordinary Main restarts preserve paired authorization. A corrupt
+snapshot prevents the phone listener from starting rather than silently granting
+access or replacing trust state. A failed durable grant/revocation write is an
+error, not a successful pairing/disconnection; retry it before assuming removal.
+There is no background refresh token. Live streams and short-lived resource
+tickets are not restored across restarts.
+
+The new pairing/session protocol uses `version: 2, expiresAt: null`. Updated
+clients still accept an unexpired version-1 credential and migrate its secure
+record only after Main successfully authenticates it and returns a version-2
+session response. Missing expiry fields, expired old credentials and malformed
+responses are not treated as permanent authorization. Old Main versions kept
+phone authorization only in memory, so a grant lost on upgrading/restarting old
+Main cannot be recovered: pair once again with the updated Main and phone app.
+The native encrypted-storage container and device-only protection are unchanged.
+
+Disconnecting revokes the authorization. If a phone disconnects while offline,
+only its local credential can be cleared; remove its session on Main to confirm
+remote revocation. A lost phone can also be revoked from Main:
 
 ```powershell
 pnpm mobile:pair --list --connection C:\absolute\path\connection.json
 pnpm mobile:pair --revoke <session-id> --connection C:\absolute\path\connection.json
 ```
 
-Expiry, revocation and shutdown abort associated live streams and invalidate
-resource tickets. Listing sessions does not return their secrets. Browser
+Revocation and shutdown abort associated live streams and invalidate resource
+tickets; shutdown does not expire the paired authorization. File access tickets
+remain short-lived (one minute), even for a permanently paired phone. Listing
+sessions does not return their secrets. Browser
 cookies, browser PINs, launch credentials and Child keys cannot authenticate
 at the mobile gateway.
 

@@ -1,3 +1,5 @@
+import type { MobileAuthorizationStore } from './mobile-authorization-store.ts'
+import { validateMobileAuthorizations } from './mobile-authorization-store.ts'
 import { isLanHttpHost } from '../shared/lan-http.ts'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
@@ -6,7 +8,6 @@ import type { GatewayPlugin } from './types.ts'
 import { GatewayClientAddressRegistry, isLoopbackGatewayRequest, validateLaunchCredential } from './server.ts'
 
 const CODE_TTL = 5 * 60_000
-const SESSION_TTL = 12 * 60 * 60_000
 const TICKET_TTL = 60_000
 const NATIVE_ORIGINS = new Set(['capacitor://localhost', 'https://localhost'])
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -16,11 +17,10 @@ const secret = () => randomBytes(32).toString('base64url')
 
 interface MobileSession {
   id: string
-  expiresAt: number
+  expiresAt: number | null
   accessHash: string
   bridgeToken: string
   controller: AbortController
-  timer: ReturnType<typeof setTimeout>
 }
 
 interface ResourceTicket {
@@ -91,25 +91,42 @@ export class MobileAccess {
     allowLanHttp?: boolean
     launchCredential: string
     clientAddresses: GatewayClientAddressRegistry
+    store?: MobileAuthorizationStore
     now?: () => number
   }) {
     this.publicOrigin = mobilePublicOrigin(options.publicOrigin, options.allowLanHttp)
     if (!options.launchCredential) throw new TypeError('Mobile access requires a Main launch credential')
+    const records = validateMobileAuthorizations({ version: 1, authorizations: options.store?.load() ?? [] })
+    for (const record of records) {
+      if (record.expiresAt !== null && record.expiresAt <= this.now()) continue
+      const session = { ...record, bridgeToken: secret(), controller: new AbortController() }
+      this.sessions.set(session.accessHash, session)
+      this.bridges.set(digest(session.bridgeToken), session)
+    }
   }
 
   private now(): number { return this.options.now?.() ?? Date.now() }
 
   private prune(): void {
     for (const [key, expiry] of this.codes) if (expiry <= this.now()) this.codes.delete(key)
-    for (const session of this.sessions.values()) if (session.expiresAt <= this.now()) this.revoke(session)
+    for (const session of this.sessions.values()) if (session.expiresAt !== null && session.expiresAt <= this.now()) this.detach(session)
     for (const [key, ticket] of this.tickets) if (ticket.expiresAt <= this.now()) this.tickets.delete(key)
   }
 
+  private save(sessions: Iterable<MobileSession>): void {
+    this.options.store?.save([...sessions].map(({ id, accessHash, expiresAt }) => ({ id, accessHash, expiresAt })))
+  }
+
   private revoke(session: MobileSession): void {
+    // Never acknowledge a revocation that could reappear on restart.
+    this.save([...this.sessions.values()].filter(value => value !== session))
+    this.detach(session)
+  }
+
+  private detach(session: MobileSession): void {
     this.sessions.delete(session.accessHash)
     this.bridges.delete(digest(session.bridgeToken))
     for (const [key, ticket] of this.tickets) if (ticket.session === session) this.tickets.delete(key)
-    clearTimeout(session.timer)
     session.controller.abort(new Error('Mobile session ended'))
   }
 
@@ -130,7 +147,7 @@ export class MobileAccess {
 
   listSessions() {
     this.prune()
-    return [...this.sessions.values()].map(session => ({ id: session.id, expiresAt: new Date(session.expiresAt).toISOString() }))
+    return [...this.sessions.values()].map(session => ({ id: session.id, expiresAt: session.expiresAt === null ? null : new Date(session.expiresAt).toISOString() }))
   }
 
   revokeSession(id: string): boolean {
@@ -160,7 +177,7 @@ export class MobileAccess {
         return c.json({ version: 1, url: this.publicOrigin, code: code.match(/.{4}/g)!.join('-'), expiresAt: new Date(expiresAt).toISOString() })
       })
       app.get('/local/v1/mobile-sessions', c => c.json({
-        version: 1, sessions: [...this.sessions.values()].map(session => ({ id: session.id, expiresAt: new Date(session.expiresAt).toISOString() })),
+        version: 1, sessions: [...this.sessions.values()].map(session => ({ id: session.id, expiresAt: session.expiresAt === null ? null : new Date(session.expiresAt).toISOString() })),
       }))
       app.delete('/local/v1/mobile-sessions/:id', c => {
         const session = [...this.sessions.values()].find(session => session.id === c.req.param('id'))
@@ -227,21 +244,25 @@ export class MobileAccess {
       if (this.sessions.size >= 32) return c.json({ error: 'session_capacity_reached' }, 429)
       this.codes.delete(key)
       const accessToken = secret()
-      const expiresAt = this.now() + SESSION_TTL
       const session: MobileSession = {
-        id: randomUUID(), accessHash: digest(accessToken), bridgeToken: secret(), expiresAt,
-        controller: new AbortController(), timer: setTimeout(() => this.revoke(session), SESSION_TTL),
+        id: randomUUID(), accessHash: digest(accessToken), bridgeToken: secret(), expiresAt: null,
+        controller: new AbortController(),
       }
-      session.timer.unref()
+      this.save([...this.sessions.values(), session])
       this.sessions.set(session.accessHash, session)
       this.bridges.set(digest(session.bridgeToken), session)
-      return c.json({ version: 1, accessToken, expiresAt: new Date(expiresAt).toISOString() })
+      return c.json({ version: 2, accessToken, expiresAt: null })
     })
     app.get('/mobile/v1/session', c => {
       const session = this.sessions.get(digest(bearer(c.req.raw)))
-      return session
-        ? c.json({ version: 1, authenticated: true, expiresAt: new Date(session.expiresAt).toISOString() })
-        : c.json({ error: 'unauthorized' }, 401)
+      if (!session) return c.json({ error: 'unauthorized' }, 401)
+      // Only a live, authenticated legacy authorization can be migrated.
+      if (session.expiresAt !== null) {
+        const upgraded = { ...session, expiresAt: null }
+        this.save([...this.sessions.values()].map(value => value === session ? upgraded : value))
+        session.expiresAt = null
+      }
+      return c.json({ version: 2, authenticated: true, expiresAt: null })
     })
     app.delete('/mobile/v1/session', c => {
       const session = this.sessions.get(digest(bearer(c.req.raw)))
@@ -264,7 +285,7 @@ export class MobileAccess {
         return c.json({ error: 'ticket_capacity_reached' }, 429)
       }
       const token = secret()
-      const expiresAt = Math.min(this.now() + TICKET_TTL, session.expiresAt)
+      const expiresAt = this.now() + TICKET_TTL
       url.search = url.searchParams.toString()
       this.tickets.set(digest(token), { session, path: `${url.pathname}${url.search}`, expiresAt })
       url.searchParams.set('ticket', token)
@@ -307,7 +328,7 @@ export class MobileAccess {
 
   close(): void {
     this.codes.clear()
-    for (const session of this.sessions.values()) this.revoke(session)
+    for (const session of this.sessions.values()) this.detach(session)
     this.tickets.clear()
   }
 }

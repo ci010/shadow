@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { mkdir, readFile, rename, writeFile, rm } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { AtomicMobileAuthorizationStore } from '../../gateway/mobile-authorization-store.ts'
 import { MobileAccess, type MobileGatewayConfig } from '../../gateway/mobile-access.ts'
 import { privateLanAddresses } from '../../gateway/lan-browser.ts'
 import { serveGateway, isLoopbackGatewayRequest, validateLaunchCredential, type GatewayClientAddressRegistry, type GatewayServer } from '../../gateway/server.ts'
@@ -55,7 +56,9 @@ export class MainMobileNetwork {
     const host = (this.options.addresses ?? privateLanAddresses)()[0]
     const config = this.options.environment ?? (host ? { publicOrigin: `http://${host}:${this.settings.port}`, port: this.settings.port, allowLanHttp: true } : undefined)
     if (!config) throw new Error('No private LAN IPv4 address. Connect to Wi-Fi or Ethernet and retry.')
-    const access = new MobileAccess({ ...config, launchCredential: this.options.launchCredential, clientAddresses: this.options.clientAddresses })
+    const access = new MobileAccess({ ...config, launchCredential: this.options.launchCredential, clientAddresses: this.options.clientAddresses,
+      store: new AtomicMobileAuthorizationStore(join(dirname(this.options.configPath), 'mobile-authorizations.v1.json')),
+    })
     const server = serveGateway(access.createGateway(this.options.main), {
       host: config.publicOrigin.startsWith('http:') ? new URL(config.publicOrigin).hostname.replace(/^\[|\]$/g, '') : '127.0.0.1',
       port: config.port, clientAddresses: this.options.clientAddresses,

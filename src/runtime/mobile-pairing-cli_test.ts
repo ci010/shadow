@@ -45,6 +45,9 @@ test('mobile CLI supports listing, revocation and non-secret help', async () => 
     assert.equal(init?.method, 'DELETE')
     return new Response(null, { status: 204 })
   })).includes('Revoked'))
+  assert((await manageMobileAccess(connection, { kind: 'list' }, async () => Response.json({
+    version: 1, sessions: [{ id, expiresAt: null }],
+  }))).includes('paired until explicitly revoked'))
   let help = ''
   await runMobilePair(['--help'], value => { help = value })
   assert(help.includes('SHADOW_MOBILE_ORIGIN'))
