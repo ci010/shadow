@@ -2,7 +2,7 @@ import type { Input } from 'electron'
 
 export const DOCUMENT_TAB_CHANNEL = 'shadow:cycle-document-tab'
 type Direction = -1 | 1
-type DocumentAction = Direction | 'close' | 'close-all' | 'toggle-explorer'
+type DocumentAction = Direction | 'close' | 'close-all' | 'toggle-explorer' | 'search-sessions'
 type BeforeInput = (event: { preventDefault(): void }, input: Input) => void
 
 interface DocumentTabWindow {
@@ -29,12 +29,13 @@ export function installDocumentTabShortcuts(window: DocumentTabWindow): () => vo
     // Cmd+W is a document command, not Electron's window-close accelerator.
     // Cmd+Tab remains OS-owned; preserve the established Ctrl+Tab cycle.
     const toggleExplorer = input.key.toLowerCase() === 'e' && input.shift
-    if (input.meta && !close && !toggleExplorer) return
-    if (!close && !toggleExplorer && input.key !== 'Tab') return
+    const searchSessions = input.key.toLowerCase() === 'r' && input.shift
+    if (input.meta && !close && !toggleExplorer && !searchSessions) return
+    if (!close && !toggleExplorer && !searchSessions && input.key !== 'Tab') return
     // Suppress the DOM keydown so the renderer cannot cycle twice.
     event.preventDefault()
-    if ((close || toggleExplorer) && input.isAutoRepeat) return
-    contents.send(DOCUMENT_TAB_CHANNEL, toggleExplorer ? 'toggle-explorer' : close ? (input.shift ? 'close-all' : 'close') : input.shift ? -1 : 1)
+    if ((close || toggleExplorer || searchSessions) && input.isAutoRepeat) return
+    contents.send(DOCUMENT_TAB_CHANNEL, searchSessions ? 'search-sessions' : toggleExplorer ? 'toggle-explorer' : close ? (input.shift ? 'close-all' : 'close') : input.shift ? -1 : 1)
   }
   const dispose = () => {
     if (disposed) return
@@ -58,7 +59,7 @@ export function receiveDocumentTabShortcuts(
 ): () => void {
   let disposed = false
   const receive = (_event: unknown, value: unknown) => {
-    if (!disposed && (value === -1 || value === 1 || value === 'close' || value === 'close-all' || value === 'toggle-explorer')) listener(value)
+    if (!disposed && (value === -1 || value === 1 || value === 'close' || value === 'close-all' || value === 'toggle-explorer' || value === 'search-sessions')) listener(value)
   }
   ipc.on(DOCUMENT_TAB_CHANNEL, receive)
   return () => {

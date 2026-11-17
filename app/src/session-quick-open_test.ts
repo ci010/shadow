@@ -81,3 +81,22 @@ test('backdrop detection excludes the dialog content, padding and border', () =>
     assert.equal(isQuickOpenBackdropPoint(point, bounds), false)
   }
 })
+
+test('native search respects workspace visibility, deactivation and modal ownership', async () => {
+  const { readFileSync } = await import('node:fs')
+  const source = readFileSync(new URL('./components/ProjectsWorkspace.vue', import.meta.url), 'utf8')
+  const body = source.match(/function nativeSessionSearch\(event: Event\) \{([\s\S]*?)\n\}/)?.[1]
+  assert.ok(body)
+  const props = { visible: true }, keyboardActive = { value: true }
+  let modal = false, opens = 0
+  const handler = new Function('props', 'keyboardActive', 'document', 'openSessionSearch',
+    `return function(event) {${body.replace('(event as CustomEvent)', 'event')}}`)(
+    props, keyboardActive, { querySelector: () => modal ? {} : null }, () => opens++)
+  handler({ detail: 'close' }); assert.equal(opens, 0)
+  handler({ detail: 'search-sessions' }); assert.equal(opens, 1)
+  props.visible = false; handler({ detail: 'search-sessions' }); assert.equal(opens, 1)
+  props.visible = true; keyboardActive.value = false; handler({ detail: 'search-sessions' }); assert.equal(opens, 1)
+  keyboardActive.value = true; modal = true; handler({ detail: 'search-sessions' }); assert.equal(opens, 1)
+  assert.match(source, /addEventListener\('shadow:cycle-document-tab', nativeSessionSearch\)/)
+  assert.match(source, /removeEventListener\('shadow:cycle-document-tab', nativeSessionSearch\)/)
+})

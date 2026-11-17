@@ -258,6 +258,12 @@ function quickOpenSession(projectId: string, sessionId: string, automationId?: s
     openAutomationRun(sessionId)
   } else selectSession(projectId, sessionId)
 }
+// Native desktop input also reaches us when focus belongs to an embedded frame.
+function nativeSessionSearch(event: Event) {
+  if ((event as CustomEvent).detail !== 'search-sessions' || !props.visible || !keyboardActive.value) return
+  if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+  openSessionSearch()
+}
 function sessionSearchKeydown(event: KeyboardEvent) {
   if (!props.visible || !keyboardActive.value || !isSessionQuickOpenShortcut(event)) return
   event.preventDefault()
@@ -665,6 +671,7 @@ onMounted(() => {
   window.addEventListener('shadow:project-deleted', onProjectDeleted)
   window.addEventListener('keydown', sidebarKeydown)
   window.addEventListener('keydown', sessionSearchKeydown)
+  window.addEventListener('shadow:cycle-document-tab', nativeSessionSearch)
   window.addEventListener('keydown', newConversationShortcut.keydown)
   window.addEventListener('keydown', projectNavigationKeydown)
 })
@@ -681,6 +688,7 @@ onUnmounted(() => {
   window.removeEventListener('shadow:project-deleted', onProjectDeleted)
   window.removeEventListener('keydown', sidebarKeydown)
   window.removeEventListener('keydown', sessionSearchKeydown)
+  window.removeEventListener('shadow:cycle-document-tab', nativeSessionSearch)
 })
 </script>
 

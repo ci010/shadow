@@ -9,7 +9,7 @@ class FakeWindow extends EventEmitter {
   messages: unknown[] = []
   webContents = Object.assign(new EventEmitter(), {
     isDestroyed: () => this.destroyed,
-    send: (channel: string, direction: number | 'close' | 'close-all' | 'toggle-explorer') => { this.messages.push([channel, direction]) },
+    send: (channel: string, direction: number | 'close' | 'close-all' | 'toggle-explorer' | 'search-sessions') => { this.messages.push([channel, direction]) },
   })
   isDestroyed = () => this.destroyed
 }
@@ -56,16 +56,16 @@ test('native dispatch preserves other modifiers, plain Tab, key-up and compositi
 
 test('preload only relays validated directions and removes its listener on disposal', () => {
   const ipc = new EventEmitter()
-  const directions: Array<number | 'close' | 'close-all' | 'toggle-explorer'> = []
+  const directions: Array<number | 'close' | 'close-all' | 'toggle-explorer' | 'search-sessions'> = []
   const dispose = receiveDocumentTabShortcuts(ipc, direction => { directions.push(direction) })
-  for (const value of [1, -1, 'close', 'close-all', 'toggle-explorer', 'delete', 0, '1', null, {}, true, undefined]) {
+  for (const value of [1, -1, 'close', 'close-all', 'toggle-explorer', 'search-sessions', 'delete', 0, '1', null, {}, true, undefined]) {
     ipc.emit(DOCUMENT_TAB_CHANNEL, {}, value)
   }
-  assert.deepEqual(directions, [1, -1, 'close', 'close-all', 'toggle-explorer'])
+  assert.deepEqual(directions, [1, -1, 'close', 'close-all', 'toggle-explorer', 'search-sessions'])
   dispose()
   dispose()
   ipc.emit(DOCUMENT_TAB_CHANNEL, {}, 1)
-  assert.deepEqual(directions, [1, -1, 'close', 'close-all', 'toggle-explorer'])
+  assert.deepEqual(directions, [1, -1, 'close', 'close-all', 'toggle-explorer', 'search-sessions'])
   assert.equal(ipc.listenerCount(DOCUMENT_TAB_CHANNEL), 0)
 })
 
@@ -148,4 +148,20 @@ test('native Command+W routes to document close while Command+Tab remains OS-own
   window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('OS switcher consumed') }, { ...input, control: false, meta: true, key: 'Tab' })
   assert.equal(prevented, 1)
   assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'close']])
+})
+
+test('native session search reserves Ctrl/Meta Shift R once, including frame-local focus', () => {
+  const window = new FakeWindow()
+  const dispose = installDocumentTabShortcuts(window)
+  const search = { ...input, key: 'R', code: 'KeyR', shift: true }
+  let prevented = 0
+  for (const patch of [{}, { control: false, meta: true }, { isAutoRepeat: true }]) {
+    window.webContents.emit('before-input-event', { preventDefault: () => prevented++ }, { ...search, ...patch })
+  }
+  assert.equal(prevented, 3, 'native handling suppresses DOM duplicates and browser reload')
+  assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'search-sessions'], [DOCUMENT_TAB_CHANNEL, 'search-sessions']])
+  for (const patch of [{ shift: false }, { alt: true }, { isComposing: true }, { control: false }, { meta: true }, { type: 'keyUp' }]) {
+    window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('unrelated input consumed') }, { ...search, ...patch })
+  }
+  dispose()
 })
