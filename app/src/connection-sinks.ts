@@ -17,7 +17,7 @@ export function connectionSinkCanvas(raw: unknown, projectId: string, name: stri
         label: receiverLabel(receiver), detail: t('Message receiver'),
         description: receiver.evidence?.sessionMetadata === 'present' ? t('Session metadata exists; message receipt, persistence and execution are unknown.')
           : receiver.evidence?.discovery === 'observed' ? t('Discovery only; message receipt, persistence and execution are unknown.')
-          : t('Configuration and existing sessions are not message admission or execution receipts.'),
+          : t('Configuration and chat history do not confirm that messages were received or the bot ran. Check the activity logs for actual results.'),
         config: receiver, status: 'unknown' as const })),
       ...(projection.receivers.length ? [] : [{ id: 'sink', nodeType: 'sink' as const, label: t('Message receiver'),
         detail: t('No conversation evidence available'), config: { path: projection.sinkPath }, status: 'unknown' as const }]),

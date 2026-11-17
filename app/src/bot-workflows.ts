@@ -35,7 +35,7 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
       detail: `${deployment?.agent ?? t('Unavailable')} · ${deployment ? deploymentLabel(deployment.state) : t('Unavailable')}`,
       config: { ...binding, deployment: deployment ?? null, admission: 'unknown', executed: 'unknown' }, status: 'unknown',
       description: binding?.kind === 'host-owner-ingress' ? t('Owner ingress is not permission to reply in every group. Admission and execution are unknown.')
-        : t('Configuration and existing sessions are not message admission or execution receipts.') })
+        : t('Configuration and chat history do not confirm that messages were received or the bot ran. Check the activity logs for actual results.') })
     return id
   }
   for (const connection of [...bots.connections, ...(bots.sinks ?? []).filter(sink => !bots.connections.some(connection => connection.id === sink.connectionId)).map(sink => ({ id: sink.connectionId, displayName: sink.connectionId, platform: 'unknown', enabled: false, health: 'disconnected' as const }))]) {
