@@ -1,20 +1,23 @@
 <template>
   <section class="workflow-manager" :aria-label="t('Workflows')" :aria-busy="loading">
-    <header class="workflow-heading">
-      <div><h1>{{ t('Workflows') }}</h1><p>{{ t('Read-only execution map. Create and edit workflows in chat.') }}</p></div>
-      <button class="btn btn-sm" :disabled="loading || busy" @click="refreshAll">{{ t('Refresh') }}</button>
+    <header v-if="!snapshot || empty" class="workflow-heading">
+      <button class="btn btn-sm workflow-refresh" :disabled="loading || busy" @click="refreshAll">{{ t('Refresh') }}</button>
     </header>
     <div v-if="error" class="workflow-message failure" role="alert"><p>{{ error }}</p><button class="btn btn-sm" :disabled="loading || busy" @click="refreshAll">{{ t('Retry') }}</button></div>
     <p v-if="snapshot?.botsUnavailable" class="workflow-message failure" role="alert">{{ t('BOT projection unavailable. Refresh to retry.') }}</p>
     <p v-if="snapshot?.bots?.warnings.length" class="workflow-message" role="status">{{ t('BOT inventory is incomplete. Some entries are unavailable or limited.') }}</p>
     <p v-if="snapshot?.runtimeError" class="workflow-message failure" role="alert">{{ t('Workflow persistence or execution needs attention. Check Main before retrying effects.') }}</p>
     <p v-if="loading && !snapshot" class="workflow-message" role="status">{{ t('Loading workflows…') }}</p>
-    <div v-else-if="snapshot && !snapshot.definitions.length && !botFlows.length" class="workflow-empty">
+    <div v-else-if="empty" class="workflow-empty">
       <h2>{{ t('No workflows yet') }}</h2><p>{{ t('Ask an Agent to create a workflow with a signal source, an explicit first-batch policy and typed actions. Its saved definition will appear here.') }}</p>
       <RouterLink class="btn" :to="chatLocation">{{ t('Open chat') }}</RouterLink>
     </div>
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
-      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-node-id="selectedBot ? botSelectedNode : inspectedNode" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)" />
+      <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-node-id="selectedBot ? botSelectedNode : inspectedNode" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)">
+        <template #toolbar-actions>
+          <button class="btn btn-sm workflow-refresh" :disabled="loading || busy" @click="refreshAll">{{ t('Refresh') }}</button>
+        </template>
+      </WorkflowGraph>
       <p v-if="documentQuery.bot && !selectedBot || documentQuery.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
       <aside v-if="selectedBot" :id="inspectorId" ref="inspector" tabindex="-1" class="workflow-inspector" :aria-label="t('Workflow details')" @keydown.esc="closeInspector">
         <SidebarResizer edge="left" v-model="inspectorWidth" :bounds="{ min: 300, max: 560 }" :label="t('Resize details')" :controls="inspectorId" />
@@ -140,6 +143,7 @@ watch(() => documentQuery.value.workflow, id => { if (typeof id === 'string' && 
 const referenceHub = inject(WorkflowInputReferencesKey, undefined)
 const inspectorId = useId(), inspectorWidth = ref(380)
 const botFlows = computed(() => botCanvas(snapshot.value?.bots))
+const empty = computed(() => !!snapshot.value && !snapshot.value.definitions.length && !botFlows.value.length)
 const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot || typeof documentQuery.value.bot === 'string' && Object.hasOwn(flow.selectionAliases ?? {}, documentQuery.value.bot)))
 const botSelectedNode = computed(() => inspectedNode.value ?? (typeof documentQuery.value.bot === 'string' ? selectedBot.value?.selectionAliases?.[documentQuery.value.bot] : undefined))
 watch(() => documentQuery.value.bot, () => { inspectedNode.value = undefined })
@@ -220,16 +224,17 @@ onUnmounted(() => { activated.value = false; mutation?.abort(); if (typeof docum
 
 <style scoped>
 .workflow-manager { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; color: var(--c-text); font-size: 13px; container-type: inline-size; }
-.workflow-heading { display: flex; gap: 16px; justify-content: space-between; align-items: start; padding: 18px 20px; border-bottom: 1px solid var(--c-border); }
-h1, h2, h3, p { margin: 0; } h1 { font-size: 18px; font-weight: 600; } h2 { font-size: 16px; font-weight: 600; } h3 { font-size: 14px; font-weight: 600; }
-.workflow-heading p, .workflow-explanation, .workflow-footer p { margin-top: 6px; color: var(--c-text-secondary); line-height: 1.6; max-width: 75ch; }
+.workflow-heading { display: flex; justify-content: flex-end; padding: 8px 20px; border-bottom: 1px solid var(--c-border); }
+h2, h3, p { margin: 0; } h2 { font-size: 16px; font-weight: 600; } h3 { font-size: 14px; font-weight: 600; }
+.workflow-explanation, .workflow-footer p { margin-top: 6px; color: var(--c-text-secondary); line-height: 1.6; max-width: 75ch; }
+.workflow-refresh { margin-inline-start: auto; }
 .workflow-layout { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
 .workflow-layout.has-inspector { grid-template-columns: minmax(0, 1fr) var(--workflow-inspector-width); }
 .workflow-inspector { position: relative; min-width: 0; overflow: auto; padding: 16px; border-left: 1px solid var(--c-border); background: var(--c-bg-card); }
 .inspector-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; color: var(--c-text-secondary); }
 .workflow-inspector:focus { outline: none; }.workflow-inspector:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .graph-text { margin-top: 12px; border-bottom: 1px solid var(--c-border); }.graph-text summary { padding: 10px 0; cursor: pointer; overflow-wrap: anywhere; }
-.workflow-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }.workflow-title>div, .workflow-heading>div { min-width: 0; flex: 1; }.workflow-title h2 { overflow-wrap: anywhere; }.workflow-title>.btn, .workflow-heading>.btn { flex-shrink: 0; white-space: nowrap; }.workflow-title p { margin-top: 8px; font-size: 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.workflow-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }.workflow-title>div { min-width: 0; flex: 1; }.workflow-title h2 { overflow-wrap: anywhere; }.workflow-title>.btn, .workflow-refresh { flex-shrink: 0; white-space: nowrap; }.workflow-title p { margin-top: 8px; font-size: 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .workflow-map-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 24px 0 12px; }.workflow-map-heading>span { color: var(--c-text-secondary); font-size: 12px; }
 .workflow-state { font-size: 12px; color: var(--c-text-secondary); font-weight: 400; }.workflow-state[data-state=completed] { color: var(--c-success); }.workflow-state[data-state=blocked], .workflow-run-hint[data-state=blocked] { color: var(--c-warn); }.workflow-state[data-state=retry], .failure { color: var(--c-error); }.workflow-state[data-state=running] { color: var(--c-info); }
 .workflow-definition { margin-top: 18px; border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); }.workflow-definition summary { padding: 12px 0; cursor: pointer; }.workflow-definition>p { margin: 10px 0; overflow-wrap: anywhere; }
@@ -241,6 +246,6 @@ dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; m
 .workflow-run-choice { width: 100%; padding: 12px 0; background: transparent; border: 0; border-bottom: 1px solid var(--c-border-soft); color: var(--c-text); display: grid; grid-template-columns: minmax(0, 1fr) auto; text-align: start; gap: 6px 16px; cursor: pointer; }.workflow-run-choice>span:last-child { font-size: 12px; color: var(--c-text-secondary); }.workflow-run-choice code { color: var(--c-text-secondary); }
 .workflow-message { padding: 12px 20px; }.workflow-message p { margin-bottom: 8px; }.workflow-empty { padding: 40px 24px; }.workflow-empty p { margin: 12px 0 20px; max-width: 65ch; line-height: 1.6; color: var(--c-text-secondary); }.workflow-footer { padding: 24px 0 8px; }.workflow-footer a { color: var(--c-primary); }.workflow-footer p { font-size: 12px; }
 button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-@container (max-width: 900px) { .workflow-layout.has-inspector { grid-template-columns: minmax(0, 1fr); }.workflow-inspector { position: absolute; inset: 0 0 0 auto; width: min(380px, 100%); box-sizing: border-box; z-index: 5; box-shadow: -8px 0 24px var(--c-shadow-soft); }.workflow-inspector :deep(.sidebar-resizer) { display: none; }.workflow-heading { padding: 16px; } }
+@container (max-width: 900px) { .workflow-layout.has-inspector { grid-template-columns: minmax(0, 1fr); }.workflow-inspector { position: absolute; inset: 0 0 0 auto; width: min(380px, 100%); box-sizing: border-box; z-index: 5; box-shadow: -8px 0 24px var(--c-shadow-soft); }.workflow-inspector :deep(.sidebar-resizer) { display: none; }.workflow-heading { padding-inline: 16px; } }
 @media (max-width: 700px), (pointer: coarse) { .workflow-run-choice, summary, .btn { min-height: 44px; } }
 </style>

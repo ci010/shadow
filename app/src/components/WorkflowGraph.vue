@@ -62,6 +62,7 @@ const canvas = computed(() => buildCanvas(props.flows))
       <button class="btn btn-sm" @click="zoomOut()">{{ t('Zoom out') }}</button>
       <button class="btn btn-sm" @click="fitView({ padding: .1 })">{{ t('Fit diagram') }}</button>
       <details class="canvas-help"><summary>{{ t('Canvas shortcuts') }}</summary><p>{{ t('Drag empty canvas with the left or middle mouse button to pan; click a node or workflow title to inspect it. Focus the canvas: scroll to pan; Ctrl/Cmd + scroll to zoom. Shift+1 fits all workflows; Shift+2 fits the selected node or workflow. Escape clears selection. These shortcuts never edit or run a workflow.') }}</p></details>
+      <slot name="toolbar-actions" />
     </div>
     <div ref="pane" class="graph-canvas" tabindex="-1" :aria-label="t('Workflow canvas')" @wheel="wheel"
       @pointerdown="event => { if (!editable(event.target) && !(event.target as HTMLElement).closest('button')) focusCanvas() }">
