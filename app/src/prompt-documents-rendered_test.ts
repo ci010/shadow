@@ -56,7 +56,11 @@ test('prompt components render revision-bound tabs, source metadata and selectio
           response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify([{name:'general',description:'Fixture role',source:'builtin',defaultMode:'session',prompt:'Definition body'}])); return
         }
         if (request.url?.startsWith('/api/agent-types/general/context')) {
-          response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({systemPrompt:'Role preview',tools:[]})); return
+          requests.push(request.url)
+          const ownerWeb = new URL(request.url, 'http://fixture').searchParams.get('rolePreview') === 'owner-web'
+          const systemPrompt = ownerWeb ? 'Device Inventory / fixture Child' : 'Generic role preview'
+          response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ systemPrompt, tools: [],
+            ...(ownerWeb ? { rolePreview: 'owner-web' } : {}), sections: [{ name: 'runtime', content: systemPrompt, characters: systemPrompt.length }] })); return
         }
         if (request.url === '/api/sessions/web%3Afixture/context') {
           requests.push(request.url); response.setHeader('Content-Type', 'application/json');
@@ -107,6 +111,9 @@ test('prompt components render revision-bound tabs, source metadata and selectio
         agentButton.click();
         await wait(()=>window.fixture.document.value.prompt==='Definition body');
         if(window.fixture.document.value.source!=='builtin / general / AGENT.md (definition prompt)')throw Error('wrong role source');
+        [...document.querySelectorAll('.agent-overview button')].find(button=>button.textContent.includes('Read system prompt')).click();
+        await wait(()=>[...document.querySelectorAll('.prompt-section')].some(section=>section.textContent.includes('Device Inventory / fixture Child')));
+        if(!document.querySelector('.preview-scope')?.textContent.includes('Owner Web preview'))throw Error('missing owner preview boundary');
         return 'PROMPT_DOCUMENTS_OK';
       })()\`);
       console.log(result); app.exit(0);
@@ -119,5 +126,12 @@ test('prompt components render revision-bound tabs, source metadata and selectio
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 75_000); t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); assert.equal(code, 0, output); assert.match(output, /PROMPT_DOCUMENTS_OK/)
-  assert.deepEqual(requests.sort(), ['/api/bot-package/fixture/prompt?revision=rev-1', '/api/sessions/web%3Afixture/context'])
+  const roleRequests = requests.filter(url => url.startsWith('/api/agent-types/general/context'))
+  assert(roleRequests.length > 0)
+  for (const url of roleRequests) {
+    const query = new URL(url, 'http://fixture').searchParams
+    assert.equal(query.get('channel'), 'web')
+    assert.equal(query.get('rolePreview'), 'owner-web')
+  }
+  assert.deepEqual(requests.filter(url => !roleRequests.includes(url)).sort(), ['/api/bot-package/fixture/prompt?revision=rev-1', '/api/sessions/web%3Afixture/context'])
 })

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { SESSION_RESPONSE_GUIDANCE } from './response-audience.ts'
+import { GENERAL_V2_WEB_RESPONSE_GUIDANCE, SESSION_RESPONSE_GUIDANCE } from './response-audience.ts'
 import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
@@ -11,6 +11,26 @@ import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-poli
 
 const TOOLS = readFileSync(new URL('./AGENTS.tools.md', import.meta.url), 'utf8')
 
+const COMPACT_TOOLS = `## Tool discovery and recovery
+
+Run independent tools in parallel. Prefer \`search\` over shell for files/content.
+Use \`write\` for ordinary text edits; use \`exec\` for transformations that need it.
+Do not choose a tool that would change unrelated content just to satisfy this preference.
+
+- Partial search results do not prove absence. Use the live schema, not copied examples; correct invalid arguments rather than guessing another tool ID.
+- Read the exact returned skill path before using its instructions or tools.
+- Before adding, removing, or changing an MCP server, read \`v:skills/mcp-config\`.
+- For MCP recovery, read \`v:skills/tool-operations\`. If execution may have occurred, check the outcome before retrying.
+
+<!-- capability:skill_save -->
+- Before shared Skill editing or detailed activation/index recovery, read \`v:skills/tool-operations\`. Use \`v:skills/.raw/<name>\` for the raw baseline and \`skill_save\` to save it; saving does not activate or publish it.
+<!-- /capability -->`
+
+function toolDiscoveryGuidance(ctx: SessionPromptContext): string {
+  const compact = ctx.agent.name === 'general-v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session'
+  return capabilityPrompt(compact ? COMPACT_TOOLS : TOOLS, ctx)
+}
+
 export function guidelineProvider(): SystemPromptProvider {
   return {
     name: 'guideline',
@@ -18,7 +38,7 @@ export function guidelineProvider(): SystemPromptProvider {
       const entries: Array<[string, string]> = [
         ['AGENT.md', capabilityPrompt(ctx.agent.prompt, ctx)],
         ...(ctx.personalBotPrompt !== undefined ? [['BOT.md (personal deployment)', capabilityPrompt(`# Personal BOT instructions\n${ctx.personalBotPrompt}`, ctx)] as [string, string]] : []),
-        ['tool-guidance', [capabilityPrompt(TOOLS, ctx), toolsGuideline(ctx)].join('\n\n')],
+        ['tool-guidance', [toolDiscoveryGuidance(ctx), toolsGuideline(ctx)].join('\n\n')],
       ]
       return entries.map(([name, text], index) => {
         // Only the whole provider was trimmed historically, not internal sources.
@@ -34,7 +54,7 @@ export function guidelineProvider(): SystemPromptProvider {
         ? `${agentType.prompt}\n\n# Personal BOT instructions\n${ctx.personalBotPrompt}` : agentType.prompt
       const sections = [capabilityPrompt(rolePrompt, ctx)]
 
-      sections.push(capabilityPrompt(TOOLS, ctx))
+      sections.push(toolDiscoveryGuidance(ctx))
       sections.push(toolsGuideline(ctx))
       return sections.join('\n\n')
     },
@@ -97,7 +117,7 @@ ${modes.length
 
 This is a reusable conversation. Complete the current request; a final response ends the turn, not the conversation, and is delivered to this conversation's reader.
 
-${SESSION_RESPONSE_GUIDANCE}
+${ctx.agent.name === 'general-v2' && ctx.channel === 'web' ? GENERAL_V2_WEB_RESPONSE_GUIDANCE : SESSION_RESPONSE_GUIDANCE}
 
 Allowed delegation modes:
 ${modes.join(', ') || 'none'}. Role tool restrictions still apply.`

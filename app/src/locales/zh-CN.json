@@ -2204,6 +2204,7 @@
   "Preview access": "预览权限",
   "Preview applied access for a person": "预览某人的实际权限",
   "Preview channel": "预览频道",
+  "Owner Web preview uses current project devices where applicable. This is not a recorded model input.": "所有者 Web 预览在适用时使用当前项目的设备清单，不代表某次实际发给模型的输入。",
   "Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.": "仅供预览。不会继承会话历史、配置、机器人策略或工作绑定。",
   "Preview truncated — use “Download” for the full file.": "预览已截断 — 使用“下载”获取完整文件。",
   "Preview truncated. Download the archive for the full file.": "预览已截断。请下载归档以获取完整文件。",

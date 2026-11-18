@@ -79,7 +79,7 @@
               <p v-if="selected && (loadingContext || contextError || !contextMatchesSelection)" class="previous-context" role="status">{{ t('Showing the previous preview:') }} <strong>{{ selected.name }}</strong> / {{ resolvedChannel }}{{ t('. The requested preview is not available yet.') }}</p>
           </template>
           <template #inspection-footer>
-            <p v-if="selected" class="preview-scope">{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
+            <p v-if="selected" class="preview-scope"><template v-if="ownerWebPreview">{{ t('Owner Web preview uses current project devices where applicable. This is not a recorded model input.') }} </template>{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
           </template>
         </DefinitionDetail>
         <div v-else-if="agentName && listError" class="agent-error agent-empty" role="alert"><p>{{ listError }}</p><button class="text-action" type="button" @click="loadAgentTypes">{{ t('Retry catalog') }}</button></div>
@@ -139,6 +139,7 @@ const renderedSystemPrompt = ref('')
 const sections = ref<import('../prompt-sections.ts').PromptSection[]>([])
 const resolvedTools = ref<ToolDef[]>([])
 const resolvedChannel = ref('')
+const ownerWebPreview = ref(false)
 const loadingContext = ref(false)
 const loadingList = ref(true)
 const listError = ref('')
@@ -182,15 +183,17 @@ async function loadContext(agent: AgentTypeMeta) {
   contextRequest?.abort()
   const request = contextRequest = new AbortController()
   const previewChannel = channel.value
+  const query = { channel: previewChannel, ...(previewChannel === 'web' ? { rolePreview: 'owner-web' } : {}) }
   loadingContext.value = true
   contextError.value = ''
   try {
-    const response = await fetch(buildUrl(`/api/agent-types/${encodeURIComponent(agent.name)}/context`, { channel: previewChannel }), { signal: request.signal })
+    const response = await fetch(buildUrl(`/api/agent-types/${encodeURIComponent(agent.name)}/context`, query), { signal: request.signal, cache: 'no-store' })
     if (!response.ok) throw new Error(t('Failed to load {name} context ({status}).', { name: agent.name, status: response.status }))
     const data = parseAgentContext(await response.json())
     if (request.signal.aborted) return
     selected.value = agent
     resolvedChannel.value = previewChannel
+    ownerWebPreview.value = data.rolePreview === 'owner-web'
     renderedSystemPrompt.value = data.systemPrompt
     sections.value = data.sections
     resolvedTools.value = data.tools
@@ -227,6 +230,7 @@ watch(() => [props.apiBase, props.agentName, props.active] as const, () => {
   renderedSystemPrompt.value = ''
   resolvedTools.value = []
   resolvedChannel.value = ''
+  ownerWebPreview.value = false
   contextError.value = ''
   loadingContext.value = false
   agentQuery.value = ''

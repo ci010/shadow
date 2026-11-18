@@ -57,6 +57,8 @@ test('internal roles stay out of public role selection while general remains ava
     await agentTypesPlugin(undefined, roles)(app)
     const body = await (await app.request('/api/agent-types')).json() as Array<{ name: string }>
     assert(body.some(role => role.name === 'general'))
+    assert(body.some(role => role.name === 'general-v2'))
+    assert(!roles.getAgentTypesSummary().includes('general-v2'))
     assert(!body.some(role => role.name === 'internal-fixture'))
     assert(!body.some(role => role.name === 'dispatcher'))
     assert(!body.some(role => role.name === 'work-organizer'))

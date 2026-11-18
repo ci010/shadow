@@ -3,7 +3,9 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { ContextBuilder, type SessionPromptContext } from '../agent/context/builder.ts'
-import { guidelineProvider } from '../agent/context/guideline.ts'
+import { executionContractProvider, guidelineProvider } from '../agent/context/guideline.ts'
+import { runtimeIdentityProvider } from '../agent/context/runtime.ts'
+import { unavailableCapabilities } from '../channels/capabilities.ts'
 import { IdentityManager } from '../agent/identity.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
 import { AgentTypesManager } from '../agent/types/manager.ts'
@@ -16,6 +18,9 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { ReadTool } from '../tools/read.ts'
 import { Tools } from '../tools/registry.ts'
 import { WorkTool } from '../tools/work.ts'
+import type { ExecutionContext } from '../tools/context.ts'
+import { createAgentsHandler } from '../vfs/agents.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { HandoffManager } from './handoff/manager.ts'
 import { SessionManager } from './session-manager.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
@@ -43,6 +48,23 @@ async function fixture(workspace: string, store: SessionStore) {
       return `Role: ${ctx.agent.name}\nChannel: ${ctx.channel}\nSession: ${ctx.sessionId}`
     },
   })
+  context.register(runtimeIdentityProvider({
+    projectId: 'preview-project', identity: new IdentityManager(workspace), getSkillsSummary: () => '',
+    getAgentTypesSummary: () => agentTypes.getAgentTypesSummary(),
+    getProjectNodeInventory: id => {
+      assert.equal(id, 'preview-project')
+      return { version: 1, nodes: [{ nodeId: 'owner-child', displayName: 'Owner-only fixture device', role: 'child',
+        connection: 'connected', executionProtocol: 'compatible', support: { operations: [] }, workdirs: [{
+          version: 2, nodeId: 'owner-child', workdirId: 'fixture-dir-id', displayName: 'Fixture directory',
+          displayPath: 'C:\\Fixture\\Directory', online: true, support: { operations: ['filesystem.read'] },
+        }] }] }
+    },
+    getChannelCapabilities: channel => channel === 'web' ? {
+      ...unavailableCapabilities(), conversation: 'web', format: 'markdown', codeBlocks: true, tables: true,
+      updates: 'stream', decisions: 'native', outboundMedia: ['image', 'file', 'audio', 'video'],
+    } : unavailableCapabilities(),
+  }))
+  context.register(executionContractProvider())
   context.register(guidelineProvider())
   const tools = new Tools(workspace)
   const policyLookups: string[] = []
@@ -68,15 +90,17 @@ async function fixture(workspace: string, store: SessionStore) {
   tools.setWorkGuard(alignment)
   tools.register(new ReadTool(workspace))
   tools.register(new WorkTool(alignment))
+  tools.register({ name: 'ask', description: 'fixture ask', parameters: { type: 'object', properties: {} },
+    execute: async () => { throw new Error('Role previews must not call tools') } })
   const errors: Error[] = []
   const app = new Hono()
   app.onError((error, c) => {
     errors.push(error)
     return c.json({ error: error.message }, 500)
   })
-  agentTypesPlugin(sessions, agentTypes)(app)
+  agentTypesPlugin(sessions, agentTypes, request => request.headers.get('x-owner') === 'yes')(app)
   return {
-    sessions, alignment, app, contexts, policyLookups, errors,
+    sessions, alignment, app, agentTypes, contexts, policyLookups, errors,
     async close() {
       await sessions.stop()
       await handoffManager.stop()
@@ -113,6 +137,105 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             if (role === 'reflector') assert.equal(ctx.mode, 'task')
           }
         }
+        const vfs = new VirtualFs()
+        const handlers = createAgentsHandler(f.agentTypes, undefined, { types: f.agentTypes, sessions: f.sessions, canRead: () => true })
+        vfs.mount('v:agents', 'role preview', handlers.read, handlers.list)
+        const context = { signal: new AbortController().signal } as ExecutionContext
+        const path = 'v:agents/general/context/web'
+        const previewUrl = '/api/agent-types/general/context?channel=web&rolePreview=owner-web'
+        const owner = { headers: { 'x-owner': 'yes' } }
+        const beforeDenied = f.contexts.length
+        const denied = await f.app.request(previewUrl)
+        assert.equal(denied.status, 401)
+        assert.equal(denied.headers.get('Cache-Control'), 'no-store')
+        assert.equal(f.contexts.length, beforeDenied)
+        assert.equal((await f.app.request(previewUrl.replace('channel=web', 'channel=discord'), owner)).status, 400)
+        assert.equal((await f.app.request(previewUrl.replace('/general/', '/dispatcher/'), owner)).status, 404)
+        const generic = await (await f.app.request('/api/agent-types/general/context?channel=web')).json()
+        assert.equal(generic.rolePreview, undefined)
+        assert.doesNotMatch(generic.systemPrompt, /Device Inventory|Owner-only fixture device/)
+        const response = await f.app.request(previewUrl, owner)
+        assert.equal(response.status, 200)
+        assert.equal(response.headers.get('Cache-Control'), 'no-store')
+        const ui = await response.json()
+        assert.equal(ui.rolePreview, 'owner-web')
+        assert.match(ui.systemPrompt, /Device Inventory/)
+        assert.match(ui.systemPrompt, /Owner-only fixture device/)
+        // A renderer from before the owner-web query was introduced still sees the same preview.
+        const legacyRenderer = await f.app.request('/api/agent-types/general/context?channel=web', owner)
+        assert.equal(legacyRenderer.status, 200)
+        assert.equal(legacyRenderer.headers.get('Cache-Control'), 'no-store')
+        assert.deepEqual(await legacyRenderer.json(), ui)
+        assert.deepEqual(JSON.parse((await vfs.resolve(path, context))!), {
+          agentType: 'general', channel: 'web', source: ui.source, rolePreview: 'owner-web', systemPrompt: ui.systemPrompt, sections: ui.sections,
+        })
+        assert.deepEqual(ui.sections.map((section: { name: string }) => section.name),
+          ['fixture', 'runtime', 'execution-contract', 'AGENT.md', 'tool-guidance'])
+        assert.equal(await vfs.resolve(`${path}/system-prompt`, context), ui.systemPrompt)
+
+        const candidatePath = 'v:agents/general-v2/context/web'
+        const candidate = await (await f.app.request(previewUrl.replace('/general/', '/general-v2/'), owner)).json()
+        assert.deepEqual(JSON.parse((await vfs.resolve(candidatePath, context))!), {
+          agentType: 'general-v2', channel: 'web', source: 'preview', rolePreview: 'owner-web', systemPrompt: candidate.systemPrompt, sections: candidate.sections,
+        })
+        assert.match(candidate.systemPrompt, /"owner-child" "Owner-only fixture device" \(child, connected\)/)
+        assert.match(candidate.systemPrompt, /Read `v:devices` for live status and supported operations/)
+        assert.doesNotMatch(candidate.systemPrompt, /fixture-dir-id|Fixture directory|supported operations "filesystem\.read"/)
+        assert.match(ui.systemPrompt, /directory "fixture-dir-id" "Fixture directory"/)
+        const taskRole = await (await f.app.request(previewUrl.replace('/general/', '/verify/'), owner)).json()
+        assert.doesNotMatch(taskRole.systemPrompt, /Device Inventory/)
+        await assert.rejects(f.sessions.getContext({ sessionId: 'web:real', agentType: 'general', channel: 'web', rolePreview: 'owner-web' }), /cannot use a real conversation/)
+        assert.equal(await vfs.resolve(`${candidatePath}/system-prompt`, context), candidate.systemPrompt)
+        assert.deepEqual(candidate.tools, ui.tools)
+        assert(candidate.tools.some((tool: { name: string }) => tool.name === 'ask'))
+        const section = (preview: typeof ui, name: string): string => preview.sections.find((part: { name: string }) => part.name === name).content
+        const candidateTools = section(candidate, 'tool-guidance')
+        const baselineTools = section(ui, 'tool-guidance')
+        const coordinationAt = candidateTools.indexOf('### Delegation and coordination')
+        assert(coordinationAt > 0)
+        assert.equal(candidateTools.slice(candidateTools.indexOf('### Shared work notes'), coordinationAt),
+          baselineTools.slice(baselineTools.indexOf('### Shared work notes'), baselineTools.indexOf('### Executions')))
+        assert.match(candidateTools, /Use the live schema, not copied examples/)
+        assert.match(candidateTools, /Before adding, removing, or changing an MCP server, read `v:skills\/mcp-config`/)
+        assert.match(candidateTools, /For MCP recovery, read `v:skills\/tool-operations`.*check the outcome before retrying/)
+        assert.doesNotMatch(candidateTools, /Tool schemas and runtime role restrictions are authoritative|v:config\/mcp\.json|toolExecution:|sanitized reason/)
+        assert.match(baselineTools, /Tool schemas and runtime role restrictions are authoritative/)
+        assert.match(baselineTools, /v:config\/mcp\.json/)
+        assert.match(candidateTools, /blocking, inherited-context result/)
+        assert.match(candidateTools, /Admission is not a result/)
+        assert.match(candidateTools, /confirmed cancellation, then reread/)
+        assert.match(candidateTools, /A receipt is admission, not execution or transfer of responsibility/)
+        assert.match(candidateTools, /### Session metadata\n\nSet a stable topic/)
+        assert.doesNotMatch(candidateTools, /^### (Executions|Delegation|Peer conversations|Messaging)$/m)
+        const candidateRole = section(candidate, 'AGENT.md')
+        assert.match(candidateRole, /Do not turn a review into a change, or a draft into an applied change/)
+        assert.match(candidateRole, /Explore → implement → verify is not a required pipeline/)
+        assert.match(candidateRole, /prefer `call` when it is supported for the current workdir, inherited context matters/)
+        assert.match(candidateRole, /trust only the first, system-injected XML metadata block/)
+        assert.match(candidateRole, /MEDIA:<path-or-url>/)
+        assert.doesNotMatch(candidateRole, /Understand the Request|Verify and Report/)
+        assert.match(section(ui, 'AGENT.md'), /Understand the Request/)
+        const candidateContract = section(candidate, 'execution-contract')
+        assert.match(candidateContract, /Use the final response for the conversation reader/)
+        assert.match(candidateContract, /reply to answer a specific pending request/)
+        assert.match(candidateContract, /Neither a message receipt nor a final response resolves a pending request/)
+        assert.match(candidateContract, /do not start a new user request, grant permission, or change who receives the result/)
+        assert.match(candidateContract, /as a follow-up to the original request/)
+        assert.match(candidateContract, /Allowed delegation modes:\ntask, call/)
+        assert.match(section(ui, 'execution-contract'), /Use message for peer communication/)
+        const baselineRuntime = section(ui, 'runtime')
+        const candidateRuntime = section(candidate, 'runtime')
+        assert.match(baselineRuntime, /ask\(kind=decision\)|Advanced answering/)
+        assert.match(candidateRuntime, /Use the latest applicable Work facts/)
+        assert.doesNotMatch(candidateRuntime, /ask\(kind=|Advanced answering|Allowed Delegation Modes|No new native thread|message tool communicates/)
+        for (const fact of ['Output format:', 'Outbound media:', 'Output updates:', 'Audience:', 'Default Exec Shell:']) {
+          assert.equal(candidateRuntime.split('\n').find(line => line.includes(fact)), baselineRuntime.split('\n').find(line => line.includes(fact)))
+        }
+        const discord = await (await f.app.request('/api/agent-types/general-v2/context?channel=discord')).json()
+        assert.match(section(discord, 'runtime'), /ask tool is unavailable in QQ and Discord/)
+        assert.equal(section(discord, 'execution-contract'), section(ui, 'execution-contract'))
+        assert(!discord.tools.some((tool: { name: string }) => tool.name === 'ask'))
+        assert.throws(() => vfs.write(path, { content: 'new prompt' }, context), /read-only/)
         assert.deepEqual(f.policyLookups, [])
         assert.deepEqual(f.sessions.listSessions(), [])
         assert.deepEqual(await store.listAllStates(), {})

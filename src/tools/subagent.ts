@@ -2,6 +2,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { ExecutionContext } from './context.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
+import { isSelectableAgentType } from '../agent/types/types.ts'
 import type { ChannelManager } from '../channels/manager.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
@@ -171,7 +172,7 @@ export class SubagentTool implements Tool {
     // Resolve agent type
     const agentType = this.agentTypes.resolve(typeName)
     if (!agentType) {
-      return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.all().filter(type => !type.root || type.name === 'general').map(type => type.name).join(', ')}`
+      return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.all().filter(isSelectableAgentType).map(type => type.name).join(', ')}`
     }
     const mode = args.mode ?? 'task'
     const title = mode === 'task' ? parseSessionName(args.title ?? description.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120)) : undefined

@@ -25,7 +25,7 @@ import { AgentTypesManager } from '../types/manager.ts'
 import { capabilityPrompt } from './capability-prompt.ts'
 import { toolsGuideline } from './tools-guideline.ts'
 
-test('provenance preserves legacy assembly bytes for every built-in role and personal BOT whitespace', async () => {
+test('provenance preserves legacy assembly bytes and reconstructs intentional general-v2 changes', async () => {
   const roles = new AgentTypesManager(process.cwd())
   await roles.load()
   const tools = readFileSync(new URL('./AGENTS.tools.md', import.meta.url), 'utf8')
@@ -38,7 +38,11 @@ test('provenance preserves legacy assembly bytes for every built-in role and per
     builder.register(guidelineProvider())
     builder.register({ name: 'after', getPromptSection: () => '\nAfter  ' })
     const built = await builder.buildSystemPromptDetails(ctx)
-    assert.equal(built.systemPrompt, `Before\n\n---\n\n${legacy}\n\n---\n\nAfter`, `${agent.name}, personal=${JSON.stringify(personal)}`)
+    const comparable = agent.name === 'general-v2' && agent.defaultMode === 'session'
+      ? built.systemPrompt.replace(/## Tool discovery and recovery[\s\S]*?(?=### Shared work notes)/,
+        `${capabilityPrompt(tools, ctx)}\n\n`)
+      : built.systemPrompt
+    assert.equal(comparable, `Before\n\n---\n\n${legacy}\n\n---\n\nAfter`, `${agent.name}, personal=${JSON.stringify(personal)}`)
     assert.equal(built.sections.map(section => (section.separatorBefore ?? '') + section.content).join(''), built.systemPrompt)
   }
 })

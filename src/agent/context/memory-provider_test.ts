@@ -192,3 +192,21 @@ test('memory provider keeps descriptions main-only and historical, and gates rel
     }
   })
 })
+
+test('general-v2 Session shortens the memory introduction without changing the recalled content', async () => {
+  const memory = {
+    readKeywords: async () => 'decisions: known-keyword — Summary',
+    readLogs: async () => 'Historical log',
+    readWorkingSet: async () => 'Previously touched file',
+  } as unknown as MemoryStore
+  const provider = memoryProvider(memory, () => undefined)
+  const concise = (await provider.getPromptSection(ctx('web:fixture', agent('general-v2'))))!
+  const legacy = (await provider.getPromptSection(ctx('web:fixture', agent('general'))))!
+  const content = (prompt: string) => prompt.slice(prompt.indexOf('## Memory lookup index'))
+  assert.match(concise, /## Memory lookup index/)
+  assert.equal(content(concise), content(legacy))
+  assert.match(concise, /Top-of-mind memory, not current state or authorization/)
+  assert.match(concise, /search `v:memory`.*browse `v:knowledge`/)
+  assert.doesNotMatch(concise, /Source scope:|explicit supersession/)
+  assert.match(legacy, /Source scope: session "web:fixture"/)
+})

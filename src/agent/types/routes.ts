@@ -1,4 +1,5 @@
 import type { AgentTypesManager } from './manager.ts'
+import { isSelectableAgentType } from './types.ts'
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import type { GatewayPlugin } from '../../gateway/types.ts'
 
@@ -21,7 +22,7 @@ export function agentTypesPlugin(
       const view = c.req.query('view')
       const knowledge = view === 'knowledge'
       const indexOnly = definition === undefined && (view === 'index' || knowledge)
-      const types = (knowledge ? agentTypes.knowledgeDefinitions() : agentTypes.all()).filter(t => (!t.root || t.name === 'general') && (definition === undefined || definition === t.name)).map((t) => ({
+      const types = (knowledge ? agentTypes.knowledgeDefinitions() : agentTypes.all()).filter(t => isSelectableAgentType(t) && (definition === undefined || definition === t.name)).map((t) => ({
         name: t.name,
         description: t.description,
         prompt: indexOnly ? undefined : t.prompt,
@@ -44,7 +45,19 @@ export function agentTypesPlugin(
       }
       const name = decodeURIComponent(c.req.param('name'))
       const channel = c.req.query('channel') ?? 'debug'
-      const result = await sessions.getContext({ agentType: name, channel })
+      const requestedPreview = c.req.query('rolePreview')
+      // Older Knowledge clients only send channel=web. Select the same preview
+      // server-side for authenticated requests, without widening role visibility.
+      if (channel === 'web' || requestedPreview !== undefined) c.header('Cache-Control', 'no-store')
+      if (requestedPreview !== undefined && (requestedPreview !== 'owner-web' || channel !== 'web')) {
+        return c.json({ error: 'invalid_role_preview' }, 400)
+      }
+      const authorizedWeb = channel === 'web' && await authorizeDefinition?.(c.req.raw)
+      if (requestedPreview && !authorizedWeb) return c.json({ error: 'Unauthorized' }, 401)
+      const visibleRole = authorizedWeb && agentTypes?.knowledgeDefinitions().some(type => type.name === name && isSelectableAgentType(type))
+      if (requestedPreview && !visibleRole) return c.json({ error: 'agent_type_not_found', name }, 404)
+      const rolePreview = visibleRole ? 'owner-web' : undefined
+      const result = await sessions.getContext({ agentType: name, channel, rolePreview })
       if (!result) {
         return c.json({ error: 'agent_type_not_found', name }, 404)
       }
