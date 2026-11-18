@@ -56,7 +56,7 @@ async function waitFor(check: () => boolean) {
 }
 
 function fixture(workspace: string, store: SessionStore, settings: {
-  managedReview?: boolean; ignoreAbort?: boolean; sleepMs?: number; projectId?:string; hasInitiative?: (id: string) => boolean
+  agentVersionDefaults?: () => Record<string, string>; managedReview?: boolean; ignoreAbort?: boolean; sleepMs?: number; projectId?:string; hasInitiative?: (id: string) => boolean
 } = {}) {
   const requests: Array<{
     sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; maxTokens?: number; settled: boolean
@@ -111,6 +111,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
       },
     },
     getLlmRuntimeConfig: () => llm,
+    getAgentVersionDefaults: settings.agentVersionDefaults,
     hasInitiative: settings.hasInitiative,
     ...(settings.sleepMs ? { sleep: { inactivityMs: settings.sleepMs } } : {}),
   } as unknown as SessionManagerDeps)
@@ -155,6 +156,64 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: new ordinary Web sessions pin the built-in version without changing historical or explicit roles`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      let defaults: Record<string, string> = {}
+      const f = fixture(workspace, store, { agentVersionDefaults: () => defaults })
+      try {
+        await store.saveState('web:historical', { sessionId: 'web:historical', segmentIndex: 0 })
+        await f.sessions.start()
+        await f.sessions.prepareCommandSession('web:historical')
+        await f.sessions.prepareCommandSession('web:implicit')
+        await f.sessions.buildSession('web:explicit', undefined, { agentType: 'general' })
+        await f.sessions.buildSession('cron:automation', undefined, { agentType: 'general' })
+        await f.sessions.prepareCommandSession('discord:historical-default')
+        assert.equal((await store.getState('web:implicit'))?.agentType, 'general-v2')
+        assert.equal((await store.getState('web:historical'))?.agentType, undefined)
+        assert.equal((await store.getState('web:explicit'))?.agentType, 'general')
+        assert.equal((await store.getState('cron:automation'))?.agentType, 'general')
+        assert.equal((await store.getState('discord:historical-default'))?.agentType, undefined)
+        defaults = { general: 'v1' }
+        await f.sessions.buildSession('web:new', undefined, { config: { model: 'override' } })
+        await f.sessions.buildSession('web:fork', { id: 'web:implicit' }, { parentSessionId: null })
+        await f.sessions.prepareCommandSession('web:implicit')
+        assert.equal((await store.getState('web:new'))?.agentType, 'general')
+        assert.equal((await store.getState('web:new'))?.config?.model, 'override')
+        assert.equal((await store.getState('web:implicit'))?.agentType, 'general-v2')
+        assert.equal((await store.getState('web:fork'))?.agentType, 'general-v2')
+      } finally { await f.sessions.stop(); await store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: specialist delegation pins the resolved default and supports an exact version`, async t => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root', undefined, { agentType: 'general' })
+        let exploreDefault = 'explore-v2'
+        // Synthetic future version: the production catalog still ships only Explore V1.
+        t.mock.method(f.sessions, 'defaultBuiltinAgentType', (role: string) => role === 'explore' ? exploreDefault : role)
+        const expected = ['explore-v2', 'explore', 'explore']
+        const ids: string[] = []
+        for (const [index, agent_type] of ['explore', 'explore@v1', 'explore'].entries()) {
+          if (index === 2) exploreDefault = 'explore'
+          const pending = f.subagent.execute({ description: 'Explore', task: 'Explore a fixture', mode: 'task', agent_type }, sourceContext(workspace, f))
+          await waitFor(() => f.requests.some(request => !request.settled && request.sessionId !== 'web:root' && !ids.includes(request.sessionId)))
+          const request = f.requests.find(request => !request.settled && request.sessionId !== 'web:root' && !ids.includes(request.sessionId))!
+          ids.push(request.sessionId)
+          try { assert.equal((await store.getState(request.sessionId))?.agentType, expected[index]); assert.equal(request.model, 'fixture') }
+          finally { request.resolve(done()); await pending }
+        }
+        assert.equal((await store.getState(ids[0]))?.agentType, 'explore-v2')
+      } finally { await f.sessions.stop(); await store.close?.() }
+    })
+  })
+
   test(`${Store.name}: task overrides and inherited call inference reach the provider; retired observer cannot start or restore`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

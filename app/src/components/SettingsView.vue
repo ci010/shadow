@@ -11,7 +11,10 @@
       </nav>
       <div class="settings-section">
         <NodesView v-if="section === 'nodes'" :api-base="apiBase" embedded />
-        <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
+        <template v-if="section === 'models'">
+          <ModelDefaultsForm :api-base="apiBase" scope="app" />
+          <AgentVersionDefaultsForm :api-base="apiBase" />
+        </template>
         <WebSearchSettings v-if="section === 'web-search'" :api-base="apiBase" />
         <ProxySettings v-if="section === 'proxy'" :api-base="apiBase" />
         <SoundSettings v-if="section === 'sounds'" />
@@ -35,6 +38,7 @@ import { useInstallationContext } from '../composables/useInstallationContext.ts
 import NodesView from './NodesView.vue'
 import ProvidersView from './ProvidersView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
+import AgentVersionDefaultsForm from './AgentVersionDefaultsForm.vue'
 import WebSearchSettings from './WebSearchSettings.vue'
 import ProxySettings from './ProxySettings.vue'
 import SoundSettings from './SoundSettings.vue'

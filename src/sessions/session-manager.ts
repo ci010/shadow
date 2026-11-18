@@ -1,3 +1,4 @@
+import { builtinAgentVersion, type AgentVersionDefaults, type BuiltinAgentRole } from '../agent/types/versions.ts'
 import { isDisplayDuplicate, markRecordedChannelInput } from '../channels/recorded-input.ts'
 import { stampPersonalOutput } from '../bots/personal-output.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
@@ -140,6 +141,7 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  getAgentVersionDefaults?: () => AgentVersionDefaults
   sessionIdentityAliases?: Readonly<Record<string, string>>
   conversationPolicies?: ConversationPolicies
   promptCaptures?: import('./prompt-capture.ts').PromptCaptureStore
@@ -2088,6 +2090,17 @@ ${JSON.stringify(request)}`,
     finally { release() }
   }
 
+  /** Only new executions requesting a default call this; stored role IDs are never re-resolved here. */
+  defaultBuiltinAgentType(role: BuiltinAgentRole): string {
+    if (this.deps.agentTypes.resolve(role)?.source === 'workspace') return role
+    const { agentType } = builtinAgentVersion(role, this.deps.getAgentVersionDefaults?.())
+    return this.deps.agentTypes.resolve(agentType) ? agentType : role
+  }
+
+  private isOrdinaryWebSession(sessionId: string): boolean {
+    return sessionId.startsWith('web:') && !this.isManagedConversation(sessionId)
+  }
+
   private async buildSessionWithAccess(...[sessionId, parent, stateFields]: Parameters<SessionManager['buildSession']>): Promise<void> {
     if (parent?.index !== undefined) this.assertHistoryWritable(parent.id)
     const topicFields = parseTopicSessionFields(stateFields ?? {})
@@ -2129,12 +2142,17 @@ ${JSON.stringify(request)}`,
       }
     }
     if (stateFields?.agentType === 'work-observer' || stateFields?.automation?.jobId === 'system:work-observer') throw new Error('Automatic work observation has been retired')
-    const agent = this.deps.agentTypes.resolve(
-      stateFields?.agentType ?? 'general',
-    )
+    const useWebDefault = this.isOrdinaryWebSession(sessionId) && !automation && !stateFields?.channelSource &&
+      (stateFields?.mode === undefined || stateFields.mode === 'session') && !stateFields?.parentSessionId
+    // A Web history fork keeps its ordinary Web source's role, not the current default.
+    const forkSource = parent && this.isOrdinaryWebSession(parent.id) ? this.sessionStates[parent.id] : undefined
+    const agentType = stateFields?.agentType ?? (useWebDefault
+      ? parent ? (forkSource?.mode === 'session' ? forkSource.agentType : undefined) ?? 'general' : this.defaultBuiltinAgentType('general')
+      : 'general')
+    const agent = this.deps.agentTypes.resolve(agentType)
     if (!agent) {
       throw new TypeError(
-        `[session-manager] buildSession: unknown agent type "${stateFields?.agentType}"`,
+        `[session-manager] buildSession: unknown agent type "${agentType}"`,
       )
     }
     if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
@@ -2224,7 +2242,7 @@ ${JSON.stringify(request)}`,
       parent,
       workspaceRoot: stateFields?.workspaceRoot,
       workdir: stateFields?.workdir ?? inheritedWorkdir,
-      agentType: stateFields?.agentType,
+      agentType: stateFields?.agentType ?? (useWebDefault ? agentType : undefined),
       initiativeId,
       folderId: stateFields?.folderId ?? parentState?.folderId,
       reportTo: mode === 'session' ? undefined : stateFields?.reportTo,
@@ -3851,6 +3869,7 @@ ${JSON.stringify(request)}`,
       sessionId,
       segmentIndex: 0,
       mode: 'session',
+      agentType: this.isOrdinaryWebSession(sessionId) ? this.defaultBuiltinAgentType('general') : undefined,
       workPolicy: { mode: 'optional' },
       parentSessionId: null,
       executionStatus: 'pending',

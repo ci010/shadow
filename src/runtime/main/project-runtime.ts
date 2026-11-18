@@ -846,6 +846,7 @@ export async function createProjectRuntime(
     backgroundTasks,
     agentTypes,
     events,
+    getAgentVersionDefaults: () => configStore.current().agentVersionDefaults,
     getLlmRuntimeConfig: () => llm,
     getYieldPolicy: () => activeConfig.tools.yield,
     presence: dependencies.presence,
@@ -1059,6 +1060,7 @@ export async function createProjectRuntime(
       .flatMap(entry => { const state = sessions.getSessionState(entry.sessionId); return state ? [state] : [] }),
     firstMessage: id => sessions.getFirstUserMessage(id),
     resolveAgent: name => agentTypes.resolve(name),
+    defaultWebAgentType: () => sessions.defaultBuiltinAgentType('general'),
     changed: id => { realtime.invalidateSessions(id); if (id) organizationTopicChanged?.(id) },
   })
   importTool.registerBuiltin('session', new SessionTool(topics))

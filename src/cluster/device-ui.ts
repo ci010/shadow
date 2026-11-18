@@ -30,7 +30,7 @@ export function deviceUiPath(value: string, method = 'GET'): boolean {
   if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\') || /%2f|%5c|%2e/i.test(rawPath)) return false
   const path = new URL(value, 'http://workspace.internal').pathname
   const bare = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
-  // The settings role browser needs these read-only business endpoints on Child too.
+  // The Knowledge role browser needs these read-only business endpoints on Child too.
   // Keep the rest of this namespace closed rather than admitting future mutations.
   if (/^\/api\/agent-types(?:\/|$)/.test(bare)) {
     return ['GET', 'HEAD'].includes(method) && /^\/api\/agent-types(?:\/[^/]+\/context)?\/?$/.test(bare)

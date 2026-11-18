@@ -217,6 +217,22 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const list = await app.request('/api/sessions/discover?query=MCP', { headers })
     assert.equal((await list.json()).totalMatches, 1)
 
+    let webDefault = 'general-v2'
+    const versioned = new TopicService({ ...options, defaultWebAgentType: () => webDefault,
+      resolveAgent: name => name === 'general-v2' ? { defaultMode: 'session' } : options.resolveAgent(name),
+    })
+    const newWebRequest = { requestId: randomUUID(), topic: 'Versioned Web topic' }
+    const implicit = await versioned.create(newWebRequest)
+    const explicit = await versioned.create({ topic: 'Explicit General', agentType: 'general' })
+    assert.equal((await store.getState(implicit.sessionId))?.agentType, 'general-v2')
+    assert.equal((await store.getState(explicit.sessionId))?.agentType, 'general')
+    webDefault = 'general'
+    assert.equal((await versioned.create(newWebRequest)).sessionId, implicit.sessionId)
+    assert.equal((await store.getState(implicit.sessionId))?.agentType, 'general-v2')
+    const next = await versioned.create({ topic: 'Next versioned Web topic' })
+    assert.equal((await store.getState(next.sessionId))?.agentType, 'general')
+
+
     const bus = new Bus()
     t.after(() => bus.stopAll())
     const base = new Tools(home)
