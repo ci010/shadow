@@ -168,7 +168,7 @@ activity, unsent drafts/attachments/references, and background work keep their t
 Other idle tabs and document tabs are not swept. Closing a tab never deletes the
 session or stops its tasks; reopen it from the sidebar.
 
-Desktop top navigation groups open conversation, Workflow, and Project settings tabs by the Project that owns them. Switching Projects leaves each open tab in its original group; select a tab in another group to return directly to it. Application Settings is in the separate **Global** group. Open tabs are retained while navigating, not across a page reload.
+Desktop top navigation groups open conversation, Workflow, and Project settings tabs by the Project that owns them. A small project-name chip marks the start of each group. Switching Projects leaves each open tab in its original group; select a tab in another group to return directly to it. Application Settings is in the separate **Global** group. Open tabs are retained while navigating, not across a page reload.
 
 Conversation (including subagent inspection), Diagnosis, Knowledge, Project settings,
 Workflows, and file/diff documents use the same Project-local editor groups.
