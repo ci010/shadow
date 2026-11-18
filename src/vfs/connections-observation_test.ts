@@ -13,13 +13,13 @@ import type { BotWorkflowProjection } from '../bots/workflow-projection.ts'
 import { connectionSinkProjection } from '../channels/sink-projection.ts'
 import { passiveChannelId } from '../channels/passive-contract.ts'
 
-const source = { version: 1 as const, projectId: 'p', botInstanceId: 'PRIVATE_CONNECTION', platform: 'qq' as const,
+const source = { version: 1 as const, projectId: 'p', connectionId: 'PRIVATE_CONNECTION', platform: 'qq' as const,
   conversationId: 'group:PRIVATE_USER', kind: 'group' as const, name: 'PRIVATE_NAME' }
-const sink = connectionSinkProjection({ projectId: 'p', connectionId: source.botInstanceId, platform: 'qq',
+const sink = connectionSinkProjection({ projectId: 'p', connectionId: source.connectionId, platform: 'qq',
   histories: [{ sessionId: passiveChannelId(source), projectId: 'p', channelSource: source }], observations: [] })
-const snapshot: BotWorkflowProjection = { sinks: [sink], connections: [{ id: source.botInstanceId, displayName: 'PRIVATE_NAME', platform: 'qq',
+const snapshot: BotWorkflowProjection = { sinks: [sink], connections: [{ id: source.connectionId, displayName: 'PRIVATE_NAME', platform: 'qq',
   purpose: 'personal', enabled: true, health: 'connected' }], deployments: [{ id: 'PRIVATE_BOT', state: 'valid', mode: 'personal', agent: 'general' }],
-  bindings: [{ id: 'PRIVATE_BINDING', connectionId: source.botInstanceId, deploymentId: 'PRIVATE_BOT', platform: 'qq', topic: 'PRIVATE_TOPIC',
+  bindings: [{ id: 'PRIVATE_BINDING', connectionId: source.connectionId, deploymentId: 'PRIVATE_BOT', platform: 'qq', topic: 'PRIVATE_TOPIC',
     enabled: true, subscribed: true, listener: true, kind: 'host-owner-ingress', sessionIds: ['PRIVATE_SESSION'] }],
   warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }
 
@@ -46,7 +46,7 @@ test('read/list/glob/grep expose only redacted shared evidence to full and filte
       assert.deepEqual(result.connections[0].receivers[0].evidence, sink.receivers[0]!.evidence)
       const freeze = workflowReferenceResolver('p', { inspect: () => ({ projectId: 'p', definitions: [], runs: [] }) as unknown as ReturnType<WorkflowRuntime['inspect']> }, () => sink, () => snapshot)
       for (const receiverId of [undefined, sink.receivers[0]!.id]) {
-        const frozen = freeze([{ kind: 'connection-sink', projectId: 'p', connectionId: source.botInstanceId, ...(receiverId ? { receiverId } : {}) }])
+        const frozen = freeze([{ kind: 'connection-sink', projectId: 'p', connectionId: source.connectionId, ...(receiverId ? { receiverId } : {}) }])
         const record = JSON.parse(frozen.split('\n').at(-2)!)[0]
         const object = JSON.parse(String(await tools.execute('read', { path: record.path }, context)))
         assert.equal(object.objectKind, receiverId ? 'receiver' : 'connection')

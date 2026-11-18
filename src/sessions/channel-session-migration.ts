@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { ChannelSourceSchema, passiveChannelId, type ChannelSource } from '../channels/passive-contract.ts'
+import { decodeChannelSource, passiveChannelId, type ChannelSource } from '../channels/passive-contract.ts'
 import { physicalSessionId, hasTruncatedLegacyHistory } from './session-identity.ts'
 import { safeSessionId } from '../utils/paths.ts'
 import type { SessionState } from './session-store.ts'
@@ -106,12 +106,12 @@ function plan(image: Image, manifest: ChannelMigrationManifest): { image: Image;
   const states = new Map(image.states), logs = new Map(image.logs)
   const groups = new Map<string, { source?: ChannelSource; from: string[] }>()
   for (const mapping of manifest.mappings) {
-    const source = mapping.source === undefined ? undefined : ChannelSourceSchema.parse(mapping.source)
-    const address = source ?? mapping.address
-    if (!address || !['qq', 'discord', 'feishu', 'wechat'].includes(address.platform) || [address.projectId, address.botInstanceId, address.conversationId].some(v => typeof v !== 'string' || !v || /[\x00-\x1f\x7f]/.test(v))) throw new Error('Reviewed channel address required')
+    const source = mapping.source === undefined ? undefined : decodeChannelSource(mapping.source)
+    const address = source ?? (mapping.address && { ...mapping.address, connectionId: mapping.address.botInstanceId })
+    if (!address || !['qq', 'discord', 'feishu', 'wechat'].includes(address.platform) || [address.projectId, address.connectionId, address.conversationId].some(v => typeof v !== 'string' || !v || /[\x00-\x1f\x7f]/.test(v))) throw new Error('Reviewed channel address required')
     const target = passiveChannelId(address)
     if (address.projectId !== manifest.projectId || typeof mapping.from !== 'string' || mapping.from === target || consumed.has(mapping.from)) throw new Error('Invalid/duplicate source mapping')
-    const encoded = [address.projectId, address.botInstanceId, address.platform, address.conversationId].map(encodeURIComponent).join(':')
+    const encoded = [address.projectId, address.connectionId, address.platform, address.conversationId].map(encodeURIComponent).join(':')
     if (mapping.from !== `bot:${encoded}` && mapping.from !== `${address.platform}:${address.conversationId}`) throw new Error('Source ID does not match the reviewed platform address')
     consumed.add(mapping.from)
     const group = groups.get(target) ?? { source, from: [] }
@@ -125,7 +125,7 @@ function plan(image: Image, manifest: ChannelMigrationManifest): { image: Image;
     if (!present.length) {
       const existing = states.get(target)
       if (!existing) throw new Error(`Neither source nor canonical session exists: ${target}`)
-      if (existing.projectId !== manifest.projectId || (existing.channelSource ? passiveChannelId(ChannelSourceSchema.parse(existing.channelSource)) !== target : existing.channelIdentityMigration !== 1)) throw new Error('Canonical session metadata mismatch')
+      if (existing.projectId !== manifest.projectId || (existing.channelSource ? passiveChannelId(decodeChannelSource(existing.channelSource)) !== target : existing.channelIdentityMigration !== 1)) throw new Error('Canonical session metadata mismatch')
       continue
     }
     const participants = [...(states.has(target) ? [target] : []), ...present]
@@ -137,7 +137,7 @@ function plan(image: Image, manifest: ChannelMigrationManifest): { image: Image;
       if (hasTruncatedLegacyHistory(state as unknown as SessionState)) throw new Error(`Ambiguous truncated physical identity: ${id}`)
       if (state.statePersistence || state.automaticWork || state.automation || state.retirement) throw new Error(`Unsupported automated/retired participant: ${id}`)
       if (state.channelSource) {
-        const existingSource = ChannelSourceSchema.parse(state.channelSource)
+        const existingSource = decodeChannelSource(state.channelSource)
         if (passiveChannelId(existingSource) !== target || group.source && ['kind', 'parentId', 'guildId', 'recipientId', 'botUserId'].some(key => existingSource[key as keyof ChannelSource] !== group.source![key as keyof ChannelSource])) throw new Error('Existing channel source/ancestry mismatch')
         group.source ??= existingSource
       }

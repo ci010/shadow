@@ -13,7 +13,7 @@ import { passiveChannelId, type ChannelSource } from '../channels/passive-contra
 import { migrateChannelSessions, type ChannelMigrationManifest } from './channel-session-migration.ts'
 import type { SessionState } from './session-store.ts'
 
-const source: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'c', platform: 'qq', conversationId: 'group:a', kind: 'group' }
+const source: ChannelSource = { version: 1, projectId: 'p', connectionId: 'c', platform: 'qq', conversationId: 'group:a', kind: 'group' }
 const old = 'bot:p:c:qq:group%3Aa', canonical = passiveChannelId(source)
 const manifest: ChannelMigrationManifest = { version: 1, projectId: 'p', mappings: [{ from: old, source }] }
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`offline canonical migration ${Store.name}: raw tool pairs, segments, references, backup and repeat`, async () => {

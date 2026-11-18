@@ -239,11 +239,11 @@ export interface DiscordIngress {
   messageId: string
 }
 export interface DiscordIntegrationTransport {
-  assertHistory?(botId: string, chatId: string, senderId: string, audienceId: string, scope: DiscordHistoryScope, signal: AbortSignal): Promise<void>
-  directory(botId: string, guildId: string | undefined, after: string | undefined, signal: AbortSignal): Promise<DiscordDirectory>
-  inspect(botId: string, chatId: string, senderId: string, signal: AbortSignal): Promise<DiscordInspection>
-  inspectTarget(botId: string, target: DiscordBinding['target'], signal: AbortSignal): Promise<{ botUserId: string; roleIds: string[] }>
-  members?(botId: string, guildId: string, query: string, signal: AbortSignal): Promise<DiscordMember[]>
+  assertHistory?(connectionId: string, chatId: string, senderId: string, audienceId: string, scope: DiscordHistoryScope, signal: AbortSignal): Promise<void>
+  directory(connectionId: string, guildId: string | undefined, after: string | undefined, signal: AbortSignal): Promise<DiscordDirectory>
+  inspect(connectionId: string, chatId: string, senderId: string, signal: AbortSignal): Promise<DiscordInspection>
+  inspectTarget(connectionId: string, target: DiscordBinding['target'], signal: AbortSignal): Promise<{ botUserId: string; roleIds: string[] }>
+  members?(connectionId: string, guildId: string, query: string, signal: AbortSignal): Promise<DiscordMember[]>
 }
 
 export interface DiscordAdapterIntegration {

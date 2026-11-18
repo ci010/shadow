@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { DatabaseSync } from 'node:sqlite'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
@@ -9,10 +11,29 @@ import type { SessionState } from '../sessions/session-store.ts'
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: additive origin metadata survives refresh/restart, old states remain valid and forged/missing origins fail closed`, async () => {
   await withTempWorkspace(async root => {
-    const source: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'connection', platform: 'feishu', conversationId: 'om_thread', kind: 'thread', parentId: 'oc_group', name: 'Before' }
+    const source: ChannelSource = { version: 1, projectId: 'p', connectionId: 'connection', platform: 'feishu', conversationId: 'om_thread', kind: 'thread', parentId: 'oc_group', name: 'Before' }
     const state: SessionState = { ownershipVersion: 2, physicalIdVersion: 2, projectId: 'p', sessionId: passiveChannelId(source), segmentIndex: 0, mode: 'session', channelSource: source }
     let store = new Store(join(root, 'sessions')); await store.init()
     await store.saveState(state.sessionId, state)
+    store.close()
+    // Simulate bytes written by the previous version, not a write through the new codec.
+    const sessionsDir = join(root, 'sessions')
+    const toLegacy = (contents: string) => {
+      assert.match(contents, /"connectionId"/)
+      return contents.replace('"connectionId"', '"botInstanceId"')
+    }
+    if (Store === JsonlSessionStore) {
+      const file = (await readdir(sessionsDir)).find(name => name.endsWith('.json'))!
+      const path = join(sessionsDir, file)
+      await writeFile(path, toLegacy(await readFile(path, 'utf8')))
+    } else {
+      const db = new DatabaseSync(join(sessionsDir, 'sessions.db'))
+      try {
+        const row = db.prepare('SELECT prototype FROM session_states WHERE key = ?').get(state.sessionId)!
+        db.prepare('UPDATE session_states SET prototype = ? WHERE key = ?').run(toLegacy(String(row.prototype)), state.sessionId)
+      } finally { db.close() }
+    }
+    store = new Store(sessionsDir); await store.init()
     const read = await store.getState(state.sessionId); assert.deepEqual(read?.channelSource, source)
     await store.saveState(state.sessionId, { ...read!, focus: 'Metadata refresh', channelSource: { ...source, name: 'After' } })
     await assert.rejects(() => store.saveState(state.sessionId, { ...state, channelSource: undefined }), /missing/)
@@ -29,7 +50,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
 })
 
 test('stable inbox identity separates Projects, connections, channels and public threads, not individual senders', () => {
-  const base = { projectId: 'p', botInstanceId: 'c', platform: 'discord', conversationId: 'thread1' }
-  const ids = [base, { ...base, projectId: 'q' }, { ...base, botInstanceId: 'other' }, { ...base, conversationId: 'thread2' }, { ...base, platform: 'qq' }].map(passiveChannelId)
+  const base = { projectId: 'p', connectionId: 'c', platform: 'discord', conversationId: 'thread1' }
+  const ids = [base, { ...base, projectId: 'q' }, { ...base, connectionId: 'other' }, { ...base, conversationId: 'thread2' }, { ...base, platform: 'qq' }].map(passiveChannelId)
   assert.equal(new Set(ids).size, ids.length)
 })

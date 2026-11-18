@@ -90,7 +90,7 @@ test('real immutable BOT packages project shared connection, distinct groups/Age
     assert.equal(ingress?.topic, undefined)
     assert.equal(personalView.deployments.find(d => d.id === 'personal')?.agent, 'general')
     assert.doesNotMatch(JSON.stringify(personalView), /PRIVATE_/)
-    const ownerSource = { version: 1 as const, projectId: 'p', botInstanceId: personal.id, platform: 'qq' as const, conversationId: 'PRIVATE_OWNER_TOPIC', kind: 'direct' as const }
+    const ownerSource = { version: 1 as const, projectId: 'p', connectionId: personal.id, platform: 'qq' as const, conversationId: 'PRIVATE_OWNER_TOPIC', kind: 'direct' as const }
     const groupSource = { ...ownerSource, kind: 'group' as const, conversationId: 'group:one' }
     const otherDM = { ...ownerSource, conversationId: 'dm:someone-else' }
     const metadata = [ownerSource, groupSource, otherDM].map(channelSource => ({ sessionId: passiveChannelId(channelSource), projectId: 'p', channelSource }))

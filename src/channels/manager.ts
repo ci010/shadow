@@ -448,7 +448,7 @@ export class ChannelManager {
         assigned = bot.purpose === 'service' && bot.platform !== 'discord' && !!this.options?.serviceAssigned?.(arrivalAddress)
       } catch { /* Receipt is transport-owned, not dependent on a healthy BOT store. */ }
       let assertAssignment = () => { if (!assigned || this.options?.serviceGeneration?.(arrivalAddress) !== generation || !this.options?.serviceAssigned?.(arrivalAddress)) throw new ChannelAdmissionError('Arrival assignment changed; retained in inbox only', 403) }
-      let source: ChannelSource = { version: 1, projectId: scope.projectId, botInstanceId: bot.id, platform: bot.platform as ChannelSource['platform'], conversationId: message.chatId,
+      let source: ChannelSource = { version: 1, projectId: scope.projectId, connectionId: bot.id, platform: bot.platform as ChannelSource['platform'], conversationId: message.chatId,
         kind: message.passiveParentId ? 'thread' : message.isGroup === false ? 'direct' : message.chatId.startsWith('channel:') ? 'channel' : 'group',
         ...(message.passiveParentId ? { parentId: message.passiveParentId } : {}),
         ...(message.chatName ? { name: message.chatName.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
@@ -679,8 +679,8 @@ export class ChannelManager {
     })
   }
 
-  pendingServiceGroups(botId: string) {
-    const bot = this.options?.instanceStore.list().find(bot => bot.id === botId)
+  pendingServiceGroups(connectionId: string) {
+    const bot = this.options?.instanceStore.list().find(bot => bot.id === connectionId)
     if (!bot || bot.purpose !== 'service' || bot.platform === 'discord') return []
     return (this.options?.serviceDiscovery?.list() ?? []).filter(entry => entry.botInstanceId === bot.id && entry.platform === bot.platform &&
       !this.options?.serviceAssigned?.({ projectId: this.projectId!, botInstanceId: bot.id, platform: bot.platform,
@@ -700,60 +700,60 @@ export class ChannelManager {
   }
 
   discordTransport(): DiscordIntegrationTransport {
-    const channel = (botId: string) => {
-      const value = this.availableByKey(botId)
+    const channel = (connectionId: string) => {
+      const value = this.availableByKey(connectionId)
       if (!(value instanceof DiscordChannel) || this.closing) throw new ChannelAdmissionError('The Discord Bot must be connected.', 503)
       return value
     }
-    const run = async <T>(botId: string, operation: (value: DiscordChannel) => Promise<T>): Promise<T> => {
-      const value = channel(botId), verify = value.connectionGuard()
+    const run = async <T>(connectionId: string, operation: (value: DiscordChannel) => Promise<T>): Promise<T> => {
+      const value = channel(connectionId), verify = value.connectionGuard()
       const result = await value.withConnection(() => operation(value))
       verify()
-      if (channel(botId) !== value) throw new ChannelAdmissionError('The Discord connection changed.', 503)
+      if (channel(connectionId) !== value) throw new ChannelAdmissionError('The Discord connection changed.', 503)
       return result
     }
     return {
-      directory: (botId, guildId, after, signal) => run(botId, value => value.directory(guildId, after, signal)),
-      inspect: (botId, chatId, senderId, signal) => run(botId, value => value.inspectConversation(chatId, senderId, signal)),
-      assertHistory: (botId, chatId, senderId, audienceId, scope, signal) => run(botId, value => value.assertScopedHistory(chatId, senderId, audienceId, scope, signal)),
-      inspectTarget: (botId, target, signal) => run(botId, value => value.inspectTarget(target, signal)),
-      members: (botId, guildId, query, signal) => run(botId, value => value.members(guildId, query, signal)),
+      directory: (connectionId, guildId, after, signal) => run(connectionId, value => value.directory(guildId, after, signal)),
+      inspect: (connectionId, chatId, senderId, signal) => run(connectionId, value => value.inspectConversation(chatId, senderId, signal)),
+      assertHistory: (connectionId, chatId, senderId, audienceId, scope, signal) => run(connectionId, value => value.assertScopedHistory(chatId, senderId, audienceId, scope, signal)),
+      inspectTarget: (connectionId, target, signal) => run(connectionId, value => value.inspectTarget(target, signal)),
+      members: (connectionId, guildId, query, signal) => run(connectionId, value => value.members(guildId, query, signal)),
     }
   }
 
-  async admitStreamHistory(botId:string,conversation:string,sender:string,message:string,signal:AbortSignal):Promise<boolean> {
-    this.assertStreamAccess(botId,conversation)
-    const bot=this.options!.instanceStore.get(botId),channel=this.availableByKey(botId)
+  async admitStreamHistory(connectionId:string,conversation:string,sender:string,message:string,signal:AbortSignal):Promise<boolean> {
+    this.assertStreamAccess(connectionId,conversation)
+    const bot=this.options!.instanceStore.get(connectionId),channel=this.availableByKey(connectionId)
     if(!channel || !channel.isAllowed(sender)) return false
     if(bot.purpose==='personal') return sender===bot.verifiedOwner?.senderId && conversation===bot.verifiedOwner?.chatId
     if(bot.platform==='discord') {
       if(!this.options?.discordIntegration) return false
       try {
-        const proof=await this.options.discordIntegration.prepareIngress(botId,{chatId:conversation,senderId:sender,messageId:message},signal)
+        const proof=await this.options.discordIntegration.prepareIngress(connectionId,{chatId:conversation,senderId:sender,messageId:message},signal)
         this.options.discordIntegration.discardAdmission(proof.admissionId)
-        this.assertStreamAccess(botId,conversation)
+        this.assertStreamAccess(connectionId,conversation)
         return true
       } catch(error) {signal.throwIfAborted();if(error instanceof IntegrationError && error.status===403)return false;throw error}
     }
     return true
   }
 
-  assertStreamAccess(botId: string, conversation?: string): void {
-    const bot = this.options?.instanceStore.get(botId)
+  assertStreamAccess(connectionId: string, conversation?: string): void {
+    const bot = this.options?.instanceStore.get(connectionId)
     if (!bot || !bot.enabled || bot.projectId !== this.projectId || bot.purpose === 'legacy') throw new Error('Channel connection is not available in this Project')
-    this.options!.instanceStore.assertAccess(botId)
+    this.options!.instanceStore.assertAccess(connectionId)
     if (!conversation) return
     if (bot.purpose === 'personal') {
       if (bot.verifiedOwner?.chatId !== conversation) throw new Error('Verified owner DM required')
     } else {
       const stream = this.options?.messageStream
-      const parent = stream?.directory().find(e=>e.connection===botId&&e.conversation===conversation)?.parent
+      const parent = stream?.directory().find(e=>e.connection===connectionId&&e.conversation===conversation)?.parent
       if(bot.platform==='discord') {
-        if(!this.options?.discordIntegration?.streamAssigned(botId,conversation,parent)) throw new Error('Explicit Discord service assignment required')
+        if(!this.options?.discordIntegration?.streamAssigned(connectionId,conversation,parent)) throw new Error('Explicit Discord service assignment required')
         return
       }
-      if (!this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:botId,platform:bot.platform,conversationId:conversation}) &&
-        !(parent && this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:botId,platform:bot.platform,conversationId:parent}))) throw new Error('Explicit service assignment required')
+      if (!this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:connectionId,platform:bot.platform,conversationId:conversation}) &&
+        !(parent && this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:connectionId,platform:bot.platform,conversationId:parent}))) throw new Error('Explicit service assignment required')
     }
   }
 
@@ -789,16 +789,16 @@ export class ChannelManager {
     return result
   }
 
-  async trustedDiscordRequest(botId: string, path: string, init: RequestInit): Promise<unknown> {
-    const bot = this.options?.instanceStore.list().find(value => value.id === botId && value.platform === 'discord')
+  async trustedDiscordRequest(connectionId: string, path: string, init: RequestInit): Promise<unknown> {
+    const bot = this.options?.instanceStore.list().find(value => value.id === connectionId && value.platform === 'discord')
     if (!bot || this.closing) throw new Error('Discord Bot is not in this Project')
-    this.options!.instanceStore.assertAccess(botId)
-    const channel = this.availableByKey(botId)
+    this.options!.instanceStore.assertAccess(connectionId)
+    const channel = this.availableByKey(connectionId)
     if (!(channel instanceof DiscordChannel)) throw new Error('Discord Bot must be connected')
     const verify = channel.connectionGuard()
     const result = await channel.withConnection(() => channel.trustedWebRequest(path, init))
     verify()
-    if (this.availableByKey(botId) !== channel) throw new Error('Discord connection changed')
+    if (this.availableByKey(connectionId) !== channel) throw new Error('Discord connection changed')
     return result
   }
 

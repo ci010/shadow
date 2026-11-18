@@ -68,7 +68,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${platform} s
     const makeInputs = () => {
       const routed = channelInputFixture({ projectId, sessions, bots, directory, receive: message => agent.receiveChannelMessage(message) })
       return { ...routed, receive: async (message: InboundMessage) => {
-        const receipt = await sessions.recordPassiveChannel({version:1,projectId,botInstanceId:bot.id,platform,conversationId:message.chatId,kind:'group'},message,()=>{})
+        const receipt = await sessions.recordPassiveChannel({version:1,projectId,connectionId:bot.id,platform,conversationId:message.chatId,kind:'group'},message,()=>{})
         if (receipt.disposition === 'filtered') return receipt
         if (message.silent) { await routed.policy(message, async()=>{}); return receipt }
         return routed.receive(message)

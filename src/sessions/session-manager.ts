@@ -1508,7 +1508,7 @@ ${JSON.stringify(request)}`,
       if (this.stopped || this.deleting.has(sessionId)) throw new Error('Passive inbox unavailable')
       if (message.channel !== source.platform || message.chatId !== source.conversationId || !message.messageId || !message.senderId) throw new Error('Passive input origin mismatch')
       const address = message.channelAddress
-      if (address && (address.projectId !== source.projectId || address.botInstanceId !== source.botInstanceId || address.platform !== source.platform || address.conversationId !== source.conversationId)) throw new Error('Passive input address mismatch')
+      if (address && (address.projectId !== source.projectId || address.botInstanceId !== source.connectionId || address.platform !== source.platform || address.conversationId !== source.conversationId)) throw new Error('Passive input address mismatch')
       if ([message.messageId, message.senderId].some(value => value.length > 512 || /[\x00-\x1f\x7f]/.test(value))) throw new Error('Invalid passive message identity')
       let state = this.sessionStates[sessionId]
       if (!state) {

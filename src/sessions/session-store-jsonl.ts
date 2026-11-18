@@ -57,7 +57,7 @@ function parseStoredState(raw: string): SessionState {
   parseContextResetAt(state.completedAt)
   if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
   parseServiceGeneration(state.serviceGeneration)
-  parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration)
+  state.channelSource = parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration)
   parseChannelBoundary(state.channelBoundary)
   parseDecisionOwner(state.decisionOwnerSessionId)
   if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
@@ -129,12 +129,12 @@ export class JsonlSessionStore implements SessionStore {
     parseContextResetAt(state.completedAt)
     if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
     parseServiceGeneration(state.serviceGeneration)
-  parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration)
-  parseChannelBoundary(state.channelBoundary)
+    const channelSource = parseChannelSource(state.channelSource, state.sessionId, state.projectId, state.channelIdentityMigration)
+    parseChannelBoundary(state.channelBoundary)
     parseDecisionOwner(state.decisionOwnerSessionId)
     state = { ...state, workPolicy: parseWorkPolicy(state.workPolicy) }
     state = { ...state, ...parseTopicSessionFields(state) }
-    const contents = JSON.stringify(state, null, 2)
+    const contents = JSON.stringify({ ...state, channelSource }, null, 2)
     await this.queueStateWrite(sessionKey, async () => {
       await mkdir(this.sessionsDir, { recursive: true })
       const staging = `${this.statePath(sessionKey)}.${crypto.randomUUID()}.pending`

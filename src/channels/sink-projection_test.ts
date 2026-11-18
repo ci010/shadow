@@ -5,7 +5,7 @@ import { passiveChannelId, type ChannelSource } from './passive-contract.ts'
 import { parseConnectionSinkProjection } from '../shared/connection-sink.ts'
 const base = { projectId: 'p', connectionId: 'conn', platform: 'qq' as const, histories: [], observations: [] }
 function history(source: ChannelSource) { return { sessionId: passiveChannelId(source), projectId: source.projectId, channelSource: source } }
-const source = { version: 1 as const, projectId: 'p', botInstanceId: 'conn', platform: 'qq' as const, conversationId: 'group:one', kind: 'group' as const, name: 'Group one' }
+const source = { version: 1 as const, projectId: 'p', connectionId: 'conn', platform: 'qq' as const, conversationId: 'group:one', kind: 'group' as const, name: 'Group one' }
 test('new connection has one passive sink but no invented receivers/chat; paths are canonical', () => {
   const sink = connectionSinkProjection(base)
   assert.deepEqual(sink.receivers, [])
@@ -26,7 +26,7 @@ test('QQ observed groups form distinct stable receivers referencing existing inb
   assert.deepEqual(linked.receivers, sink.receivers, 'BOT linking never rekeys a receiver or history')
 })
 test('Discord threads aggregate only their true parent, retain raw histories and never become assign receivers', () => {
-  const child: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'conn', platform: 'discord', conversationId: '301', kind: 'thread', parentId: '201', guildId: '100', botUserId: '900' }
+  const child: ChannelSource = { version: 1, projectId: 'p', connectionId: 'conn', platform: 'discord', conversationId: '301', kind: 'thread', parentId: '201', guildId: '100', botUserId: '900' }
   const histories = [history(child), history({ ...child, conversationId: '302' })]
   const before = structuredClone(histories)
   const sink = connectionSinkProjection({ ...base, platform: 'discord', histories })
@@ -58,7 +58,7 @@ test('only validated direct history projects a private receiver, never bare obse
   assert.equal(qq.receivers[0]?.name, 'Owner DM')
   assert.equal(qq.receivers[0]?.navigation.kind, 'conversation')
   assert.deepEqual(parseConnectionSinkProjection(qq, 'p'), qq)
-  const discordDirect: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'conn', platform: 'discord',
+  const discordDirect: ChannelSource = { version: 1, projectId: 'p', connectionId: 'conn', platform: 'discord',
     conversationId: '401', kind: 'direct', recipientId: '501', botUserId: '900' }
   const discord = connectionSinkProjection({ ...base, platform: 'discord', histories: [history(discordDirect)],
     observations: [{ connection: 'conn', platform: 'discord', conversation: '402' }] })
@@ -67,7 +67,7 @@ test('only validated direct history projects a private receiver, never bare obse
   assert.equal(connectionSinkProjection({ ...base, observations: [{ connection: 'conn', platform: 'qq', conversation: 'dm:one' }] }).receivers.length, 0)
 })
 test('parent messages and public-thread history share only the parent receiver, independent of receipt order', () => {
-  const parent: ChannelSource = { version: 1, projectId: 'p', botInstanceId: 'conn', platform: 'discord',
+  const parent: ChannelSource = { version: 1, projectId: 'p', connectionId: 'conn', platform: 'discord',
     conversationId: '201', kind: 'channel', guildId: '100', botUserId: '900', name: 'Parent' }
   const child: ChannelSource = { ...parent, conversationId: '301', kind: 'thread', parentId: '201', name: 'Child' }
   const first = connectionSinkProjection({ ...base, platform: 'discord', histories: [history(child), history(parent)] })

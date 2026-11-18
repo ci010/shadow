@@ -191,7 +191,7 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
     const messageId = randomUUID()
     const admitted = await integration.prepareIngress(instance.id, { chatId, senderId: '500', messageId }, signal())
     const location = admitted.location
-    await sessions.recordPassiveChannel({ version: 1, projectId, botInstanceId: instance.id, platform: 'discord', conversationId: chatId,
+    await sessions.recordPassiveChannel({ version: 1, projectId, connectionId: instance.id, platform: 'discord', conversationId: chatId,
       kind: location.type === 1 ? 'direct' : location.type === 10 || location.type === 11 ? 'thread' : 'channel', botUserId: botUser(instance.id),
       ...(location.guildId ? {guildId:location.guildId} : {}), ...(location.recipientId ? {recipientId:location.recipientId} : {}),
       ...(location.type === 10 || location.type === 11 ? {parentId:location.parentId!} : {}) },
@@ -327,7 +327,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 
   test(`${Store.name}: full provider input excludes private Project, old history, sibling memory and unsafe tools`, async t => {
     const f = await fixture(t, Store)
-    await f.sessions.buildSession(f.id(), undefined, { agentType: 'general', channelSource: {version:1,...f.address(),platform:'discord',kind:'channel',guildId:'100',botUserId:'900'} })
+    await f.sessions.buildSession(f.id(), undefined, { agentType: 'general', channelSource: {version:1,projectId:f.projectId,conversationId:f.address().conversationId,connectionId:f.bot.id,platform:'discord',kind:'channel',guildId:'100',botUserId:'900'} })
     const old = physicalSessionId(f.sessions.getSessionState(f.id())!)
     await f.storage.appendMessages(old, [{ role: 'user', content: 'OLD_HISTORY_CANARY', timestamp: new Date().toISOString() }])
     const privateDomain = f.memory.createDomain('PRIVATE_TITLE_CANARY', 'project-private')
@@ -904,7 +904,7 @@ async function observationFixture(t:TestContext, enabled = true, includeBots = f
     Object.assign(adapter,{botUserId:'900'})
     adapter.setBotScope({projectId:f.projectId,botInstanceId:f.bot.id,platform:'discord'})
     adapter.setPassiveCollector(async message => {
-      const receipt = await f.sessions.recordPassiveChannel({version:1,projectId:f.projectId,botInstanceId:f.bot.id,platform:'discord',conversationId:message.chatId,
+      const receipt = await f.sessions.recordPassiveChannel({version:1,projectId:f.projectId,connectionId:f.bot.id,platform:'discord',conversationId:message.chatId,
         kind:'channel',guildId:'100',botUserId:'900'},message,()=>{})
       return {eligible:true,fresh:receipt.disposition !== 'filtered',assertCurrent:()=>{}}
     })
@@ -1388,7 +1388,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   const deployments = new BotDeployments({ directory: join(f.root, 'parent-rule-deployments'), projectId: f.projectId, runGit: async () => { throw new Error('No git') } })
   const runtime = new DirectoryBots(deployments)
   const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }
-  const source = { version: 1, projectId: f.projectId, botInstanceId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
+  const source = { version: 1, projectId: f.projectId, connectionId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
   const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: [], readDomains: [], inheritThreads: true, manage: false }
   let files = assignChannelSource(base, source, permission, 'parent').files
   const publish = async () => {

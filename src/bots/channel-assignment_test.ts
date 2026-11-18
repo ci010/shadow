@@ -11,7 +11,7 @@ import { assertServiceOutput, stampServiceOutput } from './service-output.ts'
 import type { OutboundMessage } from '../bus/events.ts'
 
 const files = { 'BOT.md': '---\nid: support\nconfig: nested/bot.json\nmode: service\n---\nSupport', 'nested/bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }
-const source: ChannelSource = { version: 1, projectId: 'p', platform: 'discord', botInstanceId: 'connection', conversationId: '201', kind: 'thread', parentId: '200', guildId: '100', botUserId: '900' }
+const source: ChannelSource = { version: 1, projectId: 'p', platform: 'discord', connectionId: 'connection', conversationId: '201', kind: 'thread', parentId: '200', guildId: '100', botUserId: '900' }
 const parentSource: ChannelSource = { ...source, conversationId: '200', kind: 'channel', parentId: undefined }
 const policy = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: [], readDomains: [], inheritThreads: false, manage: false }
 
@@ -24,14 +24,14 @@ test('referenced parent channel resolves an exact stable rule; direct thread and
   assert.equal(JSON.parse(again.content).bindings.length, 1)
   assert.equal(JSON.parse(again.content).subscriptions.length, 1)
   assert.throws(() => assignChannelSource(files, source, policy), /top-level/)
-  assert.throws(() => assignChannelSource(files, { version: 1, projectId: 'p', platform: 'discord', botInstanceId: 'connection', conversationId: '300', kind: 'direct', recipientId: '500', botUserId: '900' }, policy), /top-level/)
+  assert.throws(() => assignChannelSource(files, { version: 1, projectId: 'p', platform: 'discord', connectionId: 'connection', conversationId: '300', kind: 'direct', recipientId: '500', botUserId: '900' }, policy), /top-level/)
   assert.deepEqual(JSON.parse(assignChannelSource(again.files, parentSource, { ...policy, enabled: false }).content).subscriptions, [])
 })
 
 test('policy JSON cannot forge target, connection, platform or implicitly choose participants', () => {
   for (const key of ['target', 'conversationId', 'botInstanceId', 'platform', 'botUserId', 'id']) assert.throws(() => assignChannelSource(files, parentSource, { ...policy, [key]: 'forged' }), /targets/)
   assert.throws(() => assignChannelSource(files, parentSource, { ...policy, participants: undefined }), /participants/)
-  const qq = { version: 1, projectId: 'p', platform: 'qq', botInstanceId: 'qq', conversationId: 'group:one', kind: 'group' } as const
+  const qq = { version: 1, projectId: 'p', platform: 'qq', connectionId: 'qq', conversationId: 'group:one', kind: 'group' } as const
   assert.throws(() => assignChannelSource(files, qq, { enabled: true, trigger: 'all', tools: [] }), /allowed senders/)
   const personal = { ...files, 'BOT.md': files['BOT.md'].replace('mode: service', 'mode: personal\nagent: general'), 'nested/bot.json': JSON.stringify({ connection: '00000000-0000-4000-a000-000000000001', allowedModules: [], tools: [], bindings: [] }) }
   assert.throws(() => assignChannelSource(personal, qq, { enabled: true, trigger: 'mention', tools: [], allowFrom: [] }), /Personal BOT/)
@@ -39,7 +39,7 @@ test('policy JSON cannot forge target, connection, platform or implicitly choose
 
 test('origin validation rejects cross-Project, false identity, missing thread ancestry and malformed durable metadata', () => {
   assert.deepEqual(parseChannelSource(source, passiveChannelId(source), 'p'), source)
-  for (const [value, id, project] of [[source, passiveChannelId(source), 'other'], [source, passiveChannelId({ ...source, botInstanceId: 'forged' }), 'p'], [undefined, passiveChannelId(source), 'p'], [{ ...source, parentId: undefined }, passiveChannelId(source), 'p'], [{ ...source, recipientId: 'unexpected' }, passiveChannelId(source), 'p']]) assert.throws(() => parseChannelSource(value, String(id), String(project)))
+  for (const [value, id, project] of [[source, passiveChannelId(source), 'other'], [source, passiveChannelId({ ...source, connectionId: 'forged' }), 'p'], [undefined, passiveChannelId(source), 'p'], [{ ...source, parentId: undefined }, passiveChannelId(source), 'p'], [{ ...source, recipientId: 'unexpected' }, passiveChannelId(source), 'p']]) assert.throws(() => parseChannelSource(value, String(id), String(project)))
 })
 
 test('service output leases are live and cannot survive serialization or revocation before final delivery', () => {
@@ -63,7 +63,7 @@ test('parent scope resolves one explicit inherited rule from trusted child ances
   assert.equal(JSON.parse(second.content).subscriptions.length, 1)
   assert.throws(() => assignChannelSource(files, source, policy, 'parent'), /explicit inheritThreads/)
   assert.throws(() => assignChannelSource(files, { ...source, kind: 'channel', parentId: undefined }, parentPolicy, 'parent'), /verified public Discord thread/)
-  assert.throws(() => assignChannelSource(files, { version: 1, projectId: 'p', platform: 'feishu', botInstanceId: 'connection', conversationId: 'om_thread', kind: 'thread', parentId: 'oc_group' }, { enabled: true, trigger: 'mention', tools: [], allowFrom: [], inheritThreads: true }, 'parent'), /verified public Discord thread/)
+  assert.throws(() => assignChannelSource(files, { version: 1, projectId: 'p', platform: 'feishu', connectionId: 'connection', conversationId: 'om_thread', kind: 'thread', parentId: 'oc_group' }, { enabled: true, trigger: 'mention', tools: [], allowFrom: [], inheritThreads: true }, 'parent'), /verified public Discord thread/)
   // An inherited policy on a referenced child cannot silently promote it to a parent rule.
   assert.throws(() => assignChannelSource(files, source, parentPolicy), /top-level/)
   assert.throws(() => assignChannelSource(files, source, policy), /top-level/)
@@ -102,14 +102,14 @@ test('shared production assignment validation rejects another Project, personal 
   await withTempWorkspace(async root => {
     const bots = new BotInstanceStore({ projectId: 'p', path: join(root, 'connections.json') })
     const service = bots.create('qq', 'Service', { enabled: false }, undefined, 'service')
-    const origin = { version: 1, projectId: 'p', platform: 'qq', botInstanceId: service.id, conversationId: 'group:one', kind: 'group' } as const
+    const origin = { version: 1, projectId: 'p', platform: 'qq', connectionId: service.id, conversationId: 'group:one', kind: 'group' } as const
     const candidate = parseBot(assignChannelSource(files, origin, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
     const folder = async () => { throw new Error('No read grants expected') }
     await validateServiceAssignments('p', bots, candidate, [], folder)
     await assert.rejects(() => validateServiceAssignments('other', bots, candidate, [], folder), /Project mismatch/)
     await assert.rejects(() => validateServiceAssignments('p', bots, candidate, [{ ...candidate, id: 'other' }], folder), /another BOT/)
     const personal = bots.create('qq', 'Personal', { enabled: false }, undefined, 'personal')
-    const invalid = parseBot(assignChannelSource(files, { ...origin, botInstanceId: personal.id }, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
+    const invalid = parseBot(assignChannelSource(files, { ...origin, connectionId: personal.id }, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
     await assert.rejects(() => validateServiceAssignments('p', bots, invalid, [], folder), /matching service connection/)
   })
 })

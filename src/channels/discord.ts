@@ -535,19 +535,19 @@ export class DiscordChannel extends AbstractChannel {
   private async guildAccess(channel: Record<string, unknown>, signal?: AbortSignal) {
     const guildId = channel.guild_id
     if (!isDiscordId(guildId)) throw new Error('Invalid Discord guild')
-    let botId = this.botUserId
-    if (!isDiscordId(botId)) {
+    let botUserId = this.botUserId
+    if (!isDiscordId(botUserId)) {
       const user = discordRecord(await this.api('/users/@me', { signal }))
       if (!isDiscordId(user.id) || user.bot !== true) throw new Error('Invalid Discord bot identity')
-      botId = user.id
+      botUserId = user.id
     }
     const [guildData, roles, memberData] = await Promise.all([
       this.api(`/guilds/${guildId}`, { signal }),
       this.api(`/guilds/${guildId}/roles`, { signal }),
-      this.api(`/guilds/${guildId}/members/${botId}`, { signal }),
+      this.api(`/guilds/${guildId}/members/${botUserId}`, { signal }),
     ])
     const guild = discordRecord(guildData), member = discordRecord(memberData)
-    if (guild.id !== guildId || discordRecord(member.user).id !== botId) throw new Error('Invalid Discord guild membership')
+    if (guild.id !== guildId || discordRecord(member.user).id !== botUserId) throw new Error('Invalid Discord guild membership')
     let permissionChannel = channel
     if (channel.type === 10 || channel.type === 11 || channel.type === 12) {
       if (!isDiscordId(channel.parent_id)) throw new Error('Invalid Discord thread parent')
@@ -556,7 +556,7 @@ export class DiscordChannel extends AbstractChannel {
         throw new Error('Invalid Discord thread parent')
       }
     }
-    const permissions = discordPermissions(guildId, botId, guild.owner_id, roles, member, permissionChannel.permission_overwrites)
+    const permissions = discordPermissions(guildId, botUserId, guild.owner_id, roles, member, permissionChannel.permission_overwrites)
     return { guildId, guild, roles, member, permissionChannel, permissions }
   }
 

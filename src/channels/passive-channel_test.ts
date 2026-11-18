@@ -54,7 +54,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
     const store = new Store(join(workspace, 'sessions')), events = new EventService(workspace, bus, async () => { throw new Error('No fanout') }), backgroundTasks = new BackgroundTaskManager(bus, events)
     const handoff = new HandoffManager(provider, 128000, { autoHandoff: false }, workspace, store)
     const legacyId = `bot:${[projectId, connection.id, 'qq', 'group:one'].map(encodeURIComponent).join(':')}`
-    const makeSessions = () => new SessionManager({ sessionIdentityAliases: { [legacyId]: passiveChannelId({projectId,botInstanceId:connection.id,platform:'qq',conversationId:'group:one'}) }, projectId, workspace, store, bus, provider, tools, agentTypes: agents, context, identity: new IdentityManager(workspace), handoffManager: handoff, events, backgroundTasks,
+    const makeSessions = () => new SessionManager({ sessionIdentityAliases: { [legacyId]: passiveChannelId({projectId,connectionId:connection.id,platform:'qq',conversationId:'group:one'}) }, projectId, workspace, store, bus, provider, tools, agentTypes: agents, context, identity: new IdentityManager(workspace), handoffManager: handoff, events, backgroundTasks,
       conversationPolicies: botConversationPolicies(bots, service, directory), getLlmRuntimeConfig: () => ({ model: 'fixture', temperature: 0, contextWindow: 128000 }) })
     let sessions = makeSessions(), commands = 0, replies = 0, outbound = 0
     bus.on('message.outbound', message => { if (!message.inferenceError && message.content.trim()) outbound++ })
@@ -69,7 +69,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       t.mock.method(adapter as never, 'downloadAttachments' as never, (async (_data: unknown, _chatId: string, content: string) => ({ content })) as never)
       return (id: string, content: string, group = 'one', mentioned = false, sender = 'owner') => adapter['handleDispatch'](mentioned ? 'GROUP_AT_MESSAGE_CREATE' : 'GROUP_MESSAGE_CREATE', { id, group_openid: group, group_name: 'Support group', author: { member_openid: sender, username: 'Sender' }, content, attachments: [{ url: 'https://cdn.invalid/file?secret=signed', content_type: 'image/png', size: 12 }] })
     }
-    const inboxId = passiveChannelId({ projectId, botInstanceId: connection.id, platform: 'qq', conversationId: 'group:one' })
+    const inboxId = passiveChannelId({ projectId, connectionId: connection.id, platform: 'qq', conversationId: 'group:one' })
     let approve = false, asks = 0
     const yields = new YieldManager({ getState: id => ({ sessionId: id, segmentIndex: 0 }), getPolicy: () => ({ timeoutMs: null }), notifyParent: async () => { throw new Error('Owner only') }, notifyUser: async request => { asks++; await yields.answerUser(request.sessionId, request.id, approve ? request.options[0]! : request.options[1]!) } })
     const ask = new AskTool(yields, { get: () => null, ask: async () => { throw new Error('No ordinary input') } })
@@ -120,7 +120,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       finally { directory.resolve = resolvePolicy }
       assert.match(JSON.stringify(await Array.fromAsync(store.readSessionLog(physical))), /COMMON_RECEIPT_WITH_BROKEN_BOT/)
       assert.equal(prompts.length, 0, 'BOT policy failure cannot suppress recording or grant execution')
-      const inspected = await inspect(); assert.equal(inspected.channelSource.botInstanceId, connection.id)
+      const inspected = await inspect(); assert.equal(inspected.channelSource.connectionId, connection.id)
       await send('still-unassigned', 'NO_BOT_LINK'); assert.equal(prompts.length, 0)
       const archiveStarted = Promise.withResolvers<void>(), archiveRelease = Promise.withResolvers<void>()
       const append = store.appendMessages.bind(store)
