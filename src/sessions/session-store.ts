@@ -122,6 +122,8 @@ export interface ConversationArchiveRange { nextOffset?: number; records: Record
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
 export interface SessionState {
+  /** Most recent inference settings sent by a task or call, not current defaults. */
+  executionInference?: import('../agent/llm-config.ts').ExecutionInference
   /** Current non-Discord execution activation; changes start a fresh model context. */
   serviceGeneration?: string
   /** Passive source evidence; never a BOT binding or an execution grant. */

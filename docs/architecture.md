@@ -1173,6 +1173,11 @@ event in the current conversation; it does not switch to the source session.
 These navigation entries do not make session messages or events resendable as
 human prompts.
 
+The read-only task and call trace shows the model and reasoning effort from the
+latest inference request recorded for that execution, not the current project
+defaults. Older traces fall back only to stored overrides; unknown settings are
+omitted. The effort shown is the value Shadow sent, not a provider-internal setting.
+
 Call context is a snapshot, not a live shared message array. Internal tool calls
 and intermediate responses stay in the child trace. Calls are blocking leaves:
 no yield, session messaging, subagent creation, or deferred coordination. Missing

@@ -1,3 +1,4 @@
+import { parseExecutionInference } from '../agent/llm-config.ts'
 import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
@@ -45,6 +46,7 @@ interface SessionPrototypeV1 {
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'lastUserMessageAt',
+  'executionInference',
   'retirement',
   'channelBoundary',
   'channelSource',
@@ -145,6 +147,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'].includes(String(value.executionStatus))) {
     metadata.executionStatus = value.executionStatus as SessionState['executionStatus']
   }
+  if (value.executionInference !== undefined) metadata.executionInference = parseExecutionInference(value.executionInference)
   if (isRecord(value.config)) metadata.config = value.config as SessionConfig
   if (isSessionParent(value.parent)) metadata.parent = value.parent
   const workdir = parseWorkdirRef(value.workdir)
@@ -441,6 +444,7 @@ export class SqliteSessionStore implements SessionStore {
         physicalIdVersion: parsePhysicalIdVersion(state.physicalIdVersion),
         projectId: state.projectId,
         config: state.config,
+        executionInference: parseExecutionInference(state.executionInference),
         parent: state.parent,
         workspaceRoot: state.workspaceRoot,
         workdir: state.workdir,

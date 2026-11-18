@@ -403,6 +403,13 @@ export abstract class BaseSession {
       const response = await withAbort(activeSpan(
         'agent.chat',
         async (chatSpan) => {
+          if ((this.state.mode === 'task' || this.state.mode === 'call') &&
+              (this.state.executionInference?.model !== model || this.state.executionInference?.reasoningEffort !== reasoningEffort)) {
+            const executionInference = { model, reasoningEffort }
+            await this.store.saveState(this.id, { ...this.state, executionInference })
+            this.state.executionInference = executionInference
+            this.bus.emit('session.changed', { sessionId: this.id, metadataOnly: true })
+          }
           const captureId = this.promptCaptures?.capture({
             projectId: this.state.projectId,
             sessionId: this.id,
