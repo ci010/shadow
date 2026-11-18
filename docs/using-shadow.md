@@ -383,6 +383,18 @@ published bot policy, or Work bindings. Real session context retains those check
 
 **Open AGENT.md in workspace** opens the selected definition's prompt body as a
 read-only document tab (not the original frontmatter or an execution snapshot).
+
+In the **Knowledge** explorer, published Bot runtime roles are not Agent
+source documents. Open the **Bots** folder for the deployed `BOT.md` and any
+companion Markdown, including nested files. `BOT.md` has an overview, Tools,
+System prompt, and Original Markdown. Tools and prompt belong to the selected
+published binding (or the verified owner session for a Personal Bot), not to
+all bindings combined. The view identifies in-memory session context separately
+from a rebuilt binding preview. Previews never admit input, reproduce
+per-message permissions, or capture model requests. If no eligible scope or
+live Personal session exists, the view reports the limitation rather than
+substituting source Markdown. Other Markdown remains a plain document.
+
 In Workflows, select a BOT node and use **Open deployed BOT.md in workspace** in
 its sidepane. The same action is available in BOT deployment settings. This opens
 the exact published BOT.md revision, not subsequently edited source files; a

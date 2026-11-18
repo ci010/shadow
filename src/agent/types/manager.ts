@@ -19,6 +19,7 @@ export class AgentTypesManager {
   private registry: AgentTypeRegistry
   private watcher: AgentTypesWatcher
   private agentsDir: string
+  private publishedFiles = new Map<string, string>()
 
   constructor(workspace: string) {
     this.agentsDir = workspacePath(workspace, 'agents')
@@ -51,7 +52,10 @@ export class AgentTypesManager {
     return { agentsDir: this.agentsDir }
   }
 
-  setWorkspaceType(name: string, type: AgentTypeDefinition): void {
+  setWorkspaceType(name: string, type: AgentTypeDefinition, publishedFile = false): void {
+    if (publishedFile && type.runtimeOrigin && type.dirPath && type.definitionMarkdown !== undefined) {
+      this.publishedFiles.set(type.dirPath, type.definitionMarkdown)
+    }
     this.registry.setWorkspaceType(name, type)
   }
 
@@ -89,6 +93,14 @@ export class AgentTypesManager {
 
   all(): AgentTypeDefinition[] {
     return this.registry.all()
+  }
+
+  /** A watcher refresh can replace a published legacy definition with the same
+   * on-disk AGENT.md. Only its exact publisher-recorded path and bytes qualify;
+   * neither a matching name nor frontmatter is a provenance claim. */
+  knowledgeDefinitions(): AgentTypeDefinition[] {
+    return this.all().filter(type => !type.runtimeOrigin && !(type.dirPath && type.definitionMarkdown !== undefined &&
+      this.publishedFiles.get(type.dirPath) === type.definitionMarkdown))
   }
 
   /** Summary for injection into the system prompt (shows non-general types). */

@@ -20,6 +20,8 @@ export interface AgentTypeDefinition {
   defaultMode: ExecutionMode
   /** 'builtin' or 'workspace' */
   source: 'builtin' | 'workspace'
+  /** Runtime provenance, assigned by the publisher, never parsed from AGENT.md. */
+  runtimeOrigin?: { kind: 'channel-integration' | 'bot'; id: string; revision: string }
   /** Directory path for workspace-defined types */
   dirPath?: string
   /** When false, skills context is not loaded for this agent type */

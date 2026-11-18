@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { markRaw, onScopeDispose } from 'vue'
 import { canonicalResourceKey } from '../resources/engine.ts'
 import { resourceViews } from '../resources/vue-resource.ts'
-import { listAgentDefinitions, listBotDocuments, readBotDocument } from '../knowledge-definitions.ts'
+import { listAgentDefinitions, listBotDocuments, readBotDocument, readBotRuntime } from '../knowledge-definitions.ts'
 import { createKnowledgeClient } from '../knowledge.ts'
 
 /** No knowledge live topic exists. Explicit refresh and activation revalidate;
@@ -37,6 +37,12 @@ export function createKnowledgeResources(request: typeof fetch = fetch) {
     },
     botDocument(base: string, projectId: string, bot: string, path: string, revision: string) {
       const lease = details.acquire(key(base, projectId, `bot-markdown:${revision}`, JSON.stringify([bot, path])), signal => readBotDocument(base, bot, path, revision, signal, request))
+      void lease.read()
+      return lease
+    },
+    botRuntime(base: string, projectId: string, bot: string, revision: string, scope?: string) {
+      const lease = views.acquire(key(base, projectId, 'bot-runtime', JSON.stringify([bot, revision, scope])),
+        signal => readBotRuntime(base, projectId, bot, revision, scope, signal, request))
       void lease.read()
       return lease
     },

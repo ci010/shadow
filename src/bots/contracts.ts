@@ -25,6 +25,8 @@ export interface PolicyTool {
 }
 export type PublishedAgent = AgentTypeDefinition
 export interface ResolvedConversationPolicy {
+  integrationBindingId?: string
+  runtimeOrigin?: AgentTypeDefinition['runtimeOrigin']
   generation?: string
   revision: string
   binding: ConversationBinding

@@ -71,6 +71,8 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       const address={projectId,botInstanceId:bot.id,platform:'qq',conversationId:'dm'} as const
       const message={channelInputGuard:()=>{},channel:'qq',chatId:'dm',channelAddress:address,senderId:'owner',isGroup:false,admin:true,content:'hello',messageId:'m',timestamp:new Date().toISOString()}
       assert.equal(policies.managed(id),false)
+      const personal = { personalAgent: 'personal-role' }
+      assert.equal(sessions.inspectBotContext(id, personal), undefined, 'a verified connection is not an active runtime context')
       const finished=Promise.withResolvers<void>()
       bus.on('session.turn.finished',()=>finished.resolve())
       const inputs = channelInputFixture({ projectId, sessions, bots: store, directory: runtime,
@@ -84,6 +86,11 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       assert.ok(calls[0]!.tools.includes('read'))
       assert.ok(admins.includes(true))
       assert.equal(sessions.getSessionState(id)?.agentType,'personal-role')
+      const runtimeContext = sessions.inspectBotContext(id, personal)
+      assert.equal(runtimeContext?.source, 'active-history')
+      assert.equal(runtimeContext.systemPrompt, calls[0]!.prompt)
+      assert.deepEqual(runtimeContext.tools.map(tool => tool.name), calls[0]!.tools)
+      assert.equal(sessions.inspectBotContext(id, { personalAgent: 'general' }), undefined)
       const output = outbound.find(message => message.event === 'response' && message.done && message.content === 'done')
       assert.ok(output, 'actual normal SessionManager must emit a stamped Personal response')
       assert.doesNotThrow(() => assertPersonalOutput(output))

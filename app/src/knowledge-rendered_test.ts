@@ -88,6 +88,9 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
     if (id === './SystemPromptCard.vue') return { default: Vue.defineComponent({
       props: ['prompt', 'raw'], setup: props => () => Vue.h('pre', { 'data-raw': props.raw }, props.prompt),
     }) }
+    if (id === './ToolsCard.vue') return { default: Vue.defineComponent({
+      props: ['tools'], setup: props => () => Vue.h('div', (props.tools as { name: string }[]).map(tool => tool.name).join(' ')),
+    }) }
     if (id === '../AgentsTab.vue') return { default: Vue.defineComponent({
       props: ['apiBase', 'agentName'],
       setup: props => () => Vue.h('div', { 'data-test': 'agents-browser', ...props }),
@@ -769,6 +772,53 @@ test('Bot Knowledge document reads the current exact deployment and toggles raw 
   await settle()
   assert.match(view.text(), /# Deployed b/)
   assert.deepEqual(reads, ['a'.repeat(64), 'b'.repeat(64)])
+})
+
+
+test('BOT.md separates source and selected runtime views and reports missing bindings', async t => {
+  const revision = 'a'.repeat(64)
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const url = new URL(input)
+    if (url.pathname.endsWith('/bot-package')) return Response.json({ projectId: 'a', partial: false,
+      documents: [{ id: 'help', revision, paths: ['BOT.md'] }, { id: 'empty', revision, paths: ['BOT.md'] }] })
+    const id = url.pathname.includes('/empty/') ? 'empty' : 'help'
+    assert.equal(url.searchParams.get('revision'), revision)
+    if (url.pathname.endsWith('/prompt')) {
+      calls.push('markdown')
+      return Response.json({ id, revision, path: 'BOT.md', prompt: '---\nid: help\n---\n# Exact source' })
+    }
+    assert.match(url.pathname, /runtime-context$/)
+    const scope = url.searchParams.get('scope')
+    calls.push(scope === null ? id : `${id}:${scope}`)
+    return Response.json({ projectId: 'a', id, revision, status: 'ready', mode: 'service',
+      scopes: id === 'empty' ? [] : [{ key: '0', label: 'qq / group:help' }],
+      ...(scope !== null ? { scope, result: 'available', runtime: { source: 'preview', systemPrompt: '# Effective system message', tools: [{ name: 'scoped_tool', description: 'help' }] } } : {}),
+    })
+  })
+  const view = mount(t, 'BotKnowledgeDocument.vue', { active: true, apiBase: 'http://fixture/projects/a', projectId: 'a', bot: 'help', path: 'BOT.md' })
+  const click = async (label: string) => { (view.button(label).props.onClick as () => void)(); await settle() }
+  await settle()
+  assert.match(view.text(), /Overview.*Deployment revision/)
+  assert.deepEqual(calls, ['help'])
+  await click('Tools')
+  assert.match(view.text(), /scoped_tool/)
+  assert.match(view.text(), /Binding preview from the runtime policy/)
+  assert.doesNotMatch(view.text(), /Exact source/)
+  await click('System prompt')
+  assert.match(view.text(), /# Effective system message/)
+  assert.deepEqual(calls, ['help', 'help:0'])
+  await click('Original Markdown')
+  assert.match(view.text(), /# Exact source/)
+  assert.doesNotMatch(view.text(), /Effective system message/)
+  await click('Show source')
+  assert(view.nodes().some(node => node.props['data-raw'] === true))
+  view.props.bot = 'empty'
+  await settle()
+  assert.match(view.text(), /No subscribed binding is available/)
+  await click('Tools')
+  assert.match(view.text(), /No subscribed binding is available/)
+  assert.deepEqual(calls, ['help', 'help:0', 'markdown', 'empty'])
 })
 
 

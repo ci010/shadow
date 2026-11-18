@@ -18,8 +18,10 @@ export function agentTypesPlugin(
         c.header('Cache-Control', 'no-store')
         if (!await authorizeDefinition?.(c.req.raw)) return c.json({ error: 'Unauthorized' }, 401)
       }
-      const indexOnly = definition === undefined && c.req.query('view') === 'index'
-      const types = agentTypes.all().filter(t => (!t.root || t.name === 'general') && (definition === undefined || definition === t.name)).map((t) => ({
+      const view = c.req.query('view')
+      const knowledge = view === 'knowledge'
+      const indexOnly = definition === undefined && (view === 'index' || knowledge)
+      const types = (knowledge ? agentTypes.knowledgeDefinitions() : agentTypes.all()).filter(t => (!t.root || t.name === 'general') && (definition === undefined || definition === t.name)).map((t) => ({
         name: t.name,
         description: t.description,
         prompt: indexOnly ? undefined : t.prompt,

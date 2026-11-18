@@ -149,15 +149,15 @@ export class IntegrationStore {
       this.options.sources.validate(agent.sourceFolders)
     }
     const parsed = parseAgentFile(agent.markdown, agent.name, this.agentDirectory(agent.name))
-    return { ...parsed, name: agent.name, allowedTools: [...agent.tools], blockedTools: undefined,
+    return { ...parsed, name: agent.name, runtimeOrigin: { kind: 'channel-integration', id: agent.id, revision: agent.version }, allowedTools: [...agent.tools], blockedTools: undefined,
       allowedModules: [], soul: false, skills: false }
   }
 
   restoreAgents(): void {
     for (const agent of this.agents()) {
       try {
-        this.assertAgentFile(agent)
-        this.options.agents.setWorkspaceType(agent.name, this.definition(agent))
+        const fileBacked = this.assertAgentFile(agent)
+        this.options.agents.setWorkspaceType(agent.name, this.definition(agent), fileBacked)
       } catch (error) {
         if (!(error instanceof IntegrationError)) throw error
         console.error('[discord-integration] Agent deployment paused', { id: agent.id, error: error.code })
@@ -169,8 +169,8 @@ export class IntegrationStore {
   private packagedAgent(id: string): boolean {
     return !!this.deployedBots?.().agents.some(agent => agent.id === id)
   }
-  private assertAgentFile(agent: IntegrationAgent): void {
-    if (this.packagedAgent(agent.id)) return
+  private assertAgentFile(agent: IntegrationAgent): boolean {
+    if (this.packagedAgent(agent.id)) return false
 
     const path = join(this.agentDirectory(agent.name), 'AGENT.md')
     let content: string
@@ -183,6 +183,7 @@ export class IntegrationStore {
       throw new IntegrationError('agent_definition_unavailable', 'The published Agent file is unavailable; review and publish it again.', 409)
     }
     if (content !== agent.markdown) throw new IntegrationError('agent_definition_changed', 'The Agent file changed outside its approved version. Review and publish before using it.', 409)
+    return true
   }
 
   private affected(change: IntegrationChange, state = this.snapshot()): string[] {
@@ -507,7 +508,7 @@ export class IntegrationStore {
       writePrivateFile(path, agent.markdown)
       state.agents = [...state.agents.filter(item => item.id !== agent.id), agent]
       state.bindings = state.bindings.map(binding => binding.agentId === agent.id ? narrowBinding(binding, agent) : binding)
-      this.options.agents.setWorkspaceType(agent.name, this.definition(agent))
+      this.options.agents.setWorkspaceType(agent.name, this.definition(agent), true)
     } else if (change.kind === 'bindings.save') {
       state.bindings = [...state.bindings.filter(item => !change.bindings.some(binding => binding.id === item.id)),
         ...change.bindings.map(binding => ({ ...binding,

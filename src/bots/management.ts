@@ -13,6 +13,9 @@ import { parseBotPackage, bindingSubscription, botSubscriptionKey, subscribedBin
 import { DirectoryBots } from './runtime.ts'
 import { snapshotBotDirectory, sourceUsesGit } from './directory.ts'
 import { botProposalBaseline } from './format.ts'
+import type { SessionManager } from '../sessions/session-manager.ts'
+
+type InspectContext = (bot: BotDefinition, revision: string, binding?: BotDefinition['bindings'][number]) => ReturnType<SessionManager['inspectBotContext']>
 
 type Options = {
   channelSource?: (sessionId: string) => ChannelSource
@@ -199,8 +202,43 @@ export function botPackageTool(options: Options): Tool {
 }
 
 /** Read-only owner inventory. Publication has no separate approval/pending state. */
-export function botPackagePlugin(options: Pick<Options,'projectId'|'deployments'|'pending'>, authorize:(request:Request)=>boolean|Promise<boolean>) {
+export function botPackagePlugin(options: Pick<Options,'projectId'|'deployments'|'pending'>, authorize:(request:Request)=>boolean|Promise<boolean>, inspectContext?: InspectContext) {
   return (app:Hono) => {
+    app.get('/api/bot-package/:id/runtime-context', async context => {
+      context.header('Cache-Control', 'no-store')
+      if (!await authorize(context.req.raw)) return context.json({ error: 'Unauthorized' }, 401)
+      try {
+        const snapshot = options.deployments.read(context.req.param('id'))
+        if (!snapshot) return context.json({ error: 'BOT deployment unavailable.' }, 404)
+        const { id, revision } = snapshot.deployment
+        if (context.req.query('revision') !== revision) return context.json({ error: 'BOT deployment changed. Refresh the inventory.' }, 409)
+        const envelope = { projectId: options.projectId, id, revision }
+        let bot: BotDefinition
+        try {
+          bot = parseBot(snapshot.files)
+          if (bot.id !== id) throw new Error('Identity mismatch')
+        } catch { return context.json({ ...envelope, status: 'invalid-package' }) }
+        const bindings = subscribedBindings(bot)
+        const scopes = bot.mode === 'personal' ? [{ key: 'personal', label: bot.connection }] : bindings.map((binding, index) => ({
+          key: String(index), label: `${binding.platform} / ${binding.botInstanceId} / ${binding.platform === 'discord'
+            ? binding.target.kind === 'channel' ? binding.target.channelId : binding.target.userId : binding.conversationId}`,
+        }))
+        const requested = context.req.query('scope')
+        const overview = { ...envelope, status: 'ready' as const, mode: bot.mode, agent: bot.agent, scopes }
+        if (requested === undefined) return context.json(overview)
+        const index = scopes.findIndex(scope => scope.key === requested)
+        if (index < 0) return context.json({ error: 'BOT context scope not found.' }, 404)
+        const binding = bindings[index]
+        if (binding && !binding.enabled) return context.json({ ...overview, scope: requested, result: 'disabled' })
+        if (!inspectContext || binding?.platform === 'discord' && binding.target.kind !== 'channel') {
+          return context.json({ ...overview, scope: requested, result: 'unsupported' })
+        }
+        let runtime: ReturnType<InspectContext>
+        try { runtime = inspectContext(bot, revision, binding) }
+        catch { /* Do not disclose authorization internals or another binding's details. */ }
+        return context.json({ ...overview, scope: requested, result: runtime ? 'available' : 'unavailable', runtime })
+      } catch { return context.json({ error: 'BOT deployment unavailable.' }, 409) }
+    })
     app.get('/api/bot-package/:id/prompt', async context => {
       context.header('Cache-Control', 'no-store')
       if (!await authorize(context.req.raw)) return context.json({ error: 'Unauthorized' }, 401)
