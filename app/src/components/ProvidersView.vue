@@ -207,7 +207,29 @@ onBeforeUnmount(() => request?.abort())
 .provider-usage { margin: 0 0 16px; padding-top: 10px; border-top: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .provider-usage p { margin: 0 0 4px; }
 .provider-usage a { color: var(--c-blue); }
-.provider-usage progress { display: block; width: 100%; height: 8px; accent-color: var(--c-blue); }
+.provider-usage progress {
+  display: block;
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--c-blue);
+}
+.provider-usage progress::-webkit-progress-bar { background: transparent; }
+.provider-usage progress::-webkit-progress-value {
+  background: var(--c-blue);
+  border-radius: 999px;
+}
+.provider-usage progress::-moz-progress-bar {
+  background: var(--c-blue);
+  border-radius: 999px;
+}
+@media (forced-colors: active) {
+  .provider-usage progress { appearance: auto; }
+}
 .provider-card-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; }
 .provider-state { font-size: 12px; color: var(--c-text-secondary); }
 .needs-attention, .inventory-error { color: var(--c-error); }
