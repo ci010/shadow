@@ -438,7 +438,7 @@ function publish(resource: ConversationResource) {
 }
 const consumedInspectionLinks = new Set<string>()
 function syncRoute() {
-  if (!props.visible || !['chat', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
+  if (!props.visible || !['chat', 'project-board', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
