@@ -54,6 +54,9 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
+      <div v-if="dashboardProject && !mobile?.enabled.value && openProjectTabGroups.length" class="dashboard-editor-tabs">
+        <ProjectEditorTabs :groups="openProjectTabGroups" @activate="activateTopTab" @close="editorGroups.close" />
+      </div>
       <ProjectWorkbench v-if="dashboardProject" :key="dashboardProject.id"
         :api-base="projectBase(apiBase, dashboardProject.id)" :project-id="dashboardProject.id"
         :project-name="dashboardProject.name" :visible="visible"
@@ -65,7 +68,7 @@
         <button v-if="!projects.length && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
       <AutomationDetail v-show="!dashboardProject" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
-      <EditorGroupHost @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
+      <EditorGroupHost :project-name="project.name" :other-project-tabs="otherProjectTabGroups" @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
       </AutomationDetail>
       <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
       <div v-show="false" class="editor-resource-owners">
@@ -106,11 +109,12 @@
 <script setup lang="ts">
 import { closePreviousSidebarConversation } from '../sidebar-conversation-tabs.ts'
 import { createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
-import { projectTopTabGroups, ProjectTopTabsKey, type ProjectTopTabs } from '../project-top-tabs.ts'
+import ProjectEditorTabs from './ProjectEditorTabs.vue'
+import { projectTopTabGroups } from '../project-top-tabs.ts'
 import EditorGroupHost from './EditorGroupHost.vue'
 import EditorViewHost from './EditorViewHost.vue'
 import { t } from '../i18n.ts'
-import { computed, inject, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProjectGroup from './ProjectGroup.vue'
 import ProjectWorkbench from './ProjectWorkbench.vue'
@@ -245,18 +249,12 @@ const workflowQueries = new Map<string, Record<string, string>>()
 const conversationQueries = new Map<string, typeof route.query>()
 const projectWorkbenches = new Map<string, ConversationResource>()
 let documentRoute = ''
+let incomingDocument: symbol | undefined
 let pendingTopTab: { resource: ConversationResource; path: string } | undefined
-const topTabsHost = inject(ProjectTopTabsKey, undefined)
-const topTabs: ProjectTopTabs = {
-  groups: () => projectTopTabGroups(editorGroups, projects.value, editor =>
-    !!editor.conversation || editor.id === projectEditorId(editor.projectId, 'workflows')
-    || editor.id === projectEditorId(editor.projectId, 'settings')),
-  active: id => props.visible && ['chat', 'project-workflows', 'project-settings'].includes(String(route.name))
-    && route.params.projectId === selectedProjectId.value && editorGroups.active(selectedProjectId.value)?.id === id,
-  activate: id => { void activateTopTab(id) },
-  close: id => editorGroups.close(id),
-}
-if (topTabsHost) topTabsHost.value = topTabs
+const openProjectTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, editor =>
+  !!editor.conversation || editor.id === projectEditorId(editor.projectId, 'workflows')
+  || editor.id === projectEditorId(editor.projectId, 'settings')))
+const otherProjectTabGroups = computed(() => openProjectTabGroups.value.filter(group => group.id !== selectedProjectId.value))
 
 async function activateTopTab(id: string) {
   const editor = editorGroups.descriptors.get(id)
@@ -455,6 +453,7 @@ function syncRoute() {
     void router.replace({ query: workflowQuery })
   }
   documentRoute = nextDocumentRoute
+  const tab = route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' ? 'settings' : undefined
   if (route.name === 'project-dashboard') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
@@ -475,13 +474,19 @@ function syncRoute() {
     const { panel, entry, ...query } = route.query
     conversationQueries.set(resource.key, query)
   }
+  const activation = incomingDocument = tab ? Symbol() : undefined
   publish(resource)
-  const tab = route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' ? 'settings' : undefined
   if (tab) {
     const state = projectDocuments.get(projectId)
     if (!state.tabs.includes(tab)) state.tabs = [...state.tabs, tab]
     state.selected = projectTabKey(tab)
-    void nextTick(() => editorGroups.activate(projectEditorId(projectId, tab)))
+    void nextTick(() => {
+      if (incomingDocument !== activation) return
+      incomingDocument = undefined
+      if (props.visible && `${String(route.name)}:${String(route.params.projectId)}` === nextDocumentRoute) {
+        editorGroups.activate(projectEditorId(projectId, tab))
+      }
+    })
   }
 }
 async function refresh() {
@@ -597,7 +602,11 @@ function selectSession(projectId: string, sessionId: string) {
 // Group activation (including close fallback and cross-group focus) is the
 // navigation authority; hidden source workbenches must not publish their tabs.
 watch(() => editorGroups.active(selectedProjectId.value), descriptor => {
-  if (!props.visible || !descriptor || (!descriptor.explorer && !descriptor.conversation)) return
+  if (!props.visible || route.name === 'project-dashboard' || !descriptor || (!descriptor.explorer && !descriptor.conversation)) return
+  // Entering another project's document route can expose that project's last
+  // focused conversation before the route activates the requested document.
+  if ((route.name === 'project-workflows' || route.name === 'project-settings')
+    && (incomingDocument || documentRoute !== `${String(route.name)}:${String(route.params.projectId)}`)) return
   const resource = resources.value.find(item => item.key === descriptor.owner)
   if (!resource) return
   const entry = descriptor.explorer?.entryId
@@ -722,7 +731,6 @@ onMounted(() => {
 onActivated(() => { keyboardActive.value = true })
 onDeactivated(() => { sessionSearchOpen.value = false; keyboardActive.value = false; newConversationShortcut.cancel(); closeSidebar(false) })
 onUnmounted(() => {
-  if (topTabsHost?.value === topTabs) topTabsHost.value = undefined
   keyboardActive.value = false
   newConversationShortcut.cancel()
   window.removeEventListener('keydown', newConversationShortcut.keydown)
@@ -738,6 +746,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.dashboard-editor-tabs { display: flex; flex: 0 0 40px; min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); }
 .session-search-trigger { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .session-search-trigger:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .session-search-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

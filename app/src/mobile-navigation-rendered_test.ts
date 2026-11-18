@@ -18,7 +18,7 @@ const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
 for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'mobile'
   ? 'real App mobile navigation, conversation headers, drafts, sheets and touch gestures'
-  : 'real App groups retained top tabs by project with global Settings separate', {
+  : 'real App renders one lower editor tab row and switches retained project tabs', {
   timeout: 180_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -53,7 +53,7 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
             {path:'/projects/:projectId/dashboard', name:'project-dashboard', component:ProjectsWorkspace},
             {path:'/nodes', name:'nodes', component:destination},
             {path:'/settings/:section?', name:'settings', component:destination},
-            {path:'/projects/:projectId/settings/:section?', name:'project-settings', component:destination},
+            {path:'/projects/:projectId/settings/:section?', name:'project-settings', component:ProjectsWorkspace},
             ...['agents','spans','logs'].map(name => ({path:'/projects/:projectId/' + name, name, component:destination})),
           ]});
           await router.push('/projects/work/chat');
@@ -130,9 +130,10 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
             const name = JSON.parse(body).name
             names.set(sessionId, name)
             data = { sessionId, name }
-          } else if (operation === 'workspace/files') data = { path: '', entries: [{ name: 'notes.txt', type: 'file', ext: '.txt', size: 23, mtime: null }] }
-          else if (operation === 'workspace/preview') data = { binary: false, size: 23, content: 'Synthetic document body', encoding: 'utf-8' }
-          else if (operation === 'workspace/git/status') data = { available: false, reason: 'not_repository', changes: [] }
+          } else if (operation === 'context') data = { systemPrompt: 'Synthetic mobile test prompt', tools: [] }
+          else if (operation === 'workspace/files' || path === '/api/folders/source/files') data = { path: '', entries: [{ name: 'notes.txt', type: 'file', ext: '.txt', size: 23, mtime: null }] }
+          else if (operation === 'workspace/preview' || path === '/api/folders/source/preview') data = { binary: false, size: 23, content: 'Synthetic document body', encoding: 'utf-8' }
+          else if (operation === 'workspace/git/status' || path === '/api/folders/source/git/status') data = { available: false, reason: 'not_repository', changes: [] }
           else { unexpected.push(`${request.method} ${url.pathname}`); response.statusCode = 404; data = { error: 'Unstubbed mobile fixture endpoint' } }
           response.setHeader('Content-Type', 'application/json')
           response.end(JSON.stringify(data))
