@@ -56,6 +56,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           data.daily[1].usage = {...metrics,tokens:0,durationMs:0,costs:[{currency:'USD',amount:0},{currency:'CNY',amount:0}]};
           data.daily[2].usage = {...metrics,tokens:null,durationMs:null,costs:[],unknownTokenCalls:1,unknownCostCalls:1,unknownDurationCalls:1};
           data.month = {...metrics,tokens:42000000};
+          window.addUsageFixtureTool = () => activity.tools.unshift({name:'refresh-fixture',calls:9000});
           window.usageInstance = getInstanceByDom;
           window.usageLocale = setLocalePreference;
           window.usageApp = createApp({render:()=>h(Usage,{apiBase:location.origin+'/projects/fixture',projectId:'fixture',active:true})}).use(i18n); window.usageApp.mount('#app');`
@@ -142,6 +143,38 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
             await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("[role=option]")).find(e=>e.innerText.trim()==='+JSON.stringify(text)+').click()');
             await new Promise(r=>setTimeout(r,60));
           };
+          const run = script => win.webContents.executeJavaScript(script);
+          const period = label => run('Array.from(document.querySelectorAll(".period-switch button")).find(e=>e.innerText.trim()==='+JSON.stringify(label)+').click()');
+          const plotAnimation = () => run('window.usageInstance(document.querySelector(".echart-plot")).getOption().animation');
+          const plotAnimating = () => run('!window.usageInstance(document.querySelector(".echart-plot")).getZr().animation.isFinished()');
+          const cssAnimating = selector => run('document.querySelector('+JSON.stringify(selector)+').getAnimations().length > 0');
+          const bars = 'section[aria-label="Tool usage"] .fills-bars';
+          const animations = win.webContents.debugger;
+          animations.attach('1.3');
+          const motion = value => animations.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value}]});
+          await motion('no-preference');
+          assert.equal(await run('document.querySelectorAll(\`[role="group"][aria-label="Usage period"]\`).length'),1);
+          await period('This month');
+          assert.equal(await run('window.usageInstance(document.querySelector(".echart-plot")).getOption().xAxis[0].data.length'),1);
+          assert.match(await run('document.querySelector(".summary-grid").innerText'),/42M/);
+          assert.equal(await cssAnimating(bars),true);
+          const barFill = await run('parseFloat(getComputedStyle(document.querySelector(".fills-bars .ranking-bar")).getPropertyValue("--usage-bar-fill"))');
+          assert.ok(barFill > 0 && barFill < 1);
+          assert.equal(await plotAnimation(),true);
+          assert.equal(await plotAnimating(),true);
+          await motion('reduce');
+          assert.equal(await cssAnimating(bars),false);
+          await period('Past 7 days');
+          assert.equal(await plotAnimation(),false);
+          assert.equal(await cssAnimating(bars),false);
+          await motion('no-preference');
+          // Settle the one-shot CSS entrance after changing the media preference.
+          await new Promise(r=>setTimeout(r,420));
+          await run('window.addUsageFixtureTool(); Array.from(document.querySelectorAll("button")).find(e=>e.textContent.trim()==="Refresh").click()');
+          for (let attempt=0;attempt<30 && await run('document.querySelector(".project-usage header button").disabled');attempt++) await new Promise(r=>setTimeout(r,20));
+          assert.equal(await plotAnimation(),false);
+          assert.equal(await cssAnimating(bars),false);
+          assert.match(await run('document.querySelector('+JSON.stringify(bars+' .ranking-row')+').innerText'),/refresh-fixture/);
           const model = 'section[aria-label="Model usage"]';
           const breakdownValues = () => win.webContents.executeJavaScript('Array.from(document.querySelectorAll('+JSON.stringify(model+' .ranking-count, '+model+' td')+')).map(e=>e.innerText.trim())');
           await select(model,'Metric','Estimated cost');
@@ -149,6 +182,12 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.deepEqual(usd,['496.34 USD','Unavailable']);
           await select(model,'Chart view','Donut chart');
           assert.equal(await win.webContents.executeJavaScript('getComputedStyle(document.querySelector(".usage-ring")).backgroundImage.includes("conic-gradient")'),true);
+          assert.equal(await cssAnimating('.usage-ring'),true);
+          const ringFill = await run('parseFloat(getComputedStyle(document.querySelector(".usage-ring")).getPropertyValue("--usage-ring-fill"))');
+          assert.ok(ringFill > 0 && ringFill < 360);
+          await motion('reduce');
+          assert.equal(await cssAnimating('.usage-ring'),false);
+          await motion('no-preference');
           assert.deepEqual(await breakdownValues(),usd);
           await select(model,'Chart view','Table');
           assert.deepEqual(await breakdownValues(),usd);
@@ -159,11 +198,11 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/skill-example/);
           await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Memory").click()');
           assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/memory-example.*Automatic log brief/);
-          await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Last 30 days").click(); Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="This month").click(); Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Load daily history").click();');
+          await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="All time").click(); Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Load daily history").click();');
           await new Promise(r=>setTimeout(r,80));
-          assert.equal(await win.webContents.executeJavaScript('window.usageInstance(document.querySelector(".echart-plot")).getOption().xAxis[0].data.length'),30);
+          assert.equal(await win.webContents.executeJavaScript('window.usageInstance(document.querySelector(".echart-plot")).getOption().xAxis[0].data.length'),31);
           assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".daily-table tbody tr").length'),10);
-          assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".period-switch button")).find(e=>e.innerText.trim()==="This month").getAttribute("aria-pressed")'),'true');
+          assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".period-switch button")).find(e=>e.innerText.trim()==="All time").getAttribute("aria-pressed")'),'true');
           // Native keyboard events exercise the accessible exact readout, not canvas markup.
           await win.webContents.executeJavaScript('document.querySelector("#app").style.width="1180px"; document.querySelector(".chart-interaction").scrollIntoView({block:"center"}); document.querySelector(".chart-interaction").focus()');
           const key = async name => { win.webContents.sendInputEvent({type:'keyDown',keyCode:name}); win.webContents.sendInputEvent({type:'keyUp',keyCode:name}); await new Promise(r=>setTimeout(r,60)); };
@@ -172,7 +211,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           await key('Left'); assert.equal(await readout(),'2026-09-30: 0');
           await key('Left'); assert.equal(await readout(),'2026-09-29: Unavailable');
           await key('Right'); assert.equal(await readout(),'2026-09-30: 0');
-          await key('Home'); assert.match(await readout(),/^2026-09-02:/);
+          await key('Home'); assert.match(await readout(),/^2026-09-01:/);
           await key('Escape'); assert.match(await readout(),/Hover or tap/);
           const trend = '.chart-card';
           await select(trend,'Metric','Estimated cost');
@@ -182,6 +221,8 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           await select(trend,'Chart view','Line chart');
           const chartKind = () => win.webContents.executeJavaScript('window.usageInstance(document.querySelector(".echart-plot")).getOption().series[0].type');
           assert.equal(await chartKind(),'line');
+          assert.equal(await plotAnimation(),true);
+          assert.equal(await plotAnimating(),true);
           await win.webContents.executeJavaScript('document.querySelector(".chart-interaction").focus()');
           await key('End'); assert.equal(await readout(),'2026-10-01: 10 CNY · Partial telemetry');
           await select(trend,'Cost unit','USD');
@@ -196,7 +237,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.equal(await chartKind(),'bar');
           await win.webContents.executeJavaScript('document.querySelector(".chart-interaction").scrollIntoView({block:"center"})');
           // Real pointer movement uses ECharts' coordinate conversion solely for observation.
-          const position = await win.webContents.executeJavaScript('(()=>{const e=document.querySelector(".echart-plot");const c=window.usageInstance(e);const p=c.convertToPixel({seriesIndex:0},[29,1234567]);const r=e.getBoundingClientRect(); document.activeElement.blur(); return {x:Math.round(r.left+p[0]),y:Math.round(r.top+p[1])};})()');
+          const position = await win.webContents.executeJavaScript('(()=>{const e=document.querySelector(".echart-plot");const c=window.usageInstance(e);const p=c.convertToPixel({seriesIndex:0},[30,1234567]);const r=e.getBoundingClientRect(); document.activeElement.blur(); return {x:Math.round(r.left+p[0]),y:Math.round(r.top+p[1])};})()');
           win.webContents.sendInputEvent({type:'mouseMove',...position});
           await new Promise(r=>setTimeout(r,100));
           assert.equal(await readout(),'2026-10-01: 1,234,567 · Partial telemetry');
@@ -206,7 +247,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...position});
           await new Promise(r=>setTimeout(r,80));
           assert.equal(await readout(),'2026-10-01: 1,234,567 · Partial telemetry');
-          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll("details.chart-data tbody tr").length'),30);
+          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll("details.chart-data tbody tr").length'),31);
           assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>e.getAttribute("aria-hidden")==="true")'),true);
           await win.webContents.executeJavaScript('window.oldCharts=Array.from(document.querySelectorAll(".echart-plot")).map(e=>window.usageInstance(e)); window.usageApp.unmount(); document.documentElement.classList.toggle("dark")');
           await new Promise(r=>setTimeout(r,80));

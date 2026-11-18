@@ -1,5 +1,5 @@
 import { statsIndex, toolNames } from './stats-index.ts'
-import type { ProjectUsageActivity, ProjectUsage, ProjectUsageMetrics } from '../projects/usage-contract.ts'
+import { USAGE_TREND_HISTORY_DAYS, type ProjectUsageActivity, type ProjectUsage, type ProjectUsageMetrics } from '../projects/usage-contract.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { parseTokenUsage } from './usage.ts'
@@ -63,7 +63,7 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
   const result: ProjectUsage = { activity: emptyActivity(), projectId, asOf: new Date(asOf).toISOString(), timeZone: 'UTC', total: empty(), today: empty(), past7Days: empty(), month: empty(), daily: [], scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0 }
   const daily = new Map<string, ProjectUsageMetrics>()
   // Include zero-activity days in the recent trend; older active days remain available.
-  for (let time = today - 30 * DAY; time <= today; time += DAY) daily.set(new Date(time).toISOString().slice(0, 10), empty())
+  for (let time = today - (USAGE_TREND_HISTORY_DAYS - 1) * DAY; time <= today; time += DAY) daily.set(new Date(time).toISOString().slice(0, 10), empty())
   const seen = new Set<string>(), physical = new Set<string>(), logical = new Set<string>()
   const stats = statsIndex(store)
   let scanned = 0
@@ -172,7 +172,7 @@ async function snapshot(store: SessionStore, states: SessionState[], projectId: 
 }
 export async function readProjectUsage(store: SessionStore, states: SessionState[], projectId: string, asOf: number, signal?: AbortSignal): Promise<ProjectUsage> {
   const value = await snapshot(store, states, projectId, asOf, signal, true)
-  const from = new Date(Math.floor(asOf / DAY) * DAY - 30 * DAY).toISOString().slice(0, 10)
+  const from = new Date(Math.floor(asOf / DAY) * DAY - (USAGE_TREND_HISTORY_DAYS - 1) * DAY).toISOString().slice(0, 10)
   signal?.throwIfAborted()
   const requestQuality = statsIndex(store)?.requestSummary(asOf)
   return { ...value, ...(requestQuality ? { firstText: requestQuality.firstText, requestQuality } : {}),

@@ -153,7 +153,7 @@ test('inactive usage never fetches; mismatched Project responses are rejected', 
 })
 
 
-test('the chronological chart exposes known values, keyboard targets and 7/30 day switching without refetch', async t => {
+test('the chronological chart exposes known values, keyboard targets and period switching without refetch', async t => {
   let requests = 0
   const result = response()
   result.daily[0].usage = { ...metrics, costs: [...metrics.costs, { currency: 'AI_CREDITS', amount: 12 }] }
@@ -170,10 +170,10 @@ test('the chronological chart exposes known values, keyboard targets and 7/30 da
   assert.ok(points.slice(0, -1).every(p => p.value === null && /Unavailable/.test(p.label)))
   assert.deepEqual(points.at(-1), { date: '2026-10-01', value: 1234, label: '2026-10-01: 1,234 · Partial telemetry', partial: true })
   assert.doesNotMatch(view.text(), /Token share by day/)
-  const change = view.nodes().find(n => n.tag === 'button' && n.text === 'Last 30 days')!
+  const change = view.nodes().find(n => n.tag === 'button' && n.text === 'All time')!
   ;(change.props.onClick as () => void)(); await settle()
   assert.equal(change.props['aria-pressed'], true)
-  assert.match(view.text(), /1 of 30 days available/)
+  assert.match(view.text(), /1 of 31 days available/)
   assert.equal(requests, 1)
   assert.match(view.text(), /Load daily history/) // no daily rows before explicit demand
   assert.doesNotMatch(view.text(), /13.25/)
@@ -218,14 +218,14 @@ test('cost chart switches units without mixing totals and preserves partial/abse
   assert.equal(bars().length, 1)
   assert.match(String(bars()[0].label), /30 CNY/)
   assert.ok(bars().every(n => !String(n.label).includes('USD')))
-  const change = view.nodes().find(n => n.tag === 'button' && n.text === 'Last 30 days')!
+  const change = view.nodes().find(n => n.tag === 'button' && n.text === 'All time')!
   ;(change.props.onClick as () => void)(); await settle()
   assert.equal(bars().length, 1)
   assert.equal(requests, 1)
   assert.match(view.text(), /Some usage is unavailable or partial/)
 })
 
-test('four KPI cards follow summary selection independently of the trend window; completeness is collapsed', async t => {
+test('four KPI cards and trends follow the same period; completeness is collapsed', async t => {
   const result = response()
   result.past7Days = { ...metrics, tokens: 156300000, durationMs: 293000 }
   result.month = { ...metrics, tokens: 42000000, durationMs: 3600000, calls: 10000 }
@@ -244,8 +244,9 @@ test('four KPI cards follow summary selection independently of the trend window;
   assert.match(flatten(cards()[0]), /42M/)
   assert.match(flatten(cards()[2]), /1h 0m 0s/)
   assert.match(flatten(cards()[3]), /10K/)
-  assert.match(view.text(), /1 of 7 days available/)
-  assert.match(view.text(), /Daily trends have their own date range/)
+  assert.match(view.text(), /1 of 1 days available/)
+  assert.equal(view.nodes().filter(n => n.props['aria-label'] === 'Usage period').length, 1)
+  assert.doesNotMatch(view.text(), /Last 30 days/)
   const details = view.nodes().filter(n => n.tag === 'details' && ['completeness', 'methodology'].includes(String(n.props.class)))
   assert.equal(details.length, 2)
   assert.ok(details.every(n => !n.props.open))
@@ -254,12 +255,13 @@ test('four KPI cards follow summary selection independently of the trend window;
   assert.ok(cards().every(n => !flatten(n).includes('calls missing')))
   assert.ok(view.nodes().some(n => n.props.title === '156,300,000 (partial; 1 calls missing)') === false) // titles follow the selected period
   assert.ok(view.nodes().some(n => n.props.title === '42,000,000'))
-  for (const [label, count] of [['Today', '1.2K'], ['All time', '1.2K'], ['Past 7 days', '156.3M']] as const) {
+  for (const [label, count, days] of [['Today', '1.2K', 1], ['All time', '1.2K', 31], ['Past 7 days', '156.3M', 7]] as const) {
     const button = view.nodes().find(n => n.tag === 'button' && n.text === label)!
     ;(button.props.onClick as () => void)(); await settle()
     assert.equal(button.props['aria-pressed'], true)
     assert.match(flatten(cards()[0]), new RegExp(count.replace('.', '\\.')))
-    assert.match(view.text(), /1 of 7 days available/)
+    assert.match(view.text(), new RegExp(`1 of ${days} days available`))
+    assert.equal(view.text().includes('All-time trends show only the latest 31 UTC dates.'), label === 'All time')
   }
   const costRows = view.nodes().find(n => n.props.class === 'cost-values')!.children.filter(n => n.tag === 'div')
   assert.equal(costRows.length, 2)
@@ -544,4 +546,19 @@ test('global Usage starts with all projects, reports partial totals and filters 
   await settle()
   assert.match(view.text(), /Usage by project/)
   assert.ok(view.nodes().some(n => n.props.title === '2,468'))
+})
+
+test('global Usage does not mislabel mixed UTC snapshots as one daily trend', async t => {
+  const a = response('a')
+  const b = { ...response('b'), asOf: '2026-09-30T23:59:59Z' }
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    rows: [a, b].map(usage => ({ project: { id: usage.projectId, name: usage.projectId, createdAt: '2026-09-01' }, usage })),
+    aggregate: mergeUsage([a, b]),
+  }))
+  const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture', active: true })
+  await settle()
+  assert.match(view.text(), /relative to each project’s snapshot date/)
+  assert.match(view.text(), /Daily trends are unavailable because the project snapshots span different UTC dates/)
+  assert.ok(view.nodes().some(n => n.props.title === '2,468'))
+  assert.ok(!view.nodes().some(n => n.tag === 'usage-trend-chart' || n.props.class === 'chart-card'))
 })

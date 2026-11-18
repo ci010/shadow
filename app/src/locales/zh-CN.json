@@ -1,4 +1,13 @@
 {
+  "The selected period is relative to each project’s snapshot date.": "所选时段以各项目的快照日期为准。",
+  "Usage period": "用量统计时段",
+  "Selected usage period: {period}": "所选用量时段：{period}",
+  "Select a project to inspect its usage.": "选择项目可查看用量详情。",
+  "Recorded models in the selected period.": "按所选时段统计已记录的模型。",
+  "All-time trends show only the latest {days} UTC dates.": "全部时间的趋势仅展示最近 {days} 个 UTC 日期。",
+  "Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.": "项目快照跨越不同的 UTC 日期，暂无法绘制统一的每日趋势。请刷新以对齐日期。",
+  "All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.": "统计截至各快照的所有有日期记录，不受所选用量时段限制。分位数仅使用各项目内的观测样本。",
+  "Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.": "自记录开始累计，每个项目最多显示 100 个条目。旧版 Skill 计数没有日期；所选用量时段不适用。",
   "Reads": "读取次数",
   "Recorded models in the selected summary period.": "按所选概览时段统计已记录的模型。",
   "{count} calls without a recorded model are excluded.": "另有 {count} 次调用因未记录模型而未计入。",

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ProjectUsage, ProjectUsageMetrics } from '../../src/projects/usage-contract.ts'
-import { usageWindow, displayCosts } from './project-usage-charts.ts'
+import { usageWindow, usageTrendDays, displayCosts } from './project-usage-charts.ts'
 import { measure, rankBreakdown } from './usage-breakdown.ts'
 const usage = (tokens: number | null, durationMs: number | null = tokens): ProjectUsageMetrics => ({ calls: 1, tokens, durationMs, unknownTokenCalls: tokens === null ? 1 : 0, unknownDurationCalls: durationMs === null ? 1 : 0, costs: [{ currency: 'USD', amount: 2 }, { currency: 'CNY', amount: 3 }, { currency: 'AI_CREDITS', amount: 10 }], unknownCostCalls: 0 })
 const fixture = { asOf: '2026-01-02T00:01:00Z', daily: [{ date: '2026-01-02', usage: usage(0, 0) }, { date: '2026-01-01', usage: usage(100, 2000) }, { date: '2025-12-30', usage: usage(null) }] } as ProjectUsage
@@ -18,6 +18,22 @@ test('UTC windows include today across year boundary, preserve zeros and missing
   assert.equal(points[5].seconds, 2)
   assert.equal(usageWindow(fixture, 30).length, 30)
 })
+test('selected periods yield UTC calendar ranges and the bounded all-time trend', () => {
+  for (const [asOf, period, start, days] of [
+    ['2026-01-02T00:01:00Z', 'today', '2026-01-02', 1],
+    ['2026-01-02T00:01:00Z', 'past7Days', '2025-12-27', 7],
+    ['2026-01-02T00:01:00Z', 'month', '2026-01-01', 2],
+    ['2028-02-29T23:59:59Z', 'month', '2028-02-01', 29],
+    ['2026-10-31T23:59:59Z', 'month', '2026-10-01', 31],
+    ['2026-01-02T00:01:00Z', 'total', '2025-12-03', 31],
+  ] as const) {
+    const points = usageWindow({ ...fixture, asOf }, usageTrendDays(asOf, period))
+    assert.equal(points.length, days)
+    assert.equal(points[0]?.date, start)
+    assert.equal(points.at(-1)?.date, asOf.slice(0, 10))
+  }
+})
+
 test('display costs converts credits at 100:1, merges USD and preserves CNY and source records', () => {
   const costs = usage(1).costs
   const before = structuredClone(costs)

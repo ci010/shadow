@@ -36,6 +36,9 @@ export const usageRecallSchema = z.object({
   memory: z.array(recallRow.extend({ source: z.enum(['active', 'automatic']) })).max(100),
   coverage: z.enum(['complete', 'partial']),
 })
+/** Latest UTC dates included in the overview response, including the snapshot day. */
+export const USAGE_TREND_HISTORY_DAYS = 31
+
 export const projectUsageSchema = z.object({
   requestQuality: requestQualitySchema.optional(),
   recall: usageRecallSchema.optional(),

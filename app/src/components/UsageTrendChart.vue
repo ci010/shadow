@@ -18,7 +18,7 @@ import type { EChartsType } from 'echarts/core'
 import { t } from '../i18n.ts'
 import { usageChartOption, type UsageChartDatum } from '../usage-chart-options.ts'
 
-const props = defineProps<{ title: string; kind: 'bar' | 'line'; points: UsageChartDatum[]; formatAxis: (value: number) => string; minInterval?: number }>()
+const props = defineProps<{ title: string; entranceKey: string; kind: 'bar' | 'line'; points: UsageChartDatum[]; formatAxis: (value: number) => string; minInterval?: number }>()
 const host = ref<HTMLDivElement>()
 const hintId = useId()
 const selected = ref<number | null>(null)
@@ -28,15 +28,16 @@ let chart: EChartsType | undefined
 let resize: ResizeObserver | undefined
 let theme: MutationObserver | undefined
 let disposed = false
+let motion: MediaQueryList | undefined
 
-function render() {
+function render(entrance = false) {
   if (!chart || !host.value) return
   const css = getComputedStyle(host.value)
   const color = (name: string) => css.getPropertyValue(`--c-${name}`).trim()
   chart.setOption(usageChartOption(props.title, props.kind, props.points, {
     primary: color('primary'), text: color('text'), muted: color('text-secondary'),
     border: color('border'), surface: color('bg-card'), selection: color('selection-bg'),
-  }, props.formatAxis, props.minInterval), { notMerge: true })
+  }, props.formatAxis, props.minInterval, entrance && motion?.matches === false), { notMerge: true })
 }
 function select(index: number) {
   if (!props.points.length) return
@@ -62,7 +63,12 @@ function onKey(event: KeyboardEvent) {
   else return
   event.preventDefault()
 }
-watch(() => [props.title, props.kind, props.points, props.formatAxis, props.minInterval], () => { dismiss(); render() })
+// Reloaded data, locale changes, and theme changes refresh the plot without replaying its entrance.
+watch([() => props.entranceKey, () => props.kind, () => props.title, () => props.points, () => props.formatAxis, () => props.minInterval],
+  ([key, kind], [oldKey, oldKind]) => { dismiss(); render(key !== oldKey || kind !== oldKind) })
+function onPreferenceChange(event: MediaQueryListEvent) {
+  if (event.matches) render()
+}
 onMounted(async () => {
   try {
     const { init } = await import('../usage-chart-engine.ts')
@@ -76,8 +82,13 @@ onMounted(async () => {
     chart.getZr().on('globalout', () => {
       if (document.activeElement !== host.value?.parentElement) dismiss()
     })
-    render()
-    resize = new ResizeObserver(() => { if (host.value?.clientWidth) chart?.resize() })
+    motion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    motion.addEventListener('change', onPreferenceChange)
+    render(true)
+    resize = new ResizeObserver(([entry]) => {
+      if (chart && entry && entry.contentRect.width &&
+        (Math.abs(entry.contentRect.width - chart.getWidth()) >= 1 || Math.abs(entry.contentRect.height - chart.getHeight()) >= 1)) chart.resize()
+    })
     resize.observe(host.value)
     theme = new MutationObserver(() => { dismiss(); render() })
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
@@ -85,7 +96,7 @@ onMounted(async () => {
     if (!disposed) failed.value = true
   }
 })
-onUnmounted(() => { disposed = true; resize?.disconnect(); theme?.disconnect(); chart?.dispose(); chart = undefined })
+onUnmounted(() => { disposed = true; motion?.removeEventListener('change', onPreferenceChange); resize?.disconnect(); theme?.disconnect(); chart?.dispose(); chart = undefined })
 </script>
 <style scoped>
 .usage-chart { min-width: 0; width: 100%; margin-top: auto; }

@@ -1,4 +1,13 @@
 {
+  "The selected period is relative to each project’s snapshot date.": "The selected period is relative to each project’s snapshot date.",
+  "Usage period": "Usage period",
+  "Selected usage period: {period}": "Selected usage period: {period}",
+  "Select a project to inspect its usage.": "Select a project to inspect its usage.",
+  "Recorded models in the selected period.": "Recorded models in the selected period.",
+  "All-time trends show only the latest {days} UTC dates.": "All-time trends show only the latest {days} UTC dates.",
+  "Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.": "Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.",
+  "All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.": "All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.",
+  "Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.": "Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.",
   "Reads": "Reads",
   "Recorded models in the selected summary period.": "Recorded models in the selected summary period.",
   "{count} calls without a recorded model are excluded.": "{count} calls without a recorded model are excluded.",
