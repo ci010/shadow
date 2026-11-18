@@ -7,7 +7,7 @@
     <p v-if="definitionError" role="alert">{{ definitionError }}</p>
     <p v-if="bots?.state.value.value?.partial" role="status">{{ t('Some Bot documents are unavailable. Check Bot settings.') }}</p>
     <p v-if="!loading && noMatches">{{ t('No matching entries.') }}</p>
-    <nav :aria-label="t('Knowledge entries')"><KnowledgeTree :key="query" :nodes="tree" :selected-id="selectedId" @select="$emit('select', $event)" /></nav>
+    <nav :aria-label="t('Knowledge entries')"><KnowledgeTree :key="query" :nodes="tree" :searching="!!query.trim()" :selected-id="selectedId" @select="$emit('select', $event)" /></nav>
   </aside>
 </template>
 <script setup lang="ts">
