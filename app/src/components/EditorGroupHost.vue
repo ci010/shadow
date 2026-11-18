@@ -67,7 +67,6 @@ const state = computed(() => groups.state(props.projectId))
 const knowledgeContext = computed(() => groups.active(props.projectId)?.explorer)
 const explorerOpen = computed(() => groups.explorerOpen(props.projectId))
 // Open Knowledge navigation without changing the file explorer preference.
-watch(() => !!knowledgeContext.value, value => { if (value) groups.setExplorerOpen(props.projectId, true) }, { immediate: true })
 function selectKnowledge(id: string) {
   knowledgeContext.value?.select(id)
   if (mobile?.enabled.value) closeExplorer()
