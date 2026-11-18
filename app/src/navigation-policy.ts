@@ -3,41 +3,25 @@ import type {
   InstallationMode,
 } from './installation-context.ts'
 
-export type NavigationGroup = 'primary' | 'diagnostics'
 export type AppRouteName =
   | 'chat'
-  | 'nodes'
+  | 'usage'
   | 'settings'
-  | 'agents'
-  | 'spans'
-  | 'logs'
 
 export interface NavigationItem {
   name: AppRouteName
   label: string
-  group: NavigationGroup
 }
 
 const NAVIGATION_POLICY: readonly NavigationItem[] = [
   {
     name: 'chat',
     get label() { return t('Chat') },
-    group: 'primary',
   },
+  { name: 'usage', get label() { return t('Usage') } },
   {
     name: 'settings',
     get label() { return t('Settings') },
-    group: 'primary',
-  },
-  {
-    name: 'spans',
-    get label() { return t('Spans') },
-    group: 'diagnostics',
-  },
-  {
-    name: 'logs',
-    get label() { return t('Logs') },
-    group: 'diagnostics',
   },
 ]
 
@@ -46,5 +30,5 @@ const NAVIGATION_POLICY: readonly NavigationItem[] = [
 export function navigationFor(
   _context: { readonly mode: InstallationMode },
 ): NavigationItem[] {
-  return NAVIGATION_POLICY.map(({ name, label, group }) => ({ name, label, group }))
+  return NAVIGATION_POLICY.map(({ name, label }) => ({ name, label }))
 }

@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { markRaw, onScopeDispose } from 'vue'
 import { canonicalResourceKey } from '../resources/engine.ts'
 import { resourceViews } from '../resources/vue-resource.ts'
-import { apiUrl } from '../api-url.ts'
+import { parseProjects } from '../projects.ts'
+import { apiUrl, projectBase } from '../api-url.ts'
 import { createFoldersClient } from '../folders-client.ts'
 import { fetchNodeInventory } from '../node-inventory.ts'
 import { fetchAutomations } from '../automations.ts'
@@ -20,6 +21,11 @@ export function createCatalogResources(request: typeof fetch = fetch) {
     const response = await request(apiUrl(base, path), { signal, cache: 'no-store' })
     if (!response.ok) throw Object.assign(new Error('Resource request failed'), { status: response.status })
     return response.json()
+  }
+  async function usageSummary(base: string, projectId: string, signal: AbortSignal) {
+    const result = projectUsageSchema.parse(await json(base, '/api/project/usage', signal))
+    if (result.projectId !== projectId) throw new Error('Project mismatch')
+    return result
   }
   return {
     folders(base: string, projectId: string, pool: ResourceLivePool) {
@@ -51,10 +57,27 @@ export function createCatalogResources(request: typeof fetch = fetch) {
       void lease.read(); return lease
     },
     usage(base: string, projectId: string) {
-      const lease = views.acquire(key(base, projectId, 'usage-summary'), async signal => {
-        const result = projectUsageSchema.parse(await json(base, '/api/project/usage', signal))
-        if (result.projectId !== projectId) throw new Error('Project mismatch')
-        return result
+      const lease = views.acquire(key(base, projectId, 'usage-summary'), signal => usageSummary(base, projectId, signal))
+      void lease.read(); return lease
+    },
+    globalUsage(base: string) {
+      const lease = views.acquire(key(base, '', 'global-usage'), async signal => {
+        const projects = parseProjects(await json(base, '/api/projects', AbortSignal.any([signal, AbortSignal.timeout(60_000)])))
+        // Bound fan-out: each project request can scan its own session history.
+        const rows = []
+        for (let offset = 0; offset < projects.length; offset += 4) {
+          signal.throwIfAborted()
+          rows.push(...await Promise.all(projects.slice(offset, offset + 4).map(async project => {
+            try {
+              const usage = await usageSummary(projectBase(base, project.id), project.id, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+              return { project, usage }
+            } catch {
+              signal.throwIfAborted()
+              return { project, usage: undefined }
+            }
+          })))
+        }
+        return rows
       })
       void lease.read(); return lease
     },

@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { agentDefinitionId } from './knowledge-definitions.ts'
 import { microAppNavigation } from './microapp-navigation.ts'
+import ProjectUsage from './components/ProjectUsage.vue'
 import LogsTab from './components/LogsTab.vue'
 import SpansTab from './components/SpansTab.vue'
 import ProjectsWorkspace from './components/ProjectsWorkspace.vue'
@@ -14,6 +15,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/workflows', name: 'project-workflows', component: ProjectsWorkspace },
   { path: '/projects/:projectId/board', name: 'project-board', component: ProjectsWorkspace },
   { path: '/projects/:projectId/dashboard', name: 'project-dashboard', component: ProjectsWorkspace },
+  { path: '/usage', name: 'usage', component: ProjectUsage },
   { path: '/projects', name: 'projects', component: ProjectsWorkspace },
   { path: '/knowledge', redirect: '/projects/default/knowledge' },
   { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({

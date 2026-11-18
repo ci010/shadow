@@ -44,7 +44,6 @@ test('project settings and Knowledge click through history and observed groups w
       if (path === '/api/projects') { json({ projects }); return }
       if (/\/status$/.test(path)) { json({ state: 'ready' }); return }
       if (path.endsWith('/api/work')) { json({ items: [], sessions: [], requests: [], effects: [] }); return }
-      if (path.endsWith('/api/project/usage')) { const metrics = { calls: 0, tokens: 0, unknownTokenCalls: 0, costs: [], unknownCostCalls: 0, durationMs: 0, unknownDurationCalls: 0 }; json({ projectId: path.split('/')[2], asOf: '2026-10-01T12:00:00Z', timeZone: 'UTC', total: metrics, today: metrics, past7Days: metrics, month: metrics, daily: [], scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0 }); return }
       if (path.endsWith('/api/config')) { json({ agent: { model: 'fixture', workspace: '/synthetic/home', temperature: 0.5 } }); return }
       if (path.endsWith('/api/models')) { json({ models: ['fixture'], providers: [] }); return }
       if (path.endsWith('/api/service-groups')) { json({ revision: 'r1', agents: [], groups: [{ botInstanceId: 'bot', platform: 'qq', conversationId: 'group:received', botName: 'Bot', enabled: false, pending: false, lastSeen: 1, messages: [{ id: 'm', sender: 'fixture', text: 'Received-only fixture', receivedAt: 1, state: 'not_enabled' }] }] }); return }
@@ -99,7 +98,6 @@ test('project settings and Knowledge click through history and observed groups w
       await wait('window.fixture.router.currentRoute.value.name==="project-dashboard"');
       await wait(visible('.project-workbench'));await wait(visible('[data-overview-canvas]'));
       await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Board").click()');await wait(visible('.work-filters'));
-      await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Usage").click()');await wait(visible('.project-usage'));
       assert.equal((await route()).params.sessionId,undefined);
     }
     assert.equal(await run('!!document.querySelector(".new-work")'),false);
@@ -123,7 +121,8 @@ test('project settings and Knowledge click through history and observed groups w
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); assert.equal(code, 0, log); assert.match(log, /OBSERVATION_NAVIGATION_OK/)
   assert.equal(requests.some(request => /coordinator|orchestrator/.test(request.path)), false, 'Dashboard navigation never accesses a dedicated session')
-  for (const id of ['a', 'b']) for (const path of ['/api/work', '/api/project/usage']) assert.ok(requests.some(request => request.path === `/projects/${id}${path}`), `Dashboard reads ${id}${path}`)
+  for (const id of ['a', 'b']) assert.ok(requests.some(request => request.path === `/projects/${id}/api/work`), `Dashboard reads ${id} work`)
+  assert.ok(requests.every(request => !request.path.includes('/api/project/usage')), 'Dashboard does not request usage')
   assert.deepEqual(requests.filter(request => request.method !== 'GET'), [], 'Navigation must never prepare/send/run or create an execution')
   assert.equal(requests.some(request => /\/sessions\/.*observed-group/.test(decodeURIComponent(request.path))), false, 'Observed group IDs are never local sessions')
   for (const projectId of ['a', 'b']) assert.ok(requests.some(request => request.path === `/projects/${projectId}/api/knowledge`), `Knowledge uses ${projectId}'s project scope`)

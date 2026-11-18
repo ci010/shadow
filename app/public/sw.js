@@ -15,7 +15,7 @@ a:focus-visible{outline:2px solid #8bb7ff;outline-offset:3px}
 <a href="/">Try again</a></main></html>`
 
 function isAppPage(path) {
-  return path === '/' || path === '/index.html' || path === '/nodes' || path === '/nodes/'
+  return path === '/' || path === '/index.html' || path === '/nodes' || path === '/nodes/' || /^\/usage\/?$/.test(path)
     || /^\/(?:chat|knowledge|workspaces|providers|approvals|settings|agents|logs|spans)(?:\/|$)/.test(path)
     || /^\/projects\/?$/.test(path)
     || /^\/projects\/[^/]+\/(?:chat|knowledge|settings|agents|logs|spans)(?:\/|$)/.test(path)

@@ -102,7 +102,7 @@ test('service worker never caches data or intercepts APIs, and preserves online 
     assert.equal(await navigate('/'), onlineResponse, `Preserve HTTP ${status}`)
   }
   offline = true
-  for (const path of ['/', '/projects/default/chat/web%3Aone', '/settings/models', '/nodes']) {
+  for (const path of ['/', '/projects/default/chat/web%3Aone', '/settings/models', '/nodes', '/usage']) {
     const response = await navigate(path)
     assert.equal(response?.status, 503)
     assert.equal(response.headers.get('cache-control'), 'no-store')

@@ -768,14 +768,22 @@ cancellation remains unconfirmed. Raw question records remain available in the
 card disclosure. Historical records without a tool call in the loaded segment
 are not reconstructed from a separate input-history service.
 
-## Project usage statistics
+## Usage statistics
 
-Open **Project Dashboard → Usage** for Project-wide all-time, today, past-seven-day
-and current-month tokens, estimated costs, and provider time. Daily details show
-recent 31 calendar days (including inactive days) and older active dates, with bars
-for known tokens. **Refresh** recomputes the statistics; opening this view does not
-make model requests. The summary defaults to **Past 7 days**; choose a period to
-update the four cards (tokens, estimated cost, model call time, and call count).
+Open **Usage** in the Shadow system bar (**Chat · Usage · Settings**). It opens
+with **All projects** selected and shows combined totals and trends. **Usage by
+project** breaks down the selected summary period, sorted by known tokens. Select
+a project from that table or the **Project** filter to inspect its trends and
+paginated daily history without leaving Usage. There is no separate Usage page
+in the Project Dashboard. Project Spans and Logs are still available under
+**Project Dashboard → Agent diagnostics**.
+
+Projects that fail to load are marked unavailable and excluded from totals.
+Daily project history includes the recent 31 calendar days and older active
+dates. **Refresh** recomputes the statistics for the current scope; opening the
+page does not make model requests. The summary defaults to **Past 7 days**; choose
+a period to update the four cards (tokens, estimated cost, model call time, and
+call count) and the project breakdown.
 Large values are compact; hover a value for its precise known subtotal. AI credits
 are converted at **100 credits = 1 USD** and combined with native USD estimates in
 the summary, daily cost chart and history table. CNY stays separate (no exchange

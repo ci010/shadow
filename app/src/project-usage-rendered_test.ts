@@ -31,7 +31,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>)
     // usage-to-select contract here; UiSelect's DOM behavior has its own tests.
     const fixtureRequire = (id: string) => id === './UiSelect.vue' ? { default: defineComponent({
       inheritAttrs: false,
-      setup: (_props, { attrs, slots }) => () => h('select', attrs, slots.default?.()),
+      setup: (_props, { attrs, slots, expose }) => { expose({ focus() {} }); return () => h('select', attrs, slots.default?.()) },
     }) } : id === './UsageTrendChart.vue' ? { default: defineComponent({
       props: ['title', 'kind', 'points', 'formatAxis'],
       setup: props => () => h('usage-trend-chart', { ...props }),
@@ -468,4 +468,38 @@ test('Project dashboard excludes the mounted conversation workspace from its hei
   // Keep the editor hosts mounted when switching between chat and the dashboard.
   assert.doesNotMatch(automation, /v-if=/)
   assert.match(descriptor.template!.content, /<ProjectWorkbench v-if="dashboardProject"/)
+})
+
+test('global Usage starts with all projects, reports partial totals and filters within the same view', async t => {
+  const requests: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: URL | RequestInfo) => {
+    const path = new URL(String(url)).pathname
+    requests.push(path)
+    if (path === '/api/projects') return Response.json({ projects: ['a', 'b', 'c'].map(id => ({ id, name: `Fixture ${id.toUpperCase()}`, createdAt: '2026-10-01' })) })
+    const projectId = path.split('/')[2]!
+    if (projectId === 'c') return new Response(null, { status: 503 })
+    return Response.json(response(projectId))
+  })
+  const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture', active: true })
+  await settle()
+  assert.deepEqual(requests, ['/api/projects', ...['a', 'b', 'c'].map(id => `/projects/${id}/api/project/usage`)])
+  assert.match(view.text(), /All projects.*Fixture A.*Fixture B.*Fixture C/)
+  assert.match(view.text(), /Some projects could not be loaded \(1\)/)
+  assert.match(view.text(), /Usage by project/)
+  assert.ok(view.nodes().some(n => n.props.title === '2,468'))
+  assert.doesNotMatch(view.text(), /Load daily history/)
+
+  const projectLink = view.nodes().find(n => n.tag === 'button' && n.text === 'Fixture B')!
+  ;(projectLink.props.onClick as () => void)()
+  await settle()
+  assert.equal(requests.at(-1), '/projects/b/api/project/usage')
+  assert.ok(view.nodes().some(n => n.props.title === '1,234'))
+  assert.match(view.text(), /Load daily history/)
+  assert.doesNotMatch(view.text(), /Usage by project/)
+
+  const filter = view.nodes().find(n => n.tag === 'select' && n.props['aria-label'] === 'Project')!
+  ;(filter.props['onUpdate:modelValue'] as (value: string) => void)('')
+  await settle()
+  assert.match(view.text(), /Usage by project/)
+  assert.ok(view.nodes().some(n => n.props.title === '2,468'))
 })
