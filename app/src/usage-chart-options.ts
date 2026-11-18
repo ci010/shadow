@@ -14,10 +14,13 @@ export interface UsageChartColors {
 /** ECharts owns scales, hit testing, axes and tooltips; this adapter only describes data. */
 export function usageChartOption(
   title: string, kind: 'bar' | 'line', points: UsageChartDatum[], colors: UsageChartColors,
-  formatAxis: (value: number) => string, minInterval = 0,
+  formatAxis: (value: number) => string, minInterval = 0, animate = false,
 ): EChartsCoreOption {
   return {
-    animation: false,
+    animation: animate,
+    animationDuration: 340,
+    animationEasing: 'cubicOut',
+    animationDurationUpdate: 0,
     textStyle: { fontFamily: 'Inter, system-ui, sans-serif', color: colors.text },
     grid: { left: 12, right: 16, top: 24, bottom: 12, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     tooltip: {

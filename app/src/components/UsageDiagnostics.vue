@@ -1,7 +1,7 @@
 <template>
   <section class="diagnostics" :aria-label="t('Request quality')">
     <h3>{{ t('Request quality') }}</h3>
-    <p>{{ t('All dated records through each snapshot, independent of the summary and trend windows. Percentiles use observed samples within each project.') }}</p>
+    <p>{{ t('All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.') }}</p>
     <p v-if="!projects.length || !projects.some(project => project.usage?.requestQuality)">{{ t('Unavailable') }}</p>
     <details v-for="project in projects" :key="project.id" :open="projects.length === 1">
       <summary>{{ project.name || t('Selected project') }}<template v-if="!project.usage?.requestQuality"> · {{ t('Unavailable') }}</template></summary>
@@ -33,7 +33,7 @@
     <div class="heading"><h3>{{ t('Recall') }}</h3><div role="group" :aria-label="t('Recall type')">
       <button v-for="item in recallTypes" :key="item.key" class="btn btn-sm" type="button" :aria-pressed="recallType === item.key" @click="recallType = item.key">{{ t(item.label) }}</button>
     </div></div>
-    <p>{{ t('Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. Summary and trend windows do not apply.') }}</p>
+    <p>{{ t('Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.') }}</p>
     <details v-for="project in projects" :key="project.id" :open="projects.length === 1">
       <summary>{{ project.name || t('Selected project') }}<template v-if="!project.usage?.recall"> · {{ t('Unavailable') }}</template></summary>
       <UsageBreakdown v-if="project.usage?.recall" :title="t(recallType === 'skills' ? 'Skill body reads' : 'Memory recall')" :category="t('Entry')"

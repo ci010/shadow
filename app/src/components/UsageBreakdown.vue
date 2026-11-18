@@ -7,7 +7,7 @@
     <slot name="coverage" />
     <p v-if="!ranked.length">{{ t('No recorded entries in this scope.') }}</p>
     <template v-else>
-      <div v-if="view === 'ring' && ring" class="usage-ring" :style="{ background: ring }" aria-hidden="true"></div>
+      <div v-if="view === 'ring' && ring" :key="entranceKey" class="usage-ring" :style="{ background: ring }" aria-hidden="true"></div>
       <p v-else-if="view === 'ring'">{{ t('No positive values to plot.') }}</p>
       <p v-if="view === 'ring' && ring">{{ t('Ring shows shares of displayed known values only.') }}</p>
       <div v-if="view === 'table'" class="table-scroll" tabindex="0" :aria-label="title">
@@ -15,7 +15,7 @@
           <tbody><tr v-for="row in visible" :key="row.id"><th scope="row"><slot name="entry" :row="row">{{ row.name }}</slot></th><td>{{ valueLabel(row) }}</td></tr></tbody>
         </table>
       </div>
-      <ol v-else class="ranking-chart" :aria-label="title">
+      <ol v-else :key="entranceKey" class="ranking-chart" :class="{ 'fills-bars': view === 'bar' }" :aria-label="title">
         <li v-for="(row, index) in visible" :key="row.id" class="ranking-row" :class="{ 'ring-row': view === 'ring' }">
           <span class="ranking-name"><i v-if="view === 'ring' && row.value" class="swatch" :style="{ backgroundColor: color(index) }" aria-hidden="true" /><slot name="entry" :row="row">{{ row.name }}</slot></span>
           <span v-if="view === 'bar'" class="ranking-track" aria-hidden="true"><span v-if="row.value !== null" class="ranking-bar" :style="{ width: `${maximum ? row.value / maximum * 100 : 0}%` }" /></span>
@@ -38,6 +38,7 @@ const currency = ref<CostUnit>('USD')
 const currencyChosen = ref(false)
 const unit = computed({ get: () => currency.value, set: value => { currencyChosen.value = true; currency.value = value } })
 const view = ref<'bar' | 'ring' | 'line' | 'column' | 'table'>('bar')
+const entranceKey = computed(() => JSON.stringify([props.scope, view.value, metric.value, metric.value === 'cost' && currencyChosen.value ? unit.value : null]))
 const expanded = ref(false)
 watch(() => props.scope, () => { expanded.value = false })
 watch(() => props.rows, rows => {
@@ -71,6 +72,26 @@ const ring = computed(() => {
 })
 </script>
 <style scoped>
+@property --usage-bar-fill {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
+@property --usage-ring-fill {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 360deg;
+}
+@keyframes usage-bar-enter { from { --usage-bar-fill: 0.12; } }
+@keyframes usage-ring-enter { from { --usage-ring-fill: 35deg; } }
+@media (prefers-reduced-motion: no-preference) {
+  .fills-bars { animation: usage-bar-enter 300ms cubic-bezier(.2, .75, .3, 1); }
+  .ranking-bar { transform: scaleX(var(--usage-bar-fill, 1)); transform-origin: left center; }
+  .usage-ring {
+    animation: usage-ring-enter 360ms cubic-bezier(.2, .75, .3, 1);
+    mask-image: conic-gradient(#000 0deg var(--usage-ring-fill, 360deg), transparent var(--usage-ring-fill, 360deg) 360deg);
+  }
+}
 .activity-section { min-width: 0; }
 .activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
 h3 { margin: 0; font-size: 13px; font-weight: 600; }

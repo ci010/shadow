@@ -8,13 +8,19 @@ Project and its daily history use the same local index. Browsing the panel never
 opens conversation logs. Costs are estimated, stored in the recorded currencies,
 and are not invoices.
 
-The overview and the Project, model, and tool rankings share a summary period.
+The overview, Project/model/tool rankings, and daily trends share one UTC
+period selector.
 Project and model rankings can compare tokens, recorded estimated cost, provider
 calls, or cumulative call time. Tools show result counts only; there is no
 reliable token or cost attribution to tools. Choose bars, a ring, or a table
 without changing the ranked values. Rings show proportions among the displayed
 known values; expand the ranking to include lower-ranked entries. Daily trends
-have a separate UTC window (7 or 30 days) with column, line, and table views.
+use matching dates for Today, Past 7 days, and This month, with column, line,
+and table views. All time retains cumulative totals and
+rankings; its trend explicitly shows only the latest 31 UTC dates sent in the
+overview. The separately paginated daily history is unaffected. If an aggregate
+refresh crosses midnight UTC, the relative periods follow each Project’s
+snapshot date and the trend is hidden until those dates align.
 Choosing cost reads recorded estimates instead of converting token counts.
 USD includes AI credits at 100:1; CNY is shown separately. Missing estimates
 for the selected currency are unavailable, not zero.
@@ -58,7 +64,7 @@ successful logical request's last attempt supplies the sample. Nonstreaming,
 tool-only, unsupported and historical requests without observations do not use
 total elapsed time as a substitute. Project first-text summaries use nearest-rank
 P50/P95 and a sample count. **Request quality** uses all dated indexed requests
-up to each Project snapshot, independent of the summary and trend windows. It
+up to each Project snapshot, independent of the selected usage period. It
 includes outcome counts, observed attempts and the count of requests supplying
 attempt data, text-observation categories, input/output/cache tokens and
 reporting counts, and sampled latency. Global usage displays per-Project
@@ -73,7 +79,7 @@ queue and total elapsed times.
 old counts have no historical day attribution. New recalls are indexed in
 `stats.sqlite`. The **Recall** section is owner-only and returns at most 100
 Skill entries or Memory entry/source pairs per Project. It is cumulative since
-tracking began, independent of both time controls. It uses the project-local
+tracking began, independent of the selected usage period. It uses the project-local
 index, not source logs or document bodies; delegated UI/mobile credentials do
 not gain Recall access from the usage route. `v:stats/memory-recall` remains an
 administrator view of the top 100

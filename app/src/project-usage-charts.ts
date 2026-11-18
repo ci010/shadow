@@ -1,6 +1,14 @@
-import type { ProjectUsage, ProjectUsageMetrics } from '../../src/projects/usage-contract.ts'
+import { USAGE_TREND_HISTORY_DAYS, type ProjectUsage, type ProjectUsageMetrics } from '../../src/projects/usage-contract.ts'
 
 export interface UsagePoint { date: string; usage?: ProjectUsageMetrics; tokens: number | null; seconds: number | null }
+export function usageTrendDays(asOf: string, period: 'today' | 'past7Days' | 'month' | 'total'): number {
+  switch (period) {
+    case 'today': return 1
+    case 'past7Days': return 7
+    case 'month': return Number(asOf.slice(8, 10))
+    case 'total': return USAGE_TREND_HISTORY_DAYS
+  }
+}
 /** Missing calendar rows stay unavailable; never infer telemetry from an absent row. */
 export function usageWindow(data: ProjectUsage, days: number): UsagePoint[] {
   const end = Date.parse(`${data.asOf.slice(0, 10)}T00:00:00Z`)
