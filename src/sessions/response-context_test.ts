@@ -99,6 +99,10 @@ test('continuation finds the unfinished input audience without mistaking old use
   ] }
   assert(continuedUserInvolvement([direct, { role: 'tool', content: 'Completed' }]))
   assert(continuedUserInvolvement([{ role: 'user', content: [
+    { type: 'text', text: '<sender id="owner" name="owner" chat="direct" client-device="Child &quot;A&quot;" />' },
+    { type: 'text', text: 'Original request' },
+  ] }]))
+  assert(continuedUserInvolvement([{ role: 'user', content: [
     { type: 'text', text: '<sender id="member" name="Alice" chat="group" platform-role="owner" platform-source="session" />' },
     { type: 'text', text: 'Original request' },
   ] }]))

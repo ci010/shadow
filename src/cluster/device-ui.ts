@@ -73,11 +73,14 @@ export class MainDeviceUi {
     }, 500)
     this.timer.unref()
   }
-  authorize(request: Request): boolean {
+  private approvedClient(request: Request) {
     const authentication = this.identities.get(this.clientAddresses.resolve(request))
-    if (this.closed || !authentication || !deviceUiRequestPath(new URL(request.url).pathname, request.method)) return false
-    try { this.cluster.registry.authenticate(authentication); return true } catch { return false }
+    if (this.closed || !authentication || !deviceUiRequestPath(new URL(request.url).pathname, request.method)) return
+    try { return this.cluster.registry.authenticate(authentication) } catch { return undefined }
   }
+  authorize(request: Request): boolean { return !!this.approvedClient(request) }
+  /** Display context from the verified UI ingress, never from request headers/body. */
+  clientDeviceName(request: Request): string | undefined { return this.approvedClient(request)?.displayName }
   close(): void { this.closed = true; this.identities.clear(); clearInterval(this.timer); for (const controller of this.active.keys()) controller.abort(); this.active.clear() }
   plugin(): GatewayPlugin {
     return app => {

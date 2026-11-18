@@ -58,6 +58,8 @@ export interface MessageContext {
   /** Sender display name */
   senderName?: string
   displayMetadata?: ChannelMessageMetadata
+  /** Host-attested Web client display name. Not an execution target or grant. */
+  clientDeviceName?: string
   /** Chat / conversation id within the channel */
   chatId: string
   /** Human-readable chat or channel name, if known */

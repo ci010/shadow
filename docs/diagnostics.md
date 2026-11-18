@@ -215,6 +215,12 @@ repeating delegation steps. Session memory keeps the same keywords, logs,
 and working set with a shorter top-of-mind introduction. Tool availability
 is unchanged. Use the same model for both roles when comparing behavior.
 
+For user messages sent through a paired Child's Web UI connection, the first
+`<sender>` content block can include `client-device`, the approved device's
+display name at admission. It describes the sending device, not the selected
+execution target or permissions. Other Web clients without verified device
+identity omit the attribute; request bodies and headers cannot set it.
+
 `GET /projects/<id>/api/sessions/<encoded-session-id>/context` returns the
 current prompt and tools. `source: active-history` uses in-memory state;
 `source: preview` rebuilds from current configuration. Neither is a
