@@ -3,17 +3,16 @@
     <template #mobile-header><MobileChrome :title="mobilePageTitle" /></template>
     <template #navigation>
       <Teleport :to="mobile.navigationTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.navigationTarget.value">
-        <nav v-if="mobile.enabled.value" class="tab-nav mobile-app-nav" :aria-label="t('Main navigation')">
+        <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }"
+          @wheel="!mobile.enabled.value && scrollEditorTabs($event, $event.currentTarget as HTMLElement)" :aria-label="t('Main navigation')">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
             <router-link v-for="item in group.items" :key="item.name" :to="navigationLocation(item.name)" custom v-slot="{ isActive, navigate }">
-              <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
+              <button type="button" class="tab" :class="{ active: mobile.enabled.value ? isActive : navigationPage === item.name }"
+                :aria-current="(mobile.enabled.value ? isActive : navigationPage === item.name) ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
             </router-link>
           </template>
         </nav>
-        <select v-else class="desktop-navigation" :aria-label="t('Main navigation')" :value="navigationPage" @change="navigatePage">
-          <option v-for="item in navigationGroups.flatMap(group => group.items)" :key="item.name" :value="item.name">{{ item.label }}</option>
-        </select>
       </Teleport>
     </template>
     <template #actions>
@@ -87,6 +86,7 @@ import MobileConnection from './MobileConnection.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
+import { scrollEditorTabs } from './editor-tab-scroll.ts'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
 import { provideProviderReadiness } from './provider-readiness.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
@@ -251,9 +251,6 @@ const navigationPage = computed(() => workspaceRoutes.includes(String(route.name
 function navigationLocation(name: string) {
   return name === 'chat' ? lastChatLocation.value : { name, params: ['agents', 'spans', 'logs'].includes(name) ? { projectId: route.params.projectId || 'default' } : {} }
 }
-function navigatePage(event: Event) {
-  void router.push(navigationLocation((event.target as HTMLSelectElement).value))
-}
 
 let stopRevealBorder: (() => void) | undefined
 onMounted(() => {
@@ -309,8 +306,6 @@ onUnmounted(() => {
   scrollbar-color: var(--c-scrollbar-thumb) transparent;
 }
 
-.desktop-navigation { max-width: 10rem; padding: 3px 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
-
 .tab-group-label {
   align-self: stretch;
   display: flex;
@@ -358,7 +353,7 @@ onUnmounted(() => {
 .tab-nav.mobile-app-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: visible; }
 .mobile-app-nav .tab { min-height: 44px; padding: 8px; font-size: 13px; text-transform: none; letter-spacing: 0; border: 0; text-align: left; transform: none; transition: none; }
 .mobile-app-nav .tab.active { background: var(--c-selection-bg); }
-.mobile-app-nav .tab:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.tab-nav .tab:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-app-nav .tab-group-label { display: none; }
 
 @media (max-width: 760px) {
