@@ -80,7 +80,7 @@ test('new references render and navigate through real Markdown and attachment pr
     window.fixtureStage='imports-ready';
     const router = createRouter({history:createMemoryHistory(),routes:[
       {path:'/projects/:projectId/chat/:sessionId',name:'chat',component:{render:()=>null}},
-      {path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}},
+      {path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}},
     ]});
     await router.push('/projects/fixture/chat/web%3Achat-fixture');
     createApp({setup(){

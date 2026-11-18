@@ -90,6 +90,10 @@
       <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && selectedProjectId === projectId">
         <div class="project-document-host">
           <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" />
+          <ProjectWorkbench v-else-if="tab === 'board'" mode="board" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
+            :project-name="projects.find(project => project.id === projectId)?.name ?? projectId"
+            :visible="visible && selectedProjectId === projectId && !dashboardProject && editorGroups.visible(projectEditorId(projectId, tab))"
+            @navigate="navigate(projectId, $event)" @compose="composeFromDashboard(projectId, $event)" />
           <ProjectSettings v-else :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
         </div>
       </EditorViewHost>
@@ -253,14 +257,16 @@ let incomingDocument: symbol | undefined
 let pendingTopTab: { resource: ConversationResource; path: string } | undefined
 const openProjectTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, editor =>
   !!editor.conversation || editor.id === projectEditorId(editor.projectId, 'workflows')
-  || editor.id === projectEditorId(editor.projectId, 'settings')))
+  || editor.id === projectEditorId(editor.projectId, 'board') || editor.id === projectEditorId(editor.projectId, 'settings')))
 const otherProjectTabGroups = computed(() => openProjectTabGroups.value.filter(group => group.id !== selectedProjectId.value))
 
 async function activateTopTab(id: string) {
   const editor = editorGroups.descriptors.get(id)
   if (!editor || !editorGroups.side(id)) return
   const { projectId } = editor
-  if (id === projectEditorId(projectId, 'workflows')) {
+  if (id === projectEditorId(projectId, 'board')) {
+    await router.push({ name: 'project-board', params: { projectId } })
+  } else if (id === projectEditorId(projectId, 'workflows')) {
     await router.push({ name: 'project-workflows', params: { projectId }, query: workflowQueries.get(projectId) ?? {} })
   } else if (id === projectEditorId(projectId, 'settings')) {
     await router.push({ name: 'project-settings', params: { projectId, section: settingsSections.get(projectId) ?? 'general' } })
@@ -453,7 +459,7 @@ function syncRoute() {
     void router.replace({ query: workflowQuery })
   }
   documentRoute = nextDocumentRoute
-  const tab = route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' ? 'settings' : undefined
+  const tab = route.name === 'project-board' ? 'board' : route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' ? 'settings' : undefined
   if (route.name === 'project-dashboard') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
@@ -544,7 +550,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
   const destination = projectNavigationShortcut(event)
   if (!destination || !keyboardActive.value || !props.visible || creating.value
     || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-    || !['chat', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
+    || !['chat', 'project-board', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
   if (!projects.value.some(project => project.id === projectId)) return
   event.preventDefault()
@@ -554,7 +560,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
 const newConversationShortcut = createNewConversationShortcut({
   context() {
     if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-      || !['chat', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
+      || !['chat', 'project-board', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
     // Ctrl+N matches the sidebar's explicit Start from scratch action, never inherits a workdir.
@@ -602,10 +608,26 @@ function selectSession(projectId: string, sessionId: string) {
 // Group activation (including close fallback and cross-group focus) is the
 // navigation authority; hidden source workbenches must not publish their tabs.
 watch(() => editorGroups.active(selectedProjectId.value), descriptor => {
-  if (!props.visible || route.name === 'project-dashboard' || !descriptor || (!descriptor.explorer && !descriptor.conversation)) return
+  if (!props.visible || route.name === 'project-dashboard' || !descriptor) return
+  // Project documents, including close fallback, share the same route authority
+  // as conversation/explorer tabs. Hidden owners must not publish navigation.
+  if (incomingDocument || documentRoute !== `${String(route.name)}:${String(route.params.projectId)}`) return
+  if (descriptor.id === projectEditorId(descriptor.projectId, 'board')) {
+    if (route.name !== 'project-board') void router.replace({ name: 'project-board', params: { projectId: descriptor.projectId } })
+    return
+  }
+  if (descriptor.id === projectEditorId(descriptor.projectId, 'workflows')) {
+    if (route.name !== 'project-workflows') void router.replace({ name: 'project-workflows', params: { projectId: descriptor.projectId }, query: workflowQueries.get(descriptor.projectId) ?? {} })
+    return
+  }
+  if (descriptor.id === projectEditorId(descriptor.projectId, 'settings')) {
+    if (route.name !== 'project-settings') void router.replace({ name: 'project-settings', params: { projectId: descriptor.projectId, section: settingsSections.get(descriptor.projectId) ?? 'general' } })
+    return
+  }
+  if (!descriptor.explorer && !descriptor.conversation) return
   // Entering another project's document route can expose that project's last
   // focused conversation before the route activates the requested document.
-  if ((route.name === 'project-workflows' || route.name === 'project-settings')
+  if ((route.name === 'project-board' || route.name === 'project-workflows' || route.name === 'project-settings')
     && (incomingDocument || documentRoute !== `${String(route.name)}:${String(route.params.projectId)}`)) return
   const resource = resources.value.find(item => item.key === descriptor.owner)
   if (!resource) return
@@ -643,7 +665,9 @@ watch(() => [route.name, route.params.projectId, route.params.section] as const,
 }, { immediate: true })
 function projectNavigation(resource: ConversationResource, tab?: ProjectTab, documentKey?: string) {
   if (!props.visible || selected.value?.key !== resource.key || route.params.projectId !== resource.projectId) return
-  if (tab === 'workflows') {
+  if (tab === 'board') {
+    if (route.name !== 'project-board') void router.push({ name: 'project-board', params: { projectId: resource.projectId } })
+  } else if (tab === 'workflows') {
     if (route.name !== 'project-workflows') void router.push({ name: 'project-workflows',
       params: { projectId: resource.projectId }, query: workflowQueries.get(resource.projectId) ?? {} })
   } else if (tab === 'settings') {
@@ -651,7 +675,7 @@ function projectNavigation(resource: ConversationResource, tab?: ProjectTab, doc
       void router.push({ name: 'project-settings',
         params: { projectId: resource.projectId, section: settingsSections.get(resource.projectId) ?? 'general' } })
     }
-  } else if (route.name === 'project-settings' || route.name === 'project-workflows') {
+  } else if (route.name === 'project-board' || route.name === 'project-settings' || route.name === 'project-workflows') {
     const query = { ...conversationQueries.get(resource.key) }
     if (documentKey === DIAGNOSIS_TAB_KEY) query.panel = 'diagnosis'
     else delete query.diagnosis

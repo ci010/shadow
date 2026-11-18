@@ -473,6 +473,13 @@ appropriate state; the toolbar does not grant backend access.
 
 ### Work board
 
+Board has its own Project sidebar entry alongside Knowledge and Workflows. It
+opens or reuses a Project-scoped document in the shared editor groups, including
+before any conversation exists, rather than replacing the workbench with the
+Dashboard. The document retains its filters and details across tab switches;
+closing it releases that instance. Dashboard no longer contains a duplicate
+Board switch. Existing Dashboard Work-detail links remain supported.
+
 Dashboard and Board canvases are transparent over the existing application dot
 background; do not add another graph dot layer. Keep cards, fields, toolbars and
 detail overlays on their readable theme surfaces. Top-level navigation has no

@@ -292,3 +292,12 @@ test('Command document close and explorer use the same commands as Control, not 
   assert.equal(isToggleExplorerKey({ ...command, key: 'e', shiftKey: true }), true)
   assert.equal(documentTabDirection(command), undefined)
 })
+
+test('Board is a reusable, closable project document distinct from Workflow', () => {
+  const state = openProjectTab(openProjectTab({ files: [], selected: '' }, 'workflows'), 'board')
+  assert.equal(projectTabFromKey(state.selected), 'board')
+  assert.deepEqual(state.projectTabs, ['workflows', 'board'])
+  assert.equal(openProjectTab(state, 'board'), state)
+  assert.ok(documentTabKeys(state).includes(projectTabKey('board')))
+  assert.deepEqual(closeFileTab(state, projectTabKey('board')).projectTabs, ['workflows'])
+})
