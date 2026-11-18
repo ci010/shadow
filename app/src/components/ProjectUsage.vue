@@ -27,10 +27,14 @@
         </UsageBreakdown>
         <UsageBreakdown :title="t('Model usage')" :category="t('Model')" initial-metric="calls" :rows="modelRows" :scope="activityScope"
           :description="t('Recorded models in the selected period.')">
+          <template #entry="{ row, table }"><UsageModelLabel :name="row.name" :full="table" /></template>
           <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
         </UsageBreakdown>
-        <UsageBreakdown :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope"
+      </div>
+      <div class="tool-recall-grid">
+        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope"
           :description="t('Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.')" />
+        <UsageRecall :projects="diagnosticProjects" />
       </div>
       <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
       <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
@@ -92,6 +96,8 @@
 </template>
 <script setup lang="ts">
 import { projectBase } from '../api-url.ts'
+import UsageRecall from './UsageRecall.vue'
+import UsageModelLabel from './UsageModelLabel.vue'
 import UiSelect from './UiSelect.vue'
 import UsageTrendChart from './UsageTrendChart.vue'
 import UsageBreakdown from './UsageBreakdown.vue'
@@ -243,8 +249,12 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .unavailable { color: var(--c-text-secondary); font-size: 20px; font-weight: 500; }
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
-.activity-grid { display: grid; gap: 28px; margin: 28px 0; }
-.project-link { max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
+.activity-grid, .tool-recall-grid { display: grid; gap: 18px; margin: 20px 0; align-items: start; }
+@container usage (min-width: 800px) {
+  .tool-recall-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+}
+.project-link { min-height: 24px; padding-block: 2px; max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .project-link { min-height: 44px; } }
 .conversion-note { margin-top: 12px; }
 .scope-brief { margin: 4px 0; }
 .chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }
