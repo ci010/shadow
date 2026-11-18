@@ -2020,6 +2020,14 @@ participate; admin filtering happens before ranking. Successful exact reads and
 saves record use, not discovery or prompt rebuilding. Recency is memory-only,
 bounded per Project/session, and never removes files or active tools. Search
 continues to expose the complete permitted catalog.
+
+Separately, `read({ path: "v:skills/.stats" })` exposes Project-local Skill
+recall totals to administrators. The counter persists across restarts and counts
+successful direct reads of Skill bodies, including selected-folder Skills (keyed
+by folder ID and name). Repeat reads count; continuation pages, listing, search,
+bundled resources, raw editing reads, saves and failed reads do not. Totals start
+when tracking is enabled; no historical reads are backfilled.
+
 During system-prompt assembly, exact backticked `v:skills/<name>` links outside
 `available_skills` count as explicit disclosure: matching metadata entries are
 omitted from that list. Directory/resource links do not count. This presentation

@@ -1,3 +1,4 @@
+import { SkillRecallStore } from '../../skills/recall.ts'
 import { readChannelSessionAliases, withChannelSessionAliases } from '../../sessions/channel-session-aliases.ts'
 import { assertConnectionMigrationSettled } from '../../bots/connection-migration.ts'
 import { workflowReferenceResolver } from '../../workflows/references.ts'
@@ -1321,6 +1322,8 @@ export async function createProjectRuntime(
   const skillEditing = new SkillEditing({
     projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: id => canAuthor(id),
   })
+  const skillRecall = new SkillRecallStore(projectStoragePath(workspace, 'state', 'skill-recall.sqlite'))
+  cleanup.push(() => skillRecall.close())
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
     const state = sessions.getSessionState(ctx.sessionId)
     if (!state?.folderId) return undefined
@@ -1329,10 +1332,10 @@ export async function createProjectRuntime(
     return location.locality === 'local'
       ? { folderId: state.folderId, path: location.path }
       : { folderId: state.folderId, path: location.workdir.displayPathSnapshot ?? '', workdir: { nodeId: location.workdir.nodeId, workdirId: location.workdir.workdirId } }
-  }, (path, context, continuation) => skillEditing.readRaw(path, context, continuation))
+  }, (path, context, continuation) => skillEditing.readRaw(path, context, continuation), skillRecall)
   vfs.mount(
     'v:skills',
-    'read skill bodies and category listings',
+    'read skill bodies and category listings; administrators can read v:skills/.stats for recall totals',
     skillsVfs.read,
     skillsVfs.list,
   )
@@ -2118,6 +2121,7 @@ export async function createProjectRuntime(
       () => bus.stopAll(),
       () => evalBridge.shutdown(),
       () => { conventions.close(); initiatives.close() },
+      () => skillRecall.close(),
       () => sessionStore.close?.(),
       () => closeTelemetry(),
       releaseFolderLifecycle,

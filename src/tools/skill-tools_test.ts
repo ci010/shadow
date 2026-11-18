@@ -1,3 +1,4 @@
+import { SkillRecallStore } from '../skills/recall.ts'
 import { requireToolText } from './tool.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
@@ -20,11 +21,11 @@ import { CallTools } from '../sessions/call-tools.ts'
 import { EvalBridgeRuntime } from '../script-runtime/bridge.ts'
 import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
-function setup(home: string) {
+function setup(home: string, recall?: SkillRecallStore) {
   const skills = new SkillsManager(home)
   const loader = new ImportTool(new Map(), home, undefined, name => skills.getSkillDirectory(name))
   const vfs = new VirtualFs()
-  const handlers = createSkillsHandler(skills, (skill, ctx) => loader.registerSkillTools(skill, ctx))
+  const handlers = createSkillsHandler(skills, (skill, ctx) => loader.registerSkillTools(skill, ctx), undefined, undefined, recall)
   vfs.mount('v:skills', 'Skills', handlers.read, handlers.list)
   const base = new Tools(home)
   base.register(new ReadTool(home, vfs))
@@ -429,5 +430,29 @@ test('agent module ceilings restrict registration, borrowed tools and invocation
     assert.match(requireToolText(await f.invoke('basename', { value: 'one/two' }, { ...context, tools: narrowed })), /allow.*module|module.*allow/i)
     assert.match(await f.loader.importSource({ source: join(dir, 'tools', 'path.js') }, allowed), /Declare scripts in SKILL.md/)
     allowed.resetDynamic()
+  })
+})
+
+
+test('Skill recall counts successful body reads only and persists across store reopen', async () => {
+  await withTempWorkspace(async home => {
+    const path = join(home, 'state', 'skill-recall.sqlite')
+    const store = new SkillRecallStore(path)
+    try {
+      const f = setup(home, store)
+      await addSkill(home, f.skills, 'recall-fixture', {})
+      const admin = { ...f.context, admin: true }
+      await f.read('v:skills')
+      await f.read('v:skills/missing-recall-fixture')
+      await f.read('v:skills/recall-fixture/SKILL.md')
+      assert.match(requireToolText(await f.read('v:skills/.stats', admin)), /No Skill body reads/)
+      assert.match(requireToolText(await f.read('v:skills/.stats')), /require administrator access/)
+      await f.read('v:skills/recall-fixture')
+      await f.session.execute('read', { path: 'v:skills/recall-fixture', offset: 2 }, f.context)
+      await f.read('v:skills/recall-fixture')
+      assert.match(requireToolText(await f.read('v:skills/.stats', admin)), /\n2\t"recall-fixture"$/)
+    } finally { store.close() }
+    const reopened = new SkillRecallStore(path)
+    try { assert.match(reopened.render(), /\n2\t"recall-fixture"$/) } finally { reopened.close() }
   })
 })
