@@ -21,8 +21,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
     const state = { sessionId: 's', segmentIndex: 0, projectId: 'p' }
     const physical = physicalSessionId(state)
     const timestamp = '2026-10-10T12:00:00Z'
-    const model = { type: 'model_usage', sessionId: 's', id: 'm', timestamp, model: 'fixture', durationMs: 200, firstTextMs: 40,
-      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, costs: [{ currency: 'USD', amount: 0.1 }] } }
+    const model = { type: 'model_usage', sessionId: 's', id: 'm', timestamp, model: 'fixture', durationMs: 200, firstTextMs: 40, queueMs: 30, outcome: 'success', textObservation: 'stream_text',
+      attempts: [{ outcome: 'failure', durationMs: 60, mode: 'stream' }, { outcome: 'success', durationMs: 100, mode: 'stream' }],
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, cachedTokens: 0, cacheWriteTokens: 2, costs: [{ currency: 'USD', amount: 0.1 }] } }
     await source.init()
     try {
       await source.createSessionLog(physical, [{ sessionId: 's', previous_physical_id: null }, model, model,
@@ -35,7 +36,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       index = new StatsIndex(file)
       const store = index.attach(source)
       await index.backfill(source, [state], 'p')
-      await store.appendRawEvents(physical, [model, { ...model, id: 'new', timestamp: '2026-10-11T01:00:00Z', durationMs: 0, firstTextMs: undefined, usage: null }])
+      await store.appendRawEvents(physical, [model, { ...model, id: 'new', timestamp: '2026-10-11T01:00:00Z', durationMs: 0, firstTextMs: undefined, queueMs: undefined, attempts: undefined, outcome: 'cancelled', textObservation: undefined, usage: null }])
       source.readSessionLog = async function* () { throw new Error('opened source log during query') }
       const usage = await readProjectUsage(store, [state], 'p', asOf)
       assert.equal(usage.coverage, 'complete')
@@ -43,7 +44,17 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       assert.equal(usage.today.tokens, null)
       assert.deepEqual(usage.firstText, { p50Ms: 40, p95Ms: 40, samples: 1 })
       assert.deepEqual(usage.activity.total.tools, [{ name: 'fixture.read', calls: 1 }])
-      assert.deepEqual(index.requestSummary(asOf).duration, { samples: 2, p50Ms: 0, p95Ms: 200 })
+      assert.deepEqual(usage.activity.total.models, [{ name: 'fixture', calls: 2, usage: usage.total }])
+      assert.deepEqual(usage.activity.today.models, [{ name: 'fixture', calls: 1, usage: usage.today }])
+      const quality = usage.requestQuality!
+      assert.deepEqual(quality.duration, { samples: 2, p50Ms: 0, p95Ms: 200 })
+      assert.deepEqual(quality.queue, { samples: 1, p50Ms: 30, p95Ms: 30 })
+      assert.deepEqual(quality.outcomes, [
+        { outcome: 'cancelled', requests: 1, observedAttempts: null, requestsWithAttempts: 0 },
+        { outcome: 'success', requests: 1, observedAttempts: 2, requestsWithAttempts: 1 },
+      ])
+      assert.deepEqual(quality.cache, { readTokens: 0, requestsWithReadTokens: 1, writeTokens: 2, requestsWithWriteTokens: 1,
+        inputTokens: 10, requestsWithInputTokens: 1, outputTokens: 2, requestsWithOutputTokens: 1 })
       const profile = await readUsage(store, [state], -Infinity, asOf)
       assert.equal(profile.providerCalls, 2)
       assert.equal(profile.toolCalls, 1)
@@ -104,6 +115,8 @@ test('metadata-only recall survives cursor replay and reconstruction, with sourc
       assert.deepEqual(rebuilt.recall.memorySummary().map(row => [row.entry, row.source, row.reads]), [
         ['topics/entry.md', 'active', 1], ['topics/entry.md', 'automatic', 1],
       ])
+      assert.deepEqual(rebuilt.recall.usageSummary(false), { coverage: 'partial', skills: [{ entry: 'test-skill', reads: 1 }],
+        memory: [{ entry: 'topics/entry.md', source: 'active', reads: 1 }, { entry: 'topics/entry.md', source: 'automatic', reads: 1 }] })
       assert.equal(rebuilt.db.prepare('SELECT reads FROM skill_recall WHERE skill_path=?').get('test-skill')?.reads, 1)
     } finally { await rebuilt.close() }
   })

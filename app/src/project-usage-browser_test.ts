@@ -40,8 +40,13 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           const data = { projectId:'fixture', asOf:'2026-10-01T12:00:00Z', timeZone:'UTC', total:metrics, today:metrics, past7Days:metrics, month:metrics,
             daily: Array.from({length:31}, (_,i) => ({date:new Date(Date.UTC(2026,9,1-i)).toISOString().slice(0,10), usage:{...metrics,tokens:10000*(i+1)}})),
             scanLimitReached:false, untrackedSessions:0, undatedCalls:0 };
-          const activity = { models: [{name:'gpt-6.1-sol@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot',calls:532},{name:'gpt-6-astra@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot',calls:14}], tools: ['exec','read','write','search','message','learning_result','subagent','task','learned_skill','learning_memory','ask','log','cancel','cron_add','reply'].map((name,i)=>({name,calls:[4990,4759,3494,1640,498,317,212,187,155,66,65,65,37,36,18][i]})) };
+          const activity = { models: [{name:'gpt-6.1-sol@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot',calls:532,usage:metrics},{name:'gpt-6-astra@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot',calls:14}], tools: ['exec','read','write','search','message','learning_result','subagent','task','learned_skill','learning_memory','ask','log','cancel','cron_add','reply'].map((name,i)=>({name,calls:[4990,4759,3494,1640,498,317,212,187,155,66,65,65,37,36,18][i]})) };
           data.activity = {total:activity,today:activity,past7Days:activity,month:activity};
+          const latency = {samples:1,p50Ms:32,p95Ms:32};
+          data.requestQuality = {asOf:data.asOf,coverage:'partial',outcomes:[{outcome:'success',requests:1,observedAttempts:2,requestsWithAttempts:1}],
+            textObservations:[{observation:'stream_text',requests:1}],cache:{readTokens:0,writeTokens:null,inputTokens:24,outputTokens:20,requestsWithReadTokens:1,requestsWithWriteTokens:0,requestsWithInputTokens:1,requestsWithOutputTokens:1},
+            firstText:latency,queue:{samples:0,p50Ms:null,p95Ms:null},duration:latency};
+          data.recall = {coverage:'complete',skills:[{entry:'skill-example',reads:3}],memory:[{entry:'memory-example',source:'automatic',reads:5}]};
           window.fetch = async url => {
             if (String(url).endsWith('/api/project/usage')) return Response.json(data);
             if (String(url).includes('/api/project/usage/daily')) return Response.json({projectId:'fixture',asOf:data.asOf,page:1,pageSize:10,total:31,hasMore:true,daily:data.daily.slice(0,10)});
@@ -81,10 +86,10 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
         try {
           await win.loadURL(${JSON.stringify(url)});
           for (let i=0;i<200;i++) {
-            if (await win.webContents.executeJavaScript('document.querySelectorAll(".echart-plot canvas").length===3')) break;
+            if (await win.webContents.executeJavaScript('document.querySelectorAll(".echart-plot canvas").length===1')) break;
             await new Promise(r=>setTimeout(r,50));
           }
-          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".echart-plot canvas").length'),3,await win.webContents.executeJavaScript('document.body.innerText'));
+          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".echart-plot canvas").length'),1,await win.webContents.executeJavaScript('document.body.innerText'));
           for (const locale of ['en','zh-CN']) for (const dark of [false,true]) for (const width of [1180,700,350]) {
             await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+'); document.querySelector("#app").style.width="'+width+'px"; window.usageLocale('+JSON.stringify(locale)+');');
             // ResizeObserver + canvas resize can settle after more than one frame,
@@ -106,12 +111,12 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
                   token:window.usageInstance(all('.echart-plot')[0]).getOption().series[0].data[0].itemStyle.color, primary:getComputedStyle(panel).getPropertyValue('--c-primary').trim(),
                   headingOverlap:all('.chart-card').some(card=>{const head=card.querySelector('.cost-heading') || card.querySelector('h3');const caption=card.querySelector('p');return head.getBoundingClientRect().bottom>caption.getBoundingClientRect().top+1;})};
               }).toString()+')()');
-            assert.equal(info.charts.length,3); assert.equal(info.plots.length,3);
+            assert.equal(info.charts.length,1); assert.equal(info.plots.length,1);
             assert.ok(info.plots.every(p=>p.height===240));
             assert.ok(info.radius.every(r=>r==='0px')); assert.equal(info.overflow,false);
             assert.equal(info.headingOverlap,false,JSON.stringify({locale,dark,width,info}));
             const rankings = await win.webContents.executeJavaScript('('+(() => {
-              const sections = [...document.querySelectorAll('.activity-section')];
+              const sections = [...document.querySelectorAll('.activity-grid > .activity-section')];
               return { rows: sections.map(s => s.querySelectorAll('.ranking-row').length),
                 widths: [...document.querySelectorAll('.ranking-bar')].map(e => e.style.width),
                 overflow: sections.some(s => s.scrollWidth > s.clientWidth),
@@ -119,9 +124,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
             }).toString()+')()');
             assert.deepEqual(rankings.rows,[2,10]); assert.equal(rankings.overflow,false); assert.equal(rankings.stacked,true);
             assert.equal(rankings.widths[0],'100%');
-            assert.ok(info.charts[0].top < info.charts[1].top);
             assert.equal(info.kpis[0].top===info.kpis[2].top,width>850);
-            assert.equal(info.charts[1].top===info.charts[2].top,width>850);
             assert.equal(info.background,dark?'rgb(32, 32, 32)':'rgb(255, 255, 255)');
             assert.equal(info.token,info.primary);
             assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>Math.abs(window.usageInstance(e).getWidth()-e.clientWidth)<2)'),true);
@@ -132,13 +135,30 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           }
           await win.webContents.executeJavaScript('window.usageLocale("en")');
           await new Promise(r=>setTimeout(r,50));
-          await win.webContents.executeJavaScript('document.querySelector(".ui-select-trigger").scrollIntoView({block:"center"})');
-          await new Promise(r=>setTimeout(r,50));
-          await win.webContents.executeJavaScript('document.querySelector(".ui-select-trigger").click()');
-          await new Promise(r=>setTimeout(r,50));
-          await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("[role=option]")).find(e=>e.innerText.trim()==="CNY").click()');
-          await new Promise(r=>setTimeout(r,50));
-          assert.equal(await win.webContents.executeJavaScript('document.querySelector(".ui-select-label").innerText'),'CNY');
+          const select = async (container,label,text) => {
+            const selector=container+' .ui-select-trigger[aria-label="'+label+'"]';
+            await win.webContents.executeJavaScript('(()=>{ const trigger = document.querySelector('+JSON.stringify(selector)+'); trigger.scrollIntoView({block:"center"}); trigger.click(); })()');
+            await new Promise(r=>setTimeout(r,40));
+            await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("[role=option]")).find(e=>e.innerText.trim()==='+JSON.stringify(text)+').click()');
+            await new Promise(r=>setTimeout(r,60));
+          };
+          const model = 'section[aria-label="Model usage"]';
+          const breakdownValues = () => win.webContents.executeJavaScript('Array.from(document.querySelectorAll('+JSON.stringify(model+' .ranking-count, '+model+' td')+')).map(e=>e.innerText.trim())');
+          await select(model,'Metric','Estimated cost');
+          const usd = await breakdownValues();
+          assert.deepEqual(usd,['496.34 USD','Unavailable']);
+          await select(model,'Chart view','Donut chart');
+          assert.equal(await win.webContents.executeJavaScript('getComputedStyle(document.querySelector(".usage-ring")).backgroundImage.includes("conic-gradient")'),true);
+          assert.deepEqual(await breakdownValues(),usd);
+          await select(model,'Chart view','Table');
+          assert.deepEqual(await breakdownValues(),usd);
+          await select(model,'Cost unit','CNY');
+          assert.deepEqual(await breakdownValues(),['10 CNY','Unavailable']);
+          assert.equal(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Tool usage"] .ui-select-trigger[aria-label="Metric"]')+')===null'),true);
+          assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Request quality"]')+').innerText'),/32 ms/);
+          assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/skill-example/);
+          await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Memory").click()');
+          assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/memory-example.*Automatic log brief/);
           await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Last 30 days").click(); Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="This month").click(); Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Load daily history").click();');
           await new Promise(r=>setTimeout(r,80));
           assert.equal(await win.webContents.executeJavaScript('window.usageInstance(document.querySelector(".echart-plot")).getOption().xAxis[0].data.length'),30);
@@ -148,34 +168,45 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           await win.webContents.executeJavaScript('document.querySelector("#app").style.width="1180px"; document.querySelector(".chart-interaction").scrollIntoView({block:"center"}); document.querySelector(".chart-interaction").focus()');
           const key = async name => { win.webContents.sendInputEvent({type:'keyDown',keyCode:name}); win.webContents.sendInputEvent({type:'keyUp',keyCode:name}); await new Promise(r=>setTimeout(r,60)); };
           const readout = () => win.webContents.executeJavaScript('document.querySelector(".chart-readout").innerText');
-          await key('End'); assert.equal(await readout(),'2026-10-01: 1,234,567');
+          await key('End'); assert.equal(await readout(),'2026-10-01: 1,234,567 · Partial telemetry');
           await key('Left'); assert.equal(await readout(),'2026-09-30: 0');
           await key('Left'); assert.equal(await readout(),'2026-09-29: Unavailable');
           await key('Right'); assert.equal(await readout(),'2026-09-30: 0');
           await key('Home'); assert.match(await readout(),/^2026-09-02:/);
           await key('Escape'); assert.match(await readout(),/Hover or tap/);
-          for (const [index,label] of [[1,'2026-10-01: 10 CNY'],[2,'2026-10-01: 293 s']]) {
-            await win.webContents.executeJavaScript('document.querySelectorAll(".chart-interaction")['+index+'].focus()');
-            await key('End');
-            assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-readout")['+index+'].innerText'),label);
-          }
-          await win.webContents.executeJavaScript('document.querySelector(".ui-select-trigger").click()');
-          await new Promise(r=>setTimeout(r,50));
-          await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("[role=option]")).find(e=>e.innerText.trim()==="USD").click(); document.querySelectorAll(".chart-interaction")[1].focus()');
-          await key('End');
-          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-readout")[1].innerText'),'2026-10-01: 496.34 USD');
+          const trend = '.chart-card';
+          await select(trend,'Metric','Estimated cost');
+          await select(trend,'Cost unit','CNY');
+          await select(trend,'Chart view','Table');
+          assert.equal(await win.webContents.executeJavaScript('document.querySelector(".trend-table tbody tr:last-child td").innerText'),'10 CNY · Partial telemetry');
+          await select(trend,'Chart view','Line chart');
+          const chartKind = () => win.webContents.executeJavaScript('window.usageInstance(document.querySelector(".echart-plot")).getOption().series[0].type');
+          assert.equal(await chartKind(),'line');
+          await win.webContents.executeJavaScript('document.querySelector(".chart-interaction").focus()');
+          await key('End'); assert.equal(await readout(),'2026-10-01: 10 CNY · Partial telemetry');
+          await select(trend,'Cost unit','USD');
+          await win.webContents.executeJavaScript('document.querySelector(".chart-interaction").focus()');
+          await key('End'); assert.equal(await readout(),'2026-10-01: 496.34 USD · Partial telemetry');
+          await select(trend,'Metric','Provider time');
+          await win.webContents.executeJavaScript('document.querySelector(".chart-interaction").focus()');
+          await key('End'); assert.equal(await readout(),'2026-10-01: 293 s · Partial telemetry');
+          await select(trend,'Metric','Tokens');
+          assert.equal(await chartKind(),'line');
+          await select(trend,'Chart view','Column chart');
+          assert.equal(await chartKind(),'bar');
+          await win.webContents.executeJavaScript('document.querySelector(".chart-interaction").scrollIntoView({block:"center"})');
           // Real pointer movement uses ECharts' coordinate conversion solely for observation.
           const position = await win.webContents.executeJavaScript('(()=>{const e=document.querySelector(".echart-plot");const c=window.usageInstance(e);const p=c.convertToPixel({seriesIndex:0},[29,1234567]);const r=e.getBoundingClientRect(); document.activeElement.blur(); return {x:Math.round(r.left+p[0]),y:Math.round(r.top+p[1])};})()');
           win.webContents.sendInputEvent({type:'mouseMove',...position});
           await new Promise(r=>setTimeout(r,100));
-          assert.equal(await readout(),'2026-10-01: 1,234,567');
-          assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".usage-chart div")).some(e=>e.innerText.trim().split(String.fromCharCode(10)).join(" ")==="2026-10-01 1,234,567")'),true);
+          assert.equal(await readout(),'2026-10-01: 1,234,567 · Partial telemetry');
+          assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".usage-chart div")).some(e=>e.innerText.trim().split(String.fromCharCode(10)).join(" ")==="2026-10-01 1,234,567 · Partial telemetry")'),true);
           assert.equal(await win.webContents.executeJavaScript('document.querySelector(".project-usage").scrollWidth>document.querySelector(".project-usage").clientWidth'),false);
           win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...position});
           win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...position});
           await new Promise(r=>setTimeout(r,80));
-          assert.equal(await readout(),'2026-10-01: 1,234,567');
-          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll("details.chart-data tbody tr").length'),90);
+          assert.equal(await readout(),'2026-10-01: 1,234,567 · Partial telemetry');
+          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll("details.chart-data tbody tr").length'),30);
           assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".echart-plot")).every(e=>e.getAttribute("aria-hidden")==="true")'),true);
           await win.webContents.executeJavaScript('window.oldCharts=Array.from(document.querySelectorAll(".echart-plot")).map(e=>window.usageInstance(e)); window.usageApp.unmount(); document.documentElement.classList.toggle("dark")');
           await new Promise(r=>setTimeout(r,80));

@@ -35,11 +35,21 @@ export function mergeUsage(rows: ProjectUsage[]): ProjectUsage | undefined {
   }
   for (const period of usagePeriods) {
     result[period] = sumUsageMetrics(rows.map(row => row[period]))
-    for (const kind of ['models', 'tools'] as const) {
-      const counts = new Map<string, number>()
-      for (const row of rows) for (const entry of row.activity[period][kind]) counts.set(entry.name, (counts.get(entry.name) ?? 0) + entry.calls)
-      result.activity[period][kind] = [...counts].map(([name, calls]) => ({ name, calls }))
+    const models = new Map<string, { calls: number; metrics: ProjectUsageMetrics[]; hasMetrics: boolean }>()
+    const tools = new Map<string, number>()
+    for (const row of rows) {
+      for (const entry of row.activity[period].models) {
+        const value = models.get(entry.name) ?? { calls: 0, metrics: [], hasMetrics: false }
+        value.calls += entry.calls
+        if (entry.usage) { value.metrics.push(entry.usage); value.hasMetrics = true }
+        else value.metrics.push({ ...sumUsageMetrics([]), calls: entry.calls, unknownCostCalls: entry.calls,
+          unknownTokenCalls: entry.calls, unknownDurationCalls: entry.calls })
+        models.set(entry.name, value)
+      }
+      for (const entry of row.activity[period].tools) tools.set(entry.name, (tools.get(entry.name) ?? 0) + entry.calls)
     }
+    result.activity[period].models = [...models].map(([name, { calls, metrics, hasMetrics }]) => ({ name, calls, ...(hasMetrics ? { usage: sumUsageMetrics(metrics) } : {}) }))
+    result.activity[period].tools = [...tools].map(([name, calls]) => ({ name, calls }))
   }
   return result
 }

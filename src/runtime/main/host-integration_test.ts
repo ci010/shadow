@@ -48,6 +48,12 @@ test('real Main starts and reopens fresh BOT metadata with healthy default Proje
         assert.deepEqual(usage.rows.map((row: { project: { id: string } }) => row.project.id), ['default'])
         assert.equal(usage.aggregate.total.calls, 0)
         assert.equal(usage.rows[0].usage.firstText.samples, 0)
+        assert.equal(usage.rows[0].usage.requestQuality.firstText.samples, 0)
+        assert.equal(usage.rows[0].usage.requestQuality.cache.inputTokens, null)
+        assert.deepEqual(usage.rows[0].usage.recall.skills, [])
+        assert.deepEqual(usage.rows[0].usage.recall.memory, [])
+        assert.equal(usage.aggregate.requestQuality, undefined, 'never average per-project percentiles')
+        assert.equal(usage.aggregate.recall, undefined, 'recall remains a project projection')
         for (const resource of ['folders', 'sessions', 'microapps', 'audio/status']) {
           const response = await request(`/projects/default/api/${resource}`)
           assert.equal(response.status, 200, `${resource}: ${await response.text()}`)

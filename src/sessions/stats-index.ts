@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { setImmediate } from 'node:timers/promises'
 import { physicalSessionId } from './session-identity.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
-import type { ProjectUsageMetrics } from '../projects/usage-contract.ts'
+import type { ProjectUsageMetrics, RequestQuality } from '../projects/usage-contract.ts'
 import { parseTokenUsage } from './usage.ts'
 
 type Row = Record<string, unknown>
@@ -238,16 +238,23 @@ export class StatsIndex {
       output: row.output as number | null, total: row.total as number | null, tools: Number(tools.calls),
       tracked: !!this.db.prepare('SELECT 1 FROM model WHERE session=? LIMIT 1').get(session) }
   }
-  requestSummary(asOf: number) {
+  requestSummary(asOf: number): RequestQuality {
     const outcomes = this.db.prepare(`SELECT coalesce(outcome,'unknown') AS outcome,count(*) AS requests,
       sum(json_array_length(attempts)) AS observedAttempts, count(attempts) AS requestsWithAttempts
-      FROM model WHERE at < ? GROUP BY outcome`).all(asOf)
+      FROM model WHERE at < ? GROUP BY outcome`).all(asOf).map(row => ({ outcome: String(row.outcome), requests: Number(row.requests),
+      observedAttempts: row.observedAttempts === null ? null : Number(row.observedAttempts), requestsWithAttempts: Number(row.requestsWithAttempts) }))
     const textObservations = this.db.prepare(`SELECT coalesce(text_observation,'unknown') AS observation,count(*) AS requests
-      FROM model WHERE at < ? GROUP BY observation`).all(asOf)
-    const cache = this.db.prepare(`SELECT sum(json_extract(usage,'$.cachedTokens')) AS readTokens,
+      FROM model WHERE at < ? GROUP BY observation`).all(asOf).map(row => ({ observation: String(row.observation), requests: Number(row.requests) }))
+    const cacheRow = this.db.prepare(`SELECT sum(json_extract(usage,'$.cachedTokens')) AS readTokens,
+      sum(json_extract(usage,'$.promptTokens')) AS inputTokens, count(json_extract(usage,'$.promptTokens')) AS requestsWithInputTokens,
+      sum(json_extract(usage,'$.completionTokens')) AS outputTokens, count(json_extract(usage,'$.completionTokens')) AS requestsWithOutputTokens,
       count(json_extract(usage,'$.cachedTokens')) AS requestsWithReadTokens,
       sum(json_extract(usage,'$.cacheWriteTokens')) AS writeTokens,
-      count(json_extract(usage,'$.cacheWriteTokens')) AS requestsWithWriteTokens FROM model WHERE at < ?`).get(asOf)
+      count(json_extract(usage,'$.cacheWriteTokens')) AS requestsWithWriteTokens FROM model WHERE at < ?`).get(asOf)!
+    const known = (key: string) => typeof cacheRow[key] === 'number' ? cacheRow[key] : null
+    const cache = { readTokens: known('readTokens'), writeTokens: known('writeTokens'), inputTokens: known('inputTokens'), outputTokens: known('outputTokens'),
+      requestsWithReadTokens: Number(cacheRow.requestsWithReadTokens), requestsWithWriteTokens: Number(cacheRow.requestsWithWriteTokens),
+      requestsWithInputTokens: Number(cacheRow.requestsWithInputTokens), requestsWithOutputTokens: Number(cacheRow.requestsWithOutputTokens) }
     return { asOf: new Date(asOf).toISOString(), coverage: this.complete ? 'complete' : 'partial', outcomes, textObservations, cache,
       firstText: this.latency(asOf), queue: this.latency(asOf, 'queue'), duration: this.latency(asOf, 'duration') }
   }

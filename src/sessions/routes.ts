@@ -7,7 +7,7 @@ import { createSummaryResponder } from './summary-delta.ts'
 import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
 import { projectHistoryMessages } from '../shared/history-wire.ts'
-import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
+import { projectUsagePageQuerySchema, type ProjectUsage } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
 import type { Hono } from 'hono'
@@ -200,6 +200,7 @@ export function sessionsApiPlugin(
   options: {
     cron?: Pick<CronService, 'listJobs'> & Partial<Pick<CronService, 'nextJobRun'>>
     backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
+    recall?: { authorize(request: Request): boolean | Promise<boolean>; read(): NonNullable<ProjectUsage['recall']> }
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
@@ -500,7 +501,11 @@ export function sessionsApiPlugin(
       c.header('Cache-Control', 'no-store')
       if (!options.authorizeContext || !await options.authorizeContext(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
       if (!sessions?.projectId) return c.json({ error: 'project_not_found' }, 404)
-      return c.json(await sessions.getProjectUsage(c.req.raw.signal))
+      const usage = await sessions.getProjectUsage(c.req.raw.signal)
+      const recall = options.recall
+      if (!recall || !await recall.authorize(c.req.raw)) return c.json(usage)
+      c.req.raw.signal.throwIfAborted()
+      return c.json({ ...usage, recall: recall.read() })
     })
 
     app.get('/api/sessions/:key/profile', async c => {

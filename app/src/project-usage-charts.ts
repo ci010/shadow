@@ -24,16 +24,6 @@ export function displayCosts(costs: ProjectUsageMetrics['costs']): Array<{ curre
   }
   return costUnits.filter(currency => totals.has(currency)).map(currency => ({ currency, amount: totals.get(currency)! }))
 }
-/** A missing unit is zero only with complete daily cost coverage. */
-export function costWindow(points: UsagePoint[], unit: CostUnit) {
-  return points.map(point => {
-    const usage = point.usage
-    const cost = usage && displayCosts(usage.costs).find(cost => cost.currency === unit)
-    const partial = !!usage?.unknownCostCalls
-    return { date: point.date, amount: cost?.amount ?? (usage && !partial ? 0 : null), partial }
-  })
-}
-
 /** Stable Latin compact suffixes keep large counts readable in both UI locales. */
 export function compactUsageNumber(value: number, format: (value: number, options?: Intl.NumberFormatOptions) => string): string {
   const unit = value >= 999_950_000 ? 1e9 : value >= 999_950 ? 1e6 : value >= 1e3 ? 1e3 : 1
