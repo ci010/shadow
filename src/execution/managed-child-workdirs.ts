@@ -1,3 +1,4 @@
+import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs } from './device-home.ts'
 import { normalizeStoredWorkdirIdentity } from './workdir-storage.ts'
 import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from './derived-workspace-contract.ts'
 import { DERIVED_WORKSPACE_DIRECTORY, executeChildDerivedWorkspace, validateChildDerivedWorkspaceDirectory } from './child-derived-workspace.ts'
@@ -60,13 +61,14 @@ export class ManagedChildWorkdirs {
     readonly rootPath: string,
     readonly nodeId: string,
     readonly staticWorkdirs: readonly (WorkdirBinding & { displayName?: string })[],
+    readonly deviceHomePath?: string,
   ) {
-    if (!isAbsolute(rootPath)) throw new TypeError('Managed storage must be absolute')
+    if (!isAbsolute(rootPath) || (deviceHomePath !== undefined && !isAbsolute(deviceHomePath))) throw new TypeError('Managed storage and device home must be absolute')
     const ids = new Set<string>()
     for (const binding of staticWorkdirs) {
       if (!isClusterIdentifier(binding.workdirId) || !isAbsolute(binding.rootPath) ||
         isManagedWorkdir(binding.workdirId) || binding.workdirId === LEGACY_MANAGED_SERVICE_ID ||
-        binding.workdirId === LEGACY_FOLDER_PICKER_ID || binding.workdirId.startsWith('picked-v1:') || binding.workdirId === 'process-execute' || ids.has(binding.workdirId)) {
+        binding.workdirId === LEGACY_FOLDER_PICKER_ID || binding.workdirId.startsWith('picked-v1:') || binding.workdirId === 'process-execute' || binding.workdirId === DEVICE_HOME_WORKDIR || ids.has(binding.workdirId)) {
         throw new TypeError('Reserved or duplicate Child capability ID')
       }
       ids.add(binding.workdirId)
@@ -161,6 +163,13 @@ export class ManagedChildWorkdirs {
         this.#unavailable.add(binding.workdirId)
       }
     }
+    if (this.deviceHomePath) {
+      try { await this.#rememberNewBinding(DEVICE_HOME_WORKDIR, this.deviceHomePath) }
+      catch (error) {
+        if (!unavailablePath(error) && (error as NodeJS.ErrnoException).code !== 'workdir-unavailable') throw error
+        this.#unavailable.add(DEVICE_HOME_WORKDIR)
+      }
+    }
     this.#initialized = true
   }
 
@@ -170,6 +179,7 @@ export class ManagedChildWorkdirs {
     return [
       ...[...this.#picked].map(([workdirId, rootPath]) => this.#descriptor({ workdirId, rootPath, displayName: basename(rootPath) || rootPath })),
       ...this.staticWorkdirs.map(binding => this.#descriptor(binding)),
+      ...(this.deviceHomePath ? [this.#homeDescriptor(this.deviceHomePath)] : []),
       ...[...this.#allocations.values()].map(record => ({
         ...this.#descriptor({ workdirId: record.workdirId, rootPath: this.#path(record.workdirId), displayName: 'Session workdir' }),
         online: !this.#unavailable.has(record.workdirId),
@@ -183,6 +193,7 @@ export class ManagedChildWorkdirs {
 
   async assertCanExecute(request: ExecutionRequestV2, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
+    request = deviceHomeArgs(request)
     assertExecutionSupported(request, this.workdirs, this.support)
     if (request.nodeId !== this.nodeId || !request.projectScope) throw new Error('Execution requires the configured Main Project scope')
     if (request.operation === DERIVED_WORKSPACE_OPERATION) parseDerivedWorkspaceArgs(request.args)
@@ -210,12 +221,12 @@ export class ManagedChildWorkdirs {
         if (request.operation === DERIVED_WORKSPACE_OPERATION) return this.#derive(request, signal)
         const bindings = await this.#bindings(request, signal)
         const handlers = [new CapabilityFilesystem(bindings), new CapabilityGit(bindings), new CapabilityWorkdirIdentity(bindings)]
-        return handlers.find(handler => handler.handles(request.operation))!.execute(request, signal)
+        return handlers.find(handler => handler.handles(request.operation))!.execute(deviceHomeArgs(request), signal)
       },
     }, {
       handles: operation => operation === WORKDIR_PROCESS_EXECUTE_OPERATION || operation === 'workdir.process.execute-once',
       prepareProcess: async (request, signal) =>
-        new CapabilityShell(await this.#bindings(request, signal)).prepareProcess(request, signal),
+        new CapabilityShell(await this.#bindings(request, signal)).prepareProcess(deviceHomeArgs(request), signal),
     }]
   }
 
@@ -239,6 +250,11 @@ export class ManagedChildWorkdirs {
       displayName: binding.displayName ?? binding.workdirId, displayPath: binding.rootPath, platform: process.platform,
       online: !this.#unavailable.has(binding.workdirId),
     }
+  }
+
+  #homeDescriptor(rootPath: string): WorkdirAdvertisement {
+    const { displayPath: _omit, ...home } = this.#descriptor({ workdirId: DEVICE_HOME_WORKDIR, rootPath, displayName: 'Device home' })
+    return { ...home, support: { ...home.support, operations: [...DEVICE_HOME_OPERATIONS] } }
   }
 
   async #bindingIdentity(path: string): Promise<DirectoryIdentity> {
@@ -303,6 +319,12 @@ export class ManagedChildWorkdirs {
 
   async #bindings(request: ExecutionRequestV2, signal: AbortSignal): Promise<readonly WorkdirBinding[]> {
     signal.throwIfAborted()
+    if (workdirIdOf(request) === DEVICE_HOME_WORKDIR) {
+      const rootPath = this.deviceHomePath
+      if (!rootPath || !DEVICE_HOME_OPERATIONS.includes(request.operation)) throw new Error('Device home access is not enabled for this operation')
+      await this.#assertBinding(DEVICE_HOME_WORKDIR, rootPath)
+      return [{ workdirId: DEVICE_HOME_WORKDIR, rootPath }]
+    }
     const picked = this.#picked.get(workdirIdOf(request))
     if (picked) {
       const current = await realpath(picked)

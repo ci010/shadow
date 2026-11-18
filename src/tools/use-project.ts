@@ -1,6 +1,6 @@
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
-import { executionTargetParameters, workspaceArguments } from './execution-target.ts'
+import { registeredWorkspaceParameters, workspaceArguments } from './execution-target.ts'
 import { prepareWorkingContext } from '../agent/context/working-context.ts'
 import type { LayerFSFolderRecord } from '../folders/contracts.ts'
 import type { FolderRegistry } from '../folders/registry.ts'
@@ -15,7 +15,7 @@ export class UseProjectTool implements Tool {
   readonly supportsRemoteWorkdir = true
   readonly description = 'Set a registered Workspace in the current Project as this session\'s ongoing working context, switching the default cwd and workspace-scoped instructions together. Use when this session will keep working in that workspace, not as a prerequisite for every workspace task. For cross-workspace work, consider explicit paths or separate workspace-bound subagents/sessions instead of serial switching; choose what fits the task. Use the short identifier from Project workspaces or its full workspace ID, never a path. Call alone, directly, not in a parallel batch or script. Applies to subsequent calls only; running processes and children retain their context. Does not change Project scope. Selecting LayerFS ensures its previously-ready runtime before committing; readiness/instruction failure retains the prior context. No installation or first startup is implicit.'
   readonly parameters: ToolParameters = {
-    type: 'object', properties: executionTargetParameters,
+    type: 'object', properties: registeredWorkspaceParameters,
     required: ['workspace'], additionalProperties: false,
   }
   constructor(private readonly options: {

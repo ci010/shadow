@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { assertExecutionSupported } from '../execution/workdir-contracts.ts'
 import { RemoteLayerFSService } from '../execution/layerfs/remote-service.ts'
 import { RemoteLayerFSRuntimes } from '../execution/layerfs/remote-runtime.ts'
@@ -74,6 +75,7 @@ export async function startProductionChildRuntime(
   ])).digest('hex')
   const workdirs = new ManagedChildWorkdirs(
     join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, config.workdirs ?? [],
+    config.allowDeviceHome === true ? homedir() : undefined,
   )
   await workdirs.init()
   const layerfsRuntimes = new RemoteLayerFSRuntimes(join(paths.dataDir, 'layerfs-project-services-v1', pairingScope), config.localNodeId, () => ({ online: connection === 'connected', epoch: connectionEpoch, pairingId: reference.credentialId }))

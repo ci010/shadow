@@ -1,3 +1,4 @@
+import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR } from '../../execution/device-home.ts'
 import { SkillRecallStore } from '../../skills/recall.ts'
 import { readChannelSessionAliases, withChannelSessionAliases } from '../../sessions/channel-session-aliases.ts'
 import { assertConnectionMigrationSettled } from '../../bots/connection-migration.ts'
@@ -15,6 +16,7 @@ import { learningInterval, updateLearningInterval, updateLearningEnabled } from 
 import { InputRouter } from '../../input/router.ts'
 import { createBotsHandler } from '../../vfs/bots.ts'
 import { createConnectionsHandler } from '../../vfs/connections.ts'
+import { createDevicesHandler } from '../../vfs/devices.ts'
 import { connectionSinkProjection } from '../../channels/sink-projection.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
 import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
@@ -43,7 +45,7 @@ import { BotSend } from '../../bots/send.ts'
 import { BotMessages } from '../../bots/messages.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService, publishedBotIntegrationId } from '../../bots/runtime.ts'
-import { isOwnerSession } from '../../sessions/owner-policy.ts'
+import { isDirectOwnerTurn, isOwnerSession } from '../../sessions/owner-policy.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
 import { discordReadMessage } from '../../channels/discord-operations.ts'
 import { collectDiscordHistory } from '../../channels/discord-stream.ts'
@@ -427,6 +429,7 @@ export async function createProjectRuntime(
   const sameWorkdir = (left: WorkdirRefV2, right: WorkdirRefV2) => left.nodeId === right.nodeId && left.workdirId === right.workdirId
   // Check ownership directly. No authorization object is constructed or passed.
   const directoryAccess = (ref: WorkdirRefV2): boolean => {
+    if (ref.workdirId === DEVICE_HOME_WORKDIR) return false
     const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
     if (folder) return true
     if (folderRegistry.isRetiredWorkdir(ref)) return false
@@ -447,6 +450,17 @@ export async function createProjectRuntime(
   const recordRemoteJob = (jobId: string, pending: boolean) => dependencies.catalog.recordRemoteJob(project.id, jobId, pending)
   const remoteExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, async (request, signal) => {
     if (request.workdirId === undefined || !DIRECTORY_OPERATIONS.includes(request.operation)) return denyAccess()
+    if (request.workdirId === DEVICE_HOME_WORKDIR) {
+      signal.throwIfAborted()
+      if (coordinator || !isOwnerSession(sessions.getSessionState(request.sessionId), project.id)
+        || sessions.isManagedConversation(request.sessionId) || !DEVICE_HOME_OPERATIONS.includes(request.operation)) return denyAccess()
+      sessions.assertFolderAccess(request.sessionId)
+      const target = mainCluster.workdirLookup({ version: 2, nodeId: request.nodeId, workdirId: DEVICE_HOME_WORKDIR }, request.operation)
+      if (target.node !== 'online' || target.incompatible || !target.workdir?.online) {
+        throw new ExecutionAdmissionError('device-home-unavailable', 'Child is offline, incompatible, or has not enabled device home access. No Main fallback.')
+      }
+      return
+    }
     if (request.sessionId.startsWith('folder:')) {
       const folder = folderRegistry.get(request.sessionId.slice('folder:'.length))
       const ref = folder && (folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id))
@@ -471,7 +485,7 @@ export async function createProjectRuntime(
   () => folderRegistry.acquireAccess())
   // Dedicated host-held service executors, not magic session IDs as credentials.
   const identityExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
-    if (request.workdirId === undefined || request.operation !== 'workdir.identity') denyAccess()
+    if (request.workdirId === undefined || request.workdirId === DEVICE_HOME_WORKDIR || request.operation !== 'workdir.identity') denyAccess()
   })
   const allocationExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
     if (request.workdirId !== undefined || request.operation !== MANAGED_SESSION_OPERATION ||
@@ -1249,6 +1263,20 @@ export async function createProjectRuntime(
     sessions, frontendLog, dependencies.debugProjects,
   )
   vfs.mount('v:runtime', 'read-only current Project logs and session prompt/tool diagnostics; projects is development-only, Default Project cross-Project diagnostics; read v:runtime for paths, provenance and capture limits', runtimeDiagnostics.read, runtimeDiagnostics.list)
+
+  const devicesVfs = createDevicesHandler({
+    projectId: project.id,
+    assertSession: context => {
+      if (!isDirectOwnerTurn(context) || !isOwnerSession(sessions.getSessionState(context.sessionId), project.id)
+        || sessions.isManagedConversation(context.sessionId)) {
+        throw new Error('Device inventory requires a direct turn in the owner’s private Web conversation.')
+      }
+      sessions.assertFolderAccess(context.sessionId)
+    },
+    inventory: () => sessions.getNodeInventory(),
+    homeAvailable: nodeId => !coordinator && mainCluster.workdirLookup({ version: 2, nodeId, workdirId: DEVICE_HOME_WORKDIR }, 'filesystem.read').workdir?.online === true,
+  })
+  vfs.mount('v:devices', 'read-only live device inventory for owner Web turns; connection, protocol and directory-picker support, no filesystem browsing or latency probes', devicesVfs.read, devicesVfs.list)
 
   const projectFoldersVfs = projectFolderDiscovery.handlers()
   const dispatchFiles = new ProjectDispatchFiles(workspace, project.id)

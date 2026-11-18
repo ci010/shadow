@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { folderFixture } from '../folders/test-fixtures.ts'
 import { ManagedChildWorkdirs } from './managed-child-workdirs.ts'
+import { DEVICE_HOME_WORKDIR, deviceHomeNode } from './device-home.ts'
 import { LocalExecutor } from './local-executor.ts'
 import { ProcessManager } from './processes/manager.ts'
 import { ProjectExecutor } from '../projects/executor.ts'
@@ -70,6 +71,38 @@ test('Child allocation validates grants, scope, arguments, aborts and reserved s
     executor, nodeId: 'child', workdirId: first.workdirId, sessionId: options.sessionId,
     turnId: randomUUID(), signal: options.signal,
   }, 'filesystem.read', { path: 'private.txt' }), /replaced/)
+})
+
+test('opted-in Child home is a reserved read and shell root without a registered workspace', async t => {
+  const { root, folders } = await folderFixture(t)
+  const home = join(folders, 'child-home')
+  await mkdir(home)
+  await writeFile(join(home, 'fixture.txt'), 'from Child home')
+  const storage = join(home, 'shadow-metadata')
+  const signal = new AbortController().signal
+  const access = request({ workdirId: DEVICE_HOME_WORKDIR, operation: 'filesystem.read', args: { path: '~/fixture.txt' } })
+  assert.equal(deviceHomeNode('device:child'), 'child')
+  for (const selector of ['device:', 'device:local', 'device:../child', 'child']) assert.throws(() => deviceHomeNode(selector))
+  assert.throws(() => new ManagedChildWorkdirs(storage, 'child', [{ workdirId: DEVICE_HOME_WORKDIR, rootPath: root }]), /Reserved/)
+  const disabled = new ManagedChildWorkdirs(storage, 'child', [])
+  await disabled.init()
+  await assert.rejects(disabled.assertCanExecute(access, signal), /missing|offline|withdrawn/)
+  const enabled = new ManagedChildWorkdirs(storage, 'child', [], home)
+  await enabled.init()
+  const descriptor = enabled.workdirs.find(dir => dir.workdirId === DEVICE_HOME_WORKDIR)
+  assert.equal(descriptor?.online, true)
+  assert.equal(descriptor?.displayPath, undefined)
+  await enabled.assertCanExecute(access, signal)
+  await assert.rejects(enabled.assertCanExecute({ ...access, operation: 'filesystem.write' }, signal), /No live support/)
+  await enabled.assertCanExecute({ ...access, operation: 'workdir.process.execute-once', args: { cwd: '~', script: 'echo test' } }, signal)
+  const local = fixtureProjectExecutor('default', new LocalExecutor(new ProcessManager(), 'child', enabled.operationHandlers, (req, abort) => enabled.assertCanExecute(req, abort)))
+  const target = { executor: local, nodeId: 'child', workdirId: DEVICE_HOME_WORKDIR, sessionId: 'web:chat-fixture', turnId: randomUUID(), signal }
+  assert.match(await executeRemoteFilesystemText(target, 'filesystem.read', { path: '~' }), /fixture\.txt/)
+  assert.equal(await executeRemoteFilesystemText(target, 'filesystem.read', access.args), 'from Child home')
+  await assert.rejects(executeRemoteFilesystemText(target, 'filesystem.read', { path: '~/../outside' }), /outside|escape|relative/i)
+  const disabledAgain = new ManagedChildWorkdirs(storage, 'child', [])
+  await disabledAgain.init()
+  assert.equal(disabledAgain.workdirs.some(dir => dir.workdirId === DEVICE_HOME_WORKDIR), false)
 })
 
 test('managed allocation client rejects malformed, oversized and foreign Child results', async () => {
