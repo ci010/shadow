@@ -107,6 +107,40 @@ async function main() {
     await resize(390)
     await execute(`window.__isVisible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
       window.__visible = selector => [...document.querySelectorAll(selector)].find(window.__isVisible); void 0;`)
+    if (process.env.MOBILE_SMOKE_SCENARIO === 'project-tabs') {
+      await resize(1100)
+      await wait(`!!window.__mobileFixture && !!${visible('.draft-heading')}`)
+      const group = (project: string) => `.project-top-tab-group[data-project-id="${project}"]`
+      const topTab = (project: string, label: string) => `[...document.querySelectorAll('${group(project)} .project-top-tab-label')].find(el => el.textContent.trim() === ${JSON.stringify(label)})`
+      await execute(`window.__mobileFixture.router.push('/projects/work/chat/web%3Achat-one')`)
+      await wait(`!!${topTab('work', 'First investigation')} && !!${visible('.reference-composer')}`)
+      await execute(`window.__retainedComposer = ${visible('.reference-composer')}; window.__retainedComposer.value = 'Unsent investigation draft'; window.__retainedComposer.dispatchEvent(new Event('input', { bubbles: true })); void 0;`)
+      const route = () => 'window.__mobileFixture.router.currentRoute.value'
+      await execute(`window.__mobileFixture.router.push('/projects/other/workflows')`)
+      await wait(`!!${topTab('other', 'Workflows')}`)
+      await execute(`window.__mobileFixture.router.push('/projects/other/chat/web%3Achat-two')`)
+      await wait(`!!${topTab('other', 'Second investigation')}`)
+      assert.equal(await execute(`document.querySelector('${group('work')}').getAttribute('aria-label')`), 'Workspace')
+      assert.equal(await execute(`document.querySelector('${group('other')}').getAttribute('aria-label')`), 'Other project')
+      assert.ok(await execute(`!!${topTab('work', 'First investigation')}`), 'The original chat stays in its own group')
+      assert.ok(await execute(`!${topTab('work', 'Workflows')}`), 'The Workflow never moves to the previously active project')
+      await execute(`document.querySelector('.global-top-tab-group button').click()`)
+      await wait(`${route()}.name === 'settings'`)
+      assert.equal(await execute(`document.querySelector('.global-top-tab-group').getAttribute('aria-label')`), 'Global')
+      await execute(`${topTab('other', 'Workflows')}.click()`)
+      await wait(`${route()}.name === 'project-workflows' && ${route()}.params.projectId === 'other' && ${topTab('other', 'Workflows')}?.getAttribute('aria-current') === 'page'`)
+      await execute(`${topTab('work', 'First investigation')}.click()`)
+      await wait(`${route()}.params.projectId === 'work' && ${visible('.reference-composer')} === window.__retainedComposer`)
+      assert.equal(await execute(`${visible('.reference-composer')}.value`), 'Unsent investigation draft')
+      await execute(`document.querySelector('${group('other')} [aria-label="Close Workflows"]').click()`)
+      await wait(`!${topTab('other', 'Workflows')}`)
+      assert.equal(await execute(`${route()}.params.projectId`), 'work', 'Closing a tab in another group does not navigate away')
+      assert.deepEqual(await execute('window.__mobileFixture.errors'), [])
+      assert.deepEqual(errors, [])
+      assert.deepEqual(external, [])
+      console.log('PROJECT_TABS_OK')
+      return
+    }
     // Native pairing starts without a session: real client context, real App,
     // real project catalog and folder tree, rather than a preselected chat only.
     await wait(`!!${visible('.draft-heading')} && !!${visible('[aria-label="Switch view"]')}`)

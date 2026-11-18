@@ -106,10 +106,11 @@
 <script setup lang="ts">
 import { closePreviousSidebarConversation } from '../sidebar-conversation-tabs.ts'
 import { createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
+import { projectTopTabGroups, ProjectTopTabsKey, type ProjectTopTabs } from '../project-top-tabs.ts'
 import EditorGroupHost from './EditorGroupHost.vue'
 import EditorViewHost from './EditorViewHost.vue'
 import { t } from '../i18n.ts'
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
+import { computed, inject, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProjectGroup from './ProjectGroup.vue'
 import ProjectWorkbench from './ProjectWorkbench.vue'
@@ -244,6 +245,48 @@ const workflowQueries = new Map<string, Record<string, string>>()
 const conversationQueries = new Map<string, typeof route.query>()
 const projectWorkbenches = new Map<string, ConversationResource>()
 let documentRoute = ''
+let pendingTopTab: { resource: ConversationResource; path: string } | undefined
+const topTabsHost = inject(ProjectTopTabsKey, undefined)
+const topTabs: ProjectTopTabs = {
+  groups: () => projectTopTabGroups(editorGroups, projects.value, editor =>
+    !!editor.conversation || editor.id === projectEditorId(editor.projectId, 'workflows')
+    || editor.id === projectEditorId(editor.projectId, 'settings')),
+  active: id => props.visible && ['chat', 'project-workflows', 'project-settings'].includes(String(route.name))
+    && route.params.projectId === selectedProjectId.value && editorGroups.active(selectedProjectId.value)?.id === id,
+  activate: id => { void activateTopTab(id) },
+  close: id => editorGroups.close(id),
+}
+if (topTabsHost) topTabsHost.value = topTabs
+
+async function activateTopTab(id: string) {
+  const editor = editorGroups.descriptors.get(id)
+  if (!editor || !editorGroups.side(id)) return
+  const { projectId } = editor
+  if (id === projectEditorId(projectId, 'workflows')) {
+    await router.push({ name: 'project-workflows', params: { projectId }, query: workflowQueries.get(projectId) ?? {} })
+  } else if (id === projectEditorId(projectId, 'settings')) {
+    await router.push({ name: 'project-settings', params: { projectId, section: settingsSections.get(projectId) ?? 'general' } })
+  } else if (editor.conversation) {
+    const resource = resources.value.find(item => item.key === editor.owner)
+    if (!resource) return
+    const location = { ...projectChatLocation(resource), query: conversationQueries.get(resource.key) ?? {} }
+    const path = router.resolve(location).fullPath
+    if (path === route.fullPath) publish(resource)
+    else {
+      // Drafts share a route; keep the exact clicked resource, not a new draft.
+      const selection = { resource, path }
+      pendingTopTab = selection
+      try {
+        if (await router.push(location)) return
+        await nextTick()
+      } finally {
+        if (pendingTopTab === selection) pendingTopTab = undefined
+      }
+      if (route.fullPath !== path) return
+    }
+  }
+  if (props.visible && route.params.projectId === projectId) editorGroups.activate(id)
+}
 const localSidebarOpen = ref(false)
 const sidebarOpen = computed({
   get: () => mobileIntegrated.value ? mobile!.menuOpen.value : localSidebarOpen.value,
@@ -416,7 +459,8 @@ function syncRoute() {
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
   let resource: ConversationResource
-  if (sessionId) {
+  if (pendingTopTab?.path === route.fullPath) resource = pendingTopTab.resource
+  else if (sessionId) {
     resource = registry.session({ projectId, sessionId })
     const child = typeof route.query.child === 'string' ? route.query.child : undefined
     const link = JSON.stringify([projectId, sessionId, child])
@@ -678,6 +722,7 @@ onMounted(() => {
 onActivated(() => { keyboardActive.value = true })
 onDeactivated(() => { sessionSearchOpen.value = false; keyboardActive.value = false; newConversationShortcut.cancel(); closeSidebar(false) })
 onUnmounted(() => {
+  if (topTabsHost?.value === topTabs) topTabsHost.value = undefined
   keyboardActive.value = false
   newConversationShortcut.cancel()
   window.removeEventListener('keydown', newConversationShortcut.keydown)

@@ -2660,6 +2660,7 @@
   "Set up": "设置",
   "Set up Main": "设置主节点",
   "Set up this computer": "设置此计算机",
+  "Global": "全局",
   "Settings": "设置",
   "Settings apply only to this project. Provider connections and Nodes are shared across the app.": "设置仅应用于此项目。模型提供商连接和节点由整个应用共享。",
   "Settings are managed by Main administrators.": "设置由主节点管理员管理。",

@@ -16,7 +16,9 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('real App mobile navigation, conversation headers, drafts, sheets and touch gestures', {
+for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'mobile'
+  ? 'real App mobile navigation, conversation headers, drafts, sheets and touch gestures'
+  : 'real App groups retained top tabs by project with global Settings separate', {
   timeout: 180_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -100,6 +102,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (operation === 'scheduled-tasks') data = { sessionId, tasks: [] }
           else if (path === '/api/service-groups') data = { revision: 'fixture', agents: [], groups: [] }
           else if (path === '/api/channels') data = { channels: [] }
+          else if (path === '/api/workflows') data = { version: 1, kind: 'full', cursor: 'fixture', snapshot: { projectId: scope?.[1], definitions: [], runs: [] } }
           else if (path === '/api/automations') data = { automations: [] }
           else if (path === '/api/sessions/summary') data = { sessions: [...names].map(([sessionId, title]) => ({ sessionId, title })), nodes: [] }
           else if (path === '/api/sessions/stages') data = { activity: {} }
@@ -146,7 +149,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
-  const env: NodeJS.ProcessEnv = { MOBILE_SMOKE_URL: server.resolvedUrls.local[0], MOBILE_SCREENSHOT_DIR: process.env.SHADOW_LAYOUT_SCREENSHOTS }
+  const env: NodeJS.ProcessEnv = { MOBILE_SMOKE_URL: server.resolvedUrls.local[0], MOBILE_SMOKE_SCENARIO: scenario, MOBILE_SCREENSHOT_DIR: process.env.SHADOW_LAYOUT_SCREENSHOTS }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
@@ -161,8 +164,8 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close')
   assert.equal(code, 0, `${output}\nUnexpected API requests: ${JSON.stringify(unexpected)}`)
-  assert.match(output, /MOBILE_NAVIGATION_OK/)
+  assert.match(output, scenario === 'mobile' ? /MOBILE_NAVIGATION_OK/ : /PROJECT_TABS_OK/)
   assert.deepEqual(unexpected, [])
-  assert.equal(names.get('web:chat-one'), 'Renamed on phone')
+  if (scenario === 'mobile') assert.equal(names.get('web:chat-one'), 'Renamed on phone')
   assert.equal(requests.filter(request => request.startsWith('POST ') && !request.startsWith('POST /api/io/clients') && request !== 'POST /api/chat/presence').length, 0, 'No turns, uploads or device work are started')
 })
