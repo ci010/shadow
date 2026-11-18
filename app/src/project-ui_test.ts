@@ -373,10 +373,10 @@ test('folder catalog revision serializes stale lists and moves an agent-created 
   assert.equal(state().groups.folders[0].folder.id, 'agent-folder', 'A stale list cannot erase the new registration')
 })
 
-function mountAgents(t: TestContext, agentName = 'plan', embedded = false) {
+function mountAgents(t: TestContext, agentName = 'plan', embedded = false, channel: string | null = 'web') {
   const route = reactive({
     params: { projectId: 'owner', section: 'agents' },
-    query: { agent: agentName, channel: 'web', retained: 'yes' } as Record<string, string>,
+    query: { agent: agentName, ...(channel === null ? {} : { channel }), retained: 'yes' } as Record<string, string>,
   })
   const requests: Array<{ path: string; signal?: AbortSignal | null; finish: (body: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (input: string, init?: RequestInit) => new Promise<Response>(resolve => {
@@ -397,6 +397,26 @@ function mountAgents(t: TestContext, agentName = 'plan', embedded = false) {
   requests[0].finish(agents)
   return { state, requests, route, agents }
 }
+
+test('agent previews default to web and do not offer the retired heartbeat channel', async t => {
+  const { state, requests, route } = mountAgents(t, 'plan', false, null)
+  await settle()
+  assert.deepEqual(state().channels, ['web', 'discord', 'wechat', 'feishu'])
+  assert.match(requests[1].path, /\/plan\/context\?channel=web$/)
+  route.query.channel = 'heartbeat'
+  await settle()
+  assert.equal(state().channel, 'web')
+  assert.equal(requests.length, 2, 'The legacy query resolves to the same web preview')
+})
+
+test('embedded Agent previews also fall back to web for a legacy heartbeat query', async t => {
+  const { state, requests, route } = mountAgents(t, 'plan', true, 'heartbeat')
+  await settle()
+  state().activeTab = 'tools'
+  await settle()
+  assert.match(requests[1].path, /\/plan\/context\?channel=web$/)
+  assert.equal(route.query.channel, 'heartbeat', 'Embedded inspection does not rewrite the containing route')
+})
 
 test('agent deep links load only the requested context and retain details during selection', async t => {
   const { state, requests, route, agents } = mountAgents(t)
