@@ -244,10 +244,8 @@ const remoteExpanded = ref(props.initialExplorerOpen ?? false)
 const fileSpace = ref<'project' | 'session' | undefined>(props.folderId ? 'project' : 'session')
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
 const knowledgeSelected = computed(() => props.knowledgeEnabled && (tabs.value.selected === KNOWLEDGE_TAB_KEY || !!knowledgeEntryId(tabs.value.selected)))
-const knowledgeExpanded = ref(true)
-const expanded = computed(() => knowledgeSelected.value
-  ? wide.value && knowledgeExpanded.value
-  : !groups && explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? false)))
+const explorerOpen = computed(() => props.remote ? remoteExpanded.value : (preference.value ?? false))
+const expanded = computed(() => !groups && explorerOpen.value && (knowledgeSelected.value ? wide.value : explorerAvailable.value))
 const documents = inject(ProjectDocumentsKey, undefined)
 const projectDocuments = computed(() => props.projectNavigationEnabled && props.projectId ? documents?.get(props.projectId) : undefined)
 const localTabs = ref<FileTabs>({ files: [], selected: '' })
@@ -555,16 +553,14 @@ function nativeDocumentKey(event: Event) {
 function compositionStart() { composing = true }
 function compositionEnd() { composing = false }
 function collapseExplorer() {
-  if (knowledgeSelected.value) knowledgeExpanded.value = false
-  else if (props.remote) remoteExpanded.value = false
+  if (props.remote) remoteExpanded.value = false
   else preference.value = false
   ;(mobileLayout.value ? mobileActionsButton.value : explorerButton.value)?.focus({ preventScroll: true })
 }
 function toggleExplorer() {
   if (groups) { groups.toggleExplorer(props.projectId ?? ''); return }
-  if (knowledgeSelected.value) knowledgeExpanded.value = !knowledgeExpanded.value
-  else if (props.remote) remoteExpanded.value = !expanded.value
-  else preference.value = !expanded.value
+  if (props.remote) remoteExpanded.value = !explorerOpen.value
+  else preference.value = !explorerOpen.value
 }
 watch(viewRoot, (element, previous) => { if (!groups) return; if (previous) observer?.unobserve(previous); if (element) observer?.observe(element); measureWidth() }, { flush: 'post' })
 function measureWidth() {

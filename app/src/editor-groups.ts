@@ -19,15 +19,8 @@ export interface EditorDescriptor {
 export function createEditorGroups() {
   // File visibility belongs to the workbench, not to the selected Project or tab.
   const filesOpen = ref(false)
-  const knowledgeExplorers = reactive(new Set<string>())
-  function explorerOpen(projectId: string) {
-    return active(projectId)?.explorer ? knowledgeExplorers.has(projectId) : filesOpen.value
-  }
-  function setExplorerOpen(projectId: string, open: boolean) {
-    if (!active(projectId)?.explorer) filesOpen.value = open
-    else if (open) knowledgeExplorers.add(projectId)
-    else knowledgeExplorers.delete(projectId)
-  }
+  const explorerOpen = (_projectId: string) => filesOpen.value
+  function setExplorerOpen(_projectId: string, open: boolean) { filesOpen.value = open }
   const toggleExplorer = (projectId: string) => setExplorerOpen(projectId, !explorerOpen(projectId))
   const descriptors = shallowReactive(new Map<string, EditorDescriptor>())
   const projects = reactive(new Map<string, { left: string[]; right: string[]; selected: Record<EditorSide, string>; active: EditorSide; conversation?: string }>())

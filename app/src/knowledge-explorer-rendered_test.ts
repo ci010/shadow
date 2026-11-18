@@ -71,6 +71,9 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
     await run('document.querySelector(".tree-row[data-path]").click()');
     await wait('document.querySelector(".file-markdown")');
     await run('window.fileNode=document.querySelector(".file-markdown");window.fileId=window.fixture.groups.active("p").id;'+toggle+'.click();window.fixture.request.value={};void 0');
+    await wait('window.fixture.groups.active("p")?.explorer');
+    assert.equal(await run('!!document.querySelector(".knowledge-explorer-pane")'),false,'entering Knowledge keeps the closed pane closed');
+    await run(toggle+'.click()');
     await wait('document.querySelector(".knowledge-explorer-pane button[aria-current],.knowledge-explorer-pane nav button")');
     assert.equal(await run('document.querySelector(".project-file-explorer").getBoundingClientRect().width'),0);
     assert.equal(await run('document.querySelector(".knowledge-explorer-pane").closest(".editor-group-content")===null'),true);
@@ -79,7 +82,7 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
     await run('window.homeId=window.fixture.groups.active("p").id;document.querySelector(".knowledge-explorer-pane nav button").click()');
     await wait('window.fixture.groups.active("p")?.explorer?.entryId');
     await wait('document.querySelector(".knowledge-preview")?.textContent.includes("Synthetic p")');
-    await run('window.leafId=window.fixture.groups.active("p").id;window.fixture.groups.move(window.leafId,"right");window.fixture.groups.activate(window.fileId);void 0');
+    await run('window.leafId=window.fixture.groups.active("p").id;window.fixture.groups.move(window.leafId,"right");'+toggle+'.click();window.fixture.groups.activate(window.fileId);void 0');
     await wait('!document.querySelector(".knowledge-explorer-pane")');
     assert.equal(await run('window.fileNode===document.querySelector(".file-markdown")'),true,'same file DOM survives knowledge');
     assert.equal(await run(filesVisible),false,'leaving Knowledge does not reopen the file pane');
