@@ -3594,7 +3594,7 @@ function resendLastMessage() {
   .composer-controls { flex: 1 1 auto; flex-wrap: nowrap; }
   .composer-controls :deep(.composer-control:has(.model-label)) { min-width: 0; max-width: 100%; }
   .composer-controls :deep(.model-label) { min-width: 0; max-width: 160px; }
-  .composer-controls :deep(.model-effort), .composer-controls :deep(.model-account) { display: none; }
+  .composer-controls :deep(.model-account) { display: none; }
   .composer-submit { flex: 0 0 auto; }
   .composer-hint, .composer-submit :deep(.audio-input > span[role="status"]) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }
   .composer-submit :deep(.audio-input) { min-width: 0; }

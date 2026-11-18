@@ -1,9 +1,9 @@
 <template>
   <ComposerPopover v-if="selection" :label="t('Choose model')" :title="triggerTitle" :disabled="unavailable" :busy="pending" @opened="resetMenu">
     <template #trigger>
-      <span class="model-label">{{ selection.inheriting?.value ? conversationDefaults ? t('Default · ') : t('Project · ') : '' }}{{ modelDisplayName(selection.current.value) || (selection.loading.value ? t('Loading models...') : t('Choose model')) }}</span>
-      <span v-if="settings" class="model-effort"><span aria-hidden="true">·</span> {{ effortLabel }}</span>
-      <span v-if="modelProvider(selection.current.value)" class="model-account">{{ modelAccountLabel(selection.current.value, selection.providers?.value) }}</span>
+      <span class="model-label">{{ modelDisplayName(selection.current.value) || (selection.loading.value ? t('Loading models...') : t('Choose model')) }}</span>
+      <span v-if="settings && effectiveEffortLabel" class="model-effort"><span aria-hidden="true">·</span> {{ effectiveEffortLabel }}</span>
+      <span v-if="providerLabel" class="model-account">{{ providerLabel }}</span>
       <span class="model-chevron i-lucide-chevron-down" aria-hidden="true" />
     </template>
     <template #default="{ close }">
@@ -61,7 +61,7 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, ref } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReasoningControls from './ReasoningControls.vue'
-import { filterModelOptions, modelProviderFilters, modelProviderGroup, modelCompactAccountLabel, modelAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
+import { filterModelOptions, modelProviderFilters, modelProviderGroup, modelCompactAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
 import { contextWindowLabel, currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
 const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean; futureRuns?: boolean }>()
@@ -78,14 +78,19 @@ const modelRow = ref<HTMLButtonElement>()
 const effortRow = ref<HTMLButtonElement>()
 const unavailable = computed(() => !!selection?.disabled.value)
 const pending = computed(() => !!props.busy || !!selection?.loading.value)
-const effortLabel = computed(() => {
-  const choice = currentEffort(props.settings ?? {})
-  const inherited = currentEffort(selection?.defaultReasoning?.value ?? {})
-  return choice === 'default' && inherited !== 'default'
-    ? t('Default · {label}', { label: effortOptions.find(option => option.value === inherited)!.label })
-    : effortOptions.find(option => option.value === choice)!.label
+const effortChoice = computed(() => currentEffort(props.settings ?? {}))
+const effectiveEffortLabel = computed(() => {
+  const effective = effortChoice.value === 'default' ? currentEffort(selection?.defaultReasoning?.value ?? {}) : effortChoice.value
+  return effective === 'default' ? '' : effortOptions.find(option => option.value === effective)!.label
 })
-const triggerTitle = computed(() => `${selection?.current.value || t('Choose model')}${props.settings ? ` · ${effortLabel.value}` : ''}`)
+const effortLabel = computed(() => effortChoice.value === 'default'
+  ? effectiveEffortLabel.value ? t('Default · {label}', { label: effectiveEffortLabel.value }) : effortOptions[0].label
+  : effectiveEffortLabel.value)
+const providerLabel = computed(() => {
+  const id = modelProvider(selection?.current.value ?? '')
+  return selection?.providers?.value.find(provider => provider.id === id)?.name || id
+})
+const triggerTitle = computed(() => `${selection?.current.value || t('Choose model')}${props.settings && effectiveEffortLabel.value ? ` · ${effectiveEffortLabel.value}` : ''}`)
 const allOptions = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', '', selection?.providers?.value))
 const providerFilters = computed(() => modelProviderFilters(allOptions.value, selection?.providers?.value))
 const options = computed(() => filterModelOptions(allOptions.value, '', query.value, selection?.providers?.value)
@@ -136,6 +141,7 @@ function chooseEffort(patch: ReasoningSettings, close: () => void) {
 
 <style scoped>
 .model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; color: var(--c-text); }
+.model-account { flex: 0 2 auto; min-width: 0; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-muted); font-size: 11px; }
 .model-chevron { flex: 0 0 14px; width: 14px; height: 14px; }
 .model-effort { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap; }
 .model-menu { display: flex; flex-direction: column; min-height: 0; }
