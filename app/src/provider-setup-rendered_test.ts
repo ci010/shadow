@@ -182,6 +182,44 @@ test('enterprise picker blocks invalid input, preserves it on retry, and sign-ou
   assert.match(view.text(), /Signed out of Copilot instance .* on github.com/)
 })
 
+test('provider cards show a credit meter, a balance without a meter, and unavailable usage independently', async t => {
+  let finishCredits!: (response: Response) => void
+  const credits = new Promise<Response>(resolve => { finishCredits = resolve })
+  const paths: string[] = []
+  t.mock.method(globalThis, 'fetch', async input => {
+    const path = new URL(String(input)).pathname
+    paths.push(path)
+    switch (path) {
+      case '/api/provider/configured': return Response.json({ providers: [
+        { provider: 'copilot', authMode: 'copilot', host: 'github.com', hasApiKey: false, selected: true },
+        { provider: 'ds', type: 'deepseek', authMode: 'api-key', hasApiKey: true, selected: false },
+        { provider: 'other', type: 'copilot-v2', authMode: 'copilot', host: 'github.com', hasApiKey: false, selected: false },
+      ] })
+      case '/api/provider/usage/copilot': return credits
+      case '/api/provider/usage/ds': return Response.json({ kind: 'deepseek-balance', sufficient: false, balances: [{ currency: 'USD', total: '0.00' }] })
+      case '/api/provider/usage/other': return new Response('synthetic sensitive upstream error', { status: 500 })
+      default: return Response.json({})
+    }
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', status, available: true, active: true, checking: false, error: '' }, undefined,
+    undefined, loadComponent(new URL('./components/ProvidersView.vue', import.meta.url)))
+  for (let i = 0; i < 10 && !view.text().includes('AI credit allowance unavailable'); i++) await flush()
+  assert.ok(paths.includes('/api/provider/usage/copilot'), `${paths.join(', ')}: ${view.text()}`)
+  assert.match(view.text(), /Checking account usage…/)
+  assert.match(view.text(), /API balance: 0\.00 USD/)
+  assert.match(view.text(), /Balance is insufficient for API calls/)
+  assert.match(view.text(), /AI credit allowance unavailable/)
+  assert.doesNotMatch(view.text(), /synthetic sensitive upstream error/)
+  assert.equal(view.nodes().filter(node => node.tag === 'progress').length, 0)
+  finishCredits(Response.json({ kind: 'copilot-credits', used: 5475, allowance: 1_000_000 }))
+  await flush()
+  const meters = view.nodes().filter(node => node.tag === 'progress')
+  assert.equal(meters.length, 1)
+  assert.equal(meters[0]?.props.value, 5475 / 1_000_000)
+  assert.equal(meters[0]?.props['aria-label'], '5,475 / 1,000,000 AI credits')
+  assert.match(view.text(), /5,475 \/ 1,000,000 AI credits/)
+})
+
 test('provider edit mapping retains host when Copilot is not the selected provider', () => {
   const source = readFileSync(new URL('./components/ProvidersView.vue', import.meta.url), 'utf8')
   assert.match(source, /baseUrl: item\.baseUrl, host: item\.host, ready: false/)

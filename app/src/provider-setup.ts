@@ -1,4 +1,5 @@
 import { t } from './i18n.ts'
+import { parseProviderUsage } from '../../src/shared/provider-usage.ts'
 import { apiUrl } from './api-url.ts'
 import { createUuid } from './uuid.ts'
 import { normalizeCopilotHost, copilotVerificationUri } from '../../src/shared/copilot-host.ts'
@@ -255,6 +256,9 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
     },
     async configured(signal?: AbortSignal) {
       return parseConfiguredProviders(await json('/api/provider/configured', { signal }))
+    },
+    async usage(provider: string, signal?: AbortSignal) {
+      return parseProviderUsage(await json(`/api/provider/usage/${encodeURIComponent(provider)}`, { signal }))
     },
     async status(signal?: AbortSignal, refresh = false) {
       return parseProviderSetup(await json(`/api/provider/setup${refresh ? '?refresh=true' : ''}`, { signal }))

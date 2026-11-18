@@ -15,6 +15,25 @@ the custom provider name (initially `local`). The suggestion follows connection
 choices until you edit it. After an edit, switching methods or hosts preserves
 your text; clearing the name blocks saving/sign-in. Existing names are preserved.
 
+## Account usage on provider cards
+
+Opening **App settings → Providers** checks the account figures separately from
+connection readiness. Reopen Providers to check again. A failed or unsupported
+lookup shows “unavailable,” not zero, and does not change model access.
+
+- **GitHub Copilot** uses the saved sign-in for that instance and its GitHub host.
+  The same internal entitlement endpoint already used during Copilot sign-in
+  can report a finite AI-credit allowance and remaining credits. If both are
+  present, the card shows included credits used against that allowance. Legacy
+  request counts, unreported quotas, and local cost estimates are not used in
+  this calculation. This endpoint is not a public REST contract: some plans or
+  sign-ins may not return a usable allowance. See [GitHub's billing guidance](https://docs.github.com/en/copilot/how-tos/manage-and-track-spending/monitor-ai-usage)
+  for account-wide usage and billing details.
+- **DeepSeek API key** uses DeepSeek’s official [Get User Balance API](https://api-docs.deepseek.com/api/get-user-balance).
+  The card shows the returned total balance for each currency and notes when
+  DeepSeek says it is insufficient for API calls. The balance is not a spending
+  limit. The check is not made for custom endpoints or DeepSeek Account browser sign-in.
+
 ## Configuration and compatibility
 
 The `providers` record key is the stable instance ID. Optional `type` chooses the
