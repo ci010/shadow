@@ -144,6 +144,10 @@ skills, and settings. Provider credentials and paired devices are shared at the
 App level. Project isolation is **not an OS sandbox**: permitted host tools still
 run with the backend user's permissions.
 
+On desktop, the editor strip groups open conversations, Workflows, and Project
+settings by Project. Use this row to switch between open tabs across Projects.
+The title-bar navigation control switches app-wide pages, including Settings.
+
 Use a Project's **+** menu to open a folder, clone a repository, or start
 from scratch without selecting a folder. **Open folder** is the single entry point
 for the in-app directory picker on web, Main, and Child; no native directory

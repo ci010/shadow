@@ -3,27 +3,17 @@
     <template #mobile-header><MobileChrome :title="mobilePageTitle" /></template>
     <template #navigation>
       <Teleport :to="mobile.navigationTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.navigationTarget.value">
-        <nav @wheel="!mobile.enabled.value && scrollEditorTabs($event, $event.currentTarget as HTMLElement)" class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }" :aria-label="t('Main navigation')">
+        <nav v-if="mobile.enabled.value" class="tab-nav mobile-app-nav" :aria-label="t('Main navigation')">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
-              <div v-if="item.name === 'settings'" class="global-top-tab-group" role="group" :aria-label="t('Global')">
-                <span class="top-tab-group-marker" aria-hidden="true">{{ t('Global') }}</span>
-                <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
-              </div>
-              <button v-else class="tab" :class="{ active: isActive && (item.name !== 'chat' || !hasActiveProjectTab) }" :aria-current="isActive && (item.name !== 'chat' || !hasActiveProjectTab) ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
+            <router-link v-for="item in group.items" :key="item.name" :to="navigationLocation(item.name)" custom v-slot="{ isActive, navigate }">
+              <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
             </router-link>
           </template>
-          <template v-if="!mobile.enabled.value">
-            <div v-for="group in openProjectTabGroups" :key="group.id" class="project-top-tab-group" role="group" :aria-label="group.name" :data-project-id="group.id">
-              <span class="top-tab-group-marker" aria-hidden="true">{{ group.name }}</span>
-              <div v-for="editor in group.tabs" :key="editor.id" class="project-top-tab">
-                <HoverInfo :text="editor.label" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" class="tab project-top-tab-label" :class="{ active: topTabs?.active(editor.id) }" :aria-current="topTabs?.active(editor.id) ? 'page' : undefined" @click="topTabs?.activate(editor.id)">{{ editor.label }}</button></HoverInfo>
-                <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" class="project-top-tab-close" :aria-label="t('Close {value1}', { value1: editor.label })" @click="topTabs?.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
-              </div>
-            </div>
-          </template>
         </nav>
+        <select v-else class="desktop-navigation" :aria-label="t('Main navigation')" :value="navigationPage" @change="navigatePage">
+          <option v-for="item in navigationGroups.flatMap(group => group.items)" :key="item.name" :value="item.name">{{ item.label }}</option>
+        </select>
       </Teleport>
     </template>
     <template #actions>
@@ -89,7 +79,7 @@
 <script setup lang="ts">
 import { t } from './i18n.ts'
 import { installRevealBorder } from './reveal-border.ts'
-import { computed, ref, onMounted, onUnmounted, watch, provide, inject, shallowRef } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
 import { startPresence } from './presence.ts'
 import { browserSessionKey } from './web-auth.ts'
 import { mobileSessionKey } from './mobile-client.ts'
@@ -97,9 +87,6 @@ import MobileConnection from './MobileConnection.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
-import HoverInfo from './components/HoverInfo.vue'
-import { scrollEditorTabs } from './editor-tab-scroll.ts'
-import { ProjectTopTabsKey, type ProjectTopTabs } from './project-top-tabs.ts'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
 import { provideProviderReadiness } from './provider-readiness.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
@@ -127,10 +114,6 @@ watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()
 provide(ioBridgeKey, ioBridge)
 const router = useRouter()
-const topTabs = shallowRef<ProjectTopTabs>()
-provide(ProjectTopTabsKey, topTabs)
-const openProjectTabGroups = computed(() => topTabs.value?.groups() ?? [])
-const hasActiveProjectTab = computed(() => !mobile.enabled.value && openProjectTabGroups.value.some(group => group.tabs.some(editor => topTabs.value?.active(editor.id))))
 const lastChatLocation = ref('/chat')
 watch(() => route.fullPath, (path) => {
   if (route.name === 'chat') lastChatLocation.value = path
@@ -264,6 +247,14 @@ const navigationGroups = computed(() => {
   return groups.filter((group) => group.items.length > 0)
 })
 
+const navigationPage = computed(() => workspaceRoutes.includes(String(route.name)) ? 'chat' : String(route.name))
+function navigationLocation(name: string) {
+  return name === 'chat' ? lastChatLocation.value : { name, params: ['agents', 'spans', 'logs'].includes(name) ? { projectId: route.params.projectId || 'default' } : {} }
+}
+function navigatePage(event: Event) {
+  void router.push(navigationLocation((event.target as HTMLSelectElement).value))
+}
+
 let stopRevealBorder: (() => void) | undefined
 onMounted(() => {
   stopRevealBorder = installRevealBorder()
@@ -318,27 +309,7 @@ onUnmounted(() => {
   scrollbar-color: var(--c-scrollbar-thumb) transparent;
 }
 
-.global-top-tab-group, .project-top-tab-group, .project-top-tab { display: flex; align-items: stretch; flex: none; }
-.top-tab-group-marker {
-  align-self: center;
-  max-width: 8rem;
-  margin-inline-start: 0.4rem;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--c-bg-muted);
-  color: var(--c-text-secondary);
-  font-size: 0.65rem;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.project-top-tab-label { max-width: 13rem; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: normal; }
-.project-top-tab-close { display: grid; place-items: center; padding: 0 4px; background: transparent; border: 0; color: var(--c-text-muted); cursor: pointer; }
-.project-top-tab-close:hover { background: var(--c-bg-muted); color: var(--c-text); }
-.project-top-tab button:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -2px; }
-.mobile-app-nav .global-top-tab-group > .tab { flex: 1; }
-.mobile-app-nav .top-tab-group-marker { display: none; }
+.desktop-navigation { max-width: 10rem; padding: 3px 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
 
 .tab-group-label {
   align-self: stretch;

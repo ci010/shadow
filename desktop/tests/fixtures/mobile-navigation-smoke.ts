@@ -110,44 +110,52 @@ async function main() {
     if (process.env.MOBILE_SMOKE_SCENARIO === 'project-tabs') {
       await resize(1100)
       await wait(`!!window.__mobileFixture && !!${visible('.draft-heading')}`)
-      const group = (project: string) => `.project-top-tab-group[data-project-id="${project}"]`
-      const topTab = (project: string, label: string) => `[...document.querySelectorAll('${group(project)} .project-top-tab-label')].find(el => el.textContent.trim() === ${JSON.stringify(label)})`
-      await execute(`window.__mobileFixture.router.push('/projects/work/chat/web%3Achat-one')`)
-      await wait(`!!${topTab('work', 'First investigation')} && !!${visible('.reference-composer')}`)
-      await execute(`window.__retainedComposer = ${visible('.reference-composer')}; window.__retainedComposer.value = 'Unsent investigation draft'; window.__retainedComposer.dispatchEvent(new Event('input', { bubbles: true })); void 0;`)
+      const foreign = (project: string) => `.project-editor-tab-group[data-project-id="${project}"]`
+      const tab = (label: string, selector = '.editor-workspace-header') => `[...document.querySelectorAll('${selector} button')].find(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)})`
       const route = () => 'window.__mobileFixture.router.currentRoute.value'
+      await execute(`window.__mobileFixture.router.push('/projects/work/chat/web%3Achat-one')`)
+      await wait(`!!${tab('First investigation')} && !!${visible('.reference-composer')}`)
+      await execute(`window.__retainedComposer = ${visible('.reference-composer')}; window.__retainedComposer.value = 'Unsent investigation draft'; window.__retainedComposer.dispatchEvent(new Event('input', { bubbles: true })); void 0;`)
       await execute(`window.__mobileFixture.router.push('/projects/other/workflows')`)
-      await wait(`!!${topTab('other', 'Workflows')}`)
+      await wait(`!!${tab('Workflows')}`)
       await execute(`window.__mobileFixture.router.push('/projects/other/chat/web%3Achat-two')`)
-      await wait(`!!${topTab('other', 'Second investigation')}`)
-      assert.equal(await execute(`document.querySelector('${group('work')}').getAttribute('aria-label')`), 'Workspace')
-      assert.equal(await execute(`document.querySelector('${group('other')}').getAttribute('aria-label')`), 'Other project')
-      for (const [selector, name] of [[group('work'), 'Workspace'], [group('other'), 'Other project'], ['.global-top-tab-group', 'Global']]) {
-        assert.equal(await execute(`document.querySelector('${selector}').firstElementChild.textContent.trim()`), name)
-        assert.ok(await execute(`(() => {
-          const marker = document.querySelector('${selector}').firstElementChild
-          const tab = marker.nextElementSibling
-          const style = getComputedStyle(marker)
-          const chip = marker.getBoundingClientRect()
-          const next = tab.getBoundingClientRect()
-          return marker.matches('.top-tab-group-marker[aria-hidden="true"]') && parseFloat(style.borderRadius) > 0
-            && style.borderLeftWidth === '0px' && style.borderBottomWidth === '0px'
-            && chip.width > 0 && chip.right <= next.left && chip.height < next.height
-        })()`), `${name} has a compact inline marker before its tabs`)
-      }
-      assert.ok(await execute(`!!${topTab('work', 'First investigation')}`), 'The original chat stays in its own group')
-      assert.ok(await execute(`!${topTab('work', 'Workflows')}`), 'The Workflow never moves to the previously active project')
-      await execute(`document.querySelector('.global-top-tab-group button').click()`)
-      await wait(`${route()}.name === 'settings'`)
-      assert.equal(await execute(`document.querySelector('.global-top-tab-group').getAttribute('aria-label')`), 'Global')
-      await execute(`${topTab('other', 'Workflows')}.click()`)
-      await wait(`${route()}.name === 'project-workflows' && ${route()}.params.projectId === 'other' && ${topTab('other', 'Workflows')}?.getAttribute('aria-current') === 'page'`)
-      await execute(`${topTab('work', 'First investigation')}.click()`)
+      await wait(`!!${tab('Second investigation')}`)
+      assert.deepEqual(await execute(`(() => {
+        const headers = [...document.querySelectorAll('.editor-workspace-header')].filter(window.__isVisible);
+        const header = headers[0];
+        const tabs = [...header.querySelectorAll('.editor-tab [role="tab"], .project-editor-label')];
+        const markers = [...header.querySelectorAll('.editor-project-marker')];
+        return {
+          rows: headers.length,
+          chromeTabs: document.querySelectorAll('.desktop-title-bar [role="tab"], .desktop-title-bar .tab-nav').length,
+          labels: tabs.map(el => el.textContent.trim()).sort(),
+          markers: markers.map(el => el.textContent.trim()),
+          aligned: tabs.every(el => el.getBoundingClientRect().top === tabs[0].getBoundingClientRect().top),
+          belowChrome: header.getBoundingClientRect().top >= document.querySelector('.desktop-title-bar').getBoundingClientRect().bottom,
+          fileToggle: !!header.querySelector('.project-explorer-toggle')
+        };
+      })()`), { rows: 1, chromeTabs: 0, labels: ['First investigation', 'New conversation', 'New conversation', 'Second investigation', 'Workflows'], markers: ['Other project', 'Workspace'], aligned: true, belowChrome: true, fileToggle: true })
+      await execute(`${tab('First investigation', foreign('work'))}.click()`)
       await wait(`${route()}.params.projectId === 'work' && ${visible('.reference-composer')} === window.__retainedComposer`)
       assert.equal(await execute(`${visible('.reference-composer')}.value`), 'Unsent investigation draft')
-      await execute(`document.querySelector('${group('other')} [aria-label="Close Workflows"]').click()`)
-      await wait(`!${topTab('other', 'Workflows')}`)
+      await execute(`${tab('Workflows', foreign('other'))}.click()`)
+      await wait(`${route()}.name === 'project-workflows' && ${route()}.params.projectId === 'other' && ${tab('Workflows')}?.getAttribute('aria-selected') === 'true'`)
+      await execute(`${tab('First investigation', foreign('work'))}.click()`)
+      await wait(`${route()}.params.projectId === 'work'`)
+      await execute(`${visible(foreign('other'))}.querySelector('[aria-label="Close Workflows"]').click()`)
+      await wait(`!${tab('Workflows', foreign('other'))}`)
       assert.equal(await execute(`${route()}.params.projectId`), 'work', 'Closing a tab in another group does not navigate away')
+      await execute(`window.__mobileFixture.router.push('/projects/other/settings/general')`)
+      await wait(`!!${tab('Project settings')} && !!${visible('.project-settings-view')}`)
+      await execute(`${tab('First investigation', foreign('work'))}.click()`)
+      await wait(`${route()}.params.projectId === 'work'`)
+      await execute(`${tab('Project settings', foreign('other'))}.click()`)
+      await wait(`${route()}.name === 'project-settings' && ${route()}.params.projectId === 'other' && !!${visible('.project-settings-view')}`)
+      const page = (value: string) => execute(`(() => { const picker = document.querySelector('.desktop-navigation'); picker.value = ${JSON.stringify(value)}; picker.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+      await page('settings')
+      await wait(`${route()}.name === 'settings'`)
+      await page('chat')
+      await wait(`${route()}.name === 'chat' && ${visible('.reference-composer')} === window.__retainedComposer`)
       assert.deepEqual(await execute('window.__mobileFixture.errors'), [])
       assert.deepEqual(errors, [])
       assert.deepEqual(external, [])
@@ -416,6 +424,7 @@ async function main() {
     await more('Browse files')
     await wait(`!!${visible('.project-file-explorer')}`)
     assert.ok(await execute(`${visible('.chat-history')}.getBoundingClientRect().width >= innerWidth - 1`), 'Opening files overlays rather than shrinking the phone conversation')
+    await click('.project-file-explorer .root-toggle[aria-expanded="false"]')
     await text('notes.txt', '.project-file-explorer button')
     await wait(`${visible('.mobile-document-title')}?.textContent.includes('notes.txt')`)
     await wait(`${visible('.file-modal.inline')}?.innerText.includes('Synthetic document body')`)

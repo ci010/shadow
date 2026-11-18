@@ -1,12 +1,4 @@
-import type { InjectionKey, ShallowRef } from 'vue'
 import type { EditorDescriptor, EditorGroups } from './editor-groups.ts'
-
-export interface ProjectTopTabs {
-  groups(): ProjectTopTabGroup[]
-  active(id: string): boolean
-  activate(id: string): void
-  close(id: string): void
-}
 
 export interface ProjectTopTabGroup {
   id: string
@@ -14,7 +6,6 @@ export interface ProjectTopTabGroup {
   tabs: EditorDescriptor[]
 }
 
-export const ProjectTopTabsKey: InjectionKey<ShallowRef<ProjectTopTabs | undefined>> = Symbol('ProjectTopTabs')
 
 export function projectTopTabGroups(
   editors: EditorGroups,
