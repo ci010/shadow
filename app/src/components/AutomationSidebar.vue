@@ -15,9 +15,10 @@
       </RouterLink>
     </template></HoverInfo>
     <HoverInfo :text="t('Board')"><template #default="{ triggerProps }">
-      <RouterLink v-bind="triggerProps" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }"
+      <RouterLink v-bind="triggerProps" aria-keyshortcuts="Control+B" class="automation-entry" active-class="selected" :class="{ 'is-rail': rail }"
         :to="{ name: 'project-board', params: { projectId } }" :aria-label="t('Board')">
         <span class="i-lucide-columns-3 automation-icon" aria-hidden="true" /><span v-if="!rail">{{ t('Board') }}</span>
+        <kbd v-if="!rail" class="navigation-shortcut">Ctrl+B</kbd>
       </RouterLink>
     </template></HoverInfo>
   </nav>

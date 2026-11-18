@@ -555,6 +555,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
   if (!projects.value.some(project => project.id === projectId)) return
   event.preventDefault()
   if (destination === 'knowledge') openKnowledge(projectId)
+  else if (destination === 'board') void router.push({ name: 'project-board', params: { projectId } })
   else void router.push({ name: 'project-workflows', params: { projectId }, query: workflowQueries.get(projectId) ?? {} })
 }
 const newConversationShortcut = createNewConversationShortcut({
