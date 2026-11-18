@@ -57,12 +57,19 @@ export class SignalProviderRuntime {
     workflows.bindSourceStatus(() => this.state.instances.map(i => ({ kind: 'external', id: i.id, enabled: !this.stopped && i.enabled, error: i.error, nextAt: i.nextAt })))
     workflows.bindSourceAuthorizer((owner, definition) => {
       this.authorize(owner)
-      const instance = this.state.instances.find(i => i.id === definition.source.id)
-      if (!instance || !this.member(instance, owner)) throw new Error('Source binding not authorized in this Project')
-      this.current(instance, this.controller)
-      const demand = this.provider(instance).normalize(definition.binding?.demand)
-      if (Buffer.byteLength(canonical(demand)) > 8192) throw new Error('Demand too large')
-      return { ...definition, binding: { demand } }
+      const normalize = (id: string, raw: unknown) => {
+        const instance = this.state.instances.find(i => i.id === id)
+        if (!instance || !this.member(instance, owner)) throw new Error('Source binding not authorized in this Project')
+        this.current(instance, this.controller)
+        const demand = this.provider(instance).normalize(raw)
+        if (Buffer.byteLength(canonical(demand)) > 8192) throw new Error('Demand too large')
+        return demand
+      }
+      const node = definition.nodes[0]
+      if (node.kind === 'aggregate') return { ...definition, nodes: [{ ...node,
+        inputs: node.inputs.map(input => ({ ...input, demand: normalize(input.instance, input.demand) })),
+      }] }
+      return { ...definition, binding: { demand: normalize(definition.source.id, definition.binding?.demand) } }
     })
     workflows.bindExternal(definition => this.workflowCurrent(definition))
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
@@ -229,10 +236,18 @@ export class SignalProviderRuntime {
       nodes: input.action.kind === 'notify' ? [{ kind: 'transform', code: input.action.processor }, { kind: 'inbox' }] : [input.action] })
   }
   private subscriptions() {
-    return this.workflows.inspect().definitions.filter(d => d.source.kind === 'external' && d.owner && d.binding).map(d => ({
-      id: d.id, workflow: d.id, instance: d.source.id, owner: d.owner!,
-      demand: d.binding!.demand, ...(d.gate ? { first: d.gate.first } : {}), nodes: d.nodes,
-    }))
+    type Subscription = { id: string; workflow: string; instance: string; owner: string; demand: unknown;
+      input?: string; first?: 'baseline' | 'emit'; nodes: WorkflowDefinition['nodes'] }
+    return this.workflows.inspect().definitions.flatMap((d): Subscription[] => {
+      if (d.source.kind !== 'external' || !d.owner) return []
+      const common = { workflow: d.id, owner: d.owner, nodes: d.nodes }
+      const node = d.nodes[0]
+      if (node.kind === 'aggregate') return node.inputs.map(input => ({ ...common,
+        id: `aggregate:${JSON.stringify([d.id, input.name])}`, input: input.name, instance: input.instance, demand: input.demand,
+      }))
+      return d.binding ? [{ ...common, id: d.id, instance: d.source.id, demand: d.binding.demand,
+        ...(d.gate ? { first: d.gate.first } : {}) }] : []
+    })
   }
   private member(instance: InstanceData, owner: string): boolean {
     return this.state.instances.some(i => i.id === instance.id) && this.canUse(owner)
@@ -342,8 +357,8 @@ export class SignalProviderRuntime {
       if (new Set(data.signals.map(e => e.id)).size !== data.signals.length) throw new Error('Duplicate signal IDs')
       if (this.state.demands[key] && this.state.demands[key].mode !== data.mode) throw new Error('Collection semantics changed; use a new instance/stateVersion')
     }
-    this.workflows.admit(subscriptions.filter(s => this.subscriptions().some(live => live.workflow === s.workflow && live.instance === s.instance && live.owner === s.owner && canonical(live.demand) === canonical(s.demand)) && this.member(instance, s.owner)).map(s => ({
-      workflow: s.workflow, source: { kind: 'external', id: instance.id }, observations: output[digest([instance.id, s.demand])].signals,
+    this.workflows.admit(subscriptions.filter(s => this.subscriptions().some(live => live.workflow === s.workflow && live.input === s.input && live.instance === s.instance && live.owner === s.owner && canonical(live.demand) === canonical(s.demand)) && this.member(instance, s.owner)).map(s => ({
+      workflow: s.workflow, input: s.input, source: { kind: 'external', id: instance.id }, observations: output[digest([instance.id, s.demand])].signals,
     })))
     // Source checkpoint is only protocol state. A crash here may recollect; Workflow dedupes it.
     this.update(state => {
@@ -352,10 +367,16 @@ export class SignalProviderRuntime {
   }
   private workflowCurrent(definition: WorkflowDefinition): boolean {
     if (this.stopped || this.reloading) return false
-    const subscription = this.subscriptions().find(s => s.workflow === definition.id && s.owner === definition.owner && s.instance === definition.source.id)
-    const instance = this.state.instances.find(i => i.id === subscription?.instance)
-    if (!subscription || !instance || !this.member(instance, subscription.owner)) return false
-    try { this.current(instance, this.controller); return true } catch { return false }
+    const subscriptions = this.subscriptions().filter(s => s.workflow === definition.id && s.owner === definition.owner)
+    const node = definition.nodes[0]
+    const expected = node.kind === 'aggregate' ? node.inputs : [{ name: undefined, instance: definition.source.id, demand: definition.binding?.demand }]
+    return expected.every(input => {
+      const subscription = subscriptions.find(s => s.input === input.name && s.instance === input.instance &&
+        (input.demand === undefined || canonical(s.demand) === canonical(input.demand)))
+      const instance = this.state.instances.find(i => i.id === subscription?.instance)
+      if (!subscription || !instance || !this.member(instance, subscription.owner)) return false
+      try { this.current(instance, this.controller); return true } catch { return false }
+    })
   }
   private async cycle(): Promise<void> {
     for (const instance of [...this.state.instances]) {

@@ -1,3 +1,4 @@
+import { appId, appInputName, jsonValue } from '../microapps/contracts.ts'
 import { z } from 'zod'
 import { validScheduleDelivery } from '../cron/delivery.ts'
 import { githubSubscriptionSchema } from '../projects/github/contracts.ts'
@@ -18,7 +19,17 @@ export const ExternalAction = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('notify'), processor: z.string().min(1).max(64000) }).strict(),
   z.object({ kind: z.literal('record') }).strict(), WorkMap,
 ])
+const AggregateInput = z.object({ name: appInputName, instance: WorkflowId, demand: z.unknown().optional() }).strict()
+export const AggregateResult = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('skip') }).strict(),
+  z.object({ kind: z.literal('emit'), value: jsonValue }).strict(),
+])
+export const Aggregate = z.object({ kind: z.literal('aggregate'), code: z.string().min(1).max(64000),
+  inputs: z.array(AggregateInput).min(2).max(8),
+  edge: z.object({ appId, input: appInputName }).strict(),
+}).strict()
 export const Node = z.discriminatedUnion('kind', [
+  Aggregate,
   z.object({ kind: z.literal('bot-reference'), botId: WorkflowId }).strict(),
   z.object({ kind: z.literal('transform'), code: z.string().min(1).max(64000) }).strict(),
   z.object({ kind: z.literal('inbox') }).strict(),
@@ -40,6 +51,11 @@ export const WorkflowDefinition = z.object({
     d.nodes.some((n, i) => n.kind === 'inbox' && (i === 0 || d.nodes[i - 1].kind !== 'transform')) ||
     d.nodes.filter(n => n.kind === 'work-map').length > 1
   if (d.nodes.some(n => n.kind === 'schedule-action' && n.delivery !== undefined && !validScheduleDelivery(n.delivery, n.job))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid schedule delivery' })
+  const aggregate = d.nodes.find(n => n.kind === 'aggregate')
+  if (aggregate && (d.source.kind !== 'external' || d.nodes.length !== 1 || d.gate || d.binding ||
+    aggregate.inputs[0].instance !== d.source.id || new Set(aggregate.inputs.map(input => input.name)).size !== aggregate.inputs.length)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Aggregate requires one external node, unique named inputs, primary source matching the first input, and no separate binding or gate' })
+  }
   if (invalid) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid source/action boundary or node ordering' })
 })
 export const AuthorDefinition = z.object({ id: WorkflowId.refine(id => !/^(schedule|internal|github):/.test(id), 'Host source namespace is reserved'), name: z.string().trim().min(1).max(160),
@@ -51,6 +67,7 @@ export const WorkflowRun = z.object({
   id: WorkflowId, workflow: WorkflowId, definition: WorkflowDefinition, observation: Observation,
   timestamp: z.string(), status: z.enum(['queued', 'running', 'retry', 'blocked', 'completed', 'cancelled']),
   cursor: z.number().int().nonnegative(), attempts: z.number().int().nonnegative(), nextAt: z.number(),
+  aggregateInputs: z.record(appInputName, Observation).optional(), aggregateResult: AggregateResult.optional(),
   started: z.boolean(), delivered: z.number().int().nonnegative(), drafts: Drafts.optional(),
   output: z.object({ sessionId: z.string().min(1).optional(), workKey: z.string().optional(), stale: z.boolean().optional() }).strict().optional(),
   error: z.enum(['action_failed', 'interrupted_effect', 'authority_unavailable', 'mapping_conflict']).optional(),
@@ -61,6 +78,7 @@ export const WorkflowState = z.object({
   // Non-evicting identity receipt, not an observation revision window. Bounded by the total state byte limit.
   admitted: z.record(WorkflowId, z.literal(true)).default({}),
   runs: z.array(WorkflowRun).max(2500), records: z.record(z.record(Observation)),
+  latest: z.record(WorkflowId, z.record(appInputName, Observation)).default({}),
   mappings: z.record(z.record(Mapping)).default({}),
 }).strict()
 export type GitHubNotifyNode = Extract<z.infer<typeof Node>, { kind: 'github-notify' }>

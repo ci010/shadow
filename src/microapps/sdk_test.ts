@@ -5,12 +5,13 @@ import { runInNewContext } from 'node:vm'
 
 interface Sdk {
   request(path: string, options?: RequestInit): Promise<Response>
+  loadInput(name: string, signal?: AbortSignal): Promise<unknown>
   loadState(signal?: AbortSignal): Promise<unknown>
   saveState(values: unknown, version: number, signal?: AbortSignal): Promise<unknown>
 }
 async function sdk(fetcher: (path: string, options: RequestInit) => Promise<Response>, ticket = false): Promise<Sdk> {
   const source = await readFile(new URL('./sdk.js', import.meta.url), 'utf8')
-  return runInNewContext(source.replace(/^export /gm, '') + '\n({ request, loadState, saveState })', {
+  return runInNewContext(source.replace(/^export /gm, '') + '\n({ request, loadInput, loadState, saveState })', {
     fetch: fetcher, Headers, URLSearchParams, JSON, SyntaxError,
     location: { hash: ticket ? '#shadow_ticket=synthetic-ticket' : '' },
     history: { replaceState() {} },
@@ -33,6 +34,17 @@ test('SDK state helpers use the authenticated gateway with version and cancellat
   assert.equal(new Headers(calls[1].options.headers).get('authorization'), 'Bearer synthetic-app-token')
   await assert.rejects(client.request('https://other.invalid/'), /Use \/_shadow/)
   assert.equal(calls.length, 2)
+})
+
+test('SDK input helper forwards the named read with app authorization and cancellation', async () => {
+  const signal = AbortSignal.timeout(1000)
+  const client = await sdk(async (path, options) => {
+    assert.equal(path, '/_shadow/input?name=summary')
+    assert.equal(options.signal, signal)
+    assert.equal(new Headers(options.headers).get('authorization'), 'Bearer synthetic-app-token')
+    return Response.json(null)
+  })
+  assert.equal(await client.loadInput('summary', signal), null)
 })
 
 test('SDK HTTP failures preserve status and code, including connection, malformed and non-JSON failures', async () => {

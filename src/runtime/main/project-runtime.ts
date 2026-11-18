@@ -1156,6 +1156,13 @@ export async function createProjectRuntime(
   organizationTopicChanged = id => hintOrganization(id)
   cleanup.push(() => { organizationTopicChanged = undefined; organizationHints.clear() })
   const workflows = new WorkflowRuntime(workspace, project.id, {
+    appInput: {
+      check: id => {
+        if (coordinator) throw new Error('Signal aggregation requires Main local script execution')
+        microApps.store.get(id)
+      },
+      write: (id, name, runId, value) => microApps.store.writeInput(id, name, runId, value),
+    },
     work: workMapper(alignment),
     canUse: id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
     deliver: (id, input) => deliverInput(id, input),

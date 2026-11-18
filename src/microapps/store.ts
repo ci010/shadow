@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
@@ -5,7 +6,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/p
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { writePrivateFile } from '../config/store.ts'
 import { appIcon } from './icon.ts'
-import { appId, appManifestSchema, appRecordSchema, bundleSchema, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MicroAppError,
+import { appId, appInputName, appInputValue, appManifestSchema, appRecordSchema, bundleSchema, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MicroAppError,
   appStateSchema, MAX_STATE_BYTES, type AppState, type AppBundle, type AppRecord, type AppWorkScope } from './contracts.ts'
 
 export const bundleRevision = (bundle: AppBundle) => createHash('sha256').update(JSON.stringify({
@@ -39,6 +40,9 @@ export async function readAppBundle(directory: string, manifestValue: unknown, s
   signal.throwIfAborted()
   return bundle
 }
+
+const AppInputs = z.record(appInputName, appInputValue)
+const MAX_INPUTS_BYTES = 1024 * 1024
 
 export class MicroAppStore {
   readonly root: string
@@ -82,6 +86,37 @@ export class MicroAppStore {
     this.records.set(parsed.id, parsed)
   }
   dataPath(id: string) { return join(this.root, appId.parse(id), 'data') }
+
+  private loadInputs(id: string) {
+    this.get(id)
+    const path = join(this.root, id, 'inputs.json')
+    let raw: string
+    try {
+      const stat = lstatSync(path)
+      if (!stat.isFile() || stat.size > MAX_INPUTS_BYTES) throw new MicroAppError('invalid_app_inputs', 'Stored app inputs are not a bounded regular file', 409)
+      raw = readFileSync(path, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+      throw error
+    }
+    if (Buffer.byteLength(raw) > MAX_INPUTS_BYTES) throw new MicroAppError('invalid_app_inputs', 'Stored app inputs exceed their limit', 409)
+    try { return AppInputs.parse(JSON.parse(raw)) }
+    catch { throw new MicroAppError('invalid_app_inputs', 'Stored app inputs are invalid; they were not overwritten', 409) }
+  }
+
+  readInput(id: string, name: string) {
+    return this.loadInputs(id)[appInputName.parse(name)] ?? null
+  }
+
+  writeInput(id: string, name: string, runId: string, value: unknown): void {
+    const key = appInputName.parse(name)
+    const next = appInputValue.parse({ runId, value })
+    const inputs = this.loadInputs(id)
+    if (inputs[key]?.runId === runId) return
+    const content = JSON.stringify({ ...inputs, [key]: next })
+    if (Buffer.byteLength(content) > MAX_INPUTS_BYTES) throw new MicroAppError('app_inputs_too_large', 'App inputs exceed 1 MiB', 413)
+    writePrivateFile(join(this.root, id, 'inputs.json'), content)
+  }
 
   loadState(id: string): AppState {
     this.get(id)

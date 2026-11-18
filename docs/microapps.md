@@ -423,6 +423,40 @@ managed `.tmp/` directory live under `runs/<run-id>/`.
 This registry is independent of the JSONL/SQLite conversation-store choice;
 neither store is a second app registry.
 
+## Workflow-fed app inputs
+
+A Project owner can use the `workflow` chat tool to connect two to eight named
+external Signal inputs to one restricted JavaScript `aggregate` node. See
+`v:workflows/authoring` for the definition. Each input names an existing
+authorized source instance and its provider-specific demand. The first
+instance also supplies the Workflow's primary source ID. This is a fixed
+multi-input pattern, not a general graph editor.
+
+Each named input retains the last observation in provider delivery order;
+empty collections do not reset it. Use a provider that emits one summary
+observation if the app needs an entire source snapshot instead of an individual
+observation. Any nonempty input collection queues one run per collection
+commit, including when another input has not emitted. Missing input names are
+omitted from the `inputs` object.
+Pausing still collects latest values but does not queue new runs; resuming does
+not itself trigger a run. `run({ inputs })` receives the named observations'
+`data` values. It cannot use tools, imports or I/O. Return `{ kind: 'skip' }`
+to preserve the previous app value or `{ kind: 'emit', value: ... }` to publish a
+JSON value. The saved edge names one published app and one input in this
+Project. Input bindings and the edge cannot be changed in place. The existing
+read-only Workflow view shows the aggregate configuration, not separate
+input/edge authoring controls.
+
+In the app, import `loadInput` from `/_shadow/sdk.js` and call
+`await loadInput('summary', signal)`. It returns `{ runId, value }` or `null` if
+nothing was written. It is an authenticated, read-only app input, separate from
+`loadState`/`saveState`. Writes do not launch an app or its optional backend.
+The latest output persists across stopping/reopening the app or Workflow and
+retiring the Workflow does not clear it. No separate dataset or app allowlist
+is required. Limits: 64 KiB per observation, 256 KiB for the combined snapshot,
+60 KiB for the transform result and 1 MiB total app input storage. Main local
+script execution must be enabled.
+
 ## Isolated A2A acceptance
 
 The opt-in harness sends an ordinary audio-tool request through the real A2A

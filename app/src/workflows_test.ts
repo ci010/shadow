@@ -20,6 +20,15 @@ test('read-only graph models source, durable gate, ordered action status and his
   assert.match(workflowHint('interrupted_effect'), /duplicate/)
   assert.match(workflowHint('mapping_conflict'), /ownership/)
 })
+test('the existing Workflow inspector can read an aggregate node and its saved edge', () => {
+  const node = { kind: 'aggregate', inputs: [{ name: 'left', instance: 'issues' }, { name: 'right', instance: 'reports' }],
+    edge: { appId: '719acb3a-3b5f-4987-84bc-efd35cd31a1f', input: 'summary' } }
+  const snapshot = parseWorkflows({ projectId: 'fixture', definitions: [{ ...definition, gate: undefined, nodes: [node] }], runs: [] }, 'fixture')
+  const graph = workflowGraph(snapshot.definitions[0])
+  assert.deepEqual(graph.map(n => n.id), ['source', 'node-0'])
+  assert.deepEqual(graph[1].config, node)
+  assert.equal(graph[1].targetSessionId, undefined)
+})
 test('recent runs are bounded and workflow-scoped, not session navigation', () => {
   const runs = Array.from({ length: 45 }, (_, i) => ({ ...run, id: String(i), timestamp: new Date(Date.UTC(2026, 10, 12, i)).toISOString() }))
   const rows = recentWorkflowRuns({ projectId: 'fixture', definitions: [definition], runs: [...runs, { ...run, workflow: 'other' }] }, definition.id)

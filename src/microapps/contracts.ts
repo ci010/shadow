@@ -6,7 +6,7 @@ export const MAX_FILE_BYTES = 4 * 1024 * 1024
 export const MAX_ICON_BYTES = 256 * 1024
 export const MAX_STATE_BYTES = 64 * 1024
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
-const jsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
+export const jsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.string(), z.number().finite(), z.boolean(), z.null(), z.array(jsonValue), z.record(jsonValue),
 ]))
 export const appStateSchema = z.object({
@@ -14,6 +14,8 @@ export const appStateSchema = z.object({
   values: z.record(jsonValue),
 }).strict()
 export type AppState = z.infer<typeof appStateSchema>
+export const appInputName = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/).refine(name => !Object.hasOwn(Object.prototype, name) && name !== 'prototype')
+export const appInputValue = z.object({ runId: z.string().uuid(), value: jsonValue }).strict()
 export const microAppCapabilities = {
   version: 1,
   execution: { publication: 'ready-to-open', ownerApprovalRequired: false },
