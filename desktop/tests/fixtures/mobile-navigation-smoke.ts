@@ -127,7 +127,7 @@ async function main() {
         const markers = [...header.querySelectorAll('.editor-project-marker')];
         return {
           rows: headers.length,
-          chromeTabs: document.querySelectorAll('.desktop-title-bar [role="tab"], .desktop-title-bar .tab-nav').length,
+          chromeTabs: document.querySelectorAll('.desktop-title-bar [role="tab"]').length,
           labels: tabs.map(el => el.textContent.trim()).sort(),
           markers: markers.map(el => el.textContent.trim()),
           aligned: tabs.every(el => el.getBoundingClientRect().top === tabs[0].getBoundingClientRect().top),
@@ -151,11 +151,12 @@ async function main() {
       await wait(`${route()}.params.projectId === 'work'`)
       await execute(`${tab('Project settings', foreign('other'))}.click()`)
       await wait(`${route()}.name === 'project-settings' && ${route()}.params.projectId === 'other' && !!${visible('.project-settings-view')}`)
-      const page = (value: string) => execute(`(() => { const picker = document.querySelector('.desktop-navigation'); picker.value = ${JSON.stringify(value)}; picker.dispatchEvent(new Event('change', { bubbles: true })); })()`)
-      await page('settings')
-      await wait(`${route()}.name === 'settings'`)
-      await page('chat')
-      await wait(`${route()}.name === 'chat' && ${visible('.reference-composer')} === window.__retainedComposer`)
+      const page = (label: string) => `Array.from(document.querySelectorAll('.desktop-title-bar .tab-nav button')).find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+      assert.equal(await execute(`${page('Chat')}.getAttribute('aria-current')`), 'page', 'Project routes keep the Chat tab selected')
+      await execute(`${page('Settings')}.click()`)
+      await wait(`${route()}.name === 'settings' && ${page('Settings')}.getAttribute('aria-current') === 'page'`)
+      await execute(`${page('Chat')}.click()`)
+      await wait(`${route()}.name === 'chat' && ${page('Chat')}.getAttribute('aria-current') === 'page' && ${visible('.reference-composer')} === window.__retainedComposer`)
       assert.deepEqual(await execute('window.__mobileFixture.errors'), [])
       assert.deepEqual(errors, [])
       assert.deepEqual(external, [])
