@@ -28,41 +28,33 @@
         </div>
       </aside>
 
-      <div ref="detail" class="agent-detail">
-        <template v-if="requestedAgent">
-          <header class="agent-heading">
+      <div class="agent-detail">
+        <DefinitionDetail v-if="requestedAgent" ref="detail" v-model="activeTab" :title="requestedAgent.name"
+          :description="requestedAgent.description" :label="t('Agent details')" :tabs="views"
+          :source="requestedAgent.definitionMarkdown" source-initially-raw retain-prompt-format :inspection="inspection"
+          :inspection-identity="`${requestedAgent.name}:${channel}`" :busy="loadingContext">
+          <template #before-heading>
             <button v-if="!agentName" type="button" class="agent-back text-action" @click="backToTypes"><span class="i-lucide-arrow-left" aria-hidden="true" />{{ t('Agent types') }}</button>
-            <h2 ref="heading" tabindex="-1">{{ requestedAgent.name }}</h2>
-            <p>{{ requestedAgent.description }}</p>
-          </header>
-          <div ref="tablist" class="agent-tabs" role="tablist" :aria-label="t('Agent details')">
-            <button v-for="(tab, index) in views" :id="`${id}-${tab.id}-tab`" :key="tab.id" type="button" role="tab"
-              :aria-controls="`${id}-${tab.id}-panel`" :aria-selected="activeTab === tab.id" :tabindex="activeTab === tab.id ? 0 : -1"
-              @click="activeTab = tab.id" @keydown="tabKeydown($event, index)">
-              {{ tab.label }}<span v-if="tab.id === 'tools' && contextMatchesSelection" class="tab-count">{{ resolvedTools.length }}</span>
-            </button>
-          </div>
-
-          <div class="agent-content">
-            <section v-show="activeTab === 'overview'" :id="`${id}-overview-panel`" class="agent-overview" role="tabpanel" :aria-labelledby="`${id}-overview-tab`" tabindex="0">
-              <section class="overview-section">
+          </template>
+          <template #overview>
+              <section class="detail-overview-section">
                 <h3>{{ t('Definition') }}</h3>
                 <button v-if="promptDocuments && (requestedAgent.definitionMarkdown ?? requestedAgent.prompt) !== undefined" type="button" class="text-action" @click="openDefinition">{{ t('Open AGENT.md in workspace') }}</button>
-                <dl class="agent-facts">
+                <dl class="detail-facts">
                   <div><dt>{{ t('Source') }}</dt><dd>{{ requestedAgent.source === 'builtin' ? t('Built-in') : t('Workspace') }}</dd></div>
                   <div><dt>{{ t('Default mode') }}</dt><dd>{{ enumLabel(requestedAgent.defaultMode ?? t('session')) }}</dd></div>
                 </dl>
               </section>
-              <section v-if="hasModelOverrides" class="overview-section">
+              <section v-if="hasModelOverrides" class="detail-overview-section">
                 <h3>{{ t('Model overrides') }}</h3>
-                <dl class="agent-facts">
+                <dl class="detail-facts">
                   <div v-if="requestedAgent.model"><dt>{{ t('Model') }}</dt><dd><code>{{ requestedAgent.model }}</code></dd></div>
                   <div v-if="requestedAgent.temperature != null"><dt>{{ t('Temperature') }}</dt><dd>{{ requestedAgent.temperature }}</dd></div>
                   <div v-if="requestedAgent.maxTokens != null"><dt>{{ t('Max tokens') }}</dt><dd>{{ requestedAgent.maxTokens }}</dd></div>
                 </dl>
                 <p class="agent-note">{{ t('Only explicit role overrides are shown. Unset preferences inherit their defaults.') }}</p>
               </section>
-              <section class="overview-section">
+              <section class="detail-overview-section">
                 <h3>{{ t('Tool filters') }}</h3>
                 <dl v-if="requestedAgent.allowedTools !== undefined || requestedAgent.blockedTools !== undefined" class="tool-policies">
                   <div v-if="requestedAgent.allowedTools !== undefined"><dt>{{ t('Allowlist') }}</dt><dd><code v-for="tool in requestedAgent.allowedTools" :key="tool">{{ tool }}</code><span v-if="!requestedAgent.allowedTools.length">{{ t('None listed') }}</span></dd></div>
@@ -71,52 +63,25 @@
                 <p v-else class="agent-note">{{ t('No allowlist or blocklist declared.') }}</p>
                 <p class="agent-note">{{ t('These are definition filters, not an existing conversation\'s permissions. Inspect Tools for the resolved preview.') }}</p>
               </section>
-              <section class="overview-section preview-links">
+              <section class="detail-overview-section preview-links">
                 <h3>{{ t('Inspect the preview') }}</h3>
                 <p class="agent-note">{{ t('See the tools and assembled system prompt for a selected channel.') }}</p>
                 <div><button type="button" class="text-action" @click="openView('tools')">{{ t('View tools') }}<span class="i-lucide-arrow-right" aria-hidden="true" /></button><button type="button" class="text-action" @click="openView('prompt')">{{ t('Read system prompt') }}<span class="i-lucide-arrow-right" aria-hidden="true" /></button></div>
               </section>
-            </section>
-
-            <section v-if="agentName && activeTab === 'definition'" :id="`${id}-definition-panel`" role="tabpanel" :aria-labelledby="`${id}-definition-tab`" tabindex="0">
-              <div v-if="requestedAgent.definitionMarkdown !== undefined" class="prompt-format">
-                <button type="button" :aria-pressed="definitionRaw" @click="definitionRaw = !definitionRaw">{{ definitionRaw ? t('Show preview') : t('Show source') }}</button>
-              </div>
-              <SystemPromptCard v-if="requestedAgent.definitionMarkdown !== undefined" :prompt="requestedAgent.definitionMarkdown" :raw="definitionRaw" :show-provenance="false" embedded />
-              <p v-else class="agent-note">{{ t('This agent definition is unavailable.') }}</p>
-            </section>
-
-            <template v-if="activeTab === 'tools' || activeTab === 'prompt'">
-              <div class="preview-toolbar">
-                <label class="preview-channel">{{ t('Preview channel') }}<UiSelect v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></UiSelect></label>
-                <div v-if="activeTab === 'prompt'" class="prompt-format" role="group" :aria-label="t('System prompt format')">
-                  <button type="button" :aria-pressed="!rawPrompt" @click="rawPrompt = false">{{ t('Read') }}</button><button type="button" :aria-pressed="rawPrompt" @click="rawPrompt = true">{{ t('Raw') }}</button>
-                </div>
-                <button type="button" class="preview-copy" :disabled="copyBusy || !contextMatchesSelection || loadingContext || !!contextError || activeTab === 'tools' && !resolvedTools.length || activeTab === 'prompt' && !renderedSystemPrompt" @click="copy">
-                  <span :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />{{ copied ? t('Copied') : activeTab === 'tools' ? t('Copy JSON') : t('Copy prompt') }}
-                </button>
-              </div>
+          </template>
+          <template #source-empty><p class="agent-note">{{ t('This agent definition is unavailable.') }}</p></template>
+          <template #inspection-selector>
+            <label class="detail-scope">{{ t('Preview channel') }}<UiSelect v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></UiSelect></label>
+          </template>
+          <template #inspection-status>
               <p v-if="loadingContext" class="agent-note" role="status">{{ t('Loading') }} {{ requestedAgent.name }} {{ t('preview for') }} {{ channel }}...</p>
               <div v-if="contextError" class="agent-error" role="alert"><p>{{ contextError }}</p><button type="button" class="text-action" @click="retryContext">{{ t('Retry preview') }}</button></div>
               <p v-if="selected && (loadingContext || contextError || !contextMatchesSelection)" class="previous-context" role="status">{{ t('Showing the previous preview:') }} <strong>{{ selected.name }}</strong> / {{ resolvedChannel }}{{ t('. The requested preview is not available yet.') }}</p>
-              <p v-if="copyError" class="agent-error" role="alert">{{ copyError }}</p>
-              <p v-if="copied" class="copy-feedback" role="status">{{ activeTab === 'tools' ? t('Tools JSON copied.') : t('System prompt copied.') }}</p>
-            </template>
-            <section v-show="activeTab === 'tools'" :id="`${id}-tools-panel`" role="tabpanel" :aria-labelledby="`${id}-tools-tab`" :aria-busy="loadingContext" tabindex="0">
-              <template v-if="activeTab === 'tools' && selected">
-                <label class="agent-search tool-search"><span class="i-lucide-search" aria-hidden="true" /><input v-model="toolQuery" type="search" :aria-label="t('Search tools')" :placeholder="t('Search tools')" autocomplete="off" /></label>
-                <ToolsCard :key="contextKey" :tools="filteredTools" embedded :empty-message="toolQuery.trim() ? t('No matching tools.') : t('No tools available.')" />
-              </template>
-            </section>
-            <section v-show="activeTab === 'prompt'" :id="`${id}-prompt-panel`" role="tabpanel" :aria-labelledby="`${id}-prompt-tab`" :aria-busy="loadingContext" tabindex="0">
-              <template v-if="activeTab === 'prompt' && selected">
-                <p v-if="renderedSystemPrompt" class="prompt-estimate">{{ t('Approx.') }} {{ formatNumber(Math.round(renderedSystemPrompt.length / 4)) }} {{ t('tokens') }}</p>
-                <SystemPromptCard :key="contextKey" :prompt="renderedSystemPrompt" :sections="sections" embedded :raw="rawPrompt" empty-message="No system prompt." />
-              </template>
-            </section>
-            <p v-if="activeTab !== 'overview' && selected" class="preview-scope">{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
-          </div>
-        </template>
+          </template>
+          <template #inspection-footer>
+            <p v-if="selected" class="preview-scope">{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
+          </template>
+        </DefinitionDetail>
         <div v-else-if="agentName && listError" class="agent-error agent-empty" role="alert"><p>{{ listError }}</p><button class="text-action" type="button" @click="loadAgentTypes">{{ t('Retry catalog') }}</button></div>
         <p v-else class="agent-empty">{{ loadingList ? t('Loading agent types...') : agentName ? t('This agent definition is unavailable.') : t('Select an agent type to inspect.') }}</p>
       </div>
@@ -128,14 +93,13 @@
 import { PromptDocumentsKey } from '../prompt-documents.ts'
 import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
-import { t, formatNumber } from '../i18n.ts'
+import { t } from '../i18n.ts'
 import { computed, inject, nextTick, onScopeDispose, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiUrl } from '../api-url.ts'
 import { parseAgentContext, parseAgentTypes, type AgentTypeMeta } from '../agent-types.ts'
-import { useTextCopy } from '../composables/useTextCopy.ts'
-import SystemPromptCard from './SystemPromptCard.vue'
-import ToolsCard, { type ToolDef } from './ToolsCard.vue'
+import DefinitionDetail from './DefinitionDetail.vue'
+import type { ToolDef } from './ToolsCard.vue'
 
 const props = withDefaults(defineProps<{ apiBase: string; agentName?: string; active?: boolean }>(), { active: true })
 const route = useRoute()
@@ -151,18 +115,13 @@ function openDefinition() {
     prompt, sections: [{ name: source, content: prompt, characters: prompt.length }] })
 }
 const id = `agents-${useId()}`
-const views = [...(props.agentName ? [{ id: 'definition', get label() { return 'AGENT.md' } }] as const : []), { id: 'overview', get label() { return t('Overview') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'prompt', get label() { return t('System prompt') } }] as const
-type AgentView = typeof views[number]['id']
+const views = computed(() => [...(props.agentName ? [{ id: 'definition', get label() { return 'AGENT.md' } }] as const : []), { id: 'overview', get label() { return t('Overview') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'prompt', get label() { return t('System prompt') } }] as const)
+type AgentView = typeof views.value[number]['id']
 const activeTab = ref<AgentView>(props.agentName ? 'definition' : 'overview')
-const definitionRaw = ref(true)
 const agentQuery = ref('')
-const toolQuery = ref('')
-const rawPrompt = ref(false)
 const showDetail = ref(!!route.query.agent)
 const navigation = ref<HTMLElement>()
-const detail = ref<HTMLElement>()
-const heading = ref<HTMLElement>()
-const tablist = ref<HTMLElement>()
+const detail = ref<InstanceType<typeof DefinitionDetail>>()
 const channels = ['heartbeat', 'web', 'discord', 'wechat', 'feishu']
 const localChannel = ref(typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'heartbeat')
 const channel = computed({
@@ -194,12 +153,10 @@ const filteredGroups = computed(() => {
   return ([{ source: 'builtin', label: t('Built-in') }, { source: 'workspace', label: t('Workspace') }] as const)
     .map(group => ({ ...group, agents: matches.filter(agent => agent.source === group.source) })).filter(group => group.agents.length)
 })
-const filteredTools = computed(() => {
-  const query = toolQuery.value.trim().toLowerCase()
-  return resolvedTools.value.filter(tool => `${tool.name} ${tool.description}`.toLowerCase().includes(query))
-})
-const copyText = computed(() => activeTab.value === 'tools' ? JSON.stringify(resolvedTools.value, null, 2) : renderedSystemPrompt.value)
-const { copied, busy: copyBusy, error: copyError, copy, reset: resetCopy } = useTextCopy(copyText)
+const inspection = computed(() => selected.value ? {
+  key: contextKey.value, tools: resolvedTools.value, prompt: renderedSystemPrompt.value,
+  sections: sections.value, copyDisabled: !contextMatchesSelection.value || !!contextError.value,
+} : undefined)
 function buildUrl(path: string, params?: Record<string, string>) { return apiUrl(props.apiBase, path, params).toString() }
 async function loadAgentTypes() {
   listRequest?.abort()
@@ -246,7 +203,7 @@ async function loadContext(agent: AgentTypeMeta) {
 async function selectAgent(agent: AgentTypeMeta, openDetail = true) {
   if (openDetail) showDetail.value = true
   void router.replace({ query: { ...route.query, agent: agent.name, channel: channel.value } })
-  if (openDetail) { await nextTick(); detail.value?.scrollTo({ top: 0 }); heading.value?.focus({ preventScroll: true }) }
+  if (openDetail) { await nextTick(); detail.value?.focusHeading() }
 }
 async function backToTypes() {
   showDetail.value = false
@@ -255,21 +212,10 @@ async function backToTypes() {
   if (current?.getClientRects().length) current.focus({ preventScroll: true })
   else navigation.value?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true })
 }
-async function openView(view: AgentView) {
-  activeTab.value = view
-  await nextTick()
-  tablist.value?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus({ preventScroll: true })
-}
-async function tabKeydown(event: KeyboardEvent, index: number) {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-  event.preventDefault()
-  const next = event.key === 'Home' ? 0 : event.key === 'End' ? views.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length
-  await openView(views[next]!.id)
-}
+function openView(view: AgentView) { void detail.value?.openView(view) }
 function retryContext() { if (props.active !== false && requestedAgent.value) void loadContext(requestedAgent.value) }
-watch([requestedAgent, channel], () => { toolQuery.value = ''; resetCopy(); if (!props.agentName || activeTab.value === 'tools' || activeTab.value === 'prompt') retryContext() })
+watch([requestedAgent, channel], () => { if (!props.agentName || activeTab.value === 'tools' || activeTab.value === 'prompt') retryContext() })
 watch(activeTab, () => {
-  resetCopy()
   if (props.agentName && (activeTab.value === 'tools' || activeTab.value === 'prompt') && !contextMatchesSelection.value && !loadingContext.value) retryContext()
 })
 watch(() => [props.apiBase, props.agentName, props.active] as const, () => {
@@ -294,7 +240,7 @@ onScopeDispose(() => { listRequest?.abort(); contextRequest?.abort() })
 .agent-navigation { display: flex; flex-direction: column; flex: 0 0 240px; min-height: 0; min-width: 0; border-right: 1px solid var(--c-border); }
 .catalog-header { flex-shrink: 0; padding: 20px 16px 16px; }
 .catalog-header h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 16px; font-size: 15px; line-height: 20px; font-weight: 600; }
-.catalog-count, .tab-count { color: var(--c-text-muted); font-size: 12px; font-weight: 400; }
+.catalog-count { color: var(--c-text-muted); font-size: 12px; font-weight: 400; }
 .agent-search { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--c-control-border); background: var(--c-bg-input); padding: 0 8px; }
 .agent-search > span { flex: 0 0 14px; width: 14px; height: 14px; color: var(--c-text-muted); }
 .agent-search input { width: 100%; min-width: 0; min-height: 32px; padding: 6px 0; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; outline: none; }
@@ -311,44 +257,21 @@ onScopeDispose(() => { listRequest?.abort(); contextRequest?.abort() })
 .agent-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 20px; }
 .agent-mode { flex-shrink: 0; font-size: 12px; color: var(--c-text-secondary); }
 .agent-desc { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); }
-.agent-detail { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.agent-heading { padding: 24px 28px 20px; }
-.agent-heading h2 { margin: 0; font-size: clamp(19px, 2vw, 26px); line-height: 1.4; font-weight: 500; letter-spacing: -.025em; overflow-wrap: anywhere; }
-.agent-heading h2:focus { outline: none; }
-.agent-heading p { max-width: 72ch; margin: 12px 0 0; font-size: 14px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.agent-detail { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .agent-back.text-action { display: none; margin-bottom: 20px; }
-.agent-tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 20px; margin: 0 28px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
-.agent-tabs > button:where(:not(.ui-select)) { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
-.agent-tabs > button:where(:not(.ui-select))[aria-selected="true"] { border-bottom-color: var(--c-blue); color: var(--c-text); }
-.agent-content { min-width: 0; padding: 24px 28px 32px; }
-.overview-section { max-width: 72ch; }
-.overview-section + .overview-section { margin-top: 32px; }
-.overview-section h3 { margin: 0 0 16px; font-size: 14px; line-height: 20px; font-weight: 600; }
-.agent-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 24px; margin: 0; }
-.agent-facts dt, .tool-policies dt { margin-bottom: 6px; font-size: 12px; line-height: 20px; color: var(--c-text-muted); }
-.agent-facts dd, .tool-policies dd { margin: 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.tool-policies dt { margin-bottom: 6px; font-size: 12px; line-height: 20px; color: var(--c-text-muted); }
+.tool-policies dd { margin: 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 code { font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; }
 .tool-policies { display: grid; gap: 16px; margin: 0 0 16px; }
 .tool-policies dd { display: flex; flex-wrap: wrap; gap: 4px 16px; }
-.agent-note, .preview-scope, .prompt-estimate { margin: 12px 0; font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.agent-note, .preview-scope { margin: 12px 0; font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .agent-list .agent-note, .agent-list .agent-error { margin-inline: 8px; }
 .preview-links > div { display: flex; flex-wrap: wrap; gap: 16px 24px; margin-top: 16px; }
 .text-action { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 4px; }
-.text-action > span, .preview-copy > span { width: 14px; height: 14px; flex-shrink: 0; }
-.preview-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; margin-bottom: 24px; }
-.preview-channel { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--c-text-secondary); }
-.preview-channel .ui-select { min-width: 110px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--c-control-border); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
-.preview-copy, .prompt-format button:where(:not(.ui-select)) { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--c-border); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; cursor: pointer; }
-.preview-copy { margin-inline-start: auto; }
-.preview-copy:disabled { opacity: .5; cursor: default; }
-.prompt-format { display: flex; }
-.prompt-format button:where(:not(.ui-select)) + button:where(:not(.ui-select)) { border-inline-start: 0; }
-.prompt-format button:where(:not(.ui-select))[aria-pressed="true"] { background: var(--c-bg-muted); }
-.tool-search { max-width: 360px; margin-bottom: 24px; }
+.text-action > span { width: 14px; height: 14px; flex-shrink: 0; }
 .previous-context { padding: 12px; background: var(--c-bg-soft); font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .agent-error { font-size: 13px; line-height: 1.6; color: var(--c-error); overflow-wrap: anywhere; }
 .agent-error p { margin: 8px 0; }
-.copy-feedback { font-size: 12px; color: var(--c-success); }
 .preview-scope { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--c-border-soft); }
 .agent-empty { margin: 24px 28px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
 button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), [role="tabpanel"]:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
@@ -357,16 +280,11 @@ button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has
   .agent-navigation { flex-basis: 100%; border-right: 0; }
   .agent-browser-layout:not(.show-detail) .agent-detail, .agent-browser-layout.show-detail .agent-navigation { display: none; }
   .agent-back.text-action { display: inline-flex; }
-  .agent-heading { padding: 20px 16px; }
-  .agent-tabs { flex-wrap: wrap; gap: 4px 16px; margin-inline: 16px; }
-  .agent-content { padding: 20px 16px 28px; }
-  .agent-facts { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .preview-channel { flex-basis: 100%; justify-content: space-between; }
-  .agent-tabs > button:where(:not(.ui-select)), .text-action, .preview-copy, .prompt-format button:where(:not(.ui-select)), .preview-channel .ui-select { min-height: 44px; }
+  .text-action { min-height: 44px; }
   .agent-search input { min-height: 44px; font-size: 16px; }
 }
 @media (pointer: coarse) {
-  .agent-tabs > button:where(:not(.ui-select)), .text-action, .preview-copy, .prompt-format button:where(:not(.ui-select)), .preview-channel .ui-select { min-height: 44px; }
+  .text-action { min-height: 44px; }
   .agent-search input { min-height: 44px; font-size: 16px; }
 }
 </style>

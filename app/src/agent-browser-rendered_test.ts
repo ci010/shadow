@@ -15,7 +15,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('agent browser separates definitions and previews with accessible desktop and narrow navigation', {
+test('Agent and Bot definitions share accessible inspection views and preserve their own data routes', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -59,13 +59,15 @@ test('agent browser separates definitions and previews with accessible desktop a
           import { createApp, h, reactive } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import AgentsTab from '/src/components/AgentsTab.vue';
+          import BotKnowledgeDocument from '/src/components/BotKnowledgeDocument.vue';
+          import {createResourceStores} from '/src/stores/app.ts';
           import ToolsCard from '/src/components/ToolsCard.vue';
           import SystemPromptCard from '/src/components/SystemPromptCard.vue';
           const router = createRouter({history:createMemoryHistory(), routes:[
             {path:'/agents/:projectId/:agentName?', name:'agents', component:{render:() => null}},
           ]});
           await router.push('/agents/fixture/general?channel=web&retained=yes');
-          const state = reactive({project:'fixture', width:'100%', legacy:false, definition:''});
+          const state = reactive({project:'fixture', width:'100%', legacy:false, definition:'', botPath:''});
           const requests = [];
           const nativeFetch = window.fetch.bind(window);
           window.fetch = (input, options) => {
@@ -85,12 +87,12 @@ test('agent browser separates definitions and previews with accessible desktop a
           createApp({render:() => h('main', {style:'height:100dvh;display:flex;flex-direction:column;min-height:0'}, [
             h('header', {style:'padding:12px 24px;font-size:12px;color:var(--c-text-secondary)'}, 'Agent browser / synthetic fixture'),
             h('div', {class:'fixture-pane', style:'flex:1;min-height:0;padding:12px;box-sizing:border-box;width:' + state.width}, [
-              state.legacy ? h('div', {class:'legacy-viewers', style:'height:100%;overflow:auto'}, [
+              state.botPath ? h(BotKnowledgeDocument, {path:state.botPath, bot:'fixture-bot', projectId:'fixture', active:true, apiBase:location.origin + '/projects/fixture/'}) : state.legacy ? h('div', {class:'legacy-viewers', style:'height:100%;overflow:auto'}, [
                 h(ToolsCard, {tools:${JSON.stringify(tools)}}),
                 h(SystemPromptCard, {prompt:'# Legacy renderer\\n\\nOriginal diagnosis presentation.'}),
               ]) : h(AgentsTab, {key:state.definition, agentName:state.definition || undefined, apiBase:location.origin + '/projects/' + state.project + '/'}),
             ]),
-          ])}).use(router).mount('#app');`
+          ])}).use(router).use(createResourceStores()).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
@@ -105,6 +107,25 @@ test('agent browser separates definitions and previews with accessible desktop a
             mode = url.pathname.split('/').at(-1)!
             if (mode !== 'hold') pending.splice(0).forEach(send => send())
             response.end('OK')
+            return
+          }
+          const botBase = '/projects/fixture/api/bot-package'
+          const revision = 'a'.repeat(64)
+          if (url.pathname === botBase) {
+            json({ projectId: 'fixture', partial: false, documents: [{ id: 'fixture-bot', revision, paths: ['BOT.md', 'docs/README.md'] }] })
+            return
+          }
+          if (url.pathname === `${botBase}/fixture-bot/prompt`) {
+            const path = url.searchParams.get('path')
+            json({ id: 'fixture-bot', path, revision, prompt: path === 'BOT.md' ? '---\nid: fixture-bot\n---\n# Authored Bot' : '# Ordinary Bot document' })
+            return
+          }
+          if (url.pathname === `${botBase}/fixture-bot/runtime-context`) {
+            const scope = url.searchParams.get('scope')
+            json({ projectId: 'fixture', id: 'fixture-bot', revision, status: 'ready', mode: 'service',
+              scopes: [{ key: '0', label: 'qq / group:fixture' }],
+              ...(scope !== null ? { scope, result: 'available', runtime: { source: 'preview', systemPrompt: '# Bot runtime prompt', tools } } : {}),
+            })
             return
           }
           const catalog = url.pathname.match(/^\/projects\/([^/]+)\/api\/agent-types$/)
