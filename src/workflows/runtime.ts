@@ -132,7 +132,7 @@ export class WorkflowRuntime {
   }
   snapshot(owner: string) { this.authorize(owner); return this.inspect() }
   /** Host management only; caller supplies Project router authorization. */
-  inspect() { return { ...structuredClone(this.state), runtimeError: this.runtimeError, sources: [
+  inspect(overview = false) { return { ...(overview ? { ...this.state, definitions: structuredClone(this.state.definitions), runs: [], records: {}, mappings: {}, dedupe: {}, admitted: {}, latest: {} } : structuredClone(this.state)), runtimeError: this.runtimeError, sources: [
     ...this.sourceStatus?.() ?? [],
     ...this.state.definitions.filter(d => d.source.kind !== 'external').map(d => {
       const node = d.nodes[0]
@@ -140,6 +140,16 @@ export class WorkflowRuntime {
       return { ...d.source, enabled }
     }),
   ] } }
+  inspectRuns(workflow: string, selected?: string) {
+    const runs = this.state.runs.filter(run => run.workflow === workflow)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id))
+    const recent = runs.slice(0, 30)
+    const revision = this.state.definitions.find(definition => definition.id === workflow)?.revision
+    for (const run of [runs.find(run => run.id === selected), runs.find(run => run.definition.revision === revision), runs.find(run => run.output?.sessionId)]) {
+      if (run && !recent.includes(run)) recent.push(run)
+    }
+    return structuredClone(recent)
+  }
   /** Host source adapters only. External IDs are create-only (even identical replays);
    * every external revision must use author() and its optimistic identity/ownership checks.
    * Schedule/internal host snapshots may change for future runs. */

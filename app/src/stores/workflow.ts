@@ -9,9 +9,9 @@ import { createWorkflowClient } from '../workflows.ts'
 export function createWorkflowResources(request: typeof fetch = fetch, fallbackMs = 30_000) {
   const views = resourceViews(16)
   return {
-    acquire(base: string, projectId: string) {
-      const client = createWorkflowClient(base, projectId, request)
-      const key = canonicalResourceKey({ host: base, authGeneration: 0, projectId, resource: 'workflow', projection: 'sync-v1' })
+    acquire(base: string, projectId: string, detail?: { workflow: string; run?: string }) {
+      const client = createWorkflowClient(base, projectId, request, detail ?? 'overview')
+      const key = canonicalResourceKey({ host: base, authGeneration: 0, projectId, resource: 'workflow', projection: detail ? 'runs-v1' : 'overview-v1', entityId: detail?.workflow, query: detail?.run })
       const lease = views.acquire(key, client.read, {}, invalidate => {
         invalidate()
         let timer: ReturnType<typeof setTimeout>

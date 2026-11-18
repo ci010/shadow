@@ -32,15 +32,20 @@ summaries; unavailable timezone/target metadata is marked unrecorded.
 
 ## Page reconciliation
 
-`WorkflowManager` reads an initial full UI snapshot through the authenticated,
-Project-scoped `GET /api/workflows?sync=1`. While its document and browser page
-are visible it reconciles every 30 seconds; Refresh and completed controls also
-reconcile. Subsequent requests include `since=<cursor>` and return `noop` or a
+`WorkflowManager` reads definitions and source/BOT/health metadata through the
+authenticated, Project-scoped `GET /api/workflows?sync=1&runs=0`. Run history is
+fetched separately only while a workflow inspector is open, via
+`GET /api/workflows?sync=1&workflow=<id>`. This returns the latest 30 runs for
+that workflow, plus older entries when needed for a direct run link, current
+revision status, or latest conversation. While the document and browser page
+are visible, active reads reconcile every 30 seconds; Refresh and completed
+controls also reconcile. Subsequent requests include `since=<cursor>` and return `noop` or a
 version-1 delta with definition/run upserts, removals and authoritative ID order.
 Unchanged collections are omitted. Source/BOT/health metadata is replaced only
 when changed. Legacy `GET /api/workflows` keeps its full-snapshot contract.
 
-Each Project router retains at most eight serialized UI versions, 8 MiB total,
+Each Project router retains at most eight serialized UI versions and 8 MiB per
+reconciliation cache (overview/full and scoped runs use separate caches),
 with a two-minute idle lifetime. Oversized snapshots are served but not retained.
 Unknown, expired or process-restart cursors safely return full state; incompatible
 or invalid delta responses trigger one full retry, then expose the read failure.

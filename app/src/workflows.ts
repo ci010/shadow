@@ -135,7 +135,8 @@ export function workflowGraph(definition: WorkflowDefinition, run?: WorkflowRun)
   ].map(node => ({ targetSessionId: undefined as string | undefined, ...node }))
 }
 export const recentWorkflowRuns = (snapshot: WorkflowSnapshot, id: string) => snapshot.runs.filter(r => r.workflow === id).sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id)).slice(0, 30)
-export function createWorkflowClient(base: string, projectId: string, request: typeof fetch = fetch) {
+export function createWorkflowClient(base: string, projectId: string, request: typeof fetch = fetch, scope?: 'overview' | { workflow: string; run?: string }) {
+  const query = scope === 'overview' ? '&runs=0' : scope ? `&workflow=${encodeURIComponent(scope.workflow)}${scope.run ? `&run=${encodeURIComponent(scope.run)}` : ''}` : ''
   let cursor: string | undefined, current: WorkflowSnapshot | undefined
   function apply(raw: unknown): WorkflowSnapshot {
     if (!isRecord(raw) || raw.version !== 1 || !text(raw.cursor) || raw.cursor.length > 128 || /[\u0000-\u001f\u007f]/.test(raw.cursor)) return invalid()
@@ -179,7 +180,7 @@ export function createWorkflowClient(base: string, projectId: string, request: t
   }
   return {
     async read(signal: AbortSignal) {
-      const read = (since?: string) => projectJson(base, `/api/workflows?sync=1${since ? `&since=${encodeURIComponent(since)}` : ''}`, { signal }, request)
+      const read = (since?: string) => projectJson(base, `/api/workflows?sync=1${query}${since ? `&since=${encodeURIComponent(since)}` : ''}`, { signal }, request)
       const raw = await read(cursor)
       signal.throwIfAborted()
       try { return apply(raw) } catch {

@@ -106,6 +106,39 @@ test('HTTP sync retains authorization and legacy contract; wire versions are Pro
   assert.equal(delta.kind, 'delta'); assert.deepEqual(delta.definitions.remove, ['b']); assert.equal(delta.runs, undefined)
 })
 
+test('HTTP overview excludes run payloads and an inspector reads only its workflow', async () => {
+  const { Hono } = await import('hono')
+  const { registerWorkflowRoutes } = await import('./management.ts')
+  const { WorkflowRuntime } = await import('./runtime.ts')
+  const snapshot = { ...state(), sources: [] }
+  for (const flow of snapshot.definitions) {
+    for (let i = 0; i < 35; i++) snapshot.runs.push({ id: `${flow.id}-${i}`, workflow: flow.id, definition: flow,
+      timestamp: new Date(i * 1000).toISOString(), status: 'completed', cursor: 1, started: true, attempts: 1, nextAt: 0 })
+  }
+  const runtime = Object.assign(Object.create(WorkflowRuntime.prototype), { projectId: 'p', state: snapshot }) as InstanceType<typeof WorkflowRuntime>
+  const app = new Hono()
+  registerWorkflowRoutes(app, runtime, request => request.headers.get('x-owner') === 'yes')
+  const request: typeof fetch = async input => {
+    const url = new URL(String(input))
+    return app.request(url.pathname.replace('/projects/p', '') + url.search, { headers: { 'x-owner': 'yes' } })
+  }
+  const signal = new AbortController().signal
+  const overview = createWorkflowClient('http://localhost', 'p', request, 'overview')
+  const first = await overview.read(signal)
+  assert.deepEqual(first.runs, [])
+  assert.equal(first.definitions.length, 2)
+  const history = createWorkflowClient('http://localhost', 'p', request, { workflow: 'a', run: 'a-0' })
+  assert.equal((await app.request('/api/workflows?sync=1&workflow=a')).status, 403)
+  const scoped = await history.read(signal)
+  assert.equal(scoped.runs.length, 31)
+  assert.equal(scoped.runs[0].id, 'a-34')
+  assert.equal(scoped.runs.at(-1)?.id, 'a-0')
+  assert.ok(scoped.runs.every(run => run.workflow === 'a'))
+  assert.equal(await history.read(signal), scoped)
+  snapshot.runs.pop()
+  assert.equal(await overview.read(signal), first)
+})
+
 test('health/source metadata replacement clears removed keys without replacing definitions', async () => {
   const reconcile = createWorkflowSnapshotDelta()
   let snapshot: ReturnType<typeof state> & { runtimeError?: string; sources?: { kind: string; id: string; enabled: boolean }[] } = { ...state(), runtimeError: 'failed', sources: [{ kind: 'external', id: 's', enabled: false }] }
