@@ -1,8 +1,12 @@
+import { DEVICE_HOME_WORKDIR, deviceHomeNode } from '../execution/device-home.ts'
 import type { ExecutionContext } from './context.ts'
 import { ToolNoEffectError, ToolOutcomeUnknownError } from './tool.ts'
 
+const registeredWorkspace = { type: 'string' as const, description: 'Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved.' }
+
+export const registeredWorkspaceParameters = { workspace: registeredWorkspace }
 export const executionTargetParameters = {
-  workspace: { type: 'string' as const, description: 'Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved.' },
+  workspace: { ...registeredWorkspace, description: `${registeredWorkspace.description} For read/search or OS-shell exec, a direct owner Web turn can also target an opted-in Child with device:<nodeId>; use ~ for its home.` },
 }
 
 /** Hidden compatibility for saved calls; never normalize third-party tool arguments. */
@@ -50,10 +54,19 @@ export async function executionTargetContext(
     if (typeof args.workspace !== 'string' || !args.workspace.trim()) {
       throw new ToolNoEffectError('workspace must be a nonempty registered Project Workspace identifier, not a path.')
     }
+    if (args.workspace.startsWith('device:') && (context.scriptInvocation || !['filesystem.read', 'workdir.process.execute-once'].includes(operation))) {
+      throw new ToolNoEffectError('Device home supports direct owner reads, searches and OS-shell execution only. No Main fallback is allowed.')
+    }
     if (args.workspace.startsWith('layerfs:')) return { ...context, cwd: undefined, remoteWorkdir: undefined, layerfsWorkdir: { workspace: args.workspace }, fileChangeTarget: undefined }
     if (!context.resolveToolTarget) throw new ToolNoEffectError('Workspace targeting is unavailable in this execution context; no fallback is allowed.')
-    try { target = await context.resolveToolTarget(args.workspace, operation) }
-    catch (error) {
+    try {
+      const deviceNodeId = args.workspace.startsWith('device:') ? deviceHomeNode(args.workspace) : undefined
+      target = await context.resolveToolTarget(args.workspace, operation)
+      if (deviceNodeId && (target.remoteWorkdir?.nodeId !== deviceNodeId || target.remoteWorkdir.workdirId !== DEVICE_HOME_WORKDIR
+        || target.cwd !== undefined || target.layerfsWorkdir !== undefined)) {
+        throw new Error('Device home target unavailable or mismatched. No Main fallback is allowed.')
+      }
+    } catch (error) {
       if (context.recoveringToolCall) throw new ToolOutcomeUnknownError(`The original target cannot be reconciled: ${error instanceof Error ? error.message : String(error)}. The original outcome remains unknown; no command was re-executed.`)
       throw new ToolNoEffectError(error instanceof Error ? error.message : String(error))
     }

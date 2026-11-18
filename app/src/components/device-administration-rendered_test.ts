@@ -136,7 +136,7 @@ const pending: PendingDevice = {
 }
 function backend(t: TestContext, network = disabledNetwork, devices: PendingDevice[] = []) {
   const calls: Array<{ path: string; method: string; body?: any; signal?: AbortSignal | null }> = []
-  const state = { network: structuredClone(network), pending: structuredClone(devices), nodes: [] as NodeInventoryEntry[], offerExpiry: Date.now() + 300_000, fail: false, failListener: false, failRemoval: false, denied: false }
+  const state = { network: structuredClone(network), pending: structuredClone(devices), nodes: [] as NodeInventoryEntry[], offerExpiry: Date.now() + 300_000, fail: false, failListener: false, failLoopback: false, failRemoval: false, denied: false }
   t.mock.method(globalThis, 'fetch', async (input: string | URL, init?: RequestInit) => {
     const path = new URL(input).pathname
     const method = init?.method ?? 'GET'
@@ -145,7 +145,10 @@ function backend(t: TestContext, network = disabledNetwork, devices: PendingDevi
     if (state.denied && path !== '/nodes/v1' && path !== '/local/v1/nodes') return Response.json({ error: 'unauthorized' }, { status: 401 })
     if (state.fail) return Response.json({ error: 'synthetic' }, { status: 503 })
     if (path === '/nodes/v1/network') {
-      if (method === 'PUT') state.network = { ...state.network, ...body, state: body.enabled ? 'listening' : 'disabled', endpoint: body.enabled ? `http://${body.host}:${body.port}` : null, error: null }
+      if (method === 'PUT') state.network = {
+        ...state.network, ...body, state: body.enabled ? 'listening' : 'disabled', endpoint: body.enabled ? `http://${body.host}:${body.port}` : null, error: null,
+        loopbackEndpoint: body.enabled && body.enableLoopbackListener && !state.failLoopback ? `http://127.0.0.1:${body.port}` : undefined,
+      }
       if (method === 'PUT' && body.enabled && state.failListener) {
         state.network = { ...state.network, state: 'error', endpoint: null, error: 'The device port is already in use. Choose a different port.' }
         return Response.json({ error: 'device_listener_failed', message: state.network.error, network: state.network }, { status: 503 })
@@ -219,6 +222,26 @@ test('rendered Main requires explicit HTTP acknowledgement, creates an invitatio
   assert.doesNotMatch(view.text(), /000012/)
   assert.equal(view.button('Enable device connection').props.disabled, true)
   assert.equal(calls.filter(call => call.method === 'PUT')[1]?.body.enabled, false)
+})
+
+test('rendered tunnel listener can retry and turn off without changing the LAN invitation', async t => {
+  const { calls, state } = backend(t, listeningNetwork)
+  const view = mount(t)
+  await flush()
+  await view.click('Create invitation')
+  state.failLoopback = true
+  await view.click('Enable tunnel listener')
+  assert.match(view.text(), /Tunnel listener unavailable/)
+  state.failLoopback = false
+  await view.click('Retry tunnel listener')
+  assert.match(view.text(), /http:\/\/127\.0\.0\.1:3124/)
+  assert.match(view.text(), /offer-1/)
+  await view.click('Turn off tunnel listener')
+  assert.doesNotMatch(view.text(), /http:\/\/127\.0\.0\.1:3124/)
+  assert.match(view.text(), /offer-1/)
+  assert.deepEqual(calls.filter(call => call.method === 'PUT').map(call => [call.body.host, call.body.enabled, call.body.enableLoopbackListener]), [
+    ['192.168.1.12', true, true], ['192.168.1.12', true, true], ['192.168.1.12', true, false],
+  ])
 })
 
 test('rendered approval requires identity verification and execution consent; only live registry status is connected', async t => {

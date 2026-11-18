@@ -8,6 +8,8 @@ export interface DeviceNetwork {
   host: string
   port: number
   allowInsecureLocalTransport: boolean
+  enableLoopbackListener?: boolean
+  loopbackEndpoint?: string
   state: 'disabled' | 'listening' | 'error'
   endpoint: string | null
   error: string | null
@@ -76,6 +78,9 @@ export function parseDeviceNetwork(value: unknown): DeviceNetwork {
     || !text(value.host) || !isLocalDeviceAddress(value.host)
     || !Number.isInteger(value.port) || Number(value.port) < 1024 || Number(value.port) > 65535
     || typeof value.allowInsecureLocalTransport !== 'boolean'
+    || (value.enableLoopbackListener !== undefined && typeof value.enableLoopbackListener !== 'boolean')
+    || (value.loopbackEndpoint !== undefined && (value.state !== 'listening' || !value.enableLoopbackListener
+      || value.host === '127.0.0.1' || value.loopbackEndpoint !== `http://127.0.0.1:${value.port}`))
     || !['disabled', 'listening', 'error'].includes(String(value.state))
     || !(value.endpoint === null || text(value.endpoint))
     || !(value.error === null || typeof value.error === 'string') || !Array.isArray(value.addresses)

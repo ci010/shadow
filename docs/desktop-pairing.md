@@ -134,6 +134,68 @@ identity, protected key and home. The PIN clears after each attempt. A saved
 pairing or pending reference pins the endpoint/scope; retry resumes it rather
 than silently pairing a different Main.
 
+## Optional loopback ingress for an authenticated Dev Tunnel
+
+In the Main desktop app, go to **Nodes > Pair a Child device** and select
+**Enable tunnel listener** while the LAN/VPN device listener is on. Main keeps
+its LAN/VPN endpoint and adds `127.0.0.1` on the same device port. The setting is
+saved across restarts and takes effect without restarting the LAN listener.
+**Turn off tunnel listener** stops only the loopback listener; **Turn off
+listener** stops both. LAN invitations and existing LAN pairings keep their
+original endpoint. If the loopback port is unavailable, the LAN listener stays
+up; free the local port and select **Retry tunnel listener**.
+
+Use a separate, persistent, authenticated Dev Tunnel for the device port, so
+`connect` does not also claim the Child machine's local app port. On Main, with
+the CLI signed in, create and configure the tunnel once, then host that same ID:
+
+```powershell
+$deviceTunnel = 'shadow-child-yourname'
+devtunnel create $deviceTunnel
+devtunnel port create $deviceTunnel -p 3124 --protocol auto
+devtunnel host $deviceTunnel
+```
+
+Replace `<device-tunnel-id>` with your tunnel ID and `3124` with the configured
+Shadow device port if different. Do not enable anonymous access. On Child, sign in
+with an authorized account and keep `devtunnel connect <device-tunnel-id>`
+running. Confirm the CLI forwards local `127.0.0.1:3124`, then select **Enter
+details manually** and use `http://127.0.0.1:3124` plus the ID and PIN from a
+fresh invitation. Do not paste the LAN invitation as-is or use the tunnel's web
+URL as the device endpoint. Keep the same tunnel and client-side port for
+reconnect; the Child pins the endpoint used during pairing. Device approval is
+still required. The loopback HTTP legs are local to the two machines; this does
+not change the security requirements for the LAN listener.
+
+## Inspect device state from an agent session
+
+In a direct owner Web turn, `read("v:devices")` shows the current Main device
+inventory, including paired devices with no registered Project workspace.
+Read the exact `v:devices/<encoded-node-id>` path in the result for details.
+Online status and directory-picker support are snapshots, not permission to
+execute or browse. Directory details are limited to workdirs visible to the
+current Project; use `v:project/workspaces` for registered Workspace selectors. This read-only view does not
+contact Child, expose pairing credentials, browse its filesystem, or measure
+latency.
+
+## Optional Child home target for owner tools
+
+To make a paired Child available before registering any workspace, update both
+peers and set `"allowDeviceHome": true` in the Child bootstrap configuration.
+For desktop installations this is `bootstrap/runtime-config.v1.json` under
+that Child profile's Electron user-data directory. Quit Child before changing
+this setting, retain its existing configuration, and restart it. Omission or
+`false` disables the home target. Pairing alone never enables it.
+
+When `v:devices` reports `deviceHomeWorkspace`, a direct owner Web turn can
+use `read` or `search` with `workspace: "device:<nodeId>"` and `path: "~"`.
+The Child resolves `~` to the home of the account running Shadow. OS-shell
+`exec` accepts that workspace selector and `cwd: "~"`; shell commands run with
+that account's permissions, not inside a home sandbox. Enable this only if you
+trust the paired Main with that level of access. Direct `write`, workspace
+switching, and automatic workspace registration are not part of this target.
+An unavailable Child never falls back to Main.
+
 ## Prove that work runs on Child
 
 Create a small, non-sensitive text file in the Child work directory with
