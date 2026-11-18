@@ -31,7 +31,7 @@
       <div class="agent-detail">
         <DefinitionDetail v-if="requestedAgent" ref="detail" v-model="activeTab" :title="requestedAgent.name"
           :description="requestedAgent.description" :label="t('Agent details')" :tabs="views"
-          :source="requestedAgent.definitionMarkdown" source-initially-raw retain-prompt-format :inspection="inspection"
+          :source="requestedAgent.definitionMarkdown" source-initially-raw retain-prompt-format search-prompt :inspection="inspection"
           :inspection-identity="`${requestedAgent.name}:${channel}`" :busy="loadingContext">
           <template #before-heading>
             <button v-if="!agentName" type="button" class="agent-back text-action" @click="backToTypes"><span class="i-lucide-arrow-left" aria-hidden="true" />{{ t('Agent types') }}</button>

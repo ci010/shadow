@@ -393,6 +393,12 @@ overrides and tool filters. **Tools** and **System prompt** inspect the assemble
 preview separately; tools expand to show parameters, and prompts can be read as
 formatted text or exact raw text. Copy JSON exports all resolved tools, even
 when the list is filtered.
+In the Agent's **System prompt** preview, **Search this preview** highlights
+matches and shows the current position and total. **Read** searches section names
+and rendered text, including collapsed sections; **Raw** searches the exact prompt
+text. Use the previous/next buttons or Shift+Enter/Enter to cycle through results.
+Jumping to a match in a collapsed section opens it. This searches only the current
+preview, not other Knowledge entries.
 **Preview channel** is available in those two inspection views. It changes the
 preview's channel, not an existing conversation.
 Previews do not create sessions or inherit a conversation's history, configuration,

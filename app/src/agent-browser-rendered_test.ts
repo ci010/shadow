@@ -147,7 +147,12 @@ test('Agent and Bot definitions share accessible inspection views and preserve t
               if (mode === 'fail') { response.statusCode = 503; json({ error: 'Synthetic preview failure' }); return }
               if (mode === 'invalid') { json({ systemPrompt: null, tools: 'invalid' }); return }
               const resolved = agent === 'explore' ? tools.filter(tool => tool.name !== 'write') : agent === 'verify' ? [] : tools
-              json({ systemPrompt: agent === 'verify' ? '' : `# ${agent}\n\nSynthetic assembled preview for **${channel}**.\n\n## Instructions\n\nRead the task, inspect the evidence, and preserve the owning Project.\n\n<available_skills>\n<skill name="fixture-skill">Synthetic skill description</skill>\n</available_skills>\n\n<script>window.__unsafePrompt = true</script>`, tools: resolved })
+              const systemPrompt = agent === 'verify' ? '' : `# ${agent}\n\nSynthetic assembled preview for **${channel}**.\n\n## Instructions\n\nRead the task, inspect the evidence, and preserve the owning Project. Preview scope note.\n\n<available_skills>\n<skill name="fixture-skill">Synthetic skill description</skill>\n</available_skills>\n\n<script>window.__unsafePrompt = true</script>`
+              const parts = systemPrompt.split('\n\n## Instructions')
+              const sections = parts.length === 2 ? [{ name: 'Preview introduction', content: parts[0]! },
+                { name: 'More details', content: '## Instructions' + parts[1] }]
+                .map(section => ({ ...section, characters: section.content.length })) : []
+              json({ systemPrompt, sections, tools: resolved })
             }
             if (mode === 'hold') pending.push(send)
             else send()

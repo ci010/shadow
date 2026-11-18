@@ -2028,6 +2028,8 @@
   "No matching agent types.": "没有匹配的智能体类型。",
   "No matching changes.": "没有匹配的变更。",
   "No matching commands.": "没有匹配的命令。",
+  "Search this preview": "搜索此预览",
+  "Match {current} of {total}": "第 {current} 处，共 {total} 处",
   "No matching entries.": "没有匹配条目。",
   "No matching file paths.": "没有匹配的文件路径。",
   "No matching messages in this conversation.": "此会话中没有匹配的消息。",

@@ -1999,6 +1999,8 @@
   "No matching agent types.": "No matching agent types.",
   "No matching changes.": "No matching changes.",
   "No matching commands.": "No matching commands.",
+  "Search this preview": "Search this preview",
+  "Match {current} of {total}": "Match {current} of {total}",
   "No matching entries.": "No matching entries.",
   "No matching file paths.": "No matching file paths.",
   "No matching messages in this conversation.": "No matching messages in this conversation.",
