@@ -69,7 +69,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
       const wait=async fn=>{for(let i=0;i<200;i++){if(await run(fn))return;await new Promise(r=>setTimeout(r,50));}throw new Error('Timed out: '+fn.toString()+' BODY '+await run(()=>document.body.innerText.slice(0,2000)));};
       await wait(()=>!!document.querySelector('.completion-entry'));
       assert.deepEqual(await run(()=>window.writes),[]);
-      assert.deepEqual(await run(()=>[...document.querySelectorAll('.work-view-switch button')].map(el=>el.textContent)),['Dashboard','Usage']);
+      assert.deepEqual(await run(()=>[...document.querySelectorAll('.work-view-switch button')].map(el=>el.textContent)),['Dashboard']);
       const transparentCanvas=selector=>win.webContents.executeJavaScript('('+((selector)=>{let el=document.querySelector(selector);if(!el)return false;while(el&&el!==document.body){const style=getComputedStyle(el);if(style.backgroundColor!=='rgba(0, 0, 0, 0)'||style.backgroundImage!=='none')return false;el=el.parentElement}return getComputedStyle(document.body).backgroundImage.includes('radial-gradient')}).toString()+')('+JSON.stringify(selector)+')');
       await wait(()=>!!document.querySelector('.graph-canvas .vue-flow'));
       for(const dark of [false,true]){

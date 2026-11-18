@@ -6,20 +6,19 @@
       <div v-show="!appsVisible" class="workbench-controls">
         <div v-if="mode !== 'board'" class="work-view-switch" role="group" :aria-label="t('Work view')">
           <button type="button" :aria-pressed="view === 'history'" @click="view = 'history'">{{ t('Dashboard') }}</button>
-          <button type="button" :aria-pressed="view === 'usage'" @click="view = 'usage'; panel = ''">{{ t('Usage') }}</button>
         </div>
         <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :title="t('Uses multiple bounded model requests and saves valid patches progressively; no calls on opening.')" :aria-describedby="modelCallNoticeId" @click="organizeTopics('full')">{{ organizing ? t('Organizing…') : t('Reorganize recent topics') }}</button>
         <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :aria-describedby="modelCallNoticeId" @click="organizeTopics('delta')">{{ t('Update changed topics') }}</button>
         <span :id="modelCallNoticeId" class="model-call-description">{{ t('Up to 8 model requests, 24 tool calls and 120 seconds. Valid patches are saved immediately.') }}</span>
-        <button v-if="view !== 'usage'" type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
+        <button type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
         <button v-if="mode === 'board' && view === 'completed'" type="button" @click="view = 'board'">{{ t('Back') }}</button>
         <button v-if="completionUnread.length" type="button" class="completion-entry" @click="view = 'completed'; unreadOnly = true; panel = ''">{{ t('Newly completed: {count}', { count: completionUnread.length }) }}</button>
         <span v-if="view === 'board'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
-        <button v-if="view !== 'usage'" type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
+        <button type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
       </div>
       <div v-if="mode !== 'board'" class="workbench-integrations">
         <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
-        <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; view = view === 'usage' ? 'history' : view; panel = panel === 'github' ? '' : 'github'">GitHub</button>
+        <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
       </div>
       <div v-if="!appsVisible && view === 'history' && organizationDisabled" class="organization-status" role="status">{{ t('Topic organization is disabled. Enable it in Automations to organize topics.') }} <RouterLink :to="automationChatLocation(projectId, 'system:work-organizer')">{{ t('Automation details') }}</RouterLink></div>
       <div v-if="!appsVisible && view === 'history' && organizationProgress" class="organization-status" role="status" aria-live="polite">{{ organizationProgress }}</div>
@@ -27,8 +26,7 @@
     </header>
     <QuickActions v-if="mode !== 'board'" :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="true" pinned-only />
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="true" @compose="discussApp" />
-    <ProjectUsage v-if="view === 'usage' && !appsVisible" :api-base="apiBase" :project-id="projectId" :active="visible" />
-    <div v-show="!appsVisible && view !== 'usage'" class="workbench-body">
+    <div v-show="!appsVisible" class="workbench-body">
       <main v-show="wide || !panel || view === 'history'" class="workbench-main">
         <form v-if="view === 'board' || view === 'completed'" class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
           <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
@@ -38,6 +36,10 @@
           </UiSelect></label>
         </form>
         <p v-if="completionError" class="workbench-error" role="alert">{{ t('Could not load or save completion read state.') }} <button @click="refreshCompletions">{{ t('Retry') }}</button></p>
+        <nav v-if="diagnosticsOpen" class="project-diagnostic-links" :aria-label="t('Diagnostics')">
+          <RouterLink :to="{ name: 'spans', params: { projectId } }">{{ t('Spans') }}</RouterLink>
+          <RouterLink :to="{ name: 'logs', params: { projectId } }">{{ t('Logs') }}</RouterLink>
+        </nav>
         <p v-if="error" class="workbench-error" role="alert">{{ error }} {{ t('Showing the last loaded state, if available.') }} <button @click="refresh">{{ t('Retry') }}</button></p>
         <div v-if="!data && loading" class="workbench-empty" role="status">{{ t('Loading Project work…') }}</div>
         <template v-if="data">
@@ -90,7 +92,7 @@
         <div v-show="panel === 'work'" class="project-work-detail">
           <template v-if="selected">
             <WorkAlignment :key="selected" :api-base="apiBase" :session-id="''" project :work-key="selected"
-              embedded :expanded="visible && !appsVisible && view !== 'usage' && panel === 'work'" :can-write="true" :revision="lease?.work.state.revision"
+              embedded :expanded="visible && !appsVisible && panel === 'work'" :can-write="true" :revision="lease?.work.state.revision"
               :session-catalog="data?.sessions" @updated="refresh" @loaded="detailLoaded" />
             <p v-if="selectedItem?.dependencies.length" class="detail-links">{{ t('Depends on:') }}
               <button v-for="key in selectedItem.dependencies" :key="key" @click="selectWork(key)">{{ data?.items.find(item => item.key === key)?.title ?? key }}</button>
@@ -126,7 +128,6 @@ import { projectWorkOverviewSchema, type ProjectWorkOverview } from '../../../sr
 import WorkAlignment from './WorkAlignment.vue'
 import ProjectGitHub from './ProjectGitHub.vue'
 import ProjectMicroApps from './ProjectMicroApps.vue'
-import ProjectUsage from './ProjectUsage.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
@@ -140,7 +141,7 @@ const organizationSnapshot = shallowRef<ProjectWorkOverview>()
 const data = computed(() => organizationSnapshot.value ?? lease.value?.work.state.value ?? lastSnapshot.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
-const view = ref<'history' | 'board' | 'usage' | 'completed'>(props.mode === 'board' ? 'board' : 'history'), panel = ref<'work' | 'github' | ''>('')
+const view = ref<'history' | 'board' | 'completed'>(props.mode === 'board' ? 'board' : 'history'), panel = ref<'work' | 'github' | ''>('')
 
 const selected = ref(''), wide = ref(false), appsVisible = ref(false)
 const unreadOnly = ref(false)
@@ -150,15 +151,15 @@ const { items: completionItems, unread: completionUnread, error: completionError
 const viewedDetail = shallowRef<{ key: string; sequence: number; status?: string }>()
 async function detailLoaded(record: { key: string; sequence: number; status?: string }) {
   await nextTick()
-  if (props.visible && !appsVisible.value && view.value !== 'usage' && panel.value === 'work' && selected.value === record.key) viewedDetail.value = record
+  if (props.visible && !appsVisible.value && panel.value === 'work' && selected.value === record.key) viewedDetail.value = record
 }
 watch([viewedDetail, completionItems, completionBusy], () => {
   const detail = viewedDetail.value
-  if (!detail || !props.visible || appsVisible.value || view.value === 'usage' || panel.value !== 'work' || selected.value !== detail.key || detail.status !== 'done' || completionBusy.value || completionError.value) return
+  if (!detail || !props.visible || appsVisible.value || panel.value !== 'work' || selected.value !== detail.key || detail.status !== 'done' || completionBusy.value || completionError.value) return
   const occurrence = completionItems.value.find(item => item.key === detail.key && item.unread && item.sequence <= detail.sequence)
   if (occurrence) void markCompletionsRead([occurrence])
 })
-watch(() => [props.apiBase, props.projectId, props.visible, selected.value, panel.value, appsVisible.value, view.value === 'usage'],  () => { viewedDetail.value = undefined })
+watch(() => [props.apiBase, props.projectId, props.visible, selected.value, panel.value, appsVisible.value],  () => { viewedDetail.value = undefined })
 
 const diagnosticsOpen = ref(false)
 const organizing = ref(false), organizationMessage = ref('')
@@ -302,7 +303,6 @@ watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase,
 }, { immediate: true })
 watch(() => [route.query.work, props.visible] as const, ([key]) => {
   if (route.params.projectId === props.projectId && route.name === (props.mode === 'board' ? 'project-board' : 'project-dashboard') && props.visible && typeof key === 'string' && key !== selected.value) {
-    if (view.value === 'usage') view.value = 'history'
     selected.value = key; panel.value = 'work'
   }
 }, { immediate: true })
@@ -323,6 +323,7 @@ onUnmounted(() => { organizationController?.abort(); lease.value?.release(); obs
 .overview-structure, .overview-graph { margin: 16px; border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; }
 .overview-structure summary, .overview-graph summary { cursor: pointer; }
 .project-workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--c-text); }
+.project-diagnostic-links { display: flex; flex-wrap: wrap; gap: 12px; }
 .workbench-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-bottom: 1px solid var(--c-border); flex-shrink: 0; }
 .project-identity { margin: 0; min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; line-height: 34px; }
 .workbench-controls { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }

@@ -94,7 +94,7 @@ onUnmounted(() => {
 .mobile-navigation-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .mobile-global-navigation { flex-shrink: 0; min-width: 0; padding: 8px; border-bottom: 1px solid var(--c-border); }
 /* Global destinations are secondary to the project list on phones. */
-.mobile-global-navigation :deep(.tab-nav.mobile-app-nav) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.mobile-global-navigation :deep(.tab-nav.mobile-app-nav) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
 .mobile-global-navigation :deep(.mobile-app-nav .tab) { min-height: 44px; padding: 8px 12px; white-space: normal; text-align: left; }
 .mobile-project-navigation { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .mobile-preferences { flex-shrink: 0; border-top: 1px solid var(--c-border); }

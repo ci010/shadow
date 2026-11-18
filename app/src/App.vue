@@ -5,13 +5,10 @@
       <Teleport :to="mobile.navigationTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.navigationTarget.value">
         <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }"
           @wheel="!mobile.enabled.value && scrollEditorTabs($event, $event.currentTarget as HTMLElement)" :aria-label="t('Main navigation')">
-          <template v-for="group in navigationGroups" :key="group.name">
-            <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="navigationLocation(item.name)" custom v-slot="{ isActive, navigate }">
-              <button type="button" class="tab" :class="{ active: mobile.enabled.value ? isActive : navigationPage === item.name }"
-                :aria-current="(mobile.enabled.value ? isActive : navigationPage === item.name) ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
-            </router-link>
-          </template>
+          <router-link v-for="item in navigationItems" :key="item.name" :to="navigationLocation(item.name)" custom v-slot="{ navigate }">
+            <button type="button" class="tab" :class="{ active: navigationPage === item.name }"
+              :aria-current="navigationPage === item.name ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
+          </router-link>
         </nav>
       </Teleport>
     </template>
@@ -56,14 +53,14 @@
         @retry="livePool.retry()" @manage-node="router.push({ name: 'settings', params: { section: 'nodes' } })" />
       <div
         class="route-content"
-        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)), 'settings-route': route.name === 'settings' }"
+        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)), 'settings-route': route.name === 'settings', 'usage-route': route.name === 'usage' }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
         <KeepAlive :key="resolvedBase" include="ProjectsWorkspace">
           <component
             :is="Component"
             :key="workspaceRoutes.includes(String(viewRoute.name)) ? 'projects-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.projectId ?? '')}`"
-            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: workspaceRoutes.includes(String(route.name)) }"
+            v-bind="viewRoute.name === 'usage' ? { apiBase: resolvedBase, active: true } : viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: workspaceRoutes.includes(String(route.name)) }"
             v-on="viewRoute.name === 'settings' ? providerViewEvents : {}"
             @update:log-count="logCount = $event"
           />
@@ -87,7 +84,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
 import { scrollEditorTabs } from './editor-tab-scroll.ts'
-import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
+import { navigationFor } from './navigation-policy.ts'
 import { provideProviderReadiness } from './provider-readiness.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
@@ -108,7 +105,7 @@ import { useAppNotificationSounds } from './composables/useAppNotificationSounds
 const route = useRoute()
 const workspaceRoutes: readonly string[] = ['chat', 'project-board', 'projects', 'project-dashboard', 'project-workflows', 'project-settings']
 const mobile = provideMobileChrome()
-const mobilePageTitles: Record<string, string> = { get 'project-board'() { return t('Board') }, get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
+const mobilePageTitles: Record<string, string> = { get 'project-board'() { return t('Board') }, get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get usage() { return t('Usage') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
 watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()
@@ -225,31 +222,10 @@ const onConfigChanged = (event: Event) => {
   }
 }
 
-const navigationGroups = computed(() => {
-  const items = navigationFor(installationContext.value)
-  const groups: Array<{
-    name: NavigationGroup
-    label: string
-    items: typeof items
-  }> = [
-    {
-      name: 'primary',
-      label: '',
-      items: items.filter((item) => item.group === 'primary'),
-    },
-    {
-      name: 'diagnostics',
-      label: t('Diagnostics'),
-      items: items.filter((item) => item.group === 'diagnostics'),
-    },
-  ]
-
-  return groups.filter((group) => group.items.length > 0)
-})
-
+const navigationItems = computed(() => navigationFor(installationContext.value))
 const navigationPage = computed(() => workspaceRoutes.includes(String(route.name)) ? 'chat' : String(route.name))
 function navigationLocation(name: string) {
-  return name === 'chat' ? lastChatLocation.value : { name, params: ['agents', 'spans', 'logs'].includes(name) ? { projectId: route.params.projectId || 'default' } : {} }
+  return name === 'chat' ? lastChatLocation.value : { name }
 }
 
 let stopRevealBorder: (() => void) | undefined
@@ -292,7 +268,7 @@ onUnmounted(() => {
   flex-direction: column;
 }
 .route-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
-.route-content.chat-route { display: flex; padding: 0; overflow: hidden; }
+.route-content.chat-route, .route-content.usage-route { display: flex; padding: 0; overflow: hidden; }
 .route-content.settings-route { scrollbar-gutter: stable; }
 .setup-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
@@ -304,21 +280,6 @@ onUnmounted(() => {
   overflow-x: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--c-scrollbar-thumb) transparent;
-}
-
-.tab-group-label {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  margin-left: 0.35rem;
-  padding-left: 0.65rem;
-  border-left: 1px solid var(--c-border);
-  font-size: 0.5rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--c-text-muted);
-  white-space: nowrap;
 }
 
 .tab {
@@ -354,10 +315,9 @@ onUnmounted(() => {
 .mobile-app-nav .tab { min-height: 44px; padding: 8px; font-size: 13px; text-transform: none; letter-spacing: 0; border: 0; text-align: left; transform: none; transition: none; }
 .mobile-app-nav .tab.active { background: var(--c-selection-bg); }
 .tab-nav .tab:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.mobile-app-nav .tab-group-label { display: none; }
 
 @media (max-width: 760px) {
-  @media (max-width: 1100px) { .tab-group-label { display: none; } .tab { padding-inline: 7px; font-size: 10px; } }
+  @media (max-width: 1100px) { .tab { padding-inline: 7px; font-size: 10px; } }
 
 }
 

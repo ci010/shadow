@@ -11,31 +11,31 @@ function routeNames(context: InstallationContextV1): string[] {
   return navigationFor(context).map((item) => item.name)
 }
 
-test('local Main admin sees product and diagnostic routes', () => {
+test('local Main admin sees Chat, Usage and Settings', () => {
   const context = createLocalMainAdminContext('http://localhost')
 
   assertEquals(routeNames(context), [
     'chat',
+    'usage',
     'settings',
-    'spans',
-    'logs',
   ])
 })
 
-test('authenticated contexts ignore retired scopes for product and diagnostic navigation', () => {
+test('authenticated contexts ignore retired scopes for system navigation', () => {
   for (const mode of ['main', 'child', 'client'] as const) {
     const context = { ...createLocalMainAdminContext('http://localhost'), mode, uiScopes: [] }
-    assertEquals(routeNames(context), ['chat', 'settings', 'spans', 'logs'])
+    assertEquals(routeNames(context), ['chat', 'usage', 'settings'])
   }
 })
 
-test('diagnostic routes are grouped without adding a product route', () => {
-  const context = createLocalMainAdminContext('http://localhost')
-  const diagnostics = navigationFor(context)
-    .filter((item) => item.group === 'diagnostics')
-    .map((item) => item.name)
-
-  assertEquals(diagnostics, ['spans', 'logs'])
+test('usage has one host route and diagnostics retain project links', async () => {
+  const router = await readFile(new URL('./router.ts', import.meta.url), 'utf8')
+  const dashboard = await readFile(new URL('./components/ProjectWorkbench.vue', import.meta.url), 'utf8')
+  assert.match(router, /path: '\/usage', name: 'usage'/)
+  assert.doesNotMatch(dashboard, /ProjectUsage|t\('Usage'\)/)
+  assert.match(dashboard, /Agent diagnostics/)
+  assert.match(router, /path: '\/projects\/:projectId\/spans'/)
+  assert.match(router, /path: '\/projects\/:projectId\/logs'/)
 })
 
 test('app content follows navigation without a persistent runtime status row', async () => {

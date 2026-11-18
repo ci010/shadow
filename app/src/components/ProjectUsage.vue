@@ -1,8 +1,15 @@
 <template>
-  <section class="project-usage" :aria-label="t('Project usage')">
-    <header><h2>{{ t('Project usage') }}</h2><button class="btn btn-sm" type="button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button></header>
+  <section class="project-usage" :aria-label="t(globalMode ? 'Usage' : 'Project usage')">
+    <header><h2>{{ t(globalMode ? 'Usage' : 'Project usage') }}</h2><button class="btn btn-sm" type="button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button></header>
+    <div v-if="globalMode" class="project-filter"><span aria-hidden="true">{{ t('Project') }}</span>
+      <UiSelect ref="filterControl" v-model="filter" :aria-label="t('Project')" :disabled="!rows?.length">
+        <option value="">{{ t('All projects') }}</option>
+        <option v-for="row in rows" :key="row.project.id" :value="row.project.id">{{ row.project.name }}</option>
+      </UiSelect>
+    </div>
+    <p v-if="allProjects && failedProjects && data" role="status">{{ t('Some projects could not be loaded ({count}). Totals include only available usage.', { count: failedProjects }) }}</p>
     <p v-if="loading" role="status">{{ t('Loading usage…') }}</p>
-    <p v-if="error" role="alert">{{ t('Could not load Project usage. Retry to load the latest statistics.') }} <button class="btn btn-sm" @click="refresh">{{ t('Retry') }}</button></p>
+    <p v-if="error" role="alert">{{ t(globalMode ? 'Could not load usage. Retry to load the latest statistics.' : 'Could not load Project usage. Retry to load the latest statistics.') }} <button class="btn btn-sm" @click="refresh">{{ t('Retry') }}</button></p>
     <template v-if="data">
       <div class="summary-toolbar"><h3>{{ t('Usage summary') }}</h3><div class="period-switch" role="group" :aria-label="t('Summary period')"><button class="btn btn-sm" v-for="period in periods" :key="period.key" type="button" :aria-pressed="selectedPeriod === period.key" @click="selectedPeriod = period.key">{{ t(period.label) }}</button></div></div>
       <div class="summary-grid">
@@ -11,6 +18,18 @@
         <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div></article>
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
+      <section v-if="allProjects && rows?.length" class="project-breakdown">
+        <h3>{{ t('Usage by project') }}</h3>
+        <div class="daily-table" tabindex="0" :aria-label="t('Usage by project')">
+          <table><thead><tr><th scope="col">{{ t('Project') }}</th><th scope="col">{{ t('Tokens') }}</th><th scope="col">{{ t('Estimated cost') }}</th><th scope="col">{{ t('Provider time') }}</th><th scope="col">{{ t('Provider calls') }}</th></tr></thead>
+            <tbody><tr v-for="{ project, usage } in rankedRows" :key="project.id">
+              <th scope="row"><button class="btn btn-sm" type="button" @click="filter = project.id; filterControl?.focus()">{{ project.name }}</button></th>
+              <template v-if="usage"><td>{{ tokens(usage[selectedPeriod]) }}</td><td>{{ costs(usage[selectedPeriod]) }}</td><td>{{ duration(usage[selectedPeriod]) }}</td><td>{{ formatNumber(usage[selectedPeriod].calls) }}</td></template>
+              <td v-else colspan="4">{{ t('Unavailable') }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+      </section>
       <div class="activity-grid">
         <section v-for="chart in activityCharts" :key="chart.key" class="activity-section" :aria-label="t(chart.title)">
           <div class="activity-heading"><h3>{{ t(chart.title) }}</h3><span>{{ t('{count} calls · {kinds} categories', { count: formatNumber(chart.total), kinds: formatNumber(chart.entries.length) }) }}</span></div>
@@ -57,23 +76,26 @@
         </article>
       </div>
 
-      <h3>{{ t('Daily usage (UTC)') }}</h3>
-      <p>{{ t('Daily history loads 10 dates per page, newest first.') }}</p>
-      <div class="pagination">
-        <button class="btn btn-sm" v-if="!dailyPage" :disabled="pageLoading || loading" @click="loadPage(1)">{{ t('Load daily history') }}</button>
-        <template v-if="dailyPage">
-          <button class="btn btn-sm" :disabled="pageLoading || loading || dailyPage.page <= 1" @click="loadPage(dailyPage.page - 1)">{{ t('Previous page') }}</button>
-          <span>{{ t('Page {page} · {total} dates', { page: dailyPage.page, total: dailyPage.total }) }} · {{ dailyPage.daily[0]?.date }} — {{ dailyPage.daily.at(-1)?.date }}</span>
-          <button class="btn btn-sm" :disabled="pageLoading || loading || !dailyPage.hasMore" @click="loadPage(dailyPage.page + 1)">{{ t('Next page') }}</button>
-        </template>
-        <span v-if="pageLoading" role="status">{{ t('Loading daily history…') }}</span>
-        <span v-if="pageError" role="alert">{{ t('Could not load daily history.') }} <button class="btn btn-sm" @click="loadPage(requestedPage)">{{ t('Retry') }}</button></span>
-      </div>
-      <div v-if="dailyPage" class="daily-table" tabindex="0" :aria-label="t('Daily usage (UTC)')">
-        <table><thead><tr><th scope="col">{{ t('Date') }}</th><th scope="col">{{ t('Tokens') }}</th><th scope="col">{{ t('Estimated cost') }}</th><th scope="col">{{ t('Provider time') }}</th><th scope="col">{{ t('Provider calls') }}</th></tr></thead>
-          <tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th scope="row">{{ day.date }}</th><td :title="tokens(day.usage)"><span class="trend" aria-hidden="true" :style="{ width: `${(day.usage.tokens ?? 0) / maximum * 100}%` }" /><span class="value">{{ compactNumber(day.usage.tokens) }} </span></td><td :title="costs(day.usage)"><div v-for="cost in displayCosts(day.usage.costs)" :key="cost.currency">{{ compactCost(cost.amount) }} <span class="unit">{{ cost.currency }}</span></div><span v-if="!displayCosts(day.usage.costs).length">{{ t('Unavailable') }}</span></td><td :title="duration(day.usage)">{{ compactDuration(day.usage.durationMs) }} </td><td :title="formatNumber(day.usage.calls)">{{ compactNumber(day.usage.calls) }}</td></tr></tbody>
-        </table>
-      </div>
+      <p v-if="allProjects">{{ t('Select a project to browse its daily history.') }}</p>
+      <template v-else>
+        <h3>{{ t('Daily usage (UTC)') }}</h3>
+        <p>{{ t('Daily history loads 10 dates per page, newest first.') }}</p>
+        <div class="pagination">
+          <button class="btn btn-sm" v-if="!dailyPage" :disabled="pageLoading || loading" @click="loadPage(1)">{{ t('Load daily history') }}</button>
+          <template v-if="dailyPage">
+            <button class="btn btn-sm" :disabled="pageLoading || loading || dailyPage.page <= 1" @click="loadPage(dailyPage.page - 1)">{{ t('Previous page') }}</button>
+            <span>{{ t('Page {page} · {total} dates', { page: dailyPage.page, total: dailyPage.total }) }} · {{ dailyPage.daily[0]?.date }} — {{ dailyPage.daily.at(-1)?.date }}</span>
+            <button class="btn btn-sm" :disabled="pageLoading || loading || !dailyPage.hasMore" @click="loadPage(dailyPage.page + 1)">{{ t('Next page') }}</button>
+          </template>
+          <span v-if="pageLoading" role="status">{{ t('Loading daily history…') }}</span>
+          <span v-if="pageError" role="alert">{{ t('Could not load daily history.') }} <button class="btn btn-sm" @click="loadPage(requestedPage)">{{ t('Retry') }}</button></span>
+        </div>
+        <div v-if="dailyPage" class="daily-table" tabindex="0" :aria-label="t('Daily usage (UTC)')">
+          <table><thead><tr><th scope="col">{{ t('Date') }}</th><th scope="col">{{ t('Tokens') }}</th><th scope="col">{{ t('Estimated cost') }}</th><th scope="col">{{ t('Provider time') }}</th><th scope="col">{{ t('Provider calls') }}</th></tr></thead>
+            <tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th scope="row">{{ day.date }}</th><td :title="tokens(day.usage)"><span class="trend" aria-hidden="true" :style="{ width: `${(day.usage.tokens ?? 0) / maximum * 100}%` }" /><span class="value">{{ compactNumber(day.usage.tokens) }} </span></td><td :title="costs(day.usage)"><div v-for="cost in displayCosts(day.usage.costs)" :key="cost.currency">{{ compactCost(cost.amount) }} <span class="unit">{{ cost.currency }}</span></div><span v-if="!displayCosts(day.usage.costs).length">{{ t('Unavailable') }}</span></td><td :title="duration(day.usage)">{{ compactDuration(day.usage.durationMs) }} </td><td :title="formatNumber(day.usage.calls)">{{ compactNumber(day.usage.calls) }}</td></tr></tbody>
+          </table>
+        </div>
+      </template>
       <details class="completeness"><summary>{{ t('Data completeness') }}</summary>
         <p>{{ t('Daily tokens') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.tokens !== null).length, days: windowDays }) }}</p>
         <p>{{ t('Daily estimated cost') }} · {{ t('{count} of {days} days available', { count: costPoints.filter(p => p.amount !== null).length, days: windowDays }) }} · {{ costUnit }}</p>
@@ -87,10 +109,12 @@
 
       </details>
     </template>
-    <p v-else-if="!loading && !error">{{ t('No usage loaded yet.') }}</p>
+    <p v-else-if="!loading && !error">{{ t(allProjects && rows ? 'No project usage available.' : 'No usage loaded yet.') }}</p>
   </section>
 </template>
 <script setup lang="ts">
+import { projectBase } from '../api-url.ts'
+import { mergeUsage } from '../global-usage.ts'
 import UiSelect from './UiSelect.vue'
 import UsageTrendChart from './UsageTrendChart.vue'
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -100,16 +124,41 @@ import { useCatalogResourceStore } from '../stores/catalog.ts'
 import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
 import { requireResourcePinia } from '../stores/app.ts'
 import { t, formatDateTime, formatNumber } from '../i18n.ts'
-import { projectUsageSchema, projectUsagePageSchema, type ProjectUsagePage, type ProjectUsage, type ProjectUsageMetrics } from '../../../src/projects/usage-contract.ts'
-const props = defineProps<{ apiBase: string; projectId: string; active: boolean }>()
+import type { ProjectUsageMetrics } from '../../../src/projects/usage-contract.ts'
+const props = defineProps<{ apiBase: string; projectId?: string; active: boolean }>()
 const owner = useCatalogResourceStore(requireResourcePinia()).owner
 const enabled = useCatalogVisibility(() => props.active)
+const globalMode = computed(() => props.projectId === undefined)
+const filter = ref('')
+const filterControl = ref<InstanceType<typeof UiSelect>>()
+const selectedProjectId = computed(() => props.projectId ?? filter.value)
+const allProjects = computed(() => globalMode.value && !filter.value)
+const scopedBase = computed(() => globalMode.value && filter.value ? projectBase(props.apiBase, filter.value) : props.apiBase)
+const global = shallowRef<ReturnType<typeof owner.globalUsage>>()
+const rows = computed(() => global.value?.state.value.value)
+const failedProjects = computed(() => rows.value?.filter(row => !row.usage).length ?? 0)
+const aggregate = computed(() => mergeUsage(rows.value?.flatMap(row => row.usage ? [row.usage] : []) ?? []))
 const summary = shallowRef<ReturnType<typeof owner.usage>>()
-const data = computed(() => summary.value?.state.value.value)
-const loading = computed(() => summary.value?.state.value.loading ?? false)
-const error = computed(() => !!summary.value?.state.value.error)
+const state = computed(() => allProjects.value ? global.value?.state.value : summary.value?.state.value)
+const data = computed(() => allProjects.value ? aggregate.value : summary.value?.state.value.value)
+const loading = computed(() => state.value?.loading ?? false)
+const error = computed(() => !!state.value?.error)
+watch(() => [props.apiBase, globalMode.value && enabled.value] as const, ([base, active], _, cleanup) => {
+  filter.value = ''; global.value = undefined
+  if (!active) return
+  const lease = owner.globalUsage(base); global.value = lease
+  cleanup(lease.release)
+}, { immediate: true })
+watch(rows, value => {
+  if (value && filter.value && !value.some(row => row.project.id === filter.value)) filter.value = ''
+})
 const periods = [{ key: 'today', label: 'Today' }, { key: 'past7Days', label: 'Past 7 days' }, { key: 'month', label: 'This month' }, { key: 'total', label: 'All time' }] as const
 const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
+const rankedRows = computed(() => [...(rows.value ?? [])].sort((a, b) => {
+  const period = selectedPeriod.value
+  return (b.usage?.[period].tokens ?? -1) - (a.usage?.[period].tokens ?? -1)
+    || a.project.name.localeCompare(b.project.name)
+}))
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
 const selectedActivity = computed(() => data.value!.activity[selectedPeriod.value])
 const activityKinds = [
@@ -117,7 +166,7 @@ const activityKinds = [
   { key: 'tools', title: 'Tool usage', label: 'Tool', description: 'Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.' },
 ] as const
 const expandedActivity = ref({ models: false, tools: false })
-watch(() => [props.projectId, selectedPeriod.value], () => { expandedActivity.value = { models: false, tools: false } })
+watch(() => [selectedProjectId.value, selectedPeriod.value], () => { expandedActivity.value = { models: false, tools: false } })
 const activityCharts = computed(() => activityKinds.map(kind => {
   const entries = [...selectedActivity.value[kind.key]].sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name))
   return { ...kind, entries, total: entries.reduce((sum, entry) => sum + entry.calls, 0), maximum: entries[0]?.calls ?? 0 }
@@ -178,17 +227,20 @@ function loadPage(page: number) {
     previousPageLease.value?.release(); previousPageLease.value = pageLease.value
   } else pageLease.value?.release()
   requestedPage.value = page
-  pageLease.value = owner.usagePage(props.apiBase, props.projectId, page)
+  pageLease.value = owner.usagePage(scopedBase.value, selectedProjectId.value, page)
 }
-function refresh() { resetPage(); return summary.value?.refresh() }
-watch(() => [props.apiBase, props.projectId, enabled.value] as const, ([base, projectId, active], _, cleanup) => {
+function refresh() { resetPage(); return allProjects.value ? global.value?.refresh() : summary.value?.refresh() }
+watch(() => [scopedBase.value, selectedProjectId.value, enabled.value] as const, ([base, projectId, active], _, cleanup) => {
   resetPage(); summary.value = undefined
-  if (!active) return
+  if (!active || !projectId) return
   const lease = owner.usage(base, projectId); summary.value = lease
   cleanup(() => { lease.release(); resetPage() })
 }, { immediate: true })
 </script>
 <style scoped>
+.project-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 0 16px; }
+.project-filter .ui-select { max-width: 100%; }
+.project-breakdown { margin-block: 16px; }
 .project-usage { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 24px; color: var(--c-text); background: var(--c-bg-soft); container: usage / inline-size; }
 header, .summary-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
 h2 { margin: 0; font-size: 16px; font-weight: 600; }
