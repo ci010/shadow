@@ -1,3 +1,4 @@
+import { delegatedBuiltinSelection } from '../agent/types/versions.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { ExecutionContext } from './context.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -78,6 +79,7 @@ export class SubagentTool implements Tool {
         type: 'string',
         description:
           'Agent role. Defaults to "general"; explicit call mode inherits the caller role when omitted. ' +
+          'Built-in specialist roles use their configured default for new ordinary delegations; use role@version to pin one explicitly. ' +
           'Discover local roles and configured a2a:<agent> targets with read("v:agents"). Remote targets support task mode only and inherit no local resources.',
       },
       review: reviewParameters,
@@ -159,7 +161,13 @@ export class SubagentTool implements Tool {
     const initiativeId = parseWorkRoot(args.workRoot) ?? parentState?.initiativeId
     if (initiativeId) this.sessions.assertInitiativeAccess(initiativeId)
     const inheritedRole = parentState?.agentType ?? 'general'
-    const typeName = args.agent_type != null ? String(args.agent_type) : args.mode === 'call' ? inheritedRole : 'general'
+    const ordinary = !parentState?.channelBoundary && !parentState?.automation && !ctx.channelAddress && !channelAddressFromSessionId(ctx.sessionId)
+      && !this.sessions.isManagedConversation?.(ctx.sessionId)
+    const resolveSelection = (name: string) => {
+      const builtin = ordinary ? delegatedBuiltinSelection(name) : undefined
+      return builtin ? builtin.agentType ?? this.sessions.defaultBuiltinAgentType?.(builtin.role) ?? name : name
+    }
+    const typeName = args.agent_type != null ? resolveSelection(String(args.agent_type)) : args.mode === 'call' ? inheritedRole : 'general'
     const reportTo = args.report_to != null ? String(args.report_to) : undefined
     const preloadTools = args.preload_tools && typeof args.preload_tools === 'object' && !Array.isArray(args.preload_tools)
       ? Object.fromEntries(
@@ -191,9 +199,10 @@ export class SubagentTool implements Tool {
     if (parsedReview && !parsedReview.success) return reviewError(parsedReview.error)
     const review = parsedReview?.success ? parsedReview.data : undefined
     if (review?.mode === 'parent' && review.agent_type !== undefined) return 'Error: parent review does not accept agent_type.'
-    if (review?.mode === 'agent' && (!this.agentTypes.resolve(review.agent_type ?? 'verify'))) return 'Error: reviewer must be a configured local agent.'
-    if (review?.mode === 'agent') {
-      const reviewer = this.agentTypes.resolve(review.agent_type ?? 'verify')!
+    const reviewerType = review?.mode === 'agent' ? resolveSelection(review.agent_type ?? 'verify') : undefined
+    if (reviewerType) {
+      const reviewer = this.agentTypes.resolve(reviewerType)
+      if (!reviewer) return 'Error: reviewer must be a configured local agent.'
       if (reviewer.name.startsWith('a2a:') || !isToolAllowed(reviewer, 'task')) return 'Error: reviewer must be local and permitted to use the structured task review tool.'
     }
     const task = typeof args.task === 'string' ? args.task.trim() : ''
@@ -257,7 +266,7 @@ export class SubagentTool implements Tool {
       },
     )
 
-    if (review) await this.sessions.configureTaskReview(sessionId, task, { mode: review.mode, agentType: review.mode === 'agent' ? review.agent_type ?? 'verify' : undefined, maxRounds: review.max_rounds, criteria: review.criteria })
+    if (review) await this.sessions.configureTaskReview(sessionId, task, { mode: review.mode, agentType: reviewerType, maxRounds: review.max_rounds, criteria: review.criteria })
     this.sessions.alignment?.linkExecution(sessionId, parentSessionId, work)
     if (mode === 'call') return this.sessions.startCall(sessionId, task, ctx)
     if (task) {

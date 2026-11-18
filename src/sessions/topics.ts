@@ -70,6 +70,7 @@ export interface TopicServiceOptions {
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
   folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess' | 'list'> & Partial<Pick<FolderRegistry, 'requireSelectionAvailable'>>
+  defaultWebAgentType?: () => string
   resolveAgent: (name: string) => ({ defaultMode: string } & InferenceSettings) | undefined
   changed: (sessionId?: string) => void
 }
@@ -138,8 +139,9 @@ export class TopicService {
   async create(request: unknown, createdBySessionId?: string, signal?: AbortSignal, setupInstructions?: string) {
     const parsed = createRequest.parse(request)
     if (createdBySessionId) this.assertActor(this.options.projectId, createdBySessionId, true)
-    const agent = this.options.resolveAgent(parsed.agentType)
-    if (!agent) throw new TopicError(`Unknown agent type "${parsed.agentType}".`)
+    const useDefault = !createdBySessionId && !Object.hasOwn(request as object, 'agentType')
+    const explicitAgent = useDefault ? undefined : this.options.resolveAgent(parsed.agentType)
+    if (!useDefault && !explicitAgent) throw new TopicError(`Unknown agent type "${parsed.agentType}".`)
     const requestId = parsed.requestId ?? randomUUID()
     const sessionId = `web:chat-${requestId}`
     const topicRequestHash = createHash('sha256').update(JSON.stringify({ ...parsed, requestId, createdBySessionId, setupInstructions })).digest('hex')
@@ -155,6 +157,10 @@ export class TopicService {
         if (this.options.sessions.getSessionState(sessionId)) {
           return this.existing(sessionId, topicRequestHash, parsed.initialMessage !== undefined)
         }
+        const agentType = useDefault
+          ? this.options.defaultWebAgentType?.() ?? parsed.agentType : parsed.agentType
+        const agent = explicitAgent ?? this.options.resolveAgent(agentType)
+        if (!agent) throw new TopicError(`Unknown agent type "${agentType}".`)
         const inference: InferenceSettings = {
           ...(parsed.model === undefined ? {} : { model: parsed.model }),
           ...(parsed.effort === undefined ? {} : { reasoningEffort: parsed.effort }),
@@ -185,7 +191,7 @@ export class TopicService {
         await this.options.sessions.buildSession(sessionId, undefined, {
           topic,
           topicRequestHash, createdBySessionId, mode: 'session', parentSessionId: null,
-          agentType: parsed.agentType, initiativeId: parsed.initiativeId,
+          agentType, initiativeId: parsed.initiativeId,
           folderId: folder?.id,
           workdir: folder ? folder.kind === 'remote' || folder.kind === 'layerfs' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
           focus, setupInstructions,

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isBuiltinAgentVersion } from '../agent/types/versions.ts'
 import { parseMcpServerConfig } from '../mcp/config.ts'
 import { MAX_YIELD_TIMEOUT_MS } from '../sessions/yield-contract.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
@@ -6,6 +7,11 @@ import { DEFAULT_AGENT_MODEL } from './defaults.ts'
 import { WebSearchSelectionSchema } from './web-search.ts'
 import { A2aConfigSchema } from '../a2a/config.ts'
 import { organizationConfigSchema } from '../projects/organization-controller.ts'
+
+export const AgentVersionDefaultsSchema = z.record(z.string(), z.string()).refine(
+  value => Object.entries(value).every(([role, version]) => isBuiltinAgentVersion(role, version)),
+  'Unknown built-in Agent version',
+)
 
 // ── Provider configs ────────────────────────────────────────────────────────
 
@@ -266,6 +272,7 @@ export const TunnelSchema = z.object({
 // ── Root config ─────────────────────────────────────────────────────────
 
 export const ConfigSchema = z.object({
+  agentVersionDefaults: AgentVersionDefaultsSchema.default({}),
   network: z.object({ proxyEnabled: z.boolean().default(true) }).strict().optional(),
   a2a: A2aConfigSchema.optional(),
   agent: AgentSchema.default({}),

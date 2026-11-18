@@ -8,6 +8,7 @@ import { updateBackendNetwork } from '../../execution/network/backend.ts'
 import { Hono } from 'hono'
 import { dirname, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
+import { isDeepStrictEqual } from 'node:util'
 import { appDataPaths } from '../../utils/data-paths.ts'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
 import { resolveUiDistDirectory } from './paths.ts'
@@ -27,6 +28,7 @@ import { uiPlugin } from '../../gateway/ui.ts'
 import { createProjectScope } from '../../projects/scope.ts'
 import { ProjectCatalog } from '../../projects/catalog.ts'
 import { AppProviderConfigStore, ProjectConfigStore } from '../../projects/config-store.ts'
+import { appAgentVersionDefaultsPlugin } from '../../config/agent-version-routes.ts'
 import { appModelDefaultsPlugin } from '../../config/model-routes.ts'
 import { appWebSearchPlugin } from '../../config/web-search-routes.ts'
 import { projectPaths, projectBasePath } from '../../projects/contracts.ts'
@@ -224,6 +226,12 @@ export async function startProjectHost(
     configPath: options.configPath,
     getConfig: () => activeConfig,
     onChanged: async changed => {
+      if (!isDeepStrictEqual(changed.agentVersionDefaults, activeConfig.agentVersionDefaults) &&
+        isDeepStrictEqual({ ...changed, agentVersionDefaults: activeConfig.agentVersionDefaults }, activeConfig)) {
+        // Project defaults read this shared snapshot on new execution. No provider or MCP reload is needed.
+        activeConfig = changed
+        return
+      }
       const updatedProvider = createAggregatedProvider(changed, copilotAuth, hostHome)
       const previous = activeConfig
       const previousProvider = provider
@@ -304,7 +312,7 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), mobileAccess.plugin(), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [browserAuth.plugin(), mobileAccess.plugin(), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appAgentVersionDefaultsPlugin(sharedConfigStore, () => activeConfig), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, browserAuth, clientAddresses, authorizeClient: request => {
       if (mobileAccess?.authorizeMain(request) || deviceUi?.authorize(request)) return true
       const projectId = a2aRequestProject(request)

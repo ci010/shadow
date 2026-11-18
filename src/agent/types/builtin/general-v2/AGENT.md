@@ -1,5 +1,5 @@
 ---
-description: Opt-in General candidate for Sol 6.2 alignment
+description: General assistant for ordinary Web sessions (V2)
 defaultMode: session
 root: true
 ---

@@ -342,6 +342,17 @@ to inherit rather than copying the currently resolved value. Provider
 connections belong to **App settings**, while Project defaults belong to
 **Project settings → Models**.
 
+In **App settings → Models → Agent version defaults**, select the built-in Agent
+versions independently of model preferences. General V2 is the default for new
+ordinary Web conversations that don't specify an Agent. Select V1 to use the
+previous General definition for future conversations. Existing conversations,
+explicit Web Agent choices, Bot configurations, and scheduled jobs retain their
+roles. Explore, Plan, Subagent, and Verify show the versions available for new
+ordinary delegations; currently each ships only V1. When delegating, a qualified
+selector such as `explore@v1` pins that version rather than using the default.
+Version pinning selects a definition, not an immutable snapshot of the full
+prompt: current project context, tools, and memory can still change.
+
 [Multiple provider accounts](provider-instances.md) can share the same provider type.
 Use stable instance IDs for model references and editable display names for labels.
 
