@@ -47,6 +47,14 @@
         <p class="device-hint">{{ t('This setting is saved and restored when Main restarts. Turn it off here when testing is finished.') }}</p>
       </form>
 
+      <div v-if="network.state === 'listening' && network.host !== '127.0.0.1'" class="network-state">
+        <button type="button" class="device-button" :disabled="!!action || !!loadError" @click="setLoopback(!network.enableLoopbackListener)">{{ network.enableLoopbackListener ? t('Turn off tunnel listener') : t('Enable tunnel listener') }}</button>
+        <code v-if="network.loopbackEndpoint">{{ network.loopbackEndpoint }}</code>
+        <template v-else-if="network.enableLoopbackListener">
+          <span class="device-error-text" role="status">{{ t('Tunnel listener unavailable. Check whether the local device port is in use.') }}</span>
+          <button type="button" class="device-button" :disabled="!!action || !!loadError" @click="setLoopback(true)">{{ t('Retry tunnel listener') }}</button>
+        </template>
+      </div>
       <div v-if="network.state === 'listening'" class="invitation-section">
         <template v-if="invitation">
           <h3>{{ t('Paste this invitation in the Child setup') }}</h3>
@@ -240,8 +248,21 @@ async function enableNetwork() {
   await mutate('network', async signal => {
     const value = parseDeviceNetwork(await deviceAdminRequest(props.apiBase, '/nodes/v1/network', signal, 'PUT', {
       version: 1, enabled: true, host: host.value, port: port.value, allowInsecureLocalTransport: true,
+      ...(network.value?.enableLoopbackListener ? { enableLoopbackListener: true } : {}),
     }))
     if (!signal.aborted) { applyNetwork(value); httpAcknowledged.value = false }
+  })
+}
+
+async function setLoopback(enabled: boolean) {
+  const settings = network.value
+  if (settings?.state !== 'listening') return
+  await mutate('loopback', async signal => {
+    const value = parseDeviceNetwork(await deviceAdminRequest(props.apiBase, '/nodes/v1/network', signal, 'PUT', {
+      version: 1, enabled: true, host: settings.host, port: settings.port,
+      allowInsecureLocalTransport: settings.allowInsecureLocalTransport, enableLoopbackListener: enabled,
+    }))
+    if (!signal.aborted) applyNetwork(value)
   })
 }
 
@@ -251,6 +272,7 @@ async function disableNetwork() {
   await mutate('disable', async signal => {
     const value = parseDeviceNetwork(await deviceAdminRequest(props.apiBase, '/nodes/v1/network', signal, 'PUT', {
       version: 1, enabled: false, host: settings.host, port: settings.port, allowInsecureLocalTransport: settings.allowInsecureLocalTransport,
+      ...(settings.enableLoopbackListener ? { enableLoopbackListener: true } : {}),
     }))
     if (!signal.aborted) { applyNetwork(value); httpAcknowledged.value = false }
   })

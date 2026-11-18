@@ -47,8 +47,11 @@ test('failed pairing retains identity without PIN and allows endpoint correction
   const text = await readFile(configPath, 'utf8')
   assert.ok(!text.includes('123456') && !text.includes('offer-1') && !text.includes('executionConsent'))
   await assert.rejects(restarted.pair({ ...input(directory), dataDir: join(directory, 'new-home') }), /existing device identity/)
+  await writeFile(configPath, JSON.stringify({ ...first, allowDeviceHome: true }))
+  assert.equal((await restarted.readConfig()).allowDeviceHome, true)
   await restarted.pair({ ...input(directory), endpoint: 'https://corrected.test' })
   assert.equal((await restarted.readConfig()).localNodeId, first.localNodeId)
+  assert.equal((await restarted.readConfig()).allowDeviceHome, true)
   const credentials = join(directory, 'home', 'credentials')
   await mkdir(credentials, { recursive: true })
   await writeFile(join(credentials, 'device-credential.v1.json'), JSON.stringify({ version: 1,

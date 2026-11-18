@@ -18,6 +18,7 @@ export interface ChildBootstrapConfigV1 extends BootstrapConfigBaseV1 {
   mainEndpoint: string
   allowInsecureLocalTransport?: boolean
   workdirs?: ChildWorkdirBinding[]
+  allowDeviceHome?: boolean
 }
 
 export interface ChildWorkdirBinding {
@@ -36,6 +37,7 @@ const BOOTSTRAP_FIELDS = new Set([
   'mainEndpoint',
   'allowInsecureLocalTransport',
   'workdirs',
+  'allowDeviceHome',
 ])
 
 export class BootstrapConfigError extends Error {
@@ -76,6 +78,10 @@ export function parseBootstrapConfigV1(input: unknown): BootstrapConfigV1 {
     issues.push('workdirs is only valid when mode is "child"')
   }
 
+  if (input.allowDeviceHome !== undefined && (mode !== 'child' || typeof input.allowDeviceHome !== 'boolean')) {
+    issues.push('allowDeviceHome must be a boolean on Child only')
+  }
+
   let mainEndpoint: string | undefined
   let workdirs: ChildWorkdirBinding[] | undefined
   if (mode === 'child') {
@@ -108,6 +114,7 @@ export function parseBootstrapConfigV1(input: unknown): BootstrapConfigV1 {
         allowInsecureLocalTransport: input.allowInsecureLocalTransport,
       }),
       ...(workdirs === undefined ? {} : { workdirs }),
+      ...(typeof input.allowDeviceHome === 'boolean' ? { allowDeviceHome: input.allowDeviceHome } : {}),
     }
   }
   return { ...base, mode: 'main' }

@@ -25,6 +25,7 @@ export interface DeviceNetworkConfig {
   readonly host: string
   readonly port: number
   readonly allowInsecureLocalTransport: boolean
+  readonly enableLoopbackListener?: boolean
 }
 
 export interface DeviceNetworkAddress {
@@ -37,6 +38,7 @@ export interface DeviceNetworkState extends DeviceNetworkConfig {
   readonly endpoint: string | null
   readonly error: string | null
   readonly addresses: readonly DeviceNetworkAddress[]
+  readonly loopbackEndpoint?: string
 }
 
 interface DeviceNetworkOptions {
@@ -47,6 +49,8 @@ interface DeviceNetworkOptions {
   readonly authorize: (request: Request) => boolean | Promise<boolean>
   readonly addresses?: () => readonly DeviceNetworkAddress[]
 }
+
+const LOOPBACK_DEVICE_HOST = '127.0.0.1'
 
 const DEFAULT_CONFIG: DeviceNetworkConfig = {
   version: 1, enabled: false, host: '127.0.0.1', port: 3124,
@@ -83,7 +87,9 @@ export function parseDeviceNetworkConfig(value: unknown): DeviceNetworkConfig {
   }
   const input = value as Record<string, unknown>
   if (
-    Object.keys(input).length !== 5 || input.version !== 1
+    Object.keys(input).some(key => !['version', 'enabled', 'host', 'port', 'allowInsecureLocalTransport', 'enableLoopbackListener'].includes(key))
+    || input.version !== 1
+    || (input.enableLoopbackListener !== undefined && typeof input.enableLoopbackListener !== 'boolean')
     || typeof input.enabled !== 'boolean' || typeof input.host !== 'string'
     || !isPrivateDeviceAddress(input.host)
     || !Number.isSafeInteger(input.port) || (input.port as number) < 1024 || (input.port as number) > 65535
@@ -95,12 +101,14 @@ export function parseDeviceNetworkConfig(value: unknown): DeviceNetworkConfig {
   return {
     version: 1, enabled: input.enabled, host: input.host, port: input.port as number,
     allowInsecureLocalTransport: input.allowInsecureLocalTransport,
+    ...(input.enableLoopbackListener === true ? { enableLoopbackListener: true } : {}),
   }
 }
 
 export class MainDeviceNetwork {
   private config: DeviceNetworkConfig = DEFAULT_CONFIG
   private server: GatewayServer | undefined
+  private loopbackServer: GatewayServer | undefined
   private error: string | null = null
   private operation: Promise<unknown> = Promise.resolve()
   private closing = false
@@ -128,6 +136,7 @@ export class MainDeviceNetwork {
       state: this.error ? 'error' : this.server ? 'listening' : 'disabled',
       endpoint: this.server && !this.error ? `http://${this.config.host}:${this.config.port}` : null,
       error: this.error,
+      ...(this.server && !this.error && this.loopbackServer ? { loopbackEndpoint: `http://${LOOPBACK_DEVICE_HOST}:${this.config.port}` } : {}),
       addresses: (this.options.addresses ?? deviceNetworkAddresses)(),
     }
   }
@@ -138,6 +147,11 @@ export class MainDeviceNetwork {
       const config = parseDeviceNetworkConfig(value)
       if (config.enabled) this.requireAddress(config.host)
       await this.save(config)
+      if (config.enabled && this.server && !this.error && config.host === this.config.host && config.port === this.config.port) {
+        this.config = config
+        await this.syncLoopbackListener()
+        return this.getState()
+      }
       await this.stopListener()
       this.config = config
       this.error = null
@@ -196,7 +210,43 @@ export class MainDeviceNetwork {
   }
 
   private async startListener(): Promise<void> {
-    this.requireAddress(this.config.host)
+    const { host, port } = this.config
+    this.requireAddress(host)
+    const primary = await this.bindListener(host, port)
+    this.server = primary
+    void primary.finished.catch(error => {
+      if (this.server === primary) this.recordFailure(error)
+    })
+
+    await this.syncLoopbackListener()
+  }
+
+  private async syncLoopbackListener(): Promise<void> {
+    const { host, port, enableLoopbackListener } = this.config
+    if (!enableLoopbackListener || host === LOOPBACK_DEVICE_HOST) {
+      const existing = this.loopbackServer
+      this.loopbackServer = undefined
+      await existing?.shutdown()
+      return
+    }
+    if (this.loopbackServer) return
+    // A tunnel-side bind failure must not disconnect or hide the primary LAN listener.
+    try {
+      const loopback = await this.bindListener(LOOPBACK_DEVICE_HOST, port)
+      this.loopbackServer = loopback
+      void loopback.finished.catch(error => {
+        if (this.loopbackServer !== loopback) return
+        this.reportLoopbackFailure(port, error)
+        this.loopbackServer = undefined
+        void loopback.shutdown().catch(cleanupError => this.reportLoopbackFailure(port, cleanupError))
+      })
+    } catch (error) {
+      this.reportLoopbackFailure(port, error)
+    }
+  }
+
+  private async bindListener(host: string, port: number): Promise<GatewayServer> {
+    // Use a separate app/WebSocket server per binding so cleanup is independent.
     const app = new Hono()
     // Only device protocol ingress is reachable here, including the proof-authenticated UI tunnel.
     // Raw browser APIs and launch-token/local administration remain inaccessible.
@@ -211,25 +261,24 @@ export class MainDeviceNetwork {
       clientAddresses: this.options.clientAddresses,
       launchCredentialExemptions: [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DEVICE_UI_ROUTES],
     })
-    const server = serveGateway(app, {
-      host: this.config.host, port: this.config.port,
-      clientAddresses: this.options.clientAddresses,
-    })
+    const server = serveGateway(app, { host, port, clientAddresses: this.options.clientAddresses })
     try { await server.ready }
     catch (error) {
       await server.shutdown()
       throw error
     }
-    this.server = server
-    void server.finished.catch(error => {
-      if (this.server === server) this.recordFailure(error)
-    })
+    return server
   }
 
   private async stopListener(): Promise<void> {
-    const server = this.server
+    const { server, loopbackServer } = this
     this.server = undefined
-    if (server) await server.shutdown()
+    this.loopbackServer = undefined
+    await Promise.all([server?.shutdown(), loopbackServer?.shutdown()])
+  }
+
+  private reportLoopbackFailure(port: number, error: unknown): void {
+    console.error(`[device-network] Optional loopback listener at ${LOOPBACK_DEVICE_HOST}:${port} unavailable; primary listener is unchanged`, error)
   }
 
   private recordFailure(error: unknown): void {

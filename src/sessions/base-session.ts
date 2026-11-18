@@ -1,3 +1,5 @@
+import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeNode } from '../execution/device-home.ts'
+import { isDirectOwnerTurn, isOwnerSession } from './owner-policy.ts'
 import { isRecordedChannelInput } from '../channels/recorded-input.ts'
 import { LEARNING_RECEIPT_RECORDED } from '../agent/learning/receipt.ts'
 import { resolveExplicitToolTarget, resolveWorkdirToolTarget } from '../execution/tool-target.ts'
@@ -938,10 +940,19 @@ export abstract class BaseSession {
           this.workspace, this.state, this.workdirLookup, this.remoteExecutor,
           { version: 2, nodeId, workdirId }, operation,
         ),
-        resolveToolTarget: async (folder, operation) => resolveExplicitToolTarget(
-          this.workspace, this.state, this.workdirLookup, this.remoteExecutor,
-          await this.tools.executionTargetFolder(folder, signal), operation,
-        ),
+        resolveToolTarget: async (folder, operation) => {
+          if (folder.startsWith('device:')) {
+            if (!isDirectOwnerTurn(executionContext) || !this.state.projectId || !isOwnerSession(this.state, this.state.projectId)
+              || executionContext.scriptInvocation || this.tools.boundary || !DEVICE_HOME_OPERATIONS.includes(operation) || !this.remoteExecutor) {
+              throw new Error('Device home targeting requires an owner Web turn and an authorized remote read, search or OS shell. No Main fallback is allowed.')
+            }
+            const nodeId = deviceHomeNode(folder)
+            return { remoteWorkdir: { nodeId, workdirId: DEVICE_HOME_WORKDIR, executor: this.remoteExecutor },
+              fileChangeTarget: { nodeId, workdirId: DEVICE_HOME_WORKDIR } }
+          }
+          return resolveExplicitToolTarget(this.workspace, this.state, this.workdirLookup, this.remoteExecutor,
+            await this.tools.executionTargetFolder(folder, signal), operation)
+        },
         remoteWorkdir,
         layerfsWorkdir: locations.workdir.locality === 'layerfs' ? { workspace: locations.workdir.workspace } : undefined,
         tools: this.tools,
