@@ -28,7 +28,7 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
       const groups=createEditorGroups(), project=ref('p'), request=ref();window.fixture={groups,project,request};
       createResourceApp({setup(){provideMobileChrome();provide(EditorGroupsKey,groups);return()=>h('div',{style:'display:flex;height:100vh'},['p','q'].map(p=>h('section',{key:p,style:'display:'+ (project.value===p?'flex':'none')+';flex:1;min-width:0'},[
         h(Host,{projectId:p,apiBase:location.origin+'/projects/'+p,active:project.value===p}),
-        h(Workbench,{projectId:p,apiBase:location.origin+'/projects/'+p,sessionId:'web:'+p,contextKey:p,active:project.value===p,knowledgeEnabled:true,knowledgeRequest:project.value===p?request.value:undefined,conversationTitle:p+' chat'},()=>h('textarea',{class:'draft'},'untouched draft'))
+        h(Workbench,{projectId:p,apiBase:location.origin+'/projects/'+p,sessionId:'web:'+p,folderId:p+'-folder',contextKey:p,active:project.value===p,knowledgeEnabled:true,knowledgeRequest:project.value===p?request.value:undefined,conversationTitle:p+' chat'},()=>h('textarea',{class:'draft'},'untouched draft'))
       ])))} }).use(router).mount('#app');
     ` },
     configureServer(server) { server.middlewares.use((req, res, next) => {
@@ -39,7 +39,7 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
       const project = url.pathname.split('/')[2]!
       if (url.pathname.endsWith('/knowledge')) res.end(JSON.stringify({ entries: [entry(project), { ...entry(project), id: historyId, path: historyId, title: 'cron_legacy.files.jsonl', kind: 'memory' }], links: [{ source: entry(project).id, target: 'outside', label: 'external reference' }, { source: entry(project).id, target: historyId, label: 'legacy ledger' }] }))
       else if (url.pathname.endsWith('/knowledge/entry')) res.end(JSON.stringify({ entry: entry(project), content: '# Synthetic ' + project }))
-      else if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: [] }))
+      else if (url.pathname.endsWith('/folders')) res.end(JSON.stringify({ folders: [{ id: project + '-folder', name: project + ' files', path: '/synthetic/' + project, createdAt: '2026-01-01' }] }))
       else if (url.pathname.endsWith('/picker/devices')) res.end(JSON.stringify({ devices: [] }))
       else if (url.pathname.endsWith('/files')) res.end(JSON.stringify({ path: '', entries: [{ name: 'same.md', type: 'file', ext: '.md', size: 12, mtime: null }] }))
       else if (url.pathname.endsWith('/preview')) res.end(JSON.stringify({ binary: false, size: 12, content: '# Synthetic file' }))
@@ -50,11 +50,27 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
   await server.listen(); t.after(() => { server.httpServer?.closeAllConnections(); return server.close() })
   const script = `const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});(async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1300,height:800,webPreferences:{backgroundThrottling:false}});win.webContents.on('console-message',event=>console.log(event.message));const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<600;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw Error('Timeout '+s+' '+await run('document.body.innerText'))};await win.loadURL(${JSON.stringify(server.resolvedUrls!.local[0])});
     await wait('window.fixture?.groups.active("p")');
-    await run('window.fixture.groups.explorers.add("p");void 0');
+    const toggle = '[...document.querySelectorAll(".project-explorer-toggle")].find(button=>button.getBoundingClientRect().width)';
+    const filesVisible = '[...document.querySelectorAll(".project-file-explorer")].some(pane=>pane.getBoundingClientRect().width>0)';
+    const selectProject = async project => {
+      await run('window.fixture.project.value='+JSON.stringify(project)+';void 0');
+      await wait('window.fixture.groups.active('+JSON.stringify(project)+')?.conversation && '+toggle);
+    };
+    await run(toggle+'.click()');
+    await wait(filesVisible);
+    await selectProject('q');
+    assert.equal(await run(filesVisible),true,'an open file pane stays open when switching Projects');
+    await run(toggle+'.click()');
+    await wait('!('+filesVisible+')');
+    await selectProject('p');
+    assert.equal(await run(filesVisible),false,'switching back does not restore a stale open file pane');
+    await run(toggle+'.click()');
+    await wait('document.querySelector(".root-toggle")');
+    await run('document.querySelector(".root-toggle").click()');
     await wait('document.querySelector(".tree-row[data-path]")');
     await run('document.querySelector(".tree-row[data-path]").click()');
     await wait('document.querySelector(".file-markdown")');
-    await run('window.fileNode=document.querySelector(".file-markdown");window.fileId=window.fixture.groups.active("p").id;window.fixture.request.value={};void 0');
+    await run('window.fileNode=document.querySelector(".file-markdown");window.fileId=window.fixture.groups.active("p").id;'+toggle+'.click();window.fixture.request.value={};void 0');
     await wait('document.querySelector(".knowledge-explorer-pane button[aria-current],.knowledge-explorer-pane nav button")');
     assert.equal(await run('document.querySelector(".project-file-explorer").getBoundingClientRect().width'),0);
     assert.equal(await run('document.querySelector(".knowledge-explorer-pane").closest(".editor-group-content")===null'),true);
@@ -66,7 +82,9 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
     await run('window.leafId=window.fixture.groups.active("p").id;window.fixture.groups.move(window.leafId,"right");window.fixture.groups.activate(window.fileId);void 0');
     await wait('!document.querySelector(".knowledge-explorer-pane")');
     assert.equal(await run('window.fileNode===document.querySelector(".file-markdown")'),true,'same file DOM survives knowledge');
-    assert.equal(await run('document.querySelector(".project-file-explorer").getBoundingClientRect().width>0'),true);
+    assert.equal(await run(filesVisible),false,'leaving Knowledge does not reopen the file pane');
+    await run(toggle+'.click()');
+    await wait(filesVisible);
     await run('window.fixture.groups.focus("p","right");void 0');
     await wait('document.querySelector(".knowledge-explorer-pane")');
     assert.equal(await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-label")'),'Toggle Knowledge navigation');
@@ -83,16 +101,16 @@ test('shared Knowledge pane follows focused groups, opens real leaf tabs and ret
     await run('document.querySelector(".knowledge-explorer-pane nav button").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(100);
     assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true);
     assert.equal(await run('window.fileNode===document.querySelector(".file-markdown")'),true);
-    win.setSize(500,800);await delay(150);await run('window.fixture.groups.explorers.add("p");void 0');
+    win.setSize(500,800);await delay(150);await run('window.fixture.groups.setExplorerOpen("p",true);void 0');
     await wait('document.querySelector(".mobile-explorer-target .knowledge-explorer-pane nav button")');
     assert.equal(await run('document.querySelector(".mobile-explorer-target .knowledge-explorer-pane").getBoundingClientRect().width<=500'),true);
     await run('document.querySelector(".mobile-explorer-target .knowledge-explorer-pane nav button").click()');
-    await wait('!window.fixture.groups.explorers.has("p")');
+    await wait('!window.fixture.groups.explorerOpen("p")');
     assert.equal(await run('window.fileNode===document.querySelector(".file-markdown")'),true,'mobile teleport retains file view');
     await run('window.fixture.request.value={entryId:"memory/sessions/cron_legacy.files.jsonl"};void 0');
     await wait('[...document.querySelectorAll(".knowledge-document")].some(el=>el.textContent.includes("Not a knowledge document."))');
     assert.equal(await run('[...document.querySelectorAll(".knowledge-document")].filter(el=>el.textContent.includes("Not a knowledge document.")).every(el=>!el.querySelector(".source")&&!el.textContent.includes("cron_legacy.files.jsonl"))'),true);
-    await run('window.fixture.groups.explorers.add("p");void 0');
+    await run('window.fixture.groups.setExplorerOpen("p",true);void 0');
     await wait('document.querySelector(".knowledge-explorer-pane")');
     assert.equal(await run('document.querySelector(".knowledge-explorer-pane").textContent.includes("cron_legacy")'),false);
     win.close();console.log('KNOWLEDGE_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`

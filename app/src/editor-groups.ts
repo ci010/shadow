@@ -1,4 +1,4 @@
-import { reactive, shallowReactive, type InjectionKey } from 'vue'
+import { reactive, ref, shallowReactive, type InjectionKey } from 'vue'
 
 export type EditorSide = 'left' | 'right'
 export interface EditorDescriptor {
@@ -17,8 +17,18 @@ export interface EditorDescriptor {
 }
 /** Resource identity/lifetime is deliberately independent of group placement. */
 export function createEditorGroups() {
-  const explorers = reactive(new Set<string>())
-  const toggleExplorer = (projectId: string) => { if (explorers.has(projectId)) explorers.delete(projectId); else explorers.add(projectId) }
+  // File visibility belongs to the workbench, not to the selected Project or tab.
+  const filesOpen = ref(false)
+  const knowledgeExplorers = reactive(new Set<string>())
+  function explorerOpen(projectId: string) {
+    return active(projectId)?.explorer ? knowledgeExplorers.has(projectId) : filesOpen.value
+  }
+  function setExplorerOpen(projectId: string, open: boolean) {
+    if (!active(projectId)?.explorer) filesOpen.value = open
+    else if (open) knowledgeExplorers.add(projectId)
+    else knowledgeExplorers.delete(projectId)
+  }
+  const toggleExplorer = (projectId: string) => setExplorerOpen(projectId, !explorerOpen(projectId))
   const descriptors = shallowReactive(new Map<string, EditorDescriptor>())
   const projects = reactive(new Map<string, { left: string[]; right: string[]; selected: Record<EditorSide, string>; active: EditorSide; conversation?: string }>())
   // Multiple source workbenches may reference the same Project resource. Only
@@ -90,7 +100,11 @@ export function createEditorGroups() {
     const descriptor = descriptors.get(id), placement = side(id)
     return visible(id) && !!descriptor && state(descriptor.projectId).active === placement
   }
-  return { descriptors, projects, targets, views, explorers, toggleExplorer,
+  function active(projectId: string) {
+    const project = state(projectId)
+    return descriptors.get(project.selected[project.active])
+  }
+  return { descriptors, projects, targets, views, explorerOpen, setExplorerOpen, toggleExplorer,
     registerView(id: string, token: symbol) { views.set(id, [...(views.get(id) ?? []), token]) },
     unregisterView(id: string, token: symbol) {
       const remaining = (views.get(id) ?? []).filter(item => item !== token)
@@ -99,7 +113,7 @@ export function createEditorGroups() {
     },
     state, side, open, focus, activate, move, close, visible, focused,
     unregister(id: string) { remove(id); descriptors.delete(id) },
-    active(projectId: string) { const project = state(projectId); return descriptors.get(project.selected[project.active]) },
+    active,
     referenceTarget(projectId: string) {
       const id = state(projectId).conversation
       const descriptor = id && side(id) ? descriptors.get(id) : undefined

@@ -322,7 +322,7 @@ function chooseMobileKnowledge() {
 }
 async function showMobileFiles() {
   actionsOpen.value = false
-  if (groups) groups.explorers.add(props.projectId ?? '')
+  if (groups) groups.setExplorerOpen(props.projectId ?? '', true)
   else if (props.remote) remoteExpanded.value = true
   else preference.value = true
   await nextTick()

@@ -2,7 +2,7 @@
   <div ref="workspace" class="editor-workspace">
     <MobileEditorChrome :project-id="projectId" :active="!!active" />
     <header v-if="!mobile?.enabled.value" class="editor-workspace-header">
-      <HoverInfo v-if="apiBase" :text="knowledgeContext ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="knowledgeContext ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-${knowledgeContext ? 'explorer' : 'files'}`" :aria-expanded="groups.explorers.has(projectId)" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
+      <HoverInfo v-if="apiBase" :text="knowledgeContext ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="knowledgeContext ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-${knowledgeContext ? 'explorer' : 'files'}`" :aria-expanded="explorerOpen" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
         <span v-if="projectName && (state.left.length || state.right.length)" class="editor-project-marker" :id="`${hostId}-project`">{{ projectName }}</span>
         <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined">
@@ -18,11 +18,11 @@
       </div>
     </header>
     <div class="editor-workspace-body">
-      <MobileSheet v-if="mobile?.enabled.value" :open="!!active && groups.explorers.has(projectId)" :label="knowledgeContext ? t('Knowledge explorer') : t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
+      <MobileSheet v-if="mobile?.enabled.value" :open="!!active && explorerOpen" :label="knowledgeContext ? t('Knowledge explorer') : t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
       <Teleport :to="mobileExplorerTarget || 'body'" :disabled="!mobile?.enabled.value || !mobileExplorerTarget">
-      <KnowledgeExplorer v-if="apiBase && knowledgeContext && groups.explorers.has(projectId)" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="!!active" :explorer-id="`${hostId}-explorer`" :selected-id="knowledgeContext.entryId" @select="selectKnowledge" @close="closeExplorer" />
+      <KnowledgeExplorer v-if="apiBase && knowledgeContext && explorerOpen" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="!!active" :explorer-id="`${hostId}-explorer`" :selected-id="knowledgeContext.entryId" @select="selectKnowledge" @close="closeExplorer" />
       <!-- The file owner stays mounted: its EditorViewHosts own open file lifetimes. -->
-      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="groups.explorers.has(projectId) && !knowledgeContext" :explorer-id="`${hostId}-files`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
+      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="explorerOpen && !knowledgeContext" :explorer-id="`${hostId}-files`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
       </Teleport>
   <div ref="root" class="editor-groups">
     <nav v-if="state.left.length && state.right.length" class="mobile-group-switch" :aria-label="t('Open documents')"><button v-for="side in sides" :key="side" :aria-pressed="state.active === side" @click="groups.focus(projectId, side)">{{ t(side === 'left' ? 'Left editor group' : 'Right editor group') }}</button></nav>
@@ -65,8 +65,9 @@ const mobileExplorerTarget = ref<HTMLElement>()
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
 const knowledgeContext = computed(() => groups.active(props.projectId)?.explorer)
-// Open navigation on entering Knowledge, but allow it to be collapsed while reading.
-watch(() => !!knowledgeContext.value, value => { if (value) groups.explorers.add(props.projectId) }, { immediate: true })
+const explorerOpen = computed(() => groups.explorerOpen(props.projectId))
+// Open Knowledge navigation without changing the file explorer preference.
+watch(() => !!knowledgeContext.value, value => { if (value) groups.setExplorerOpen(props.projectId, true) }, { immediate: true })
 function selectKnowledge(id: string) {
   knowledgeContext.value?.select(id)
   if (mobile?.enabled.value) closeExplorer()
@@ -102,7 +103,7 @@ function middleClickTab(event: MouseEvent, id: string) {
   event.preventDefault()
   groups.close(id)
 }
-function closeExplorer() { groups.explorers.delete(props.projectId); explorerToggle.value?.focus() }
+function closeExplorer() { groups.setExplorerOpen(props.projectId, false); explorerToggle.value?.focus() }
 const width = ref(1000), preferredWidth = ref(480)
 const bounds = computed(() => ({ min: 240, max: Math.max(240, width.value - 280) }))
 const rightWidth = computed(() => Math.min(bounds.value.max, Math.max(bounds.value.min, preferredWidth.value)))

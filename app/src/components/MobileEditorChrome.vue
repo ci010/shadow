@@ -7,7 +7,7 @@
     <div v-for="entry in entries" :key="entry.id" class="mobile-view-row"><button :aria-current="entry.id === current?.id ? 'page' : undefined" @click="groups.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button class="mobile-view-close" v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
   </MobileSheet>
   <MobileSheet :open="actionsOpen" :label="t('Conversation and document actions')" @update:open="actionsOpen = $event">
-    <div class="mobile-workbench-actions"><button @click="groups.explorers.add(projectId); actionsOpen = false">{{ t('Browse files') }}</button><button v-if="current?.closable" @click="groups.close(current.id); actionsOpen = false">{{ t('Close current document') }}</button></div>
+    <div class="mobile-workbench-actions"><button @click="groups.setExplorerOpen(projectId, true); actionsOpen = false">{{ t('Browse files') }}</button><button v-if="current?.closable" @click="groups.close(current.id); actionsOpen = false">{{ t('Close current document') }}</button></div>
   </MobileSheet>
 </template>
 <script setup lang="ts">

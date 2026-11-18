@@ -39,7 +39,13 @@ test('Project explorer roots stay left, expand independently and show only bound
   await server.listen(); t.after(() => { server.httpServer?.closeAllConnections(); return server.close() })
   const url = server.resolvedUrls!.local[0]
   const script = String.raw`const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});(async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1300,height:800,webPreferences:{backgroundThrottling:false}});const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<200;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw Error('Timeout '+s+' '+await run('document.body.innerText'))};await win.loadURL(${JSON.stringify(url)});
-    await wait('document.querySelectorAll(".explorer-root").length===2');await run('document.querySelector(".project-explorer-toggle").click()');
+    await wait('document.querySelectorAll(".explorer-root").length===2');
+    const paneWidth = 'document.querySelector(".project-file-explorer").getBoundingClientRect().width';
+    assert.equal(await run(paneWidth),0,'opening conversations starts with the file pane closed');
+    await run('[...document.querySelectorAll(".editor-tab [role=tab]")].find(tab=>tab.textContent==="A").click()');
+    await wait('window.groups.active("p")?.id==="A"');
+    assert.equal(await run(paneWidth),0,'switching conversation tabs keeps the file pane closed');
+    await run('document.querySelector(".project-explorer-toggle").click()');
     const expanded = id => run('document.querySelector('+JSON.stringify('[data-root-id="'+id+'"] .root-toggle')+').getAttribute("aria-expanded")');
     assert.equal(await run('document.querySelectorAll(\'[data-root-id^="session:"]\').length'),0,'conversation data is not an explorer root');
     await run('window.groups.move("B","right");window.groups.focus("p","right")');await delay(80);
@@ -101,7 +107,7 @@ test('Project explorer roots stay left, expand independently and show only bound
     if(process.env.PROJECT_EXPLORER_SCREENSHOT) require('node:fs').writeFileSync(process.env.PROJECT_EXPLORER_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
     win.setSize(500,800);await delay(100);assert.equal(await run(sameRow),true,'narrow header stays inline');
     const wasOpen=await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")');await run('document.querySelector(".project-explorer-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'E',modifiers:['control','shift']});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'E',modifiers:['control','shift']});await delay(100);assert.notEqual(await run('document.querySelector(".project-explorer-toggle").getAttribute("aria-expanded")'),wasOpen,'keyboard shortcut toggles');
-    await run('window.groups.explorers.add("p");void 0');await delay(50);await run('document.querySelector(".root-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(50);assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true,'Escape returns focus to header toggle');
+    await run('window.groups.setExplorerOpen("p",true);void 0');await delay(50);await run('document.querySelector(".root-toggle").focus()');await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await delay(50);assert.equal(await run('document.activeElement.classList.contains("project-explorer-toggle")'),true,'Escape returns focus to header toggle');
     await run('for(const id of [...window.groups.descriptors.keys()])window.groups.close(id)');await delay(100);assert.equal(await run('document.querySelectorAll(".editor-tab").length'),0);assert.equal(await run('document.querySelector(".project-explorer-toggle").getBoundingClientRect().width>0'),true);await win.close();console.log('PROJECT_EXPLORER_OK');app.quit();})().catch(e=>{console.error(e);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs'); await writeFile(entry, script)
   const env = { ...process.env }

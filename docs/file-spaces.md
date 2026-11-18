@@ -1,6 +1,6 @@
 # File explorer sources
 
-The document workbench starts with its file explorer collapsed, including on wide screens. An explicit initial-open setting, explorer toggle, or linked-file reveal can open it.
+The document workbench starts with its file explorer collapsed, including on wide screens. Opening a conversation or switching tabs or Projects leaves the file explorer's open or closed state unchanged. Knowledge navigation opens independently and does not change file explorer visibility.
 
 The explorer distinguishes two sources:
 
