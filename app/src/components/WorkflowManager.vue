@@ -15,7 +15,7 @@
     <div v-else-if="snapshot" class="workflow-layout" :class="{ 'has-inspector': inspectorOpen }" :style="{ '--workflow-inspector-width': `${inspectorWidth}px` }">
       <WorkflowGraph ref="graphView" :flows="canvasFlows" :project-id="projectId" :selected-node-id="selectedBot ? botSelectedNode : inspectedNode" :selected-id="selectedBot?.definition.id ?? (inspectorOpen ? definition?.id : undefined)" @inspect="inspectFlow" @clear="closeInspector" @toggle="(id, enabled) => operate(enabled ? 'resume' : 'pause', id)">
         <template #toolbar-actions>
-          <button class="btn btn-sm workflow-refresh" :disabled="loading || busy" @click="refreshAll">{{ t('Refresh') }}</button>
+          <button class="btn btn-sm workflow-refresh" :disabled="busy" @click="refreshAll">{{ t('Refresh') }}</button>
         </template>
       </WorkflowGraph>
       <p v-if="documentQuery.bot && !selectedBot || documentQuery.workflow && !definition" class="workflow-message" role="status">{{ t('This workflow is not available. Choose a current definition from the list.') }}</p>
@@ -32,7 +32,7 @@
         </header>
         <p v-if="sourceStatus" class="workflow-explanation">{{ t('Signal source') }}: {{ sourceStatus.enabled ? t('Enabled') : t('Paused') }}<span v-if="sourceStatus.nextAt"> · {{ t('Next collection check') }}: {{ formatDateTime(sourceStatus.nextAt) }}</span></p>
         <p v-if="sourceStatus?.error" class="workflow-run-hint failure" role="alert">{{ t('Source collection failed. Inspect its authorized binding and source status in chat; no collector checkpoint was advanced for this failure.') }} <code>{{ sourceStatus.error }}</code></p>
-        <p v-if="documentQuery.run && !selectedRun" class="workflow-message" role="status">{{ t('This run is no longer retained. The current definition is shown instead.') }}</p>
+        <p v-if="runSnapshot && !runError && documentQuery.run && !selectedRun" class="workflow-message" role="status">{{ t('This run is no longer retained. The current definition is shown instead.') }}</p>
         <p class="workflow-explanation">{{ t('A workflow run is not a model session. Deterministic actions can finish without starting a conversation.') }}</p>
         <p v-if="notice" class="workflow-message" role="status">{{ notice }}</p>
         <p v-if="operationError" class="workflow-message failure" role="alert">{{ operationError }}</p>
@@ -42,7 +42,7 @@
           <button v-if="selectedRun" class="btn btn-sm" @click="selectRun()">{{ t('Current configuration') }}</button>
         </div>
         <p v-if="selectedRun && selectedRun.definition.revision !== definition.revision" class="workflow-explanation">{{ t('This run retains its admitted definition. Later edits apply to future runs.') }}</p>
-        <p v-if="!selectedRun" class="workflow-explanation">{{ t('Latest retained run state') }}</p>
+        <p v-if="!selectedRun && runSnapshot && !runError" class="workflow-explanation">{{ t('Latest retained run state') }}</p>
         <details class="graph-text" :open="!!inspectedNode"><summary>{{ t('Node details') }}</summary>
           <ol><li v-for="node in graph" :key="node.id"><details class="workflow-node" :data-state="node.status" :open="inspectedNode === node.id">
             <summary>{{ node.label }} · {{ node.detail }} · {{ workflowStatus(node.status) }}</summary>
@@ -83,7 +83,9 @@
         </section>
         <section class="workflow-runs" :aria-label="t('Recent workflow runs')">
           <h3>{{ t('Recent workflow runs') }} <small>{{ t('Latest 30 retained runs') }}</small></h3>
-          <p v-if="!runs.length">{{ t('No runs have been admitted yet. A baseline or idle source may produce no run.') }}</p>
+          <p v-if="runError" role="alert" class="workflow-message failure">{{ runError }} <button class="btn btn-sm" @click="runLease?.refresh()">{{ t('Retry') }}</button></p>
+          <p v-else-if="!runSnapshot" role="status">{{ t('Loading workflow runs…') }}</p>
+          <p v-else-if="!runs.length">{{ t('No runs have been admitted yet. A baseline or idle source may produce no run.') }}</p>
           <ol v-else><li v-for="run in runs" :key="run.id"><button class="workflow-run-choice" :class="{ selected: selectedRun?.id === run.id }" :aria-pressed="selectedRun?.id === run.id" @click="selectRun(run.id)">
             <time :datetime="run.timestamp">{{ formatDateTime(run.timestamp) }}</time><span class="workflow-state" :data-state="run.status">{{ workflowStatus(run.status) }}</span><code>{{ run.id }}</code>
           </button><RouterLink v-if="run.output?.sessionId" class="run-session-link" :to="{ name: 'chat', params: { projectId, sessionId: run.output.sessionId } }">{{ t('Open model session') }}: {{ run.output.sessionId }}</RouterLink><p v-else class="workflow-explanation">{{ t('No model session was recorded for this run.') }}</p></li></ol>
@@ -129,15 +131,27 @@ const catalog = useAutomationCatalog(() => props.apiBase, () => enabled.value)
 const operationId = ref('')
 const definition = computed(() => typeof documentQuery.value.workflow === 'string' ? snapshot.value?.definitions.find(d => d.id === documentQuery.value.workflow) : snapshot.value?.definitions[0])
 const sourceStatus = computed(() => snapshot.value?.sources?.find(s => s.kind === definition.value?.source.kind && s.id === definition.value?.source.id))
-const runs = computed(() => definition.value && snapshot.value ? recentWorkflowRuns(snapshot.value, definition.value.id) : [])
+const runLease = shallowRef<ReturnType<typeof owner.acquire>>()
+const runSnapshot = computed(() => runLease.value?.state.value.value)
+const runError = computed(() => runLease.value?.state.value.error ?? '')
+const runs = computed(() => definition.value && runSnapshot.value ? recentWorkflowRuns(runSnapshot.value, definition.value.id) : [])
+const runWorkflow = computed(() => typeof documentQuery.value.workflow === 'string' && !documentQuery.value.bot ? definition.value?.id : undefined)
+const linkedRun = computed(() => typeof documentQuery.value.run === 'string' ? documentQuery.value.run : undefined)
+watch(() => [props.apiBase, props.projectId, enabled.value, runWorkflow.value, linkedRun.value] as const,
+  ([base, project, active, workflow, run], _old, cleanup) => {
+    if (!active || !workflow) { runLease.value = undefined; return }
+    const lease = owner.acquire(base, project, { workflow, run })
+    runLease.value = lease
+    cleanup(lease.release)
+  }, { immediate: true, flush: 'sync' })
 const githubTarget = computed(() => {
   const node = displayed.value?.nodes.find(n => n.kind === 'github-notify')
   const target = node?.subscription as { sessionId?: unknown; workKey?: unknown } | undefined
   return typeof target?.sessionId === 'string' && typeof target.workKey === 'string' ? { sessionId: target.sessionId, workKey: target.workKey } : undefined
 })
-const selectedRun = computed(() => snapshot.value?.runs.find(r => r.workflow === definition.value?.id && r.id === documentQuery.value.run))
+const selectedRun = computed(() => runSnapshot.value?.runs.find(r => r.workflow === definition.value?.id && r.id === documentQuery.value.run))
 const displayed = computed(() => selectedRun.value?.definition ?? definition.value)
-const graph = computed(() => displayed.value ? workflowGraph(displayed.value, selectedRun.value ?? runs.value.find(r => r.definition.revision === displayed.value?.revision)) : [])
+const graph = computed(() => displayed.value ? workflowGraph(displayed.value, selectedRun.value ?? runSnapshot.value?.runs.find(r => r.definition.revision === displayed.value?.revision)) : [])
 const inspector = ref<HTMLElement>(), inspectedNode = ref<string>(), inspectedFlow = ref<string>(), graphView = ref<InstanceType<typeof WorkflowGraph>>()
 watch(() => documentQuery.value.workflow, id => { if (typeof id === 'string' && id !== inspectedFlow.value) inspectedNode.value = undefined })
 const referenceHub = inject(WorkflowInputReferencesKey, undefined)
@@ -178,7 +192,7 @@ const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(f
     error: operationId.value === flow.id ? operationError.value : undefined,
     notice: job?.disabledByGlobal ? t('Learning is disabled globally. This control saves the workflow preference only.') : !available ? t('Workflow controls are unavailable. Refresh to retry.') : undefined,
   }
-  return { definition: selected?.definition ?? flow, conversation: workflowConversation(flow, snapshot.value!.runs, available ? catalog.jobs.value : []), enabled: effective, control, snapshot: !!selected, run: selected ?? recentWorkflowRuns(snapshot.value!, flow.id).find(run => run.definition.revision === flow.revision) }
+  return { definition: selected?.definition ?? flow, conversation: workflowConversation(flow, runSnapshot.value?.runs ?? [], available ? catalog.jobs.value : []), enabled: effective, control, snapshot: !!selected, run: selected ?? runSnapshot.value?.runs.find(run => run.workflow === flow.id && run.definition.revision === flow.revision) }
 }), ...botFlows.value])
 const selectedControl = computed(() => canvasFlows.value.find(flow => flow.definition.id === definition.value?.id)?.control)
 async function inspectFlow(id: string, nodeId?: string) {
@@ -191,7 +205,7 @@ async function inspectFlow(id: string, nodeId?: string) {
 const chatLocation = computed(() => ({ name: 'chat', params: { projectId: props.projectId } }))
 let mutation: AbortController | undefined
 function refreshAll() { catalog.refresh(); void refresh() }
-async function refresh() { if (enabled.value) await resourceLease.value?.refresh() }
+async function refresh() { if (enabled.value) await Promise.all([resourceLease.value?.refresh(), runLease.value?.refresh()]) }
 
 function selectRun(id?: string) { confirmation.value = ''; void router.replace({ query: { workflow: definition.value?.id, ...(id ? { run: id } : {}) } }) }
 function requestRetry(run: WorkflowRun) { if (run.status === 'blocked') confirmation.value = run.id; else void operate('retry', run.id) }

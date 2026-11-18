@@ -93,20 +93,29 @@ export function registerWorkflowRoutes(app: Hono, runtime: WorkflowRuntime, auth
   inspectBots?: () => import('../bots/workflow-projection.ts').BotWorkflowProjection) {
   // Owned by this authorized Project router; never share versions across Projects.
   const reconcile = createWorkflowSnapshotDelta()
+  const reconcileRuns = createWorkflowSnapshotDelta()
   app.get('/api/workflows', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)
-    const snapshot = runtime.inspect()
+    const sync = c.req.query('sync') === '1'
+    const workflow = sync ? c.req.query('workflow') : undefined
+    const since = c.req.query('since')
+    c.header('Cache-Control', 'no-store')
+    if (workflow !== undefined) {
+      return c.json(reconcileRuns({ projectId: runtime.projectId, definitions: [],
+        runs: runtime.inspectRuns(workflow, c.req.query('run')) }, since))
+    }
+    const overview = sync && c.req.query('runs') === '0'
+    const snapshot = runtime.inspect(overview)
     let projection: Record<string, unknown> = {}
     if (inspectBots) {
       try { projection = { bots: inspectBots() } }
       catch { projection = { botsUnavailable: true } }
     }
     const state = { ...snapshot, ...projection }
-    c.header('Cache-Control', 'no-store')
     // Legacy callers keep their full snapshot contract.
-    return c.json(c.req.query('sync') === '1' ? reconcile({ projectId: snapshot.projectId,
-      definitions: snapshot.definitions, runs: snapshot.runs, sources: snapshot.sources,
-      runtimeError: snapshot.runtimeError, ...projection }, c.req.query('since')) : state)
+    return c.json(sync ? reconcile({ projectId: snapshot.projectId,
+      definitions: snapshot.definitions, runs: overview ? [] : snapshot.runs, sources: snapshot.sources,
+      runtimeError: snapshot.runtimeError, ...projection }, since) : state)
   })
   app.post('/api/workflows/control', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 403)

@@ -4336,6 +4336,7 @@
   "I inspected effects — retry": "已检查副作用，重试",
   "Keep blocked": "保持阻塞",
   "Latest 30 retained runs": "最近保留的 30 次运行",
+  "Loading workflow runs…": "正在加载工作流运行记录…",
   "Loading workflows…": "正在加载 工作流…",
   "Map to Work": "映射到 Work",
   "Next eligible retry": "下次可重试时间",
