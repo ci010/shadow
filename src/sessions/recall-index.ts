@@ -58,6 +58,15 @@ export class RecallIndex {
       if (!stopped()) checkpoint.run(Math.min(offset, stream.bytesRead + initialOffset))
     } finally { lines.close(); stream.destroy() }
   }
+  usageSummary(complete: boolean) {
+    return {
+      skills: this.db.prepare('SELECT skill_path AS entry, reads FROM skill_recall ORDER BY reads DESC, entry LIMIT 100').all()
+        .map(row => ({ entry: String(row.entry), reads: Number(row.reads) })),
+      memory: this.memorySummary().flatMap(row => row.source === 'active' || row.source === 'automatic'
+        ? [{ entry: String(row.entry), source: row.source as 'active' | 'automatic', reads: Number(row.reads) }] : []),
+      coverage: complete ? 'complete' as const : 'partial' as const,
+    }
+  }
   memorySummary() {
     return this.db.prepare(`SELECT entry,source,sum(reads) AS reads FROM memory_recall GROUP BY entry,source
       ORDER BY reads DESC,entry,source LIMIT 100`).all()

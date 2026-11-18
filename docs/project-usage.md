@@ -8,6 +8,17 @@ Project and its daily history use the same local index. Browsing the panel never
 opens conversation logs. Costs are estimated, stored in the recorded currencies,
 and are not invoices.
 
+The overview and the Project, model, and tool rankings share a summary period.
+Project and model rankings can compare tokens, recorded estimated cost, provider
+calls, or cumulative call time. Tools show result counts only; there is no
+reliable token or cost attribution to tools. Choose bars, a ring, or a table
+without changing the ranked values. Rings show proportions among the displayed
+known values; expand the ranking to include lower-ranked entries. Daily trends
+have a separate UTC window (7 or 30 days) with column, line, and table views.
+Choosing cost reads recorded estimates instead of converting token counts.
+USD includes AI credits at 100:1; CNY is shown separately. Missing estimates
+for the selected currency are unavailable, not zero.
+
 ## Sources and coverage
 
 Each Project stores its own `state/stats.sqlite`. SQLite and JSONL session records
@@ -46,8 +57,12 @@ chunks; Shadow can buffer the complete response before displaying it. The
 successful logical request's last attempt supplies the sample. Nonstreaming,
 tool-only, unsupported and historical requests without observations do not use
 total elapsed time as a substitute. Project first-text summaries use nearest-rank
-P50/P95 and a sample count, all time; the global view does not average Project
-percentiles. `v:stats/model-requests` reports Project outcomes, observed attempt
+P50/P95 and a sample count. **Request quality** uses all dated indexed requests
+up to each Project snapshot, independent of the summary and trend windows. It
+includes outcome counts, observed attempts and the count of requests supplying
+attempt data, text-observation categories, input/output/cache tokens and
+reporting counts, and sampled latency. Global usage displays per-Project
+percentiles and samples, not averages of percentiles. `v:stats/model-requests` reports Project outcomes, observed attempt
 counts, cache-token coverage, and P50/P95/sample counts for first text, retry
 queue and total elapsed times.
 
@@ -56,7 +71,12 @@ queue and total elapsed times.
 `v:skills/.stats` retains successful initial body-read totals. The previous
 `state/skill-recall.sqlite` is read-only as a legacy baseline during migration;
 old counts have no historical day attribution. New recalls are indexed in
-`stats.sqlite`. `v:stats/memory-recall` is an administrator view of the top 100
+`stats.sqlite`. The **Recall** section is owner-only and returns at most 100
+Skill entries or Memory entry/source pairs per Project. It is cumulative since
+tracking began, independent of both time controls. It uses the project-local
+index, not source logs or document bodies; delegated UI/mobile credentials do
+not gain Recall access from the usage route. `v:stats/memory-recall` remains an
+administrator view of the top 100
 entry/source pairs. The active source counts successful initial Wiki body reads
 under `v:memory`; listing, searches and continuation pages are excluded. The
 automatic source counts log briefings selected into historical prompt context,

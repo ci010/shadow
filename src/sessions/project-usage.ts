@@ -11,13 +11,17 @@ function emptyActivity(): ProjectUsageActivity {
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
-function addActivity(activity: ProjectUsageActivity, kind: 'models' | 'tools', names: string[], time: number, today: number, month: number, count = 1) {
+function addActivity(activity: ProjectUsageActivity, kind: 'models' | 'tools', names: string[], time: number, today: number, month: number, count = 1, metrics?: ProjectUsageMetrics) {
   for (const period of ['total', ...(time >= today ? ['today' as const] : []), ...(time >= today - 6 * DAY ? ['past7Days' as const] : []), ...(time >= month ? ['month' as const] : [])] as const) {
     for (const name of names) {
       const entries = activity[period][kind]
       const entry = entries.find(value => value.name === name)
       if (entry) entry.calls += count
       else entries.push({ name, calls: count })
+      if (kind === 'models' && metrics) {
+        const model = activity[period].models.find(value => value.name === name)!
+        merge(model.usage ??= empty(), metrics)
+      }
     }
   }
 }
@@ -66,7 +70,7 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
   const selected = states.filter(state => state.projectId === projectId && !logical.has(state.sessionId) && !!logical.add(state.sessionId))
   if (stats) {
     const accumulate = (time: number, model: unknown, usage: ProjectUsageMetrics) => {
-      if (typeof model === 'string' && model.trim()) addActivity(result.activity, 'models', [model], time, today, month, usage.calls)
+      if (typeof model === 'string' && model.trim()) addActivity(result.activity, 'models', [model], time, today, month, usage.calls, usage)
       merge(result.total, usage)
       if (time >= today) merge(result.today, usage)
       if (time >= today - 6 * DAY) merge(result.past7Days, usage)
@@ -88,7 +92,6 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
     for (const row of stats.toolsByDay(today, asOf)) { signal?.throwIfAborted(); addActivity(result.activity, 'tools', [row.name], row.day, today, month, row.calls) }
     const tracked = stats.trackedSessions()
     result.untrackedSessions = selected.filter(state => !tracked.has(state.sessionId)).length
-    result.firstText = stats.latency(asOf)
   } else outer: for (let position = 0; position < selected.length; position++) {
     const state = selected[position]!
     let tracked = false
@@ -170,7 +173,10 @@ async function snapshot(store: SessionStore, states: SessionState[], projectId: 
 export async function readProjectUsage(store: SessionStore, states: SessionState[], projectId: string, asOf: number, signal?: AbortSignal): Promise<ProjectUsage> {
   const value = await snapshot(store, states, projectId, asOf, signal, true)
   const from = new Date(Math.floor(asOf / DAY) * DAY - 30 * DAY).toISOString().slice(0, 10)
-  return { ...value, daily: value.daily.filter(day => day.date >= from) }
+  signal?.throwIfAborted()
+  const requestQuality = statsIndex(store)?.requestSummary(asOf)
+  return { ...value, ...(requestQuality ? { firstText: requestQuality.firstText, requestQuality } : {}),
+    daily: value.daily.filter(day => day.date >= from) }
 }
 export async function readProjectUsagePage(store: SessionStore, states: SessionState[], projectId: string, asOf: number, page: number, signal?: AbortSignal) {
   if (!Number.isSafeInteger(page) || page < 1 || page > 100000) throw new Error('Invalid usage page')

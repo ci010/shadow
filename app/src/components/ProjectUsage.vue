@@ -18,36 +18,18 @@
         <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div></article>
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
-      <section v-if="allProjects && rows?.length" class="project-breakdown">
-        <h3>{{ t('Usage by project') }}</h3>
-        <div class="daily-table" tabindex="0" :aria-label="t('Usage by project')">
-          <table><thead><tr><th scope="col">{{ t('Project') }}</th><th scope="col">{{ t('Tokens') }}</th><th scope="col">{{ t('Estimated cost') }}</th><th scope="col">{{ t('Provider time') }}</th><th scope="col">{{ t('Provider calls') }}</th></tr></thead>
-            <tbody><tr v-for="{ project, usage } in rankedRows" :key="project.id">
-              <th scope="row"><button class="btn btn-sm" type="button" @click="filter = project.id; filterControl?.focus()">{{ project.name }}</button></th>
-              <template v-if="usage"><td>{{ tokens(usage[selectedPeriod]) }}</td><td>{{ costs(usage[selectedPeriod]) }}</td><td>{{ duration(usage[selectedPeriod]) }}</td><td>{{ formatNumber(usage[selectedPeriod].calls) }}</td></template>
-              <td v-else colspan="4">{{ t('Unavailable') }}</td>
-            </tr></tbody>
-          </table>
-        </div>
-      </section>
+      <p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p>
       <div class="activity-grid">
-        <section v-for="chart in activityCharts" :key="chart.key" class="activity-section" :aria-label="t(chart.title)">
-          <div class="activity-heading"><h3>{{ t(chart.title) }}</h3><span>{{ t('{count} calls · {kinds} categories', { count: formatNumber(chart.total), kinds: formatNumber(chart.entries.length) }) }}</span></div>
-          <p>{{ t(chart.description) }}</p>
-          <template v-if="chart.entries.length">
-            <div class="ranking-head" aria-hidden="true"><span>{{ t(chart.label) }}</span><span>{{ t('Calls') }}</span><span>{{ t('Share') }}</span></div>
-            <ol class="ranking-chart" :aria-label="t(chart.title)">
-              <li v-for="entry in (expandedActivity[chart.key] ? chart.entries : chart.entries.slice(0, 10))" :key="entry.name" class="ranking-row">
-                <span class="ranking-name">{{ entry.name }}</span>
-                <span class="ranking-track" aria-hidden="true"><span class="ranking-bar" :style="{ width: `${chart.maximum ? entry.calls / chart.maximum * 100 : 0}%` }" /></span>
-                <span class="ranking-count"><span class="sr-only">{{ t('Calls') }}: </span>{{ formatNumber(entry.calls) }}</span>
-                <span class="ranking-share"><span class="sr-only">{{ t('Share') }}: </span>{{ formatNumber(chart.total ? entry.calls / chart.total : 0, { style: 'percent', maximumFractionDigits: 1 }) }}</span>
-              </li>
-            </ol>
-            <button class="btn btn-sm ranking-toggle" v-if="chart.entries.length > 10" type="button" :aria-expanded="expandedActivity[chart.key]" @click="expandedActivity[chart.key] = !expandedActivity[chart.key]">{{ expandedActivity[chart.key] ? t('Show top 10') : t('Show all {count} categories', { count: chart.entries.length }) }}</button>
-          </template>
-          <p v-else>{{ t('No recorded calls in this period.') }}</p>
-        </section>
+        <UsageBreakdown v-if="allProjects && projectRows.length" :title="t('Usage by project')" :category="t('Project')"
+          :description="t('Use the selected summary period. Select a project to inspect its usage.')" :rows="projectRows" initial-metric="tokens" :scope="activityScope">
+          <template #entry="{ row }"><button class="btn btn-sm project-link" type="button" @click="filter = row.id; filterControl?.focus()">{{ row.name }}</button></template>
+        </UsageBreakdown>
+        <UsageBreakdown :title="t('Model usage')" :category="t('Model')" initial-metric="calls" :rows="modelRows" :scope="activityScope"
+          :description="t('Recorded models in the selected summary period.')">
+          <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
+        </UsageBreakdown>
+        <UsageBreakdown :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope"
+          :description="t('Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.')" />
       </div>
       <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
       <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
@@ -56,25 +38,20 @@
         <div class="window-switch" :aria-label="t('Chart window')" role="group"><button class="btn btn-sm" v-for="days in [7, 30]" :key="days" type="button" :aria-pressed="windowDays === days" @click="windowDays = days">{{ t('Last {days} days', { days }) }}</button></div>
       </div>
       <p class="trend-range">{{ points[0]?.date }} — {{ points.at(-1)?.date }} · UTC</p>
-      <div class="charts">
-        <article class="chart-card token-card">
-          <h3>{{ t('Daily tokens') }}</h3><p>{{ t('Daily known tokens.') }}</p>
-          <p v-if="!points.some(p => p.tokens !== null)" class="empty-chart">{{ t('No known tokens in this window.') }}</p>
-          <UsageTrendChart v-else :title="t('Daily tokens')" kind="bar" :points="tokenSeries" :format-axis="compactNumber" :min-interval="1" />
-        </article>
-        <article class="chart-card cost-card">
-          <div class="cost-heading"><h3>{{ t('Daily estimated cost') }}</h3><label v-if="hasCny">{{ t('Cost unit') }} <UiSelect :value="costUnit" :aria-label="t('Cost unit')" @change="costChosen = true; costUnit = ($event.target as HTMLSelectElement).value as CostUnit"><option v-for="unit in costUnits" :key="unit" :value="unit">{{ unit }}</option></UiSelect></label></div>
-          <p>{{ t('Includes converted AI credits in USD.') }}</p>
-          <p v-if="!costPoints.some(p => p.amount !== null)" class="empty-chart">{{ t('No known cost in this window for this unit.') }}</p>
-          <UsageTrendChart v-else :title="`${t('Daily estimated cost')} (${costUnit})`" kind="bar" :points="costSeries" :format-axis="compactCost" />
-
-        </article>
-        <article class="chart-card">
-          <h3>{{ t('Daily provider time') }}</h3><p>{{ t('Cumulative call time, not work duration; gaps are not interpolated.') }}</p>
-          <p v-if="!points.some(p => p.seconds !== null)" class="empty-chart">{{ t('No known call time in this window.') }}</p>
-          <UsageTrendChart v-else :title="t('Daily provider time')" kind="line" :points="timeSeries" :format-axis="timeAxis" />
-        </article>
-      </div>
+      <article class="chart-card" :aria-label="t('Usage trends')">
+        <div class="cost-heading"><h3>{{ trendTitle }}</h3>
+          <UsageViewControls v-model:metric="trendMetric" v-model:unit="costUnit" v-model:view="trendView" :views="['line', 'column', 'table']" />
+        </div>
+        <p>{{ t(trendMetric === 'time' ? 'Cumulative call time, not work duration; gaps are not interpolated.' : trendMetric === 'cost' ? 'Includes converted AI credits in USD.' : 'Missing telemetry is unavailable, not zero.') }}</p>
+        <div v-if="trendView === 'table'" class="trend-table" tabindex="0" :aria-label="trendTitle">
+          <table><thead><tr><th scope="col">{{ t('Date') }}</th><th scope="col">{{ trendTitle }}</th></tr></thead>
+            <tbody><tr v-for="point in trendSeries" :key="point.date"><th scope="row">{{ point.date }}</th><td>{{ point.label.slice(point.date.length + 2) }}</td></tr></tbody>
+          </table>
+        </div>
+        <p v-else-if="!trendSeries.some(p => p.value !== null)" class="empty-chart">{{ t('No known values in this window.') }}</p>
+        <UsageTrendChart v-else :title="trendTitle" :kind="trendView === 'column' ? 'bar' : 'line'" :points="trendSeries" :format-axis="axisFormat" :min-interval="['tokens', 'calls'].includes(trendMetric) ? 1 : 0" />
+      </article>
+      <UsageDiagnostics :projects="diagnosticProjects" />
 
       <p v-if="allProjects">{{ t('Select a project to browse its daily history.') }}</p>
       <template v-else>
@@ -98,10 +75,10 @@
       </template>
       <details class="completeness"><summary>{{ t('Data completeness') }}</summary>
         <p v-if="data.coverage === 'partial'">{{ t('Historical indexing is incomplete; totals may grow as data becomes available.') }}</p>
-        <p v-if="data.firstText">{{ t('First streamed text (all time): P50 {p50}, P95 {p95} ({count} samples)', { p50: data.firstText.p50Ms === null ? t('Unavailable') : `${Math.round(data.firstText.p50Ms)} ms`, p95: data.firstText.p95Ms === null ? t('Unavailable') : `${Math.round(data.firstText.p95Ms)} ms`, count: data.firstText.samples }) }}</p>
+        <p v-if="data.firstText && !data.requestQuality">{{ t('First streamed text (all time): P50 {p50}, P95 {p95} ({count} samples)', { p50: data.firstText.p50Ms === null ? t('Unavailable') : `${Math.round(data.firstText.p50Ms)} ms`, p95: data.firstText.p95Ms === null ? t('Unavailable') : `${Math.round(data.firstText.p95Ms)} ms`, count: data.firstText.samples }) }}</p>
         <p>{{ t('Daily tokens') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.tokens !== null).length, days: windowDays }) }}</p>
         <p>{{ t('Daily estimated cost') }} · {{ t('{count} of {days} days available', { count: costPoints.filter(p => p.amount !== null).length, days: windowDays }) }} · {{ costUnit }}</p>
-        <p>{{ t('Daily provider time') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.seconds !== null).length, days: windowDays }) }}</p><p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p><p>{{ t('Selected summary period: {period}', { period: t(periods.find(p => p.key === selectedPeriod)!.label) }) }}</p><ul><li>{{ t('Missing token telemetry: {count} calls', { count: selectedUsage.unknownTokenCalls }) }}</li><li>{{ t('Missing cost telemetry: {count} calls', { count: selectedUsage.unknownCostCalls }) }}</li><li>{{ t('Missing duration telemetry: {count} calls', { count: selectedUsage.unknownDurationCalls }) }}</li></ul><p>{{ t('Coverage: {untracked} sessions without complete tracking; {undated} undated calls excluded. Scan capped: {capped}. Totals may be lower bounds.', { untracked: data.untrackedSessions, undated: data.undatedCalls, capped: data.scanLimitReached ? t('Yes') : t('No') }) }}</p><table class="coverage-table"><thead><tr><th>{{ t('Date') }}</th><th>{{ t('Missing tokens / cost / duration') }}</th></tr></thead><tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th>{{ day.date }}</th><td>{{ day.usage.unknownTokenCalls }} / {{ day.usage.unknownCostCalls }} / {{ day.usage.unknownDurationCalls }}</td></tr></tbody></table></details>
+        <p>{{ t('Daily provider time') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.seconds !== null).length, days: windowDays }) }}</p><p>{{ t('Selected summary period: {period}', { period: t(periods.find(p => p.key === selectedPeriod)!.label) }) }}</p><ul><li>{{ t('Missing token telemetry: {count} calls', { count: selectedUsage.unknownTokenCalls }) }}</li><li>{{ t('Missing cost telemetry: {count} calls', { count: selectedUsage.unknownCostCalls }) }}</li><li>{{ t('Missing duration telemetry: {count} calls', { count: selectedUsage.unknownDurationCalls }) }}</li></ul><p>{{ t('Coverage: {untracked} sessions without complete tracking; {undated} undated calls excluded. Scan capped: {capped}. Totals may be lower bounds.', { untracked: data.untrackedSessions, undated: data.undatedCalls, capped: data.scanLimitReached ? t('Yes') : t('No') }) }}</p><table class="coverage-table"><thead><tr><th>{{ t('Date') }}</th><th>{{ t('Missing tokens / cost / duration') }}</th></tr></thead><tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th>{{ day.date }}</th><td>{{ day.usage.unknownTokenCalls }} / {{ day.usage.unknownCostCalls }} / {{ day.usage.unknownDurationCalls }}</td></tr></tbody></table></details>
       <details class="methodology"><summary>{{ t('How usage is measured') }}</summary>
       <p>{{ t('As of {time}. Calendar dates use UTC; past 7 days includes today and the previous 6 days.', { time: formatDateTime(data.asOf, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }) }) }}</p>
       <p>{{ t('Costs are provider/model estimates, not invoices. AI credits are converted to USD at 100 credits = 1 USD and added to USD estimates. CNY remains separate; original records are unchanged.') }}</p>
@@ -118,8 +95,12 @@
 import { projectBase } from '../api-url.ts'
 import UiSelect from './UiSelect.vue'
 import UsageTrendChart from './UsageTrendChart.vue'
+import UsageBreakdown from './UsageBreakdown.vue'
+import UsageDiagnostics from './UsageDiagnostics.vue'
+import UsageViewControls from './UsageViewControls.vue'
+import { measure, type UsageMetric } from '../usage-breakdown.ts'
 import { computed, ref, shallowRef, watch } from 'vue'
-import { compactUsageNumber, compactUsageCost, durationParts, usageWindow, displayCosts, costWindow, costUnits, type CostUnit, type UsagePoint } from '../project-usage-charts.ts'
+import { compactUsageNumber, compactUsageCost, durationParts, usageWindow, displayCosts, type CostUnit } from '../project-usage-charts.ts'
 import type { UsageChartDatum } from '../usage-chart-options.ts'
 import { useCatalogResourceStore } from '../stores/catalog.ts'
 import { useCatalogVisibility } from '../resources/catalog-visibility.ts'
@@ -156,25 +137,20 @@ watch(rows, value => {
 })
 const periods = [{ key: 'today', label: 'Today' }, { key: 'past7Days', label: 'Past 7 days' }, { key: 'month', label: 'This month' }, { key: 'total', label: 'All time' }] as const
 const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
-const rankedRows = computed(() => [...(rows.value ?? [])].sort((a, b) => {
-  const period = selectedPeriod.value
-  return (b.usage?.[period].tokens ?? -1) - (a.usage?.[period].tokens ?? -1)
-    || a.project.name.localeCompare(b.project.name)
-}))
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
 const selectedActivity = computed(() => data.value!.activity[selectedPeriod.value])
-const activityKinds = [
-  { key: 'models', title: 'Model usage', label: 'Model', description: 'LLM calls by model in the selected summary period.' },
-  { key: 'tools', title: 'Tool usage', label: 'Tool', description: 'Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.' },
-] as const
-const expandedActivity = ref({ models: false, tools: false })
-watch(() => [selectedProjectId.value, selectedPeriod.value], () => { expandedActivity.value = { models: false, tools: false } })
-const activityCharts = computed(() => activityKinds.map(kind => {
-  const entries = [...selectedActivity.value[kind.key]].sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name))
-  return { ...kind, entries, total: entries.reduce((sum, entry) => sum + entry.calls, 0), maximum: entries[0]?.calls ?? 0 }
-}))
+const activityScope = computed(() => `${selectedProjectId.value}:${selectedPeriod.value}`)
+const projectRows = computed(() => (rows.value ?? []).map(({ project, usage }) => ({ id: project.id, name: project.name, usage: usage?.[selectedPeriod.value] })))
+const modelRows = computed(() => selectedActivity.value.models.map(row => ({ id: row.name, ...row })))
+const unnamedCalls = computed(() => Math.max(0, selectedUsage.value.calls - modelRows.value.reduce((sum, row) => sum + row.calls, 0)))
+const toolRows = computed(() => selectedActivity.value.tools.map(row => ({ id: row.name, ...row })))
+const diagnosticProjects = computed(() => allProjects.value
+  ? (rows.value ?? []).map(({ project, usage }) => ({ id: project.id, name: project.name, usage }))
+  : [{ id: selectedProjectId.value ?? '', name: rows.value?.find(row => row.project.id === selectedProjectId.value)?.project.name ?? '', usage: data.value }])
 const summaryCosts = computed(() => displayCosts(selectedUsage.value.costs))
-const hasMissing = computed(() => !!data.value && (data.value.coverage === 'partial' || data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0 || [data.value.total, ...data.value.daily.map(d => d.usage)].some(u => u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
+const incompleteIndex = computed(() => !!data.value && (data.value.coverage === 'partial' || data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0))
+const hasMissing = computed(() => incompleteIndex.value || !!data.value && [data.value.total, ...data.value.daily.map(d => d.usage)]
+  .some(u => u.calls > 0 && (u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
 function compactNumber(value: number | null) { return value === null ? t('Unavailable') : compactUsageNumber(value, formatNumber) }
 function compactCost(value: number) { return compactUsageCost(value, formatNumber) }
 function exactCost(cost: ProjectUsageMetrics['costs'][number]) { return `${formatNumber(cost.amount, { maximumSignificantDigits: 15 })} ${cost.currency}` }
@@ -187,26 +163,30 @@ function compactDuration(ms: number | null) {
 }
 const windowDays = ref(7)
 const points = computed(() => data.value ? usageWindow(data.value, windowDays.value) : [])
-const costUnit = ref<CostUnit>('USD')
-const costChosen = ref(false)
-const hasCny = computed(() => costUnit.value === 'CNY' || points.value.some(p => p.usage?.costs.some(c => c.currency === 'CNY')))
-watch(points, () => {
-  if (!costChosen.value) {
-    const available = points.value.flatMap(p => displayCosts(p.usage?.costs ?? []))
-    if (available.length && !available.some(c => c.currency === costUnit.value)) costUnit.value = available[0]!.currency
-  }
+const currency = ref<CostUnit>('USD')
+const currencyChosen = ref(false)
+const costUnit = computed({ get: () => currency.value, set: value => { currencyChosen.value = true; currency.value = value } })
+watch(points, rows => {
+  if (currencyChosen.value) return
+  const available = rows.flatMap(row => displayCosts(row.usage?.costs ?? []))
+  if (available.length && !available.some(cost => cost.currency === currency.value)) currency.value = available[0]!.currency
 })
-const costPoints = computed(() => costWindow(points.value, costUnit.value))
-function costLabel(point: ReturnType<typeof costWindow>[number]) {
-  const value = point.amount === null ? t('Unavailable') : `${formatNumber(point.amount, { maximumSignificantDigits: 15 })} ${costUnit.value}`
-  return `${point.date}: ${value}`
-}
-const tokenSeries = computed<UsageChartDatum[]>(() => points.value.map(p => ({ date: p.date, value: p.tokens, label: pointLabel(p, 'tokens'), partial: !!p.usage?.unknownTokenCalls })))
-const timeSeries = computed<UsageChartDatum[]>(() => points.value.map(p => ({ date: p.date, value: p.seconds, label: pointLabel(p, 'seconds'), partial: !!p.usage?.unknownDurationCalls })))
-const costSeries = computed<UsageChartDatum[]>(() => costPoints.value.map(p => ({ date: p.date, value: p.amount, label: costLabel(p), partial: p.partial })))
-function timeAxis(seconds: number) { return compactDuration(seconds * 1000) }
-function pointLabel(point: UsagePoint, metric: 'tokens' | 'seconds') {
-  return `${point.date}: ${point.usage ? metric === 'tokens' ? tokens(point.usage) : duration(point.usage) : t('Unavailable')}`
+const trendMetric = ref<UsageMetric>('tokens')
+const trendView = ref<'bar' | 'ring' | 'column' | 'line' | 'table'>('column')
+const trendTitles = { tokens: 'Daily tokens', calls: 'Daily provider calls', cost: 'Daily estimated cost', time: 'Daily provider time' } as const
+const trendTitle = computed(() => `${t(trendTitles[trendMetric.value])}${trendMetric.value === 'cost' ? ` (${costUnit.value})` : ''}`)
+const costPoints = computed(() => points.value.map(p => ({ amount: measure(p, 'cost', costUnit.value).value })))
+const trendSeries = computed<UsageChartDatum[]>(() => points.value.map(p => {
+  const metric = trendMetric.value
+  const { value, partial } = measure(p, metric, costUnit.value)
+  // Padded no-activity days are not verified zero if index coverage is incomplete.
+  const known = metric === 'calls' && value === 0 && (incompleteIndex.value || data.value?.coverage !== 'complete') ? null : value
+  const exact = known === null ? t('Unavailable') : formatNumber(known, { maximumSignificantDigits: 15 })
+  const label = known === null ? exact : metric === 'cost' ? `${exact} ${costUnit.value}` : metric === 'time' ? t('{seconds} s', { seconds: exact }) : exact
+  return { date: p.date, value: known, partial, label: `${p.date}: ${label}${partial && known !== null ? ` · ${t('Partial telemetry')}` : ''}` }
+}))
+function axisFormat(value: number) {
+  return trendMetric.value === 'cost' ? compactCost(value) : trendMetric.value === 'time' ? compactDuration(value * 1000) : compactNumber(value)
 }
 const maximum = computed(() => dailyPage.value?.daily.reduce((max, day) => Math.max(max, day.usage.tokens ?? 0), 1) ?? 1)
 function tokens(usage: ProjectUsageMetrics) { return usage.tokens === null ? t('Unavailable') : formatNumber(usage.tokens) }
@@ -242,7 +222,6 @@ watch(() => [scopedBase.value, selectedProjectId.value, enabled.value] as const,
 <style scoped>
 .project-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 0 16px; }
 .project-filter .ui-select { max-width: 100%; }
-.project-breakdown { margin-block: 16px; }
 .project-usage { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 24px; color: var(--c-text); background: var(--c-bg-soft); container: usage / inline-size; }
 header, .summary-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
 h2 { margin: 0; font-size: 16px; font-weight: 600; }
@@ -265,43 +244,17 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
 .activity-grid { display: grid; gap: 28px; margin: 28px 0; }
-.activity-section { min-width: 0; }
-.activity-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.activity-heading > span { font-size: 12px; color: var(--c-text-secondary); font-variant-numeric: tabular-nums; }
-.ranking-chart { list-style: none; margin: 0; padding: 0; }
-.ranking-head, .ranking-row { display: grid; grid-template-columns: minmax(140px, 30%) minmax(0, 1fr) 80px 64px; align-items: center; gap: 16px; }
-.ranking-head { color: var(--c-text-secondary); font-size: 11px; margin: 16px 0 6px; }
-.ranking-head > :first-child { grid-column: span 2; }
-.ranking-head > :not(:first-child) { text-align: right; }
-.ranking-row { min-height: 36px; padding: 6px 0; font-size: 12px; }
-.ranking-name { overflow-wrap: anywhere; line-height: 1.5; }
-.ranking-track { height: 12px; background: var(--c-bg-muted); }
-.ranking-bar { display: block; height: 100%; background: var(--c-primary); }
-.ranking-count, .ranking-share { text-align: right; font-variant-numeric: tabular-nums; }
-.ranking-share { color: var(--c-text-secondary); }
-.ranking-toggle { margin-top: 12px; }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-@container usage (max-width: 550px) {
-  .ranking-head { grid-template-columns: minmax(0, 1fr) 70px 54px; gap: 10px; }
-  .ranking-head > :first-child { grid-column: auto; }
-  .ranking-row { grid-template-columns: minmax(0, 1fr) 70px 54px; gap: 6px 10px; padding: 10px 0; }
-  .ranking-name { grid-column: 1 / -1; }
-  .ranking-track { grid-row: 2; }
-  .ranking-count, .ranking-share { grid-row: 2; }
-}
+.project-link { max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
 .conversion-note { margin-top: 12px; }
 .scope-brief { margin: 4px 0; }
 .chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }
 .chart-toolbar p { margin: 4px 0 0; }
 .trend-range { margin: 0 0 12px; font-variant-numeric: tabular-nums; }
-.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 28px; }
 .chart-card { min-width: 0; border: 1px solid var(--c-border); background: var(--c-bg-card); padding: 16px 20px; display: flex; flex-direction: column; }
-.token-card { grid-column: 1 / -1; }
 .chart-card > p { margin: 6px 0 12px; }
 .chart-card > .chart-stat { margin: 12px 0 0; font-variant-numeric: tabular-nums; }
 .cost-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.cost-heading label { display: flex; align-items: center; gap: 6px; color: var(--c-text-secondary); font-size: 12px; white-space: nowrap; }
-.cost-heading .ui-select { width: 90px; font-size: 12px; }
+.trend-table { overflow: auto; }
 .empty-chart { display: grid; place-content: center; min-height: 210px; text-align: center; }
 .pagination { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; color: var(--c-text-secondary); font-size: 12px; }
 .daily-table { overflow-x: auto; margin: 12px 0 24px; }
@@ -321,7 +274,6 @@ details li { line-height: 1.8; color: var(--c-text-secondary); }
 @container usage (max-width: 850px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 24px; }
   .metric-card:nth-child(3) { border-left: 0; }
-  .charts, .activity-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @container usage (max-width: 380px) {
   .metric-card { padding: 0 12px; }

@@ -28,3 +28,22 @@ test('aggregate aligns daily rows by UTC date and combines model/tool activity a
   assert.equal(combined.undatedCalls, 4)
   assert.equal(combined.scanLimitReached, true)
 })
+
+
+test('model metrics merge per name and mark mixed legacy coverage without inventing costs', () => {
+  const period = (model: { name: string; calls: number; usage?: typeof measured }) => ({ models: [model], tools: [] })
+  const project = (id: string, activity: ReturnType<typeof period>) => projectUsageSchema.parse({
+    projectId: id, timeZone: 'UTC', asOf: '2026-10-01T04:00:00Z', today: measured, past7Days: measured, month: measured, total: measured,
+    activity: { today: activity, past7Days: activity, month: activity, total: activity },
+    daily: [], coverage: 'complete', scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0,
+  })
+  const known = project('a', period({ name: 'model', calls: measured.calls, usage: measured }))
+  const legacy = project('b', period({ name: 'model', calls: 4 }))
+  const [combined] = mergeUsage([known, legacy])!.activity.today.models
+  assert.equal(combined.calls, measured.calls + 4)
+  assert.equal(combined.usage?.tokens, measured.tokens)
+  assert.deepEqual(combined.usage?.costs, measured.costs)
+  assert.equal(combined.usage?.unknownCostCalls, measured.unknownCostCalls + 4)
+  assert.equal(combined.usage?.unknownTokenCalls, measured.unknownTokenCalls + 4)
+  assert.equal(combined.usage?.unknownDurationCalls, measured.unknownDurationCalls + 4)
+})

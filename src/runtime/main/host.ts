@@ -168,8 +168,10 @@ export async function startProjectHost(
   })
   cleanup.push(() => mobileAccess.shutdown())
   let deviceUi: MainDeviceUi | undefined
-  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || browserAuth.authorize(request)
+  // Recall names are privileged metadata: a delegated device or mobile bearer alone is insufficient.
+  const authorizeRecall = (request: Request) => browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
+  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeRecall(request)
   const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
@@ -284,7 +286,7 @@ export async function startProjectHost(
           debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, accountHome: hostHome, authorize, realtimeHub, computer,
+          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, realtimeHub, computer,
           webClientDeviceName: request => deviceUi?.clientDeviceName(request),
           localExecutor: options.localExecutor !== false,
         }))
