@@ -147,9 +147,9 @@ test('summary set normalization stabilizes bot/automation/Discord groups and ser
   const qq = 'bot:a:qq:qq:group', inbox = 'channel-inbox:a:qq:qq:group'
   const sessions = [
     { sessionId: qq, lastActivityAt: '2026-01-01' },
-    { sessionId: inbox, lastActivityAt: '2026-01-03', channelSource: { version: 1, projectId: 'a', botInstanceId: 'qq', platform: 'qq', conversationId: 'group', kind: 'group' } },
+    { sessionId: inbox, lastActivityAt: '2026-01-03', channelSource: { version: 1, projectId: 'a', connectionId: 'qq', platform: 'qq', conversationId: 'group', kind: 'group' } },
     { sessionId: 'bot:a:discord:discord:300', discordChannel: { id: '300', name: 'Old', type: 11, guildId: '200', parentId: '100', parentName: 'Forum old' } },
-    { sessionId: 'channel-inbox:a:discord:discord:300', lastActivityAt: '2026-01-04', channelSource: { version: 1, projectId: 'a', botInstanceId: 'discord', platform: 'discord', conversationId: '300', kind: 'thread', parentId: '100', guildId: '200', botUserId: '999' }, discordChannel: { id: '300', name: 'New', type: 11, guildId: '200', parentId: '100', parentName: 'Forum new' } },
+    { sessionId: 'channel-inbox:a:discord:discord:300', lastActivityAt: '2026-01-04', channelSource: { version: 1, projectId: 'a', connectionId: 'discord', platform: 'discord', conversationId: '300', kind: 'thread', parentId: '100', guildId: '200', botUserId: '999' }, discordChannel: { id: '300', name: 'New', type: 11, guildId: '200', parentId: '100', parentName: 'Forum new' } },
     { sessionId: 'web:chat-run', automation: { contextMode: 'fresh', jobId: 'job', name: 'Job', runId: 'run', startedAt: '2026-01-01' } },
     { sessionId: 'task:child', mode: 'task', parentSessionId: 'web:chat-run' },
     { sessionId: 'web:chat-regular', title: 'Regular', lastActivityAt: '2026-01-02' },

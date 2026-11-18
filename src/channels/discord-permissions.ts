@@ -24,7 +24,7 @@ function bitfield(value: unknown): bigint {
 
 /** Discord's guild roles, then everyone/role/member channel overwrite precedence. */
 export function discordPermissions(
-  guildId: string, botId: string, ownerId: unknown, roles: unknown,
+  guildId: string, botUserId: string, ownerId: unknown, roles: unknown,
   member: Record<string, unknown>, overwrites: unknown,
 ): bigint {
   if (!Array.isArray(roles) || !Array.isArray(member.roles)
@@ -44,7 +44,7 @@ export function discordPermissions(
     }
   }
   if ([...assigned].some(id => !found.has(id))) throw new Error('Missing Discord role')
-  if (ownerId === botId || (permissions & DiscordPermission.administrator) !== 0n) return ~0n
+  if (ownerId === botUserId || (permissions & DiscordPermission.administrator) !== 0n) return ~0n
 
   let everyoneAllow = 0n, everyoneDeny = 0n, roleAllow = 0n, roleDeny = 0n, userAllow = 0n, userDeny = 0n
   for (const value of overwrites) {
@@ -57,7 +57,7 @@ export function discordPermissions(
       everyoneAllow |= allow; everyoneDeny |= deny
     } else if (overwrite.type === 0 && assigned.has(overwrite.id)) {
       roleAllow |= allow; roleDeny |= deny
-    } else if (overwrite.type === 1 && overwrite.id === botId) {
+    } else if (overwrite.type === 1 && overwrite.id === botUserId) {
       userAllow |= allow; userDeny |= deny
     }
   }

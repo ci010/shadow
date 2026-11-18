@@ -624,8 +624,8 @@ export class FeishuChannel extends AbstractChannel {
       return (!own || own.legacySessionId) && parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
     }
     const own = this.address(rootId)
-    const stored = own && this.hasPassiveCollector ? this.sessionManager?.getSessionState(passiveChannelId(own))?.channelSource : undefined
-    return this.topicParents.get(rootId) ?? (stored?.kind === 'thread' && stored.platform === 'feishu' && stored.projectId === own?.projectId && stored.botInstanceId === own?.botInstanceId ? stored.parentId : undefined)
+    const stored = own && this.hasPassiveCollector ? this.sessionManager?.getSessionState(passiveChannelId({ ...own, connectionId: own.botInstanceId }))?.channelSource : undefined
+    return this.topicParents.get(rootId) ?? (stored?.kind === 'thread' && stored.platform === 'feishu' && stored.projectId === own?.projectId && stored.connectionId === own?.botInstanceId ? stored.parentId : undefined)
   }
 
   private _mediaSessionId(chatId: string): string {

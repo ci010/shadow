@@ -1,11 +1,11 @@
 import { z } from 'zod'
-import type { ChannelAddress, InboundMessage } from '../bus/events.ts'
+import type { InboundMessage } from '../bus/events.ts'
 
 export function parseServiceGeneration(value: unknown): string | undefined { return value === undefined ? undefined : z.string().min(1).max(256).regex(/^[^\x00-\x1f\x7f]+$/).parse(value) }
 
 const id = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
 export const ChannelSourceSchema = z.object({
-  version: z.literal(1), projectId: id, botInstanceId: id,
+  version: z.literal(1), projectId: id, connectionId: id,
   platform: z.enum(['qq', 'feishu', 'discord', 'wechat']), conversationId: id,
   kind: z.enum(['direct', 'group', 'channel', 'thread']),
   parentId: id.optional(), guildId: id.optional(), recipientId: id.optional(), botUserId: id.optional(),
@@ -21,15 +21,25 @@ export const ChannelSourceSchema = z.object({
 /** Host-recorded origin evidence, not an execution or platform-output grant. */
 export type ChannelSource = z.infer<typeof ChannelSourceSchema>
 export const PASSIVE_CHANNEL_PREFIX = 'channel-inbox:'
-export function passiveChannelId(source: Pick<ChannelAddress, 'projectId' | 'botInstanceId' | 'platform' | 'conversationId'>): string {
-  return PASSIVE_CHANNEL_PREFIX + [source.projectId, source.botInstanceId, source.platform, source.conversationId].map(encodeURIComponent).join(':')
+export function passiveChannelId(source: { projectId: string; connectionId: string; platform: string; conversationId: string }): string {
+  return PASSIVE_CHANNEL_PREFIX + [source.projectId, source.connectionId, source.platform, source.conversationId].map(encodeURIComponent).join(':')
+}
+
+/** Decode old persisted/wire metadata at the boundary, never in routing logic. */
+export function decodeChannelSource(value: unknown): ChannelSource {
+  if (value && typeof value === 'object' && Object.hasOwn(value, 'botInstanceId')) {
+    const { botInstanceId, ...source } = value as Record<string, unknown>
+    if (Object.hasOwn(source, 'connectionId') && source.connectionId !== botInstanceId) throw new Error('Conflicting channel source connection IDs')
+    value = { ...source, connectionId: botInstanceId }
+  }
+  return ChannelSourceSchema.parse(value)
 }
 export function parseChannelSource(value: unknown, sessionId?: string, projectId?: string, migrated?: 1): ChannelSource | undefined {
   if (value === undefined) {
     if (sessionId?.startsWith(PASSIVE_CHANNEL_PREFIX) && migrated !== 1) throw new Error('Passive channel origin metadata is missing')
     return undefined
   }
-  const source = ChannelSourceSchema.parse(value)
+  const source = decodeChannelSource(value)
   if (sessionId && passiveChannelId(source) !== sessionId || projectId && source.projectId !== projectId) throw new Error('Passive channel origin mismatch')
   return source
 }

@@ -77,7 +77,7 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       bus.on('session.turn.finished',()=>finished.resolve())
       const inputs = channelInputFixture({ projectId, sessions, bots: store, directory: runtime,
         receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
-      await sessions.recordPassiveChannel({version:1,projectId,botInstanceId:bot.id,platform:'qq',conversationId:'dm',kind:'direct'},message,()=>{})
+      await sessions.recordPassiveChannel({version:1,projectId,connectionId:bot.id,platform:'qq',conversationId:'dm',kind:'direct'},message,()=>{})
       await inputs.receive(message)
       await finished.promise
       assert.match(calls[0]!.prompt,/Scoped personal instructions/)

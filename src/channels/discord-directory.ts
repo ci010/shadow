@@ -39,14 +39,14 @@ export async function discordMembers(api: DiscordApi, guildId: string, query: st
   }))
 }
 
-async function guildFacts(api: DiscordApi, guildId: string, botId: string, signal: AbortSignal) {
+async function guildFacts(api: DiscordApi, guildId: string, botUserId: string, signal: AbortSignal) {
   id.parse(guildId)
   const [rawGuild, rawRoles, rawBot] = await Promise.all([
     api(`/guilds/${guildId}`, { signal }), api(`/guilds/${guildId}/roles`, { signal }),
-    api(`/guilds/${guildId}/members/${botId}`, { signal }),
+    api(`/guilds/${guildId}/members/${botUserId}`, { signal }),
   ])
   const guild = guildSchema.parse(rawGuild), roles = z.array(role).parse(rawRoles), bot = memberSchema.parse(rawBot)
-  if (guild.id !== guildId || bot.user.id !== botId || bot.user.bot === false) throw new Error('Discord returned another server or Bot membership.')
+  if (guild.id !== guildId || bot.user.id !== botUserId || bot.user.bot === false) throw new Error('Discord returned another server or Bot membership.')
   if (new Set(roles.map(role => role.id)).size !== roles.length) throw new Error('Discord returned duplicate role IDs.')
   return { guild, roles, bot }
 }

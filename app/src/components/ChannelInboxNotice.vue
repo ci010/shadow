@@ -2,7 +2,7 @@
   <section class="channel-inbox-notice" :aria-label="t('Passive channel inbox')">
     <strong>{{ t('Passive channel inbox') }}</strong>
     <p>{{ t('Received messages are stored here without invoking an Agent, tools or replies. Only messages delivered by the platform can be recorded. Attachments are metadata references, not downloaded files.') }}</p>
-    <dl><dt>{{ t('Platform') }}</dt><dd>{{ source.platform }}</dd><dt>{{ t('Connection') }}</dt><dd>{{ source.botInstanceId }}</dd><dt>{{ t('Channel source') }}</dt><dd>{{ source.kind }} · {{ source.conversationId }}<span v-if="source.parentId"> · {{ source.parentId }}</span></dd></dl>
+    <dl><dt>{{ t('Platform') }}</dt><dd>{{ source.platform }}</dd><dt>{{ t('Connection') }}</dt><dd>{{ source.connectionId }}</dd><dt>{{ t('Channel source') }}</dt><dd>{{ source.kind }} · {{ source.conversationId }}<span v-if="source.parentId"> · {{ source.parentId }}</span></dd></dl>
     <p>{{ t('In an owner Web chat, type @ and select this inbox to assign a BOT. The reference identifies the target, not permission. BOT files and exact deployment approval still control execution. Old inbox history is never replayed automatically; unassigning stops inference, not receipt.') }}</p>
     <RouterLink :to="{ name: 'chat', params: { projectId: source.projectId } }">{{ t('Open owner chat') }}</RouterLink>
   </section>

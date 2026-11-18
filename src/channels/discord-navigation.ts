@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { channelAddressFromSessionId } from '../bus/events.ts'
+import { decodeChannelSource } from './passive-contract.ts'
 import { ChannelBoundarySchema } from './integration-contract.ts'
 
 const snowflake = z.string().regex(/^\d{1,32}$/)
@@ -10,7 +11,7 @@ export const DiscordChannelNavigationSchema = z.object({
 }).strict()
 export type DiscordChannelNavigation = z.infer<typeof DiscordChannelNavigationSchema>
 const passiveOrigin = z.object({
-  version: z.literal(1), projectId: z.string().min(1), botInstanceId: z.string().min(1),
+  version: z.literal(1), projectId: z.string().min(1), connectionId: z.string().min(1),
   platform: z.literal('discord'), conversationId: snowflake,
   kind: z.enum(['direct', 'channel', 'thread']), parentId: snowflake.optional(),
   guildId: snowflake.optional(), recipientId: snowflake.optional(), botUserId: snowflake,
@@ -36,10 +37,12 @@ export function discordChannelNavigation(state: {
     return DiscordChannelNavigationSchema.parse({ id: location.id, name: location.name, type: location.type,
       guildId: location.guildId, parentId: location.parentId, parentName: location.parentName })
   }
-  const parsed = passiveOrigin.safeParse(state.channelSource)
+  let origin: unknown
+  try { origin = decodeChannelSource(state.channelSource) } catch { return undefined }
+  const parsed = passiveOrigin.safeParse(origin)
   if (!parsed.success) return undefined
   const source = parsed.data
-  if (source.projectId !== projectId || source.botInstanceId !== address.botInstanceId || source.conversationId !== address.conversationId
+  if (source.projectId !== projectId || source.connectionId !== address.botInstanceId || source.conversationId !== address.conversationId
     || (source.kind === 'thread') !== !!source.parentId
     || (source.kind === 'direct' ? !source.recipientId || !!source.guildId : !source.guildId || !!source.recipientId)) return undefined
   return { id: source.conversationId, name: source.name ?? null, type: source.kind === 'thread' ? 11 : source.kind === 'direct' ? 1 : 0,

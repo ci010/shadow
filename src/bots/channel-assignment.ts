@@ -15,18 +15,18 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
   if (source.platform === 'discord' && source.kind === 'thread' && scope === 'conversation' && permissions.inheritThreads !== false) throw new Error('Exact thread assignment requires inheritThreads:false; choose scope:parent explicitly for a parent rule')
   const conversationId = scope === 'parent' ? source.parentId! : source.conversationId
   if (!['mention', 'all'].includes(String(permissions.trigger)) || typeof permissions.enabled !== 'boolean') throw new Error('Choose an explicit trigger and enabled state')
-  const existing = bot.bindings.find(binding => binding.botInstanceId === source.botInstanceId && binding.platform === source.platform && (binding.platform === 'discord'
+  const existing = bot.bindings.find(binding => binding.botInstanceId === source.connectionId && binding.platform === source.platform && (binding.platform === 'discord'
     ? binding.target.kind === 'dm' ? binding.target.userId === source.recipientId : binding.target.channelId === conversationId && binding.target.guildId === source.guildId
     : binding.conversationId === source.conversationId))
   let target: Record<string, unknown>
   if (source.platform === 'discord') {
     if (!source.botUserId || !source.guildId) throw new Error('Verified Discord source identity required')
     if (!Object.hasOwn(permissions, 'participants')) throw new Error('Choose Discord participants explicitly')
-    target = { platform: 'discord', botInstanceId: source.botInstanceId, botUserId: source.botUserId, id: existing?.platform === 'discord' ? existing.id : randomUUID(),
+    target = { platform: 'discord', botInstanceId: source.connectionId, botUserId: source.botUserId, id: existing?.platform === 'discord' ? existing.id : randomUUID(),
       target: { kind: 'channel', guildId: source.guildId, channelId: conversationId } }
   } else {
     if (!Array.isArray(permissions.allowFrom)) throw new Error('Choose allowed senders explicitly; [] permits nobody')
-    target = { platform: source.platform, botInstanceId: source.botInstanceId, conversationId: source.conversationId }
+    target = { platform: source.platform, botInstanceId: source.connectionId, conversationId: source.conversationId }
   }
   const binding = BotBindingSchema.parse({ ...permissions, ...target })
   const config = JSON.parse(files[configPath]!)

@@ -135,8 +135,8 @@ test('QQ connection trigger compatibility values persist but do not configure Se
   }, { projectId: 'A', instanceStore: store, serviceAssigned: () => true })
   await manager.init()
   t.after(() => manager.stopAll())
-  const incoming = async (botId: string) => {
-    const channel = manager['channels'].get(botId)
+  const incoming = async (connectionId: string) => {
+    const channel = manager['channels'].get(connectionId)
     assert.ok(channel instanceof QQChannel)
     await channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
       id: 'source', content: 'Context without a mention', group_openid: 'group',

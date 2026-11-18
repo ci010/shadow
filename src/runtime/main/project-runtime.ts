@@ -1914,8 +1914,8 @@ export async function createProjectRuntime(
       if (!state || state.projectId !== project.id) throw new Error('Channel session must belong to this Project')
       const source = parseChannelSource(state.channelSource, sessionId, project.id)
       if (!source) throw new Error('Reference a passive channel inbox session')
-      botStore.assertAccess(source.botInstanceId)
-      const connection = botStore.get(source.botInstanceId)
+      botStore.assertAccess(source.connectionId)
+      const connection = botStore.get(source.connectionId)
       if (connection.purpose !== 'service' || connection.platform !== source.platform) throw new Error('Channel source connection is no longer a matching service connection')
       return source
     },

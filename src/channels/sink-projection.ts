@@ -34,7 +34,7 @@ export function connectionSinkProjection(options: {
     if (history.projectId !== projectId || history.channelSource === undefined) continue
     let source: ChannelSource | undefined
     try { source = parseChannelSource(history.channelSource, history.sessionId, projectId) } catch { continue }
-    if (!source || source.botInstanceId !== connectionId || source.platform !== platform) continue
+    if (!source || source.connectionId !== connectionId || source.platform !== platform) continue
     const value = fact(source.parentId ?? source.conversationId)
     if (source.parentId) { value.children = true; value.source ??= source }
     else { value.source = source; value.inboxSessionId = history.sessionId }

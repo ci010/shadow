@@ -81,7 +81,7 @@ test('create is explicit new source plus immediate exact publication, never over
 test('link edits and publishes only the existing BOT companion; group receiver identity is host-owned', async t => {
   const f = fixture(t), first = JSON.parse(await f.propose() as string).deployment.revision
   const { passiveChannelId } = await import('../channels/passive-contract.ts')
-  const source = { version: 1 as const, projectId: 'p', botInstanceId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
+  const source = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
   const tool = botPackageTool({ ...f.options, channelSource: () => source })
   const sourceRevision = f.deployments.freezeDirectory(f.source).revision
   const input = { action: 'link', folderId: 'folder', summary: 'Link existing BOT', channelSessionId: passiveChannelId(source), expectedRevision: first, sourceRevision, bindingJson: JSON.stringify({ enabled: true, trigger: 'all', allowFrom: ['owner'], tools: [] }) }
@@ -95,7 +95,7 @@ test('link edits and publishes only the existing BOT companion; group receiver i
 test('link never creates exact thread or DM assignment and never trusts target keys from policy JSON', async t => {
   const f = fixture(t), first = JSON.parse(await f.propose() as string).deployment.revision
   const { passiveChannelId } = await import('../channels/passive-contract.ts')
-  const base = { version: 1 as const, projectId: 'p', botInstanceId: 'bot', platform: 'qq' as const, conversationId: 'dm:one', kind: 'direct' as const }
+  const base = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'dm:one', kind: 'direct' as const }
   const tool = botPackageTool({ ...f.options, channelSource: () => base })
   await assert.rejects(() => tool.execute({ action: 'link', folderId: 'folder', summary: 'Link', channelSessionId: passiveChannelId(base), expectedRevision: first, sourceRevision: f.deployments.freezeDirectory(f.source).revision, bindingJson: JSON.stringify({ enabled: true, trigger: 'all', allowFrom: [], tools: [] }) }, f.context), /top-level/)
   const { assignChannelSource } = await import('./channel-assignment.ts')

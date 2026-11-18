@@ -8,7 +8,7 @@ const boundary = () => ({ version: 1, bindingId: uuid, revision: 'a'.repeat(64),
   startedAt: '2026-11-08T00:00:00Z', botInstanceId: 'connection', botUserId: '100', conversationId: '200', sources: [],
   location: { id: '200', name: 'Post', type: 11, guildId: '300', guildName: 'Guild', parentId: '400', parentName: 'Forum', recipientId: null },
 })
-const origin = () => ({ version: 1, projectId: 'p', botInstanceId: 'connection', platform: 'discord', conversationId: '200',
+const origin = () => ({ version: 1, projectId: 'p', connectionId: 'connection', platform: 'discord', conversationId: '200',
   kind: 'thread', parentId: '400', guildId: '300', botUserId: '100', name: 'Post' })
 
 test('old Bot history projects bounded verified Discord location only', () => {
@@ -26,7 +26,7 @@ test('old Bot history projects bounded verified Discord location only', () => {
 test('passive inbox projects ancestry only when its entire scoped identity matches', () => {
   const state = { projectId: 'p', sessionId: 'channel-inbox:p:connection:discord:200', channelSource: origin() }
   assert.deepEqual(discordChannelNavigation(state, 'p'), { id: '200', name: 'Post', type: 11, guildId: '300', parentId: '400', parentName: null })
-  for (const source of [{ ...origin(), projectId: 'other' }, { ...origin(), botInstanceId: 'other' },
+  for (const source of [{ ...origin(), projectId: 'other' }, { ...origin(), connectionId: 'other' },
     { ...origin(), conversationId: '201' }, { ...origin(), parentId: undefined }, { ...origin(), guildId: undefined },
     { ...origin(), recipientId: '900' }, { ...origin(), platform: 'qq' }]) {
     assert.equal(discordChannelNavigation({ ...state, channelSource: source }, 'p'), undefined)

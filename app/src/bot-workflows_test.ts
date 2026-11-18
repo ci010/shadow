@@ -51,7 +51,7 @@ test('isolated group shortcuts remain distinct from binding inspector configurat
 test('personal paired DM ingress survives a sink with an extra group, without granting group replies', async () => {
   const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
   const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
-  const source = { version: 1 as const, projectId: 'p', botInstanceId: 'qq-shared', platform: 'qq' as const,
+  const source = { version: 1 as const, projectId: 'p', connectionId: 'qq-shared', platform: 'qq' as const,
     conversationId: 'group:extra', kind: 'group' as const }
   const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq',
     histories: [{ sessionId: passiveChannelId(source), projectId: 'p', channelSource: source }], observations: [] })
@@ -86,7 +86,7 @@ test('one transport branches through exact receiver identities, with configured-
   const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
   const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
   const histories = ['group:one', 'group:unbound'].map(conversationId => {
-    const channelSource = { version: 1 as const, projectId: 'p', botInstanceId: 'qq-shared', platform: 'qq' as const, conversationId, kind: 'group' as const }
+    const channelSource = { version: 1 as const, projectId: 'p', connectionId: 'qq-shared', platform: 'qq' as const, conversationId, kind: 'group' as const }
     return { sessionId: passiveChannelId(channelSource), projectId: 'p', channelSource }
   })
   const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq', histories, observations: [] })
@@ -127,7 +127,7 @@ test('receiver titles share names or typed raw identities; owner associations ca
     { kind: 'direct' as const, conversationId: 'dm:owner', name: 'Owner chat' },
     { kind: 'direct' as const, conversationId: 'dm:other' },
     { kind: 'group' as const, conversationId: 'group:one' },
-  ].map(item => ({ version: 1 as const, projectId: 'p', botInstanceId: 'qq-shared', platform: 'qq' as const, ...item }))
+  ].map(item => ({ version: 1 as const, projectId: 'p', connectionId: 'qq-shared', platform: 'qq' as const, ...item }))
   const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq', observations: [], histories: sources.map(channelSource => ({ projectId: 'p', sessionId: passiveChannelId(channelSource), channelSource })) })
   const owner = sink.receivers.find(r => r.address.conversationId === 'dm:owner')!
   const group = sink.receivers.find(r => r.kind === 'group')!
@@ -143,7 +143,7 @@ test('receiver titles share names or typed raw identities; owner associations ca
 test('Discord top-level and thread-parent receiver matching uses guild/channel IDs, never name', async () => {
   const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
   const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
-  const source = { version: 1 as const, projectId: 'p', botInstanceId: 'discord', platform: 'discord' as const, kind: 'channel' as const, conversationId: '201', guildId: '100', botUserId: '900', name: 'Same display name' }
+  const source = { version: 1 as const, projectId: 'p', connectionId: 'discord', platform: 'discord' as const, kind: 'channel' as const, conversationId: '201', guildId: '100', botUserId: '900', name: 'Same display name' }
   for (const channelSource of [source, { ...source, kind: 'thread' as const, conversationId: '301', parentId: '201' }]) {
     const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'discord', platform: 'discord', observations: [], histories: [{ projectId: 'p', sessionId: passiveChannelId(channelSource), channelSource }] })
     const binding = { ...bots.bindings[0], connectionId: 'discord', platform: 'discord', topic: 'guild:100:channel:201' }

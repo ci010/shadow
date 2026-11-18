@@ -7,7 +7,7 @@ import type { SessionManager } from './session-manager.ts'
 test('full and partial graph expose only display ancestry, never boundary grants', async () => {
   const sessionId = 'channel-inbox:p:connection:discord:200'
   const state = { projectId: 'p', sessionId, segmentIndex: 0, name: 'Post',
-    channelSource: { version: 1, projectId: 'p', botInstanceId: 'connection', platform: 'discord', conversationId: '200',
+    channelSource: { version: 1, projectId: 'p', connectionId: 'connection', platform: 'discord', conversationId: '200',
       kind: 'thread', parentId: '400', guildId: '300', botUserId: '100', name: 'Post' } }
   const app = new Hono()
   sessionsApiPlugin({ projectId: 'p',
