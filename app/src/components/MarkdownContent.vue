@@ -1,6 +1,7 @@
 <template>
   <div>
     <div ref="content" class="markdown-body" v-answer-html v-markdown-link-hints v-html="html" />
+    <AnswerDataView v-if="projection !== undefined && answerData" :data="answerData" />
     <Teleport v-for="(block, index) in blocks" :key="index" :to="block.target">
       <CopyIconButton class="code-copy" :value="block.text" :label="t('Copy code block')" />
     </Teleport>
@@ -10,17 +11,22 @@
 <script setup lang="ts">
 import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { computed, ref, shallowRef, watch } from 'vue'
+import AnswerDataView from './AnswerData.vue'
+import { splitAnswerDataReference } from '../answer-data-reference.ts'
+import type { AnswerData } from '../../../src/shared/answer-data.ts'
 import { vAnswerHtml } from '../answer-html'
 import CopyIconButton from './CopyIconButton.vue'
 import { t } from '../i18n.ts'
 
 const props = defineProps<{
   text: string
+  answerData?: AnswerData
   renderContent: (text: string) => string
 }>()
 
 // Keep parsing, sanitizing and math rendering out of the parent render loop.
-const html = computed(() => props.renderContent(props.text))
+const projection = computed(() => props.answerData ? splitAnswerDataReference(props.text) : undefined)
+const html = computed(() => props.renderContent(projection.value ?? props.text))
 const content = ref<HTMLElement>()
 const blocks = shallowRef<{ target: HTMLElement; text: string }[]>([])
 watch([html, content], () => {

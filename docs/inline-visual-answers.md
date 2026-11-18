@@ -212,3 +212,16 @@ Implementation: `app/src/answer-flow.ts`, `app/src/components/AnswerFlow.vue`,
 and schema/layout independently; they do not mount a full backend-connected
 conversation. The transition example at https://vueflow.dev/examples/transition.html
 is optional inspiration only, not an accepted protocol or required animation.
+
+## Computed tables and charts
+
+For small computed results, the `answer-data` skill describes how to return an
+`answerData` projection from foreground `exec(shell=node)`. Shadow web
+chat renders the result in the assistant answer, including on history reload,
+when the answer ends with a standalone `answer-data` fence containing only
+`latest`. It can resolve only the latest preceding display result in that turn.
+Use `table`, `line`, or `bar`; values are passed directly from the tool to the
+renderer. Only the bounded display projection is stored in this successful tool
+result (not stdout, stderr, or other returned fields). The underlying tool calls
+and script arguments still follow normal history behavior. The renderer never
+fetches a path or URL. Use ordinary prose for conclusions and caveats.

@@ -1,3 +1,4 @@
+import { decodeAnswerData } from '../shared/answer-data.ts'
 import { ToolNoEffectError, isCompletedToolFailure, requireToolText, type ToolResult } from './tool.ts'
 import assert, {
   deepEqual as assertEquals,
@@ -852,4 +853,23 @@ test('local OS and Node use current logical session data despite inherited cwd a
     scope.close()
     await rm(workspace, { recursive: true, force: true })
   }
+})
+
+
+test('Node returns only the computed answer-data projection', async () => {
+  const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))))
+  const ctx = callContext(sandbox, tool)
+  const result = await tool.execute({ shell: 'node', script: `
+    const raw = [['East', 12], ['East', 4], ['West', 2]];
+    console.log('fixture stdout'); console.error('fixture stderr');
+    export default () => ({ raw, answerData: { kind: 'bar', title: 'Total', columns: ['Region', 'Total'],
+      rows: Object.entries(Object.groupBy(raw, r => r[0])).map(([k, v]) => [k, v.reduce((sum, r) => sum + r[1], 0)]) } });
+  ` }, ctx)
+  const text = requireToolText(result)
+  assert.deepEqual(decodeAnswerData(text), { kind: 'bar', title: 'Total', columns: ['Region', 'Total'], rows: [['East', 16], ['West', 2]] })
+  assert.doesNotMatch(text, /fixture|stdout|stderr|raw/)
+  const invalid = await tool.execute({ shell: 'node', script: `console.log('fixture'); export default () => ({ answerData: { kind: 'pie' } })` }, ctx)
+  assert.equal(isCompletedToolFailure(invalid), true)
+  assert.match(requireToolText(invalid), /^Error: answerData/)
+  assert.doesNotMatch(requireToolText(invalid), /fixture/)
 })

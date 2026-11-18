@@ -63,6 +63,7 @@ export function channelCapabilityPrompt(
     `- Outbound media: ${capabilities.outboundMedia.join(', ') || 'none verified'}. Receiving an attachment does not imply it can be sent back.`,
     `- Output updates: ${capabilities.updates}. Replies are sent automatically; the adapter handles formatting, uploads, splitting and limits. Do not write raw API/card JSON.`,
   ]
+  if (channel === 'web') lines.push('- For a small computed table or chart, read `v:skills/answer-data`. Return the display projection directly from `exec(shell=node)`; reference it in the final answer as the skill describes; do not copy tool values into prose.')
   if (compactWebRuntime && channel === 'web') return lines.join('\n')
 
   lines.push(

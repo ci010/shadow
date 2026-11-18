@@ -1,3 +1,4 @@
+import { encodeAnswerData } from '../shared/answer-data.ts'
 import { layerfsRoute } from './layerfs-route.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import type { ExecutionContext } from './context.ts'
@@ -684,10 +685,23 @@ export class ExecTool implements Tool<ToolResult> {
         }, null, 2) }],
       })
       completion = run.completion.then<ToolResult, ToolResult>(
-        result => JSON.stringify({
-          ok: true, module: '<inline script>', cwd,
-          stdout: result.stdout, stderr: result.stderr, result: result.value,
-        }, null, 2),
+        result => {
+          const value = result.value
+          if (value && typeof value === 'object' && Object.hasOwn(value, 'answerData')) {
+            // Display results must not also persist stdout, stderr or sibling fields.
+            const rejected = (text: string) => completedToolFailure({ isError: true, content: [{ type: 'text', text }] })
+            if (timeoutMs === 0) return rejected('Error: answerData requires a foreground run.')
+            try {
+              return encodeAnswerData((value as Record<string, unknown>).answerData)
+            } catch (error) {
+              return rejected(`Error: ${errMsg(error)}`)
+            }
+          }
+          return JSON.stringify({
+            ok: true, module: '<inline script>', cwd,
+            stdout: result.stdout, stderr: result.stderr, result: value,
+          }, null, 2)
+        },
         error => {
           const result = failure(errMsg(error))
           return error instanceof ScriptExecutionError && !controller.signal.aborted && typeof result !== 'string'

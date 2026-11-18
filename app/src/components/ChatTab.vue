@@ -199,7 +199,7 @@
               :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: sessionMessageSourceLabel(msg.sessionSource, allSessions) }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
             >
               <div v-if="!msg.sessionSource && msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
-              <MarkdownContent v-if="msg.attachmentBody.text" class="chat-content prose" :text="msg.attachmentBody.text" :render-content="renderMarkdown" />
+              <MarkdownContent v-if="msg.attachmentBody.text" class="chat-content prose" :text="msg.attachmentBody.text" :render-content="renderMarkdown" :answer-data="answerDataForMessage(msg, idx)" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
@@ -243,7 +243,7 @@
           <p v-if="ioError" class="composer-error" role="alert">{{ t('Capture requests:') }} {{ ioError }}</p>
           <!-- Streaming response -->
           <div v-if="streaming && !viewingPhysicalId && (streamContent || streamMedia.length)" class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" :aria-label="t('Assistant message')">
-            <MarkdownContent v-if="streamContent" class="chat-content prose selectable-text" :text="streamContent" :render-content="renderMarkdown" />
+            <MarkdownContent v-if="streamContent" class="chat-content prose selectable-text" :text="streamContent" :render-content="renderMarkdown" :answer-data="streamAnswerData" />
             <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
@@ -538,6 +538,7 @@ function closeAttachmentPicker() { finishAttachmentPicker?.(); finishAttachmentP
 onUnmounted(closeAttachmentPicker)
 import { exitAnswerHtml, sanitizeAnswerHtmlRoots } from '../answer-html'
 import MarkdownContent from './MarkdownContent.vue'
+import { latestAnswerData } from '../answer-data-reference.ts'
 import MessageCopyActions from './MessageCopyActions.vue'
 import { exitStrongCompatibility } from '../markdown-strong-compat.ts'
 import MessageAttachments from './MessageAttachments.vue'
@@ -1475,6 +1476,14 @@ const displayMessages = computed(() => messages.value.map(msg => ({
   ...msg, attachmentBody: messageAttachments(msg.content, msg.media),
 })))
 
+function answerDataForMessage(msg: ChatMsg, index: number) {
+  if (msg.role !== 'assistant' || msg.event || msg.sessionSource || !msg.responseContext || !msg.content.includes('```answer-data')) return
+  return latestAnswerData(displayMessages.value, index, msg.responseContext.turnId)
+}
+const streamAnswerData = computed(() => streamContent.value.includes('```answer-data')
+  ? latestAnswerData(displayMessages.value, displayMessages.value.length, streamResponseContext.value?.turnId)
+  : undefined)
+
 const inlineExecutions = computed(() => inlineExecutionMessages(
   displayMessages.value, allSessions.value, activeSessionId.value, sessionStages.value, streaming.value,
 ))
@@ -1817,6 +1826,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                   media: result.media,
                   event: 'tool_result',
                   toolName: result.name,
+                  responseContext: parseResponseContext(cur.responseContext),
                   toolCallId: tc.id,
                   timestamp: result.timestamp,
                 }
@@ -2807,6 +2817,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
   } else if (event === 'tool_result') {
     messages.value.push({
       role: 'assistant', event: 'tool_result', content: payload.content ?? '',
+      responseContext: parseResponseContext(payload.responseContext),
       media: payload.media?.flatMap(path => {
         const url = mobileResources.resolve(buildMediaUrl(props.apiBase, activeSessionId.value, path))
         return url ? [url] : []

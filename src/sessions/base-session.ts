@@ -1,3 +1,4 @@
+import { ANSWER_DATA_PREFIX } from '../shared/answer-data.ts'
 import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeNode } from '../execution/device-home.ts'
 import { isDirectOwnerTurn, isOwnerSession } from './owner-policy.ts'
 import { isRecordedChannelInput } from '../channels/recorded-input.ts'
@@ -647,6 +648,8 @@ export abstract class BaseSession {
         media: media.length ? media : undefined,
         toolCallId: call.id,
         toolName: call.name,
+        responseContext: call.name === 'exec' && typeof content === 'string' && content.startsWith(ANSWER_DATA_PREFIX)
+          ? this.responseContext : undefined,
         done: false,
       })
       for (const callback of publishedCallbacks.get(call.id) ?? []) callback()
