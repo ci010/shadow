@@ -662,6 +662,16 @@ For web scope use `search({ handler: "web", domain: "example.com", query: "docs"
 with web. Web searches warn when ignoring file-only options (`path`, `include`,
 `limit`, `offset`); these do not restrict or paginate web results.
 
+With API-key DeepSeek V4 Pro on the official endpoint, Shadow uses the
+[DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api/#tools).
+When the `search` system tool is available, Shadow also offers DeepSeek's native
+`web_search` for public web searches, opening pages, and finding text within
+pages. DeepSeek executes these actions; they do not call Shadow's configured
+web search backend. Flash, DeepSeek Account, custom endpoints, and other
+providers do not get this native tool. Switching away does not remove prior
+answers or DeepSeek's saved search context; the latter is replayed only on the
+matching DeepSeek Responses route.
+
 Old stored calls using `space` still execute through runtime-only compatibility,
 but `space` is absent from the advertised schema. Do not combine it with
 `handler`, or specify the same root/filter/domain in both legacy and new fields.

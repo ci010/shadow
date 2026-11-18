@@ -39,6 +39,13 @@ export type ResponsesOutputItem =
     >
   }
   | {
+    type: 'web_search_call'
+    id: string
+    status: 'completed' | 'failed'
+    action: Record<string, unknown>
+    [extension: string]: unknown
+  }
+  | {
     type: 'function_call'
     id?: string
     status?: 'completed'
