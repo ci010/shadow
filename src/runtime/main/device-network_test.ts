@@ -130,6 +130,67 @@ test('device-only listener persists, restores, and never exposes Main administra
   assert.equal(JSON.parse(await readFile(configPath, 'utf8')).enabled, false)
 })
 
+test('optional loopback supports a second device ingress without changing the saved endpoint', { timeout: 15_000 }, async t => {
+  const { config, configPath, options } = await fixture(t)
+  const host = '127.0.0.2' // Synthetic primary interface; never bind a real network interface in this test.
+  const primaryConfig = { ...config, host }
+  const probe = createServer().listen(0, host)
+  try { await once(probe, 'listening') }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EADDRNOTAVAIL') throw error
+    t.skip('This OS does not provide a second loopback address')
+    return
+  }
+  await new Promise<void>((resolve, reject) => probe.close(error => error ? reject(error) : resolve()))
+  const instanceOptions = { ...options, addresses: () => [...addresses(), { name: 'Test primary', address: host }] }
+  const dual = new MainDeviceNetwork(instanceOptions)
+  t.after(() => dual.shutdown())
+  const lan = `http://${host}:${config.port}`
+  const loopback = `http://127.0.0.1:${config.port}`
+  const request = (base: string, path = '/cluster/v1/node', init?: RequestInit) =>
+    fetch(base + path, { ...init, signal: AbortSignal.timeout(3000) })
+  assert.equal((await dual.configure(primaryConfig)).endpoint, lan)
+  assert.equal((await request(lan)).status, 426)
+  await assert.rejects(request(loopback))
+
+  const dualConfig = { ...primaryConfig, enableLoopbackListener: true }
+  const blocker = createServer().listen(config.port, '127.0.0.1')
+  await once(blocker, 'listening')
+  try {
+    const state = await dual.configure(dualConfig)
+    assert.equal(state.state, 'listening')
+    assert.equal(state.endpoint, lan)
+    assert.equal(state.enableLoopbackListener, true)
+    assert.equal(state.loopbackEndpoint, undefined)
+    assert.equal((await request(lan)).status, 426)
+  } finally {
+    await new Promise<void>((resolve, reject) => blocker.close(error => error ? reject(error) : resolve()))
+  }
+  const listening = await dual.configure(dualConfig)
+  assert.equal(listening.endpoint, lan)
+  assert.equal(listening.loopbackEndpoint, loopback)
+  assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), dualConfig)
+  for (const endpoint of [lan, loopback]) {
+    assert.equal((await request(endpoint)).status, 426)
+    assert.equal((await request(endpoint, '/nodes/v1/network', { headers })).status, 404)
+    assert.equal((await request(endpoint, '/pair/v1/present', {
+      method: 'POST', headers: { ...headers, origin: 'https://browser.example' }, body: '{}',
+    })).status, 403)
+  }
+  await dual.shutdown()
+  const restored = new MainDeviceNetwork(instanceOptions)
+  t.after(() => restored.shutdown())
+  await restored.init()
+  assert.equal(restored.getState().endpoint, lan)
+  assert.equal(restored.getState().loopbackEndpoint, loopback)
+  assert.equal((await request(loopback)).status, 426)
+  assert.equal((await restored.configure({ ...dualConfig, enableLoopbackListener: false })).loopbackEndpoint, undefined)
+  assert.equal((await request(lan)).status, 426)
+  await assert.rejects(request(loopback))
+  assert.equal((await restored.configure({ ...dualConfig, enabled: false })).state, 'disabled')
+  await Promise.all([assert.rejects(request(lan)), assert.rejects(request(loopback))])
+})
+
 test('occupied port reports actionable failure without reporting a listening endpoint, then retries', { timeout: 15_000 }, async t => {
   const { app, config, network } = await fixture(t)
   const occupied = createServer().listen(config.port, config.host)

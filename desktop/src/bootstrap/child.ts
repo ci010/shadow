@@ -25,6 +25,7 @@ export interface ChildConfig {
   readonly dataDir: string
   readonly mainEndpoint: string
   readonly allowInsecureLocalTransport: boolean
+  readonly allowDeviceHome?: boolean
   readonly workdirs: readonly [{ readonly workdirId: 'desktop-workdir'; readonly rootPath: string; readonly displayName: string }]
 }
 export interface ChildSetupInfo {
@@ -142,7 +143,9 @@ export class FileChildBootstrap implements ChildBootstrap {
       }) } as ChildConfig : saved as ChildConfig
     if (value.version !== 1 || value.mode !== 'child' || typeof value.localNodeId !== 'string' || !value.localNodeId
       || !Array.isArray(value.workdirs) || value.workdirs.length !== 1 || value.workdirs[0]?.workdirId !== 'desktop-workdir'
-      || Object.keys(value).length !== 7 || Object.keys(value.workdirs[0]).sort().join(',') !== 'displayName,rootPath,workdirId') throw new TypeError('Saved Child configuration is invalid')
+      || (Object.hasOwn(value, 'allowDeviceHome') && typeof value.allowDeviceHome !== 'boolean')
+      || Object.keys(value).length !== (Object.hasOwn(value, 'allowDeviceHome') ? 8 : 7)
+      || Object.keys(value.workdirs[0]).sort().join(',') !== 'displayName,rootPath,workdirId') throw new TypeError('Saved Child configuration is invalid')
     parseChildPairInput({ endpoint: value.mainEndpoint, offerId: 'validate', pin: '000000', displayName: 'Child',
       dataDir: value.dataDir, workdir: value.workdirs[0].rootPath,
       allowInsecureLocalTransport: value.allowInsecureLocalTransport, executionConsent: true })
@@ -180,6 +183,7 @@ export class FileChildBootstrap implements ChildBootstrap {
     if (!config || changed) {
       config = { version: 1, mode: 'child', localNodeId: config?.localNodeId ?? randomUUID(), dataDir: input.dataDir,
         mainEndpoint: input.endpoint, allowInsecureLocalTransport: input.allowInsecureLocalTransport,
+        ...(config?.allowDeviceHome === undefined ? {} : { allowDeviceHome: config.allowDeviceHome }),
         workdirs: [{ workdirId: 'desktop-workdir', rootPath: input.workdir, displayName: 'Shared work folder' }] }
       await mkdir(dirname(this.configPath), { recursive: true })
       const staging = `${this.configPath}.${randomUUID()}.tmp`

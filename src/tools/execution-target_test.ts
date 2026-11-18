@@ -154,6 +154,20 @@ test('workspace is advertised; hidden folder alias is equivalent and mixed selec
   assert.deepEqual(seen, ['child', 'child'])
 })
 
+test('device home selectors cannot resolve to a local, different remote, or scripted target', async () => {
+  const args = { workspace: 'device:child', path: '~' }
+  const context = (target: unknown) => ({ signal: new AbortController().signal,
+    resolveToolTarget: async () => target }) as unknown as ExecutionContext
+  for (const target of [{ cwd: '/main' }, { remoteWorkdir: { nodeId: 'other', workdirId: 'device-home-v1' } },
+    { remoteWorkdir: { nodeId: 'child', workdirId: 'other' } }]) {
+    await assert.rejects(executionTargetContext(args, context(target), 'filesystem.read'), /No Main fallback/)
+  }
+  const remote = { remoteWorkdir: { nodeId: 'child', workdirId: 'device-home-v1' } }
+  assert.equal((await executionTargetContext(args, context(remote), 'filesystem.read')).remoteWorkdir, remote.remoteWorkdir)
+  await assert.rejects(executionTargetContext(args, { ...context(remote), scriptInvocation: true }, 'filesystem.read'), /direct owner/)
+  await assert.rejects(executionTargetContext(args, context(remote), 'filesystem.write'), /direct owner/)
+})
+
 test('dynamic validation accepts only builtin hidden alias and rejects mixed selectors', async () => {
   const tools = new SessionTools(new Tools('.'), '.')
   tools.registerDynamic(new ReadTool('.'))
