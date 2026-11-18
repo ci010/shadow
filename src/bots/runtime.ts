@@ -21,7 +21,7 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 const agentName = (id:string) => `bot_${id.slice(0,40)}_${digest(id).slice(0,16)}`
 /** The deterministic published Service Agent identity; inspecting it grants no policy. */
 export { agentName as publishedBotAgentName }
-const uuid = (id: string) => { const h = digest(['bot', id]); return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
+export const publishedBotIntegrationId = (id: string) => { const h = digest(['bot', id]); return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
 
 /** Directory-backed BOT policy adapter. No source or release snapshots are persisted in policy JSON. */
 export class DirectoryBots {
@@ -132,7 +132,7 @@ export class DirectoryBots {
       const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
       const data = { ...rawData, ...(upper ? { allowFrom: binding.allowFrom ? binding.allowFrom.filter(id => upper.includes(id)) : upper } : {}) }
       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
+      return [{ runtimeOrigin: { kind: 'bot' as const, id: bot.id, revision: deployment.revision }, generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
@@ -145,7 +145,7 @@ export class DirectoryBots {
     for (const {bot,deployment} of candidates) {
       const selected = bot.bindings.filter(binding => binding.platform === 'discord')
       if (!selected.length) continue
-      const id = uuid(bot.id)
+      const id = publishedBotIntegrationId(bot.id)
       const tools = [...new Set(selected.flatMap(binding => binding.tools))]
       agents.push({ id,name:agentName(bot.id),displayName:bot.id,markdown:`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id),defaultMode:'session',allowedTools:tools})}---\n${bot.prompt}`,
         execution:'restricted',tools,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders,discordHistory:bot.discordHistory,skills:bot.skills ?? [],

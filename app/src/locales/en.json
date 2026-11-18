@@ -4477,5 +4477,20 @@
   "Some Bot documents are unavailable. Check Bot settings.": "Some Bot documents are unavailable. Check Bot settings.",
   "This agent definition is unavailable.": "This agent definition is unavailable.",
   "Deployed snapshot / read-only": "Deployed snapshot / read-only",
-  "This deployed Markdown document is unavailable.": "This deployed Markdown document is unavailable."
+  "This deployed Markdown document is unavailable.": "This deployed Markdown document is unavailable.",
+  "Bot document views": "Bot document views",
+  "Original Markdown": "Original Markdown",
+  "Personal Bot": "Personal Bot",
+  "Deployment revision": "Deployment revision",
+  "Runtime scopes": "Runtime scopes",
+  "Runtime scope": "Runtime scope",
+  "Select a Bot binding": "Select a Bot binding",
+  "No subscribed binding is available for runtime inspection.": "No subscribed binding is available for runtime inspection.",
+  "The deployed package could not be loaded. The original Markdown is still available.": "The deployed package could not be loaded. The original Markdown is still available.",
+  "This Bot binding is disabled.": "This Bot binding is disabled.",
+  "Runtime inspection is not supported for this Bot binding.": "Runtime inspection is not supported for this Bot binding.",
+  "Runtime context is unavailable for this scope. Personal Bots require an active verified-owner session.": "Runtime context is unavailable for this scope. Personal Bots require an active verified-owner session.",
+  "Active session system message and tools; not a captured provider request.": "Active session system message and tools; not a captured provider request.",
+  "Binding preview from the runtime policy; no input was admitted. Per-input permissions and provider requests are not reconstructed.": "Binding preview from the runtime policy; no input was admitted. Per-input permissions and provider requests are not reconstructed.",
+  "No system prompt.": "No system prompt."
 }

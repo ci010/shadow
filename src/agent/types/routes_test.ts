@@ -85,3 +85,27 @@ test('Agent inspection returns exact loaded Markdown only for the explicitly req
     assert(internal.every(role => role.definitionMarkdown === undefined))
   })
 })
+
+test('Knowledge index excludes publisher-associated roles, not names or apparent frontmatter', async () => {
+  await withTempWorkspace(async workspace => {
+    const roles = new AgentTypesManager(workspace)
+    const { parseAgentFile } = await import('./parse.ts')
+    const source = '---\nname: support\n---\nOriginal role'
+    const published = parseAgentFile(source, 'support', `${workspace}/agents/support`)
+    roles.setWorkspaceType('support', { ...published, runtimeOrigin: { kind: 'channel-integration', id: 'legacy-profile', revision: 'r' } }, true)
+    const custom = parseAgentFile('---\nname: bot_named_by_user\nruntimeOrigin: {kind: bot, id: arbitrary}\n---\nUser role', 'custom', `${workspace}/agents/custom`)
+    assert.equal(custom.runtimeOrigin, undefined)
+    roles.setWorkspaceType(custom.name, custom)
+    const app = new Hono()
+    agentTypesPlugin(undefined, roles)(app)
+    const names = async (view: string) => (await (await app.request(`/api/agent-types?view=${view}`)).json() as { name: string }[]).map(role => role.name)
+    assert.deepEqual(await names('knowledge'), ['bot_named_by_user'])
+    assert.deepEqual(await names('index'), ['support', 'bot_named_by_user'])
+    // Watcher reload of the exact approved file preserves the association only in Knowledge.
+    roles.setWorkspaceType('support', published)
+    assert.deepEqual(await names('knowledge'), ['bot_named_by_user'])
+    // An independent same-name definition, even with identical bytes, is not that published file.
+    roles.setWorkspaceType('support', { ...published, dirPath: `${workspace}/agents/independent` })
+    assert.deepEqual(await names('knowledge'), ['support', 'bot_named_by_user'])
+  })
+})

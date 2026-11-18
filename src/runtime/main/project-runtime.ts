@@ -42,7 +42,7 @@ import type { BotHostScope } from '../../bots/host-contract.ts'
 import { BotSend } from '../../bots/send.ts'
 import { BotMessages } from '../../bots/messages.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
-import { DirectoryBots, DirectoryBotService } from '../../bots/runtime.ts'
+import { DirectoryBots, DirectoryBotService, publishedBotIntegrationId } from '../../bots/runtime.ts'
 import { isOwnerSession } from '../../sessions/owner-policy.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
 import { discordReadMessage } from '../../channels/discord-operations.ts'
@@ -2016,7 +2016,34 @@ export async function createProjectRuntime(
       bots: botStore, memory: memoryDomains, agents: agentTypes, sessions, learning: discordLearning, authorize: dependencies.authorize }),
     slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
     credentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
-    botPackagePlugin(botPackageOptions, dependencies.authorize),
+    botPackagePlugin(botPackageOptions, dependencies.authorize, (bot, revision, binding) => {
+      if (!directoryBots.executionState(bot.id).enabled) return
+      if (bot.mode === 'personal') {
+        const connection = botStore.get(bot.connection!)
+        botStore.assertAccess(connection.id)
+        if (!connection.enabled || connection.purpose !== 'personal' || !connection.verifiedOwner ||
+            directoryBots.personal(connection.id)?.id !== bot.id || agentTypes.resolve(bot.agent!)?.defaultMode !== 'session') return
+        const sessionId = channelSessionId({ projectId: project.id, botInstanceId: connection.id, platform: connection.platform,
+          conversationId: connection.verifiedOwner.chatId, legacySessionId: connection.legacySessionId })
+        return sessions.inspectBotContext(sessionId, { personalAgent: bot.agent })
+      }
+      if (!binding?.enabled) return
+      const connection = botStore.get(binding.botInstanceId)
+      botStore.assertAccess(connection.id)
+      if (!connection.enabled || connection.purpose !== 'service' || connection.platform !== binding.platform) return
+      const address = { projectId: project.id, botInstanceId: connection.id, platform: binding.platform, legacySessionId: connection.legacySessionId }
+      if (binding.platform === 'discord') {
+        if (binding.target.kind !== 'channel') return
+        const sessionId = binding.observation?.enabled ? `discord-observation:${project.id}:${binding.id}`
+          : channelSessionId({ ...address, conversationId: binding.target.channelId })
+        return sessions.inspectBotContext(sessionId, {
+          service: { kind: 'channel-integration', id: publishedBotIntegrationId(bot.id), revision }, integrationBindingId: binding.id,
+        })
+      }
+      return sessions.inspectBotContext(channelSessionId({ ...address, conversationId: binding.conversationId }), {
+        service: { kind: 'bot', id: bot.id, revision },
+      })
+    }),
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes, dependencies.authorize),
     sessionDiagnosisPlugin({

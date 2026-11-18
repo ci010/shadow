@@ -275,6 +275,7 @@ export class DiscordIntegration implements ConversationPolicies {
       return { id, revision: domain.revision }
     })
     const policy: ResolvedConversationPolicy = {
+      integrationBindingId: binding.id,
       revision: fingerprint({ binding, agent: profile.version, domains }),
       agent: { ...this.options.store.definition(profile), allowedTools: [...binding.tools] },
       binding: {

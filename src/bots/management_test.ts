@@ -147,3 +147,43 @@ test('Knowledge lists and reads Markdown only from verified Project deployments'
   assert.equal(partial.partial, true)
   assert.deepEqual(partial.documents.map((entry: { id: string }) => entry.id), ['support'])
 })
+
+test('Knowledge runtime endpoint is owner-only, revision-bound and derives scope exclusively from subscriptions', async t => {
+  const f = fixture(t), app = new Hono(), headers = { 'x-owner': 'yes' }
+  const snapshot = files()
+  const base = JSON.parse(snapshot['bot.json'])
+  const binding = base.bindings[0]
+  snapshot['bot.json'] = JSON.stringify({ ...base,
+    bindings: [{ ...binding, enabled: true }, { ...binding, conversationId: 'group:disabled', enabled: false }, { ...binding, conversationId: 'group:unsubscribed', enabled: true }],
+    subscriptions: [binding, { ...binding, conversationId: 'group:disabled' }].map(({ platform, botInstanceId, conversationId }) => ({ platform, botInstanceId, conversationId })),
+  })
+  writeFileSync(join(f.source, 'bot.json'), snapshot['bot.json'])
+  const revision = JSON.parse(await f.propose() as string).deployment.revision
+  const selected: unknown[] = []
+  botPackagePlugin(f.options, request => request.headers.get('x-owner') === 'yes', (bot, rev, scope) => {
+    assert.equal(bot.id, 'support')
+    assert.equal(rev, revision)
+    selected.push(scope)
+    return { source: 'preview', systemPrompt: 'Assembled runtime', sections: [], tools: [{ name: 'scoped_tool', description: 'Actual tool definition', parameters: { type: 'object', properties: {} } }] }
+  })(app)
+  const route = '/api/bot-package/support/runtime-context'
+  const req = (suffix = '') => app.request(`${route}?revision=${revision}${suffix}`, { headers })
+  const denied = await app.request(`${route}?revision=${revision}&scope=0`)
+  assert.equal(denied.status, 401)
+  assert.equal(denied.headers.get('cache-control'), 'no-store')
+  assert.equal((await app.request(`${route}?revision=stale&scope=0`, { headers })).status, 409)
+  assert.equal((await app.request(`/api/bot-package/foreign/runtime-context?revision=${revision}&scope=0`, { headers })).status, 404)
+  const overview = await (await req()).json()
+  assert.equal(overview.projectId, 'p')
+  assert.equal(overview.mode, 'service')
+  assert.equal(overview.scopes.length, 2)
+  assert.equal(overview.runtime, undefined)
+  assert.equal((await req('&scope=2')).status, 404)
+  assert.equal((await req('&scope=web:arbitrary')).status, 404)
+  assert.equal((await (await req('&scope=1')).json()).result, 'disabled')
+  assert.deepEqual(selected, [])
+  const result = await (await req('&scope=0&sessionId=web:unrelated')).json()
+  assert.equal(result.result, 'available')
+  assert.deepEqual(result.runtime, { source: 'preview', systemPrompt: 'Assembled runtime', sections: [], tools: [{ name: 'scoped_tool', description: 'Actual tool definition', parameters: { type: 'object', properties: {} } }] })
+  assert.equal((selected[0] as typeof binding).conversationId, 'group:one')
+})

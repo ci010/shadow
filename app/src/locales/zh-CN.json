@@ -4477,5 +4477,20 @@
   "Some Bot documents are unavailable. Check Bot settings.": "部分机器人文档不可用。请检查机器人设置。",
   "This agent definition is unavailable.": "此智能体定义不可用。",
   "Deployed snapshot / read-only": "已部署快照 / 只读",
-  "This deployed Markdown document is unavailable.": "此已部署的 Markdown 文档不可用。"
+  "This deployed Markdown document is unavailable.": "此已部署的 Markdown 文档不可用。",
+  "Bot document views": "机器人文档视图",
+  "Original Markdown": "原始 Markdown",
+  "Personal Bot": "个人机器人",
+  "Deployment revision": "部署修订版本",
+  "Runtime scopes": "运行时范围",
+  "Runtime scope": "运行时范围",
+  "Select a Bot binding": "选择机器人绑定",
+  "No subscribed binding is available for runtime inspection.": "没有可用于查看运行时上下文的订阅绑定。",
+  "The deployed package could not be loaded. The original Markdown is still available.": "无法加载已部署的机器人包，但仍可查看原始 Markdown。",
+  "This Bot binding is disabled.": "此机器人绑定已停用。",
+  "Runtime inspection is not supported for this Bot binding.": "此机器人绑定不支持查看运行时上下文。",
+  "Runtime context is unavailable for this scope. Personal Bots require an active verified-owner session.": "无法获取此范围的运行时上下文。个人机器人需要已验证所有者的活动会话。",
+  "Active session system message and tools; not a captured provider request.": "来自活动会话的系统消息和工具，不是发送给模型服务商的请求记录。",
+  "Binding preview from the runtime policy; no input was admitted. Per-input permissions and provider requests are not reconstructed.": "根据运行时策略生成的绑定预览，未接纳任何输入。此预览不会重建逐条输入的权限或模型请求。",
+  "No system prompt.": "没有系统提示词。"
 }

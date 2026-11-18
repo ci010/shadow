@@ -833,13 +833,13 @@ ${JSON.stringify(request)}`,
   }
 
   // Ephemeral provenance only. Never apply regenerated metadata to persisted history.
-  private promptProvenance = new Map<string, { systemPrompt: string; sections: import('../agent/context/builder.ts').SystemPromptSection[] }>()
+  private promptProvenance = new Map<string, { systemPrompt: string; sections: import('../agent/context/builder.ts').SystemPromptSection[]; policyRevision?: string; policyGeneration?: string; personalBotPrompt?: string }>()
 
   private async runtimeSystemPrompt(sessionId: string, ctx: SessionPromptContext,
     policy?: ReturnType<NonNullable<SessionManagerDeps['conversationPolicies']>['resolve']>, state?: SessionState): Promise<string> {
     const details = policy ? this.deps.conversationPolicies!.prompt(policy, sessionId, state)
       : await this.deps.context.buildSystemPromptDetails(ctx)
-    this.promptProvenance.set(sessionId, details)
+    this.promptProvenance.set(sessionId, { ...details, policyRevision: policy?.revision, policyGeneration: policy?.generation, personalBotPrompt: ctx.personalBotPrompt })
     return details.systemPrompt
   }
 
@@ -848,7 +848,7 @@ ${JSON.stringify(request)}`,
     const systemPrompt = decisions ? `${base}\n\n${decisions}` : base
     const provenance = this.promptProvenance.get(sessionId)
     if (provenance?.systemPrompt === base && decisions) {
-      this.promptProvenance.set(sessionId, { systemPrompt, sections: [...provenance.sections,
+      this.promptProvenance.set(sessionId, { ...provenance, systemPrompt, sections: [...provenance.sections,
         { name: 'decision-validity', content: decisions, characters: decisions.length }] })
     }
     return systemPrompt
@@ -3544,6 +3544,52 @@ ${JSON.stringify(request)}`,
       description: d.function.description,
       parameters: d.function.parameters,
     }))
+  }
+
+  /** Owner BOT inspection. Exact scope comes from the published package, never
+   * from a caller-selected session. A preview uses runtime policy builders but
+   * never admits an input or restores a conversation. */
+  inspectBotContext(sessionId: string, expected: {
+    service?: NonNullable<AgentTypeDefinition['runtimeOrigin']>
+    integrationBindingId?: string
+    personalAgent?: string
+  }) {
+    const state = this.getSessionState(sessionId)
+    if (state && (state.sessionId !== sessionId || state.projectId !== this.deps.projectId || state.retirement)) return
+    this.assertFolderAccess(sessionId)
+    const policies = this.deps.conversationPolicies
+    if (!policies) return
+    const policy = policies.resolve(sessionId)
+    const personal = !expected.service && policies.personal?.(sessionId)
+    if (expected.service) {
+      const origin = policy?.runtimeOrigin ?? policy?.agent.runtimeOrigin
+      if (!policy?.binding.enabled || origin?.kind !== expected.service.kind || origin.id !== expected.service.id ||
+          origin.revision !== expected.service.revision || policy.integrationBindingId !== expected.integrationBindingId) return
+    } else if (policy || !expected.personalAgent || state?.agentType !== expected.personalAgent ||
+        !personal || personal.agent !== expected.personalAgent) return
+
+    const provenance = this.promptProvenance.get(sessionId)
+    const active = this.getActiveSession(sessionId)
+    const systemPrompt = extractSystemPrompt(active?.history[0])
+    const matchesActive = policy ? provenance?.policyRevision === policy.revision &&
+      provenance.policyGeneration === policy.generation && (!expected.integrationBindingId ||
+        state?.channelBoundary?.bindingId === expected.integrationBindingId && state.channelBoundary.revision === policy.revision)
+      : personal && provenance?.personalBotPrompt === personal.prompt
+    if (active && state && systemPrompt && matchesActive && provenance?.systemPrompt === systemPrompt) {
+      return { source: 'active-history' as const, systemPrompt,
+        sections: provenance.sections,
+        tools: active.getTools().map(tool => tool.function) }
+    }
+    if (!policy) return // Sender identity and dynamic Personal tools require a live verified-owner session.
+    const matchingState = expected.integrationBindingId && state?.channelBoundary?.bindingId === expected.integrationBindingId &&
+      state.channelBoundary.revision === policy.revision ? structuredClone(state) : undefined
+    const preview = policies.prompt(policy, sessionId, matchingState)
+    const tools = policies.tools(policy, sessionId, matchingState)
+    try {
+      tools.restrictChannelTools(policy.binding.platform, sessionId)
+      return { source: 'preview' as const, ...preview, tools: tools.getDefinitions().map(tool => tool.function) }
+    }
+    finally { tools.resetDynamic() }
   }
 
   async getContext(
