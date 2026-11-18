@@ -8,7 +8,6 @@
         <template #icon><span :class="nodeIcon(node)" /></template>
       </TreeRow>
       <div v-if="!node.entry" v-show="isExpanded(node)">
-        <p v-if="node.id === 'memory'" class="memory-note">{{ t('Session history, semantic logs and conventions; not file-edit history or curated Wiki pages.') }}</p>
         <KnowledgeTree :nodes="node.children" :depth="depth + 1" :searching="searching" :selected-id="selectedId" @select="$emit('select', $event)" />
       </div>
     </li>
@@ -61,6 +60,5 @@ function folderLabel(node: KnowledgeTreeNode) {
 </script>
 <style scoped>
 .knowledge-tree { list-style: none; margin: 0; padding: 0; }
-.memory-note { margin: 0 6px 8px 32px; font-size: 12px; color: var(--c-text-secondary); }
 @media (max-width: 700px), (pointer: coarse) { .knowledge-tree { --tree-row-height: 44px; } }
 </style>
