@@ -416,6 +416,8 @@ export class MicroApps {
     app.use('/_shadow/generate', authorize)
     app.use('/_shadow/status', authorize)
     app.use('/_shadow/state', authorize)
+    app.use('/_shadow/input', authorize)
+    app.get('/_shadow/input', c => c.json(this.store.readInput(id, c.req.query('name') ?? '')))
     app.get('/_shadow/status', c => {
       const record = this.store.get(id)
       return c.json({ id, revision: record.revision, runId: run.id, name: record.manifest.name, model: record.model,

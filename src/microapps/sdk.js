@@ -43,8 +43,8 @@ async function token() {
   return access;
 }
 export async function request(path, options = {}) {
-  if (typeof path !== 'string' || !/^\/(?:_shadow\/(?:generate|status|state)$|backend\/)/.test(path) || path.includes('\\')) {
-    throw new Error('Use /_shadow/generate, /_shadow/status, /_shadow/state or /backend/ paths.');
+  if (typeof path !== 'string' || !/^\/(?:_shadow\/(?:generate|status|state|input)(?:\?|$)|backend\/)/.test(path) || path.includes('\\')) {
+    throw new Error('Use /_shadow/generate, /_shadow/status, /_shadow/state, /_shadow/input or /backend/ paths.');
   }
   const headers = new Headers(options.headers);
   headers.set('Authorization', `Bearer ${await token()}`);
@@ -60,6 +60,10 @@ export async function generate(input, signal) {
 export async function status() { return (await request('/_shadow/status')).json(); }
 export async function loadState(signal) {
   return (await request('/_shadow/state', { signal })).json();
+}
+export async function loadInput(name, signal) {
+  const query = new URLSearchParams({ name });
+  return (await request(`/_shadow/input?${query}`, { signal })).json();
 }
 export async function saveState(values, version, signal) {
   return (await request('/_shadow/state', {

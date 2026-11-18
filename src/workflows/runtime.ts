@@ -6,7 +6,7 @@ import { writePrivateFile } from '../utils/private-file.ts'
 import { executeGrantedScript } from '../script-runtime/granted-script.ts'
 import { canonical, digest } from './json.ts'
 import type { DeliverInput } from '../sessions/input.ts'
-import { AuthorDefinition, MappingConflict, revisionTime, Drafts, Observation, WorkflowDefinition, WorkflowState, type Definition, type Run, type SignalObservation, type State, type WorkMapNode, type WorkMapping, type GitHubNotifyNode } from './contracts.ts'
+import { AggregateResult, AuthorDefinition, MappingConflict, revisionTime, Drafts, Observation, WorkflowDefinition, WorkflowState, type Definition, type Run, type SignalObservation, type State, type WorkMapNode, type WorkMapping, type GitHubNotifyNode } from './contracts.ts'
 
 class WorkflowAuthorityError extends Error {}
 
@@ -44,10 +44,11 @@ export class WorkflowRuntime {
     canUse(owner: string): boolean
     deliver: DeliverInput
     work?: (owner: string, identity: string, node: WorkMapNode, observation: SignalObservation, mapping: WorkMapping, signal: AbortSignal) => Promise<WorkMapping>
+    appInput?: { check(appId: string): void; write(appId: string, input: string, runId: string, value: unknown): void }
     now?: () => number
   }) {
     this.path = projectStoragePath(directory, '.workflows', 'state.json')
-    this.state = { format: 1, projectId, definitions: [], dedupe: {}, admitted: {}, runs: [], records: {}, mappings: {} }
+    this.state = { format: 1, projectId, definitions: [], dedupe: {}, admitted: {}, runs: [], records: {}, latest: {}, mappings: {} }
   }
   get available(): boolean { return !this.stopped }
   private now() { return this.host.now?.() ?? Date.now() }
@@ -147,6 +148,7 @@ export class WorkflowRuntime {
     const definition = WorkflowDefinition.parse(JSON.parse(JSON.stringify(raw)))
     if (definition.owner && ['external', 'bot'].includes(definition.source.kind)) this.authorize(definition.owner)
     if (definition.source.kind === 'external' && (!definition.owner || definition.nodes.some(n => n.kind === 'schedule-action'))) throw new Error('External workflow cannot invoke a schedule action')
+    if (definition.nodes[0].kind === 'aggregate') throw new Error('Aggregate requires authenticated authoring')
     if (definition.source.kind === 'bot') throw new Error('BOT execution references require authenticated versioned authoring')
     const old = this.state.definitions.find(d => d.id === definition.id)
     if (!old && (Object.hasOwn(this.state.dedupe, definition.id) || this.hasAdmitted(definition.id))) throw new Error('Retired Workflow ID; create a new subscription ID')
@@ -174,8 +176,17 @@ export class WorkflowRuntime {
       if (!this.sourceAuthorizer) throw new Error('Source authorization unavailable')
       definition = this.sourceAuthorizer(owner, definition)
     }
-    if (old && (canonical(old.source) !== canonical(definition.source) || canonical(old.binding ?? (old.source.kind === 'bot' ? null : this.sourceAuthorizer!(owner, old).binding)) !== canonical(definition.binding ?? null))) {
+    if (old && (canonical(old.source) !== canonical(definition.source) || canonical(old.binding ?? (old.source.kind === 'bot' || old.nodes[0].kind === 'aggregate' ? null : this.sourceAuthorizer!(owner, old).binding)) !== canonical(definition.binding ?? null))) {
       throw new Error('Source/demand identity is immutable; create a new Workflow with an explicit first-batch policy')
+    }
+    const aggregate = definition.nodes[0].kind === 'aggregate' ? definition.nodes[0] : undefined
+    const oldAggregate = old?.nodes[0].kind === 'aggregate' ? old.nodes[0] : undefined
+    if (old && canonical(oldAggregate?.inputs ?? null) !== canonical(aggregate?.inputs ?? null)) throw new Error('Aggregate input bindings are immutable')
+    if (aggregate) {
+      if (!this.host.appInput) throw new Error('App data input unavailable')
+      this.host.appInput.check(aggregate.edge.appId)
+      if (oldAggregate && canonical(oldAggregate.edge) !== canonical(aggregate.edge)) throw new Error('Aggregate output edge is immutable')
+      if (this.state.definitions.some(d => d.id !== definition.id && d.nodes[0].kind === 'aggregate' && canonical(d.nodes[0].edge) === canonical(aggregate.edge))) throw new Error('App data input already has a Workflow edge')
     }
     if (old && canonical(old.gate ?? null) !== canonical(definition.gate ?? null)) throw new Error('First-batch policy cannot be changed after creation')
     if (old && (Object.keys(this.state.mappings[old.id] ?? {}).length || this.state.runs.some(r => r.workflow === old.id && r.definition.nodes.some(n => n.kind === 'work-map'))) && canonical(old.nodes.filter(n => n.kind === 'work-map')) !== canonical(definition.nodes.filter(n => n.kind === 'work-map'))) throw new Error('Materialized mapping ownership is immutable; create a new Workflow')
@@ -190,7 +201,7 @@ export class WorkflowRuntime {
     this.remove(id)
   }
   /** Atomic multi-subscriber admission. A failed commit must never advance a source checkpoint. */
-  admit(batches: Array<{ workflow: string; source: Definition['source']; observations: SignalObservation[] }>): string[] {
+  admit(batches: Array<{ workflow: string; source: Definition['source']; observations: SignalObservation[]; input?: string }>): string[] {
     if (this.stopped) throw new Error('Workflow stopped')
     const admitted: string[] = []
     this.update(state => {
@@ -198,14 +209,28 @@ export class WorkflowRuntime {
       const retained = (r: Run) => !terminal(r) || this.active.has(r.workflow)
       const history = state.runs.filter(r => !retained(r)).slice(-500)
       state.runs = [...state.runs.filter(retained), ...history]
+      const changed = new Set<string>()
       for (const batch of batches) {
         const definition = state.definitions.find(d => d.id === batch.workflow)
-        if (!definition || canonical(definition.source) !== canonical(batch.source)) throw new Error('Workflow source binding mismatch')
+        const aggregate = definition?.nodes[0].kind === 'aggregate' ? definition.nodes[0] : undefined
+        if (!definition || (aggregate ? batch.source.kind !== 'external' || !aggregate.inputs.some(input => input.name === batch.input && input.instance === batch.source.id)
+          : batch.input !== undefined || canonical(definition.source) !== canonical(batch.source))) throw new Error('Workflow source binding mismatch')
         if (definition.source.kind === 'bot') throw new Error('BOT references consume live guarded inputs only, never persisted observations')
         // Disabled external definitions still advance their revision window without creating actions.
         if (definition.source.kind === 'external' && definition.owner && !this.host.canUse(definition.owner)) throw new Error('Workflow owner unavailable')
         const observations = batch.observations.map(value => Observation.parse(value))
         if (observations.length > 500 || new Set(observations.map(o => o.id)).size !== observations.length) throw new Error('Invalid observation batch')
+        if (aggregate) {
+          const latest = observations.at(-1)
+          if (!latest) continue
+          const name = batch.input!
+          const values = state.latest[definition.id] ??= {}
+          const content = canonical(latest)
+          if (Buffer.byteLength(content) > 64 * 1024) throw new Error('Aggregate input too large')
+          values[name] = latest
+          changed.add(definition.id)
+          continue
+        }
         const gate = definition.gate
         const dedupe = gate ? state.dedupe[definition.id] ?? { baseline: false, seen: [] } : undefined
         for (const observation of observations) {
@@ -224,6 +249,19 @@ export class WorkflowRuntime {
         }
         if (dedupe) state.dedupe[definition.id] = { baseline: true, seen: [...new Set([...dedupe.seen, ...observations.map(o => o.id)])].slice(-4096) }
       }
+      for (const workflow of changed) {
+        const definition = state.definitions.find(d => d.id === workflow)!
+        const node = definition.nodes[0]
+        if (node.kind !== 'aggregate') continue
+        const inputs = state.latest[workflow]
+        if (Buffer.byteLength(canonical(inputs)) > 256 * 1024) throw new Error('Aggregate inputs too large')
+        if (!definition.enabled) continue
+        const id = randomUUID()
+        state.runs.push({ id, workflow, definition, observation: { id, data: null }, aggregateInputs: inputs,
+          timestamp: new Date(this.now()).toISOString(), status: 'queued', cursor: 0, attempts: 0, nextAt: 0, started: false, delivered: 0 })
+        state.admitted[workflow] = true
+        admitted.push(id)
+      }
       if (state.runs.filter(r => !terminal(r)).length > 2000) throw new Error('Workflow backlog full')
     })
     return admitted
@@ -234,9 +272,12 @@ export class WorkflowRuntime {
     if (removed?.source.kind === 'bot') this.botEpoch.set(removed.source.id, (this.botEpoch.get(removed.source.id) ?? 0) + 1)
     this.update(state => {
       // Retire even an identity removed before its first collection/admission.
+      delete state.latest[id]
       state.dedupe[id] ??= { baseline: true, seen: [] }
       state.definitions = state.definitions.filter(d => d.id !== id)
-      for (const run of state.runs.filter(r => r.workflow === id && !terminal(r))) run.status = 'cancelled'
+      for (const run of state.runs.filter(r => r.workflow === id && !terminal(r))) {
+        run.status = 'cancelled'; delete run.aggregateInputs; delete run.aggregateResult
+      }
     })
   }
   control(owner: string, id: string, action: 'pause' | 'resume' | 'retry' | 'cancel', acknowledgeReplay = false): void {
@@ -257,7 +298,11 @@ export class WorkflowRuntime {
     const run = this.state.runs.find(r => r.id === id)
     if (!run || terminal(run) || this.active.has(run.workflow)) throw new Error('Run is unavailable, terminal or active')
     if (action === 'retry' && run.status === 'blocked' && !acknowledgeReplay) throw new Error('Inspect effects first; acknowledgeReplay is required')
-    this.update(state => { const r = state.runs.find(r => r.id === id)!; r.status = action === 'cancel' ? 'cancelled' : 'retry'; r.nextAt = 0; r.error = undefined })
+    this.update(state => {
+      const r = state.runs.find(r => r.id === id)!
+      r.status = action === 'cancel' ? 'cancelled' : 'retry'; r.nextAt = 0; r.error = undefined
+      if (action === 'cancel') { delete r.aggregateInputs; delete r.aggregateResult }
+    })
   }
   private current(run: Run): void {
     this.controller.signal.throwIfAborted()
@@ -307,7 +352,21 @@ export class WorkflowRuntime {
           this.current(run); abort.throwIfAborted()
           const node = run.definition.nodes[run.cursor]
           this.update(state => { const r = state.runs.find(r => r.id === run.id)!; r.status = 'running'; r.started = true })
-          if (node.kind === 'transform') {
+          if (node.kind === 'aggregate') {
+            if (!run.aggregateInputs || !this.host.appInput) throw new Error('Aggregate inputs or app adapter unavailable')
+            this.host.appInput.check(node.edge.appId)
+            let result = run.aggregateResult
+            if (!result) {
+              result = AggregateResult.parse(await executeGrantedScript({ code: node.code,
+                args: { inputs: Object.fromEntries(Object.entries(run.aggregateInputs).map(([name, observation]) => [name, observation.data])) }, signal: abort,
+                callModule: async () => { throw new Error('Aggregate transforms have no capabilities') } }))
+              this.current(run); abort.throwIfAborted()
+              if (Buffer.byteLength(canonical(result)) > 60 * 1024) throw new Error('Aggregate result too large')
+              const saved = result
+              this.update(state => { state.runs.find(r => r.id === run.id)!.aggregateResult = saved })
+            }
+            if (result.kind === 'emit') this.host.appInput.write(node.edge.appId, node.edge.input, run.id, result.value)
+          } else if (node.kind === 'transform') {
             const drafts = Drafts.parse(await executeGrantedScript({ code: node.code, args: { signal: run.observation }, signal: abort,
               imports: ['@shadow/html'], allowedModules: ['@shadow/html'], callModule: async () => { throw new Error('Workflow transforms have no capabilities') } }))
             this.current(run); abort.throwIfAborted()
@@ -359,6 +418,7 @@ export class WorkflowRuntime {
               if (!node.revisionField || !prior || revisionTime(run.observation, node.revisionField) > revisionTime(prior, node.revisionField)) Object.defineProperty(records, key, { value: run.observation, enumerable: true, configurable: true, writable: true })
               else r.output = { stale: true }
             }
+            if (node.kind === 'aggregate') { delete r.aggregateInputs; delete r.aggregateResult }
             r.cursor++; r.started = false; r.delivered = 0; r.attempts = 0; r.error = undefined
             if (r.status !== 'cancelled') r.status = r.cursor === r.definition.nodes.length ? 'completed' : 'queued'
           })
