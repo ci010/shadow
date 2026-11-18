@@ -89,9 +89,12 @@ test('native search respects workspace visibility, deactivation and modal owners
   assert.ok(body)
   const props = { visible: true }, keyboardActive = { value: true }
   let modal = false, opens = 0
-  const handler = new Function('props', 'keyboardActive', 'document', 'openSessionSearch',
+  const handler = new Function('props', 'keyboardActive', 'document', 'openSessionSearch', 'hasVisibleNewConversationOverlay',
     `return function(event) {${body.replace('(event as CustomEvent)', 'event')}}`)(
-    props, keyboardActive, { querySelector: () => modal ? {} : null }, () => opens++)
+    props, keyboardActive, { querySelectorAll: (selector: string) => {
+      assert.equal(selector, 'dialog[open], [aria-modal="true"]:not(dialog)')
+      return [{ getClientRects: () => modal ? [1] : [] }]
+    } }, () => opens++, (await import('./new-conversation-shortcut.ts')).hasVisibleNewConversationOverlay)
   handler({ detail: 'close' }); assert.equal(opens, 0)
   handler({ detail: 'search-sessions' }); assert.equal(opens, 1)
   props.visible = false; handler({ detail: 'search-sessions' }); assert.equal(opens, 1)
