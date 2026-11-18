@@ -1,4 +1,11 @@
 {
+  "{used} / {allowance} AI credits": "{used} / {allowance} AI 积分",
+  "API balance: {amount} {currency}": "API 余额：{amount} {currency}",
+  "Balance is insufficient for API calls.": "余额不足，无法调用 API。",
+  "AI credit allowance unavailable": "无法获取 AI 积分用量",
+  "API balance unavailable": "无法获取 API 余额",
+  "View GitHub billing": "查看 GitHub 账单",
+  "Checking account usage…": "正在查询账户用量…",
   "Skill & Memory reads": "Skill 与记忆读取",
   "Other tools": "其他工具",
   "Shares are based on all recorded tool calls.": "占比以所有已记录的工具调用为基数。",

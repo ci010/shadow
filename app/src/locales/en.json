@@ -1,4 +1,11 @@
 {
+  "{used} / {allowance} AI credits": "{used} / {allowance} AI credits",
+  "API balance: {amount} {currency}": "API balance: {amount} {currency}",
+  "Balance is insufficient for API calls.": "Balance is insufficient for API calls.",
+  "AI credit allowance unavailable": "AI credit allowance unavailable",
+  "API balance unavailable": "API balance unavailable",
+  "View GitHub billing": "View GitHub billing",
+  "Checking account usage…": "Checking account usage…",
   "Skill & Memory reads": "Skill & Memory reads",
   "Other tools": "Other tools",
   "Shares are based on all recorded tool calls.": "Shares are based on all recorded tool calls.",

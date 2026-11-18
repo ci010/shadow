@@ -26,6 +26,23 @@
             <p class="provider-auth">{{ authLabels[item.authMode] }}</p>
             <p v-if="item.baseUrl" class="provider-endpoint" :title="item.baseUrl">{{ item.baseUrl }}</p>
             <p v-else class="provider-endpoint">{{ item.authMode === 'copilot' ? t('GitHub account') : t('Provider endpoint') }}</p>
+            <div v-if="supportsUsage(item)" class="provider-usage" role="status">
+              <template v-if="usage.get(item.provider)?.kind === 'copilot-credits'">
+                <p>{{ creditLabel(item.provider) }}</p>
+                <progress :value="creditProgress(item.provider)" max="1" :aria-label="creditLabel(item.provider)" />
+              </template>
+              <template v-else-if="usage.get(item.provider)?.kind === 'deepseek-balance'">
+                <p v-for="entry in balances(item.provider)" :key="entry.currency">
+                  {{ t('API balance: {amount} {currency}', { amount: entry.total, currency: entry.currency }) }}
+                </p>
+                <p v-if="insufficient(item.provider)">{{ t('Balance is insufficient for API calls.') }}</p>
+              </template>
+              <p v-else-if="usage.get(item.provider)?.kind === 'unavailable'">
+                {{ item.authMode === 'copilot' ? t('AI credit allowance unavailable') : t('API balance unavailable') }}
+                <a v-if="item.authMode === 'copilot' && item.host === 'github.com'" href="https://github.com/settings/billing" target="_blank" rel="noopener noreferrer">{{ t('View GitHub billing') }}</a>
+              </p>
+              <p v-else>{{ t('Checking account usage…') }}</p>
+            </div>
             <div class="provider-card-footer">
               <span class="provider-state" :class="{ 'needs-attention': item.reason || (item.selected && !status?.ready) }">
                 {{ item.reason ? t('Needs attention') : item.selected ? status?.ready ? t('Ready') : t('Needs attention') : t('Configured') }}
@@ -59,7 +76,8 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n.ts'
+import { formatNumber, t } from '../i18n.ts'
+import type { ProviderUsage } from '../../../src/shared/provider-usage.ts'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import ProviderSetup from '../ProviderSetup.vue'
 import {
@@ -103,18 +121,47 @@ const formStatus = computed<ProviderSetupStatus | null>(() => {
     model: item.model ?? providerPresets.find(preset => preset.id === (item.type ?? item.provider))?.model ?? '',
   }
 })
+const usage = ref(new Map<string, ProviderUsage>())
+function supportsUsage(item: ConfiguredProvider) {
+  return item.authMode === 'copilot' || (item.type ?? item.provider) === 'deepseek'
+}
+function creditLabel(id: string) {
+  const entry = usage.value.get(id)
+  return entry?.kind === 'copilot-credits' ? t('{used} / {allowance} AI credits', {
+    used: formatNumber(entry.used), allowance: formatNumber(entry.allowance),
+  }) : ''
+}
+function creditProgress(id: string) {
+  const entry = usage.value.get(id)
+  return entry?.kind === 'copilot-credits' ? Math.min(1, entry.used / entry.allowance) : 0
+}
+function balances(id: string) {
+  const entry = usage.value.get(id)
+  return entry?.kind === 'deepseek-balance' ? entry.balances : []
+}
+function insufficient(id: string) {
+  const entry = usage.value.get(id)
+  return entry?.kind === 'deepseek-balance' && !entry.sufficient
+}
 let request: AbortController | undefined
 async function loadProviders() {
   request?.abort()
+  usage.value.clear()
   if (!props.available || props.checking || props.active === false) return
   const controller = new AbortController()
   request = controller
   if (!providers.value.length) loading.value = true
   inventoryError.value = ''
   try {
-    const result = await createProviderSetupClient(props.apiBase).configured(controller.signal)
+    const client = createProviderSetupClient(props.apiBase)
+    const result = await client.configured(controller.signal)
     if (controller.signal.aborted) return
     providers.value = result
+    for (const item of result.filter(supportsUsage)) {
+      void client.usage(item.provider, controller.signal).catch(() => ({ kind: 'unavailable' } as const)).then(entry => {
+        if (!controller.signal.aborted) usage.value.set(item.provider, entry)
+      })
+    }
     if (!result.some(item => item.provider === editing.value)) editing.value = null
   } catch (error) {
     if (!controller.signal.aborted) {
@@ -136,7 +183,7 @@ async function finishEditing() {
   const cards = view.value?.querySelectorAll<HTMLElement>('.provider-card')
   Array.from(cards ?? []).find(card => card.dataset.provider === provider)?.querySelector('button')?.focus()
 }
-watch(() => [props.apiBase, props.available, props.checking, props.status, props.active], loadProviders, { immediate: true })
+watch(() => [props.apiBase, props.available, props.checking, props.status, props.active, formGeneration.value], loadProviders, { immediate: true })
 onBeforeUnmount(() => request?.abort())
 </script>
 
@@ -157,6 +204,10 @@ onBeforeUnmount(() => request?.abort())
 .provider-selected { color: var(--c-blue); font-size: 12px; }
 .provider-auth { margin: 16px 0 6px; font-size: 13px; color: var(--c-text-secondary); }
 .provider-endpoint { margin: 0 0 24px; font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.provider-usage { margin: 0 0 16px; padding-top: 10px; border-top: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.provider-usage p { margin: 0 0 4px; }
+.provider-usage a { color: var(--c-blue); }
+.provider-usage progress { display: block; width: 100%; height: 8px; accent-color: var(--c-blue); }
 .provider-card-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; }
 .provider-state { font-size: 12px; color: var(--c-text-secondary); }
 .needs-attention, .inventory-error { color: var(--c-error); }

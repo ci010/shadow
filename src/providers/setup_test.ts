@@ -220,6 +220,45 @@ test('configured inventory lists meaningful providers, selected model and safe f
   assert.deepEqual(f.auth.calls, [])
 })
 
+test('account usage uses only the instance credential at the provider API and returns sanitized, uncached data', async t => {
+  const calls: { url: string; authorization: string | null; redirect?: RequestRedirect }[] = []
+  const auth = authHarness({ existing: true })
+  const f = fixture(t, { providers: {
+    copilot: {},
+    other: { type: 'copilot' },
+    official: { type: 'deepseek', apiKey: 'synthetic-official-key', baseUrl: 'https://api.deepseek.com/v1' },
+    custom: { type: 'deepseek', apiKey: 'synthetic-custom-key', baseUrl: 'https://api.deepseek.com.example.invalid' },
+    failed: { type: 'deepseek', apiKey: 'synthetic-failed-key' },
+    browser: { type: 'deepseek-account' },
+  } }, auth, async (url, init) => {
+    const authorization = new Headers(init?.headers).get('authorization')
+    calls.push({ url: String(url), authorization, redirect: init?.redirect })
+    if (authorization === 'Bearer synthetic-failed-key') return Response.json({ error: authorization }, { status: 401 })
+    if (String(url).endsWith('/user/balance')) return Response.json({ is_available: false,
+      balance_infos: [{ currency: 'CNY', total_balance: '0.00' }, { currency: 'USD', total_balance: '-0.25' }], secret: authorization })
+    return Response.json({ token_based_billing: true, quota_snapshots: { premium_interactions: {
+      unlimited: false, has_quota: false, entitlement: '1000000', quota_remaining: 994525, credits_used: 12345,
+    } }, secret: authorization })
+  })
+  t.mock.method(f.setup, 'status', () => { assert.fail('Usage must not trigger provider readiness') })
+  const get = async (id: string) => {
+    const response = await f.app.request(`/api/provider/usage/${id}`)
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    return response.json()
+  }
+  assert.deepEqual(await get('copilot'), { kind: 'copilot-credits', used: 5475, allowance: 1_000_000 })
+  assert.deepEqual(await get('official'), { kind: 'deepseek-balance', sufficient: false,
+    balances: [{ currency: 'CNY', total: '0.00' }, { currency: 'USD', total: '-0.25' }] })
+  for (const id of ['other', 'custom', 'browser', 'failed', 'INVALID']) assert.deepEqual(await get(id), { kind: 'unavailable' })
+  assert.deepEqual(calls, [
+    { url: 'https://api.github.com/copilot_internal/user', authorization: 'Bearer synthetic-copilot-token', redirect: 'error' },
+    { url: 'https://api.deepseek.com/user/balance', authorization: 'Bearer synthetic-official-key', redirect: 'error' },
+    { url: 'https://api.deepseek.com/user/balance', authorization: 'Bearer synthetic-failed-key', redirect: 'error' },
+  ])
+  assert.deepEqual(auth.calls, [], 'usage does not refresh or change the OAuth grant')
+})
+
 test('configured inventory excludes default selections and blank placeholders but includes explicit Copilot', async (t) => {
   inventoryEnvironment(t)
   for (const raw of [

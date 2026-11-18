@@ -1,4 +1,6 @@
 import { deepseekAccountAuth } from './deepseek-account-auth.ts'
+import { copilotUsage, deepseekUsage, fetchAccountUsage, isOfficialDeepSeek, unavailableUsage } from './account-usage.ts'
+import type { ProviderUsage } from '../shared/provider-usage.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { RuntimeDiagnosticLog, ReadinessResult } from '../runtime/diagnostic-log.ts'
@@ -234,6 +236,33 @@ export class ProviderSetup {
       })
     }
     return providers.sort((a, b) => Number(b.selected) - Number(a.selected) || a.provider.localeCompare(b.provider))
+  }
+
+  private async accountUsage(id: string, requestSignal: AbortSignal): Promise<ProviderUsage> {
+    const config = this.options.getConfig()
+    const type = providerType(config, id)
+    const signal = AbortSignal.any([requestSignal, this.shutdown.signal, AbortSignal.timeout(5_000)])
+    try {
+      if (type === 'deepseek') {
+        const { apiKey, baseUrl } = resolveProviderSettings(config, id)
+        if (!apiKey.trim() || !isOfficialDeepSeek(baseUrl)) return unavailableUsage
+        const result = await fetchAccountUsage(this.request, 'https://api.deepseek.com/user/balance',
+          { accept: 'application/json', authorization: `Bearer ${apiKey}` }, deepseekUsage, signal)
+        const current = this.options.getConfig()
+        const settings = resolveProviderSettings(current, id)
+        return providerType(current, id) === type && settings.apiKey === apiKey && isOfficialDeepSeek(settings.baseUrl) ? result : unavailableUsage
+      }
+      if (isCopilotProviderType(type)) {
+        const auth = copilotAuthForInstance(config, id, this.rootAuth)
+        if (!(auth instanceof CopilotAuthenticatorV2)) return unavailableUsage
+        const lease = await auth.acquireLease(signal)
+        const result = await fetchAccountUsage(this.request, `https://api.${lease.host}/copilot_internal/user`, {
+          accept: 'application/json', authorization: `Bearer ${lease.token}`, 'Copilot-Integration-Id': 'copilot-developer-app',
+        }, copilotUsage, signal)
+        return providerType(this.options.getConfig(), id) === type && auth.getRevision() === lease.revision ? result : unavailableUsage
+      }
+    } catch { /* Account usage is advisory; never return upstream errors or credential details. */ }
+    return unavailableUsage
   }
 
   async status(refresh = false): Promise<ProviderSetupStatus> {
@@ -559,6 +588,10 @@ export class ProviderSetup {
         } catch { return c.json({ error: 'Instance could not be saved.' }, 409) }
       })
       app.get('/api/provider/configured', (c) => c.json({ providers: this.configured() }))
+      app.get('/api/provider/usage/:id', async (c) => {
+        const id = ProviderName.safeParse(c.req.param('id'))
+        return c.json(id.success ? await this.accountUsage(id.data, c.req.raw.signal) : unavailableUsage)
+      })
       app.get('/api/provider/setup', async (c) => c.json(await this.status(c.req.query('refresh') === 'true')))
       app.post('/api/provider/setup', async (c) => {
         const input = SetupInput.safeParse(await c.req.json().catch(() => null))
