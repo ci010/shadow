@@ -7,6 +7,8 @@ import { once } from 'node:events'
 import { createServer, get as httpGet } from 'node:http'
 import { gunzipSync } from 'node:zlib'
 import { WebChannel } from '../channels/web.ts'
+import { channelMessageInput } from '../sessions/input.ts'
+import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { Bus } from '../bus/bus.ts'
 import { sessionsApiPlugin } from '../sessions/routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -26,7 +28,7 @@ import { childWorkspacePlugin } from '../runtime/child-workspace.ts'
 import { requestDeviceChallengeProtocol } from './device-challenge-client.ts'
 import { deviceChallengeApiPlugin } from './device-challenge-api.ts'
 
-async function fixture(developmentUrl?: string) {
+async function fixture(developmentUrl?: string, displayName = 'Trusted desktop') {
   let endpoint = 'http://main.test:3124'
   const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])
   const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey))
@@ -35,7 +37,7 @@ async function fixture(developmentUrl?: string) {
   const now = new Date()
   registry.createOffer('offer-1', now, new Date(now.getTime() + 60_000))
   registry.presentOffer({ offerId: 'offer-1', pendingId: 'pending-1', deviceId: 'device-1', nodeId: 'node-1',
-    deviceIdentityFingerprint: fingerprint, displayName: 'Trusted desktop' }, now)
+    deviceIdentityFingerprint: fingerprint, displayName }, now)
   const authentication = registry.approve({ pendingId: 'pending-1', expectedDeviceIdentityFingerprint: fingerprint, credentialId: 'credential-1' }, now)
   const identity = { deviceId: authentication.deviceId, nodeId: authentication.nodeId, credentialId: authentication.credentialId }
   const authority = new DeviceChallengeAuthority(registry)
@@ -82,6 +84,42 @@ test('approved Child uses same Main projects and streaming uploads; no generic b
   assert.equal(uploaded.status, 200); assert.equal(await uploaded.text(), 'file bytes')
   assert.equal((await f.main.request('/api/projects', { headers: { Authorization: 'Bearer child-private' } })).status, 401)
   assert.equal((await f.child.request('/local/v1/stop', { method: 'POST', headers })).status, 404)
+})
+
+test('Child chat stamps the approved device name per message, never a client-supplied name', async t => {
+  const f = await fixture(undefined, 'Child "A" & <desk>'); t.after(() => f.bridge.close())
+  const project = new Hono()
+  const bus = new Bus()
+  const web = new WebChannel(bus, {
+    authorize: request => f.bridge.authorize(request) || request.headers.get('authorization') === 'Bearer main-private',
+    clientDeviceName: request => f.bridge.clientDeviceName(request),
+  })
+  const messages: unknown[] = []
+  web.setReceiver(async message => {
+    const input = channelMessageInput(message)
+    assert.equal(input.kind, 'message')
+    messages.push((await buildUserChatMessage(input, '.', '.')).content)
+    bus.emit('message.outbound', { event: 'response', channel: 'web', chatId: message.chatId,
+      replyTo: message.messageId, done: true, content: 'ok' })
+    return { status: 'accepted', sessionId: `web:${message.chatId}`, inputId: message.messageId }
+  })
+  await web.start(project); t.after(() => web.stop())
+  f.main.all('/projects/device-chat/*', c => {
+    const url = new URL(c.req.url); url.pathname = url.pathname.slice('/projects/device-chat'.length)
+    const request = new Request(url, c.req.raw)
+    f.addresses.inherit(c.req.raw, request)
+    return project.fetch(request)
+  })
+  const send = (app: Hono, path: string, credential: string) => app.request(`/projects/device-chat/api/chat/${path}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json', 'X-Shadow-Client-Device': 'spoofed' },
+    body: JSON.stringify({ chatId: 'same', content: 'Hello', clientDeviceName: 'spoofed' }),
+  })
+  assert.equal((await send(f.child, 'send', 'child-private')).status, 200)
+  assert.equal((await send(f.main, 'send', 'main-private')).status, 200)
+  assert.equal((await send(f.child, 'message', 'child-private')).status, 200)
+  const child = [{ type: 'text', text: '<sender id="web-user" name="web-user" chat="direct" client-device="Child &quot;A&quot; &amp; &lt;desk&gt;" />' }, { type: 'text', text: 'Hello' }]
+  const main = [{ type: 'text', text: '<sender id="web-user" name="web-user" chat="direct" />' }, { type: 'text', text: 'Hello' }]
+  assert.deepEqual(messages, [child, main, child])
 })
 
 test('UI proofs are single use, purpose bound, and revoke active streams together with device trust', async t => {

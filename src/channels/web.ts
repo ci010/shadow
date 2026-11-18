@@ -114,6 +114,7 @@ export class WebChannel extends AbstractChannel {
 
   private sessionManager?: SessionManager
   private readonly authorize: (request: Request) => boolean | Promise<boolean>
+  private readonly clientDeviceName?: (request: Request) => string | undefined
   private readonly prepareSession?: (sessionId: string) => Promise<void>
   private readonly subscriptions: string[] = []
 
@@ -126,6 +127,7 @@ export class WebChannel extends AbstractChannel {
       sessionManager?: SessionManager
       /** Host authentication, never inferred from a Web address or body fields. */
       authorize?: (request: Request) => boolean | Promise<boolean>
+      clientDeviceName?: (request: Request) => string | undefined
       /** Prepare durable host identity only after authentication, before routing. */
       prepareSession?: (sessionId: string) => Promise<void>
       realtime?: RealtimePublisher
@@ -139,6 +141,7 @@ export class WebChannel extends AbstractChannel {
     this.outputRoots = opts.durableMediaRoots ?? durableMediaRoots
     this.sessionManager = opts.sessionManager
     this.authorize = opts.authorize ?? (() => false)
+    this.clientDeviceName = opts.clientDeviceName
     this.prepareSession = opts.prepareSession
 
     this.acceptToolResults = true
@@ -383,7 +386,7 @@ export class WebChannel extends AbstractChannel {
             chatId,
             (body.content ?? '') + referenceContext,
             requestId,
-            { senderName: 'web-user' },
+            { senderName: 'web-user', clientDeviceName: this.clientDeviceName?.(c.req.raw) },
             body.media,
           ),
           completed,
@@ -500,7 +503,7 @@ export class WebChannel extends AbstractChannel {
           requestId,
           {
             senderName: 'web-user',
-            ...(retry ? { retry: true } : {}),
+            ...(retry ? { retry: true } : { clientDeviceName: this.clientDeviceName?.(c.req.raw) }),
             ...(delivery === 'queue' ? { delivery } : {}),
           },
           media,

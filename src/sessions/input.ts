@@ -150,6 +150,7 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
     senderId: message.senderId,
     senderName: message.senderName,
     ...(message.displayMetadata ? { displayMetadata: message.displayMetadata } : {}),
+    ...(message.clientDeviceName ? { clientDeviceName: message.clientDeviceName } : {}),
     chatName: message.chatName,
     isGroup: message.isGroup,
     admin: message.admin,

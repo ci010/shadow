@@ -73,7 +73,11 @@ export function buildSenderTag(msg: SessionMessageInput): string {
   const assignment = msg.source.kind === 'session' && msg.source.workAssignment
     ? ` work-key="${escapeAttr(msg.source.workAssignment.key)}" assignment-revision="${msg.source.workAssignment.assignmentRevision}" input-id="${escapeAttr(msg.id)}"` : ''
   const platform = msg.source.kind === 'user' ? platformAttributes(msg.source.sender.displayMetadata) : ''
-  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions}${assignment}${platform} />`
+  const deviceName = msg.source.kind === 'user' && msg.source.sender.channel === 'web' &&
+    typeof msg.source.sender.clientDeviceName === 'string'
+    ? msg.source.sender.clientDeviceName.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').trim().slice(0, 160) : ''
+  const clientDevice = deviceName ? ` client-device="${escapeAttr(deviceName)}"` : ''
+  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions}${assignment}${clientDevice}${platform} />`
 }
 
 /**

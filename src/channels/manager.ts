@@ -57,6 +57,7 @@ export interface ChannelManagerOptions {
   routeInputPolicy?: ReceiveChannelPolicy
   /** Real host Request authorization, checked before Web state preparation. */
   authorizeWebRequest?: (request: Request) => boolean | Promise<boolean>
+  webClientDeviceName?: (request: Request) => string | undefined
 }
 
 // Host-wide ownership, not a routing registry. Failed cleanup retains its claim.
@@ -155,6 +156,7 @@ export class ChannelManager {
         sessionManager: this.sessionManager,
         realtime: this.options?.realtime,
         authorize: this.options?.authorizeWebRequest,
+        clientDeviceName: this.options?.webClientDeviceName,
         resolveInputReferences: this.options?.resolveInputReferences,
         prepareSession: async id => {
           this.sessionManager.assertFolderAccess(id)

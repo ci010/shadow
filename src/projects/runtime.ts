@@ -28,6 +28,8 @@ export interface ProjectRuntimeDependencies {
   accountHome?: string
   copilotAuth: CopilotAuthenticator
   authorize: (request: Request) => boolean | Promise<boolean>
+  /** Host-attested display name of the sending device, if known. */
+  webClientDeviceName?: (request: Request) => string | undefined
   realtimeHub?: RealtimeHub
   computer?: ComputerService
   /** Desktop grants require a local owner, not mobile/device credentials. */

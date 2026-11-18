@@ -277,6 +277,7 @@ export async function startProjectHost(
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
           mainCluster, copilotAuth, accountHome: hostHome, authorize, realtimeHub, computer,
+          webClientDeviceName: request => deviceUi?.clientDeviceName(request),
           localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready
