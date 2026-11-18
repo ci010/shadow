@@ -7,6 +7,8 @@ import type { SessionPromptContext } from './builder.ts'
 import { projectProvider } from './project.ts'
 import { ContextBuilder } from './builder.ts'
 import { workspaceProvider } from './workspace.ts'
+import { runtimeDiscoveryProvider } from './runtime.ts'
+import { IdentityManager } from '../identity.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirLookup } from '../../sessions/locality.ts'
 
@@ -111,4 +113,43 @@ test('one environment section owns the effective working directory regardless of
     assert(!systemPrompt.includes(resolveSessionLocations(home, ctx, undefined, lookup).sessionDataDir))
     assert.doesNotMatch(systemPrompt, /C:\\DisplayOnly\\remote-work/)
   }
+})
+
+test('general-v2 Web Session keeps file boundaries and moves the VFS catalog to discovery and clarifies knowledge navigation', async () => {
+  const home = resolve('.test-data', 'prompt-home')
+  const vfs = new VirtualFs()
+  vfs.mount('v:devices', 'device inventory', () => { throw new Error('Prompt assembly must not read VFS content') })
+  vfs.mount('v:project', 'Project resources', () => { throw new Error('Prompt assembly must not read VFS content') })
+  for (const prefix of ['v:runtime', 'v:knowledge', 'v:memory']) vfs.mount(prefix, `${prefix} original`, () => '')
+  const builder = new ContextBuilder(home)
+  builder.register(workspaceProvider(home, vfs, undefined, discovery([folder(1)])))
+  builder.register(runtimeDiscoveryProvider({
+    projectId: project.id, identity: new IdentityManager(home), getSkillsSummary: () => '', getAgentTypesSummary: () => '',
+  }, vfs))
+  const ctx = { ...context, mode: 'session' as const, agent: { ...context.agent, name: 'general-v2', soul: false } }
+  const candidate = await builder.buildSystemPromptDetails(ctx)
+  const legacy = await builder.buildSystemPromptDetails({ ...ctx, agent: { ...ctx.agent, name: 'general' } })
+  const otherChannel = await builder.buildSystemPromptDetails({ ...ctx, channel: 'discord' })
+  const section = (result: typeof candidate, name: string) => result.sections.find(part => part.name === name)!.content
+  const intro = section(candidate, 'workspace-intro')
+  const catalog = (text: string) => text.match(/Virtual resources:\n\n(?:- `v:[^\n]+\n?)+/)?.[0].trimEnd()
+  assert.match(intro, /only to change this session's default workspace and cwd/)
+  assert.match(intro, /never resolve remote display paths on Main/)
+  assert.match(intro, /Use the exact attachment paths supplied in messages/)
+  assert.match(intro, /If the destination is a system user folder, resolve its actual location on the execution device/)
+  assert.match(intro, /Do not silently deliver to session storage/)
+  assert.match(intro, /Verify the final file at its durable destination before claiming delivery/)
+  assert.match(intro, /Session cleanup must not remove files outside session storage/)
+  assert.match(intro, /v:skills\/git-github/)
+  assert.match(intro, /v:skills\/project-knowledge/)
+  assert.equal(catalog(intro), undefined)
+  const candidateDiscovery = section(candidate, 'capability-discovery')
+  const legacyCatalog = catalog(section(legacy, 'workspace-intro'))!
+  assert.equal(catalog(candidateDiscovery), legacyCatalog
+    .replace('v:knowledge original', 'browse Project knowledge, references, backlinks and historical logs (read-only)')
+    .replace('v:memory original', 'read original Project records and edit shared Wiki Markdown'))
+  assert.match(candidateDiscovery, /see `v:skills\/a2a` before delegating remotely/)
+  assert.doesNotMatch(candidateDiscovery, /receipts provide sessionId/)
+  assert.equal(section(otherChannel, 'workspace-intro'), section(legacy, 'workspace-intro'))
+  assert.match(section(candidate, 'capability-discovery'), /`v:devices\/` — device inventory/)
 })

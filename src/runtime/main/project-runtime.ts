@@ -1241,7 +1241,7 @@ export async function createProjectRuntime(
   context.register({ name: 'project-conventions', getPromptSection: () => conventions.prompt() })
   context.register(workspaceProvider(workspace, vfs, workdirLookup, projectFolderDiscovery))
   context.register(guidelineProvider())
-  context.register(runtimeDiscoveryProvider(runtimePrompt))
+  context.register(runtimeDiscoveryProvider(runtimePrompt, vfs))
   context.register(memoryProvider(
     memory,
     (sid) => sessions.getSessionState(sid)?.initiativeId ?? undefined,
@@ -1317,8 +1317,13 @@ export async function createProjectRuntime(
   }))
   vfs.mount('v:models', 'read v:models for exact selectable configured model IDs, effort/capabilities/limits and provenance-labeled task guidance; not permissions or availability guarantees', modelsVfs.read, modelsVfs.list)
 
-  const agentsVfs = createAgentsHandler(agentTypes, a2a.sessions)
-  vfs.mount('v:agents', 'available local roles and configured remote agent targets; discovery grants no capabilities', agentsVfs.read, agentsVfs.list)
+  const agentsVfs = createAgentsHandler(agentTypes, a2a.sessions, {
+    types: agentTypes, sessions,
+    canRead: context => context.projectId === project.id && isDirectOwnerTurn(context)
+      && isOwnerSession(sessions.getSessionState(context.sessionId), project.id)
+      && !sessions.isManagedConversation(context.sessionId),
+  })
+  vfs.mount('v:agents', 'available local roles and configured remote agent targets; owner Web turns can read v:agents/<role>/context/web for the Knowledge-page owner Web preview and source sections; discovery grants no capabilities', agentsVfs.read, agentsVfs.list)
 
   const selfSessionVfs = createSelfSessionHandler(sessions, () => topics)
 

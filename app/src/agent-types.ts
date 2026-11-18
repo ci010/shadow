@@ -51,10 +51,11 @@ export function parseAgentTypes(value: unknown): AgentTypeMeta[] {
   }
   return value
 }
-export function parseAgentContext(value: unknown): { systemPrompt: string; sections: PromptSection[]; tools: ToolDef[] } {
+export function parseAgentContext(value: unknown): { systemPrompt: string; sections: PromptSection[]; tools: ToolDef[]; rolePreview?: 'owner-web' } {
   if (!record(value) || typeof value.systemPrompt !== 'string' || !Array.isArray(value.tools)
     || !value.tools.every(isTool) || new Set(value.tools.map(tool => tool.name)).size !== value.tools.length) {
     throw new Error(t('Cannot read the assembled agent preview. Retry the preview.'))
   }
-  return { systemPrompt: value.systemPrompt, sections: promptSections(value.systemPrompt, value.sections), tools: value.tools }
+  return { systemPrompt: value.systemPrompt, sections: promptSections(value.systemPrompt, value.sections), tools: value.tools,
+    ...(value.rolePreview === 'owner-web' ? { rolePreview: 'owner-web' as const } : {}) }
 }

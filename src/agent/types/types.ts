@@ -42,3 +42,8 @@ export interface AgentTypeDefinition {
   /** DeepSeek reasoning effort level */
   reasoningEffort?: ReasoningEffort
 }
+
+/** User-selectable root roles stay out of automatic delegation suggestions. */
+export function isSelectableAgentType(type: Pick<AgentTypeDefinition, 'name' | 'root'>): boolean {
+  return !type.root || type.name === 'general' || type.name === 'general-v2'
+}

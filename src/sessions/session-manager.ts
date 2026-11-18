@@ -3599,13 +3599,20 @@ ${JSON.stringify(request)}`,
       channel?: string
       chatId?: string
       preview?: boolean
+      /** Host-authorized role preview only; never inferred from caller-supplied session identity. */
+      rolePreview?: 'owner-web'
     },
   ): Promise<{
     systemPrompt: string
     source: 'active-history' | 'preview'
+    rolePreview?: 'owner-web'
     sections?: import('../agent/context/builder.ts').SystemPromptSection[]
     tools: Array<{ name: string; description: string; parameters: unknown }>
   }> {
+    const ownerWebPreview = opts.rolePreview === 'owner-web'
+    if (ownerWebPreview && (opts.sessionId !== undefined || opts.channel !== 'web' || !opts.agentType || opts.chatId !== undefined)) {
+      throw new Error('Owner Web role preview requires a role and cannot use a real conversation.')
+    }
     if (opts.sessionId) this.assertFolderAccess(opts.sessionId)
     let sessionId: string
     let channel: string
@@ -3668,6 +3675,7 @@ ${JSON.stringify(request)}`,
       personalBotPrompt: personal?.prompt,
       mode: state?.mode ?? agentType.defaultMode,
       taskReviewable: !!state?.task,
+      ...(ownerWebPreview ? { admin: true, isGroup: false } : {}),
       workRequired: opts.sessionId ? this.alignment?.required(sessionId) ?? false : false,
       parentSessionId: delegationOwner(state),
       initiativeId: state?.initiativeId,
@@ -3682,7 +3690,8 @@ ${JSON.stringify(request)}`,
     }, channel, promptCtx.mode)
 
     const decisions = opts.sessionId ? await this.decisionValidityPrompt(sessionId) : ''
-    return { source: 'preview', systemPrompt: decisions ? `${systemPrompt}\n\n${decisions}` : systemPrompt,
+    return { source: 'preview', ...(ownerWebPreview ? { rolePreview: 'owner-web' as const } : {}),
+      systemPrompt: decisions ? `${systemPrompt}\n\n${decisions}` : systemPrompt,
       sections: decisions ? [...sections, { name: 'decision-validity', content: decisions, characters: decisions.length }] : sections, tools }
   }
 

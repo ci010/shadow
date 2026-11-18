@@ -50,6 +50,23 @@ ${allows('reply')
     : ''}`.trim())
   }
 
+  if (ctx.agent.name === 'general-v2' && mode === 'session') {
+    const coordination: string[] = []
+    if (allows('cancel')) coordination.push('Read `v:bg` for execution output. `cancel({executionId})` waits for local cleanup or reports remote state. Do not poll.')
+    if (modes.includes('call')) coordination.push('Set `mode: "call"` explicitly for a blocking, inherited-context result. Invoke `subagent` directly, never through scripts.')
+    if (modes.includes('task')) coordination.push('`mode: "task"` starts asynchronously in a fresh context. Admission is not a result; continue independent work or end the turn instead of waiting or polling. `report_to` routes completion, not ownership or permission.')
+    if (modes.length) coordination.push('Separate sessions do not isolate files or roll back side effects. Wait for completion or confirmed cancellation, then reread the affected files before taking over a worker’s scope.')
+    if (modes.includes('task') && allows('task')) coordination.push('Only designated reviewers may accept a task, using its exact submitted revision.')
+    if (allows('read')) coordination.push('Check another session’s progress in `v:sessions/<sessionId>` and relevant Work first. Missing or stale evidence is not a reason to poll or ping.')
+    if (allows('session')) coordination.push('Durable peers are not child executions. Read `v:skills/peer-sessions` for discovery, creation and maintenance.')
+    if (allows('message')) coordination.push('Use `message` when the other agent needs to participate, not for status you can read. A receipt is admission, not execution or transfer of responsibility. Reassignment does not stop running work.')
+    if (coordination.length) sections.push(['### Delegation and coordination', '', ...coordination.map(line => `- ${line}`)].join('\n'))
+    if (allows('read') && allows('write')) sections.push(`### Session metadata
+
+Set a stable topic in \`v:sessions/self.json\`; use focus for the current phase. \`completed\` tracks conversation responsibility, not Work. Reopen only for a new request that requires work, not an acknowledgement or metadata cleanup.`)
+    return sections.join('\n\n')
+  }
+
   if (mode !== 'call' && allows('cancel')) {
     sections.push(`### Executions
 

@@ -181,6 +181,40 @@ existing non-retention policy and are not silently saved by this mechanism.
 
 ## Inspect prompts during development
 
+In a direct turn in the Project owner's private Web conversation, read
+`v:agents/general/context/web` for the Web role preview shown in Knowledge.
+It returns `source: "preview"`, the rendered `systemPrompt`, and the ordered
+`sections` with their sources. Append `/system-prompt` for the exact text with
+normal `read` line paging. Other roles listed in Knowledge use the same path
+pattern. This is a role preview, not a reconstruction of a real conversation
+or evidence of provider input. Reading it does not start a session or make an
+inference; search only lists metadata, not prompt content. The authenticated
+Web preview (`rolePreview: "owner-web"`) uses the same Project device
+inventory and rendering rules as an eligible owner Web session, without
+borrowing a conversation's identity, history, workdir, or Work. Authenticated
+Web requests for Knowledge-visible roles use this preview even if an older
+renderer sends only `channel=web`. Unauthenticated requests cannot get the
+inventory, including by explicitly requesting `rolePreview=owner-web`.
+Read `v:runtime/current/system-prompt` for an active session's actual prompt,
+or `v:devices` for the live inventory alone.
+
+`general-v2` is an opt-in comparison role, not the default. In Knowledge,
+compare `general` and `general-v2` with the Web channel selected, or read
+`v:agents/general-v2/context/web`. The comparison trims the runtime text for
+direct Web sessions, clarifies the Web Session delivery contract, and moves
+the VFS catalog from working context to capability discovery without removing
+entries. Its shorter role body keeps product-specific boundaries and prefers
+blocking calls for bounded exploration or independent verification when inherited
+context matters and call mode is supported. Its Session tool guidance groups
+execution, delegation and peer coordination, with session metadata separate.
+MCP setup and recovery details are on demand in `mcp-config` and
+`tool-operations`; the prompt keeps the check-before-retry rule for uncertain
+execution outcomes. Web discovery distinguishes read-only Knowledge navigation
+from Wiki originals in `v:memory` and points to the A2A Skill instead of
+repeating delegation steps. Session memory keeps the same keywords, logs,
+and working set with a shorter top-of-mind introduction. Tool availability
+is unchanged. Use the same model for both roles when comparing behavior.
+
 `GET /projects/<id>/api/sessions/<encoded-session-id>/context` returns the
 current prompt and tools. `source: active-history` uses in-memory state;
 `source: preview` rebuilds from current configuration. Neither is a
