@@ -49,6 +49,7 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
             {path:'/chat', redirect:'/projects/work/chat/web%3Achat-one'},
             {path:'/projects/:projectId/chat/:sessionId?', name:'chat', component:ProjectsWorkspace},
             {path:'/projects', name:'projects', component:ProjectsWorkspace},
+            {path:'/projects/:projectId/board', name:'project-board', component:ProjectsWorkspace},
             {path:'/projects/:projectId/workflows', name:'project-workflows', component:ProjectsWorkspace},
             {path:'/projects/:projectId/dashboard', name:'project-dashboard', component:ProjectsWorkspace},
             {path:'/nodes', name:'nodes', component:destination},

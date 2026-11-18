@@ -31,7 +31,7 @@
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
       :inspection="inspection" :project-navigation-enabled="!embedded" :primary-activity="conversationTabActivity"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
-      :active="visible && (inspection || ['chat', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive && conversationFocused" :draft="!activeSessionId"
+      :active="visible && (inspection || ['chat', 'project-board', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive && conversationFocused" :draft="!activeSessionId"
       :editable-conversation="!isExecution && (!activeSessionId || isDirectChat) && !viewingPhysicalId" :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
       :composer-height="composerVisible ? dockHeight : 0" :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
@@ -1308,7 +1308,7 @@ const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
 const diagnosisDocumentVisible = ref(false)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => editorGroups ? conversationDocumentVisible.value : (props.inspection || (route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
+const composerVisible = computed(() => editorGroups ? conversationDocumentVisible.value : (props.inspection || (route.name !== 'project-board' && route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)

@@ -2,22 +2,22 @@
   <section ref="rootElement" class="project-workbench" :class="{ compact: !wide, 'has-panel': !!panel, 'dashboard-panel': view === 'history' }"
     :style="{ '--coordination-panel-width': `${panelWidth}px` }" :aria-label="t('Project workbench')">
     <header class="workbench-heading">
-      <h1 class="project-identity" :title="projectName">{{ projectName }}</h1>
+      <h1 class="project-identity" :title="projectName">{{ mode === 'board' ? t('Board') : projectName }}</h1>
       <div v-show="!appsVisible" class="workbench-controls">
-        <div class="work-view-switch" role="group" :aria-label="t('Work view')">
+        <div v-if="mode !== 'board'" class="work-view-switch" role="group" :aria-label="t('Work view')">
           <button type="button" :aria-pressed="view === 'history'" @click="view = 'history'">{{ t('Dashboard') }}</button>
-          <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">{{ t('Board') }}</button>
           <button type="button" :aria-pressed="view === 'usage'" @click="view = 'usage'; panel = ''">{{ t('Usage') }}</button>
         </div>
         <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :title="t('Uses multiple bounded model requests and saves valid patches progressively; no calls on opening.')" :aria-describedby="modelCallNoticeId" @click="organizeTopics('full')">{{ organizing ? t('Organizing…') : t('Reorganize recent topics') }}</button>
         <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :aria-describedby="modelCallNoticeId" @click="organizeTopics('delta')">{{ t('Update changed topics') }}</button>
         <span :id="modelCallNoticeId" class="model-call-description">{{ t('Up to 8 model requests, 24 tool calls and 120 seconds. Valid patches are saved immediately.') }}</span>
         <button v-if="view !== 'usage'" type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
+        <button v-if="mode === 'board' && view === 'completed'" type="button" @click="view = 'board'">{{ t('Back') }}</button>
         <button v-if="completionUnread.length" type="button" class="completion-entry" @click="view = 'completed'; unreadOnly = true; panel = ''">{{ t('Newly completed: {count}', { count: completionUnread.length }) }}</button>
         <span v-if="view === 'board'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
         <button v-if="view !== 'usage'" type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
       </div>
-      <div class="workbench-integrations">
+      <div v-if="mode !== 'board'" class="workbench-integrations">
         <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
         <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; view = view === 'usage' ? 'history' : view; panel = panel === 'github' ? '' : 'github'">GitHub</button>
       </div>
@@ -25,7 +25,7 @@
       <div v-if="!appsVisible && view === 'history' && organizationProgress" class="organization-status" role="status" aria-live="polite">{{ organizationProgress }}</div>
       <div v-if="!appsVisible && view === 'history' && organizationMessage" class="organization-status" role="status" aria-live="polite">{{ organizationMessage }}</div>
     </header>
-    <QuickActions :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="true" pinned-only />
+    <QuickActions v-if="mode !== 'board'" :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="true" pinned-only />
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="true" @compose="discussApp" />
     <ProjectUsage v-if="view === 'usage' && !appsVisible" :api-base="apiBase" :project-id="projectId" :active="visible" />
     <div v-show="!appsVisible && view !== 'usage'" class="workbench-body">
@@ -130,7 +130,7 @@ import ProjectUsage from './ProjectUsage.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
-const props = defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean }>()
+const props = withDefaults(defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean; mode?: 'dashboard' | 'board' }>(), { mode: 'dashboard' })
 const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string] }>()
 const live = useProjectLiveState(), route = useRoute(), router = useRouter()
 const livePool = useLiveClientPool()
@@ -140,7 +140,7 @@ const organizationSnapshot = shallowRef<ProjectWorkOverview>()
 const data = computed(() => organizationSnapshot.value ?? lease.value?.work.state.value ?? lastSnapshot.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
-const view = ref<'history' | 'board' | 'usage' | 'completed'>('history'), panel = ref<'work' | 'github' | ''>('')
+const view = ref<'history' | 'board' | 'usage' | 'completed'>(props.mode === 'board' ? 'board' : 'history'), panel = ref<'work' | 'github' | ''>('')
 
 const selected = ref(''), wide = ref(false), appsVisible = ref(false)
 const unreadOnly = ref(false)
@@ -211,7 +211,7 @@ function toggleApps() {
   }
 }
 async function discussApp(text: string) { appsVisible.value = false; await discussGitHub(text) }
-watch(() => route.query.microApp, id => { if (typeof id === 'string') appsVisible.value = true }, { immediate: true })
+watch(() => route.query.microApp, id => { if (props.mode !== 'board' && props.visible && route.params.projectId === props.projectId && typeof id === 'string') appsVisible.value = true }, { immediate: true })
 const panelId = `coordination-${useId()}`
 const modelCallNoticeId = `model-call-${useId()}`
 const containerWidth = ref(0), preferredPanelWidth = ref(400)
@@ -243,7 +243,8 @@ const sessionExists = (id: string | null) => !!id && !!data.value?.sessions.some
 function refresh() { if (props.visible) { void lease.value?.work.refresh(); void refreshCompletions() } }
 function clearFilters() { Object.assign(filter, { query: '', root: '', assignee: '', terminal: false }) }
 async function selectWork(key: string) {
-  await router.replace({ query: { ...route.query, work: key } })
+  await router.replace({ name: props.mode === 'board' ? 'project-board' : 'project-dashboard',
+    params: { projectId: props.projectId }, query: { ...(route.params.projectId === props.projectId ? route.query : {}), work: key } })
   if (route.query.work !== key) return
   panel.value = 'work'
   await nextTick(); panelHeading.value?.focus()
@@ -257,7 +258,7 @@ function openSession(id: string) {
 }
 async function closePanel() {
   panel.value = ''
-  await nextTick(); rootElement.value?.querySelector<HTMLButtonElement>('.work-view-switch button')?.focus()
+  await nextTick(); rootElement.value?.querySelector<HTMLButtonElement>('.work-refresh')?.focus()
 }
 import { workReference } from '../content-references.ts'
 
@@ -271,7 +272,7 @@ async function discussNode(key: string) {
   emit('compose', t('Discuss the premise of {title} ({key}):', { title: workReference(props.projectId, key, item?.title), key }) + '\n')
 }
 async function focusRequest(request: ProjectWorkOverview['requests'][number]) {
-  view.value = 'history'
+  view.value = props.mode === 'board' ? 'board' : 'history'
 
   clearFilters()
   panel.value = ''
@@ -299,8 +300,8 @@ watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase,
   lease.value?.release(); lease.value = undefined
   if (visible) lease.value = live.acquireProject(apiBase, projectId, undefined, true)
 }, { immediate: true })
-watch(() => route.query.work, key => {
-  if (props.visible && typeof key === 'string' && key !== selected.value) {
+watch(() => [route.query.work, props.visible] as const, ([key]) => {
+  if (route.params.projectId === props.projectId && route.name === (props.mode === 'board' ? 'project-board' : 'project-dashboard') && props.visible && typeof key === 'string' && key !== selected.value) {
     if (view.value === 'usage') view.value = 'history'
     selected.value = key; panel.value = 'work'
   }

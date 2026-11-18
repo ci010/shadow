@@ -64,7 +64,7 @@ test('native Apps use a branded isolated window and Windows tasks launch warm an
         import {microAppNavigation} from '/src/microapp-navigation.ts';
         const router=createRouter({history:createMemoryHistory(),routes:[
           {path:'/projects/:projectId/chat/:sessionId',name:'chat',component:{render:()=>null}},
-          {path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}}
+          {path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}}
         ]});router.beforeEach(microAppNavigation);
         import {conversationMicroAppLink} from '/src/project-coordination.ts';
         import ProjectMicroApps from '/src/components/ProjectMicroApps.vue';
