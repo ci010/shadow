@@ -840,7 +840,7 @@ ${JSON.stringify(request)}`,
   private async runtimeSystemPrompt(sessionId: string, ctx: SessionPromptContext,
     policy?: ReturnType<NonNullable<SessionManagerDeps['conversationPolicies']>['resolve']>, state?: SessionState): Promise<string> {
     const details = policy ? this.deps.conversationPolicies!.prompt(policy, sessionId, state)
-      : await this.deps.context.buildSystemPromptDetails(ctx)
+      : await this.deps.context.buildSystemPromptDetails({ ...ctx, runtimePrompt: true })
     this.promptProvenance.set(sessionId, { ...details, policyRevision: policy?.revision, policyGeneration: policy?.generation, personalBotPrompt: ctx.personalBotPrompt })
     return details.systemPrompt
   }

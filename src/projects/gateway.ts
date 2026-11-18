@@ -1,3 +1,5 @@
+import { mergeUsage } from './merge-usage.ts'
+import { projectUsageSchema } from './usage-contract.ts'
 import type { Hono } from 'hono'
 import type { ProjectCatalog } from './catalog.ts'
 import { DEFAULT_PROJECT_ID } from './contracts.ts'
@@ -16,6 +18,7 @@ export function registerProjectGateway(app: Hono, options: {
   start: (id: string) => Promise<void>
   remove: (id: string) => Promise<void>
   status: (id: string) => { state: 'ready' | 'starting' | 'failed'; error?: string }
+  authorizeUsage?: (request: Request) => boolean | Promise<boolean>
   clientAddresses: GatewayClientAddressRegistry
 }): void {
   const unavailable = (id: string) => {
@@ -23,6 +26,36 @@ export function registerProjectGateway(app: Hono, options: {
     return { ...status, error: 'project_unavailable', message }
   }
   app.get('/api/projects', c => c.json({ projects: options.catalog.list() }))
+  app.get('/api/usage', async c => {
+    c.header('Cache-Control', 'no-store')
+    if (!await options.authorizeUsage?.(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+    const projects = options.catalog.list()
+    const rows = []
+    for (let offset = 0; offset < projects.length; offset += 4) {
+      c.req.raw.signal.throwIfAborted()
+      rows.push(...await Promise.all(projects.slice(offset, offset + 4).map(async project => {
+        const target = options.catalog.isDeleting(project.id) ? undefined : options.lookup(project.id)
+        if (!target) return { project, usage: null }
+        try {
+          const request = new Request(new URL('/api/project/usage', c.req.url), c.req.raw)
+          options.clientAddresses.inherit(c.req.raw, request)
+          const response = await target.run(() => target.app.fetch(request, c.env))
+          if (response.status === 401 || response.status === 403) return null
+          if (!response.ok) return { project, usage: null }
+          const usage = projectUsageSchema.safeParse(await response.json())
+          return { project, usage: usage.success && usage.data.projectId === project.id ? usage.data : null }
+        } catch (error) {
+          c.req.raw.signal.throwIfAborted()
+          console.error('[projects] Usage read failed', project.id, error)
+          return { project, usage: null }
+        }
+      })))
+    }
+    const visible = rows.filter(row => row !== null)
+    const aggregate = mergeUsage(visible.flatMap(row => row.usage ? [row.usage] : []))
+    if (aggregate && visible.some(row => !row.usage)) aggregate.coverage = 'partial'
+    return c.json({ rows: visible, aggregate: aggregate ?? null })
+  })
   app.post('/api/projects', async c => {
     try {
       const body: unknown = await c.req.json()

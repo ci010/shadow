@@ -90,10 +90,16 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
           else if (path === '/api/projects') data = { projects: [
             { id: 'work', name: 'Workspace', createdAt: '' }, { id: 'other', name: 'Other project', createdAt: '' },
           ] }
-          else if (path === '/api/project/usage') {
-            const metrics = { calls: 1, tokens: scope?.[1] === 'work' ? 100 : 200, durationMs: 2000, costs: [], unknownTokenCalls: 0, unknownCostCalls: 1, unknownDurationCalls: 0 }
-            data = { projectId: scope?.[1], asOf: '2026-10-01T12:00:00Z', timeZone: 'UTC', total: metrics, today: metrics, past7Days: metrics, month: metrics,
-              daily: [], scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0 }
+          else if (path === '/api/project/usage' || path === '/api/usage') {
+            const usage = (projectId: string, tokens: number) => {
+              const metrics = { calls: 1, tokens, durationMs: 2000, costs: [], unknownTokenCalls: 0, unknownCostCalls: 1, unknownDurationCalls: 0 }
+              return { projectId, asOf: '2026-10-01T12:00:00Z', timeZone: 'UTC', total: metrics, today: metrics, past7Days: metrics, month: metrics,
+                daily: [], scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0 }
+            }
+            data = path === '/api/usage' ? { aggregate: usage('', 300), rows: [
+              { project: { id: 'work', name: 'Workspace', createdAt: '' }, usage: usage('work', 100) },
+              { project: { id: 'other', name: 'Other project', createdAt: '' }, usage: usage('other', 200) },
+            ] } : usage(scope?.[1] ?? '', scope?.[1] === 'work' ? 100 : 200)
           }
           else if (path === '/api/provider/configured') data = { providers: [] }
           else if (path === '/api/provider/setup') data = { provider: 'openai', model: 'gpt-test', ready: true, hasApiKey: false, authMode: 'none' }

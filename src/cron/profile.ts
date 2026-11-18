@@ -63,10 +63,10 @@ export class AutomationProfileService {
     const frequency = this.policy?.(featureId) ?? (job ? { kind: 'schedule' as const, description: job.schedule, scope: 'configured_job' as const, schedule: job.schedule }
       : { kind: 'unknown' as const, description: 'Current runtime policy unavailable; historical snapshots are not current frequency.', scope: 'historical_unknown' as const })
     return { featureId, window: { from: new Date(from).toISOString(), asOf: new Date(asOf).toISOString(), timezone: 'UTC', semantics: 'events_completed_in_window_runs_started_in_window' }, frequency, runs, usage, executionOutcomes, ...(organizationOutcomes?{organizationOutcomes}:{}), ...(organizationScopes ? { organizationScopes } : {}),
-      coverage: usage.scanLimitReached || usage.untrackedSessions || usage.unknownUsageCalls ? 'partial' : usage.trackedSessions ? 'complete' : 'unknown',
+      coverage: usage.coverage === 'partial' || usage.scanLimitReached || usage.untrackedSessions || usage.unknownUsageCalls ? 'partial' : usage.trackedSessions ? 'complete' : 'unknown',
       limitations: [...(usage.scanLimitReached ? ['Source scan capped at 100,000 records; all displayed counts and known tokens are lower bounds.'] : []), 'Provider calls are persisted provider.chat completions, including failures; transport retries are not separate calls.',
         'Tool calls count distinct persisted tool result IDs; interrupted calls without a result and nested direct tool invocations may be absent.',
         'Missing historical telemetry is unknown, not zero. Known token totals are subtotals when usage is incomplete.',
-        'Cached/reasoning token breakdowns, call durations and costs are not persisted by this source. No budget estimates or quality scores.'] }
+        'This view does not display cache and reasoning breakdowns, durations or costs. No budget estimates or quality scores.'] }
   }
 }

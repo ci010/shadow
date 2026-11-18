@@ -28,6 +28,8 @@ export const projectUsageSchema = z.object({
   total: projectUsageMetricsSchema, today: projectUsageMetricsSchema,
   past7Days: projectUsageMetricsSchema, month: projectUsageMetricsSchema,
   daily: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), usage: projectUsageMetricsSchema })),
+  firstText: z.object({ samples: z.number().int().nonnegative(), p50Ms: amount.nullable(), p95Ms: amount.nullable() }).optional(),
+  coverage: z.enum(['complete', 'partial']).optional(),
   scanLimitReached: z.boolean(), untrackedSessions: z.number().int().nonnegative(),
   undatedCalls: z.number().int().nonnegative(),
 })

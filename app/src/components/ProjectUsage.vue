@@ -97,6 +97,8 @@
         </div>
       </template>
       <details class="completeness"><summary>{{ t('Data completeness') }}</summary>
+        <p v-if="data.coverage === 'partial'">{{ t('Historical indexing is incomplete; totals may grow as data becomes available.') }}</p>
+        <p v-if="data.firstText">{{ t('First streamed text (all time): P50 {p50}, P95 {p95} ({count} samples)', { p50: data.firstText.p50Ms === null ? t('Unavailable') : `${Math.round(data.firstText.p50Ms)} ms`, p95: data.firstText.p95Ms === null ? t('Unavailable') : `${Math.round(data.firstText.p95Ms)} ms`, count: data.firstText.samples }) }}</p>
         <p>{{ t('Daily tokens') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.tokens !== null).length, days: windowDays }) }}</p>
         <p>{{ t('Daily estimated cost') }} · {{ t('{count} of {days} days available', { count: costPoints.filter(p => p.amount !== null).length, days: windowDays }) }} · {{ costUnit }}</p>
         <p>{{ t('Daily provider time') }} · {{ t('{count} of {days} days available', { count: points.filter(p => p.seconds !== null).length, days: windowDays }) }}</p><p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p><p>{{ t('Selected summary period: {period}', { period: t(periods.find(p => p.key === selectedPeriod)!.label) }) }}</p><ul><li>{{ t('Missing token telemetry: {count} calls', { count: selectedUsage.unknownTokenCalls }) }}</li><li>{{ t('Missing cost telemetry: {count} calls', { count: selectedUsage.unknownCostCalls }) }}</li><li>{{ t('Missing duration telemetry: {count} calls', { count: selectedUsage.unknownDurationCalls }) }}</li></ul><p>{{ t('Coverage: {untracked} sessions without complete tracking; {undated} undated calls excluded. Scan capped: {capped}. Totals may be lower bounds.', { untracked: data.untrackedSessions, undated: data.undatedCalls, capped: data.scanLimitReached ? t('Yes') : t('No') }) }}</p><table class="coverage-table"><thead><tr><th>{{ t('Date') }}</th><th>{{ t('Missing tokens / cost / duration') }}</th></tr></thead><tbody><tr v-for="day in dailyPage?.daily ?? []" :key="day.date"><th>{{ day.date }}</th><td>{{ day.usage.unknownTokenCalls }} / {{ day.usage.unknownCostCalls }} / {{ day.usage.unknownDurationCalls }}</td></tr></tbody></table></details>
@@ -114,7 +116,6 @@
 </template>
 <script setup lang="ts">
 import { projectBase } from '../api-url.ts'
-import { mergeUsage } from '../global-usage.ts'
 import UiSelect from './UiSelect.vue'
 import UsageTrendChart from './UsageTrendChart.vue'
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -135,9 +136,9 @@ const selectedProjectId = computed(() => props.projectId ?? filter.value)
 const allProjects = computed(() => globalMode.value && !filter.value)
 const scopedBase = computed(() => globalMode.value && filter.value ? projectBase(props.apiBase, filter.value) : props.apiBase)
 const global = shallowRef<ReturnType<typeof owner.globalUsage>>()
-const rows = computed(() => global.value?.state.value.value)
+const rows = computed(() => global.value?.state.value.value?.rows)
 const failedProjects = computed(() => rows.value?.filter(row => !row.usage).length ?? 0)
-const aggregate = computed(() => mergeUsage(rows.value?.flatMap(row => row.usage ? [row.usage] : []) ?? []))
+const aggregate = computed(() => global.value?.state.value.value?.aggregate)
 const summary = shallowRef<ReturnType<typeof owner.usage>>()
 const state = computed(() => allProjects.value ? global.value?.state.value : summary.value?.state.value)
 const data = computed(() => allProjects.value ? aggregate.value : summary.value?.state.value.value)
@@ -173,7 +174,7 @@ const activityCharts = computed(() => activityKinds.map(kind => {
   return { ...kind, entries, total: entries.reduce((sum, entry) => sum + entry.calls, 0), maximum: entries[0]?.calls ?? 0 }
 }))
 const summaryCosts = computed(() => displayCosts(selectedUsage.value.costs))
-const hasMissing = computed(() => !!data.value && (data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0 || [data.value.total, ...data.value.daily.map(d => d.usage)].some(u => u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
+const hasMissing = computed(() => !!data.value && (data.value.coverage === 'partial' || data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0 || [data.value.total, ...data.value.daily.map(d => d.usage)].some(u => u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
 function compactNumber(value: number | null) { return value === null ? t('Unavailable') : compactUsageNumber(value, formatNumber) }
 function compactCost(value: number) { return compactUsageCost(value, formatNumber) }
 function exactCost(cost: ProjectUsageMetrics['costs'][number]) { return `${formatNumber(cost.amount, { maximumSignificantDigits: 15 })} ${cost.currency}` }

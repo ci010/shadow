@@ -1,3 +1,4 @@
+import { statsIndex } from './stats-index.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { parseTokenUsage } from './usage.ts'
@@ -10,6 +11,24 @@ export function emptyUsage(): UsageMetrics {
 export async function readUsage(store: SessionStore, states: SessionState[], from: number, asOf: number, signal?: AbortSignal): Promise<UsageMetrics> {
   const result = emptyUsage()
   const seen = new Set<string>(), tools = new Set<string>()
+  const stats = statsIndex(store)
+  if (stats) {
+    result.coverage = stats.complete ? 'complete' : 'partial'
+    const sessions = new Set(states.map(state => state.sessionId))
+    for (const session of sessions) {
+      signal?.throwIfAborted()
+      const item = stats.profile(session, from, asOf)
+      result.providerCalls += item.calls
+      result.knownUsageCalls += item.known
+      result.unknownUsageCalls += item.calls - item.known
+      if (item.input !== null) result.inputTokens = (result.inputTokens ?? 0) + item.input
+      if (item.output !== null) result.outputTokens = (result.outputTokens ?? 0) + item.output
+      if (item.total !== null) result.totalTokens = (result.totalTokens ?? 0) + item.total
+      result.toolCalls += item.tools
+      if (item.tracked) result.trackedSessions++; else result.untrackedSessions++
+    }
+    return result
+  }
   let scanned = 0
   // Foreground aggregate reads never start a profiler loop or consume unbounded history.
   outer: for (const state of states) {

@@ -1,3 +1,4 @@
+import { mergeUsage } from './global-usage.ts'
 import type { ProjectUsage } from '../../src/projects/usage-contract.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -475,14 +476,17 @@ test('global Usage starts with all projects, reports partial totals and filters 
   t.mock.method(globalThis, 'fetch', async (url: URL | RequestInfo) => {
     const path = new URL(String(url)).pathname
     requests.push(path)
-    if (path === '/api/projects') return Response.json({ projects: ['a', 'b', 'c'].map(id => ({ id, name: `Fixture ${id.toUpperCase()}`, createdAt: '2026-10-01' })) })
+    if (path === '/api/usage') return Response.json({
+      rows: ['a', 'b', 'c'].map(id => ({ project: { id, name: `Fixture ${id.toUpperCase()}`, createdAt: '2026-10-01' }, usage: id === 'c' ? null : response(id) })),
+      aggregate: mergeUsage([response('a'), response('b')]),
+    })
     const projectId = path.split('/')[2]!
     if (projectId === 'c') return new Response(null, { status: 503 })
     return Response.json(response(projectId))
   })
   const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture', active: true })
   await settle()
-  assert.deepEqual(requests, ['/api/projects', ...['a', 'b', 'c'].map(id => `/projects/${id}/api/project/usage`)])
+  assert.deepEqual(requests, ['/api/usage'])
   assert.match(view.text(), /All projects.*Fixture A.*Fixture B.*Fixture C/)
   assert.match(view.text(), /Some projects could not be loaded \(1\)/)
   assert.match(view.text(), /Usage by project/)

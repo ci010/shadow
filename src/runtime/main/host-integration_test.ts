@@ -41,6 +41,13 @@ test('real Main starts and reopens fresh BOT metadata with healthy default Proje
         const status = await request('/api/projects/default/status')
         assert.equal(status.status, 200)
         assert.deepEqual(await status.json(), { state: 'ready' })
+        const globalUsage = await request('/api/usage')
+        assert.equal(globalUsage.status, 200)
+        assert.equal(globalUsage.headers.get('cache-control'), 'no-store')
+        const usage = await globalUsage.json()
+        assert.deepEqual(usage.rows.map((row: { project: { id: string } }) => row.project.id), ['default'])
+        assert.equal(usage.aggregate.total.calls, 0)
+        assert.equal(usage.rows[0].usage.firstText.samples, 0)
         for (const resource of ['folders', 'sessions', 'microapps', 'audio/status']) {
           const response = await request(`/projects/default/api/${resource}`)
           assert.equal(response.status, 200, `${resource}: ${await response.text()}`)

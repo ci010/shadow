@@ -1,3 +1,4 @@
+import { observeResponseMode } from './request-meter.ts'
 import { httpFailure } from './http-failure.ts'
 import { prepareRequestBody } from './request-body.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
@@ -122,6 +123,7 @@ export async function openaiChat(params: {
 
       if (!res.ok) throw await httpFailure(res, params.providerName ?? 'LLM', params.model, params.signal, prepared.stats)
 
+      observeResponseMode('nonstream')
       const json = (await res.json()) as any
 
       const contentParts: string[] = []

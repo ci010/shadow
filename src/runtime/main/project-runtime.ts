@@ -1,3 +1,4 @@
+import { StatsIndex } from '../../sessions/stats-index.ts'
 import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR } from '../../execution/device-home.ts'
 import { SkillRecallStore } from '../../skills/recall.ts'
 import { readChannelSessionAliases, withChannelSessionAliases } from '../../sessions/channel-session-aliases.ts'
@@ -737,7 +738,10 @@ export async function createProjectRuntime(
   // Do not retain the host's snapshot through the runtime dependency closure.
   delete dependencies.startupSessionStates
   const sessionIdentityAliases = await readChannelSessionAliases(sessionsDir, project.id)
-  const sessionStore = withChannelSessionAliases(startupStates.store, sessionIdentityAliases)
+  const aliasStore = withChannelSessionAliases(startupStates.store, sessionIdentityAliases)
+  const stats = new StatsIndex(projectStoragePath(workspace, 'state', 'stats.sqlite'))
+  const sessionStore = stats.attach(aliasStore, sessionIdentityAliases)
+  cleanup.push(() => stats.close())
   cleanup.push(startupStates.close)
   cleanup.push(() => sessionStore.close?.())
   await startup.measure('ownership', () => assertSessionProjectOwnership(sessionStore, project.id))
@@ -1247,6 +1251,7 @@ export async function createProjectRuntime(
   context.register(memoryProvider(
     memory,
     (sid) => sessions.getSessionState(sid)?.initiativeId ?? undefined,
+    entry => stats.recallMemory(entry, 'automatic'),
   ))
 
   const mcpManager = new McpManager(
@@ -1357,7 +1362,8 @@ export async function createProjectRuntime(
   const skillEditing = new SkillEditing({
     projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: id => canAuthor(id),
   })
-  const skillRecall = new SkillRecallStore(projectStoragePath(workspace, 'state', 'skill-recall.sqlite'))
+  const skillRecall = new SkillRecallStore(projectStoragePath(workspace, 'state', 'stats.sqlite'), projectStoragePath(workspace, 'state', 'skill-recall.sqlite'),
+    path => stats.recall.record(path, 'skill'))
   cleanup.push(() => skillRecall.close())
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
     const state = sessions.getSessionState(ctx.sessionId)
@@ -1386,7 +1392,7 @@ export async function createProjectRuntime(
     context => topics.assertActor(context.projectId, context.sessionId))
   vfs.mount('v:knowledge', 'read-only knowledge/log navigation; read v:knowledge/overview', knowledgeVfs.read, knowledgeVfs.list)
 
-  const memoryVfs = createMemoryHandler(workspace, project.id)
+  const memoryVfs = createMemoryHandler(workspace, project.id, entry => stats.recallMemory(entry, 'active'))
   vfs.mount(
     'v:memory',
     'read Project memory; write wiki Markdown files (session records, logs and internal state are read-only here)',
@@ -1714,7 +1720,9 @@ export async function createProjectRuntime(
     return undefined
   }, Date.now, sessionId => learningRuntime.ledger.outcome(sessionId))
   const sessionProfiles = new SessionProfileService(sessions, project.id)
-  const statsVfs = createStatsHandler(sessions, () => topics, sessionProfiles, automationProfiles)
+  const statsVfs = createStatsHandler(sessions, () => topics, sessionProfiles, automationProfiles, {
+    memoryRecall: () => stats.recall.memorySummary(), modelRequests: () => stats.requestSummary(Date.now()),
+  })
   vfs.mount('v:stats', 'on-demand Project, conversation and automation usage; read v:stats for paths and scope', statsVfs.read, statsVfs.list)
   const setWorkflowFeatureEnabled = registerAutomationRoutes(app, cronService, sessions, project.id, sessionId => learningRuntime.ledger.outcome(sessionId), jobId => {
     const pipeline = jobId === 'learning:reflector' ? 'reflector' : jobId === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
@@ -2185,6 +2193,7 @@ export async function createProjectRuntime(
       () => evalBridge.shutdown(),
       () => { conventions.close(); initiatives.close() },
       () => skillRecall.close(),
+      () => stats.close(),
       () => sessionStore.close?.(),
       () => closeTelemetry(),
       releaseFolderLifecycle,
@@ -2216,6 +2225,8 @@ export async function createProjectRuntime(
     organizationController.start()
   })
   await ready
+  void sessions.listHistoryStates().then(states => stats.backfill(aliasStore, states, project.id))
+    .catch(error => console.error('[stats] Historical backfill failed', error))
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   await cronService.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
   await workDispatcher.recover()

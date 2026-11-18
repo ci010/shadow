@@ -3,7 +3,7 @@ import { markRaw, onScopeDispose } from 'vue'
 import { canonicalResourceKey } from '../resources/engine.ts'
 import { resourceViews } from '../resources/vue-resource.ts'
 import { parseProjects } from '../projects.ts'
-import { apiUrl, projectBase } from '../api-url.ts'
+import { apiUrl } from '../api-url.ts'
 import { createFoldersClient } from '../folders-client.ts'
 import { fetchNodeInventory } from '../node-inventory.ts'
 import { fetchAutomations } from '../automations.ts'
@@ -62,22 +62,17 @@ export function createCatalogResources(request: typeof fetch = fetch) {
     },
     globalUsage(base: string) {
       const lease = views.acquire(key(base, '', 'global-usage'), async signal => {
-        const projects = parseProjects(await json(base, '/api/projects', AbortSignal.any([signal, AbortSignal.timeout(60_000)])))
-        // Bound fan-out: each project request can scan its own session history.
-        const rows = []
-        for (let offset = 0; offset < projects.length; offset += 4) {
-          signal.throwIfAborted()
-          rows.push(...await Promise.all(projects.slice(offset, offset + 4).map(async project => {
-            try {
-              const usage = await usageSummary(projectBase(base, project.id), project.id, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
-              return { project, usage }
-            } catch {
-              signal.throwIfAborted()
-              return { project, usage: undefined }
-            }
-          })))
+        const payload = await json(base, '/api/usage', AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+        return {
+          aggregate: payload.aggregate === null ? undefined : projectUsageSchema.parse(payload.aggregate),
+          rows: (payload.rows as Array<{ project: unknown; usage: unknown }>).flatMap(row => {
+            const project = parseProjects({ projects: [row.project] })[0]
+            if (!project) return []
+            const usage = row.usage === null ? undefined : projectUsageSchema.parse(row.usage)
+            if (usage && usage.projectId !== project.id) throw new Error('Project mismatch')
+            return [{ project, usage }]
+          }),
         }
-        return rows
       })
       void lease.read(); return lease
     },

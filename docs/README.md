@@ -17,7 +17,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [GitHub collaboration](github.md)
 - [Provider instances and multiple accounts](provider-instances.md)
 - [DeepSeek Account browser authorization](deepseek-account.md)
-- [Provider cost estimates](provider-cost.md)
+- [Provider cost estimates](provider-cost.md) and [Project usage and recall](project-usage.md)
 - [Quick Actions](quick-actions.md)
 - [Directory BOTs](bots.md), [external input routing](input-routing.md)
 - [Project Micro Apps](microapps.md)

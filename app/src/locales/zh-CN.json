@@ -3834,6 +3834,8 @@
   "UTC dates · estimated costs · cumulative model call time": "UTC 日期 · 估算费用 · 模型调用累计耗时",
   "Some usage is unavailable or partial; known subtotals may be lower. See data completeness.": "部分用量缺失或不完整，已知小计可能偏低。请查看数据完整性。",
   "Trend window is independent of the summary period · UTC": "趋势窗口独立于汇总周期 · UTC",
+  "Historical indexing is incomplete; totals may grow as data becomes available.": "历史索引尚未完成；数据补齐后总量可能增加。",
+  "First streamed text (all time): P50 {p50}, P95 {p95} ({count} samples)": "流式首段正文（累计）：P50 {p50}，P95 {p95}（{count} 个样本）",
   "Data completeness": "数据完整性",
   "Selected summary period: {period}": "当前汇总周期：{period}",
   "Missing token telemetry: {count} calls": "缺失 token 记录：{count} 次调用",

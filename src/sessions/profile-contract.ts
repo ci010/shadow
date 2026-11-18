@@ -6,6 +6,7 @@ export interface UsageMetrics {
  outputTokens: number | null
  totalTokens: number | null
  toolCalls: number
+ coverage?: 'complete' | 'partial'
  scanLimitReached?: boolean
  trackedSessions: number
  untrackedSessions: number

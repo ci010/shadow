@@ -1,7 +1,7 @@
 import type { SessionManager } from './session-manager.ts'
 import type { SessionProfile } from './profile-contract.ts'
 export const PROFILE_LIMITATIONS = [
-  'Source records are scanned on demand, capped at 100,000 per aggregate; capped totals are lower bounds.',
+  'Project usage is indexed from completed source events; partial coverage and capped totals are lower bounds.',
   'Provider calls count persisted provider.chat completions (including failures), not transport retries.',
   'Tool calls count distinct persisted result IDs, not interrupted or nested direct calls.',
   'Missing telemetry is unknown, not zero. Tokens are known subtotals when usage is incomplete.',

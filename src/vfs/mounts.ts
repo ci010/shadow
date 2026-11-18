@@ -459,7 +459,7 @@ async function walkResourceFiles(root: string, signal: AbortSignal, rel = ''): P
  *
  * Wiki writes share the filesystem writer; source records and internal state stay read-only here.
  */
-export function createMemoryHandler(workspace: string, projectId?: string): {
+export function createMemoryHandler(workspace: string, projectId?: string, recall?: (entry: string) => void): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
   write: VirtualFsWriteHandler
@@ -470,7 +470,7 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
   const visibleFiles = async (signal: AbortSignal, subpath = '') => (await walkResourceFiles(memoryRoot, signal, subpath)).filter(path => !maintenance.isHidden(`memory/${path}`))
   const writer = new WriteTool(workspace, true)
 
-  const read: VirtualFsHandler = async (subpath, context) => {
+  const read: VirtualFsHandler = async (subpath, context, options) => {
     if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
     if (!subpath || subpath === 'overview') return 'Project memory\n- Knowledge navigation: v:knowledge/overview\n- Wiki originals: v:memory/topics/ (and concepts/, decisions/, identities/, tools/)\n- Semantic logs: v:knowledge/logs; raw JSONL: v:memory/events/\n- Session context/raw edit ledgers: v:memory/sessions/; edit index: v:sessions/<id>/edits\n- Skills remain separate: v:skills/\nUse flag l, explicit directory reads, or glob/grep at v:memory/ for exhaustive raw discovery. Wiki Markdown writes remain unchanged.'
     if (subpath.includes('..')) return 'Invalid path.'
@@ -496,7 +496,9 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
         .join('\n')
     }
     if (info.nlink !== 1) throw new Error('Memory paths must be unlinked regular files')
-    return await readFile(target, 'utf8')
+    const body = await readFile(target, { encoding: 'utf8', signal: context.signal })
+    if (body.trim() && (options?.offset ?? 1) <= 1 && /\.md$/i.test(subpath) && !/^(?:sessions|events)\//i.test(subpath)) recall?.(subpath)
+    return body
   }
 
   const list: VirtualFsListHandler = async (context, options) => {
