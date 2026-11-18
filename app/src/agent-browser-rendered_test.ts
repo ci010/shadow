@@ -65,7 +65,7 @@ test('agent browser separates definitions and previews with accessible desktop a
             {path:'/agents/:projectId/:agentName?', name:'agents', component:{render:() => null}},
           ]});
           await router.push('/agents/fixture/general?channel=web&retained=yes');
-          const state = reactive({project:'fixture', width:'100%', legacy:false});
+          const state = reactive({project:'fixture', width:'100%', legacy:false, definition:''});
           const requests = [];
           const nativeFetch = window.fetch.bind(window);
           window.fetch = (input, options) => {
@@ -88,7 +88,7 @@ test('agent browser separates definitions and previews with accessible desktop a
               state.legacy ? h('div', {class:'legacy-viewers', style:'height:100%;overflow:auto'}, [
                 h(ToolsCard, {tools:${JSON.stringify(tools)}}),
                 h(SystemPromptCard, {prompt:'# Legacy renderer\\n\\nOriginal diagnosis presentation.'}),
-              ]) : h(AgentsTab, {apiBase:location.origin + '/projects/' + state.project + '/'}),
+              ]) : h(AgentsTab, {key:state.definition, agentName:state.definition || undefined, apiBase:location.origin + '/projects/' + state.project + '/'}),
             ]),
           ])}).use(router).mount('#app');`
       },
@@ -111,6 +111,8 @@ test('agent browser separates definitions and previews with accessible desktop a
           if (catalog) {
             catalogRequests++
             if (catalog[1] === 'broken') { response.statusCode = 503; json({ error: 'Synthetic catalog failure' }) }
+            else if (url.searchParams.has('definition')) json(agents.filter(agent => agent.name === url.searchParams.get('definition'))
+              .map(agent => ({ ...agent, definitionMarkdown: `---\nname: ${agent.name}\n---\n# Authored definition` })))
             else json(catalog[1] === 'empty' ? [] : agents)
             return
           }

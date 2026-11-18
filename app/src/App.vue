@@ -6,7 +6,7 @@
         <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }" :aria-label="t('Main navigation')">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : item.name === 'agents' ? { name: 'project-settings', params: { projectId: route.params.projectId || 'default', section: 'agents' } } : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
+            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
               <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">
                 {{ item.label }}
               </button>
@@ -105,9 +105,9 @@ import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
 
 const route = useRoute()
-const workspaceRoutes: readonly string[] = ['chat', 'projects', 'project-dashboard', 'project-workflows', 'project-settings', 'agents']
+const workspaceRoutes: readonly string[] = ['chat', 'projects', 'project-dashboard', 'project-workflows', 'project-settings']
 const mobile = provideMobileChrome()
-const mobilePageTitles: Record<string, string> = { get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get agents() { return t('Agents') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
+const mobilePageTitles: Record<string, string> = { get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
 watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()

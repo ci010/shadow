@@ -8,6 +8,8 @@ export interface AgentTypeDefinition {
   description: string
   /** Full system prompt body (markdown) */
   prompt: string
+  /** Original loaded AGENT.md, for read-only inspection. */
+  definitionMarkdown?: string
   /** Whitelist — if set, ONLY these tools are available (takes precedence over blockedTools) */
   allowedTools?: string[]
   /** Blacklist — these tools are removed from the full set */

@@ -119,3 +119,31 @@ test('BOT prompt tab reads only the authorized exact deployed revision, never la
   assert.equal((await app.request('/api/bot-package/support/prompt?revision=stale', { headers: { 'x-owner': 'yes' } })).status, 409)
   assert.equal((await app.request('/api/bot-package/missing/prompt?revision=stale', { headers: { 'x-owner': 'yes' } })).status, 404)
 })
+
+test('Knowledge lists and reads Markdown only from verified Project deployments', async t => {
+  const f = fixture(t), app = new Hono(), headers = { 'x-owner': 'yes' }
+  mkdirSync(join(f.source, 'docs'))
+  writeFileSync(join(f.source, 'docs', 'README.MD'), '# Deployed companion')
+  const revision = JSON.parse(await f.propose() as string).deployment.revision
+  writeFileSync(join(f.source, 'docs', 'README.MD'), '# Not deployed')
+  const other = new BotDeployments({directory:join(f.root,'other'),projectId:'other'})
+  await other.deploy({ id: 'foreign', source: { folderId: 'folder', directory: 'foreign' }, ...other.freeze({ 'BOT.md': '# Other Project' }) })
+  botPackagePlugin(f.options, request => request.headers.get('x-owner') === 'yes')(app)
+  const list = '/api/bot-package?documents=markdown'
+  assert.equal((await app.request(list)).status, 401)
+  assert.deepEqual(await (await app.request(list, { headers })).json(), {
+    projectId: 'p', partial: false, documents: [{ id: 'support', revision, paths: ['BOT.md', 'docs/README.MD'] }],
+  })
+  const file = (id: string, path: string, rev = revision) => `/api/bot-package/${id}/prompt?${new URLSearchParams({ path, revision: rev })}`
+  assert.equal((await app.request(file('support', 'docs/README.MD'))).status, 401)
+  assert.equal((await (await app.request(file('support', 'docs/README.MD'), { headers })).json()).prompt, '# Deployed companion')
+  assert.equal((await app.request(file('support', 'bot.json'), { headers })).status, 404)
+  assert.equal((await app.request(file('support', '../BOT.md'), { headers })).status, 404)
+  assert.equal((await app.request(file('support', 'docs/README.MD', 'stale'), { headers })).status, 409)
+  assert.equal((await app.request(file('foreign', 'BOT.md'), { headers })).status, 404)
+  await f.deployments.deploy({ id: 'damaged', source: { folderId: 'folder', directory: 'damaged' }, ...f.deployments.freeze({ 'BOT.md': '# Damaged' }) })
+  writeFileSync(join(f.deployments.runtimeDirectory('damaged'), 'BOT.md'), '# Unverified overwrite')
+  const partial = await (await app.request(list, { headers })).json()
+  assert.equal(partial.partial, true)
+  assert.deepEqual(partial.documents.map((entry: { id: string }) => entry.id), ['support'])
+})

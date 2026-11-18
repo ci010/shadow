@@ -397,7 +397,7 @@ function publish(resource: ConversationResource) {
 }
 const consumedInspectionLinks = new Set<string>()
 function syncRoute() {
-  if (!props.visible || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
+  if (!props.visible || !['chat', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
@@ -432,7 +432,7 @@ function syncRoute() {
     conversationQueries.set(resource.key, query)
   }
   publish(resource)
-  const tab = route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' || route.name === 'agents' ? 'settings' : undefined
+  const tab = route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' ? 'settings' : undefined
   if (tab) {
     const state = projectDocuments.get(projectId)
     if (!state.tabs.includes(tab)) state.tabs = [...state.tabs, tab]
@@ -495,7 +495,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
   const destination = projectNavigationShortcut(event)
   if (!destination || !keyboardActive.value || !props.visible || creating.value
     || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-    || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
+    || !['chat', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
   if (!projects.value.some(project => project.id === projectId)) return
   event.preventDefault()
@@ -505,7 +505,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
 const newConversationShortcut = createNewConversationShortcut({
   context() {
     if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-      || !['chat', 'project-dashboard', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name))) return
+      || !['chat', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
     // Ctrl+N matches the sidebar's explicit Start from scratch action, never inherits a workdir.
@@ -598,7 +598,7 @@ function projectNavigation(resource: ConversationResource, tab?: ProjectTab, doc
       void router.push({ name: 'project-settings',
         params: { projectId: resource.projectId, section: settingsSections.get(resource.projectId) ?? 'general' } })
     }
-  } else if (route.name === 'project-settings' || route.name === 'agents' || route.name === 'project-workflows') {
+  } else if (route.name === 'project-settings' || route.name === 'project-workflows') {
     const query = { ...conversationQueries.get(resource.key) }
     if (documentKey === DIAGNOSIS_TAB_KEY) query.panel = 'diagnosis'
     else delete query.diagnosis

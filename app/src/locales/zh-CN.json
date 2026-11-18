@@ -4472,5 +4472,10 @@
   "What happened": "发生内容",
   "Source session": "来源会话",
   "Recorded source": "原始记录",
-  "Unrecognized event record": "无法识别的事件记录"
+  "Unrecognized event record": "无法识别的事件记录",
+  "Could not load definition documents. Refresh and retry.": "无法加载定义文档。请刷新后重试。",
+  "Some Bot documents are unavailable. Check Bot settings.": "部分机器人文档不可用。请检查机器人设置。",
+  "This agent definition is unavailable.": "此智能体定义不可用。",
+  "Deployed snapshot / read-only": "已部署快照 / 只读",
+  "This deployed Markdown document is unavailable.": "此已部署的 Markdown 文档不可用。"
 }

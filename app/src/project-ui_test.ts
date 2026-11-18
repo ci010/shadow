@@ -52,11 +52,13 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
   }))
   app.use(createResourceStores())
   app.mount({})
-  t.after(() => app.unmount())
-  return () => {
+  let mounted = true
+  const unmount = () => { if (mounted) { mounted = false; app.unmount() } }
+  t.after(unmount)
+  return Object.assign(() => {
     assert.ok(instance)
     return Reflect.get(instance.$, 'setupState')
-  }
+  }, { unmount })
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const config = (model: string) => ({ agent: { model, workspace: 'C:\\synthetic', temperature: .7 }, learning: {} })
@@ -371,7 +373,7 @@ test('folder catalog revision serializes stale lists and moves an agent-created 
   assert.equal(state().groups.folders[0].folder.id, 'agent-folder', 'A stale list cannot erase the new registration')
 })
 
-function mountAgents(t: TestContext, agentName = 'plan') {
+function mountAgents(t: TestContext, agentName = 'plan', embedded = false) {
   const route = reactive({
     params: { projectId: 'owner', section: 'agents' },
     query: { agent: agentName, channel: 'web', retained: 'yes' } as Record<string, string>,
@@ -388,7 +390,7 @@ function mountAgents(t: TestContext, agentName = 'plan') {
     route.query = location.query
     await nextTick()
   }
-  const state = mountScript(t, 'AgentsTab.vue', { apiBase: 'http://fixture/projects/owner/' }, undefined, {
+  const state = mountScript(t, 'AgentsTab.vue', { apiBase: 'http://fixture/projects/owner/', ...(embedded ? { agentName, active: true } : {}) }, undefined, {
     'vue-router': { useRoute: () => route, useRouter: () => ({ replace }) },
   })
   const agents = ['explore', 'plan', 'general'].map(name => ({ name, description: name, source: 'builtin', canSpawn: false }))
@@ -487,11 +489,27 @@ test('agent entry without a selection loads the default once and aborts pending 
   assert.equal(requests.length, 2)
   assert.match(requests[1].path, /\/explore\/context\?channel=web$/)
   assert.equal(state().loadingContext, true)
-  t.after(async () => {
-    assert.equal(requests[1].signal?.aborted, true)
-    requests[1].finish({ systemPrompt: 'Late response', tools: [] })
-    await settle()
-  })
+  state.unmount()
+  assert.equal(requests[1].signal?.aborted, true)
+  requests[1].finish({ systemPrompt: 'Late response', tools: [] })
+  await settle()
+})
+
+test('agent Knowledge entry opens the definition and only resolves context when inspecting', async t => {
+  const { state, requests, route } = mountAgents(t, 'plan', true)
+  await settle()
+  assert.equal(state().activeTab, 'definition')
+  assert.equal(state().requestedAgent.name, 'plan')
+  assert.match(requests[0].path, /\/api\/agent-types\?definition=plan$/)
+  assert.equal(requests.length, 1)
+  state().activeTab = 'tools'
+  await settle()
+  assert.match(requests[1].path, /\/plan\/context\?channel=web$/)
+  state().channel = 'discord'
+  await settle()
+  assert.equal(requests[1].signal?.aborted, true)
+  assert.match(requests[2].path, /\/plan\/context\?channel=discord$/)
+  assert.equal(route.query.channel, 'web', 'Inspection does not change the workspace route')
 })
 
 test('automation overview creates no draft and run navigation retains project-qualified conversation resources', async t => {

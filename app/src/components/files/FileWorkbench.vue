@@ -148,7 +148,10 @@
         </div></EditorViewHost>
         <EditorViewHost v-for="key in knowledgeKeys" :key="key" :descriptor="descriptor(key, key === KNOWLEDGE_TAB_KEY ? t('Knowledge') : knowledgeLabel(knowledgeEntryId(key)!), 'i-lucide-book-open')" :selected="tabs.selected === key" :active="active">
           <div class="knowledge-document" role="tabpanel" :id="panelId(key)" :aria-labelledby="tabId(key)">
-            <KnowledgeView :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="knowledgeEntryId(key) ?? ''" :active="shown(key)" :shared-explorer="!!groups"
+            <AgentsTab v-if="agentDefinitionName(knowledgeEntryId(key) ?? '')" :api-base="apiBase" :agent-name="agentDefinitionName(knowledgeEntryId(key) ?? '')" :active="!!shown(key)" />
+            <BotKnowledgeDocument v-else-if="botDocumentTarget(knowledgeEntryId(key) ?? '')" :api-base="apiBase" :project-id="projectId ?? ''" :active="!!shown(key)"
+              v-bind="botDocumentTarget(knowledgeEntryId(key) ?? '')!" />
+            <KnowledgeView v-else :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="knowledgeEntryId(key) ?? ''" :active="shown(key)" :shared-explorer="!!groups"
               @select="selectKnowledgeEntry" @home="openKnowledgeHome" @catalog="updateKnowledgeLabels" />
           </div>
         </EditorViewHost>
@@ -196,6 +199,9 @@ import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import OverlayTransition from '../OverlayTransition.vue'
 import KnowledgeView from '../KnowledgeView.vue'
+import AgentsTab from '../AgentsTab.vue'
+import BotKnowledgeDocument from '../BotKnowledgeDocument.vue'
+import { agentDefinitionName, botDocumentTarget } from '../../knowledge-definitions.ts'
 import { ProjectDocumentsKey } from '../../project-documents.ts'
 import WorkflowManager from '../WorkflowManager.vue'
 import ProjectSettings from '../ProjectSettings.vue'
@@ -296,7 +302,7 @@ const shown = (key: string) => props.active && (groups ? groups.visible(editorId
 const focused = (key: string) => props.keyboardActive && (groups ? groups.focused(editorId(key)) : tabs.value.selected === key)
 const knowledgeKeys = computed(() => props.knowledgeEnabled ? [...(tabs.value.knowledge ? [KNOWLEDGE_TAB_KEY] : []), ...(tabs.value.knowledgeEntries ?? []).map(knowledgeEntryTabKey)] : [])
 const knowledgeLabels = ref<Record<string, string>>({})
-const knowledgeLabel = (entryId: string) => isFileHistory(entryId) ? t('Not a knowledge document.') : knowledgeLabels.value[entryId] ?? entryId.split('/').at(-1) ?? entryId
+const knowledgeLabel = (entryId: string) => isFileHistory(entryId) ? t('Not a knowledge document.') : knowledgeLabels.value[entryId] ?? agentDefinitionName(entryId) ?? botDocumentTarget(entryId)?.path.split('/').at(-1) ?? entryId.split('/').at(-1) ?? entryId
 function updateKnowledgeLabels(entries: KnowledgeEntry[]) {
   knowledgeLabels.value = Object.fromEntries(entries.map(entry => [entry.id, entry.title]))
 }
@@ -586,7 +592,7 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
 }, { immediate: true })
 watch(() => [route?.fullPath, props.active] as const, (value, previous) => {
   if (groups || !props.projectNavigationEnabled || !props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
-  const tab = route?.name === 'project-workflows' ? 'workflows' : route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'settings' : undefined
+  const tab = route?.name === 'project-workflows' ? 'workflows' : route?.name === 'project-settings' ? 'settings' : undefined
   if (tab && (!previous || value[0] !== previous[0] || tabs.value.projectTabs?.includes(tab))) tabs.value = openProjectTab(tabs.value, tab)
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
 }, { immediate: true })

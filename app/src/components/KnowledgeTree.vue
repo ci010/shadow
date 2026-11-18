@@ -5,7 +5,7 @@
         <button v-bind="triggerProps" :aria-current="selectedId === node.id ? 'page' : undefined" @click="$emit('select', node.id)"><span class="i-lucide-file-text" aria-hidden="true" /><span class="label">{{ node.label }}</span></button>
       </HoverInfo>
       <details v-else open>
-        <summary><span class="i-lucide-folder" aria-hidden="true" />{{ node.id === 'wiki' ? t('Wiki') : node.id === 'memory' ? t('Memory') : node.id === 'skill' ? t('Skills') : depth === 1 && node.id.startsWith('skill/') ? (node.label === 'Project' ? t('Project') : t('Built-in')) : node.label }}</summary>
+        <summary><span class="i-lucide-folder" aria-hidden="true" />{{ folderLabel(node) }}</summary>
         <p v-if="node.id === 'memory'" class="memory-note">{{ t('Session history, semantic logs and conventions; not file-edit history or curated Wiki pages.') }}</p>
         <KnowledgeTree :nodes="node.children" :depth="depth + 1" :selected-id="selectedId" @select="$emit('select', $event)" />
       </details>
@@ -16,7 +16,22 @@
 import type { KnowledgeTreeNode } from '../knowledge-tree.ts'
 import { t } from '../i18n.ts'
 import HoverInfo from './HoverInfo.vue'
-withDefaults(defineProps<{ nodes: KnowledgeTreeNode[]; selectedId?: string; depth?: number }>(), { depth: 0 })
+const props = withDefaults(defineProps<{ nodes: KnowledgeTreeNode[]; selectedId?: string; depth?: number }>(), { depth: 0 })
+function folderLabel(node: KnowledgeTreeNode) {
+  if (props.depth === 0) {
+    if (node.id === 'wiki') return t('Wiki')
+    if (node.id === 'memory') return t('Memory')
+    if (node.id === 'skill') return t('Skills')
+    if (node.id === 'agents') return t('Agents')
+    if (node.id === 'bots') return t('Bots')
+  }
+  if (props.depth === 1 && /^(skill|agents)\//.test(node.id)) {
+    if (node.label === 'Project') return t('Project')
+    if (node.label === 'Workspace') return t('Workspace')
+    if (node.label === 'Built-in') return t('Built-in')
+  }
+  return node.label
+}
 defineEmits<{ select: [id: string] }>()
 </script>
 <style scoped>

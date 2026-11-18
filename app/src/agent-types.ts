@@ -6,6 +6,7 @@ export interface AgentTypeMeta {
   name: string
   description: string
   prompt?: string
+  definitionMarkdown?: string
   source: 'builtin' | 'workspace'
   allowedTools?: string[]
   blockedTools?: string[]
@@ -26,6 +27,7 @@ function optionalNumber(value: unknown) {
 }
 function isAgent(value: unknown): value is AgentTypeMeta {
   return record(value) && typeof value.name === 'string' && !!value.name.trim()
+    && (value.definitionMarkdown === undefined || typeof value.definitionMarkdown === 'string')
     && (value.prompt === undefined || typeof value.prompt === 'string')
     && typeof value.description === 'string' && (value.source === 'builtin' || value.source === 'workspace')
     && (value.defaultMode === undefined || value.defaultMode === 'session' || value.defaultMode === 'task' || value.defaultMode === 'call')

@@ -63,3 +63,25 @@ test('internal roles stay out of public role selection while general remains ava
     assert(!roles.getAgentTypesSummary().includes('internal-fixture'))
   })
 })
+
+test('Agent inspection returns exact loaded Markdown only for the explicitly requested role', async () => {
+  await withTempWorkspace(async workspace => {
+    const roles = new AgentTypesManager(workspace)
+    await roles.load()
+    const app = new Hono()
+    const headers = { 'x-owner': 'yes' }
+    await agentTypesPlugin(undefined, roles, request => request.headers.get('x-owner') === 'yes')(app)
+    assert.equal((await app.request('/api/agent-types?definition=general')).status, 401)
+    const catalog = await (await app.request('/api/agent-types')).json() as Array<{ name: string; definitionMarkdown?: string }>
+    assert(catalog.every(role => role.definitionMarkdown === undefined))
+    const index = await (await app.request('/api/agent-types?view=index')).json() as Array<{ name: string; prompt?: string; definitionMarkdown?: string }>
+    assert.deepEqual(index.map(role => role.name), catalog.map(role => role.name))
+    assert(index.every(role => role.prompt === undefined && role.definitionMarkdown === undefined))
+    const detail = await (await app.request('/api/agent-types?definition=general', { headers })).json() as typeof catalog
+    const original = roles.resolve('general')?.definitionMarkdown
+    assert.match(original ?? '', /^---/)
+    assert.deepEqual(detail.filter(role => role.definitionMarkdown !== undefined).map(role => [role.name, role.definitionMarkdown]), [['general', original]])
+    const internal = await (await app.request('/api/agent-types?definition=dispatcher', { headers })).json() as typeof catalog
+    assert(internal.every(role => role.definitionMarkdown === undefined))
+  })
+})

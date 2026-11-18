@@ -2018,7 +2018,7 @@ export async function createProjectRuntime(
     credentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     botPackagePlugin(botPackageOptions, dependencies.authorize),
     otelPlugin(otelStore),
-    agentTypesPlugin(sessions, agentTypes),
+    agentTypesPlugin(sessions, agentTypes, dependencies.authorize),
     sessionDiagnosisPlugin({
       projectId: project.id,
       getState: id => sessions.getSessionState(id),
