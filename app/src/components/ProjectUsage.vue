@@ -143,8 +143,9 @@ const state = computed(() => allProjects.value ? global.value?.state.value : sum
 const data = computed(() => allProjects.value ? aggregate.value : summary.value?.state.value.value)
 const loading = computed(() => state.value?.loading ?? false)
 const error = computed(() => !!state.value?.error)
-watch(() => [props.apiBase, globalMode.value && enabled.value] as const, ([base, active], _, cleanup) => {
-  filter.value = ''; global.value = undefined
+watch(() => [props.apiBase, globalMode.value && enabled.value] as const, ([base, active], previous, cleanup) => {
+  if (previous && base !== previous[0]) filter.value = ''
+  global.value = undefined
   if (!active) return
   const lease = owner.globalUsage(base); global.value = lease
   cleanup(lease.release)

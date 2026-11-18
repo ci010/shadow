@@ -34,7 +34,7 @@
         <ProjectGroup v-for="project in projects" :key="project.id" :api-base="apiBase" :project="project"
           :data-project-id="project.id" :folder-revision="folderRevision"
           :navigation-key="`${route.fullPath}:${visible}`"
-          :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
+          :selected-project-id="appTab ? '' : selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
           :dashboard-selected="!!dashboardProject"
           :draft-folder-id="selected?.folder?.id" :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
@@ -54,28 +54,31 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <div v-if="dashboardProject && !mobile?.enabled.value && openProjectTabGroups.length" class="dashboard-editor-tabs">
+      <div v-if="!appTab && (dashboardProject || !selectedProjectId) && !mobile?.enabled.value && openProjectTabGroups.length" class="dashboard-editor-tabs">
         <ProjectEditorTabs :groups="openProjectTabGroups" @activate="activateTopTab" @close="editorGroups.close" />
       </div>
       <ProjectWorkbench v-if="dashboardProject" :key="dashboardProject.id"
         :api-base="projectBase(apiBase, dashboardProject.id)" :project-id="dashboardProject.id"
         :project-name="dashboardProject.name" :visible="visible"
         @navigate="navigate(dashboardProject.id, $event)" @compose="composeFromDashboard(dashboardProject.id, $event)" />
-      <section v-if="!selectedProjectId && !loading" class="project-empty">
+      <section v-if="!appTab && !selectedProjectId && !loading" class="project-empty">
         <h1>{{ t('Where would you like to work?') }}</h1>
         <p>{{ t('Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.') }}</p>
         <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">{{ t('Start in') }} {{ project.name }}</button>
         <button v-if="!projects.length && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
-      <AutomationDetail v-show="!dashboardProject" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
-      <EditorGroupHost :project-name="project.name" :other-project-tabs="otherProjectTabGroups" @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && selectedProjectId === project.id && !dashboardProject" />
+      <EditorGroupHost v-if="appDocuments.length" v-show="appEditorActive" :project-id="APP_EDITOR_SCOPE"
+        project-name="Shadow" :active="appEditorActive" :other-project-tabs="projectOnlyTabGroups"
+        @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" />
+      <AutomationDetail v-show="!appTab && !dashboardProject" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible && !appTab" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
+      <EditorGroupHost :project-name="project.name" :other-project-tabs="otherProjectTabGroups" @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && !appTab && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && !appTab && selectedProjectId === project.id && !dashboardProject" />
       </AutomationDetail>
       <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
       <div v-show="false" class="editor-resource-owners">
         <ProjectConversation v-for="resource in resources" :key="resource.key" :resource-key="resource.key"
           :ref="component => setConversation(resource.key, component)"
           :inspection="!!resource.inspection" :keyboard-active="ownerFocused(resource.key)"
-          :visible="visible && selectedProjectId === resource.projectId && !dashboardProject"
+          :visible="visible && !appTab && selectedProjectId === resource.projectId && !dashboardProject"
           :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
           :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
           :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
@@ -86,20 +89,27 @@
       </div>
     </div>
     <div v-show="false" :ref="setParking" />
+    <EditorViewHost v-for="document in appDocuments" :key="document.id" :descriptor="document" :active="appEditorActive">
+      <ProjectUsage v-if="document.id === appEditorId('usage')" :api-base="apiBase" :active="appEditorActive && editorGroups.visible(document.id)" />
+      <div v-else class="app-settings-document">
+        <slot name="app-settings" :section="appSettingsSection" :active="appEditorActive && editorGroups.visible(document.id)"
+          :close="() => editorGroups.close(document.id)" />
+      </div>
+    </EditorViewHost>
     <template v-for="[projectId, state] in projectDocuments.projects" :key="projectId">
-      <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && selectedProjectId === projectId">
+      <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && !appTab && selectedProjectId === projectId">
         <div class="project-document-host">
-          <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" />
+          <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" />
           <ProjectWorkbench v-else-if="tab === 'board'" mode="board" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
             :project-name="projects.find(project => project.id === projectId)?.name ?? projectId"
-            :visible="visible && selectedProjectId === projectId && !dashboardProject && editorGroups.visible(projectEditorId(projectId, tab))"
+            :visible="visible && !appTab && selectedProjectId === projectId && !dashboardProject && editorGroups.visible(projectEditorId(projectId, tab))"
             @navigate="navigate(projectId, $event)" @compose="composeFromDashboard(projectId, $event)" />
           <ProjectSettings v-else :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
         </div>
       </EditorViewHost>
     </template>
-    <EditorViewHost v-for="item in promptDocuments" :key="item.descriptor.id" :descriptor="item.descriptor" :active="visible && selectedProjectId === item.descriptor.projectId">
-      <PromptDocument :document="item.document" :active="visible && selectedProjectId === item.descriptor.projectId && editorGroups.focused(item.descriptor.id)" :can-quote="!!editorGroups.referenceTarget(item.descriptor.projectId)" @quote="quotePrompt(item.descriptor.projectId, $event)" />
+    <EditorViewHost v-for="item in promptDocuments" :key="item.descriptor.id" :descriptor="item.descriptor" :active="visible && !appTab && selectedProjectId === item.descriptor.projectId">
+      <PromptDocument :document="item.document" :active="visible && !appTab && selectedProjectId === item.descriptor.projectId && editorGroups.focused(item.descriptor.id)" :can-quote="!!editorGroups.referenceTarget(item.descriptor.projectId)" @quote="quotePrompt(item.descriptor.projectId, $event)" />
     </EditorViewHost>
     <SessionQuickOpen v-if="sessionSearchOpen" :api-base="apiBase" :projects="projects"
       @close="sessionSearchOpen = false" @select="quickOpenSession" />
@@ -112,7 +122,7 @@
 
 <script setup lang="ts">
 import { closePreviousSidebarConversation } from '../sidebar-conversation-tabs.ts'
-import { createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
+import { APP_EDITOR_SCOPE, createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
 import ProjectEditorTabs from './ProjectEditorTabs.vue'
 import { projectTopTabGroups } from '../project-top-tabs.ts'
 import EditorGroupHost from './EditorGroupHost.vue'
@@ -145,6 +155,7 @@ import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import PromptDocument from './PromptDocument.vue'
 import { PromptDocumentsKey, type PromptDocument as PromptDocumentData } from '../prompt-documents.ts'
 import WorkflowManager from './WorkflowManager.vue'
+import ProjectUsage from './ProjectUsage.vue'
 import ProjectSettings from './ProjectSettings.vue'
 import { createProjectDocuments, ProjectDocumentsKey } from '../project-documents.ts'
 import { WorkflowInputReferencesKey } from '../workflow-input-references.ts'
@@ -200,12 +211,57 @@ function quoteExplorer(projectId: string, text: string) {
   const target = editorGroups.referenceTarget(projectId)
   if (target) instances.get(target.owner)?.appendDraft(text)
 }
-function ownerFocused(owner: string) { return editorGroups.active(selectedProjectId.value)?.owner === owner }
+function ownerFocused(owner: string) { return !appTab.value && editorGroups.active(selectedProjectId.value)?.owner === owner }
 
 const liveState = useProjectLiveState()
 const route = useRoute()
 const router = useRouter()
 const installation = useInstallationContext()
+// Host documents share the editor stack but are not attached to any Project.
+type AppTab = 'usage' | 'settings'
+const appTab = computed<AppTab | undefined>(() => route.name === 'usage' || route.name === 'settings' ? route.name : undefined)
+const appEditorActive = computed(() => props.visible && !!appTab.value)
+const appDocuments = shallowRef<EditorDescriptor[]>([])
+const appEditorId = (tab: AppTab) => `${APP_EDITOR_SCOPE}:${tab}`
+const appSettingsSection = ref('')
+const appPaths: Partial<Record<AppTab, string>> = {}
+let previousWorkspacePath = '/chat'
+function openAppRoute(tab: AppTab, replace = false) {
+  if (appTab.value === tab) return
+  const location = appPaths[tab] ?? { name: tab }
+  void (replace ? router.replace(location) : router.push(location))
+}
+function syncAppDocument() {
+  if (!props.visible) return
+  const tab = appTab.value
+  if (!tab) {
+    if (['chat', 'projects', 'project-dashboard', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) previousWorkspacePath = route.fullPath
+    return
+  }
+  appPaths[tab] = route.fullPath
+  if (tab === 'settings') appSettingsSection.value = typeof route.params.section === 'string' ? route.params.section : ''
+  const id = appEditorId(tab)
+  const descriptor = appDocuments.value.find(item => item.id === id) ?? {
+    id, projectId: APP_EDITOR_SCOPE, owner: APP_EDITOR_SCOPE, closable: true,
+    get label() { return t(tab === 'usage' ? 'Usage' : 'Settings') },
+    icon: tab === 'usage' ? 'i-lucide-chart-no-axes-column' : 'i-lucide-settings',
+    select: () => { if (!appTab.value) openAppRoute(tab) },
+    close: () => {
+      appDocuments.value = appDocuments.value.filter(item => item.id !== id)
+      if (appTab.value !== tab) return
+      // Close-all can remove both documents in the same event. Resolve after
+      // the batch rather than navigating to a document being closed as well.
+      queueMicrotask(() => {
+        if (appTab.value !== tab || editorGroups.side(id)) return
+        const other = tab === 'usage' ? 'settings' : 'usage'
+        if (editorGroups.side(appEditorId(other))) openAppRoute(other, true)
+        else void router.replace(previousWorkspacePath)
+      })
+    },
+  }
+  if (!appDocuments.value.includes(descriptor)) appDocuments.value = [...appDocuments.value, descriptor]
+  editorGroups.open(descriptor)
+}
 const mobile = useMobileChrome()
 const mobileIntegrated = computed(() => !!mobile?.enabled.value && !!mobile.projectsTarget.value)
 provide(HomeTreeCacheKey, createHomeTreeCache())
@@ -244,7 +300,7 @@ const { automation, syncAutomationRoute, showAutomation, openAutomationRun, iden
 const workflowProjectId = computed(() => route.name === 'project-workflows' && typeof route.params.projectId === 'string' ? route.params.projectId : '')
 const dashboardProject = computed(() => route.name === 'project-dashboard' ? projects.value.find(project => project.id === route.params.projectId) : undefined)
 const selectedProjectId = computed(() => workflowProjectId.value || (dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? ''))
-const selectedProjectName = computed(() => projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
+const selectedProjectName = computed(() => appTab.value ? '' : projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
 
 // Project documents reuse the current workbench (including an unsent draft).
@@ -255,16 +311,23 @@ const projectWorkbenches = new Map<string, ConversationResource>()
 let documentRoute = ''
 let incomingDocument: symbol | undefined
 let pendingTopTab: { resource: ConversationResource; path: string } | undefined
-const openProjectTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, editor =>
+const projectOnlyTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, editor =>
   !!editor.conversation || editor.id === projectEditorId(editor.projectId, 'workflows')
   || editor.id === projectEditorId(editor.projectId, 'board') || editor.id === projectEditorId(editor.projectId, 'settings')))
+const openProjectTabGroups = computed(() => [
+  ...projectOnlyTabGroups.value,
+  ...projectTopTabGroups(editorGroups, [{ id: APP_EDITOR_SCOPE, name: 'Shadow' }], () => true),
+])
 const otherProjectTabGroups = computed(() => openProjectTabGroups.value.filter(group => group.id !== selectedProjectId.value))
 
 async function activateTopTab(id: string) {
   const editor = editorGroups.descriptors.get(id)
   if (!editor || !editorGroups.side(id)) return
   const { projectId } = editor
-  if (id === projectEditorId(projectId, 'board')) {
+  if (projectId === APP_EDITOR_SCOPE) {
+    editorGroups.activate(id)
+    return
+  } else if (id === projectEditorId(projectId, 'board')) {
     await router.push({ name: 'project-board', params: { projectId } })
   } else if (id === projectEditorId(projectId, 'workflows')) {
     await router.push({ name: 'project-workflows', params: { projectId }, query: workflowQueries.get(projectId) ?? {} })
@@ -722,6 +785,12 @@ function onProjectDeleted(event: Event) {
   const id = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
   if (id) projectDeleted(id)
 }
+watch(() => [route.fullPath, props.visible], syncAppDocument, { immediate: true })
+watch(() => editorGroups.active(APP_EDITOR_SCOPE), descriptor => {
+  const current = appTab.value
+  if (!appEditorActive.value || !current || !descriptor || !editorGroups.side(appEditorId(current))) return
+  openAppRoute(descriptor.id === appEditorId('usage') ? 'usage' : 'settings')
+})
 watch(() => [route.fullPath, props.visible], syncRoute)
 watch(() => route.fullPath, () => { sessionSearchOpen.value = false; closeSidebar(false) })
 watch(() => props.visible, visible => { if (!visible) { sessionSearchOpen.value = false; closeSidebar(false) } })
@@ -806,5 +875,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); ou
 .projects-backdrop { position: absolute; inset: 44px 0 0; z-index: 49; padding: 0; border: 0; background: var(--c-shadow-softer); }
 @media (max-width: 700px), (pointer: coarse) { .projects-toggle { min-height: 44px; } }
 @media (max-width: 1000px) { .project-secondary-editor { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; max-width: calc(100% - 32px); box-shadow: -8px 0 24px var(--c-shadow-soft); } }
+.app-settings-document { flex: 1; min-height: 0; min-width: 0; overflow: auto; scrollbar-gutter: stable; container: app-settings / inline-size; }
 .project-document-host { display: flex; flex: 1; min-height: 0; min-width: 0; }
 </style>

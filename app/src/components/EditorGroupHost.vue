@@ -1,6 +1,7 @@
 <template>
   <div ref="workspace" class="editor-workspace">
-    <MobileEditorChrome :project-id="projectId" :active="!!active" />
+    <MobileEditorChrome :project-id="projectId" :active="!!active" :has-explorer="!!apiBase" :other-project-tabs="otherProjectTabs"
+      @activate-project-tab="emit('activateProjectTab', $event)" />
     <header v-if="!mobile?.enabled.value" class="editor-workspace-header">
       <HoverInfo v-if="apiBase" :text="knowledgeContext ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="knowledgeContext ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-${knowledgeContext ? 'explorer' : 'files'}`" :aria-expanded="explorerOpen" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
@@ -18,7 +19,7 @@
       </div>
     </header>
     <div class="editor-workspace-body">
-      <MobileSheet v-if="mobile?.enabled.value" :open="!!active && explorerOpen" :label="knowledgeContext ? t('Knowledge explorer') : t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
+      <MobileSheet v-if="apiBase && mobile?.enabled.value" :open="!!active && explorerOpen" :label="knowledgeContext ? t('Knowledge explorer') : t('File explorer')" side @update:open="!$event && closeExplorer()"><div ref="mobileExplorerTarget" class="mobile-explorer-target" /></MobileSheet>
       <Teleport :to="mobileExplorerTarget || 'body'" :disabled="!mobile?.enabled.value || !mobileExplorerTarget">
       <KnowledgeExplorer v-if="apiBase && knowledgeContext && explorerOpen" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="!!active" :explorer-id="`${hostId}-explorer`" :selected-id="knowledgeContext.entryId" @select="selectKnowledge" @close="closeExplorer" />
       <!-- The file owner stays mounted: its EditorViewHosts own open file lifetimes. -->

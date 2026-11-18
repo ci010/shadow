@@ -2519,6 +2519,11 @@ not a separately wired desktop channel. Migrated configuration is not evidence
 of a running adapter.
 Likewise, a comment mentioning Telegram is not a shipped Telegram adapter.
 
+The top-bar **Usage** and **Settings** entries open closable app-wide tabs in the
+same workbench as project documents and conversations. Usage opens on **All
+projects** by default and can be filtered to one project. Direct links such as
+`/usage` and `/settings/language` open the corresponding tab and section; on
+mobile, the document title opens the workbench tab switcher.
 App settings retain shared Providers; each project's Bots section owns
 QQ, Feishu, and Discord setup.
 Within `/projects/<id>/`, `GET /api/channels` returns public bot-instance

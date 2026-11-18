@@ -10,7 +10,7 @@
         </RouterLink>
       </nav>
       <div class="settings-section">
-        <NodesView v-if="section === 'nodes'" :api-base="apiBase" embedded />
+        <NodesView v-if="active && section === 'nodes'" :api-base="apiBase" embedded />
         <template v-if="section === 'models'">
           <ModelDefaultsForm :api-base="apiBase" scope="app" />
           <AgentVersionDefaultsForm :api-base="apiBase" />
@@ -23,7 +23,7 @@
           <p>{{ t('Choose the language used by this app. Your choice is saved on this device and does not change agent responses.') }}</p>
           <LanguageSelector />
         </section>
-        <ProvidersView v-if="available" v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
+        <ProvidersView v-if="available" v-show="section === 'providers'" v-bind="props" embedded :active="active && section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
       </div>
     </div>
@@ -45,7 +45,7 @@ import SoundSettings from './SoundSettings.vue'
 import LanguageSelector from './LanguageSelector.vue'
 import { t } from '../i18n.ts'
 
-const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
+const props = withDefaults(defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean; editorSection?: string; active?: boolean }>(), { active: true })
 defineEmits<{ configured: []; retry: []; close: [] }>()
 const route = useRoute()
 const context = useInstallationContext()
@@ -60,7 +60,7 @@ const sections = computed(() => [
 ].filter(item => item.id === 'nodes'
   ? context.value.mode !== 'client'
   : props.available))
-const section = computed(() => sections.value.find(item => item.id === route.params.section)?.id
+const section = computed(() => sections.value.find(item => item.id === (props.editorSection ?? route.params.section))?.id
   ?? (props.available ? 'providers' : sections.value[0]?.id))
 </script>
 
@@ -80,6 +80,13 @@ const section = computed(() => sections.value.find(item => item.id === route.par
 /* Subpages share the column geometry; only individual fields may be narrower. */
 .settings-section > :deep(*) { box-sizing: border-box; width: 100%; max-width: none; margin-inline: 0; }
 @media (max-width: 700px) {
+  .settings-view { padding: 20px 16px 32px; }
+  .settings-heading { margin-bottom: 20px; }
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .settings-navigation { flex-direction: row; flex-wrap: wrap; border-bottom: 1px solid var(--c-border); }
+  .settings-navigation a { flex: 1 0 auto; min-height: 44px; }
+}
+@container app-settings (max-width: 700px) {
   .settings-view { padding: 20px 16px 32px; }
   .settings-heading { margin-bottom: 20px; }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }

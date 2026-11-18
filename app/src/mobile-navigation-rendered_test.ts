@@ -41,7 +41,6 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
           import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import App from '/src/App.vue';
-          import Usage from '/src/components/ProjectUsage.vue';
           import {createInstallationContextProvider} from '/src/composables/useInstallationContext.ts';
           import {createMobileClientContext} from '/src/installation-context.ts';
           import ProjectsWorkspace from '/src/components/ProjectsWorkspace.vue';
@@ -49,17 +48,17 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
           const router = createRouter({history:createMemoryHistory(), routes:[
             {path:'/chat', redirect:'/projects/work/chat/web%3Achat-one'},
             {path:'/projects/:projectId/chat/:sessionId?', name:'chat', component:ProjectsWorkspace},
-            {path:'/usage', name:'usage', component:Usage},
+            {path:'/usage', name:'usage', component:ProjectsWorkspace},
             {path:'/projects', name:'projects', component:ProjectsWorkspace},
             {path:'/projects/:projectId/board', name:'project-board', component:ProjectsWorkspace},
             {path:'/projects/:projectId/workflows', name:'project-workflows', component:ProjectsWorkspace},
             {path:'/projects/:projectId/dashboard', name:'project-dashboard', component:ProjectsWorkspace},
             {path:'/nodes', name:'nodes', component:destination},
-            {path:'/settings/:section?', name:'settings', component:destination},
+            {path:'/settings/:section?', name:'settings', component:ProjectsWorkspace},
             {path:'/projects/:projectId/settings/:section?', name:'project-settings', component:ProjectsWorkspace},
             ...['agents','spans','logs'].map(name => ({path:'/projects/:projectId/' + name, name, component:destination})),
           ]});
-          await router.push('/projects/work/chat');
+          await router.push(new URLSearchParams(location.search).get('route') ?? '/projects/work/chat');
           window.__mobileFixture = {router, errors:[]};
           addEventListener('error', event => window.__mobileFixture.errors.push(event.message));
           addEventListener('unhandledrejection', event => window.__mobileFixture.errors.push(String(event.reason)));
@@ -96,6 +95,7 @@ for (const scenario of ['mobile', 'project-tabs'] as const) test(scenario === 'm
             data = { projectId: scope?.[1], asOf: '2026-10-01T12:00:00Z', timeZone: 'UTC', total: metrics, today: metrics, past7Days: metrics, month: metrics,
               daily: [], scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0 }
           }
+          else if (path === '/api/provider/configured') data = { providers: [] }
           else if (path === '/api/provider/setup') data = { provider: 'openai', model: 'gpt-test', ready: true, hasApiKey: false, authMode: 'none' }
           else if (path === '/api/config') data = { agent: { model: 'gpt-test', workspace: 'synthetic', temperature: 0.5 } }
           else if (path === '/api/models') data = { models: ['gpt-test', 'gpt-alternate'] }

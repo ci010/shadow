@@ -1,11 +1,9 @@
 import { createRouter, createWebHashHistory, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { agentDefinitionId } from './knowledge-definitions.ts'
 import { microAppNavigation } from './microapp-navigation.ts'
-import ProjectUsage from './components/ProjectUsage.vue'
 import LogsTab from './components/LogsTab.vue'
 import SpansTab from './components/SpansTab.vue'
 import ProjectsWorkspace from './components/ProjectsWorkspace.vue'
-import SettingsView from './components/SettingsView.vue'
 
 const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/settings/learning', redirect: to => ({ name: 'chat', params: { projectId: to.params.projectId }, query: { automation: 'learning:reflector' } }) },
@@ -15,7 +13,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/workflows', name: 'project-workflows', component: ProjectsWorkspace },
   { path: '/projects/:projectId/board', name: 'project-board', component: ProjectsWorkspace },
   { path: '/projects/:projectId/dashboard', name: 'project-dashboard', component: ProjectsWorkspace },
-  { path: '/usage', name: 'usage', component: ProjectUsage },
+  { path: '/usage', name: 'usage', component: ProjectsWorkspace },
   { path: '/projects', name: 'projects', component: ProjectsWorkspace },
   { path: '/knowledge', redirect: '/projects/default/knowledge' },
   { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({
@@ -27,7 +25,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/nodes', name: 'nodes', redirect: '/settings/nodes' },
   { path: '/providers', name: 'providers', redirect: '/settings/providers' },
   { path: '/settings/channels', redirect: '/projects/default/settings/connections' },
-  { path: '/settings/:section(providers|models|web-search|proxy|sounds|language|nodes)?', name: 'settings', component: SettingsView },
+  { path: '/settings/:section(providers|models|web-search|proxy|sounds|language|nodes)?', name: 'settings', component: ProjectsWorkspace },
   { path: '/approvals', redirect: '/nodes' },
   { path: '/agents/:agentName?', redirect: to => ({ name: 'agents', params: { projectId: 'default', agentName: to.params.agentName }, query: to.query, hash: to.hash }) },
   { path: '/projects/:projectId/agents/:agentName?', name: 'agents', redirect: to => {
