@@ -122,10 +122,11 @@ const agentQuery = ref('')
 const showDetail = ref(!!route.query.agent)
 const navigation = ref<HTMLElement>()
 const detail = ref<InstanceType<typeof DefinitionDetail>>()
-const channels = ['heartbeat', 'web', 'discord', 'wechat', 'feishu']
-const localChannel = ref(typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'heartbeat')
+const channels = ['web', 'discord', 'wechat', 'feishu']
+const routeChannel = computed(() => typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'web')
+const localChannel = ref(routeChannel.value)
 const channel = computed({
-  get: () => props.agentName ? localChannel.value : typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'heartbeat',
+  get: () => props.agentName ? localChannel.value : routeChannel.value,
   set: value => {
     if (props.agentName) localChannel.value = value
     else void router.replace({ query: { ...route.query, channel: value } })

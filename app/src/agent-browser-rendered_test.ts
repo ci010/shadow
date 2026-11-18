@@ -140,7 +140,7 @@ test('Agent and Bot definitions share accessible inspection views and preserve t
           const context = url.pathname.match(/^\/projects\/([^/]+)\/api\/agent-types\/([^/]+)\/context$/)
           if (context) {
             const agent = decodeURIComponent(context[2]!)
-            const channel = url.searchParams.get('channel') ?? 'heartbeat'
+            const channel = url.searchParams.get('channel') ?? ''
             contexts.push({ project: context[1]!, agent, channel })
             const send = () => {
               if (response.destroyed) return

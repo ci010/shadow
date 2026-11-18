@@ -1484,6 +1484,9 @@ Product model discovery uses `GET /api/models` (model IDs, capability metadata,
 and safe provider labels). Agent discovery and assembled-context previews use
 `GET /api/agent-types` and `GET /api/agent-types/:name/context?channel=...`.
 Project-scoped clients prefix these paths with `/projects/:projectId`.
+The Agent page defaults to the `web` preview; older `?channel=heartbeat`
+links also display the `web` preview. The API still accepts an explicit
+`heartbeat` channel for compatibility. A preview does not start an Agent run.
 These replace the former `/debug/models` and `/debug/agent-types` routes; no legacy
 aliases are registered. `/v1/models` remains the OpenAI-compatible interface.
 Mobile and Child ingress continue to exclude agent-type/context inspection;
