@@ -9,6 +9,17 @@ export function isExecutionStatus(value: unknown): value is ExecutionStatus {
 export function isOneShot(session: Pick<SidebarSession, 'mode'> | undefined): boolean {
   return session?.mode === 'task' || session?.mode === 'call'
 }
+export function executionTraceDetail(session: SidebarSession | undefined, isCall: boolean): string {
+  const inference = session?.executionInference
+  // Old traces may have explicit overrides, but today's project defaults are not historical evidence.
+  const model = inference?.model ?? session?.config?.model
+  const effort = inference ? inference.reasoningEffort : session?.config?.reasoningEffort
+  return [
+    isCall ? t('Call · inherited context · blocking') : t('Task · fresh context · async'),
+    model ? `${t('Model')}: ${model}` : undefined,
+    effort ? `${t('Effort')}: ${effort}` : undefined,
+  ].filter(Boolean).join(' · ') + ` ${t('· Read-only trace')}`
+}
 export function executionStatus(session: SidebarSession, stage?: string): ExecutionStatus | undefined {
   // Durable terminal state outranks stale live activity.
   if (session.executionStatus && ['completed', 'failed', 'cancelled'].includes(session.executionStatus)) return session.executionStatus

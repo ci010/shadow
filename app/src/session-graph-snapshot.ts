@@ -7,7 +7,7 @@ const narrowChanges = new Set(['history', 'metadata', 'activity', 'work', 'backg
  * structural, so new lineage contracts cannot silently bypass full recovery. */
 function sameTopology(previous: Graph, patch: Graph, selected: Set<string>): boolean {
   const sessionAttributes = new Set(['name', 'title', 'topic', 'focus', 'description', 'completed', 'executionStatus',
-    'lastActivityAt', 'waitingForCall', 'hasCron', 'hasBackgroundTasks', 'config', 'inferenceDefaults'])
+    'lastActivityAt', 'waitingForCall', 'hasCron', 'hasBackgroundTasks', 'config', 'inferenceDefaults', 'executionInference'])
   const nodeAttributes = new Set(['executionStatus', 'timestamp', 'waitingForCall', 'description'])
   const signature = (rows: Array<Record<string, unknown>>, attributes: Set<string>) => rows.map(row =>
     JSON.stringify(Object.keys(row).filter(key => !attributes.has(key) && row[key] !== undefined).sort()

@@ -275,7 +275,7 @@
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" :class="{ 'work-chip-active': composerWorking }" role="status" aria-live="polite">
             <SessionActivity :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
-            <span class="chat-working-detail">{{ isCall ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }} {{ t('· Read-only trace') }}</span>
+            <span class="chat-working-detail">{{ executionTraceDetail(activeSession, isCall) }}</span>
             <WorkingWave v-if="composerWorking" />
           </div>
           <div v-else-if="(sessionWorking || activeSubagents.length) && !viewingPhysicalId" class="chat-working" :class="[sessionStage, { 'has-subagents': activeSubagents.length, 'work-chip-active': composerWorking }]" role="status" aria-live="polite"
@@ -599,7 +599,7 @@ import ConversationEvent from './ConversationEvent.vue'
 import { parseResponseContext, type ResponseContext } from '../../../src/sessions/response-context.ts'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
-import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
+import { activeSubagentsByOwner, executionStages, executionTraceDetail, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
 import { automationChatLocation } from '../automations.ts'
@@ -3516,7 +3516,7 @@ function resendLastMessage() {
 .session-status-row:has(.session-work-controls:not([style*="display: none"])) .chat-working-detail { display: none; }
 .execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
 .session-status-row .execution-summary .chat-working-detail { display: block; }
-.execution-summary .chat-working-detail { display: block; white-space: normal; }
+.execution-summary .chat-working-detail { display: block; white-space: normal; overflow-wrap: anywhere; }
 .chat-working :deep(.session-activity) { flex: 0 1 auto; min-width: 0; }
 .chat-working :deep(.activity-label) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-working :deep(.activity-symbol) { flex: 0 0 16px; }

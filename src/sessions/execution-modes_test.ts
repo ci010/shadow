@@ -208,6 +208,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           ids.push(request.sessionId)
           try { assert.equal((await store.getState(request.sessionId))?.agentType, expected[index]); assert.equal(request.model, 'fixture') }
           finally { request.resolve(done()); await pending }
+          assert.deepEqual((await store.getState(request.sessionId))?.executionInference, { model: 'fixture' })
         }
         assert.equal((await store.getState(ids[0]))?.agentType, 'explore-v2')
       } finally { await f.sessions.stop(); await store.close?.() }
@@ -232,9 +233,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal(request.model, 'override')
           assert.equal(request.effort, 'high')
           assert.equal((await store.getState(request.sessionId))?.config?.reasoningEffort, 'high')
+          const expected = { model: request.model, reasoningEffort: request.effort }
+          assert.deepEqual((await store.getState(request.sessionId))?.executionInference, expected)
           request.resolve(done())
           await pending
           await waitFor(() => f.sessions.getSessionState(request.sessionId)?.executionStatus === 'completed')
+          const app = new Hono()
+          sessionsApiPlugin(f.sessions)(app)
+          for (const endpoint of ['graph', 'summary']) {
+            const response = await app.request(`/api/sessions/${endpoint}`)
+            assert.equal(response.status, 200)
+            const row = (await response.json()).sessions.find((entry: { sessionId: string }) => entry.sessionId === request.sessionId)
+            assert.deepEqual(row?.executionInference, expected)
+          }
         }
         // A direct backend caller cannot smuggle inference through the child prototype.
         await f.sessions.buildSession('virtual:direct-call', undefined, {

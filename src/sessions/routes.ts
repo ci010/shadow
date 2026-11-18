@@ -389,8 +389,9 @@ export function sessionsApiPlugin(
         } : undefined
         const discordChannel = state && sessions.projectId ? discordChannelNavigation(state, sessions.projectId) : undefined
         const navigationAutomation = graphAutomation(automation)
+        const executionInference = execution.mode === 'session' ? undefined : state?.executionInference
         const fingerprint = summary ? [state && stateIdentities.get(state), { ...session, automation: navigationAutomation }, execution, namedTitle,
-          discordChannel, inferenceOverrides, inferenceDefaults,
+          discordChannel, inferenceOverrides, inferenceDefaults, executionInference,
           cronTargets.has(session.sessionId), backgroundOwners.has(session.sessionId), contextParentSessionId] : undefined
         const cached = summary ? summaryRows.get(session.sessionId, fingerprint) : undefined
         if (cached) { enrichedSessions.push(cached); continue }
@@ -419,7 +420,7 @@ export function sessionsApiPlugin(
           title: (state && sessionTopic(state).trim()) ? undefined : graphTitle(session.name)?.trim() ? graphTitle(session.name) : title,
           focus: state?.focus,
           description: execution.description,
-          inferenceOverrides, inferenceDefaults,
+          inferenceOverrides, inferenceDefaults, executionInference,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ?? null,
           contextParentSessionId,
         } : {
@@ -438,6 +439,7 @@ export function sessionsApiPlugin(
           description: execution.description,
           ...(summary ? { config: undefined, inferenceOverrides } : { config: state?.config ?? undefined }),
           inferenceDefaults,
+          executionInference,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
             null,
           ...(contextParentSessionId ? { contextParentSessionId } : {}),

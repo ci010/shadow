@@ -2,10 +2,27 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { groupFolderSessions, parseSessionGraph } from './folders-sidebar.ts'
 import { childConversationTarget } from './conversation-split.ts'
-import { activeSubagentsByOwner, executionDisplayStage, executionStages, executionStatus, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from './subagent-executions.ts'
+import { activeSubagentsByOwner, executionDisplayStage, executionStages, executionStatus, executionTraceDetail, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from './subagent-executions.ts'
 import { isWaitingStage, isWorkingStage, sessionActivity } from './session-activity.ts'
 import { readFile } from 'node:fs/promises'
 import { compileScript, compileStyle, compileTemplate, parse } from 'vue/compiler-sfc'
+
+test('read-only trace shows the recorded request, not current defaults or stale overrides', () => {
+  const trace = (fields: Record<string, unknown>, isCall = false) => executionTraceDetail(parseSessionGraph({
+    sessions: [{ sessionId: 'virtual:child', mode: isCall ? 'call' : 'task', executionStatus: 'completed', ...fields }],
+    nodes: [],
+  })[0], isCall)
+  assert.equal(trace({
+    executionInference: { model: 'used', reasoningEffort: 'high' },
+    config: { model: 'configured', reasoningEffort: 'low' },
+    inferenceDefaults: { model: 'current' },
+  }), 'Task · fresh context · async · Model: used · Effort: high · Read-only trace')
+  assert.equal(trace({ executionInference: { model: 'used' }, config: { reasoningEffort: 'low' } }, true),
+    'Call · inherited context · blocking · Model: used · Read-only trace')
+  assert.equal(trace({ config: { model: 'legacy', reasoningEffort: 'medium' } }),
+    'Task · fresh context · async · Model: legacy · Effort: medium · Read-only trace')
+  assert.equal(trace({ inferenceDefaults: { model: 'current' } }), 'Task · fresh context · async · Read-only trace')
+})
 
 const graph = () => ({
   sessions: [
@@ -204,6 +221,7 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
       assert.doesNotMatch(source, /fetch\(/)
     }
     if (filename === 'ChatTab.vue') {
+      assert.match(source, /executionTraceDetail\(activeSession, isCall\)/)
       assert.match(source, /:explorer-enabled="!embedded && \(!activeSessionId \|\| !!currentWorkdir \|\| expectedHome\)"/)
       assert.match(source, /<FileWorkbench[^>]*:session-id="activeSessionId"/)
       assert.match(source, /conversationDocumentVisible\.value && activeSessionId\.value/)

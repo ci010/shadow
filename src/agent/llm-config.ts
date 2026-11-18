@@ -13,6 +13,18 @@ export interface ThinkingConfig {
 export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORTS[number]
 
+export interface ExecutionInference {
+  model: string
+  reasoningEffort?: ReasoningEffort
+}
+
+export function parseExecutionInference(value: unknown): ExecutionInference | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { model, reasoningEffort } = value as Record<string, unknown>
+  if (typeof model !== 'string' || !model.trim()) return undefined
+  return { model, ...(isReasoningEffort(reasoningEffort) ? { reasoningEffort } : {}) }
+}
+
 export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return REASONING_EFFORTS.some(effort => effort === value)
 }

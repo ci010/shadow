@@ -3,7 +3,7 @@ import { DiscordChannelNavigationSchema, type DiscordChannelNavigation } from '.
 import { t } from './i18n.ts'
 import { conversationIconStage } from './session-activity.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
-import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
+import { isReasoningEffort, parseExecutionInference, type ExecutionInference, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
 import { isExecutionStatus, persistentConversations, type ExecutionStatus } from './subagent-executions.ts'
 import { isDirectConversation, parseConversationTopic } from './project-coordination.ts'
@@ -16,6 +16,7 @@ export const FOLDER_ACTIONS = [
 ] as const
 
 export interface SidebarSession {
+  executionInference?: ExecutionInference
   channelSource?: ChannelSource
   discordChannel?: DiscordChannelNavigation
   discordHistoryIds?: string[]
@@ -176,6 +177,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       channelAddress,
       channelSource,
       discordChannel: session.discordChannel === undefined ? undefined : DiscordChannelNavigationSchema.parse(session.discordChannel),
+      executionInference: parseExecutionInference(session.executionInference),
       inferenceDefaults: isRecord(defaults) && typeof defaults.model === 'string' ? {
         model: defaults.model,
         ...(typeof defaults.contextWindow === "number" ? { contextWindow: defaults.contextWindow } : {}),
