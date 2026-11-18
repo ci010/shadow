@@ -57,6 +57,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           data.daily[2].usage = {...metrics,tokens:null,durationMs:null,costs:[],unknownTokenCalls:1,unknownCostCalls:1,unknownDurationCalls:1};
           data.month = {...metrics,tokens:42000000};
           window.addUsageFixtureTool = () => activity.tools.unshift({name:'refresh-fixture',calls:9000});
+          window.setRecallFixture = mode => { if (mode === 'restricted') delete data.recall; else data.recall = {coverage:'complete',skills:[],memory:[]}; };
           window.usageInstance = getInstanceByDom;
           window.usageLocale = setLocalePreference;
           window.usageApp = createApp({render:()=>h(Usage,{apiBase:location.origin+'/projects/fixture',projectId:'fixture',active:true})}).use(i18n); window.usageApp.mount('#app');`
@@ -117,14 +118,18 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
             assert.ok(info.radius.every(r=>r==='0px')); assert.equal(info.overflow,false);
             assert.equal(info.headingOverlap,false,JSON.stringify({locale,dark,width,info}));
             const rankings = await win.webContents.executeJavaScript('('+(() => {
-              const sections = [...document.querySelectorAll('.activity-grid > .activity-section')];
-              return { rows: sections.map(s => s.querySelectorAll('.ranking-row').length),
+              const sections = [...document.querySelectorAll('.activity-grid > .activity-section, .tool-recall-grid > .activity-section')];
+                const tool = sections[1].getBoundingClientRect();
+                const recall = document.querySelector('.recall').getBoundingClientRect();
+              return { recallAdjacent: Math.abs(tool.top - recall.top) < 1 && recall.left >= tool.right, recallFollows: recall.top >= tool.bottom, rows: sections.map(s => s.querySelectorAll('.ranking-row').length),
                 widths: [...document.querySelectorAll('.ranking-bar')].map(e => e.style.width),
                 overflow: sections.some(s => s.scrollWidth > s.clientWidth),
                 stacked: sections[1].getBoundingClientRect().top >= sections[0].getBoundingClientRect().bottom };
             }).toString()+')()');
-            assert.deepEqual(rankings.rows,[2,10]); assert.equal(rankings.overflow,false); assert.equal(rankings.stacked,true);
+            assert.deepEqual(rankings.rows,[2,9]); assert.equal(rankings.overflow,false); assert.equal(rankings.stacked,true);
             assert.equal(rankings.widths[0],'100%');
+            assert.equal(rankings.recallAdjacent,width===1180);
+            assert.equal(rankings.recallFollows,width!==1180);
             assert.equal(info.kpis[0].top===info.kpis[2].top,width>850);
             assert.equal(info.background,dark?'rgb(32, 32, 32)':'rgb(255, 255, 255)');
             assert.equal(info.token,info.primary);
@@ -177,6 +182,21 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.match(await run('document.querySelector('+JSON.stringify(bars+' .ranking-row')+').innerText'),/refresh-fixture/);
           const model = 'section[aria-label="Model usage"]';
           const breakdownValues = () => win.webContents.executeJavaScript('Array.from(document.querySelectorAll('+JSON.stringify(model+' .ranking-count, '+model+' td')+')).map(e=>e.innerText.trim())');
+          const exactModel = 'gpt-6.1-sol@account-0037227c-cf26-4d72-9b67-052b4aa88064-copilot';
+          assert.equal(await run('document.querySelector(".model-name").innerText'),'gpt-6.1-sol');
+          assert.equal(await run('document.querySelector(".model-instance").innerText'),exactModel.slice('gpt-6.1-sol'.length));
+          await run('document.querySelector(".model-trigger").click()');
+          await new Promise(r=>setTimeout(r,80));
+          assert.equal(await run('document.querySelector("[role=tooltip]").innerText'),exactModel);
+          const tool = 'section[aria-label="Tool usage"]';
+          const tail = await run('document.querySelector(".tool-shares .ranking-row:last-child").innerText');
+          assert.match(tail,/Other tools/);
+          assert.match(tail,/629 · 2[.]46%/);
+          await select(tool,'Chart view','Donut chart');
+          assert.equal(await run('document.querySelector(".tool-shares .ranking-row:last-child").innerText'),tail);
+          await select(tool,'Chart view','Table');
+          assert.equal(await run('document.querySelectorAll(".tool-shares tbody tr").length'),16);
+          assert.equal(await run('document.querySelector(".tool-shares tbody tr:last-child th").innerText'),'reply');
           await select(model,'Metric','Estimated cost');
           const usd = await breakdownValues();
           assert.deepEqual(usd,['496.34 USD','Unavailable']);
@@ -198,6 +218,18 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/skill-example/);
           await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Memory").click()');
           assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/memory-example.*Automatic log brief/);
+          const recallText = () => run('document.querySelector(".recall").innerText');
+          const refreshRecall = async mode => {
+            await run('window.setRecallFixture('+JSON.stringify(mode)+'); document.querySelector(".project-usage header button").click()');
+            for (let attempt=0;attempt<30 && await run('document.querySelector(".project-usage header button").disabled');attempt++) await new Promise(r=>setTimeout(r,20));
+          };
+          await refreshRecall('restricted');
+          assert.match(await recallText(),/not available with current access/);
+          assert.doesNotMatch(await recallText(),/skill-example|memory-example|No recorded entries/);
+          assert.equal(await run('document.querySelector(".recall .activity-section")'),null);
+          await refreshRecall('empty');
+          assert.match(await recallText(),/No recorded entries/);
+          assert.doesNotMatch(await recallText(),/not available with current access/);
           await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="All time").click(); Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Load daily history").click();');
           await new Promise(r=>setTimeout(r,80));
           assert.equal(await win.webContents.executeJavaScript('window.usageInstance(document.querySelector(".echart-plot")).getOption().xAxis[0].data.length'),31);

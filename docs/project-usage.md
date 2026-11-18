@@ -13,8 +13,12 @@ period selector.
 Project and model rankings can compare tokens, recorded estimated cost, provider
 calls, or cumulative call time. Tools show result counts only; there is no
 reliable token or cost attribution to tools. Choose bars, a ring, or a table
-without changing the ranked values. Rings show proportions among the displayed
-known values; expand the ranking to include lower-ranked entries. Daily trends
+without changing the ranked values. Project/model rings show proportions among
+displayed known values; expand to see lower-ranked entries. Tool charts show the
+eight most-called tools and combine the rest as Other tools, with shares based on
+all recorded calls in the selected scope. The Tool table lists every tool
+separately. Model labels separate the model from its provider/account instance;
+focus or open the label to see the full identifier, also visible in the table. Daily trends
 use matching dates for Today, Past 7 days, and This month, with column, line,
 and table views. All time retains cumulative totals and
 rankings; its trend explicitly shows only the latest 31 UTC dates sent in the
@@ -77,11 +81,13 @@ queue and total elapsed times.
 `v:skills/.stats` retains successful initial body-read totals. The previous
 `state/skill-recall.sqlite` is read-only as a legacy baseline during migration;
 old counts have no historical day attribution. New recalls are indexed in
-`stats.sqlite`. The **Recall** section is owner-only and returns at most 100
+`stats.sqlite`. **Skill & Memory reads** appears beside Tool usage (below it on narrow panels).
+The data is owner-only and returns at most 100
 Skill entries or Memory entry/source pairs per Project. It is cumulative since
 tracking began, independent of the selected usage period. It uses the project-local
 index, not source logs or document bodies; delegated UI/mobile credentials do
-not gain Recall access from the usage route. `v:stats/memory-recall` remains an
+not gain Recall access from the usage route. The page distinguishes unavailable
+read statistics from authorized statistics with no entries. `v:stats/memory-recall` remains an
 administrator view of the top 100
 entry/source pairs. The active source counts successful initial Wiki body reads
 under `v:memory`; listing, searches and continuation pages are excluded. The

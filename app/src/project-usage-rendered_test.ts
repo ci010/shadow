@@ -369,7 +369,7 @@ test('usage styling inherits real light/dark theme tokens and panel-width layout
   }
   assert.match(css, /container:\s*usage \/ inline-size/)
   assert.match(css, /@container usage \(max-width: 850px\)/)
-  assert.doesNotMatch(css, /@media|\dvw/)
+  assert.doesNotMatch(css, /@media(?! \(pointer: coarse\))|\dvw/)
   assert.match(css, /\.chart-card[^}]+var\(--c-bg-card\)/)
   assert.match(source, /<UsageViewControls v-model:metric="trendMetric"/)
   assert.equal((source.match(/<button /g) ?? []).length, (source.match(/<button class="btn btn-sm(?: [^"]*)?"/g) ?? []).length)
@@ -442,7 +442,7 @@ test('model and tool counts follow the summary period; missing-data notice is vi
 })
 
 
-test('ranked bars show top ten, exact counts and can reveal the tail', async t => {
+test('tool charts retain the full denominator with top eight and an aggregated tail', async t => {
   const result = response()
   result.activity.past7Days.tools = Array.from({ length: 12 }, (_, i) => ({ name: `tool-${i}`, calls: i + 1 }))
   t.mock.method(globalThis, 'fetch', async () => Response.json(result))
@@ -450,19 +450,15 @@ test('ranked bars show top ten, exact counts and can reveal the tail', async t =
   await settle()
   const rows = () => view.nodes().filter(n => String(n.props.class).includes('ranking-row'))
   const bars = () => view.nodes().filter(n => n.props.class === 'ranking-bar')
-  assert.equal(rows().length, 10)
-  assert.equal(bars()[0]!.props.style && (bars()[0]!.props.style as { width: string }).width, '100%')
+  assert.equal(rows().length, 9)
+  assert.equal(bars()[0]!.props.style && (bars()[0]!.props.style as { width: string }).width, `${12 / 78 * 100}%`)
   const text = (node: ElementNode): string => node.tag === '#comment' ? '' : node.text + node.children.map(text).join('')
   assert.equal(text(view.nodes().find(n => n.props.class === 'ranking-name')!).trim(), 'tool-11')
-  const toggle = view.nodes().find(n => n.tag === 'button' && n.text === 'Show all 12 categories')!
-  ;(toggle.props.onClick as () => void)()
-  await settle()
-  assert.equal(rows().length, 12)
-  assert.equal(toggle.props['aria-expanded'], true)
-  assert.match(view.text(), /Show top 10/)
-  ;(toggle.props.onClick as () => void)()
-  await settle()
-  assert.equal(rows().length, 10)
+  assert.match(view.text(), /Other tools.*10/)
+  setSelect(view, 'Chart view', 'table', 'Tool usage'); await settle()
+  const toolTable = view.nodes().find(n => n.props.class === 'table-scroll' && n.props['aria-label'] === 'Tool usage')!
+  assert.equal(toolTable.children[0]!.children.find(n => n.tag === 'tbody')!.children.filter(n => n.tag === 'tr').length, 12)
+  assert.doesNotMatch(text(toolTable), /Other tools/)
 })
 
 
@@ -481,7 +477,8 @@ test('global project and model views change independently without changing their
   const section = (label: string) => view.nodes().find(n => n.tag === 'section' && n.props['aria-label'] === label)!
   const values = (label: string) => {
     const visit = (n: ElementNode): ElementNode[] => [n, ...n.children.flatMap(visit)]
-    return visit(section(label)).filter(n => n.props.class === 'ranking-count' || n.tag === 'td').map(n => n.text)
+    const text = (n: ElementNode): string => n.tag === '#comment' ? '' : n.text + n.children.map(text).join('')
+    return visit(section(label)).filter(n => n.props.class === 'ranking-count' || n.tag === 'td').map(text)
   }
   await settle()
   setSelect(view, 'Metric', 'cost', 'Usage by project'); await settle()

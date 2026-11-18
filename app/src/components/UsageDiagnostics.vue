@@ -29,28 +29,11 @@
       </template>
     </details>
   </section>
-  <section v-if="projects.some(project => project.usage?.recall)" class="diagnostics" :aria-label="t('Recall')">
-    <div class="heading"><h3>{{ t('Recall') }}</h3><div role="group" :aria-label="t('Recall type')">
-      <button v-for="item in recallTypes" :key="item.key" class="btn btn-sm" type="button" :aria-pressed="recallType === item.key" @click="recallType = item.key">{{ t(item.label) }}</button>
-    </div></div>
-    <p>{{ t('Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.') }}</p>
-    <details v-for="project in projects" :key="project.id" :open="projects.length === 1">
-      <summary>{{ project.name || t('Selected project') }}<template v-if="!project.usage?.recall"> · {{ t('Unavailable') }}</template></summary>
-      <UsageBreakdown v-if="project.usage?.recall" :title="t(recallType === 'skills' ? 'Skill body reads' : 'Memory recall')" :category="t('Entry')"
-        :description="coverage(project.usage.recall.coverage)" :count-label="t('Reads')" :allow-ring="false" :scope="`${project.id}:${recallType}`"
-        :rows="recallType === 'skills' ? project.usage.recall.skills.map(row => ({ id: row.entry, name: row.entry, calls: row.reads }))
-          : project.usage.recall.memory.map(row => ({ id: `${row.source}:${row.entry}`, name: `${row.entry} · ${t(row.source === 'active' ? 'Active Wiki read' : 'Automatic log brief')}`, calls: row.reads }))" />
-    </details>
-  </section>
 </template>
 <script setup lang="ts">
-import { ref } from 'vue'
 import { formatDateTime, formatNumber, t, type MessageKey } from '../i18n.ts'
 import type { ProjectUsage } from '../../../src/projects/usage-contract.ts'
-import UsageBreakdown from './UsageBreakdown.vue'
 defineProps<{ projects: { id: string; name: string; usage?: ProjectUsage | null }[] }>()
-const recallType = ref<'skills' | 'memory'>('skills')
-const recallTypes = [{ key: 'skills', label: 'Skill' }, { key: 'memory', label: 'Memory' }] as const
 const latency = [{ key: 'firstText', label: 'First streamed text' }, { key: 'queue', label: 'Queue latency' }, { key: 'duration', label: 'Request duration' }] as const
 const telemetry = [
   { value: 'inputTokens', samples: 'requestsWithInputTokens', label: 'Input tokens' },
@@ -67,8 +50,6 @@ function observation(value: string) { return t(({ stream_text: 'First text obser
 </script>
 <style scoped>
 .diagnostics { margin-block: 24px; min-width: 0; }
-.heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.heading button[aria-pressed=true] { background: var(--c-selection-bg); color: var(--c-primary); }
 h3 { margin: 0; font-size: 13px; font-weight: 600; }
 p, details { font-size: 12px; color: var(--c-text-secondary); }
 details { border-top: 1px solid var(--c-border); padding: 10px 0; }
