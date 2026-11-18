@@ -53,17 +53,21 @@
         @retry="livePool.retry()" @manage-node="router.push({ name: 'settings', params: { section: 'nodes' } })" />
       <div
         class="route-content"
-        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)), 'settings-route': route.name === 'settings', 'usage-route': route.name === 'usage' }"
+        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)) }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
         <KeepAlive :key="resolvedBase" include="ProjectsWorkspace">
           <component
             :is="Component"
             :key="workspaceRoutes.includes(String(viewRoute.name)) ? 'projects-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.projectId ?? '')}`"
-            v-bind="viewRoute.name === 'usage' ? { apiBase: resolvedBase, active: true } : viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: workspaceRoutes.includes(String(route.name)) }"
-            v-on="viewRoute.name === 'settings' ? providerViewEvents : {}"
+            v-bind="{ apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: workspaceRoutes.includes(String(route.name)) }"
             @update:log-count="logCount = $event"
-          />
+          >
+            <template #app-settings="{ section, active, close }">
+              <SettingsView v-bind="providerViewProps" :editor-section="section" :active="active"
+                @configured="providerConfigured" @retry="refreshProvider(true)" @close="close" />
+            </template>
+          </component>
         </KeepAlive>
       </router-view>
       </div>
@@ -91,6 +95,7 @@ import DesktopFrame from './DesktopFrame.vue'
 import MobileChrome from './components/MobileChrome.vue'
 import { provideMobileChrome } from './composables/useMobileChrome.ts'
 import DesktopBrowserAccess from './components/DesktopBrowserAccess.vue'
+import SettingsView from './components/SettingsView.vue'
 import ConnectionStatus from './components/ConnectionStatus.vue'
 import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
@@ -103,7 +108,7 @@ import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
 
 const route = useRoute()
-const workspaceRoutes: readonly string[] = ['chat', 'project-board', 'projects', 'project-dashboard', 'project-workflows', 'project-settings']
+const workspaceRoutes: readonly string[] = ['chat', 'project-board', 'projects', 'project-dashboard', 'project-workflows', 'project-settings', 'usage', 'settings']
 const mobile = provideMobileChrome()
 const mobilePageTitles: Record<string, string> = { get 'project-board'() { return t('Board') }, get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get usage() { return t('Usage') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
@@ -112,8 +117,10 @@ const ioBridge = createIoBridge()
 provide(ioBridgeKey, ioBridge)
 const router = useRouter()
 const lastChatLocation = ref('/chat')
+const lastSettingsLocation = ref('/settings')
 watch(() => route.fullPath, (path) => {
   if (route.name === 'chat') lastChatLocation.value = path
+  if (route.name === 'settings') lastSettingsLocation.value = path
 }, { immediate: true })
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
@@ -180,11 +187,6 @@ const providerViewProps = computed(() => ({
   checking: checkingProvider.value,
   available: isMain.value,
 }))
-const providerViewEvents = {
-  configured: providerConfigured,
-  retry: () => { void refreshProvider(true) },
-  close: () => { void router.push(lastChatLocation.value) },
-}
 let providerGeneration = 0
 let providerRequest: AbortController | undefined
 async function refreshProvider(refresh = false) {
@@ -223,9 +225,9 @@ const onConfigChanged = (event: Event) => {
 }
 
 const navigationItems = computed(() => navigationFor(installationContext.value))
-const navigationPage = computed(() => workspaceRoutes.includes(String(route.name)) ? 'chat' : String(route.name))
+const navigationPage = computed(() => route.name === 'usage' || route.name === 'settings' ? route.name : workspaceRoutes.includes(String(route.name)) ? 'chat' : String(route.name))
 function navigationLocation(name: string) {
-  return name === 'chat' ? lastChatLocation.value : { name }
+  return name === 'chat' ? lastChatLocation.value : name === 'settings' ? lastSettingsLocation.value : { name }
 }
 
 let stopRevealBorder: (() => void) | undefined
@@ -268,8 +270,7 @@ onUnmounted(() => {
   flex-direction: column;
 }
 .route-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
-.route-content.chat-route, .route-content.usage-route { display: flex; padding: 0; overflow: hidden; }
-.route-content.settings-route { scrollbar-gutter: stable; }
+.route-content.chat-route { display: flex; padding: 0; overflow: hidden; }
 .setup-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
 .tab-nav {

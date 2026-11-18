@@ -188,7 +188,7 @@
 import SessionActivity from '../SessionActivity.vue'
 import { t } from '../../i18n.ts'
 import EditorViewHost from '../EditorViewHost.vue'
-import { EditorGroupsKey, EditorOwnerKey, type EditorDescriptor } from '../../editor-groups.ts'
+import { APP_EDITOR_SCOPE, EditorGroupsKey, EditorOwnerKey, type EditorDescriptor } from '../../editor-groups.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import FileTree from './FileTree.vue'
@@ -268,7 +268,8 @@ function editorId(key: string) {
 const otherEditors = computed(() => {
   if (!groups) return []
   const state = groups.state(props.projectId ?? '')
-  return [...state.left, ...state.right].flatMap(editorKey => {
+  const app = groups.state(APP_EDITOR_SCOPE)
+  return [...state.left, ...state.right, ...app.left, ...app.right].flatMap(editorKey => {
     const entry = groups.descriptors.get(editorKey)
     return entry && entry.owner !== (owner || id) ? [entry] : []
   })

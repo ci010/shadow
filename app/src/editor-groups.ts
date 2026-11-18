@@ -1,5 +1,8 @@
 import { reactive, ref, shallowReactive, type InjectionKey } from 'vue'
 
+// A workbench scope, never a Project ID or an API scope.
+export const APP_EDITOR_SCOPE = '@app'
+
 export type EditorSide = 'left' | 'right'
 export interface EditorDescriptor {
   id: string
