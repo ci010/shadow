@@ -1,3 +1,4 @@
+import type { SkillRecallStore } from '../skills/recall.ts'
 import { safePath } from '../knowledge/service.ts'
 import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
 import { sessionEdits } from './session-edits.ts'
@@ -286,11 +287,23 @@ export function createSkillsHandler(
   registerTools?: (skill: Skill, context: ExecutionContext) => Promise<string[]>,
   folderScope?: (context: ExecutionContext) => FolderSkillScope | undefined,
   readRaw?: (subpath: string, context: ExecutionContext, continuation: boolean) => string,
+  recall?: Pick<SkillRecallStore, 'record' | 'render'>,
 ): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
 } {
   const read: VirtualFsHandler = async (subpath, context, options) => {
+    if (subpath === '.stats') {
+      if (!context.admin) throw new Error('Skill recall statistics require administrator access')
+      if (!recall) throw new Error('Skill recall statistics are not configured')
+      return recall.render()
+    }
+    const record = (path: string) => {
+      if (!recall || (options?.offset ?? 1) > 1) return
+      try { recall.record(path) } catch (error) {
+        console.warn('[skills] Failed to record Skill recall', error)
+      }
+    }
     // Dot-prefixed names cannot be shared Skills, so this editing view cannot shadow one.
     if (subpath === '.raw' || subpath.startsWith('.raw/')) {
       if (!readRaw) throw new Error('Raw Skill editing reads are not configured')
@@ -313,14 +326,17 @@ export function createSkillsHandler(
       const skill = scoped.find(skill => skill.meta.name === name)
       if (!skill) return `Unknown selected-folder skill: ${name}`
       if (parts.length) return readFolderSkillResource(skill, parts.join('/'), context)
+      const recallPath = `folder/${scope.folderId}/${name}`
       if (scope.workdir) {
         const warning = skill.meta.toolsError || Object.keys(skill.meta.tools ?? {}).length
           ? '\n\nRemote skill tool execution is unavailable: declarations are not registered or executed on Main.' : ''
+        record(recallPath)
         return `Selected-folder skill source: ${JSON.stringify(skill.dirPath)}; scope: ${JSON.stringify(scope)}\n\n${skill.body}${warning}`
       }
       if (skill.meta.toolsError) throw new Error(skill.meta.toolsError)
       if (Object.keys(skill.meta.tools ?? {}).length && !registerTools) throw new Error('Skill tool registration is not configured')
       const registered = await registerTools?.(skill, context) ?? []
+      record(recallPath)
       return `Selected-folder skill source: ${JSON.stringify(skill.dirPath)}; scope: ${JSON.stringify(scope)}\n\n${skill.body}`
         + (registered.length ? `\nRegistered for this session: ${registered.join(', ')}. Invoke with invoke_tool; modules run lazily.` : '')
     }
@@ -363,6 +379,7 @@ export function createSkillsHandler(
         }
       }
       skills.markSkillUsed(name, context.sessionId)
+      record(name)
       return content
     }
 
