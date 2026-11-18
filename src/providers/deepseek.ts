@@ -2,6 +2,7 @@ import { estimateUsageCost } from './cost.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { env } from 'node:process'
 import { OpenAICompatibleProvider, openaiChat } from './openai-compatible.ts'
+import { openaiResponses } from './openai-responses.ts'
 import { ProviderHttpError } from './provider.ts'
 import { chatCompletionImages } from './tool-images.ts'
 import type {
@@ -32,13 +33,19 @@ function imageMessages(messages: ChatMessage[], model: string): ChatMessage[] {
   return chatCompletionImages(messages)
 }
 
-/** DeepSeek Chat Completions with thinking continuity and Flash image input. */
+const RESPONSES_URL = 'https://api.deepseek.com/responses'
+
+/** Official V4 Pro uses Responses; Flash and custom endpoints keep Chat Completions. */
 export class DeepSeekProvider extends OpenAICompatibleProvider {
   constructor(
     defaultModel: string = 'deepseek-flash',
     options: { apiKey?: string; baseUrl?: string } = {},
   ) {
     super('deepseek', options.apiKey ?? env.DEEPSEEK_API_KEY ?? '', options.baseUrl ?? 'https://api.deepseek.com', defaultModel)
+  }
+
+  private usesResponses(model: string): boolean {
+    return model === 'deepseek-v4-pro' && /^https:\/\/api\.deepseek\.com(?:\/v1)?\/*$/.test(this.baseURL)
   }
 
   override async chat(
@@ -53,6 +60,14 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
       throw new ProviderHttpError(400, '[deepseek] Reasoning effort must be low, high or max.', 'unsupported_reasoning_effort')
     }
     messages = imageMessages(messages, options.model)
+    if (this.usesResponses(options.model)) {
+      const result = await openaiResponses({
+        ...options, url: RESPONSES_URL, apiKey: this.apiKey, providerName: this.name,
+        messages, tools, reasoningEffort,
+      })
+      if (result.usage) result.usage = estimateUsageCost(this.name, result.model ?? options.model, result.usage)
+      return result
+    }
     if (tools.length > 0) {
       messages = messages.map((e) => e.role === 'assistant' ? ({
         role: e.role,
@@ -90,7 +105,7 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
       name: id === 'deepseek-flash' ? 'DeepSeek V4.1 Flash' : 'DeepSeek V4 Pro',
       vision: id === 'deepseek-flash',
       contextWindow: 1_000_000,
-      supportedEndpoints: ['/chat/completions'],
+      supportedEndpoints: [this.usesResponses(id) ? '/responses' : '/chat/completions'],
       reasoningEfforts: ['low', 'high', 'max'],
     }))
   }

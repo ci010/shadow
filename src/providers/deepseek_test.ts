@@ -3,6 +3,8 @@ import { test, type TestContext } from 'node:test'
 import { Hono } from 'hono'
 import { ConfigSchema } from '../config/schema.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
+import { AggregatedProvider } from './aggregated.ts'
+import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { createAggregatedProvider, createProvider } from './factory.ts'
 import { resolveContextWindow } from './model-registry.ts'
@@ -33,13 +35,14 @@ function harness(t: TestContext, responses: Response[]) {
   return calls
 }
 
-test('DeepSeek catalog exposes current Flash vision and keeps Chat Completions as its protocol', async () => {
+test('DeepSeek catalog exposes current Flash vision and reports model-specific transports', async () => {
   const provider = new DeepSeekProvider()
   assert.deepEqual(await provider.listModels(), ['deepseek-flash', 'deepseek-v4-pro'])
   const infos = await provider.listModelInfos()
   assert.equal(infos[0].vision, true)
   assert.equal(infos[1].vision, false)
   assert.deepEqual(infos[0].supportedEndpoints, ['/chat/completions'])
+  assert.deepEqual(infos[1].supportedEndpoints, ['/responses'])
   assert.deepEqual(infos[0].reasoningEfforts, ['low', 'high', 'max'])
   for (const id of ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']) {
     assert.equal(resolveContextWindow(`${id}@deepseek`), 1_000_000)
@@ -243,4 +246,65 @@ test('DeepSeek maps shared medium/xhigh effort to documented high without losing
     assert.equal(call.body.reasoning_effort, 'high')
     assert.equal((call.body.messages as ChatMessage[])[0].reasoning_content, 'Earlier non-tool reasoning')
   }
+})
+
+test('native search and fetch are provider-scoped and survive switching on a shared history', async (t) => {
+  const pro = 'deepseek-v4-pro'
+  const search = { ...tool, function: { ...tool.function, name: 'search' } }
+  const source = { type: 'url', url: 'https://example.com/', title: 'Source' }
+  const items = [
+    { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', queries: ['example'], sources: [source] } },
+    { type: 'web_search_call', id: 'ws_2', status: 'completed', action: { type: 'open_page', url: source.url } },
+    { type: 'web_search_call', id: 'ws_3', status: 'failed', action: { type: 'find_in_page', url: source.url, pattern: 'Example' }, error: { code: 'unavailable' } },
+    { type: 'message', id: 'msg_1', status: 'completed', role: 'assistant', content: [
+      { type: 'output_text', text: 'Example result', annotations: [{ ...source, type: 'url_citation', start_index: 0, end_index: 7 }] },
+    ] },
+  ]
+  const terminal = (output: unknown[]) => ({ type: 'response.completed', response: { status: 'completed', model: pro, output } })
+  const frame = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`
+  const stream = new Response(items.map((item, output_index) => frame({ type: 'response.output_item.done', output_index, item })).join('') +
+    frame(terminal(items)), { headers: { 'content-type': 'text/event-stream' } })
+  const empty = () => Response.json(terminal([]).response)
+  const calls = harness(t, [stream, completion(), empty(), empty(), completion(), completion()])
+  const provider = new AggregatedProvider(new Map([
+    ['official', new DeepSeekProvider(pro, { baseUrl: 'https://api.deepseek.com/v1/' })],
+    ['other', new OpenAICompatibleProvider('other', 'key', 'https://fixture.invalid', pro)],
+    ['custom', new DeepSeekProvider(pro, { baseUrl: 'https://custom.invalid' })],
+  ]), 'official')
+  const history: ChatMessage[] = [{ role: 'system', content: 'Unmodified system prompt' }, { role: 'user', content: 'Find the example page' }]
+  const first = await provider.chat(history, [search], { model: `${pro}@official` })
+  assert.equal(first.content, 'Example result')
+  assert.deepEqual(first.toolCalls, [])
+  assert.deepEqual(first.providerState?.outputItems, items)
+  history.push({ role: 'assistant', content: first.content, provider_state: first.providerState }, { role: 'user', content: 'Continue' })
+  await provider.chat(history, [search], { model: `${pro}@other` })
+  await provider.chat(history, [search], { model: `${pro}@official` })
+  await provider.chat(history, [tool], { model: `${pro}@official` })
+  await provider.chat(history, [search], { model: `${pro}@custom` })
+  await provider.chat(history, [search], { model: 'deepseek-flash@official' })
+  assert.deepEqual(calls.map(call => call.url), [
+    'https://api.deepseek.com/responses', 'https://fixture.invalid/chat/completions',
+    'https://api.deepseek.com/responses', 'https://api.deepseek.com/responses',
+    'https://custom.invalid/chat/completions', 'https://api.deepseek.com/v1/chat/completions',
+  ])
+  for (const i of [0, 2]) {
+    const tools = calls[i].body.tools as Array<{ type: string; description?: string }>
+    assert.deepEqual(tools[1], { type: 'web_search' })
+    assert.match(tools[0].description!, /native web_search.*open pages/)
+    assert.deepEqual((calls[i].body.input as unknown[])[0], {
+      type: 'message', role: 'system', content: [{ type: 'input_text', text: 'Unmodified system prompt' }],
+    })
+  }
+  assert.deepEqual(calls[0].body.tools, calls[2].body.tools)
+  assert.deepEqual((calls[2].body.input as unknown[]).slice(2, 6), items)
+  assert.deepEqual((calls[3].body.input as unknown[]).slice(2, 6), items)
+  for (const i of [1, 4, 5]) {
+    assert.deepEqual(calls[i].body.tools, [search])
+    const replay = (calls[i].body.messages as ChatMessage[])[2]
+    assert.equal(replay.role, 'assistant')
+    assert.equal(replay.content, 'Example result')
+    assert.equal('provider_state' in replay, false)
+  }
+  assert.doesNotMatch(JSON.stringify(calls[3].body.tools), /web_search/)
+  assert.equal(search.function.description, tool.function.description)
 })

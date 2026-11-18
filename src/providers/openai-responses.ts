@@ -71,6 +71,13 @@ function annotation(value: unknown): ResponsesOutputAnnotation {
 
 function outputItem(value: unknown, provider?: string): ResponsesOutputItem {
   if (!object(value)) invalid('invalid output item')
+  if (provider === 'deepseek' && value.type === 'web_search_call') {
+    const id = text(value.id, true)
+    if ((value.status !== 'completed' && value.status !== 'failed') || !object(value.action) ||
+      (value.action.type !== 'search' && value.action.type !== 'open_page' && value.action.type !== 'find_in_page')) invalid('invalid DeepSeek web search item')
+    // Replay the server action and its sources unchanged. It is not a local tool call.
+    return { ...value, type: 'web_search_call', id, status: value.status, action: value.action }
+  }
   if (value.status !== undefined && value.status !== 'completed') invalid('output item is not completed')
   const id = value.id === undefined ? {} : { id: text(value.id, true) }
   const status = value.status === undefined ? {} : { status: 'completed' as const }
@@ -403,9 +410,18 @@ export async function openaiResponses(params: {
   } else if (params.providerName === 'deepseek') {
     body.reasoning = { effort: params.reasoningEffort ?? 'high' }
   } else if (params.reasoningEffort) body.reasoning = { effort: params.reasoningEffort }
-  if (params.tools.length) body.tools = params.tools.map(({ function: fn }) => ({
-    type: 'function', name: fn.name, description: fn.description, parameters: fn.parameters, strict: false,
-  }))
+  // Respect the current tool boundary (including receipt-only and restricted agents).
+  const nativeWeb = params.providerName === 'deepseek' && params.model === 'deepseek-v4-pro' &&
+    params.url === 'https://api.deepseek.com/responses' && params.tools.some(tool => tool.function.name === 'search')
+  if (params.tools.length) body.tools = [
+    ...params.tools.map(({ function: fn }) => ({
+      type: 'function', name: fn.name,
+      description: nativeWeb && fn.name === 'search'
+        ? `${fn.description}\n\nFor public web research, prefer the native web_search tool. DeepSeek runs it server-side and can open pages or find text within them. Use this search function for file and virtual searches.`
+        : fn.description, parameters: fn.parameters, strict: false,
+    })),
+    ...(nativeWeb ? [{ type: 'web_search' }] : []),
+  ]
   const prepared = await prepareRequestBody(body, params.requestCompression, params.signal)
   return withProviderRetry(async () => {
     const response = await fetch(params.url, {
