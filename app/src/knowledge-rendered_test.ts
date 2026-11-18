@@ -80,9 +80,17 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
       props: ['preview'],
       setup: (props, { emit }) => () => Vue.h('button', { 'data-test': 'confirm-repair', onClick: () => emit('applied', props.preview.sourceId) }, 'Confirm repair stub'),
     }) }
-    if (id === './AgentsTab.vue') return { default: Vue.defineComponent({
-      props: ['apiBase'],
-      setup: props => () => Vue.h('div', { 'data-test': 'agents-browser', apiBase: props.apiBase }),
+    if (id === './KnowledgeTree.vue') return { default: Vue.defineComponent({
+      props: ['nodes'], emits: ['select'],
+      setup: (props, { emit }) => () => Vue.h('div', props.nodes.map((root: { id: string; label: string; children: unknown[] }) =>
+        Vue.h('button', { 'data-tree': root.children, onClick: () => emit('select', root.id) }, root.label))),
+    }) }
+    if (id === './SystemPromptCard.vue') return { default: Vue.defineComponent({
+      props: ['prompt', 'raw'], setup: props => () => Vue.h('pre', { 'data-raw': props.raw }, props.prompt),
+    }) }
+    if (id === '../AgentsTab.vue') return { default: Vue.defineComponent({
+      props: ['apiBase', 'agentName'],
+      setup: props => () => Vue.h('div', { 'data-test': 'agents-browser', ...props }),
     }) }
     if (id === '../EditorViewHost.vue') return { default: Vue.defineComponent({
       props: ['selected'], setup: (props, { slots }) => () => Vue.h('div', { hidden: !props.selected }, slots.default?.()),
@@ -215,7 +223,7 @@ test('workbench renders Knowledge next to Conversation, deduplicates and closes 
   assert.equal(panel(), undefined)
 })
 
-test('project Settings and legacy Agents routes share one workbench tab', async t => {
+test('project Settings remains a separate workbench tab', async t => {
   const changes: Array<string | undefined> = []
   const view = mount(t, 'files/FileWorkbench.vue', {
     apiBase: 'http://fixture/projects/a', projectId: 'a', sessionId: '', contextKey: 'a:draft',
@@ -224,9 +232,6 @@ test('project Settings and legacy Agents routes share one workbench tab', async 
   const tab = (key: string) => view.nodes().find(node =>
     node.props.role === 'tab' && String(node.props.id).endsWith(encodeURIComponent(key)))!
   view.route.name = 'project-settings'
-  await settle()
-  assert.equal(tab(projectTabKey('settings')).props['aria-selected'], true)
-  view.route.name = 'agents'
   await settle()
   assert.equal(tab(projectTabKey('settings')).props['aria-selected'], true)
   assert.equal(tab('\0project:agents'), undefined)
@@ -713,23 +718,71 @@ test('repair dialog requires explicit confirmation, sends only revision identity
 })
 
 
-test('project settings embeds the existing Agents browser only in the Agents section', async t => {
-  t.mock.method(globalThis, 'fetch', async () => Response.json({ projects: [], agent: {}, learning: {} }))
-  const view = mount(t, 'ProjectSettings.vue', {
-    apiBase: 'http://fixture/projects/a', hostApiBase: 'http://fixture', projectId: 'a',
+test('Knowledge explorer requests independent, Project-scoped Agent and Bot folders', async t => {
+  const requests: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const url = new URL(input)
+    requests.push(url.pathname)
+    const project = url.pathname.split('/')[2]
+    if (url.pathname.endsWith('/agent-types')) return Response.json([{ name: `agent-${project}`, description: '', source: 'workspace' }])
+    if (url.pathname.endsWith('/bot-package')) return Response.json({ projectId: project, partial: false,
+      documents: [{ id: `bot-${project}`, revision: 'a'.repeat(64), paths: ['BOT.md', 'docs/README.md'] }] })
+    return Response.json(catalog)
   })
-  view.route.name = 'project-settings'
-  view.route.params.section = 'agents'
+  const view = mount(t, 'KnowledgeExplorer.vue', { active: true, apiBase: 'http://fixture/projects/a', projectId: 'a', explorerId: 'fixture' })
   await settle()
-  const browser = () => view.nodes().find(node => node.props['data-test'] === 'agents-browser')
-  assert.equal(browser()?.props.apiBase, 'http://fixture/projects/a')
-  assert.match(view.text(), /Agents/)
-  view.route.params.section = 'general'
+  const tree = (name: string) => JSON.stringify(view.button(name).props['data-tree'])
+  assert.match(tree('Agents'), /agent-definition:agent-a/)
+  assert.match(tree('Bots'), /bot-document:bot-a\/docs\/README.md/)
+  assert.equal(requests.length, 3, 'no prompts or bodies are prefetched')
+  view.props.apiBase = 'http://fixture/projects/b'
+  view.props.projectId = 'b'
   await settle()
-  assert.equal(browser(), undefined)
-  view.route.params.section = 'agents'
+  assert.doesNotMatch(tree('Agents'), /agent-a/)
+  assert.match(tree('Agents'), /agent-definition:agent-b/)
+  assert.match(tree('Bots'), /bot-document:bot-b\/BOT.md/)
+})
+
+
+test('Bot Knowledge document reads the current exact deployment and toggles raw source', async t => {
+  let revision = 'a'.repeat(64)
+  const reads: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const url = new URL(input)
+    if (url.pathname.endsWith('/bot-package')) return Response.json({ projectId: 'a', partial: false,
+      documents: [{ id: 'help', revision, paths: ['docs/README.md'] }] })
+    assert.equal(url.pathname, '/projects/a/api/bot-package/help/prompt')
+    assert.equal(url.searchParams.get('path'), 'docs/README.md')
+    assert.equal(url.searchParams.get('revision'), revision)
+    reads.push(revision)
+    return Response.json({ id: 'help', revision, path: 'docs/README.md', prompt: `# Deployed ${revision[0]}` })
+  })
+  const view = mount(t, 'BotKnowledgeDocument.vue', { active: true, apiBase: 'http://fixture/projects/a', projectId: 'a', bot: 'help', path: 'docs/README.md' })
   await settle()
-  assert.equal(browser()?.props.apiBase, 'http://fixture/projects/a')
+  assert.match(view.text(), /Deployed snapshot \/ read-only/)
+  assert.match(view.text(), /# Deployed a/)
+  ;(view.button('Show source').props.onClick as () => void)()
+  await settle()
+  assert(view.nodes().some(node => node.props['data-raw'] === true))
+  revision = 'b'.repeat(64)
+  await (view.button('Refresh').props.onClick as () => Promise<void>)()
+  await settle()
+  assert.match(view.text(), /# Deployed b/)
+  assert.deepEqual(reads, ['a'.repeat(64), 'b'.repeat(64)])
+})
+
+
+test('agent definition selections open inside Knowledge, not Settings', async t => {
+  const view = mount(t, 'files/FileWorkbench.vue', {
+    apiBase: 'http://fixture/projects/a', projectId: 'a', sessionId: '', contextKey: 'a:draft',
+    active: true, knowledgeEnabled: true, projectNavigationEnabled: true,
+    knowledgeRequest: { entryId: 'agent-definition:plan' },
+  })
+  await settle()
+  const browser = view.nodes().find(node => node.props['data-test'] === 'agents-browser')
+  assert.equal(browser?.props.apiBase, 'http://fixture/projects/a')
+  assert.equal(browser?.props.agentName, 'plan')
+  assert.equal(view.nodes().some(node => node.props.role === 'tab' && String(node.props.id).endsWith(encodeURIComponent(projectTabKey('settings')))), false)
 })
 
 

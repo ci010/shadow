@@ -1,7 +1,7 @@
 <template>
   <section class="agent-browser" :aria-label="t('Agent types')">
-    <div class="agent-browser-layout" :class="{ 'show-detail': showDetail && requestedAgent }">
-      <aside ref="navigation" class="agent-navigation" :aria-label="t('Agent type navigation')">
+    <div class="agent-browser-layout" :class="{ 'show-detail': agentName || showDetail && requestedAgent }">
+      <aside v-if="!agentName" ref="navigation" class="agent-navigation" :aria-label="t('Agent type navigation')">
         <header class="catalog-header">
           <h2>{{ t('Agent types') }} <span class="catalog-count">{{ agentTypes.length }}</span></h2>
           <label class="agent-search">
@@ -31,7 +31,7 @@
       <div ref="detail" class="agent-detail">
         <template v-if="requestedAgent">
           <header class="agent-heading">
-            <button type="button" class="agent-back text-action" @click="backToTypes"><span class="i-lucide-arrow-left" aria-hidden="true" />{{ t('Agent types') }}</button>
+            <button v-if="!agentName" type="button" class="agent-back text-action" @click="backToTypes"><span class="i-lucide-arrow-left" aria-hidden="true" />{{ t('Agent types') }}</button>
             <h2 ref="heading" tabindex="-1">{{ requestedAgent.name }}</h2>
             <p>{{ requestedAgent.description }}</p>
           </header>
@@ -47,7 +47,7 @@
             <section v-show="activeTab === 'overview'" :id="`${id}-overview-panel`" class="agent-overview" role="tabpanel" :aria-labelledby="`${id}-overview-tab`" tabindex="0">
               <section class="overview-section">
                 <h3>{{ t('Definition') }}</h3>
-                <button v-if="promptDocuments && requestedAgent.prompt !== undefined" type="button" class="text-action" @click="openDefinition">{{ t('Open AGENT.md in workspace') }}</button>
+                <button v-if="promptDocuments && (requestedAgent.definitionMarkdown ?? requestedAgent.prompt) !== undefined" type="button" class="text-action" @click="openDefinition">{{ t('Open AGENT.md in workspace') }}</button>
                 <dl class="agent-facts">
                   <div><dt>{{ t('Source') }}</dt><dd>{{ requestedAgent.source === 'builtin' ? t('Built-in') : t('Workspace') }}</dd></div>
                   <div><dt>{{ t('Default mode') }}</dt><dd>{{ enumLabel(requestedAgent.defaultMode ?? t('session')) }}</dd></div>
@@ -78,7 +78,15 @@
               </section>
             </section>
 
-            <template v-if="activeTab !== 'overview'">
+            <section v-if="agentName && activeTab === 'definition'" :id="`${id}-definition-panel`" role="tabpanel" :aria-labelledby="`${id}-definition-tab`" tabindex="0">
+              <div v-if="requestedAgent.definitionMarkdown !== undefined" class="prompt-format">
+                <button type="button" :aria-pressed="definitionRaw" @click="definitionRaw = !definitionRaw">{{ definitionRaw ? t('Show preview') : t('Show source') }}</button>
+              </div>
+              <SystemPromptCard v-if="requestedAgent.definitionMarkdown !== undefined" :prompt="requestedAgent.definitionMarkdown" :raw="definitionRaw" :show-provenance="false" embedded />
+              <p v-else class="agent-note">{{ t('This agent definition is unavailable.') }}</p>
+            </section>
+
+            <template v-if="activeTab === 'tools' || activeTab === 'prompt'">
               <div class="preview-toolbar">
                 <label class="preview-channel">{{ t('Preview channel') }}<UiSelect v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></UiSelect></label>
                 <div v-if="activeTab === 'prompt'" class="prompt-format" role="group" :aria-label="t('System prompt format')">
@@ -109,7 +117,8 @@
             <p v-if="activeTab !== 'overview' && selected" class="preview-scope">{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
           </div>
         </template>
-        <p v-else class="agent-empty">{{ loadingList ? t('Loading agent types...') : t('Select an agent type to inspect.') }}</p>
+        <div v-else-if="agentName && listError" class="agent-error agent-empty" role="alert"><p>{{ listError }}</p><button class="text-action" type="button" @click="loadAgentTypes">{{ t('Retry catalog') }}</button></div>
+        <p v-else class="agent-empty">{{ loadingList ? t('Loading agent types...') : agentName ? t('This agent definition is unavailable.') : t('Select an agent type to inspect.') }}</p>
       </div>
     </div>
   </section>
@@ -120,7 +129,7 @@ import { PromptDocumentsKey } from '../prompt-documents.ts'
 import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatNumber } from '../i18n.ts'
-import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, inject, nextTick, onScopeDispose, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiUrl } from '../api-url.ts'
 import { parseAgentContext, parseAgentTypes, type AgentTypeMeta } from '../agent-types.ts'
@@ -128,22 +137,24 @@ import { useTextCopy } from '../composables/useTextCopy.ts'
 import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard, { type ToolDef } from './ToolsCard.vue'
 
-const props = defineProps<{ apiBase: string }>()
+const props = withDefaults(defineProps<{ apiBase: string; agentName?: string; active?: boolean }>(), { active: true })
 const route = useRoute()
 const router = useRouter()
 const promptDocuments = inject(PromptDocumentsKey, undefined)
 function openDefinition() {
   const agent = requestedAgent.value
   const projectId = route.params.projectId
-  if (!agent || typeof agent.prompt !== 'string' || typeof projectId !== 'string') return
-  const source = `${agent.source} / ${agent.name} / AGENT.md (definition prompt)`
+  const prompt = agent?.definitionMarkdown ?? agent?.prompt
+  if (!agent || typeof prompt !== 'string' || typeof projectId !== 'string') return
+  const source = `${agent.source} / ${agent.name} / AGENT.md${agent.definitionMarkdown === undefined ? ' (definition prompt)' : ''}`
   promptDocuments?.open(projectId, { key: `agent:${agent.source}:${agent.name}`, label: `${agent.name} / AGENT.md`, source,
-    prompt: agent.prompt, sections: [{ name: source, content: agent.prompt, characters: agent.prompt.length }] })
+    prompt, sections: [{ name: source, content: prompt, characters: prompt.length }] })
 }
 const id = `agents-${useId()}`
-const views = [{ id: 'overview', get label() { return t('Overview') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'prompt', get label() { return t('System prompt') } }] as const
+const views = [...(props.agentName ? [{ id: 'definition', get label() { return 'AGENT.md' } }] as const : []), { id: 'overview', get label() { return t('Overview') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'prompt', get label() { return t('System prompt') } }] as const
 type AgentView = typeof views[number]['id']
-const activeTab = ref<AgentView>('overview')
+const activeTab = ref<AgentView>(props.agentName ? 'definition' : 'overview')
+const definitionRaw = ref(true)
 const agentQuery = ref('')
 const toolQuery = ref('')
 const rawPrompt = ref(false)
@@ -153,12 +164,16 @@ const detail = ref<HTMLElement>()
 const heading = ref<HTMLElement>()
 const tablist = ref<HTMLElement>()
 const channels = ['heartbeat', 'web', 'discord', 'wechat', 'feishu']
+const localChannel = ref(typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'heartbeat')
 const channel = computed({
-  get: () => typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'heartbeat',
-  set: value => { void router.replace({ query: { ...route.query, channel: value } }) },
+  get: () => props.agentName ? localChannel.value : typeof route.query.channel === 'string' && channels.includes(route.query.channel) ? route.query.channel : 'heartbeat',
+  set: value => {
+    if (props.agentName) localChannel.value = value
+    else void router.replace({ query: { ...route.query, channel: value } })
+  },
 })
 const agentTypes = ref<AgentTypeMeta[]>([])
-const requestedAgent = computed(() => agentTypes.value.find(agent => agent.name === route.query.agent) ?? agentTypes.value[0])
+const requestedAgent = computed(() => props.agentName ? agentTypes.value.find(agent => agent.name === props.agentName) : agentTypes.value.find(agent => agent.name === route.query.agent) ?? agentTypes.value[0])
 const selected = ref<AgentTypeMeta | null>(null)
 const renderedSystemPrompt = ref('')
 const sections = ref<import('../prompt-sections.ts').PromptSection[]>([])
@@ -192,12 +207,12 @@ async function loadAgentTypes() {
   loadingList.value = true
   listError.value = ''
   try {
-    const response = await fetch(buildUrl('/api/agent-types'), { signal: request.signal })
+    const response = await fetch(buildUrl('/api/agent-types', props.agentName ? { definition: props.agentName } : undefined), { signal: request.signal })
     if (!response.ok) throw new Error(t('Failed to load agent types ({status}).', { status: response.status }))
     const data = parseAgentTypes(await response.json())
     if (request.signal.aborted) return
     agentTypes.value = data
-    if (requestedAgent.value && route.query.agent !== requestedAgent.value.name) selectAgent(requestedAgent.value, false)
+    if (!props.agentName && requestedAgent.value && route.query.agent !== requestedAgent.value.name) selectAgent(requestedAgent.value, false)
   } catch (cause) {
     if (!request.signal.aborted) {
       listError.value = cause instanceof Error ? cause.message : t('Failed to load agent types.')
@@ -230,7 +245,7 @@ async function loadContext(agent: AgentTypeMeta) {
 }
 async function selectAgent(agent: AgentTypeMeta, openDetail = true) {
   if (openDetail) showDetail.value = true
-  void router.replace({ name: 'project-settings', params: { projectId: route.params.projectId, section: 'agents' }, query: { ...route.query, agent: agent.name, channel: channel.value } })
+  void router.replace({ query: { ...route.query, agent: agent.name, channel: channel.value } })
   if (openDetail) { await nextTick(); detail.value?.scrollTo({ top: 0 }); heading.value?.focus({ preventScroll: true }) }
 }
 async function backToTypes() {
@@ -251,10 +266,14 @@ async function tabKeydown(event: KeyboardEvent, index: number) {
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? views.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length
   await openView(views[next]!.id)
 }
-function retryContext() { if (requestedAgent.value) void loadContext(requestedAgent.value) }
-watch([requestedAgent, channel], () => { toolQuery.value = ''; resetCopy(); retryContext() })
-watch(activeTab, resetCopy)
-watch(() => props.apiBase, () => {
+function retryContext() { if (props.active !== false && requestedAgent.value) void loadContext(requestedAgent.value) }
+watch([requestedAgent, channel], () => { toolQuery.value = ''; resetCopy(); if (!props.agentName || activeTab.value === 'tools' || activeTab.value === 'prompt') retryContext() })
+watch(activeTab, () => {
+  resetCopy()
+  if (props.agentName && (activeTab.value === 'tools' || activeTab.value === 'prompt') && !contextMatchesSelection.value && !loadingContext.value) retryContext()
+})
+watch(() => [props.apiBase, props.agentName, props.active] as const, () => {
+  listRequest?.abort()
   contextRequest?.abort()
   selected.value = null
   agentTypes.value = []
@@ -264,10 +283,9 @@ watch(() => props.apiBase, () => {
   contextError.value = ''
   loadingContext.value = false
   agentQuery.value = ''
-  void loadAgentTypes()
-})
-onMounted(loadAgentTypes)
-onUnmounted(() => { listRequest?.abort(); contextRequest?.abort() })
+  if (props.active !== false) void loadAgentTypes()
+}, { immediate: true })
+onScopeDispose(() => { listRequest?.abort(); contextRequest?.abort() })
 </script>
 
 <style scoped>
@@ -340,7 +358,7 @@ button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has
   .agent-browser-layout:not(.show-detail) .agent-detail, .agent-browser-layout.show-detail .agent-navigation { display: none; }
   .agent-back.text-action { display: inline-flex; }
   .agent-heading { padding: 20px 16px; }
-  .agent-tabs { gap: 16px; margin-inline: 16px; }
+  .agent-tabs { flex-wrap: wrap; gap: 4px 16px; margin-inline: 16px; }
   .agent-content { padding: 20px 16px 28px; }
   .agent-facts { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .preview-channel { flex-basis: 100%; justify-content: space-between; }

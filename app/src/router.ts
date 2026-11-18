@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { agentDefinitionId } from './knowledge-definitions.ts'
 import { microAppNavigation } from './microapp-navigation.ts'
 import LogsTab from './components/LogsTab.vue'
 import SpansTab from './components/SpansTab.vue'
@@ -17,7 +18,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({
     name: 'chat', params: { projectId: to.params.projectId }, query: { ...to.query, panel: 'knowledge' }, hash: to.hash,
   }) },
-  { path: '/projects/:projectId/settings/:section(general|models|connections|bots|agents)?', name: 'project-settings', component: ProjectsWorkspace },
+  { path: '/projects/:projectId/settings/agents', redirect: to => ({ name: 'agents', params: { projectId: to.params.projectId }, query: to.query, hash: to.hash }) },
+  { path: '/projects/:projectId/settings/:section(general|models|connections|bots)?', name: 'project-settings', component: ProjectsWorkspace },
   { path: '/workspaces', redirect: '/nodes' },
   { path: '/nodes', name: 'nodes', redirect: '/settings/nodes' },
   { path: '/providers', name: 'providers', redirect: '/settings/providers' },
@@ -25,7 +27,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/settings/:section(providers|models|web-search|proxy|sounds|language|nodes)?', name: 'settings', component: SettingsView },
   { path: '/approvals', redirect: '/nodes' },
   { path: '/agents/:agentName?', redirect: to => ({ name: 'agents', params: { projectId: 'default', agentName: to.params.agentName }, query: to.query, hash: to.hash }) },
-  { path: '/projects/:projectId/agents/:agentName?', name: 'agents', redirect: to => ({ name: 'project-settings', params: { projectId: to.params.projectId, section: 'agents' }, query: { ...to.query, ...(to.params.agentName ? { agent: to.params.agentName } : {}) }, hash: to.hash }) },
+  { path: '/projects/:projectId/agents/:agentName?', name: 'agents', redirect: to => {
+    const { agent, ...query } = to.query
+    const name = to.params.agentName || agent
+    return { name: 'knowledge', params: { projectId: to.params.projectId }, query: { ...query, entry: typeof name === 'string' && name ? agentDefinitionId(name) : undefined }, hash: to.hash }
+  } },
   { path: '/spans', redirect: '/projects/default/spans' },
   { path: '/projects/:projectId/spans', name: 'spans', component: SpansTab },
   { path: '/logs', redirect: '/projects/default/logs' },

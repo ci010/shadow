@@ -5,17 +5,25 @@ import type { GatewayPlugin } from '../../gateway/types.ts'
 export function agentTypesPlugin(
   sessions: SessionManager | undefined,
   agentTypes?: AgentTypesManager,
+  authorizeDefinition?: (request: Request) => boolean | Promise<boolean>,
 ): GatewayPlugin {
   return (app) => {
     // ── /api/agent-types — list all agent type definitions ─────
-    app.get('/api/agent-types', (c) => {
+    app.get('/api/agent-types', async (c) => {
       if (!agentTypes) {
         return c.json({ error: 'agent_types_unavailable' }, 501)
       }
-      const types = agentTypes.all().filter(t => !t.root || t.name === 'general').map((t) => ({
+      const definition = c.req.query('definition')
+      if (definition !== undefined) {
+        c.header('Cache-Control', 'no-store')
+        if (!await authorizeDefinition?.(c.req.raw)) return c.json({ error: 'Unauthorized' }, 401)
+      }
+      const indexOnly = definition === undefined && c.req.query('view') === 'index'
+      const types = agentTypes.all().filter(t => (!t.root || t.name === 'general') && (definition === undefined || definition === t.name)).map((t) => ({
         name: t.name,
         description: t.description,
-        prompt: t.prompt,
+        prompt: indexOnly ? undefined : t.prompt,
+        definitionMarkdown: definition !== undefined ? t.definitionMarkdown : undefined,
         source: t.source,
         allowedTools: t.allowedTools,
         blockedTools: t.blockedTools,

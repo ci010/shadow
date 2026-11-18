@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { markRaw, onScopeDispose } from 'vue'
 import { canonicalResourceKey } from '../resources/engine.ts'
 import { resourceViews } from '../resources/vue-resource.ts'
+import { listAgentDefinitions, listBotDocuments, readBotDocument } from '../knowledge-definitions.ts'
 import { createKnowledgeClient } from '../knowledge.ts'
 
 /** No knowledge live topic exists. Explicit refresh and activation revalidate;
@@ -24,6 +25,21 @@ export function createKnowledgeResources(request: typeof fetch = fetch) {
     catch (error) { if (status && error instanceof Error) Object.assign(error, { status }); throw error }
   }
   return {
+    agents(base: string, projectId: string) {
+      const lease = views.acquire(key(base, projectId, 'agent-definitions'), signal => listAgentDefinitions(base, signal, request))
+      void lease.read()
+      return lease
+    },
+    bots(base: string, projectId: string) {
+      const lease = views.acquire(key(base, projectId, 'bot-markdown'), signal => listBotDocuments(base, projectId, signal, request))
+      void lease.read()
+      return lease
+    },
+    botDocument(base: string, projectId: string, bot: string, path: string, revision: string) {
+      const lease = details.acquire(key(base, projectId, `bot-markdown:${revision}`, JSON.stringify([bot, path])), signal => readBotDocument(base, bot, path, revision, signal, request))
+      void lease.read()
+      return lease
+    },
     catalog(base: string, projectId: string) {
       const lease = views.acquire(key(base, projectId, 'catalog-v1'), signal => load(base, client => client.list(signal)))
       void lease.read()

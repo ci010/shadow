@@ -4472,5 +4472,10 @@
   "What happened": "What happened",
   "Source session": "Source session",
   "Recorded source": "Recorded source",
-  "Unrecognized event record": "Unrecognized event record"
+  "Unrecognized event record": "Unrecognized event record",
+  "Could not load definition documents. Refresh and retry.": "Could not load definition documents. Refresh and retry.",
+  "Some Bot documents are unavailable. Check Bot settings.": "Some Bot documents are unavailable. Check Bot settings.",
+  "This agent definition is unavailable.": "This agent definition is unavailable.",
+  "Deployed snapshot / read-only": "Deployed snapshot / read-only",
+  "This deployed Markdown document is unavailable.": "This deployed Markdown document is unavailable."
 }

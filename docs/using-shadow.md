@@ -428,8 +428,15 @@ semantic inference. Built-in skills are read-only. Deleting an entry removes
 only that file, not its incoming references or already-loaded instructions.
 Agent learning can later recreate deleted knowledge.
 
-Knowledge uses the shared explorer pane, grouped into Wiki, Memory and Skills
-(with Project and Built-in skill branches). Memory retains the catalog's session
+Knowledge uses the shared explorer pane, grouped into Wiki, Memory, Skills,
+Agents and Bots. Agents lists the effective built-in and workspace definitions;
+open a definition to read `AGENT.md` or inspect the overview, resolved tools and
+assembled system prompt for a selected channel. Bots lists Markdown from the
+current Project's verified active deployments, including Markdown in package
+subfolders. These are read-only views: source and deployment files stay where
+they are, and editing, deployment and connection management retain their
+existing workflows. Agent and Bot documents do not become Wiki entries or graph
+nodes. Memory retains the catalog's session
 history, semantic logs and conventions, but not file-edit working-set indexes;
 it is not a curated Wiki. Selecting a leaf opens or reuses its
 own document tab. The focused editor group determines whether the pane shows

@@ -208,13 +208,28 @@ export function botPackagePlugin(options: Pick<Options,'projectId'|'deployments'
         const snapshot = options.deployments.read(context.req.param('id'))
         if (!snapshot) return context.json({ error: 'BOT deployment unavailable.' }, 404)
         if (context.req.query('revision') !== snapshot.deployment.revision) return context.json({ error: 'BOT deployment changed. Refresh the inventory.' }, 409)
+        const requestedPath = context.req.query('path')
+        const path = requestedPath ?? 'BOT.md'
+        if (!/\.md$/i.test(path) || !Object.hasOwn(snapshot.files, path)) return context.json({ error: 'BOT Markdown unavailable.' }, 404)
         return context.json({ id: snapshot.deployment.id, revision: snapshot.deployment.revision,
-          source: snapshot.deployment.source, prompt: snapshot.files['BOT.md'] })
+          source: snapshot.deployment.source, ...(requestedPath !== undefined ? { path } : {}), prompt: snapshot.files[path] })
       } catch { return context.json({ error: 'BOT deployment unavailable.' }, 409) }
     })
     app.get('/api/bot-package',async context => {
       context.header('Cache-Control','no-store')
       if (!await authorize(context.req.raw)) return context.json({error:'Unauthorized'},401)
+      if (context.req.query('documents') === 'markdown') {
+        const { ids, warning } = options.deployments.diagnosticIds()
+        let partial = !!warning
+        const documents = ids.flatMap(id => {
+          const { value, error } = options.deployments.inspect(id)
+          if (error) partial = true
+          if (!value) return []
+          const paths = Object.keys(value.files).filter(path => /\.md$/i.test(path)).sort()
+          return [{ id, revision: value.deployment.revision, paths }]
+        })
+        return context.json({ projectId: options.projectId, documents, partial })
+      }
       try { return context.json({projectId:options.projectId,deployments:options.deployments.list(),pending:[...options.pending].map(([revision,facts])=>({revision,facts}))}) }
       catch { return context.json({error:'BOT deployment unavailable; active content was not replaced.'},409) }
     })
