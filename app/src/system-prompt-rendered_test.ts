@@ -15,7 +15,7 @@ import { createServer } from 'vite'
 test('system prompt treats HTML as text without losing the tail or generated formatting', { timeout: 90_000 }, async t => {
   const source = readFileSync(new URL('./components/SystemPromptCard.vue', import.meta.url), 'utf8')
   const rendering = source.slice(source.indexOf('// Prompt HTML'), source.indexOf('const props ='))
-    + source.slice(source.indexOf('function preprocessCustomXml'), source.indexOf('const rendered ='))
+    + source.slice(source.indexOf('function preprocessCustomXml'), source.indexOf('const validatedSections ='))
   const js = ts.transpileModule(rendering, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const script = `import { Marked } from '/node_modules/marked/lib/marked.esm.js';
 import DOMPurify from '/node_modules/dompurify/dist/purify.es.mjs';

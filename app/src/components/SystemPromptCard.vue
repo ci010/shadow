@@ -32,17 +32,33 @@
       <div v-if="!prompt && emptyMessage" class="prompt-empty flex-1 flex items-center justify-center text-ink/40 text-sm px-4">
         {{ emptyMessage }}
       </div>
-      <div v-else-if="prompt" :class="embedded ? 'prompt-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
-        <pre v-if="raw" class="system-prompt-raw">{{ prompt }}</pre>
+      <div v-if="searchable && prompt" class="context-search" role="search" :aria-label="t('System prompt')">
+        <label class="context-search-input">
+          <span class="i-lucide-search" aria-hidden="true" />
+          <input v-model="query" type="search" :aria-label="t('Search this preview')" :placeholder="t('Search this preview')" autocomplete="off" @keydown="searchKeydown" />
+        </label>
+        <span class="context-search-status" role="status">{{ !query.trim() ? '' : search.count ? t('Match {current} of {total}', { current: formatNumber(activeHit + 1), total: formatNumber(search.count) }) : t('No matching entries.') }}</span>
+        <div class="context-search-actions">
+          <HoverInfo v-for="direction in directions" :key="direction.step" :text="direction.label()" v-slot="{ triggerProps }">
+            <button v-bind="triggerProps" type="button" class="btn btn-sm" :aria-label="direction.label()" :disabled="!search.count" @click="moveHit(direction.step)">
+              <span :class="direction.icon" aria-hidden="true" />
+            </button>
+          </HoverInfo>
+        </div>
+      </div>
+      <div v-if="prompt" ref="searchRoot" :class="embedded ? 'prompt-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
+        <pre v-if="raw" class="system-prompt-raw"><template v-for="(part, index) in search.raw" :key="index"><mark v-if="part.hit !== undefined" :data-context-hit="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></pre>
         <div v-else-if="validatedSections.length" class="prompt-sections">
-          <section v-for="(section, index) in validatedSections" :key="index" class="prompt-section">
-            <header>{{ section.name }}</header>
-            <div class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="renderMarkdown(section.content)" />
-          </section>
+          <component :is="searchable ? 'details' : 'section'" v-for="(section, index) in search.sections" :key="index" class="prompt-section" :open="searchable || undefined">
+            <component :is="searchable ? 'summary' : 'header'" class="prompt-section-heading">
+              <template v-for="(part, i) in section.heading" :key="i"><mark v-if="part.hit !== undefined" :data-context-hit="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template>
+            </component>
+            <div class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="section.body" />
+          </component>
         </div>
         <template v-else>
           <p v-if="showProvenance" class="prompt-provenance-note">{{ t('Source metadata unavailable; showing exact prompt without inferred sources.') }}</p>
-          <div class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="rendered" />
+          <div class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="search.body" />
         </template>
       </div>
     </template>
@@ -52,8 +68,10 @@
 <script setup lang="ts">
 import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { createMarkdown } from '../markdown.ts'
-import { t } from '../i18n.ts'
-import { computed } from 'vue'
+import { formatNumber, t } from '../i18n.ts'
+import { computed, ref, watch } from 'vue'
+import { contextPreviewHighlighter } from '../context-preview-search.ts'
+import HoverInfo from './HoverInfo.vue'
 import { promptSections } from '../prompt-sections.ts'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
@@ -86,6 +104,7 @@ const props = withDefaults(defineProps<{
   collapsible?: boolean
   embedded?: boolean
   raw?: boolean
+  searchable?: boolean
 }>(), {
   emptyMessage: '',
   showTokenEstimate: false,
@@ -146,7 +165,60 @@ function renderMarkdown(text: string): string {
 }
 
 const validatedSections = computed(() => promptSections(props.prompt, props.sections))
+const sectionHtml = computed(() => validatedSections.value.map(section => ({
+  heading: section.name, body: renderMarkdown(section.content),
+})))
 const rendered = computed(() => renderMarkdown(props.prompt))
+const query = ref('')
+const activeHit = ref(0)
+const searchRoot = ref<HTMLElement>()
+const directions = [
+  { step: -1, label: () => t('Previous match'), icon: 'i-lucide-chevron-up' },
+  { step: 1, label: () => t('Next match'), icon: 'i-lucide-chevron-down' },
+]
+const search = computed(() => {
+  const term = props.searchable ? query.value.trim() : ''
+  const index = contextPreviewHighlighter(term)
+  const sections = !props.raw ? sectionHtml.value.map(section => ({
+    heading: index.plain(section.heading), body: index.highlight(section.body),
+  })) : []
+  const raw = props.raw ? index.plain(props.prompt) : []
+  const body = props.raw || sections.length ? '' : index.highlight(rendered.value)
+  return { sections, body, raw, count: index.count }
+})
+
+let activeMarks: HTMLElement[] = []
+function revealHit() {
+  for (const mark of activeMarks) mark.classList.remove('context-hit-active')
+  const root = searchRoot.value
+  activeMarks = root && search.value.count
+    ? [...root.querySelectorAll<HTMLElement>(`[data-context-hit="${activeHit.value}"]`)] : []
+  for (const mark of activeMarks) mark.classList.add('context-hit-active')
+  const first = activeMarks[0]
+  if (!first || !root) return
+  for (let parent = first.parentElement; parent && parent !== root; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.open && !parent.firstElementChild?.contains(first)) parent.open = true
+  }
+  first.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+watch(search, () => { activeHit.value = 0; revealHit() }, { flush: 'post' })
+function moveHit(step: number) {
+  const count = search.value.count
+  if (!count) return
+  activeHit.value = (activeHit.value + step + count) % count
+  revealHit()
+}
+function searchKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    moveHit(event.shiftKey ? -1 : 1)
+  } else if (event.key === 'Escape' && query.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    query.value = ''
+  }
+}
 
 </script>
 
@@ -154,7 +226,24 @@ const rendered = computed(() => renderMarkdown(props.prompt))
 .prompt-sections { display: grid; gap: 16px; }
 .prompt-section { padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border-soft); overflow-wrap: anywhere; min-width: 0; }
 .prompt-section:nth-child(even) { background: var(--c-bg-muted); }
-.prompt-section>header { font-size: 12px; font-weight: 600; color: var(--c-text-secondary); margin-bottom: 16px; }
+.prompt-section-heading { font-size: 12px; font-weight: 600; color: var(--c-text-secondary); }
+.prompt-section-heading + .system-prompt-content { margin-top: 16px; }
+summary.prompt-section-heading { cursor: pointer; }
+.context-search { position: sticky; top: var(--definition-tabs-height, 0px); z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; margin-bottom: 8px; background: var(--c-bg-card); border-bottom: 1px solid var(--c-border); }
+.context-search-input { display: flex; align-items: center; gap: 8px; flex: 1 1 10rem; min-width: 0; max-width: 19rem; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); padding: 0 8px; background: var(--c-bg-input); color: var(--c-text-secondary); }
+.context-search-input:focus-within { outline: 2px solid var(--c-primary); outline-offset: 1px; }
+.context-search-input input { min-width: 0; width: 100%; min-height: 32px; border: 0; outline: 0; background: transparent; color: var(--c-text); font-size: 13px; }
+.context-search-input input::placeholder { color: var(--c-text-muted); }
+.context-search-status { font-size: 12px; color: var(--c-text-secondary); font-variant-numeric: tabular-nums; }
+.context-search-actions { display: flex; gap: 4px; }
+.context-search-actions button { min-width: 32px; min-height: 32px; }
+@container agent-browser (max-width: 700px) {
+  .context-search-input input, .context-search-actions button { min-height: 44px; }
+  .context-search-input input { font-size: 16px; }
+  .context-search-actions button { min-width: 44px; }
+}
+:deep(mark[data-context-hit]) { background: var(--c-warn-bg); color: var(--c-text); scroll-margin-block-start: calc(var(--definition-tabs-height, 0px) + 100px); }
+:deep(mark.context-hit-active) { background: var(--c-selection-bg); color: var(--c-text); outline: 1px solid var(--c-primary); }
 .prompt-provenance-note { color: var(--c-text-secondary); font-size: 12px; margin-bottom: 16px; }
 .card-collapsed {
   flex: 0 0 auto !important;

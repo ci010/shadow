@@ -49,7 +49,7 @@
               </template>
               <template v-else>
                 <p v-if="inspection.prompt" class="prompt-estimate">{{ t('Approx.') }} {{ formatNumber(Math.round(inspection.prompt.length / 4)) }} {{ t('tokens') }}</p>
-                <SystemPromptCard :key="inspection.key" :prompt="inspection.prompt" :sections="inspection.sections" embedded :raw="rawPrompt" empty-message="No system prompt." />
+                <SystemPromptCard :key="inspection.key" :prompt="inspection.prompt" :sections="inspection.sections" embedded :raw="rawPrompt" :searchable="searchPrompt" empty-message="No system prompt." />
               </template>
             </template>
             <slot name="inspection-footer" />
@@ -73,7 +73,7 @@ const props = defineProps<{
   title: string; description?: string; label: string
   tabs: readonly { id: View; label: string }[]
   source?: string; sourceInitiallyRaw?: boolean; busy?: boolean
-  inspectionIdentity?: string; retainPromptFormat?: boolean
+  inspectionIdentity?: string; retainPromptFormat?: boolean; searchPrompt?: boolean
   inspection?: { key: string; tools: ToolDef[]; prompt: string; sections?: PromptSection[]; copyDisabled?: boolean }
 }>()
 const activeTab = defineModel<View>({ required: true })
@@ -81,6 +81,14 @@ const id = `definition-${useId()}`
 const scroller = ref<HTMLElement>()
 const heading = ref<HTMLElement>()
 const tablist = ref<HTMLElement>()
+watch(tablist, (element, _, cleanup) => {
+  if (!element || !props.searchPrompt) return
+  const update = () => scroller.value?.style.setProperty('--definition-tabs-height', `${element.offsetHeight}px`)
+  const observer = new ResizeObserver(update)
+  observer.observe(element)
+  update()
+  cleanup(() => observer.disconnect())
+}, { flush: 'post' })
 const sourceRaw = ref(!!props.sourceInitiallyRaw)
 const rawPrompt = ref(false)
 const toolQuery = ref('')
