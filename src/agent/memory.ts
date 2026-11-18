@@ -138,6 +138,7 @@ export class MemoryStore {
       maxChars?: number
       currentInitiative?: string
       initiativeOf?: (sessionId: string) => string | undefined
+      onRecall?: (entry: string) => void
       since?: string
     } = {},
   ): Promise<string> {
@@ -213,7 +214,9 @@ export class MemoryStore {
       output = render()
     }
     // An unusually small requested budget cannot even fit the honest omission notice.
-    return output.length <= budget ? output : ''
+    if (output.length > budget) return ''
+    for (const entry of [...shownOwn, ...shownRelated]) opts.onRecall?.(`events/${date}.jsonl#${entry.detailLine}`)
+    return output
   }
 
   // ── Combined context for the system prompt ────────────────────────────

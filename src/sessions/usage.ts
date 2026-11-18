@@ -1,3 +1,4 @@
+import { measureLogicalRequest, requestMeter } from '../providers/request-meter.ts'
 import { randomUUID } from 'node:crypto'
 import type { LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
@@ -73,19 +74,26 @@ export function usageProvider(
     ...(provider.listModelInfos ? { listModelInfos: () => provider.listModelInfos!() } : {}),
     async chat(...args) {
       const destination = owner()
-      const started = performance.now()
-      const record = (usage: LLMResponseUsage | null) => store.appendRawEvents(destination.physicalId, [{
+      const meter = requestMeter()
+      let last: (typeof meter.attempts)[number] | undefined
+      const record = (usage: LLMResponseUsage | null, outcome: 'success' | 'failure' | 'cancelled', toolOnly = false) => store.appendRawEvents(destination.physicalId, [{
         type: 'model_usage', id: randomUUID(), sessionId: destination.sessionId,
-        timestamp: new Date().toISOString(), model: args[2]?.model, usage, durationMs: Math.max(0, performance.now() - started),
+        timestamp: new Date().toISOString(), model: args[2]?.model, usage, outcome, durationMs: performance.now() - meter.started,
+        firstDispatchMs: meter.firstDispatchMs, queueMs: meter.queueMs, attempts: meter.attempts.length ? meter.attempts : undefined,
+        textObservation: toolOnly ? 'tool_only' : last?.firstTextMs !== undefined ? 'stream_text'
+          : last?.mode === 'stream' ? 'stream_no_text' : last?.mode === 'nonstream' ? 'nonstream' : 'unknown',
+        firstTextMs: outcome === 'success' && !toolOnly ? last?.firstTextMs : undefined,
       }])
       let response
-      try { response = await provider.chat(...args) }
+      try { response = await measureLogicalRequest(meter, () => provider.chat(...args)) }
       catch (cause) {
-        await record(null)
+        last = meter.attempts.at(-1)
+        await record(null, args[2]?.signal?.aborted || last?.outcome === 'cancelled' ? 'cancelled' : 'failure')
         throw cause
       }
       const usage = parseTokenUsage(response.usage)
-      await record(usage)
+      last = meter.attempts.at(-1)
+      await record(usage, response.usage !== undefined && !usage ? 'failure' : 'success', !response.content?.trim() && response.toolCalls.length > 0)
       if (response.usage !== undefined && !usage) throw new Error('The model returned invalid token usage.')
       return response
     },

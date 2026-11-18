@@ -1,3 +1,4 @@
+import { observeResponseMode, observeStreamText } from './request-meter.ts'
 import { httpFailure, safeProviderCode } from './http-failure.ts'
 import { prepareRequestBody } from './request-body.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
@@ -304,6 +305,7 @@ async function streamResponse(response: Response, signal?: AbortSignal): Promise
         if (!object(part)) invalid('invalid text content part')
         const value = type.endsWith('.delta') ? event.delta : event[field]
         if (typeof value !== 'string') invalid('invalid text delta')
+        if (type === 'response.output_text.delta' || type === 'response.refusal.delta') observeStreamText(value)
         part[field] = type.endsWith('.delta') ? String(part[field] ?? '') + value : value
       }
     }
@@ -416,8 +418,10 @@ export async function openaiResponses(params: {
     let result: unknown
     try {
       if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+        observeResponseMode('stream')
         result = await streamResponse(response, params.signal)
       } else {
+        observeResponseMode('nonstream')
         let text = ''
         for await (const chunk of chunks(response, params.signal)) text += chunk
         result = parseJson(text)

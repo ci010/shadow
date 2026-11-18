@@ -12,6 +12,7 @@ import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 export function memoryProvider(
   memory: MemoryStore,
   initiativeOf: (sessionId: string) => string | undefined,
+  recall?: (entry: string) => void,
 ): SystemPromptProvider {
   return {
     name: 'memory',
@@ -19,10 +20,12 @@ export function memoryProvider(
       // Long-term keyword index is main-agent-only (sub-agents skip it).
       const isMain = ['general', 'general-legacy', 'general-v2'].includes(ctx.agent.name)
       const keywords = isMain ? await memory.readKeywords() : ''
+      const recalledLogs: string[] = []
       const logs = await memory.readLogs(ctx.sessionId, {
         currentInitiative: ctx.initiativeId,
         initiativeOf,
         since: ctx.contextResetAt,
+        onRecall: ctx.runtimePrompt && recall ? entry => recalledLogs.push(entry) : undefined,
       })
       const workingSet = await memory.readWorkingSet(ctx.sessionId, 50, ctx.contextResetAt)
 
@@ -34,6 +37,7 @@ export function memoryProvider(
         reference('Previously touched files', workingSet),
       ].filter(Boolean)
       if (!sections.length) return null
+      for (const entry of recalledLogs) recall?.(entry)
       if (ctx.agent.name === 'general-v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session') {
         return [
           '# Historical reference',

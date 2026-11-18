@@ -210,3 +210,17 @@ test('general-v2 Session shortens the memory introduction without changing the r
   assert.doesNotMatch(concise, /Source scope:|explicit supersession/)
   assert.match(legacy, /Source scope: session "web:fixture"/)
 })
+
+test('automatic recall counts only log entries selected for a runtime prompt, not previews or indexes', async () => {
+  await withTempWorkspace(async workspace => {
+    await seedEvent(workspace, 'discord:reference')
+    const recalled: string[] = []
+    const provider = memoryProvider(new MemoryStore(workspace), () => undefined, entry => recalled.push(entry))
+    const context = ctx('discord:reference', agent('general'))
+    assert.match((await provider.getPromptSection(context))!, /Recent Logs/)
+    assert.deepEqual(recalled, [])
+    assert.match((await provider.getPromptSection({ ...context, runtimePrompt: true }))!, /Recent Logs/)
+    assert.equal(recalled.length, 1)
+    assert.match(recalled[0]!, /^events\/\d{4}-\d{2}-\d{2}\.jsonl#1$/)
+  })
+})

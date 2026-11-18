@@ -326,7 +326,7 @@ export async function startProjectHost(
   otelPlugin(hostOtelStore)(hostDiagnostics)
   app.route('/host', hostDiagnostics)
   registerProjectGateway(app, {
-    catalog, start, clientAddresses,
+    catalog, start, clientAddresses, authorizeUsage: authorize,
     remove: async id => {
       if (deletions.has(id)) throw new FolderError('project_busy', 'Project deletion is already running.', 409)
       deletions.add(id)

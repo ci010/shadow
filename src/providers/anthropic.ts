@@ -1,3 +1,4 @@
+import { observeResponseMode } from './request-meter.ts'
 import { httpFailure } from './http-failure.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
 import { providerTransportFailure } from './provider.ts'
@@ -136,6 +137,7 @@ export class AnthropicProvider implements LLMProvider {
         phase = 'response'
         if (!res.ok) throw await httpFailure(res, this.name, model, options.signal)
 
+        observeResponseMode('nonstream')
         const json = (await res.json()) as any
 
         let content: string | null = null

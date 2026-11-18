@@ -162,3 +162,40 @@ test('normalized Project organization URL reaches organization once; legacy doub
     assert.match(reached.headers.get('X-Correlation-ID') ?? '', /^[0-9a-f-]{36}$/)
   })
 })
+
+
+test('global usage merges only authorized Project projections and labels missing runtime', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'home'))
+    await catalog.init()
+    const restricted = await catalog.create('Restricted')
+    const failed = await catalog.create('Unavailable')
+    const target = new Hono()
+    const metrics = { calls: 1, tokens: 10, unknownTokenCalls: 0, costs: [], unknownCostCalls: 1, durationMs: null, unknownDurationCalls: 1 }
+    let calls = 0
+    target.get('/api/project/usage', c => {
+      calls++
+      assert.equal(c.req.header('authorization'), 'Bearer usage')
+      return c.json({ projectId: 'default', asOf: '2026-03-01T04:05:06Z', timeZone: 'UTC', coverage: 'complete',
+        total: metrics, today: metrics, past7Days: metrics, month: metrics, daily: [], untrackedSessions: 0, undatedCalls: 0, scanLimitReached: false })
+    })
+    const denied = new Hono()
+    denied.get('/api/project/usage', c => c.json({ error: 'unauthorized' }, 403))
+    const app = new Hono()
+    registerProjectGateway(app, {
+      catalog, lookup: id => id === failed.id ? undefined : { app: id === restricted.id ? denied : target, run: callback => callback() },
+      start: async () => {}, remove: async () => {}, status: () => ({ state: 'ready' }), clientAddresses: new GatewayClientAddressRegistry(),
+      authorizeUsage: async request => request.headers.get('authorization') === 'Bearer usage',
+    })
+    assert.equal((await app.request('/api/usage')).status, 401)
+    assert.equal(calls, 0)
+    const response = await app.request('/api/usage', { headers: { authorization: 'Bearer usage' } })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    const data = await response.json()
+    assert.equal(data.aggregate.coverage, 'partial')
+    assert.equal(data.aggregate.total.tokens, 10)
+    assert.equal(data.rows.find((row: { project: { id: string } }) => row.project.id === failed.id).usage, null)
+    assert.ok(!data.rows.some((row: { project: { id: string } }) => row.project.id === restricted.id))
+  })
+})

@@ -5,7 +5,7 @@ import type { AutomationProfileService } from '../cron/profile.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import type { VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
 /** Aggregate-only Project metadata. Discovery never scans event logs. */
-export function createStatsHandler(sessions: SessionManager, topics: () => TopicService, profiles: SessionProfileService, automations: AutomationProfileService): { read: VirtualFsHandler; list: VirtualFsListHandler } {
+export function createStatsHandler(sessions: SessionManager, topics: () => TopicService, profiles: SessionProfileService, automations: AutomationProfileService, indexed?: { memoryRecall(): unknown; modelRequests(): unknown }): { read: VirtualFsHandler; list: VirtualFsListHandler } {
   const authorize = (context: Parameters<VirtualFsHandler>[1]) => {
     topics().assertActor(context.projectId, context.sessionId)
     if (context.projectId !== profiles.projectId) throw new Error('Stats belong to the current Project.')
@@ -15,13 +15,25 @@ export function createStatsHandler(sessions: SessionManager, topics: () => Topic
     const rows = (await sessions.listHistoryStates()).filter(row => row.projectId === profiles.projectId)
     const ids = new Set(await automations.featureIds())
     for (const row of rows) { const state = row; const automation = state && resolveAutomationSession(state); if (automation) ids.add(automation.jobId) }
-    return [{ name: 'project', content: 'Current Project aggregate usage: rolling 24h and total.' }, ...rows.map(row => ({ name: `sessions/${encodeURIComponent(row.sessionId)}`, content: 'Logical conversation usage: own and including descendants, rolling 24h and total.' })), ...[...ids].map(id => ({ name: `automations/${encodeURIComponent(id)}`, content: 'Automation feature aggregate, rolling 24h.' }))]
+    return [{ name: 'usage', content: 'Calendar usage and first streamed answer text latency.' }, { name: 'project', content: 'Current Project aggregate usage: rolling 24h and total.' }, ...rows.map(row => ({ name: `sessions/${encodeURIComponent(row.sessionId)}`, content: 'Logical conversation usage: own and including descendants, rolling 24h and total.' })), ...[...ids].map(id => ({ name: `automations/${encodeURIComponent(id)}`, content: 'Automation feature aggregate, rolling 24h.' }))]
   }
   return {
-    list: (context) => { authorize(context); return entries() },
+    list: async (context) => {
+      authorize(context)
+      const rows = await entries()
+      if (indexed) rows.push({ name: 'model-requests', content: 'Logical model requests, observed attempts and latency samples.' })
+      if (context.admin && indexed) rows.push({ name: 'memory-recall', content: 'Top successful Memory reads, split by source.' })
+      return rows
+    },
     read: async (path, context) => {
       authorize(context)
-      if (!path) return 'On-demand aggregate statistics. Read v:stats/project, v:stats/sessions/<URL-encoded logical ID>, or v:stats/automations/<URL-encoded feature ID>. Search lists metadata only; read computes bounded statistics.\n' + (await entries()).map(entry => `v:stats/${entry.name}`).join('\n')
+      if (!path) return (indexed ? 'Calendar usage: v:stats/usage; measured request metrics: v:stats/model-requests.' + (context.admin ? ' Memory recall: v:stats/memory-recall.' : '') + '\n' : '') + 'On-demand aggregate statistics. Read v:stats/project, v:stats/sessions/<URL-encoded logical ID>, or v:stats/automations/<URL-encoded feature ID>. Search lists metadata only; read computes bounded statistics.\n' + (await entries()).map(entry => `v:stats/${entry.name}`).join('\n')
+      if (path === 'model-requests' && indexed) return JSON.stringify(indexed.modelRequests(), null, 2)
+      if (path === 'memory-recall') {
+        if (!context.admin || !indexed) throw new Error('Memory recall statistics require administrator access.')
+        return JSON.stringify({ limit: 100, rows: indexed.memoryRecall() }, null, 2)
+      }
+      if (path === 'usage') return JSON.stringify(await sessions.getProjectUsage(context.signal), null, 2)
       if (path === 'project') return JSON.stringify(await profiles.project(context.signal), null, 2)
       const match = /^(sessions|automations)\/([^/]+)$/.exec(path)
       if (!match) throw new Error('Invalid stats path.')

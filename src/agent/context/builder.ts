@@ -14,6 +14,8 @@ import type { ChannelAddress } from '../../bus/events.ts'
  * fields, not per-message execution state.
  */
 export interface SessionPromptContext {
+  /** Runtime prompt composition, never diagnostic or role preview. */
+  runtimePrompt?: true
   projectId?: string
   channelAddress?: ChannelAddress
   mode?: ExecutionMode

@@ -1,3 +1,4 @@
+import { measureProviderAttempt, observeRetryWait } from './request-meter.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHmac, randomBytes } from 'node:crypto'
@@ -65,6 +66,12 @@ export function transportBackoffMs(attempt: number, random: () => number = Math.
 export async function withProviderRetry<T>(request: () => Promise<T>, signal?: AbortSignal, options: ProviderRetryOptions = {}): Promise<T> {
   const now = options.clock ?? Date.now
   const sleep = options.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }))
+  observeRetryWait(0)
+  const measureWait = async (ms: number) => {
+    const started = performance.now()
+    try { await sleep(ms, signal) }
+    finally { observeRetryWait(performance.now() - started) }
+  }
   const started = now()
   let httpAttempts = 0
   let timeoutAttempts = 0
@@ -89,7 +96,7 @@ export async function withProviderRetry<T>(request: () => Promise<T>, signal?: A
       console.info('[provider.rate-limit.wait]', state)
       waiting.getStore()?.(state)
     }
-    try { await sleep(ms, signal); signal?.throwIfAborted() }
+    try { await measureWait(ms); signal?.throwIfAborted() }
     catch (error) { signal?.throwIfAborted(); throw error }
     finally { if (rateLimit) waiting.getStore()?.(undefined) }
   }
@@ -105,7 +112,7 @@ export async function withProviderRetry<T>(request: () => Promise<T>, signal?: A
     try {
       httpAttempts++
       spanAttributes({ 'llm.request.http_attempts': httpAttempts })
-      const result = await request()
+      const result = await measureProviderAttempt(request, signal)
       timeoutStats(false, true)
       if (timeoutAttempts > 0) trace.getActiveSpan()?.addEvent('llm.request.image_timeout_recovered', {
         http_attempts: httpAttempts, attempts: timeoutAttempts, retries: timeoutRetries,
@@ -137,7 +144,7 @@ export async function withProviderRetry<T>(request: () => Promise<T>, signal?: A
         trace.getActiveSpan()?.addEvent('llm.request.image_timeout_retry', { ...attributes, retries: timeoutRetries, delay_ms: backoff })
         // Independent, two-wait budget: real 408s may each take over a minute.
         // Do not relax the existing 429/preconnection elapsed-time limit.
-        await sleep(backoff, signal)
+        await measureWait(backoff)
         signal?.throwIfAborted()
         continue
       }

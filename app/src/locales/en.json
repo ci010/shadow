@@ -3834,6 +3834,8 @@
   "UTC dates · estimated costs · cumulative model call time": "UTC dates · estimated costs · cumulative model call time",
   "Some usage is unavailable or partial; known subtotals may be lower. See data completeness.": "Some usage is unavailable or partial; known subtotals may be lower. See data completeness.",
   "Trend window is independent of the summary period · UTC": "Trend window is independent of the summary period · UTC",
+  "Historical indexing is incomplete; totals may grow as data becomes available.": "Historical indexing is incomplete; totals may grow as data becomes available.",
+  "First streamed text (all time): P50 {p50}, P95 {p95} ({count} samples)": "First streamed text (all time): P50 {p50}, P95 {p95} ({count} samples)",
   "Data completeness": "Data completeness",
   "Selected summary period: {period}": "Selected summary period: {period}",
   "Missing token telemetry: {count} calls": "Missing token telemetry: {count} calls",

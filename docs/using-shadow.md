@@ -824,8 +824,8 @@ statistical definitions below. Both are collapsed initially.
   so this is **not elapsed Project work time**. New calls record duration in both
   JSONL and SQLite; older events without duration remain unavailable/partial.
 - Values are known subtotals, not reconstructed historical bills. Historical
-  sessions without source tracking, undated events and scans capped at 100,000
-  source records are disclosed. Capped aggregates are lower bounds; calls without
+  sessions without source tracking, undated events and incomplete background
+  indexing are disclosed. Partial aggregates may be lower bounds; calls without
   usage or duration remain unknown. Inactive dates with no recorded calls show
   no known token/cost/time value, rather than implying complete telemetry.
 
@@ -833,7 +833,8 @@ The Project-bound `GET /api/project/usage` endpoint requires the same context-re
 permission as session profiles, rejects requests when authorization is unavailable,
 forwards request cancellation, and returns `Cache-Control: no-store`. It accepts no
 Project selector or pricing overrides. The gateway's existing Project route selects
-the runtime; statistics are computed from that runtime's SessionManager/store.
+the runtime; statistics come from that Project’s usage index. The all-Projects
+view uses the context-authorized host endpoint `GET /api/usage`.
 
 ### Daily usage pagination
 
@@ -846,8 +847,9 @@ Project switching clear the page. Page responses include total dates, hasMore an
 snapshot asOf; no HTTP caching is permitted. Valid pages are decimal integers
 1–100000; beyond-end pages are empty and have hasMore=false.
 
-Aggregation still scans up to 100,000 source-log records, explicitly reporting
-truncation. An in-memory snapshot per store/Project (up to eight Projects, 60-second
-TTL) avoids rescanning source logs on every page. Refresh rebuilds it; expired
-snapshots can shift pages as new records arrive. No persistent index/migration is
-introduced. Recent zero-activity dates and older active dates comprise daily history.
+Usage reads never scan session logs. Background indexing reports partial coverage
+until complete. An in-memory snapshot (60-second TTL) keeps daily pagination
+stable between adjacent reads; after expiry or refresh, new indexed records can
+shift pages. Recent zero-activity dates and older active dates comprise daily
+history. See [Project usage and recall](project-usage.md) for indexing and timing
+semantics.

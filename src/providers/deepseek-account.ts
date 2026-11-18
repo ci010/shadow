@@ -1,3 +1,4 @@
+import { measureProviderAttempt, observeResponseMode, observeStreamText } from './request-meter.ts'
 import type { ChatMessage, LLMProvider, LLMProviderOptions, LLMResponse, ToolCall } from './provider.ts'
 import { ProviderHttpError } from './provider.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
@@ -97,6 +98,10 @@ export class DeepSeekAccountProvider implements LLMProvider {
     const grant = this.auth.resolve(endpoint)
     const signal = AbortSignal.any([grant.signal, ...(options.signal ? [options.signal] : []), AbortSignal.timeout(300_000)])
     signal.throwIfAborted()
+    return measureProviderAttempt(() => this.send(endpoint, grant, signal, messages, tools, options), signal)
+  }
+
+  private async send(endpoint: string, grant: { token: string }, signal: AbortSignal, messages: ChatMessage[], tools: ToolDefinition[], options: LLMProviderOptions): Promise<LLMResponse> {
     const response = await this.request(endpoint, {
       method: 'POST', headers: { 'content-type': 'application/json', 'accept': 'text/event-stream', 'anthropic-version': '2023-06-01', 'x-dsh-auth-token': grant.token },
       redirect: 'error', body: JSON.stringify(deepseekAccountRequest(messages, tools, options)), signal,
@@ -107,6 +112,7 @@ export class DeepSeekAccountProvider implements LLMProvider {
       // Do not surface arbitrary server text, which may contain secrets.
       throw new ProviderHttpError(response.status, 'DeepSeek Account request rejected', response.status === 401 ? 'ACCOUNT_TOKEN_INVALID' : undefined, { provider: this.name })
     }
+    observeResponseMode('stream')
     if (!response.body) throw new Error('DeepSeek Account response body missing')
     const blocks = new Map<number, { type: string; text: string; id?: string; name?: string; input?: Record<string, unknown>; json: string; stopped: boolean }>()
     const result: LLMResponse = { content: null, toolCalls: [], model: options.model }
@@ -125,12 +131,13 @@ export class DeepSeekAccountProvider implements LLMProvider {
         if (!started || !Number.isSafeInteger(event.index) || event.index < 0 || blocks.has(event.index) || blocks.size >= 1024) throw new Error('Malformed DeepSeek Account block start')
         const block = event.content_block
         if (!block || !['text', 'thinking', 'tool_use'].includes(block.type) || (block.type === 'text' && typeof block.text !== 'string') || (block.type === 'thinking' && typeof block.thinking !== 'string')) throw new Error('Unsupported DeepSeek Account content block')
+        if (block.type === 'text') observeStreamText(block.text)
         blocks.set(event.index, { type: block.type, text: block.text ?? block.thinking ?? '', id: block.id, name: block.name, input: block.input, json: '', stopped: false })
       } else if (event.type === 'content_block_delta') {
         const block = blocks.get(event.index)
         if (!block || block.stopped) throw new Error('Malformed DeepSeek Account block delta')
         const delta = event.delta
-        if (delta?.type === 'text_delta' && block.type === 'text' && typeof delta.text === 'string') block.text += delta.text
+        if (delta?.type === 'text_delta' && block.type === 'text' && typeof delta.text === 'string') { block.text += delta.text; observeStreamText(delta.text) }
         else if (delta?.type === 'thinking_delta' && block.type === 'thinking' && typeof delta.thinking === 'string') block.text += delta.thinking
         else if (delta?.type === 'input_json_delta' && block.type === 'tool_use' && typeof delta.partial_json === 'string') block.json += delta.partial_json
         else if (delta?.type !== 'signature_delta') throw new Error('Malformed DeepSeek Account delta')

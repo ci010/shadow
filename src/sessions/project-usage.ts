@@ -1,3 +1,4 @@
+import { statsIndex, toolNames } from './stats-index.ts'
 import type { ProjectUsageActivity, ProjectUsage, ProjectUsageMetrics } from '../projects/usage-contract.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { physicalSessionId } from './session-identity.ts'
@@ -10,33 +11,13 @@ function emptyActivity(): ProjectUsageActivity {
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
-function argumentsObject(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== 'string') return object(value)
-  try { return object(JSON.parse(value)) } catch { return undefined }
-}
-function toolNames(name: unknown, args: unknown): string[] {
-  if (typeof name !== 'string' || !name.trim()) return []
-  const parameters = argumentsObject(args)
-  if (name === 'invoke_tool' || name === 'functions.invoke_tool') {
-    return typeof parameters?.name === 'string' && parameters.name.trim() ? [parameters.name] : []
-  }
-  // Wrappers are not tools themselves. Resolve each dispatched target, including
-  // dynamic invoke_tool targets, rather than attributing calls to the wrapper.
-  if (name === 'multi_tool_use.parallel' || name === 'multi_tool_use') {
-    return Array.isArray(parameters?.tool_uses) ? parameters.tool_uses.flatMap(value => {
-      const call = object(value)
-      return call ? toolNames(call.recipient_name, call.parameters) : []
-    }) : []
-  }
-  return [name.startsWith('functions.') ? name.slice('functions.'.length) : name]
-}
-function addActivity(activity: ProjectUsageActivity, kind: 'models' | 'tools', names: string[], time: number, today: number, month: number) {
+function addActivity(activity: ProjectUsageActivity, kind: 'models' | 'tools', names: string[], time: number, today: number, month: number, count = 1) {
   for (const period of ['total', ...(time >= today ? ['today' as const] : []), ...(time >= today - 6 * DAY ? ['past7Days' as const] : []), ...(time >= month ? ['month' as const] : [])] as const) {
     for (const name of names) {
       const entries = activity[period][kind]
       const entry = entries.find(value => value.name === name)
-      if (entry) entry.calls++
-      else entries.push({ name, calls: 1 })
+      if (entry) entry.calls += count
+      else entries.push({ name, calls: count })
     }
   }
 }
@@ -58,6 +39,19 @@ function add(target: ProjectUsageMetrics, record: Record<string, unknown>) {
   if (typeof duration === 'number' && Number.isFinite(duration) && duration >= 0) target.durationMs = (target.durationMs ?? 0) + duration
   else target.unknownDurationCalls++
 }
+function merge(target: ProjectUsageMetrics, value: ProjectUsageMetrics) {
+  target.calls += value.calls
+  if (value.tokens !== null) target.tokens = (target.tokens ?? 0) + value.tokens
+  if (value.durationMs !== null) target.durationMs = (target.durationMs ?? 0) + value.durationMs
+  target.unknownTokenCalls += value.unknownTokenCalls
+  target.unknownCostCalls += value.unknownCostCalls
+  target.unknownDurationCalls += value.unknownDurationCalls
+  for (const cost of value.costs) {
+    const existing = target.costs.find(entry => entry.currency === cost.currency)
+    if (existing) existing.amount += cost.amount
+    else target.costs.push({ ...cost })
+  }
+}
 /** One bounded source-log pass; never sums assistant snapshots or inherited fork history. */
 async function scanProjectUsage(store: SessionStore, states: SessionState[], projectId: string, asOf: number, signal?: AbortSignal): Promise<ProjectUsage> {
   const today = Math.floor(asOf / DAY) * DAY
@@ -67,9 +61,35 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
   // Include zero-activity days in the recent trend; older active days remain available.
   for (let time = today - 30 * DAY; time <= today; time += DAY) daily.set(new Date(time).toISOString().slice(0, 10), empty())
   const seen = new Set<string>(), physical = new Set<string>(), logical = new Set<string>()
+  const stats = statsIndex(store)
   let scanned = 0
   const selected = states.filter(state => state.projectId === projectId && !logical.has(state.sessionId) && !!logical.add(state.sessionId))
-  outer: for (let position = 0; position < selected.length; position++) {
+  if (stats) {
+    const accumulate = (time: number, model: unknown, usage: ProjectUsageMetrics) => {
+      if (typeof model === 'string' && model.trim()) addActivity(result.activity, 'models', [model], time, today, month, usage.calls)
+      merge(result.total, usage)
+      if (time >= today) merge(result.today, usage)
+      if (time >= today - 6 * DAY) merge(result.past7Days, usage)
+      if (time >= month) merge(result.month, usage)
+      const date = new Date(time).toISOString().slice(0, 10)
+      const bucket = daily.get(date) ?? empty()
+      merge(bucket, usage); daily.set(date, bucket)
+    }
+    for (const row of stats.days(today)) { signal?.throwIfAborted(); accumulate(row.day, row.model, row.usage) }
+    for (const record of stats.records(undefined, today)) {
+      signal?.throwIfAborted()
+      const at = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
+      if (!Number.isFinite(at)) { if (record.type === 'model_usage') result.undatedCalls++; continue }
+      if (at >= asOf) continue
+      if (record.type === 'model_usage') {
+        const usage = empty(); add(usage, record); accumulate(at, record.model, usage)
+      }
+    }
+    for (const row of stats.toolsByDay(today, asOf)) { signal?.throwIfAborted(); addActivity(result.activity, 'tools', [row.name], row.day, today, month, row.calls) }
+    const tracked = stats.trackedSessions()
+    result.untrackedSessions = selected.filter(state => !tracked.has(state.sessionId)).length
+    result.firstText = stats.latency(asOf)
+  } else outer: for (let position = 0; position < selected.length; position++) {
     const state = selected[position]!
     let tracked = false
     const calls = new Map<string, { name: unknown; args: unknown }>()
@@ -125,6 +145,7 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
     }
     if (!tracked) result.untrackedSessions++
   }
+  if (stats) result.coverage = stats.complete ? 'complete' : 'partial'
   for (const period of Object.values(result.activity)) {
     for (const entries of [period.models, period.tools]) entries.sort((a, b) => b.calls - a.calls || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   }
