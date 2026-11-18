@@ -31,77 +31,83 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
     props: ['target', 'incoming', 'apiBase', 'projectId'],
     setup: (props, { emit }) => () => Vue.h('button', { 'data-test': 'confirm-delete', onClick: () => emit('deleted', props.target.id) }, 'Confirm stub'),
   })
-  const url = new URL(`./components/${filename}`, import.meta.url)
-  const { descriptor } = parse(readFileSync(url, 'utf8'))
-  const script = compileScript(descriptor, { id: filename, inlineTemplate: true }).content
-  const { outputText } = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
-  const require = createRequire(url)
-  const module = { exports: {} as { default: Vue.Component } }
-  new Function('require', 'module', 'exports', 'document', outputText)((id: string) => {
-    if (id === 'vue') return {
-      ...Vue, vModelText: {}, vModelCheckbox: {}, vModelSelect: {},
-      vShow: {
-        beforeMount: (node: ElementNode, binding: { value: boolean }) => { node.props.hidden = !binding.value },
-        updated: (node: ElementNode, binding: { value: boolean }) => { node.props.hidden = !binding.value },
-      },
-      ...(filename === 'files/FileWorkbench.vue' ? { onMounted() {}, onUnmounted() {} } : {}),
-    }
-    if (id === 'vue-router') return { useRoute: () => route, useRouter: () => ({
-      replace: ({ query }: { query: typeof route.query }) => { route.query = query },
-      back: () => history.push(-1), forward: () => history.push(1), go: (direction: number) => history.push(direction),
-    }) }
-    // Tooltip DOM behavior has its own tests; this in-memory renderer has no DOM.
-    if (id.endsWith('markdown-link-hints')) return { vMarkdownLinkHints: {} }
-    if (id.endsWith('useInstallationContext.ts')) return { useInstallationContext: () => scope }
-    if (id.endsWith('/knowledge-markdown.ts')) return {
-      renderKnowledgeMarkdown: (content: string) => require('marked').marked.parse(content),
-    }
-    if (id.endsWith('/useWorkdirGit.ts')) return { useWorkdirGit: () => ({
-      status: Vue.ref(), loading: Vue.ref(false), error: Vue.ref(''), offline: Vue.ref(false), revision: Vue.ref(0), refresh() {},
-    }) }
-    if (id === '../HoverInfo.vue' || id === './HoverInfo.vue') return { default: Vue.defineComponent({
-      props: ['text'],
-      setup: (_props, { slots }) => () => slots.default?.({ triggerProps: {} }),
-    }) }
-    if (id === '../KnowledgeView.vue') return { default: Vue.defineComponent({
-      props: ['apiBase', 'projectId', 'entryId', 'active', 'sidebarTarget'],
-      emits: ['select', 'catalog'],
-      setup: (props, { emit }) => () => Vue.h('div', { 'data-test': 'knowledge-panel', ...props, onClick: () => emit('select', builtin.id) }),
-    }) }
-    if (id === './FileTreeNode.vue') return { default: Vue.defineComponent({
-      props: ['entry'],
-      setup: props => () => Vue.h('div', { 'data-test': 'file-entry' }, props.entry.name),
-    }) }
-    if (id === './KnowledgeDeleteDialog.vue') return { default: dialogStub }
-    if (id === './KnowledgeGraph.vue') return { default: Vue.defineComponent({
-      setup: (_props, { slots }) => () => Vue.h('div', { 'data-test': 'knowledge-graph' }, slots.tools?.()),
-    }) }
-    if (id === './KnowledgeRepairDialog.vue') return { default: Vue.defineComponent({
-      props: ['preview'],
-      setup: (props, { emit }) => () => Vue.h('button', { 'data-test': 'confirm-repair', onClick: () => emit('applied', props.preview.sourceId) }, 'Confirm repair stub'),
-    }) }
-    if (id === './KnowledgeTree.vue') return { default: Vue.defineComponent({
-      props: ['nodes'], emits: ['select'],
-      setup: (props, { emit }) => () => Vue.h('div', props.nodes.map((root: { id: string; label: string; children: unknown[] }) =>
-        Vue.h('button', { 'data-tree': root.children, onClick: () => emit('select', root.id) }, root.label))),
-    }) }
-    if (id === './SystemPromptCard.vue') return { default: Vue.defineComponent({
-      props: ['prompt', 'raw'], setup: props => () => Vue.h('pre', { 'data-raw': props.raw }, props.prompt),
-    }) }
-    if (id === './ToolsCard.vue') return { default: Vue.defineComponent({
-      props: ['tools'], setup: props => () => Vue.h('div', (props.tools as { name: string }[]).map(tool => tool.name).join(' ')),
-    }) }
-    if (id === '../AgentsTab.vue') return { default: Vue.defineComponent({
-      props: ['apiBase', 'agentName'],
-      setup: props => () => Vue.h('div', { 'data-test': 'agents-browser', ...props }),
-    }) }
-    if (id === '../EditorViewHost.vue') return { default: Vue.defineComponent({
-      props: ['selected'], setup: (props, { slots }) => () => Vue.h('div', { hidden: !props.selected }, slots.default?.()),
-    }) }
-    if (id.endsWith('.vue')) return { default: Vue.defineComponent({ setup: () => () => Vue.h('div') }) }
-    return require(id)
-  }, module, module.exports, filename === 'files/FileWorkbench.vue'
-    ? { getElementById: () => undefined } : Reflect.get(globalThis, 'document'))
+  function loadComponent(filename: string): Vue.Component {
+    const url = new URL(`./components/${filename}`, import.meta.url)
+    const { descriptor } = parse(readFileSync(url, 'utf8'))
+    const script = compileScript(descriptor, { id: filename, inlineTemplate: true }).content
+    const { outputText } = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
+    const require = createRequire(url)
+    const module = { exports: {} as { default: Vue.Component } }
+    new Function('require', 'module', 'exports', 'document', outputText)((id: string) => {
+      if (id === 'vue') return {
+        ...Vue, vModelText: {}, vModelCheckbox: {}, vModelSelect: {},
+        vShow: {
+          beforeMount: (node: ElementNode, binding: { value: boolean }) => { node.props.hidden = !binding.value },
+          updated: (node: ElementNode, binding: { value: boolean }) => { node.props.hidden = !binding.value },
+        },
+        ...(filename === 'files/FileWorkbench.vue' ? { onMounted() {}, onUnmounted() {} } : {}),
+      }
+      if (id === 'vue-router') return { useRoute: () => route, useRouter: () => ({
+        replace: ({ query }: { query: typeof route.query }) => { route.query = query },
+        back: () => history.push(-1), forward: () => history.push(1), go: (direction: number) => history.push(direction),
+      }) }
+      // Tooltip DOM behavior has its own tests; this in-memory renderer has no DOM.
+      if (id.endsWith('markdown-link-hints')) return { vMarkdownLinkHints: {} }
+      if (id.endsWith('useInstallationContext.ts')) return { useInstallationContext: () => scope }
+      if (id.endsWith('/knowledge-markdown.ts')) return {
+        renderKnowledgeMarkdown: (content: string) => require('marked').marked.parse(content),
+      }
+      if (id.endsWith('/useWorkdirGit.ts')) return { useWorkdirGit: () => ({
+        status: Vue.ref(), loading: Vue.ref(false), error: Vue.ref(''), offline: Vue.ref(false), revision: Vue.ref(0), refresh() {},
+      }) }
+      if (id === '../HoverInfo.vue' || id === './HoverInfo.vue') return { default: Vue.defineComponent({
+        props: ['text'],
+        setup: (_props, { slots }) => () => slots.default?.({ triggerProps: {} }),
+      }) }
+      if (id === '../KnowledgeView.vue') return { default: Vue.defineComponent({
+        props: ['apiBase', 'projectId', 'entryId', 'active', 'sidebarTarget'],
+        emits: ['select', 'catalog'],
+        setup: (props, { emit }) => () => Vue.h('div', { 'data-test': 'knowledge-panel', ...props, onClick: () => emit('select', builtin.id) }),
+      }) }
+      if (id === './FileTreeNode.vue') return { default: Vue.defineComponent({
+        props: ['entry'],
+        setup: props => () => Vue.h('div', { 'data-test': 'file-entry' }, props.entry.name),
+      }) }
+      if (id === './KnowledgeDeleteDialog.vue') return { default: dialogStub }
+      if (id === './KnowledgeGraph.vue') return { default: Vue.defineComponent({
+        setup: (_props, { slots }) => () => Vue.h('div', { 'data-test': 'knowledge-graph' }, slots.tools?.()),
+      }) }
+      if (id === './KnowledgeRepairDialog.vue') return { default: Vue.defineComponent({
+        props: ['preview'],
+        setup: (props, { emit }) => () => Vue.h('button', { 'data-test': 'confirm-repair', onClick: () => emit('applied', props.preview.sourceId) }, 'Confirm repair stub'),
+      }) }
+      if (id === './KnowledgeTree.vue') return { default: Vue.defineComponent({
+        props: ['nodes'], emits: ['select'],
+        setup: (props, { emit }) => () => Vue.h('div', props.nodes.map((root: { id: string; label: string; children: unknown[] }) =>
+          Vue.h('button', { 'data-tree': root.children, onClick: () => emit('select', root.id) }, root.label))),
+      }) }
+      if (id === './SystemPromptCard.vue') return { default: Vue.defineComponent({
+        props: ['prompt', 'raw'], setup: props => () => Vue.h('pre', { 'data-raw': props.raw }, props.prompt),
+      }) }
+      if (id === './ToolsCard.vue') return { default: Vue.defineComponent({
+        props: ['tools'], setup: props => () => Vue.h('div', (props.tools as { name: string }[]).map(tool => tool.name).join(' ')),
+      }) }
+      if (id === '../AgentsTab.vue') return { default: Vue.defineComponent({
+        props: ['apiBase', 'agentName'],
+        setup: props => () => Vue.h('div', { 'data-test': 'agents-browser', ...props }),
+      }) }
+      if (id === '../EditorViewHost.vue') return { default: Vue.defineComponent({
+        props: ['selected'], setup: (props, { slots }) => () => Vue.h('div', { hidden: !props.selected }, slots.default?.()),
+      }) }
+      if (id === './DefinitionDetail.vue') return { default: loadComponent('DefinitionDetail.vue') }
+      if (id.endsWith('.vue')) return { default: Vue.defineComponent({ setup: () => () => Vue.h('div') }) }
+      return require(id)
+    }, module, module.exports, filename === 'files/FileWorkbench.vue'
+      ? { getElementById: () => undefined } : Reflect.get(globalThis, 'document'))
+    return module.exports.default
+  }
+  const component = loadComponent(filename)
+  const require = createRequire(import.meta.url)
   const body = element('body')
   const renderer = Vue.createRenderer<ElementNode, ElementNode>({
     createElement: element, createText: text => element('#text', text), createComment: text => element('#comment', text),
@@ -129,7 +135,7 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
   }
   const find = (node: ElementNode, selector: string): ElementNode | undefined =>
     node.props.id === selector.slice(1) ? node : node.children.map(child => find(child, selector)).find(Boolean)
-  const app = renderer.createApp(Vue.defineComponent({ setup: () => () => Vue.h(module.exports.default, props) }))
+  const app = renderer.createApp(Vue.defineComponent({ setup: () => () => Vue.h(component, props) }))
   const pinia = require(fileURLToPath(new URL('./stores/app.ts', import.meta.url))).createResourceStores()
   app.use(pinia)
   app.mount(root)
@@ -797,7 +803,12 @@ test('BOT.md separates source and selected runtime views and reports missing bin
     })
   })
   const view = mount(t, 'BotKnowledgeDocument.vue', { active: true, apiBase: 'http://fixture/projects/a', projectId: 'a', bot: 'help', path: 'BOT.md' })
-  const click = async (label: string) => { (view.button(label).props.onClick as () => void)(); await settle() }
+  const click = async (label: string) => {
+    const tab = view.nodes().find(node => node.props.role === 'tab' && node.children.some(child => child.text.trim() === label))
+    const button = tab ?? view.button(label)
+    ;(button.props.onClick as () => void)()
+    await settle()
+  }
   await settle()
   assert.match(view.text(), /Overview.*Deployment revision/)
   assert.deepEqual(calls, ['help'])

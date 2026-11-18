@@ -50,7 +50,8 @@ async function main() {
   const layout = () => execute(`(() => {
     const browser = document.querySelector('.agent-browser');
     const detail = document.querySelector('.agent-detail');
-    return {overflow:browser.scrollWidth > browser.clientWidth || detail.scrollWidth > detail.clientWidth,
+    const scroller = detail.querySelector('.definition-detail') ?? detail;
+    return {overflow:browser.scrollWidth > browser.clientWidth || scroller.scrollWidth > scroller.clientWidth,
       documentOverflow:document.documentElement.scrollWidth > innerWidth,
       list:document.querySelector('.agent-navigation').getClientRects().length > 0,
       detail:detail.getClientRects().length > 0};
@@ -213,6 +214,42 @@ async function main() {
     await wait(`document.querySelector('.legacy-viewers .tool-def').open`)
     assert.match(await execute(`document.querySelector('.legacy-viewers .tool-def-body').innerText`), /path\*/)
     assert.match(await execute(`document.querySelector('.legacy-viewers .system-prompt-content').innerText`), /Legacy renderer/)
+    await execute(`window.__agentFixture.state.legacy = false`)
+    await wait(`!!document.querySelector('.definition-detail')`)
+    const agentScope = await execute(`document.querySelector('.agent-tabs').getAttributeNames().find(name => name.startsWith('data-v-'))`)
+    assert.match(agentScope, /^data-v-/)
+    const botRequestStart = await execute(`window.__agentFixture.requests.length`)
+    await execute(`window.__agentFixture.state.botPath = 'BOT.md'`)
+    await wait(`document.querySelector('.definition-detail')?.innerText.includes('Deployment revision')`)
+    assert.equal(await execute(`document.querySelector('.agent-tabs').hasAttribute(${JSON.stringify(agentScope)})`), true, 'Both tab bars are rendered by the same Vue SFC')
+    const botKey = (key: string) => execute(`document.querySelector('[role="tab"][aria-selected="true"]').dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)},bubbles:true,cancelable:true}))`)
+    await botKey('ArrowRight')
+    await wait(`document.activeElement.id.endsWith('-tools-tab') && document.querySelectorAll('.tool-def').length === 3`)
+    assert.equal(await execute(`document.getElementById(document.activeElement.getAttribute('aria-controls')).getAttribute('aria-labelledby') === document.activeElement.id`), true)
+    assert.equal(await execute(`document.querySelectorAll('[role="tab"][tabindex="0"]').length`), 1)
+    await input('[aria-label="Search tools"]', 'path')
+    assert.equal(await execute(`document.querySelectorAll('.tool-def').length`), 1)
+    await execute(`document.querySelector('.tool-def summary').click()`)
+    await wait(`document.querySelector('.tool-def').open`)
+    await execute(`document.querySelector('.preview-copy').click()`)
+    await wait(`!!document.querySelector('.copy-feedback')`)
+    assert.equal(JSON.parse(await execute(`window.__agentFixture.clipboard.writes.at(-1)`)).length, 3)
+    await botKey('ArrowRight')
+    await wait(`document.activeElement.id.endsWith('-prompt-tab') && !!document.querySelector('.system-prompt-content h1')`)
+    await execute(`document.querySelector('.prompt-format button[aria-pressed="false"]').click()`)
+    await wait(`document.querySelector('.system-prompt-raw')?.textContent === '# Bot runtime prompt'`)
+    await botKey('End')
+    await wait(`document.activeElement.id.endsWith('-definition-tab') && document.getElementById(document.activeElement.getAttribute('aria-controls'))?.textContent.includes('Authored Bot')`)
+    assert.equal(await execute(`!!document.querySelector('.preview-toolbar')`), false)
+    await execute(`document.querySelector('.prompt-format button').click()`)
+    await wait(`document.querySelector('.system-prompt-raw')?.textContent.includes('id: fixture-bot')`)
+    await botKey('Home')
+    await wait(`document.activeElement.id.endsWith('-overview-tab')`)
+    assert.equal(await execute(`document.querySelector('.definition-detail').scrollWidth <= document.querySelector('.definition-detail').clientWidth`), true)
+    assert.equal(await execute(`window.__agentFixture.requests.slice(${botRequestStart}).every(request => new URL(request.url).pathname.includes('/api/bot-package'))`), true, 'Bot inspection never requests Agent previews')
+    await execute(`window.__agentFixture.state.botPath = 'docs/README.md'`)
+    await wait(`document.querySelector('.bot-document')?.innerText.includes('Ordinary Bot document')`)
+    assert.equal(await execute(`!!document.querySelector('.definition-detail, [role="tablist"]')`), false)
     console.log('AGENT_BROWSER_OK')
   } finally { window.destroy(); app.quit() }
 }
