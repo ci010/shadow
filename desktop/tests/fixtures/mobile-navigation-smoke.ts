@@ -122,6 +122,19 @@ async function main() {
       await wait(`!!${topTab('other', 'Second investigation')}`)
       assert.equal(await execute(`document.querySelector('${group('work')}').getAttribute('aria-label')`), 'Workspace')
       assert.equal(await execute(`document.querySelector('${group('other')}').getAttribute('aria-label')`), 'Other project')
+      for (const [selector, name] of [[group('work'), 'Workspace'], [group('other'), 'Other project'], ['.global-top-tab-group', 'Global']]) {
+        assert.equal(await execute(`document.querySelector('${selector}').firstElementChild.textContent.trim()`), name)
+        assert.ok(await execute(`(() => {
+          const marker = document.querySelector('${selector}').firstElementChild
+          const tab = marker.nextElementSibling
+          const style = getComputedStyle(marker)
+          const chip = marker.getBoundingClientRect()
+          const next = tab.getBoundingClientRect()
+          return marker.matches('.top-tab-group-marker[aria-hidden="true"]') && parseFloat(style.borderRadius) > 0
+            && style.borderLeftWidth === '0px' && style.borderBottomWidth === '0px'
+            && chip.width > 0 && chip.right <= next.left && chip.height < next.height
+        })()`), `${name} has a compact inline marker before its tabs`)
+      }
       assert.ok(await execute(`!!${topTab('work', 'First investigation')}`), 'The original chat stays in its own group')
       assert.ok(await execute(`!${topTab('work', 'Workflows')}`), 'The Workflow never moves to the previously active project')
       await execute(`document.querySelector('.global-top-tab-group button').click()`)
