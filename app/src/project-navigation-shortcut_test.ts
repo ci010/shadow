@@ -29,8 +29,15 @@ test('workspace navigation targets the active Project and ignores overlays and i
   assert.deepEqual(knowledge, ['active'])
   handler({ ...key, key: 'j' })
   assert.deepEqual(routes, [{ name: 'project-workflows', params: { projectId: 'active' }, query: {} }])
-  overlay = true; handler(key)
-  overlay = false; active.value = false; handler(key)
-  active.value = true; visible.value = false; handler(key)
-  assert.equal(prevented, 2)
+  const board = { ...key, key: 'b' }
+  handler(board)
+  assert.deepEqual(routes.at(-1), { name: 'project-board', params: { projectId: 'active' } })
+  handler({ ...board, ctrlKey: false, metaKey: true })
+  for (const selector of ['input', 'textarea', '[contenteditable]', '.xterm']) {
+    handler({ ...board, target: { closest: (selectors: string) => selectors.split(', ').includes(selector) ? {} : null } })
+  }
+  overlay = true; handler(board)
+  overlay = false; active.value = false; handler(board)
+  active.value = true; visible.value = false; handler(board)
+  assert.equal(prevented, 3)
 })
