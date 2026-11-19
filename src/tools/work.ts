@@ -17,6 +17,7 @@ export function workReceipt(record: WorkRecord) {
     title: record.workflow?.title, status: record.workflow?.status,
     parentKey: record.workflow?.parentKey, assignee: record.workflow?.assignee,
     assignmentRevision: record.workflow?.assignmentRevision,
+    automaticDispatch: record.workflow?.automaticDispatch,
     impactPending: !!record.notes?.attention && !record.notes.attention.reviewed,
   }
 }

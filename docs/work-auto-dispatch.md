@@ -113,14 +113,50 @@ useful parallelism and suitable worker model without a persisted complexity scor
 It can start several independent items or finish without starting anything.
 Host admission still validates the current record and explicit dependencies.
 
+Work has optional typed `automaticDispatch: "manual" | "ready"` scheduling intent
+(on the stored workflow, exposed by Work reads and the typed create/update tools).
+Only the Work controller or authenticated human can change it. `manual` prevents
+automatic admission, including through an ancestor. Findings (`notes.kind:
+"finding"`), such as tracking-only intake mirrors, are excluded unless explicitly
+marked `ready`. Old task records without the field retain their previous mechanical
+eligibility; there is no blanket rewrite or inferred authorization migration.
+`ready` means consider for scheduling, **not** permission to access repositories,
+publish, test live, remove textual boundaries, or bypass ownership/dependencies.
+Use `work_update` with the current version and `automaticDispatch` to record a
+controller's existing scheduling decision; do not mark imported findings ready
+merely to create activity. Intake refreshes must preserve this field.
+
 Done/cancelled, paused, assigned and dependency-blocked Work are not claimed.
 Ancestor pauses and terminal states are respected. An unassigned blocked Work can
 be claimed once for blocker clarification; the blocker is retained. An assigned
 blocked Work is never an automatic re-entry pool. Scheduling does not silently
 remove an explicit dependency or change the task objective.
 
+The host also suppresses repeated model rounds for unchanged scheduling input.
+Its fingerprint includes configuration, current supplementary instructions, all
+Work pages (not just the first), dependency state, target/capacity and owner
+availability/busy/waiting state. Changed input is reconsidered on the next timer
+scan. Otherwise a completed round is rechecked after 30 minutes; failed or
+interrupted rounds back off for five minutes. This bounded periodic recheck
+covers external changes not represented in Work; it is not continuous PR polling.
+Receipts are atomically persisted in Project state at
+`state/work-dispatch/round-state.json`, separate from dispatcher memory, and
+survive restart. Malformed receipts fail closed rather than silently resetting.
+Manual `/run` uses the same suppression; changing Work/instructions/configuration
+invalidates it. No model-run session is created for a suppressed check.
+
+The model snapshot keeps full Work definitions/boundaries, scheduling summaries,
+`detailsPath`, eligibility, `needsReview`, owner execution/wait state and automatic
+capacity. It omits bulky source-mirror HTML and intake/observation histories;
+read the exact Work details when those are necessary. Capacity is not a general
+machine-utilization or Excel mutex signal.
+
 The host serializes admission and performs the eligibility/sequence check in the
-same Work SQLite transaction. Each Work gets a dedicated durable worker session
+same Work SQLite transaction. First kickoff rechecks readiness (including ancestors)
+after claim and immediately before final admission. A newly manual item retains
+its claimed owner and blocker rather than starting or returning to an unassigned
+pool. This is not cancellation of an already-running worker; explicit authorized
+human recovery remains a separate control. Each Work gets a dedicated durable worker session
 and its selected model/effort. With a selected source, admission prepares an
 independent registered **real Git worktree** before the first worker delivery.
 Without a source, the first delivery starts only the bootstrap phase below.
@@ -202,6 +238,44 @@ retry the same source/base after inspecting effects. No automatic alternate-devi
 retry, source execution or cleanup is performed. Both session stores preserve the
 phase and prepared identity. Other managed tasks retain the existing owner-only
 `workspace_register`/`workspace_create` gates; this is not a general owner grant.
+
+## Coordinator review and existing owners
+
+`work_dispatch` exposes a narrow `request_review` action with `key`, current Work
+`sequence` as `version`, and a bounded `reason` containing findings/evidence links.
+Use it when an otherwise eligible item needs existing-PR/owner reconciliation,
+authenticated lookups or missing authorization, or an assigned blocked owner has
+stopped and needs coordinator review. The host can schedule these stopped-owner
+reviews even without capacity for a new automatic worker. Normal tool/input or
+external waits and busy owners do not qualify as stalled work. Tracking-only
+findings without explicit readiness, and manual, paused or terminal Work/ancestors,
+are not automatically reviewed.
+
+The recipient is **only the Work's current available durable coordinator in the
+same Project**. There is no arbitrary recipient fallback. The action queues a
+context notification through SessionManager; it does not reassign, resume an
+execution, accept a result, grant a testing turn or reclaim a lock. A write-ahead
+receipt permits one notification attempt per exact Work version/coordinator,
+regardless of changing reason text. An accepted receipt means notification
+admission only. An unconfirmed outcome after delivery invocation or a crash is
+retained and not automatically replayed; inspect coordinator history before
+recovery. A conclusively failed pre-send validation/abort releases only its unsent
+reservation, allowing safe retry without an artificial Work version change. Once review is requested, new-worker
+admission through that dispatcher is refused for the same Work version. The
+coordinator must reconcile and update Work before reconsideration.
+
+Direct adoption/routing to an existing PR owner and authenticated PR queries are
+**not implemented by the restricted dispatcher itself**. Its coordinator must use
+existing authorized tools and assignment/recovery controls, verify actual current
+ownership and operations, and preserve branches/artifacts. This explicit handoff
+replaces prompt-only promises; it is not a universal deadlock supervisor or a new
+source of authority. Absence of a coordinator remains a reported limitation.
+
+First worker deliveries (including bootstrap) and new explicit recovery messages
+load current supplementary Project dispatch requirements. Recovery of a retained
+interrupted tool call keeps its original history/replay controls instead. This carries draft-PR,
+original-item-comment and testing-mutex requirements to workers without treating
+them as new authority. Already-running workers are not retroactively rewritten.
 
 ## Blockers and recovery
 

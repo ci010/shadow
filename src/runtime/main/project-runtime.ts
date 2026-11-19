@@ -28,6 +28,7 @@ import { BotWakes } from '../../bots/wake.ts'
 import { WorkDispatcher } from '../../cron/work-dispatch.ts'
 import { ProjectDispatchFiles } from '../../cron/work-dispatch-files.ts'
 import { WorkDispatchAgent } from '../../cron/work-dispatch-agent.ts'
+import { WorkDispatchRoundState } from '../../cron/work-dispatch-round-state.ts'
 import { WorkBootstrapTool } from '../../cron/work-bootstrap.ts'
 import { DerivedWorkspaces } from '../../folders/derived-workspace.ts'
 import { RemoteDerivedWorkspaceBackend } from '../../folders/remote-derived-workspace.ts'
@@ -1560,6 +1561,7 @@ export async function createProjectRuntime(
     }
   }
   const workDispatcher = new WorkDispatcher({ projectId: project.id, store: initiatives, sessions,
+    workerInstructions: () => dispatchFiles.instructions(),
     validateProgram: validateWorkProgram,
     validateTarget: validateWorkTarget,
     capacityPolicy: () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID)?.program,
@@ -1679,7 +1681,7 @@ export async function createProjectRuntime(
     })
   }, sessionId => realtime.invalidateSessions(sessionId))
   const workDispatchAgent = new WorkDispatchAgent(workDispatcher, sessions, cronDispatcher,
-    dispatchFiles, () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID))
+    dispatchFiles, () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID), new WorkDispatchRoundState(workspace))
   tools.register(workDispatchAgent)
   coordinator?.allow(workDispatchAgent)
   workDispatcher.setRunner((job, signal) => workDispatchAgent.run(job, signal))
