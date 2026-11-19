@@ -13,6 +13,8 @@ import { sessionActivity } from './session-activity.ts'
 import { createProjectLiveState } from './project-live-state.ts'
 import type { LiveClient } from './live-client.ts'
 import { createResponseContext, type ResponseContext } from '../../src/sessions/response-context.ts'
+import { imageAttachmentReference } from './chat-attachments.ts'
+import type { OtioDraftBridge } from './otio-draft.ts'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const root = 'web:chat-parent'
@@ -120,6 +122,72 @@ test('main composer answers the pending question, retains rejected drafts and ne
   state.handleYieldRequest(request)
   state.resetConversation()
   assert.equal(state.activeAsk, null)
+})
+
+test('OTIO reviews use the active composer and queue exact anchors with the pending PNG', async t => {
+  const f = fixture(t, true)
+  const view = f.mount('a')
+  const state = view.state()
+  const base = view.props.apiBase
+  const peer = 'web:chat-peer'
+  state.allSessions = [{ sessionId: root, mode: 'session' }, { sessionId: peer, mode: 'session' }]
+  state.loadingHistory = false
+  state.streaming = true
+  assert.equal(state.requestBusy, true)
+  const bridge: OtioDraftBridge = state.otioDraft
+  const initial = bridge.target(base)!
+  const anchor = 'Review cut.otio · V1 / Shot 01 · frame 84'
+  const image = new File(['Synthetic PNG'], 'marked-84.png', { type: 'image/png' })
+  assert.equal(state.canAttachFiles, false)
+  assert.equal(bridge.add(base, initial.key, { text: anchor, file: image }), false)
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  assert.equal(bridge.add(base, initial.key, { text: 'Review cut.otio · V1' }), true)
+  state.currentWorkdir = { kind: 'local', displayPath: '/fixture' }
+  assert.equal(bridge.add(base, initial.key, { text: anchor, file: image }), true)
+  assert.equal(state.pendingAttachments.length, 1)
+  const attachment = state.pendingAttachments[0]
+  assert.equal(attachment.file, image)
+  assert.equal(attachment.kind, 'image')
+  assert.equal(attachment.source, undefined)
+  const reference = imageAttachmentReference(attachment)
+  const body = `Keep this exact unsent draft\n\nReview cut.otio · V1\n\n${anchor}\n${reference}`
+  assert.equal(state.inputText, body)
+  assert.ok(!f.requests.some(request => /\/(upload|send)$/.test(request.path)))
+
+  const sending = state.sendMessage(undefined, { queue: true })
+  await settle()
+  const upload = f.requests.find(request => request.path.endsWith('/upload'))!
+  assert.equal((upload.body as FormData).get('chatId'), root.slice(4))
+  assert.equal((upload.body as FormData).get('file'), image)
+  upload.finish({ path: '/fixture/uploads/marked-84.png' })
+  await settle()
+  const send = f.requests.find(request => request.path.endsWith('/send'))!
+  const payload = JSON.parse(send.body as string)
+  assert.equal(payload.delivery, 'queue')
+  assert.equal(payload.chatId, root.slice(4))
+  assert.deepEqual(payload.media, ['/fixture/uploads/marked-84.png'])
+  assert.ok(payload.content.startsWith(`${body}\n\n`))
+  assert.ok(payload.content.includes('/fixture/uploads/marked-84.png'))
+  send.finish({ chatId: root.slice(4), requestId: 'queued-review' })
+  await sending
+  assert.equal(state.pendingAttachments.length, 0)
+
+  state.selectSession(peer, false)
+  state.loadingHistory = false
+  state.currentWorkdir = { kind: 'local', displayPath: '/fixture' }
+  state.inputText = 'Do not change this other draft'
+  const current = bridge.target(base)!
+  assert.notEqual(current.key, initial.key)
+  state.submittingMessage = true
+  assert.equal(bridge.add(base, current.key, { text: anchor }), false)
+  state.submittingMessage = false
+  state.viewingPhysicalId = 'historic-segment'
+  assert.equal(bridge.add(base, current.key, { text: anchor }), false)
+  state.viewingPhysicalId = undefined
+  assert.equal(bridge.add(base, initial.key, { text: anchor, file: image }), false)
+  assert.equal(bridge.add(base, current.key, { text: anchor, file: new File(['not PNG'], 'marked.jpg', { type: 'image/jpeg' }) }), false)
+  assert.equal(state.inputText, 'Do not change this other draft')
+  assert.equal(state.pendingAttachments.length, 0)
 })
 
 test('composer attachment-only answers upload once and preserve the attachment after a rejected reply', async t => {

@@ -8,7 +8,7 @@ export const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp', '.ico': 'image/x-icon',
-  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.avif': 'image/avif', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
   '.pdf': 'application/pdf', '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -30,6 +30,14 @@ export function staticFilePath(c: Context): string | null {
   }
 }
 
+function mime(target: string): string {
+  return MIME_BY_EXT[extname(target).toLowerCase()] ?? 'application/octet-stream'
+}
+
+function seekable(contentType: string): boolean {
+  return contentType.startsWith('video/') || contentType.startsWith('audio/')
+}
+
 /** Shared Main-local serving; callers must authorize and resolve the owning root. */
 export async function serveLocalFiles(
   c: Context,
@@ -43,18 +51,28 @@ export async function serveLocalFiles(
   const encoding = operation === 'preview' ? c.req.query('encoding') ?? 'auto' : 'auto'
   if (!isTextEncoding(encoding)) return c.json({ error: 'invalid_text_encoding' }, 400)
   try {
-    const result = await localFiles(base, operation, path, c.req.raw.signal, maxBytes, encoding)
+    const result = await localFiles(base, operation, path, c.req.raw.signal, maxBytes, encoding,
+      c.req.method === 'GET' && !c.req.raw.headers.has('If-Range')
+        ? target => seekable(mime(target)) ? c.req.header('Range') ?? null : null
+        : undefined)
     if (result.operation === 'files') {
       return c.json({ ...identity, path: result.path,
         workdir: { kind: 'local', displayPath: result.base, ...(scope ? { scope } : {}) }, entries: result.entries })
     }
     if (result.operation === 'raw') {
-      const contentType = MIME_BY_EXT[extname(result.target).toLowerCase()] ?? 'application/octet-stream'
+      const contentType = mime(result.target)
+      const { range, size, stream } = result
+      const status = !stream ? 416 : range ? 206 : 200
+      const length = !stream ? 0 : range ? range.end - range.start + 1 : size
       try {
-        return new Response(result.stream, {
+        return new Response(stream, {
+          status,
           headers: {
             'Content-Type': contentType,
-            'Content-Length': String(result.size),
+            'Content-Length': String(length),
+            ...(seekable(contentType) ? { 'Accept-Ranges': 'bytes' } : {}),
+            ...(!stream ? { 'Content-Range': `bytes */${size}` }
+              : range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${size}` } : {}),
             'Cache-Control': 'no-cache',
             'Access-Control-Allow-Origin': '*',
             ...(contentType.startsWith('image/') ? {
@@ -64,7 +82,7 @@ export async function serveLocalFiles(
           },
         })
       } catch (error) {
-        await result.stream.cancel()
+        await stream?.cancel()
         throw error
       }
     }
