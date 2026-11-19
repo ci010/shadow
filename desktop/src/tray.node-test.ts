@@ -4,7 +4,7 @@ import test from 'node:test'
 import type { Menu, MenuItemConstructorOptions } from 'electron'
 import { installTrayMenu } from './tray.js'
 
-function fixture(development = false) {
+function fixture(development = false, backend = false, developmentGate = development) {
   const calls: string[] = []
   let windowOpen = true
   const actions = {
@@ -27,7 +27,7 @@ function fixture(development = false) {
   const dispose = installTrayMenu(tray, {
     buildFromTemplate(items) { template = items; return nativeMenu },
   }, actions, () => { calls.push('quit') }, development ? () => { calls.push('restart') } : undefined,
-  development, () => { calls.push('restart-backend') })
+  developmentGate, backend ? () => { calls.push('restart-backend') } : undefined)
   const click = (index: number) => {
     const item = template[index]!
     assert.ok(item.click)
@@ -68,10 +68,17 @@ test('DevTools opens the workbench first; disposal disables all tray actions', (
 
 test('development restart calls main callback and is inert after disposal', () => {
   const { template, click, calls, dispose } = fixture(true)
-  assert.equal(template[3]?.label, '重启后端（开发）')
-  assert.equal(template[4]?.label, '重启 Shadow（开发）')
-  click(3); click(4)
-  assert.deepEqual(calls, ['restart-backend', 'restart'])
-  dispose(); click(3); click(4)
+  assert.equal(template[3]?.label, '重启 Shadow（开发）')
+  click(3)
+  assert.deepEqual(calls, ['restart'])
+  dispose(); click(3)
+  assert.deepEqual(calls, ['restart', 'destroy-tray'])
+})
+
+test('development backend and full restart call distinct callbacks', () => {
+  const { template, click, calls, dispose } = fixture(true, true)
+  assert.deepEqual(template.slice(3, 5).map(item => item.label), ['重启后端（开发）', '重启 Shadow（开发）'])
+  click(3); click(4); dispose(); click(3); click(4)
   assert.deepEqual(calls, ['restart-backend', 'restart', 'destroy-tray'])
+  assert.equal(fixture(false, true, false).template.some(item => item.label?.includes('（开发）')), false)
 })
