@@ -4,22 +4,17 @@ import test from 'node:test'
 import type { Menu, MenuItemConstructorOptions } from 'electron'
 import { installTrayMenu } from './tray.js'
 
-function fixture(development = false, backend = false, developmentGate = development) {
+function fixture(development = false) {
   const calls: string[] = []
-  const window = Object.assign(new EventEmitter(), {
-    minimized: false,
-    destroyed: false,
-    webContents: {
-      destroyed: false,
-      isDestroyed() { return this.destroyed },
-      openDevTools(options: { mode: 'detach' }) { calls.push(`devtools:${options.mode}`) },
+  let windowOpen = true
+  const actions = {
+    show() {
+      if (!windowOpen) { windowOpen = true; calls.push('create-window') }
+      calls.push('show')
     },
-    isDestroyed() { return this.destroyed },
-    isMinimized() { return this.minimized },
-    restore() { this.minimized = false; calls.push('restore') },
-    show() { calls.push('show') },
-    focus() { calls.push('focus') },
-  })
+    release() { if (windowOpen) { windowOpen = false; calls.push('destroy-window') } },
+    openDevTools() { calls.push('devtools') },
+  }
   let template: MenuItemConstructorOptions[] = []
   const nativeMenu = {} as Menu
   const tray = Object.assign(new EventEmitter(), {
@@ -31,79 +26,52 @@ function fixture(development = false, backend = false, developmentGate = develop
   })
   const dispose = installTrayMenu(tray, {
     buildFromTemplate(items) { template = items; return nativeMenu },
-  }, window, () => { calls.push('quit') }, development ? () => { calls.push('restart') } : undefined, developmentGate, backend ? () => { calls.push('restart-backend') } : undefined)
+  }, actions, () => { calls.push('quit') }, development ? () => { calls.push('restart') } : undefined,
+  development, () => { calls.push('restart-backend') })
   const click = (index: number) => {
     const item = template[index]!
     assert.ok(item.click)
     item.click({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent)
   }
-  return { calls, window, tray, template, click, dispose }
+  return { calls, tray, template, click, dispose }
 }
 
-test('tray menu offers show, DevTools and quit without a development-only gate', () => {
-  const { template, click, calls } = fixture()
+test('lightweight mode can release and reopen the window repeatedly without quitting', () => {
+  const { template, tray, click, calls } = fixture()
   assert.deepEqual(template.map(item => item.label ?? item.type), [
-    '显示 Shadow', '打开开发者工具', 'separator', '退出',
+    '显示 Shadow', '轻量模式（关闭主窗口）', '打开开发者工具', 'separator', '退出',
   ])
+  click(1); click(1)
+  assert.equal(tray.isDestroyed(), false)
   click(0)
   click(1)
-  click(3)
-  assert.deepEqual(calls, ['show', 'focus', 'show', 'focus', 'devtools:detach', 'quit'])
-})
-
-test('tray click and DevTools restore a minimized window before focusing it', () => {
-  const { tray, window, calls, click } = fixture()
-  window.minimized = true
+  tray.emit('double-click')
   tray.emit('click')
-  assert.deepEqual(calls, ['restore', 'show', 'focus'])
-  calls.length = 0
-  window.minimized = true
   click(1)
-  assert.deepEqual(calls, ['restore', 'show', 'focus', 'devtools:detach'])
+  click(4)
+  assert.deepEqual(calls, ['destroy-window', 'create-window', 'show',
+    'destroy-window', 'create-window', 'show', 'show', 'destroy-window', 'quit'])
 })
 
-test('destroyed windows and web contents are not accessed by tray callbacks', () => {
-  for (const target of ['window', 'contents'] as const) {
-    const { window, tray, click, calls } = fixture()
-    if (target === 'window') window.destroyed = true
-    else window.webContents.destroyed = true
-    tray.emit('click')
-    click(0)
-    click(1)
-    assert.deepEqual(calls, [])
-  }
-})
-
-test('window close and explicit disposal destroy the tray once and remove listeners', () => {
-  for (const action of ['close', 'dispose', 'destroyed-tray'] as const) {
-    const { window, tray, click, calls, dispose } = fixture()
-    if (action === 'close') window.emit('closed')
-    if (action === 'destroyed-tray') tray.destroy()
-    dispose()
-    dispose()
-    tray.emit('click')
-    click(0)
-    click(1)
-    click(3)
-    assert.deepEqual(calls, ['destroy-tray'])
-    assert.equal(tray.listenerCount('click'), 0)
-    assert.equal(window.listenerCount('closed'), 0)
-  }
+test('DevTools opens the workbench first; disposal disables all tray actions', () => {
+  const { tray, click, calls, dispose } = fixture()
+  click(1); click(2)
+  assert.deepEqual(calls, ['destroy-window', 'create-window', 'show', 'devtools'])
+  calls.length = 0
+  dispose(); dispose()
+  tray.emit('click'); tray.emit('double-click')
+  click(0); click(1); click(2); click(4)
+  assert.deepEqual(calls, ['destroy-tray'])
+  assert.equal(tray.listenerCount('click'), 0)
+  assert.equal(tray.listenerCount('double-click'), 0)
 })
 
 test('development restart calls main callback and is inert after disposal', () => {
   const { template, click, calls, dispose } = fixture(true)
-  assert.equal(template[2]?.label, '重启 Shadow（开发）')
-  click(2)
-  assert.deepEqual(calls, ['restart'])
-  dispose(); click(2)
-  assert.deepEqual(calls, ['restart', 'destroy-tray'])
-})
-
-test('development backend and full restart call distinct callbacks', () => {
-  const { template, click, calls, dispose } = fixture(true, true)
-  assert.deepEqual(template.slice(2, 4).map(item => item.label), ['重启后端（开发）', '重启 Shadow（开发）'])
-  click(2); click(3); dispose(); click(2); click(3)
+  assert.equal(template[3]?.label, '重启后端（开发）')
+  assert.equal(template[4]?.label, '重启 Shadow（开发）')
+  click(3); click(4)
+  assert.deepEqual(calls, ['restart-backend', 'restart'])
+  dispose(); click(3); click(4)
   assert.deepEqual(calls, ['restart-backend', 'restart', 'destroy-tray'])
-  assert.equal(fixture(false, true, false).template.some(item => item.label?.includes('（开发）')), false)
 })

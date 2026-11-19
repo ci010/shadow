@@ -98,6 +98,7 @@ export { secureWebPreferences } from './window-controls.js'
 
 let mainWindow: BrowserWindow | null = null
 let mainTray: Tray | null = null
+let reopenMainWindow: (() => BrowserWindow) | undefined
 let managedDeployment: ManagedDeploymentProfile | undefined
 let openTaskApp: ((identity: MicroAppIdentity) => Promise<void>) | undefined
 const pendingTaskApps: MicroAppIdentity[] = []
@@ -110,9 +111,10 @@ function rendererLoadErrorCode(error: unknown): number | undefined {
 }
 
 function showMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show(); mainWindow.focus()
+  const window = mainWindow ?? reopenMainWindow?.()
+  if (!window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show(); window.focus()
 }
 
 function requestTaskApp(identity: MicroAppIdentity): void {
@@ -456,6 +458,7 @@ async function start(): Promise<void> {
   )
   registerIpcHandlers(coordinator, startup, async (result, retry) => {
     if (!result.ok || result.context.mode !== 'child' || !mainWindow) return result
+    const window = mainWindow
     const remoteTarget = resolveChildRendererTarget(localTarget, result.context.apiBase, app.isPackaged)
     if (remoteTarget === localTarget) {
       reportRenderer('renderer-ready')
@@ -485,9 +488,12 @@ async function start(): Promise<void> {
       reportRenderer('renderer-probe')
       return { ok: false, code: 'runtime-unavailable' }
     }
+    if (window !== mainWindow) return result
     renderer.select(remoteTarget)
     setTimeout(() => {
-      void mainWindow?.loadURL(remoteTarget.url).catch(error => {
+      if (window !== mainWindow) return
+      void window.loadURL(remoteTarget.url).catch(error => {
+        if (window !== mainWindow) return
         const netError = rendererLoadErrorCode(error)
         if (netError === -3) return
         reportRenderer('renderer-load-failed', netError === undefined ? {} : { netError })
@@ -496,63 +502,19 @@ async function start(): Promise<void> {
     }, 0)
     return result
   })
-  mainWindow = createMainWindow(target, !initialApp, roleUserDataPath)
   const restoreLocalRenderer = (): void => {
-    if (!mainWindow || target.origin === localTarget.origin) return
+    const window = mainWindow
+    if (!window || target.origin === localTarget.origin) return
     childRendererReadiness.fail()
     renderer.select(localTarget)
-    void (localTarget.kind === 'url' ? mainWindow.loadURL(localTarget.url) : mainWindow.loadFile(localTarget.filePath))
+    void (localTarget.kind === 'url' ? window.loadURL(localTarget.url) : window.loadFile(localTarget.filePath))
       .catch(error => {
+        if (window !== mainWindow) return
         const netError = rendererLoadErrorCode(error)
         if (netError === -3) return
         reportRenderer('renderer-load-failed', netError === undefined ? {} : { netError })
       })
   }
-  // A document 200 is not readiness: entry scripts may still fail. The remote
-  // renderer must reach bootstrap.ensureRuntime, otherwise restore local recovery.
-  mainWindow.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
-    if (isMainFrame && !inPlace && target.origin !== localTarget.origin) {
-      reportRenderer('renderer-navigation')
-      childRendererReadiness.wait()
-    }
-  })
-  mainWindow.once('closed', () => childRendererReadiness.ready())
-  mainWindow.webContents.on('did-navigate', (_event, _url, status) => {
-    if (status >= 400 && target.origin !== localTarget.origin) {
-      reportRenderer('renderer-load-failed', { httpStatus: status })
-      restoreLocalRenderer()
-    }
-  })
-  mainWindow.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
-    if (isMainFrame && code !== -3 && target.origin !== localTarget.origin) {
-      reportRenderer('renderer-load-failed', { netError: code })
-      restoreLocalRenderer()
-    } // ERR_ABORTED is an intentional replacement.
-  })
-  const isChildRendererRequest = (details: Electron.OnCompletedListenerDetails | Electron.OnErrorOccurredListenerDetails) =>
-    details.webContentsId === mainWindow?.webContents.id
-    && target.origin !== localTarget.origin
-    && new URL(details.url).origin === target.origin
-  session.defaultSession.webRequest.onCompleted({ urls: ['http://127.0.0.1/*'] }, details => {
-    if (isChildRendererRequest(details) && details.statusCode >= 400) {
-      reportRenderer('renderer-resource-failed', { httpStatus: details.statusCode, resourceType: details.resourceType })
-    }
-  })
-  session.defaultSession.webRequest.onErrorOccurred({ urls: ['http://127.0.0.1/*'] }, details => {
-    if (isChildRendererRequest(details) && details.error !== 'net::ERR_ABORTED') {
-      reportRenderer('renderer-resource-failed', { resourceType: details.resourceType })
-    }
-  })
-  mainWindow.once('closed', () => {
-    session.defaultSession.webRequest.onCompleted(null)
-    session.defaultSession.webRequest.onErrorOccurred(null)
-  })
-
-  installTaskNotifications(ipcMain, mainWindow, target, {
-    supported: () => Notification.isSupported(),
-    create: message => new Notification({ ...message, icon: desktopIconPath(), silent: true }),
-    onError: message => console.error('[desktop] Task notification failed:', message),
-  })
   microApps = new DesktopMicroApps({
     userDataPath, executablePath: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged,
     defaultIconPath: desktopIconPath(),
@@ -576,27 +538,98 @@ async function start(): Promise<void> {
     if (!runtime.ok || !rendererAuthorization) throw new Error('Connected Main is unavailable')
     await microApps!.open(identity)
   }
+  const openWindow = (showOnReady: boolean) => {
+    renderer.select(localTarget)
+    childRendererReadiness.retry()
+    const window = mainWindow = createMainWindow(target, showOnReady, roleUserDataPath)
+    // A document 200 is not readiness: entry scripts may still fail. The remote
+    // renderer must reach bootstrap.ensureRuntime, otherwise restore local recovery.
+    window.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
+      if (isMainFrame && !inPlace && target.origin !== localTarget.origin) {
+        reportRenderer('renderer-navigation')
+        childRendererReadiness.wait()
+      }
+    })
+    window.once('closed', () => childRendererReadiness.ready())
+    window.webContents.on('did-navigate', (_event, _url, status) => {
+      if (status >= 400 && target.origin !== localTarget.origin) {
+        reportRenderer('renderer-load-failed', { httpStatus: status })
+        restoreLocalRenderer()
+      }
+    })
+    window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+      if (isMainFrame && code !== -3 && target.origin !== localTarget.origin) {
+        reportRenderer('renderer-load-failed', { netError: code })
+        restoreLocalRenderer()
+      } // ERR_ABORTED is an intentional replacement.
+    })
+    const contentsId = window.webContents.id
+    const isChildRendererRequest = (details: Electron.OnCompletedListenerDetails | Electron.OnErrorOccurredListenerDetails) =>
+      details.webContentsId === contentsId
+      && target.origin !== localTarget.origin
+      && new URL(details.url).origin === target.origin
+    session.defaultSession.webRequest.onCompleted({ urls: ['http://127.0.0.1/*'] }, details => {
+      if (isChildRendererRequest(details) && details.statusCode >= 400) {
+        reportRenderer('renderer-resource-failed', { httpStatus: details.statusCode, resourceType: details.resourceType })
+      }
+    })
+    session.defaultSession.webRequest.onErrorOccurred({ urls: ['http://127.0.0.1/*'] }, details => {
+      if (isChildRendererRequest(details) && details.error !== 'net::ERR_ABORTED') {
+        reportRenderer('renderer-resource-failed', { resourceType: details.resourceType })
+      }
+    })
+    window.once('closed', () => {
+      session.defaultSession.webRequest.onCompleted(null)
+      session.defaultSession.webRequest.onErrorOccurred(null)
+    })
+
+    installTaskNotifications(ipcMain, window, target, {
+      supported: () => Notification.isSupported(),
+      create: message => new Notification({ ...message, icon: desktopIconPath(), silent: true }),
+      onError: message => console.error('[desktop] Task notification failed:', message),
+    })
+    installBackgroundWindow(app, window)
+    installPresence(ipcMain, window, powerMonitor)
+    installWebPairing(ipcMain, window, () => activityAuthorization)
+    taskbarActivity = new TaskbarActivity(window)
+    taskbarActivity.setAuthorization(activityAuthorization)
+    window.once('closed', () => {
+      taskbarActivity?.dispose()
+      taskbarActivity = undefined
+      mainWindow = null
+    })
+    const loaded = localTarget.kind === 'url' ? window.loadURL(localTarget.url) : window.loadFile(localTarget.filePath)
+    return { window, loaded }
+  }
+  const initialWindow = openWindow(!initialApp)
+  reopenMainWindow = () => {
+    const { window, loaded } = openWindow(false)
+    void loaded.catch(error => {
+      if (window === mainWindow && rendererLoadErrorCode(error) !== -3) {
+        dialog.showErrorBox('Unable to open Shadow', 'The desktop page could not load. Close it and try opening it again from the tray.')
+      }
+    })
+    return window
+  }
   mainTray = new Tray(createTrayImage(desktopTrayIconPath(app.isPackaged), nativeImage))
-  const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged, backendRestart ? () => { void backendRestart.request() } : undefined)
-  const disposeBackground = installBackgroundWindow(app, mainWindow)
+  const disposeTray = installTrayMenu(mainTray, Menu, {
+    show: showMainWindow,
+    release: () => mainWindow?.destroy(),
+    openDevTools: () => mainWindow?.webContents.openDevTools({ mode: 'detach' }),
+  }, () => app.quit(), restart, !app.isPackaged, backendRestart ? () => { void backendRestart.request() } : undefined)
+  const activate = () => { if (!mainWindow) showMainWindow() }
+  app.on('activate', activate)
+  app.on('before-quit', () => { reopenMainWindow = undefined })
   app.once('will-quit', () => {
-    disposeBackground()
+    app.removeListener('activate', activate)
     disposeTray()
     mainTray = null
     openTaskApp = undefined
     disposeAppIpc()
   })
-  installPresence(ipcMain, mainWindow, powerMonitor)
-  installWebPairing(ipcMain, mainWindow, () => activityAuthorization)
-  taskbarActivity = new TaskbarActivity(mainWindow)
-  taskbarActivity.setAuthorization(activityAuthorization)
-  mainWindow.on('closed', () => {
-    taskbarActivity?.dispose()
-    taskbarActivity = undefined
-    mainWindow = null
+  await initialWindow.loaded.catch(error => {
+    if (!initialWindow.window.isDestroyed()) throw error
   })
-  if (target.kind === 'url') await mainWindow.loadURL(target.url)
-  else await mainWindow.loadFile(target.filePath)
   if (initialApp) requestTaskApp(initialApp)
   for (const identity of pendingTaskApps.splice(0)) requestTaskApp(identity)
   if (app.isPackaged && process.env.SHADOW_DESKTOP_RELEASE_IPC === '1' && process.connected) {
@@ -643,6 +676,8 @@ if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
           : 'Desktop initialization failed. Check the startup diagnostics before retrying.')
       app.quit()
     })
-    app.on('window-all-closed', () => app.quit())
+    app.on('window-all-closed', () => {
+      if (!mainTray || mainTray.isDestroyed()) app.quit()
+    })
   }
 }

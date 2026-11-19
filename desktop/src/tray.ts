@@ -13,52 +13,39 @@ export function createTrayImage(
 interface TrayTarget {
   setToolTip(text: string): void
   setContextMenu(menu: Menu): void
-  on(event: 'click', listener: () => void): unknown
-  removeListener(event: 'click', listener: () => void): unknown
+  on(event: 'click' | 'double-click', listener: () => void): unknown
+  removeListener(event: 'click' | 'double-click', listener: () => void): unknown
   isDestroyed(): boolean
   destroy(): void
 }
 
-interface TrayWindow {
-  webContents: {
-    isDestroyed(): boolean
-    openDevTools(options: { mode: 'detach' }): void
-  }
-  isDestroyed(): boolean
-  isMinimized(): boolean
-  restore(): void
+interface TrayActions {
   show(): void
-  focus(): void
-  once(event: 'closed', listener: () => void): unknown
-  removeListener(event: 'closed', listener: () => void): unknown
+  release(): void
+  openDevTools(): void
 }
 
 export function installTrayMenu(
   tray: TrayTarget,
   menu: { buildFromTemplate(template: MenuItemConstructorOptions[]): Menu },
-  window: TrayWindow,
+  actions: TrayActions,
   quit: () => void,
   restart?: () => void,
   development = !!restart,
   restartBackend?: () => void,
 ): () => void {
   let disposed = false
-  const available = () => !disposed && !window.isDestroyed() && !window.webContents.isDestroyed()
-  const showWindow = () => {
-    if (!available()) return
-    if (window.isMinimized()) window.restore()
-    window.show()
-    window.focus()
-  }
+  const showWindow = () => { if (!disposed) actions.show() }
   tray.setToolTip(development ? 'Shadow (DEV)' : 'Shadow')
   tray.setContextMenu(menu.buildFromTemplate([
     { label: '显示 Shadow', click: showWindow },
+    { label: '轻量模式（关闭主窗口）', click: () => { if (!disposed) actions.release() } },
     {
       label: '打开开发者工具',
       click: () => {
-        if (!available()) return
+        if (disposed) return
         showWindow()
-        window.webContents.openDevTools({ mode: 'detach' })
+        actions.openDevTools()
       },
     },
     ...(development && restartBackend ? [{ label: '重启后端（开发）', click: () => { if (!disposed) restartBackend() } }] : []),
@@ -67,13 +54,13 @@ export function installTrayMenu(
     { label: '退出', click: () => { if (!disposed) quit() } },
   ]))
   tray.on('click', showWindow)
+  tray.on('double-click', showWindow)
   const dispose = () => {
     if (disposed) return
     disposed = true
-    window.removeListener('closed', dispose)
     tray.removeListener('click', showWindow)
+    tray.removeListener('double-click', showWindow)
     if (!tray.isDestroyed()) tray.destroy()
   }
-  window.once('closed', dispose)
   return dispose
 }
