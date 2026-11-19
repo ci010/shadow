@@ -23,6 +23,32 @@ class ImageSession extends BaseSession {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: a restored oversized tool result reaches the provider only as a file-backed preview`, async () => withTempWorkspace(async home => {
+    const store: SessionStore = new Store(join(home, '.sessions'))
+    await store.init()
+    try {
+      const output = 'a'.repeat(30_000_000) + 'output tail'
+      const messages: ChatMessage[] = [
+        { role: 'assistant', content: null, tool_calls: [{ type: 'function', id: 'legacy', function: { name: 'exec', arguments: '{}' } }] },
+        { role: 'tool', name: 'exec', tool_call_id: 'legacy', content: output },
+      ]
+      const sessionId = 'web:legacy-tool-output'
+      const tools = new SessionTools(new Tools(home), home)
+      const provider: LLMProvider = { name: 'fixture', listModels: () => ['fixture'], async chat(input) {
+        const result = input.find(message => message.role === 'tool' && message.tool_call_id === 'legacy')
+        assert(result && typeof result.content === 'string')
+        assert(result.content.length < 12_500)
+        assert.match(result.content, /Full output saved to: \.tmp\/tool-result-exec-/)
+        assert(!result.content.includes('output tail'))
+        return { content: 'Finished', toolCalls: [] }
+      } }
+      const session = new ImageSession(home, sessionId, { sessionId, segmentIndex: 0, mode: 'session' },
+        messages, provider, tools, new Bus(), store)
+      await session.run({ sessionId, physicalSessionId: session.physicalSessionId, channel: 'web', chatId: 'fixture',
+        senderId: 'fixture', messageId: 'fixture', tools, signal: new AbortController().signal })
+      assert.equal(messages[1].content, output)
+    } finally { store.close?.() }
+  }))
   test(`${Store.name}: private observations reach only the next inference, never persisted images or history`, async () => withTempWorkspace(async home => {
     const store: SessionStore = new Store(join(home, '.sessions'))
     await store.init()

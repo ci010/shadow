@@ -480,7 +480,10 @@ export class ExecTool implements Tool<ToolResult> {
       }))
       detach()
       transferred = true
-      return `${timeoutMs === 0 ? 'Remote process started in background.' : `Remote process still running after ${formatElapsed(Number(timeoutMs))}. Output so far:\n${output}`}\nExecution ID: ${backgroundExecutionId(id)}\nRead v:bg/<executionId> for output; cancel({ executionId }) stops it.`
+      const header = timeoutMs === 0 ? 'Remote process started in background.'
+        : `Remote process still running after ${formatElapsed(Number(timeoutMs))}.`
+      return `${header}\nExecution ID: ${backgroundExecutionId(id)}\nRead v:bg/<executionId> for output; cancel({ executionId }) stops it.` +
+        (timeoutMs === 0 ? '' : `\nOutput so far:\n${output}`)
     } catch (error) {
       if (error instanceof ToolOutcomeUnknownError) {
         if (foreground) context.tools.rejectExecution('Remote foreground cleanup/outcome could not be verified.')
@@ -601,17 +604,11 @@ export class ExecTool implements Tool<ToolResult> {
       if (stderr) partial += `\n[stderr]\n${stderr}`
       partial = partial.trim()
 
-      const header =
-        `Process PID=${pid} still running after ${formatElapsed(elapsed)}. ` +
-        `Output collected so far (may be incomplete):`
-      const taskId = this.registerBackgroundProcessTask(
-        context,
-        managed,
-      )
-      const body = partial
-        ? `${header}\n${partial}`
-        : `${header}\n(no output yet)`
-      return taskId ? `${body}\n\nExecution ID: ${backgroundExecutionId(taskId)}\nRead v:bg/<executionId> for output; cancel({ executionId }) stops it.\n` : body
+      const header = `Process PID=${pid} still running after ${formatElapsed(elapsed)}.`
+      const taskId = this.registerBackgroundProcessTask(context, managed)
+      const receipt = taskId
+        ? `\nExecution ID: ${backgroundExecutionId(taskId)}\nRead v:bg/<executionId> for output; cancel({ executionId }) stops it.` : ''
+      return `${header}${receipt}\nOutput collected so far (may be incomplete):\n${partial || '(no output yet)'}`
     }
 
     // Process finished within the timeout window

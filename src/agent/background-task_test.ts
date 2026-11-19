@@ -365,7 +365,7 @@ test('oversized callbacks save exact success/error and prefix in their owning Pr
     assert(path)
     const stored = await readFile(projectStoragePath(f.home, path), 'utf8')
     assert.equal(stored, `${prefix}\n\n${result}`)
-    assert.match(input.content, /line-based offset\/limit/)
+    assert.match(input.content, /flag="c", offset=1/)
     assert.doesNotMatch(input.content, /offset=12000/)
     assert((await f.tasks.getTaskOutput(task.taskId)).endsWith(result))
     assert.equal((await readdir(projectStoragePath(f.home, '.tmp'))).length, 1)
