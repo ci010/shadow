@@ -7,6 +7,7 @@ const input = z.object({ edit_id: z.string().min(1).max(256) }).strict()
 
 export class ViewEditTool implements Tool {
   readonly name = 'view_edit'
+  readonly javascriptBridge = 'read-only'
   readonly readonly = true
   // This reads Main's session log, not the remote workdir's filesystem.
   readonly supportsRemoteWorkdir = true

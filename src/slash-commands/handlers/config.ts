@@ -131,10 +131,10 @@ function parseConfigValue(
     case 'defaultShell': {
       const value = rawValue.trim().toLowerCase()
       if (
-        !['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh', 'node']
+        !['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh', 'javascript']
           .includes(value)
       ) {
-        return 'Error: defaultShell must be one of `cmd`, `sh`, `bash`, `git-bash`, `powershell`, `pwsh`, or `node`.'
+        return 'Error: defaultShell must be one of `cmd`, `sh`, `bash`, `git-bash`, `powershell`, `pwsh`, or `javascript`.'
       }
       return { defaultShell: value as SessionConfig['defaultShell'] }
     }

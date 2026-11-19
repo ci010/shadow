@@ -98,7 +98,7 @@ The OS exec tool also enforces leaf-call foreground rules: default/max 120s,
 strictly positive timeout, no background registration, deadline/abort stops the
 owned Child tree, and unconfirmed cleanup is unknown/blocked rather than success.
 This does not lift separate remote leaf-worker creation restrictions elsewhere
-in orchestration. Inline `shell=node`/tool bridging is still unsupported remotely.
+in orchestration. Inline `shell=javascript` requires Main compute authorization and binds bridged filesystem calls and authorized nested OS shells to the resolved Child target. A remote-only profile still cannot run Main scripts.
 No unsupported route falls back to Main.
 
 Remote limits remain explicit: combined output is capped at 128 KiB and exceeding

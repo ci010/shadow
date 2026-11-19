@@ -189,35 +189,40 @@ test('remote execution prompt does not advertise Main shell detection or inline 
   assert.match(remote, /timeout terminates the Child command/)
   assert.match(remote, /subagent mode=task.*inherits the selected Workspace and opaque remote workdir automatically/)
   assert.match(remote, /Do not copy paths to Main or switch away from the Child to delegate/)
-  assert.doesNotMatch(remote, /Available Exec Shells|Default Exec Shell|node \| inline TypeScript/)
+  assert.doesNotMatch(remote, /Available Exec Shells|Default Exec Shell|javascript \| bounded inline JavaScript/)
   const local = (await provider.getPromptSection({ ...ctx, workdir: undefined }))!
   assert.match(local, /Default Exec Shell.*powershell/)
-  assert.match(local, /node \| inline TypeScript/)
+  assert.match(local, /javascript \| bounded inline JavaScript/)
 })
 
-test('Node-only runtime and tool guidance agree without advertising detected OS shells', async () => {
+test('JavaScript-only runtime and tool guidance agree without advertising detected OS shells', async () => {
   const ctx: SessionPromptContext = {
     behavior: {}, channel: 'web', chatId: 'node-only', sessionId: 'web:node-only',
     defaultExecShell: 'powershell', execNodeOnly: true,
-    agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
+    agent: { name: 'general-v2', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
   }
   const runtime = identityProvider({
     identity: new IdentityManager('.'), getSkillsSummary: () => '', getAgentTypesSummary: () => '',
   })
   const prompt = (await runtime.getPromptSection(ctx))!
-  assert.match(prompt, /Default Exec Shell\*\*: node/)
-  assert.match(prompt, /node \| inline TypeScript runtime/)
-  assert.match(prompt, /Only Node exec is enabled, including tool-bridge calls/)
-  assert.match(prompt, /not an OS sandbox/)
+  assert.match(prompt, /Default Exec Shell\*\*: javascript/)
+  assert.match(prompt, /javascript \| bounded inline JavaScript/)
+  assert.match(prompt, /Only JavaScript exec is enabled/)
+  assert.match(prompt, /not a security sandbox/)
   assert.doesNotMatch(prompt, /  - (cmd|sh|bash|git-bash|powershell|pwsh)\b/)
   const guideline = (await guidelineProvider().getPromptSection(ctx))!
-  assert.match(guideline, /Inline TypeScript only/)
+  assert.match(guideline, /Inline JavaScript only/)
   assert.doesNotMatch(guideline, /using a detected shell/)
   assert.match(guideline, /infer\(\).*semantic judgments/)
   assert.match(guideline, /budgets, errors and direct-only boundaries/)
-  assert.match(guideline, /Read `node-scripting` first/)
+  assert.match(guideline, /Read `javascript-scripting` first/)
   const ordinary = (await guidelineProvider().getPromptSection({ ...ctx, execNodeOnly: false }))!
   assert.match(ordinary, /`infer\(\)` handles semantic judgments/)
+  assert.match(ordinary, /use direct `write` for ordinary edits/)
+  assert.match(ordinary, /dependent read → write → test steps/)
+  assert.match(ordinary, /nested OS `exec` requires an explicit shell/i)
+  assert.doesNotMatch(ordinary, /shell: "node"|inline TypeScript/)
+  assert.doesNotMatch(guideline, /nested OS `exec` requires an explicit shell/i)
   const noExec = (await guidelineProvider().getPromptSection({
     ...ctx, agent: { ...ctx.agent, allowedTools: ['read'] },
   }))!
@@ -225,7 +230,7 @@ test('Node-only runtime and tool guidance agree without advertising detected OS 
   const remote = (await runtime.getPromptSection({
     ...ctx, workdir: { version: 2, nodeId: 'child', workdirId: 'opaque' },
   }))!
-  assert.match(remote, /Node-only exec is unavailable on remote workdirs/)
+  assert.match(remote, /JavaScript-only exec requires Main compute permission/)
   assert.doesNotMatch(remote, /Child chooses its default OS shell|Available Exec Shells/)
 })
 

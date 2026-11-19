@@ -151,6 +151,7 @@ export function applyReplacementDetailed(
 
 export class WriteTool implements Tool {
   readonly name = 'write'
+  readonly javascriptBridge = 'filesystem'
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description =

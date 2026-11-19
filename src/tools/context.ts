@@ -64,10 +64,14 @@ export interface ExecutionContext extends MessageContext {
   toolCallId?: string
   /** Only the unfinished saved batch; remote shells reconcile instead of re-executing. */
   recoveringToolCall?: boolean
+  /** Base tool names sent to the provider for this inference. */
+  offeredToolNames?: readonly string[]
   /** Provider-facing tool name; nested script invocations are separate admissions. */
   toolCallName?: string
   /** Host-stamped nested script RPC; never accepted as a model tool argument. */
   scriptInvocation?: boolean
+  /** A target-bound JavaScript bridge call: native exec must remain foreground. */
+  javascriptInvocation?: boolean
   /** Persist observed writes immediately, including nested script calls that outlive cancellation. */
   recordFileChange?: (change: import('../sessions/file-change-contract.ts').RecordedFileChange) => Promise<void>
   /** Read only this logical session's own recorded edits, across its physical segments. */

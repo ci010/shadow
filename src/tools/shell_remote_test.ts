@@ -28,7 +28,7 @@ function fixture(nodeOnly = false) {
   const tool = new ExecTool(
     process.cwd(), 120_000, new CommandHandlerManager(),
     { spawn: () => assert.fail('Must not spawn on Main') } as unknown as ProcessManager,
-    'node', { runPromiseTask: () => assert.fail('No remote background task') } as unknown as BackgroundTaskManager,
+    'sh', { runPromiseTask: () => assert.fail('No remote background task') } as unknown as BackgroundTaskManager,
     { startProcess: async () => assert.fail('Must not invoke Main executor') },
     nodeOnly,
   )
@@ -41,11 +41,11 @@ function fixture(nodeOnly = false) {
   return { tool, context, requests }
 }
 
-test('Node-only exec rejects remote workdirs without dispatch or a local shell fallback', async () => {
+test('JavaScript-only exec rejects OS shells and the removed Node entry without dispatch', async () => {
   const { tool, context, requests } = fixture(true)
-  for (const shell of [undefined, 'node', 'powershell']) {
+  for (const shell of ['node', 'powershell']) {
     await assert.rejects(tool.execute({ script: 'must not run', shell }, context),
-      error => error instanceof ToolNoEffectError && /Node-only exec|Only shell=node/.test(error.message))
+      error => error instanceof ToolNoEffectError && /Invalid `shell`|Only shell=javascript/.test(error.message))
   }
   assert.equal(requests.length, 0)
 })
@@ -71,7 +71,6 @@ test('ExecTool remote path sends only resource-relative cwd and does not inherit
 test('ExecTool remote rejects unsupported execution modes and malformed inputs before dispatch', async () => {
   const { tool, context, requests } = fixture()
   for (const args of [
-    { script: 'echo no', shell: 'node' },
     { script: 'echo no', timeout_ms: -1 },
     { script: 'echo no', timeout_ms: '1' }, { script: 'echo no', timeout_ms: Infinity },
     { script: 'echo no', timeout_ms: 0.5 },
@@ -172,7 +171,7 @@ test('registered remote exec keeps bounded output intact instead of spilling to 
     { ...context, tools: new SessionTools(registry, process.cwd()) }), output)
 })
 
-test('explicit Child selection routes exec independently of committed session cwd and keeps shell=node distinct', async () => {
+test('explicit Child selection routes exec independently of committed session cwd and rejects the removed Node entry', async () => {
   const { tool, context, requests } = fixture()
   const remoteWorkdir = context.remoteWorkdir!
   const local: ExecutionContext = { ...context, remoteWorkdir: undefined,
@@ -185,7 +184,7 @@ test('explicit Child selection routes exec independently of committed session cw
   assert.equal(requests.length, 1)
   assert.equal(requests[0]?.nodeId, 'child')
   assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', lifetime: 'until-exit' })
-  assert.match(requireToolText(await tool.execute({ folder: 'child-folder', shell: 'node', script: '1' }, local)), /not supported on remote/)
+  await assert.rejects(tool.execute({ folder: 'child-folder', shell: 'node', script: '1' }, local), /old .*node.* removed/)
   assert.equal(requests.length, 1)
   assert.equal(local.remoteWorkdir, undefined)
 })

@@ -266,7 +266,7 @@ watch 等 run 完成并返回实际 conclusion；dispatch 在 CI 成功后启动
 signal 查询第三步 Check Run；watch_signal 等待其出现，返回 {status,signal:{url,printedAt,deadlineAt,...},result}；
 process + url 参数验证真实 CI artifact 的文件 SHA256，然后确认一个 transient、非生产 test deployment；
 只能用该 capability 操作本次验收；不得自行调用 gh、读取用户配置/凭据/旧会话、安装依赖或操作正式发布。
-执行方式自行选择。普通 OS shell 的 node 不注入 Shadow 工具 SDK；如需脚本调用宿主 capability，exec 的 shell:"node" 提供 invoke_tool，返回已解析的数据。v:skills/node-scripting 是实际使用指南。现有 event、cron、background、continuation 工具也可自行发现。
+执行方式自行选择。使用直接 invoke_tool 调用宿主 capability；JavaScript exec 仅能编排绑定工作区的文件工具，不能间接调用 capability。现有 event、cron、background、continuation 工具也可自行发现。
 第三步信号是实际 GitHub API，不是本地模拟，也不是 GitHub REST 运行中日志流。`,
       configure: async (importer, workdir) => { this.workdir = workdir; importer.registerBuiltin('github_actions', this) },
       refresh: signal => this.refresh(signal),

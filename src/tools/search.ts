@@ -25,6 +25,7 @@ function parseSpace(space: string): { scheme: string; qualifier: string } {
  */
 export class SearchTool implements Tool {
   readonly name = 'search'
+  readonly javascriptBridge = 'filesystem'
   readonly supportsRemoteWorkdir = true
   readonly supportsLayerFSWorkdir = true
   readonly readonly = true

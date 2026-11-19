@@ -145,21 +145,21 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "exec",
-      "description": "Run a command or script. Use \`shell: \\"node\\"\` for inline TypeScript with tool access and infer() for bounded semantic computation; see node-scripting.",
+      "description": "Run an OS command or bounded inline JavaScript. JavaScript has no Node APIs; its filesystem tool bridge is bound to the resolved workspace. Not a security sandbox.",
       "parameters": {
         "type": "object",
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved. For read/search or OS-shell exec, a direct owner Web turn can also target an opted-in Child with device:<nodeId>; use ~ for its home."
           },
           "script": {
             "type": "string",
-            "description": "Script to run. For OS shells this is the command string; for \`shell=node\` this is inline TypeScript source. Preserve failures: do not append exit 0 or || true to hide an error. When chaining native commands in PowerShell, check $LASTEXITCODE after each one and propagate failures."
+            "description": "Script to run. For OS shells this is the command string; for \`shell=javascript\` this is an ES module (e.g. \`await read({ path: 'notes.txt' })\` without an import when read is allowed; return JSON from export default or export function run). Preserve failures: do not append exit 0 or || true to hide an error. When chaining native commands in PowerShell, check $LASTEXITCODE after each one and propagate failures."
           },
           "shell": {
             "type": "string",
-            "description": "Runtime: OS shell name or \`node\` for inline TypeScript. Omitted uses the Runtime default (normally cmd on Windows, sh on Unix). Select powershell/pwsh explicitly for PowerShell syntax; shell syntax is not auto-detected."
+            "description": "Runtime: OS shell name or \`javascript\` for inline JavaScript. Omitted uses the Runtime default (normally cmd on Windows, sh on Unix). Select powershell/pwsh explicitly for PowerShell syntax; shell syntax is not auto-detected."
           },
           "args": {
             "type": "array",
@@ -170,11 +170,11 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "cwd": {
             "type": "string",
-            "description": "Working directory (defaults to the committed session cwd)"
+            "description": "OS shells only: working directory (defaults to the resolved workspace)"
           },
           "timeout_ms": {
             "type": "number",
-            "description": "Max wait time in milliseconds. 0 = run in background (fire-and-forget). Omit for default (120s). The process is NOT killed on timeout."
+            "description": "Max wait time in milliseconds. 0 = run in background (fire-and-forget). Omit for default (120s). JavaScript requires 1–120000 and is terminated on timeout; OS-shell behavior depends on the target."
           }
         },
         "required": [

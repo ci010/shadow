@@ -2152,7 +2152,7 @@ export async function createProjectRuntime(
     coordinator.allowRemoteShell(tools.get('exec')!)
     coordinator.allowRemoteLayerFS(mount => folderRegistry.list().some(folder => folder.kind === 'layerfs' && folder.mount === mount && !!folder.location))
     context.register({ name: 'coordinator-execution', getPromptSection: () =>
-      'Main local executor is disabled. Main provides inference, coordination and file storage. Host executable tools, scripts, MCP and browser execution are unavailable on Main. Use an explicitly selected online Child workdir for supported remote shell/filesystem operations; never fall back to Main. Remote Node scripts and remote leaf-call exec are not supported.' })
+      'Main local executor is disabled. Main provides inference, coordination and file storage. Host executable tools, scripts, MCP and browser execution are unavailable on Main. Use an explicitly selected online Child workdir for supported remote shell/filesystem operations; never fall back to Main. The JavaScript worker requires Main execution permission and is unavailable in this profile, even when a Child or LayerFS workspace is selected.' })
   }
 
   // ── Graceful shutdown ─────────────────────────────────────────────

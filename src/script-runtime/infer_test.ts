@@ -143,7 +143,7 @@ test('Node infer uses separate RPC and composes real tools without a registered 
       entry: 'run', policy, signal: signal() })
     assert.equal(result.value, 'undefined')
     assert.throws(() => startScript({ code: '', args: {}, entry: 'run', policy,
-      signal: signal(), infer: async () => null }), /only in host/)
+      signal: signal(), infer: async () => null }), /only in inline exec/)
   }
   assert.throws(() => startScript({ code: '', args: {}, entry: 'script', policy: { kind: 'host' },
     signal: signal(), toolNames: ['infer'] }), /not a tool/)

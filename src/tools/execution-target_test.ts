@@ -13,6 +13,11 @@ import { SearchTool } from './search.ts'
 import { ViewEditTool } from './view-edit.ts'
 import { Tools, SessionTools } from './registry.ts'
 import { UseProjectTool } from './use-project.ts'
+import { ExecTool } from './shell.ts'
+import { ProcessManager } from '../execution/processes/manager.ts'
+import { CommandHandlerManager } from './shell-commands/command-handler.ts'
+import type { BackgroundTaskManager } from '../agent/background-task.ts'
+import { requireToolText } from './tool.ts'
 import type { RemoteFolderRecord } from '../folders/contracts.ts'
 import type { RecordedFileChange } from '../sessions/file-change-contract.ts'
 
@@ -30,15 +35,19 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
     await writeFile(join(main, 'note.txt'), 'main-unchanged')
     const filesystem = new CapabilityFilesystem([{ workdirId: 'approved', rootPath: child }])
     let calls = 0
+    let offline = false
     const executor: Executor = {
       getStatus: async () => null, cancel: async () => { throw new Error('not used') },
       async *execute(request, signal) {
         calls++
+        if (offline) throw new Error('Child unavailable fixture')
         assert.equal(request.nodeId, 'child'); assert.equal(request.workdirId, 'approved')
-        const chunk = await filesystem.execute(request, signal)
+        const isCommand = request.operation === 'workdir.process.execute-once'
+        if (isCommand) assert.equal((request.args as { script?: string }).script, 'echo checked')
+        const chunk = isCommand ? 'checked\n' : await filesystem.execute(request, signal)
         const timestamp = new Date().toISOString()
         yield { version: 1, jobId: request.jobId, sequence: 0, timestamp, type: 'stdout', chunk }
-        yield { version: 1, jobId: request.jobId, sequence: 1, timestamp, type: 'completed', receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'completed', finishedAt: timestamp } }
+        yield { version: 1, jobId: request.jobId, sequence: 1, timestamp, type: 'completed', receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'completed', ...(isCommand ? { exitCode: 0 } : {}), finishedAt: timestamp } }
       },
     }
     const registry = new Tools(main)
@@ -46,7 +55,7 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
       list: () => [folder], requireAvailable: async () => folder,
       requireExecutionAvailable: async () => folder, acquireAccess: () => () => {},
     } }))
-    const sessionTools = new SessionTools(registry, main, ['read', 'write', 'search'])
+    const sessionTools = new SessionTools(registry, main, ['read', 'write', 'search', 'exec'])
     // Host target resolution must work even when context switching is not exposed.
     assert.equal(sessionTools.get('workspace_use'), undefined)
     let change: RecordedFileChange | undefined
@@ -71,6 +80,46 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
     assert.equal(calls, before)
     assert.equal(await new SearchTool(main, undefined, undefined, false).execute({ folder: 'child', handler: 'grep', query: 'x' }, context), 'No matches found')
     assert.equal(calls, before + 1)
+
+    registry.register(read)
+    registry.register(new WriteTool(main))
+    registry.register(new SearchTool(main, undefined, undefined, false))
+    const js = new ExecTool(main, 15_000, new CommandHandlerManager(), new ProcessManager(), 'sh', {} as BackgroundTaskManager)
+    registry.register(js)
+    const script = `
+      import importedRead from '@shadow/read'
+      export default async ([value, shell]) => {
+        if (read !== importedRead) throw Error('Read adapters differ')
+        const before = await read({ path: 'note.txt' })
+        const found = await search({ handler: 'grep', path: '.', query: before })
+        if (!found) throw Error('Search result missing')
+        await write({ path: 'note.txt', content: value })
+        const tested = await exec({ script: 'echo checked', shell, timeout_ms: 5000 })
+        return { before, tested }
+      }
+    `
+    for (const [workspace, value, before] of [[undefined, 'local-js', 'main-unchanged'], ['child', 'child-js', 'child-after']] as const) {
+      const output = await js.execute({ shell: 'javascript', workspace, script, args: [value, process.platform === 'win32' ? 'cmd' : 'sh'] }, context)
+      const result = JSON.parse(requireToolText(output)).result
+      assert.equal(result?.before, before, requireToolText(output))
+      assert.match(result.tested, /checked/)
+    }
+    assert.equal(await readFile(join(main, 'note.txt'), 'utf8'), 'local-js')
+    assert.equal(await readFile(join(child, 'note.txt'), 'utf8'), 'child-js')
+    const count = calls
+    for (const args of [{ workspace: 'local', path: 'note.txt' }, { path: '../note.txt' }, { path: 'v:sessions/self.json' }]) {
+      const output = await js.execute({ shell: 'javascript', workspace: 'child', script: `import read from '@shadow/read'; await read(${JSON.stringify(args)})` }, context)
+      assert.match(requireToolText(output), /bound target/)
+    }
+    await assert.rejects(js.execute({ shell: 'javascript', workspace: 'foreign', script }, context), /Unknown or ambiguous/)
+    assert.equal(calls, count)
+    offline = true
+    const output = await js.execute({ shell: 'javascript', workspace: 'child', script, args: ['must-not-write', 'sh'] }, context)
+    assert.match(requireToolText(output), /Child unavailable fixture/)
+    assert.equal(JSON.parse(requireToolText(output)).ok, false)
+    assert.equal(calls, count + 1)
+    assert.equal(await readFile(join(main, 'note.txt'), 'utf8'), 'local-js')
+    assert.equal(await readFile(join(child, 'note.txt'), 'utf8'), 'child-js')
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -82,7 +131,7 @@ test('Folder selection rejects raw addresses, virtual/URL/web routes, invalid se
   for (const path of ['v:memory/a', 'https://example.com', '/main/v:memory/a', 'foo/../v:tools']) {
     await assert.rejects(executionTargetContext({ folder: 'child', path }, { ...base, async resolveToolTarget() { throw new Error('must not resolve') } }, 'filesystem.read'), /ordinary filesystem/)
   }
-  assert.equal(await executionTargetContext({ shell: 'node' }, base, 'workdir.process.execute-once'), base)
+  assert.equal(await executionTargetContext({ shell: 'javascript' }, base, 'workdir.process.execute-once'), base)
   await assert.rejects(executionTargetContext({ folder: 'child', handler: 'web' }, base, 'filesystem.read'), /ordinary filesystem/)
 })
 

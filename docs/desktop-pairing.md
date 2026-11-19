@@ -211,7 +211,7 @@ than silently executing on Main.
 
 Remote sessions still use Main's configured provider. File access and a
 foreground OS-shell command are useful first checks; do not start with remote
-browser automation, inline TypeScript, attachments or background processes.
+browser automation, Main-host script computation, attachments or background processes. A Main-authorized JavaScript script can bridge filesystem tools and authorized OS commands to the selected Child; the JavaScript itself does not run on the Child.
 Those are not implied by successful pairing. See the
 [remote locality contract](architecture.md#locality-contract) for supported
 operations and remaining limits.

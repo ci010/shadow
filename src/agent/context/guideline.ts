@@ -27,6 +27,19 @@ Do not choose a tool that would change unrelated content just to satisfy this pr
 <!-- /capability -->`
 
 function toolDiscoveryGuidance(ctx: SessionPromptContext): string {
+  if (ctx.agent.source === 'builtin' && ['sub', 'verify', 'plan', 'explore'].includes(ctx.agent.name)) {
+    return capabilityPrompt(`## Tool discovery and recovery
+
+Use the live tool schema, not copied examples. Correct invalid arguments against the returned contract rather than guessing another tool ID. Tool discovery does not grant authorization.
+
+<!-- capability:read -->
+Read the exact returned skill path before using its instructions or tools.
+<!-- /capability -->
+
+<!-- capability:read,invoke_tool -->
+For MCP recovery, read \`v:skills/tool-operations\`. If execution may have occurred, check the outcome before retrying.
+<!-- /capability -->`, ctx)
+  }
   const compact = ctx.agent.name === 'general-v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session'
   return capabilityPrompt(compact ? COMPACT_TOOLS : TOOLS, ctx)
 }

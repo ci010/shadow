@@ -74,7 +74,7 @@ test('timeline provider rejects failed publication instead of claiming success',
     /Fixture publication failed/)
 })
 
-test('isolated Node-only fixture reaches separate review and explicit owner confirmation without real model calls', { timeout: 150_000 }, async t =>
+test('isolated JavaScript-only fixture reaches separate review and explicit owner confirmation without real model calls', { timeout: 150_000 }, async t =>
   withTempWorkspace(async home => {
     const forkRuntime = childProcess.fork
     const runtimeFork = t.mock.method(childProcess, 'fork', (modulePath: string | URL, args: readonly string[], options: ForkOptions) =>
@@ -95,8 +95,8 @@ test('isolated Node-only fixture reaches separate review and explicit owner conf
     const respond = async (messages: ChatMessage[], definitions: ToolDefinition[]): Promise<LLMResponse> => {
       calls++
       const policy = String(messages[0].content)
-      assert.match(policy, /Only Node exec is enabled/)
-      assert.deepEqual(definitions.find(tool => tool.function.name === 'exec')?.function.parameters.properties.shell.enum, ['node'])
+      assert.match(policy, /Only JavaScript exec is enabled/)
+      assert.deepEqual(definitions.find(tool => tool.function.name === 'exec')?.function.parameters.properties.shell.enum, ['javascript'])
       const tools = (...items: Array<{ name: string; arguments: Record<string, unknown> }>): LLMResponse => ({
         content: null, toolCalls: items.map((item, index) => ({ id: `timeline-${calls}-${index}`, ...item })),
       })
@@ -110,20 +110,22 @@ test('isolated Node-only fixture reaches separate review and explicit owner conf
       assert.ok(calls <= 7, 'Author testing requires the real post-request input event')
       assert.ok(messages.some(message => message.role === 'user' &&
         contentText(message.content).includes('Publish only the inert synthetic fixture.')))
-      if (calls === 1) return tools({ name: 'work', arguments: { action: 'create', data: {
+      if (calls === 1) return tools({ name: 'invoke_tool', arguments: { name: 'work_create', args: {
         title: 'Timeline fixture', definition: fixtureDefinition, notes: { kind: 'task' },
       } } })
       if (calls === 2) {
-        const value = messages.findLast(message => message.role === 'tool' && message.name === 'work')?.content
+        const value = messages.findLast(message => message.role === 'tool' && message.name === 'invoke_tool')?.content
         assert.equal(typeof value, 'string')
+        assert.match(String(value), /^\{/, String(value))
         const record = JSON.parse(String(value))
         assert.equal(typeof record.key, 'string')
         assert.equal(typeof record.version, 'number')
-        return tools({ name: 'work', arguments: { action: 'update', key: record.key, version: record.version,
-          data: { notes: { summary: 'Publish inert fixture only', next: 'Publish source' } } } })
+        return tools({ name: 'invoke_tool', arguments: { name: 'work_update', args: { key: record.key, version: record.version,
+          notes: { summary: 'Publish inert fixture only', next: 'Publish source' } } } })
       }
       if (calls === 3) {
-        const value = messages.findLast(message => message.role === 'tool' && message.name === 'work')?.content
+        const value = messages.findLast(message => message.role === 'tool' && message.name === 'invoke_tool')?.content
+        assert.match(String(value), /^\{/, String(value))
         const record = JSON.parse(String(value))
         assert.equal(typeof record.key, 'string', 'Work note update must succeed')
         assert.equal(typeof record.version, 'number')
@@ -132,10 +134,7 @@ test('isolated Node-only fixture reaches separate review and explicit owner conf
       if (calls === 4) return tools({ name: 'read', arguments: { path: 'v:tools/micro_app/micro_app' } })
       if (calls === 5) return tools(
         { name: 'exec', arguments: { script: `
-          import { execFile } from 'node:child_process'
-          import { promisify } from 'node:util'
-          const { stdout } = await promisify(execFile)(process.execPath, ['-p', '"native-fixture"'], { shell: false })
-          console.log(stdout)
+          export default () => "javascript-fixture"
         ` } },
         { name: 'exec', arguments: { shell: 'powershell', script: 'Write-Output "must-not-run"' } },
         { name: 'write', arguments: { path: 'app/index.html', content: '<!doctype html><title>Fixture</title><p>Not runtime-tested</p>' } },
@@ -144,8 +143,8 @@ test('isolated Node-only fixture reaches separate review and explicit owner conf
       if (calls === 6) {
         const results = messages.filter(message => message.role === 'tool' && message.name === 'exec')
         assert.equal(results.length, 2)
-        assert.match(String(results[0].content), /native-fixture/)
-        assert.match(String(results[1].content), /Only shell=node/)
+        assert.match(String(results[0].content), /javascript-fixture/)
+        assert.match(String(results[1].content), /Only shell=javascript/)
         return tools({ name: 'invoke_tool', arguments: { name: 'micro_app', args: { action: 'publish', directory: 'app' } } })
       }
       assert.equal(calls, 7)

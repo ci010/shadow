@@ -26,6 +26,7 @@ let started = false
 let failed = false
 let completed = false
 let host = false
+let javascript = false
 let testDiagnostics = false
 let idleScript = false
 let calls = 0
@@ -44,7 +45,7 @@ function fail(code: Extract<ChildPacket, { type: 'error' }>['code'], error?: unk
   send({
     type: 'error', code: failure ? 'capability_failed' : code,
     ...(failure ? { failure } : {}),
-    ...(host && types.isNativeError(error) ? { message: error.message.slice(0, 4096) } : {}),
+    ...((host || javascript) && types.isNativeError(error) ? { message: error.message.slice(0, 4096) } : {}),
     ...(testDiagnostics && code === 'guest_failed' && !failure && types.isNativeError(error)
       ? { diagnostic: `${error.name}: ${error.message}`.slice(0, 4096) } : {}),
   })
@@ -55,6 +56,7 @@ process.on('uncaughtException', error => fail('guest_failed', error))
 process.on('unhandledRejection', error => fail('guest_failed', error))
 
 async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promise<void> {
+  javascript = packet.policy.kind === 'javascript'
   host = packet.policy.kind === 'host'
   testDiagnostics = packet.policy.kind === 'restricted' && packet.policy.mode === 'test'
   // Windows/libuv may insert profile/PATH variables despite an explicit env.
@@ -85,6 +87,22 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
   const context = vm.createContext(sandbox, {
     name: 'script', codeGeneration: { strings: host, wasm: host },
   })
+  if (javascript) {
+    let logBytes = 0
+    sandbox.console = vm.runInContext(`(emit) => {
+      const stringify = JSON.stringify, text = String;
+      const send = (error, values) => {
+        const line = values.map(value => typeof value === 'string' ? value : stringify(value) ?? text(value)).join(' ');
+        emit(error, line.slice(0, 16384));
+      };
+      return Object.freeze({ log: (...values) => send(false, values), error: (...values) => send(true, values) });
+    }`, context)((error: boolean, text: string) => {
+      if (failed || completed) return
+      logBytes += Buffer.byteLength(text) + 1
+      if (logBytes > 64 * 1024) { fail('output_limit'); return }
+      send({ type: 'log', stream: error ? 'stderr' : 'stdout', text })
+    })
+  }
   const realm = vm.runInContext('({ object: Object.prototype, array: Array.prototype })', context) as {
     object: object; array: object
   }
@@ -145,9 +163,10 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     Object.assign(sandbox, globals)
     Object.assign(globalThis, globals)
   }
-  const identifier = pathToFileURL(packet.filename).href
+  const identifier = javascript ? 'shadow:exec' : pathToFileURL(packet.filename).href
   const resolveModule = async (specifier: string): Promise<vm.SyntheticModule | vm.SourceTextModule> => {
-    if ((!host || specifier.startsWith('@shadow/')) && !allowed.has(specifier)) {
+    if (((!host || specifier.startsWith('@shadow/')) && !allowed.has(specifier)) &&
+      !(javascript && packet.inferEnabled && specifier === '@shadow/infer')) {
       fail('import_denied')
       throw new Error('Import denied.')
     }
@@ -180,12 +199,12 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
             // Return void; never hand the host Promise or exception to guests.
             void (async () => {
               try {
-                const result = await call(specifier.slice('@shadow/'.length), input, false, true)
+                const result = await call(specifier.slice('@shadow/'.length), input, javascript && specifier === '@shadow/infer', true)
                 settle(result as string, false)
               } catch (error) {
                 const failure = error && typeof error === 'object' ? callFailures.get(error) : undefined
                 const guestError = settle(JSON.stringify({
-                  message: failure ? (host && failure.message ? failure.message : callFailureMessage(failure)) : 'Script module call failed.',
+                  message: failure ? ((host || javascript) && failure.message ? failure.message : callFailureMessage(failure)) : 'Script module call failed.',
                   ...(failure ? { code: failure.code, status: failure.status } : {}),
                 }), true)
                 if (failure && guestError && typeof guestError === 'object') callFailures.set(guestError, failure)
@@ -232,11 +251,20 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     await load
     return module
   }
+  if (javascript) {
+    // Bind only the capabilities admitted by the parent, using the same
+    // guest-realm functions and call path as the compatible static imports.
+    const names = packet.inferEnabled ? [...packet.toolNames, 'infer'] : packet.toolNames
+    for (const name of names) {
+      const module = await dynamicImport(`@shadow/${name}`)
+      Object.defineProperty(sandbox, name, { value: Reflect.get(module.namespace, 'default') })
+    }
+  }
   const code = /\.(?:ts|mts)$/i.test(packet.filename)
     ? stripTypeScriptTypes(packet.code, { mode: host ? 'transform' : 'strip', sourceUrl: identifier })
     : packet.code
   const source = new vm.SourceTextModule(code, {
-    context, identifier, importModuleDynamically: dynamicImport,
+    context, identifier, ...(javascript ? {} : { importModuleDynamically: dynamicImport }),
     initializeImportMeta: meta => {
       meta.url = identifier
       if (host) {

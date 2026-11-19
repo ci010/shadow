@@ -42,8 +42,8 @@ function createToolBinding(
       async infer(input: Record<string, unknown>, callSignal: AbortSignal) {
         const combined = AbortSignal.any([signal, callSignal, AbortSignal.timeout(120_000)])
         combined.throwIfAborted()
-        if (!context.toolCallId || context.toolCallName !== 'exec' || context.remoteWorkdir) {
-          throw new Error('infer requires a local Node exec invocation.')
+        if (!context.toolCallId || context.toolCallName !== 'exec') {
+          throw new Error('infer requires an inline exec invocation.')
         }
         if (inferenceCalls >= 8 || activeInferences >= 2) throw new Error('infer limit: 8 calls per exec, at most 2 concurrent.')
         inferenceCalls++
