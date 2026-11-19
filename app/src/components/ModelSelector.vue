@@ -9,11 +9,12 @@
     <template #default="{ close }">
       <div ref="menu" class="model-menu" @keydown="submenuKey">
       <template v-if="page === 'menu'">
-        <div v-if="usage || deepSeekRates" class="model-usage-row" :class="{ 'model-usage-deepseek': deepSeekRates }">
+        <div v-if="usage || deepSeekRates || (usageKind === 'copilot-credits' && usageUnavailable)" class="model-usage-row" :class="{ 'model-usage-deepseek': deepSeekRates }">
           <template v-if="usage?.kind === 'copilot-credits'">
             <span>{{ t('{used} / {allowance} AI credits', { used: formatNumber(usage.used), allowance: formatNumber(usage.allowance) }) }}</span>
             <progress aria-hidden="true" :value="usage.used" :max="usage.allowance" />
           </template>
+          <span v-else-if="usageKind === 'copilot-credits' && usageUnavailable">{{ t('AI credit allowance unavailable') }}</span>
           <span v-else-if="usage?.kind === 'deepseek-balance'">{{ usage.balances.map(({ total, currency }) => t('API balance: {amount} {currency}', { amount: total, currency })).join(' · ') }}</span>
           <span v-if="deepSeekRates">{{ t('DeepSeek API reference (off-peak, USD / 1M tokens): input {input} · cached {cached} · output {output}', { input: formatNumber(deepSeekRates[0]), cached: formatNumber(deepSeekRates[1]), output: formatNumber(deepSeekRates[2]) }) }}</span>
         </div>
@@ -112,18 +113,24 @@ const usageKind = computed(() => {
   if (type === 'deepseek') return 'deepseek-balance'
 })
 const usage = ref<Exclude<ProviderUsage, { kind: 'unavailable' }>>()
+const usageUnavailable = ref(false)
 watch([
-  () => opened.value && page.value === 'menu' && !pending.value && !unavailable.value ? props.usageApiBase : undefined,
+  () => opened.value && page.value === 'menu' ? props.usageApiBase : undefined,
   usageProvider, usageKind,
 ], async ([base, provider, kind], _previous, onCleanup) => {
   usage.value = undefined
+  usageUnavailable.value = false
   if (base === undefined || !provider || !kind) return
   const controller = new AbortController()
   onCleanup(() => controller.abort())
   try {
     const result = await createProviderSetupClient(base).usage(provider, controller.signal)
-    if (!controller.signal.aborted && result.kind === kind) usage.value = result
-  } catch { /* Optional account data: leave the row hidden. */ }
+    if (controller.signal.aborted) return
+    if (result.kind === kind) usage.value = result
+    else usageUnavailable.value = true
+  } catch {
+    if (!controller.signal.aborted) usageUnavailable.value = true
+  }
 })
 const triggerTitle = computed(() => `${selection?.current.value || t('Choose model')}${props.settings && effectiveEffortLabel.value ? ` · ${effectiveEffortLabel.value}` : ''}`)
 const allOptions = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', '', selection?.providers?.value))
