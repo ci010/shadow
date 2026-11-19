@@ -15,7 +15,7 @@ export interface ScriptOptions {
   cwd?: string
   filename?: string
   entry: 'run' | 'script'
-  policy: { kind: 'restricted'; imports: readonly string[]; mode?: 'live' | 'test' | 'probe' } | { kind: 'host' }
+  policy: { kind: 'restricted'; imports: readonly string[]; mode?: 'live' | 'test' | 'probe' } | { kind: 'host' } | { kind: 'javascript' }
   callModule?: (name: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
   infer?: (input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
   toolNames?: readonly string[]
@@ -136,7 +136,7 @@ export function startScript(options: ScriptOptions): ScriptRun {
   const maxCalls = boundedInteger(options.maxCalls ?? (host ? Number.MAX_SAFE_INTEGER : 32),
     'maxCalls', 0, host ? Number.MAX_SAFE_INTEGER : 128)
   const toolNames = (options.toolNames ?? []).map(name => ToolNameSchema.parse(name))
-  if (options.infer && (!host || options.entry !== 'script')) throw new Error('infer is available only in host Node exec scripts.')
+  if (options.infer && (policy.kind === 'restricted' || options.entry !== 'script')) throw new Error('infer is available only in inline exec scripts.')
   if (toolNames.includes('infer')) throw new Error('infer is a Node capability, not a tool name.')
   if (toolNames.length > 1024 || new Set(toolNames).size !== toolNames.length) throw new Error('Invalid script tool names.')
   if (typeof options.code !== 'string') throw new Error('Script source must be text.')
@@ -275,14 +275,20 @@ export function startScript(options: ScriptOptions): ScriptRun {
       if (ended) return
       try {
         const message = ChildPacketSchema.parse(raw)
-        if (message.type === 'result') {
+        if (message.type === 'log') {
+          if (policy.kind !== 'javascript') { finish(new Error('Unexpected script log packet.')); return }
+          outputBytes += Buffer.byteLength(message.text) + 1
+          if (outputBytes > 64 * 1024) { finish(new Error('Script child output limit exceeded.')); return }
+          if (message.stream === 'stdout') stdout += message.text + '\n'
+          else stderr += message.text + '\n'
+        } else if (message.type === 'result') {
           finish(undefined, decodeJson(message.json, 'output'))
         } else if (message.type === 'error') {
           const diagnostic = policy.kind === 'restricted' && policy.mode === 'test'
             && message.code === 'guest_failed' && !message.failure ? message.diagnostic : undefined
-          const detail = host ? message.message ?? message.failure?.message
+          const detail = (host || policy.kind === 'javascript') ? message.message ?? message.failure?.message
             : diagnostic ? `Script guest_failed: ${diagnostic}` : undefined
-          const Failure = host && toolCalls === 0 ? ScriptExecutionError : Error
+          const Failure = policy.kind !== 'restricted' && toolCalls === 0 ? ScriptExecutionError : Error
           finish(new Failure(detail ?? (message.failure
             ? callFailureMessage(message.failure) : `Script ${message.code}.`)))
         } else {
@@ -291,13 +297,13 @@ export function startScript(options: ScriptOptions): ScriptRun {
             return
           }
           if (message.type === 'infer') {
-            if (!host || options.entry !== 'script' || !options.infer) {
+            if (policy.kind === 'restricted' || options.entry !== 'script' || !options.infer) {
               finish(new Error('Script infer call denied.'))
               return
             }
             const input = decodeJson(message.json, 'infer input', true) as Record<string, unknown>
             launchCall((_name, input, signal) => options.infer!(input, signal),
-              controller.signal, 'infer', input, message.id, state, host)
+              controller.signal, 'infer', input, message.id, state, host || policy.kind === 'javascript')
             return
           }
           toolCalls++
@@ -308,7 +314,7 @@ export function startScript(options: ScriptOptions): ScriptRun {
             return
           }
           const input = decodeJson(message.json, 'module input', true) as Record<string, unknown>
-          launchCall(options.callModule, controller.signal, message.name, input, message.id, state, host)
+          launchCall(options.callModule, controller.signal, message.name, input, message.id, state, host || policy.kind === 'javascript')
         }
       } catch {
         finish(new Error('Script invalid IPC or JSON payload.'))

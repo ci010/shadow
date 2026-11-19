@@ -36,7 +36,7 @@ import { ProcessManager as RealProcessManager } from '../execution/processes/man
 import { SessionTools, Tools } from './registry.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { EvalBridgeRuntime } from '../script-runtime/bridge.ts'
-import { createProjectScope, getProjectScope } from '../projects/scope.ts'
+import { createProjectScope } from '../projects/scope.ts'
 
 const sandbox = await createTempWorkspace()
 const cwd = () => sandbox
@@ -141,81 +141,116 @@ function execTool(
   )
 }
 
-test('Node-only exec narrows discovery and rejects other shells before any dispatch', async () => {
+test('JavaScript-only exec narrows discovery and rejects other shells before any dispatch', async () => {
   const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
   const tool = execTool(sandbox, executor, undefined, undefined, true)
-  assert.deepEqual(tool.parameters.properties.shell.enum, ['node'])
-  assert.equal(tool.parameters.properties.shell.default, 'node')
+  assert.deepEqual(tool.parameters.properties.shell.enum, ['javascript'])
+  assert.equal(tool.parameters.properties.shell.default, 'javascript')
   assert.doesNotMatch(JSON.stringify(tool.parameters), /PowerShell|powershell|pwsh|normally cmd/)
   for (const shell of ['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh', 'invalid', null, 1]) {
     await assert.rejects(tool.execute({ shell, script: 'must not run', timeout_ms: 0 }, context(sandbox)),
-      error => error instanceof ToolNoEffectError && /Only shell=node/.test(error.message))
+      error => error instanceof ToolNoEffectError && /Only shell=javascript|Invalid `shell`/.test(error.message))
   }
   assert.equal(executor.calls.length, 0)
   assert.equal(execTool(sandbox, executor).parameters.properties.shell.enum, undefined, 'Default surface is unchanged')
 })
 
-test('Node-only exec defaults to Node despite session preference and directly runs executable arguments', async () => {
-  const workspace = await createTempWorkspace()
+test('JavaScript-only exec overrides session preferences, returns JSON, and exposes no Node APIs', async () => {
   const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
-  const tool = execTool(workspace, executor, undefined, undefined, true)
-  const ctx = { ...callContext(workspace, tool), defaultExecShell: 'powershell' as const }
+  const tool = execTool(sandbox, executor, undefined, undefined, true)
+  const ctx = { ...callContext(sandbox, tool), defaultExecShell: 'powershell' as const }
   const argument = '中文 "quotes" & | ; $HOME %PATH%'
+  const response = await tool.execute({ args: [argument], script: 'export default args => ({ args, process: typeof process, require: typeof require, Buffer: typeof Buffer })' }, ctx)
+  assert.deepEqual(JSON.parse(requireToolText(response)).result, { args: [argument], process: 'undefined', require: 'undefined', Buffer: 'undefined' })
+  assert.equal(executor.calls.length, 0)
+  for (const specifier of ['node:fs', 'node:process', '@shadow/exec', '@shadow/invoke_tool', '@shadow/subagent', './x.js']) {
+    const result = await tool.execute({ script: 'import ' + JSON.stringify(specifier) }, ctx)
+    assert.equal(isCompletedToolFailure(result), true)
+    assert.match(requireToolText(result), /import_denied/)
+  }
+  await assert.rejects(tool.execute({ shell: 'node', script: '1' }, ctx), /old .*node.* removed/)
+})
+
+test('JavaScript exposes only offered, bridge-enabled tools and gates readonly calls', async () => {
+  const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
+  const tool = execTool(sandbox, executor, undefined, undefined, true)
+  const tools = new Tools(sandbox)
+  tools.register(tool)
+  const fixture = {
+    parameters: { type: 'object' as const, properties: {} }, description: 'fixture',
+    async execute() { return 'fixture-result' },
+  }
+  tools.register({ ...fixture, name: 'direct_only' })
+  tools.register({ ...fixture, name: 'unoffered', javascriptBridge: 'read-only', readonly: true })
+  tools.register({ ...fixture, name: 'offered', javascriptBridge: 'read-only', readonly: args => args.mutate !== true })
+  const ctx = { ...context(sandbox), tools: new SessionTools(tools, sandbox), offeredToolNames: ['exec', 'direct_only', 'offered'] }
+  const result = await tool.execute({ script: `import imported from '@shadow/offered';
+    export default async () => [typeof direct_only, typeof unoffered, typeof exec, typeof infer, offered === imported, await offered()]` }, ctx)
+  assert.deepEqual(JSON.parse(requireToolText(result)).result, ['undefined', 'undefined', 'undefined', 'undefined', true, 'fixture-result'])
+  assert.match(requireToolText(await tool.execute({ script: 'await offered({ mutate: true })' }, ctx)), /only read-only/)
+  for (const hidden of ['direct_only', 'unoffered']) {
+    assert.match(requireToolText(await tool.execute({ script: `import '@shadow/${hidden}'` }, ctx)), /import_denied/)
+  }
+})
+
+test('JavaScript bridge rejects target overrides, background and recursion; failed native commands stop the script', async () => {
+  const manager = new RealProcessManager()
+  const background = new RecordingBackgroundTasks()
+  const tool = new ExecTool(sandbox, 15_000, new CommandHandlerManager(), manager,
+    defaultManagedShell(), background as unknown as BackgroundTaskManager)
+  const ctx = callContext(sandbox, tool)
+  const shell = defaultManagedShell()
+  for (const [nested, message] of [
+    [{ shell, workspace: 'other', script: 'echo forbidden' }, /bound target/],
+    [{ shell, timeout_ms: 0, script: 'echo forbidden' }, /positive foreground timeout/],
+    [{ shell: 'javascript', script: 'echo forbidden' }, /explicit OS shell/],
+    [{ shell, script: 'exit 9' }, /exited with code 9/],
+  ] as const) {
+    const result = await tool.execute({ shell: 'javascript', script: `import exec from '@shadow/exec'; await exec(${JSON.stringify(nested)}); console.log('continued')` }, ctx)
+    assert.match(requireToolText(result), message)
+    assert.doesNotMatch(requireToolText(result), /continued/)
+  }
+  assert.deepEqual(manager.list(), [])
+  assert.equal(background.calls, 0)
+})
+
+test('JavaScript cancellation joins an already running nested OS command', async () => {
+  const workspace = await createTempWorkspace()
+  const manager = new RealProcessManager()
+  const background = new RecordingBackgroundTasks()
+  const tool = new ExecTool(workspace, 15_000, new CommandHandlerManager(), manager,
+    defaultManagedShell(), background as unknown as BackgroundTaskManager)
+  const controller = new AbortController()
+  const marker = join(workspace, 'started')
+  const module = join(workspace, 'wait.cjs')
+  await writeFile(module, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'yes'); setInterval(() => {}, 1000)`)
+  const nested = { shell: defaultManagedShell(), script: `"${process.execPath}" "${module}"` }
+  const pending = assert.rejects(tool.execute({ shell: 'javascript', script: `await exec(${JSON.stringify(nested)})` },
+    callContext(workspace, tool, controller.signal)), /caller stopped/)
+  void pending.catch(() => {})
   try {
-    await writeFile(join(workspace, 'program with spaces.cjs'),
-      'console.log(JSON.stringify({args:process.argv.slice(2),cwd:process.cwd()}))')
-    const response = await tool.execute({ script: `
-      import { execFile } from 'node:child_process'
-      import { promisify } from 'node:util'
-      const result = await promisify(execFile)(process.execPath,
-        ['program with spaces.cjs', ${JSON.stringify(argument)}], { encoding: 'utf8', shell: false })
-      console.log(result.stdout)
-    ` }, ctx)
-    const result = JSON.parse(requireToolText(response))
-    assert.equal(result.ok, true, requireToolText(response))
-    assert.deepEqual(JSON.parse(result.stdout), { args: [argument], cwd: workspace })
-    assert.equal(executor.calls.length, 0)
-    assert.deepEqual(ctx.tools.getDefinitions().find(tool => tool.function.name === 'exec')?.function.parameters.properties.shell.enum, ['node'])
+    const deadline = Date.now() + 10_000
+    while (!existsSync(marker)) {
+      assert(Date.now() < deadline, 'nested process did not start')
+      await delay(20)
+    }
+    controller.abort(new Error('caller stopped'))
+    await pending
+    assert.deepEqual(manager.list(), [])
+    assert.equal(background.calls, 0)
   } finally {
+    controller.abort(new Error('caller stopped'))
+    await pending.catch(() => {})
+    for (const process of manager.list()) await manager.terminate(process)
     await rm(workspace, { recursive: true, force: true })
   }
 })
 
-test('Node-only bridge cannot enable an OS shell through nested exec', async () => {
-  const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
-  const tool = execTool(sandbox, executor, undefined, undefined, true)
-  const response = await tool.execute({ script: `
-    const rejected = await exec({ shell: 'powershell', script: 'must not run' })
-    console.log(JSON.stringify(rejected))
-  ` }, callContext(sandbox, tool))
-  const result = JSON.parse(requireToolText(response))
-  assert.equal(result.ok, true, requireToolText(response))
-  assert.match(result.stdout, /Only shell=node/)
-  assert.equal(executor.calls.length, 0)
-})
-
-test('Node-only native executable failures retain output and failed status', async () => {
-  const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))),
-    undefined, undefined, true)
-  const response = await tool.execute({ script: `
-    import { execFile } from 'node:child_process'
-    import { promisify } from 'node:util'
-    try {
-      await promisify(execFile)(process.execPath,
-        ['-e', 'console.log("before-failure");console.error("native-failure");process.exit(7)'],
-        { encoding: 'utf8', shell: false })
-    } catch (error) {
-      console.log(error.stdout)
-      console.error(error.stderr)
-      throw error
-    }
-  ` }, callContext(sandbox, tool))
-  assert.equal(isCompletedToolFailure(response), true)
-  const result = JSON.parse(requireToolText(response))
-  assert.equal(result.ok, false)
-  assert.match(result.stdout, /before-failure/)
-  assert.match(result.stderr, /native-failure/)
-  assert.match(result.error, /Command failed/)
+test('JavaScript source failures preserve output and fail without a background task', async () => {
+  const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))))
+  const result = await tool.execute({ shell: 'javascript', script: 'console.log("before-failure"); console.error("fixture-error"); throw Error("fixture failed")' }, callContext(sandbox, tool))
+  assert.equal(isCompletedToolFailure(result), true)
+  assert.deepEqual(JSON.parse(requireToolText(result)), { ok: false, error: 'fixture failed', stdout: 'before-failure\n', stderr: 'fixture-error\n' })
 })
 
 test('ExecTool command interception retains project and exact bot identity without spawning', async () => {
@@ -326,7 +361,7 @@ for (const mode of ['session', 'call'] as const) {
   }
 }
 
-for (const shell of [defaultManagedShell(), 'node'] as const) {
+for (const shell of [defaultManagedShell()]) {
   for (const timeout_ms of [0, 1]) {
     test(`background ${shell} timeout=${timeout_ms} reports real failure with preserved output`, async t => {
       const manager = new RealProcessManager(), bus = new Bus()
@@ -344,7 +379,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
       await writeFile(file, source)
       try {
         const result = await tool.execute({
-          shell, timeout_ms, script: shell === 'node' ? source : `"${process.execPath}" "${file}"`,
+          shell, timeout_ms, script: `"${process.execPath}" "${file}"`,
         }, { ...context(sandbox), tools: new SessionTools(base, sandbox) })
         assertMatch(requireToolText(result), /Execution ID: bg:/)
         const task = tasks.listTasks()[0]
@@ -354,12 +389,10 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
         assertMatch(output, /PASS before failure/)
         assertMatch(output, /assertion failed/)
         const expectedData = `SESSION_DATA=${resolveSessionLocations(sandbox, { sessionId: 'session-1' }).sessionDataDir}`
-        assert(output.includes(shell === 'node' ? JSON.stringify(expectedData).slice(1, -1) : expectedData), output)
-        if (shell !== 'node') {
-          assert(output.includes(`Shell: ${shell}\nCwd: ${sandbox}`))
-          assertMatch(output, /\[stdout\]\nPASS before failure/)
-          assertMatch(output, /\[stderr\]\nassertion failed/)
-        }
+        assert(output.includes(expectedData), output)
+        assert(output.includes(`Shell: ${shell}\nCwd: ${sandbox}`))
+        assertMatch(output, /\[stdout\]\nPASS before failure/)
+        assertMatch(output, /\[stderr\]\nassertion failed/)
         assert.equal(tasks.listTasks()[0].status, 'failed')
         await t.waitFor(() => assert.equal(inputs.length, 1))
         assertMatch(inputs[0], /failed/)
@@ -472,140 +505,15 @@ function callContext(workspace: string, tool: ExecTool, signal = new AbortContro
   return { ...context(workspace, signal), tools }
 }
 
-test('node exec uses the shared TS runtime with native imports, args, cwd, env and bound project tools without HTTP', async () => {
-  const workspace = await createTempWorkspace()
-  const scope = createProjectScope('script-project')
-  const runtime = new EvalBridgeRuntime({
-    projectId: scope.projectId, scope,
-  })
-  const tool = execTool(workspace, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))))
-  const base = new Tools(workspace)
-  const ctx = callContext(workspace, tool, undefined, base)
-  const calls: ExecutionContext[] = []
-  ctx.projectId = scope.projectId
-  ctx.evalBridge = runtime
-  ctx.toolCallId = 'outer-call'
-  ctx.toolCallName = 'exec'
-  base.register({
-    name: 'fixture', description: 'fixture', parameters: { type: 'object', properties: {} },
-    async execute(input, bound) {
-      assert.equal(getProjectScope(), scope)
-      calls.push(bound)
-      return JSON.stringify({ input, sessionId: bound.sessionId })
-    },
-  })
-  try {
-    await writeFile(join(workspace, '.env'), 'SCRIPT_FIXTURE_VALUE=synthetic\n')
-    const response = await tool.execute({
-      shell: 'node', args: ['one', 'two'],
-      script: [
-        'import { basename } from "node:path";',
-        'const number: number = 42;',
-        'console.log(basename(process.cwd()), process.env.SCRIPT_FIXTURE_VALUE);',
-        'console.log(JSON.stringify({ safegit: process.env.SHADOW_SAFEGIT_PATH }));',
-        'export default async (args: string[]) => ({ number, args, calls: [await fixture({ value: 1 }), await fixture({ value: 2 })] });',
-      ].join('\n'),
-    }, ctx)
-    const result = JSON.parse(requireToolText(response))
-    assert.equal(result.ok, true, requireToolText(response))
-    assert.match(result.stdout, /synthetic/)
-    assert(result.stdout.includes(JSON.stringify({ safegit: (await localExecSafegitEnv({})).SHADOW_SAFEGIT_PATH })))
-    assert.deepEqual(result.result, {
-      number: 42, args: ['one', 'two'],
-      calls: [{ input: { value: 1 }, sessionId: ctx.sessionId }, { input: { value: 2 }, sessionId: ctx.sessionId }],
-    })
-    assert.equal(calls.length, 2)
-    assert(calls.every(call => call.projectId === scope.projectId && call.physicalSessionId === ctx.physicalSessionId))
-    assert(calls.every(call => call.toolCallName === 'fixture' && call.toolCallId !== ctx.toolCallId))
-    assert.notEqual(calls[0].toolCallId, calls[1].toolCallId)
-    assert.equal(existsSync(join(workspace, '.eval')), false)
-  } finally {
-    await runtime.shutdown()
-    scope.close()
-    await rm(workspace, { recursive: true, force: true })
-  }
-})
-
-test('node exec refuses missing project bindings and invalid finite timeouts before running source', async () => {
+test('JavaScript refuses invalid foreground timeouts and missing project bindings before source runs', async () => {
   const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))))
-  const ctx = { ...context(sandbox), tools: new SessionTools(new Tools(sandbox), sandbox), projectId: 'unbound' }
-  const script = 'throw new Error("source must not execute")'
-  for (const timeout_ms of [0, 100]) {
-    assert.match(requireToolText(await tool.execute({ shell: 'node', script, timeout_ms }, ctx)), /injected eval bridge/)
-  }
-  for (const timeout_ms of [NaN, Infinity, -1, 0.5, 2_147_483_648]) {
-    assert.match(requireToolText(await tool.execute({ shell: 'node', script, timeout_ms }, ctx)), /finite non-negative integer/)
+  const ctx = { ...callContext(sandbox, tool), projectId: 'unbound' }
+  const script = 'throw new Error("must not execute")'
+  await assert.rejects(tool.execute({ shell: 'javascript', script, timeout_ms: 100 }, ctx), /injected eval bridge/)
+  for (const timeout_ms of [0, NaN, Infinity, -1, 0.5, 120001]) {
+    await assert.rejects(tool.execute({ shell: 'javascript', script, timeout_ms }, ctx), /JavaScript timeout_ms/)
   }
 })
-
-class ScriptBackgroundTasks extends RecordingBackgroundTasks {
-  options?: Parameters<BackgroundTaskManager['runPromiseTask']>[0]
-  completion?: Promise<string>
-
-  override runPromiseTask(
-    options?: Parameters<BackgroundTaskManager['runPromiseTask']>[0],
-    completion?: Promise<string>,
-  ): string {
-    this.options = options
-    this.completion = completion
-    void completion?.catch(() => {})
-    return super.runPromiseTask()
-  }
-}
-
-for (const timeout_ms of [0, 50]) {
-  test(`node exec background timeout=${timeout_ms} survives its turn and exposes live output, tools, cancellation and reaping`, async () => {
-    const workspace = await createTempWorkspace()
-    const background = new ScriptBackgroundTasks()
-    const controller = new AbortController()
-    const tool = execTool(workspace, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))), background)
-    const base = new Tools(workspace)
-    const tools = new SessionTools(base, workspace)
-    let calls = 0
-    base.register({
-      name: 'heartbeat', description: '', parameters: { type: 'object', properties: {} },
-      async execute(_input, ctx) {
-        ctx.signal.throwIfAborted()
-        calls++
-        return 'alive'
-      },
-    })
-    const ownerFile = join(workspace, 'owner.pid')
-    const childFile = join(workspace, 'child.pid')
-    try {
-      const response = await tool.execute({
-        shell: 'node', timeout_ms,
-        script: [
-          'import { writeFileSync } from "node:fs";',
-          'import { spawn } from "node:child_process";',
-          `writeFileSync(${JSON.stringify(ownerFile)}, String(process.pid));`,
-          'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });',
-          `writeFileSync(${JSON.stringify(childFile)}, String(child.pid));`,
-          'setInterval(async () => console.log(await heartbeat({})), 5);',
-        ].join('\n'),
-      }, { ...context(workspace, controller.signal), tools })
-      assert.match(requireToolText(response), /Execution ID: bg:/)
-      assert.equal(background.calls, 1)
-      controller.abort(new Error('turn ended'))
-      const deadline = Date.now() + 10_000
-      while (calls < 140 || !String(await background.options?.observe?.()).includes('alive')) {
-        assert(Date.now() < deadline, 'background script did not stay alive and call its tools')
-        await delay(20)
-      }
-      await background.options?.onCancel?.('cancel')
-      await assertRejects(background.completion!, /abort|cancel|terminated/i)
-      for (const file of [ownerFile, childFile]) {
-        const pid = Number(await readFile(file, 'utf8'))
-        assert.throws(() => process.kill(pid, 0), (error: any) => error.code === 'ESRCH')
-      }
-      assert.equal(existsSync(join(workspace, '.eval')), false)
-    } finally {
-      await background.options?.onCancel?.('cancel')
-      await background.completion?.catch(() => {})
-      await rm(workspace, { recursive: true, force: true })
-    }
-  })
-}
 
 test('call exec exposes foreground-only schema and rejects background and invalid limits before spawn', async () => {
   const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
@@ -664,45 +572,20 @@ test('call foreground cancellation waits for cleanup rather than releasing pendi
   assertEquals(background.calls, 0)
 })
 
-test('call node exec cancels and joins unawaited foreground bridge work before returning', async () => {
-  const workspace = await createTempWorkspace()
-  const manager = new RealProcessManager()
+test('JavaScript timeout and cancellation stop work without background ownership', async () => {
   const background = new RecordingBackgroundTasks()
-  const tool = new ExecTool(workspace, 120_000, new CommandHandlerManager(), manager,
-    defaultManagedShell(), background as unknown as BackgroundTaskManager)
+  const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))), background)
+  const script = 'while (true) {}'
+  const timeout = await tool.execute({ shell: 'javascript', script, timeout_ms: 100 }, callContext(sandbox, tool))
+  assert.match(requireToolText(timeout), /timed out/)
   const controller = new AbortController()
-  const pidFile = join(workspace, 'nested.pid')
-  try {
-    const module = join(workspace, 'nested-process.mjs')
-    await writeFile(module, [
-      'import {writeFileSync} from "node:fs";',
-      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
-      'setInterval(() => {}, 1000);',
-    ].join('\n'))
-    const command = `"${process.execPath}" "${module}"`
-    const script = [
-      'import {existsSync} from "node:fs";',
-      `void exec(${JSON.stringify({ script: command, timeout_ms: 30_000 })});`,
-      `while (!existsSync(${JSON.stringify(pidFile)})) await new Promise(resolve => setTimeout(resolve, 10));`,
-      'console.log("outer-finished");',
-      'process.stdout.write("outer-finished\\n", () => process.exit(0));',
-    ].join('\n')
-    const result = await tool.execute({ shell: 'node', script, timeout_ms: 5000 },
-      callContext(workspace, tool, controller.signal))
-    assertEquals(JSON.parse(requireToolText(result)).ok, true)
-    assertMatch(requireToolText(result), /outer-finished/)
-    assertEquals(manager.list(), [])
-    assertEquals(background.calls, 0)
-    const pid = Number(await readFile(pidFile, 'utf8'))
-    assert.throws(() => process.kill(pid, 0), (error: any) => error.code === 'ESRCH')
-  } finally {
-    controller.abort()
-    for (const managed of manager.list()) await manager.terminate(managed)
-    await rm(workspace, { recursive: true, force: true })
-  }
+  const work = assert.rejects(tool.execute({ shell: 'javascript', script }, callContext(sandbox, tool, controller.signal)), /caller stopped/)
+  controller.abort(new Error('caller stopped'))
+  await work
+  assert.equal(background.calls, 0)
 })
 
-for (const shell of [defaultManagedShell(), 'node'] as const) {
+for (const shell of [defaultManagedShell()]) {
   test(`call foreground ${shell}: success leaves no managed process or background notification`, async () => {
     const workspace = await createTempWorkspace()
     const manager = new RealProcessManager()
@@ -710,13 +593,11 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
     const tool = new ExecTool(workspace, 120_000, new CommandHandlerManager(), manager,
       defaultManagedShell(), background as unknown as BackgroundTaskManager)
     try {
-      const script = shell === 'node' ? 'console.log("foreground-success")' : 'echo foreground-success'
+      const script = 'echo foreground-success'
       const result = await tool.execute({ shell, script }, callContext(workspace, tool))
       assertMatch(requireToolText(result), /foreground-success/)
-      if (shell === 'node') assertEquals(JSON.parse(requireToolText(result)).ok, true)
       assertEquals(manager.list(), [])
       assertEquals(background.calls, 0)
-      if (shell === 'node') assertEquals(existsSync(join(workspace, '.eval')), false)
     } finally { await rm(workspace, { recursive: true, force: true }) }
   })
 
@@ -743,7 +624,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
       try {
         const module = join(workspace, 'process-fixture.mjs')
         await writeFile(module, source)
-        const script = shell === 'node' ? source : `"${process.execPath}" "${module}"`
+        const script = `"${process.execPath}" "${module}"`
         work = tool.execute({ shell, script, timeout_ms: outcome === 'timeout' ? 1500 : 30_000 },
           callContext(workspace, tool, controller.signal))
         // Attach rejection handling before any cancellation or test assertion.
@@ -771,8 +652,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
         }
         assertEquals(manager.list(), [])
         assertEquals(background.calls, 0)
-        if (shell === 'node') assertEquals(existsSync(join(workspace, '.eval')), false)
-      } finally {
+        } finally {
         controller.abort()
         await work?.catch(() => {})
         for (const managed of manager.list()) await manager.terminate(managed)
@@ -782,7 +662,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
   }
 }
 
-test('local OS and Node children receive the explicit host safegit override ahead of dotenv without mutating the host', async () => {
+test('OS shell, unlike JavaScript, children receive the explicit host safegit override ahead of dotenv without mutating the host', async () => {
   const workspace = await createTempWorkspace()
   const previous = process.env.SHADOW_SAFEGIT_PATH
   const binary = join(workspace, 'explicit-safegit')
@@ -801,10 +681,9 @@ test('local OS and Node children receive the explicit host safegit override ahea
     const os = await tool.execute({ shell, script: process.platform === 'win32'
       ? 'echo %SHADOW_SAFEGIT_PATH%' : 'printf "%s" "$SHADOW_SAFEGIT_PATH"' }, ctx)
     assert.equal(requireToolText(os).trim(), binary)
-    const node = JSON.parse(requireToolText(await tool.execute({ shell: 'node',
-      script: 'export default () => process.env.SHADOW_SAFEGIT_PATH' }, ctx)))
-    assert.equal(node.ok, true)
-    assert.equal(node.result, binary)
+    const js = JSON.parse(requireToolText(await tool.execute({ shell: 'javascript',
+      script: 'export default () => [typeof process, typeof SHADOW_SAFEGIT_PATH]' }, ctx)))
+    assert.deepEqual(js.result, ['undefined', 'undefined'])
     assert.equal(process.env.SHADOW_SAFEGIT_PATH, binary)
   } finally {
     if (previous === undefined) delete process.env.SHADOW_SAFEGIT_PATH
@@ -816,7 +695,7 @@ test('local OS and Node children receive the explicit host safegit override ahea
 })
 
 
-test('local OS and Node use current logical session data despite inherited cwd and dotenv, without host mutation', async () => {
+test('OS shell, unlike JavaScript, use current logical session data despite inherited cwd and dotenv, without host mutation', async () => {
   const workspace = await createTempWorkspace()
   const before = process.env.SHADOW_SESSION_DATA_DIR
   const manager = new RealProcessManager()
@@ -839,12 +718,9 @@ test('local OS and Node use current logical session data despite inherited cwd a
       const os = await tool.execute({ shell, script: process.platform === 'win32'
         ? 'echo %SHADOW_SESSION_DATA_DIR%' : 'printf "%s" "$SHADOW_SESSION_DATA_DIR"' }, ctx)
       assert.equal(requireToolText(os).trim(), expected)
-      const nodeText = requireToolText(await tool.execute({ shell: 'node',
-        script: 'export default () => ({ data: process.env.SHADOW_SESSION_DATA_DIR, cwd: process.cwd() })' }, ctx))
-      assert(nodeText.startsWith('{'), nodeText)
-      const node = JSON.parse(nodeText)
-      assert.equal(node.ok, true)
-      assert.deepEqual(node.result, { data: expected, cwd: owner })
+      const js = JSON.parse(requireToolText(await tool.execute({ shell: 'javascript',
+        script: 'export default () => [typeof process, typeof SHADOW_SESSION_DATA_DIR]' }, ctx)))
+      assert.deepEqual(js.result, ['undefined', 'undefined'])
       assert.equal(process.env.SHADOW_SESSION_DATA_DIR, before)
     }
   } finally {

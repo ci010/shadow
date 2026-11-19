@@ -468,9 +468,9 @@ at most 100 attempts. `--max-calls <1-100>` can lower that cap for a focused
 recovery or interaction probe; the effective cap is recorded in the run artifacts.
 `--node-only` sets `tools.exec.nodeOnly` in the isolated Project configuration, without
 changing the normal installation or the product request. Both `prompt.json`
-and `isolation.json` record the choice. Other tools remain available; external
-programs should be launched directly from Node, not through OS-shell wrappers.
-This tests a tool surface and scripting policy, not an OS sandbox.
+and `isolation.json` record the choice. Despite the historical flag name, it
+now enables only `shell: "javascript"`: no native modules or external programs.
+Other tools remain available. This is misuse prevention, not a security sandbox.
 Background learning is disabled in the isolated **Project** configuration.
 Before any inference, the controller verifies the running learning service is
 disabled and records `learning.json`; setting only the shared runtime field

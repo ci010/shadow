@@ -6,6 +6,7 @@ export const ModeSchema = z.enum(['live', 'test', 'probe'])
 export const PolicySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('restricted'), imports: ScriptImportsSchema, mode: ModeSchema.default('live') }).strict(),
   z.object({ kind: z.literal('host') }).strict(),
+  z.object({ kind: z.literal('javascript') }).strict(),
 ])
 
 export function validateImports(imports: readonly string[], mode: z.infer<typeof ModeSchema>): string[] {
@@ -59,12 +60,13 @@ export const ParentPacketSchema = z.discriminatedUnion('type', [
 export type ParentPacket = z.infer<typeof ParentPacketSchema>
 
 export const ChildPacketSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('log'), stream: z.enum(['stdout', 'stderr']), text: z.string().max(16384) }).strict(),
   z.object({ type: z.literal('result'), json: text }).strict(),
   z.object({ type: z.literal('call'), id, name: ToolNameSchema, json: text }).strict(),
   z.object({ type: z.literal('infer'), id, json: text }).strict(),
   z.object({
     type: z.literal('error'),
-    code: z.enum(['import_denied', 'invalid_json', 'guest_failed', 'invalid_entry', 'protocol_error', 'capability_limit', 'capability_failed']),
+    code: z.enum(['import_denied', 'invalid_json', 'guest_failed', 'invalid_entry', 'protocol_error', 'output_limit', 'capability_limit', 'capability_failed']),
     failure: CallFailureSchema.optional(),
     message: z.string().max(4096).optional(),
     diagnostic: z.string().max(4096).optional(),

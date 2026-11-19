@@ -353,8 +353,8 @@ name, name-ID selector or full UUID of a registered Workspace in the current
 Project. Read `v:project/workspaces` for selectors. The Workspace fixes its device and
 directory; tools do not accept raw node/workdir addresses. Omission
 preserves the committed session target. Legacy `folder` remains a hidden compatibility alias; supplying both selectors is rejected. Per-call selection does not change
-session cwd, scoped instructions or already-running calls. `exec.shell: "node"`
-still means inline TypeScript, not a device.
+session cwd, scoped instructions or already-running calls. `exec.shell: "javascript"`
+selects bounded Main computation with bridged filesystem calls on that target.
 
 ```json
 {"workspace":"child-source","path":"notes.txt"}
@@ -382,9 +382,9 @@ Current remote support is deliberately limited:
 - UTF-8 text and directory `read`, and the existing text overwrite/edit/append
   `write`, use the existing workdir filesystem operations.
 - OS `exec` uses the existing bounded remote process protocol. Its existing
-  lifecycle/time-limit/permission restrictions are unchanged. Inline
-  `shell: "node"`, Node-only exec policy, call-mode remote foreground execution,
-  and remote background execution remain unsupported.
+  lifecycle/time-limit/permission restrictions are unchanged. Call-mode remote
+  OS-shell execution and remote background execution remain unsupported.
+  Main-authorized JavaScript can bridge supported calls to the Child, including foreground OS commands where authorized.
 - Remote filesystem `search` (glob/grep) remains unsupported and explicitly
   rejects the route; it does not run Main's ripgrep. Use Child OS `exec` within
   its selected workdir when the Project permits shell execution. Local explicit
@@ -437,27 +437,25 @@ check `$LASTEXITCODE` after each native command in a sequence. The shell's actua
 exit status is authoritative: arbitrary scripts can mask a child command's error,
 and the tool cannot reconstruct that status from output text.
 
-For an opt-in Node-only execution surface, set `tools.exec.nodeOnly: true` in
-the Project configuration before starting its backend (restart to apply).
-`exec` then advertises only inline TypeScript;
-omitting `shell` selects Node even if a session or `defaultShell` prefers an
-OS shell. Explicit non-Node requests fail before execution, including nested
-tool-bridge requests. Runtime discovery and tool guidance match that policy.
-Remote workdirs reject this mode rather than falling back to Main or an OS shell.
-Other tools and the normal background/cancellation lifecycle are unchanged;
-the default configuration still offers detected OS shells.
+For JavaScript-only exec, set the existing `tools.exec.nodeOnly: true` flag in
+Project configuration before starting the backend. The historical key now
+selects only `shell: "javascript"` and overrides session shell preferences.
+Replace any saved `defaultShell: "node"` setting with `"javascript"` or an
+OS shell. The old privileged inline Node entry is no longer accepted.
 
-Use native `node:child_process` `execFile`/`spawn` with a program and argument
-array (`shell: false`) for external programs. `exec`/`execSync`, shell binaries
-and Windows `.cmd`/`.bat` wrappers reintroduce shell parsing; use actual
-executables or a Node CLI entrypoint instead. Node-only is **not an OS sandbox**:
-privileged Node imports can still launch arbitrary programs. Avoiding indirect
-shell launch is a scripting policy, not a claim of OS-level enforcement.
+JavaScript is a plain ES module with no native modules, `process`, or ambient
+host/Project environment. Return JSON from `export default (args) => ...` or
+`export function run(args)`. Use static imports such as
+`import read from '@shadow/read'`. Authorized `read`, `search`, and `write` use relative paths. Authorized
+`@shadow/exec` uses an explicit OS shell and foreground deadline; it is
+unavailable in JavaScript-only mode. Target selectors, `cwd`, virtual resources,
+web search, recursive JavaScript and other orchestration are unsupported. Main compute authorization is required
+regardless of which Workspace the bridged calls use. The worker always has a
+finite deadline (1–120000 ms) and is cancelled with the turn. This reduces
+accidental misuse; it is **not a security sandbox**.
 
-Node `exec` also exposes `await infer({instructions, input, schema, model?,
-maxTokens?, reasoningEffort?})`. This is a separate host RPC, never a registered
-tool, `invoke_tool` target, or application capability. Other script runtimes do
-not receive it. It works independently of the Project's Node-only shell flag.
+`import infer from '@shadow/infer'` exposes the existing bounded semantic RPC
+when available for the turn; it is not a registered tool or application SDK.
 The host sends only explicit input/instructions/schema to the configured
 provider with no tools or conversation history, then validates the returned
 JSON. Invalid output and provider errors reject without an automatic repair
@@ -474,7 +472,7 @@ returned usage, including invalid model outputs. History-only assistant token
 totals exclude these spans; do not equate one exec with one model request.
 Provider transport policy and other runtime model consumers remain separate;
 an evaluation's outbound proxy enforces its cross-turn, all-consumer cap.
-See [Node scripting](../src/skills/builtin/node-scripting/SKILL.md) for composition
+See [JavaScript scripting](../src/skills/builtin/javascript-scripting/SKILL.md) for composition
 guidance. Each exec still starts a disposable worker, not a persistent REPL.
 
 Recognized model connection/response failures include their phase and a bounded

@@ -39,8 +39,7 @@ same-project/deployment/image sandbox with capacity (or creates one), mounts the
 branch, runs once, checkpoints **even on nonzero exit**, and unmounts without discard.
 Nonzero remains a tool failure with its checkpoint receipt. Sandboxes are reused,
 not closed per call; upstream closes them after two idle minutes without mounts.
-Commit does not require unmount. The tool shell=node runtime is unsupported;
-installed Node commands inside sh/bash are ordinary commands.
+Commit does not require unmount. `shell: "javascript"` computes in an authorized Main worker; its bound `@shadow/exec` calls still use sh/bash on the branch and checkpoint normally. Installed Node commands inside sh/bash are ordinary commands, not JavaScript bridge code.
 
 Follow the exec wait-window/background contract; inspect owned output at `v:bg`.
 Independent branches can overlap; same-branch operations are reserved. Unknown or

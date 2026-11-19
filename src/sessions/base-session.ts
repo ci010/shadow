@@ -379,7 +379,8 @@ export abstract class BaseSession {
       const responseContext = this.responseContext
         ? { ...this.responseContext, responseId: `${turnId}:${i}` } : undefined
       const workGuard = this.tools.getWorkGuard()
-      executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
+      executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id),
+        offeredToolNames: toolDefs.map(def => def.function.name) }
       const boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
       await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
       const durableMessages = modelMessages(this.messages, executionContext.channel === 'qq')

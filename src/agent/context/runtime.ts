@@ -134,7 +134,7 @@ export function runtimeIdentityProvider(
       }
       const platform = `${getOs()} ${getArch()}`
       const remote = ctx.workdir && ctx.workdir.nodeId !== LOCAL_NODE_ID ? ctx.workdir : undefined
-      const defaultShell = ctx.execNodeOnly ? 'node' : ctx.defaultExecShell ?? defaultManagedShell()
+      const defaultShell = ctx.execNodeOnly ? 'javascript' : ctx.defaultExecShell ?? defaultManagedShell()
       const detectedShells = remote || ctx.execNodeOnly ? [] : await availableExecShells()
       const delegationModes = isToolAllowed(ctx.agent, 'subagent')
         ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId)
@@ -163,10 +163,10 @@ export function runtimeIdentityProvider(
           `- **Main Host Platform**: ${platform} (not the execution target)`,
           `- **Execution Target**: remote node \`${remote.nodeId}\`, directory \`${remote.workdirId}\`.`,
           ...(ctx.execNodeOnly ? [
-            '- Node-only exec is unavailable on remote workdirs. Do not fall back to an OS shell or Main filesystem.',
+            '- JavaScript-only exec requires Main compute permission. Bridged filesystem tools stay on the Child; no OS-shell or Main filesystem fallback.',
           ] : [
           '- The Child chooses its default OS shell. Omit shell unless its availability on the Child is known; Main shell detection does not apply.',
-          '- Remote exec is bounded OS-shell execution only: timeout_ms must be an integer from 1 to 120000 (default 120000). Unlike local exec, timeout terminates the Child command; it does not continue in the background. Inline Node/TypeScript, background jobs and call-mode remote exec are unsupported.',
+          '- Remote OS-shell exec is bounded: timeout_ms must be an integer from 1 to 120000 (default 120000). Unlike local exec, timeout terminates the Child command; it does not continue in the background. JavaScript does not start background jobs. JavaScript orchestration requires Main compute permission and keeps bridged filesystem tools and authorized nested OS commands on the Child.',
           '- For delegated Child work, use subagent mode=task: it inherits the selected Workspace and opaque remote workdir automatically, including review/retry. Do not copy paths to Main or switch away from the Child to delegate. Execution, cancellation and review are Main control-plane services; task OS commands still run on the Child.',
           '- The Child resolves initial cwd from the selected directory. Use relative paths; never use Main paths or display-path snapshots as remote cwd. Paired devices execute supported operations without per-operation approval; shell execution is not an OS sandbox.',
           ]),
@@ -180,10 +180,10 @@ export function runtimeIdentityProvider(
             if (shell.version) details.push(shell.version)
             return `  - ${details.join(' | ')}`
           }),
-          '  - node | inline TypeScript runtime',
+          '  - javascript | bounded inline JavaScript (not a security sandbox)',
           ...(ctx.execNodeOnly ? [
-            '- Only Node exec is enabled, including tool-bridge calls; session shell preferences cannot enable other shells.',
-            '- Run external programs with node:child_process execFile/spawn and argument arrays (shell:false). Do not invoke OS shells or exec/execSync; Node retains host privileges, so this tool policy is not an OS sandbox.',
+            '- Only JavaScript exec is enabled; session shell preferences cannot enable OS shells.',
+            '- JavaScript does not expose native modules, process or environment. See v:skills/javascript-scripting.',
           ] : []),
         ]),
       ]

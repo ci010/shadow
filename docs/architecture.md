@@ -1668,9 +1668,12 @@ They do not enable arbitrary remote scripts, MCP imports or tool factories.
 Names and parameters should be checked in each implementation rather than
 copied from a historical prompt. Local `exec` launches a new process per command:
 changing directory in one command does not change later invocations.
-Its `shell: "node"` mode executes inline TypeScript in a Node child with a
-session tool bridge. OS-shell names such as `pwsh`, `bash`, or `cmd` select the
-ordinary managed-process path.
+Its `shell: "javascript"` mode runs a bounded ES module in the existing Main
+child process and VM. `read`, `search`, `write`, and authorized nested OS `exec` are bound to the resolved
+Workspace and retain normal authorization and routing. A remote-only executor
+profile cannot opt into Main computation. Native imports, `process`, and
+ambient environment are not provided; this is not a security sandbox. OS-shell
+names such as `pwsh`, `bash`, or `cmd` select the ordinary managed-process path.
 
 Local OS-shell failures include the exit code, actual shell (including automatic
 Windows `cmd` to `sh` escalation), resolved working directory, and separate
@@ -1679,10 +1682,10 @@ output. Signal termination also reports the signal. Foreground results and
 background completion failures share this format; successful output is unchanged.
 A nonzero exit remains a failure, but its meaning is command-specific: for
 example, `git grep` exits with code 1 when there are no matches, usually without
-diagnostic output. Node-script and remote-execution results retain their own
+diagnostic output. JavaScript and remote-execution results retain their own
 formats.
 
-`ask(kind="decision")` is called directly, not through the Node script bridge. Its question
+`ask(kind="decision")` is called directly, not through the JavaScript bridge. Its question
 advertises two distinct suggested options and one default; legacy three-option
 requests remain readable. Both binary and legacy three-option questions use the
 same square-edged, lettered selection list and an explicit **Continue** action;
@@ -2870,10 +2873,10 @@ workspace icons and a short device source label. Optional public picker
 device names are preferred; unavailable metadata falls back to Main, LayerFS, or
 a remote node short ID. Full names, paths, and remote node IDs are available in
 shared HoverInfo on pointer hover and keyboard focus, not as wrapped row text.
-Only Folder/Workspace resources appear as explorer roots; per-conversation
-session-data roots are not listed. Existing attachments and session-file previews
-remain available without adding a separate explorer layer. Folder roots are the
-union of explicit `folderId` bindings from conversations open in this Project's editor groups,
+The current conversation contributes a Session files root once it has a session
+ID, even without a Folder/Workspace binding. This root browses session data,
+not the effective workdir, and does not list other conversations' data. Folder
+roots are the union of explicit `folderId` bindings from conversations open in this Project's editor groups,
 filtered against the catalog before deduplication by canonical local IDs or remote
 node/root identity. Closing or rebinding the last owning conversation removes its
 folder root; unbound conversations and project-only tabs do not expose unrelated
@@ -3320,10 +3323,13 @@ After saved setup is complete, Electron main starts the Main or Child backend
 with `utilityProcess.fork` without waiting for a renderer request. First-run
 setup starts it after role configuration. Renderer bootstrap observes the
 current attempt; failed startup requires an explicit retry rather than retrying
-on page reload. Closing the main window hides it while the tray and backend
-remain active; tray click, OS activation and a second same-profile launch restore
-it. The existing Electron single-instance lock prevents duplicate same-profile
-hosts. Explicit Quit requests authenticated backend shutdown before exiting.
+on page reload. Closing the main window normally hides it. To release the
+workbench renderer while keeping Electron, the tray, and the backend running,
+choose **轻量模式（关闭主窗口）** from the tray. Choose **显示 Shadow** or
+double-click the tray icon on Windows to recreate the workbench. This does not
+close separately opened Micro App windows or install a system service. The
+Electron single-instance lock prevents duplicate same-profile hosts. Explicit
+Quit requests authenticated backend shutdown before exiting.
 The supervisor still checks authenticated loopback readiness with the existing
 15-second deadline. The short-lived Child pairing command remains a Node-mode
 helper with private stdin; it is not the persistent Child runtime.

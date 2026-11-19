@@ -85,6 +85,8 @@ export interface Tool<Result extends ToolResult = string> {
   readonly supportsRemoteWorkdir?: boolean
   /** If true, this tool is opt-in only — hidden unless explicitly listed in allowedTools. */
   readonly optIn?: boolean
+  /** Explicit host opt-in to the inline JS bridge. Absent tools require direct calls. */
+  readonly javascriptBridge?: 'filesystem' | 'foreground-shell' | 'read-only'
   /** Trusted, bounded evidence/receipt outputs must not be truncated before model inspection. */
   readonly preserveOutput?: boolean
 

@@ -198,7 +198,7 @@ export const ExecToolSchema = z.object({
     'git-bash',
     'powershell',
     'pwsh',
-    'node',
+    'javascript',
   ]).optional(),
   timeoutMs: z.number().default(60_000),
   maxOutputBytes: z.number().default(10_000),

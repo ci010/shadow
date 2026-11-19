@@ -188,6 +188,7 @@ const nhm = new NodeHtmlMarkdown({
 export class ReadTool implements Tool<ToolResult> {
   private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
+  readonly javascriptBridge = 'filesystem'
   readonly readonly = (args: Record<string, unknown>) => !isSkillRootPath(args.path)
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
@@ -337,7 +338,7 @@ export class ReadTool implements Tool<ToolResult> {
     const cacheKey = `${sessionId}\0${resolved}\0${encoding}`
     const cached = this.readCache.get(cacheKey)
     if (
-      cached &&
+      !context.javascriptInvocation && cached &&
       cached.mtime === mtime &&
       cached.offset === offset &&
       cached.limit === limit
@@ -360,7 +361,7 @@ export class ReadTool implements Tool<ToolResult> {
     validateContentTokens(content, ext)
 
     // ── Cache this read ──
-    this.readCache.set(cacheKey, { mtime, offset, limit })
+    if (!context.javascriptInvocation) this.readCache.set(cacheKey, { mtime, offset, limit })
 
     // ── Format output ──
     let result = showLineNumbers

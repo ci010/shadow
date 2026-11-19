@@ -182,8 +182,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.match(candidate.systemPrompt, /Read `v:devices` for live status and supported operations/)
         assert.doesNotMatch(candidate.systemPrompt, /fixture-dir-id|Fixture directory|supported operations "filesystem\.read"/)
         assert.match(ui.systemPrompt, /directory "fixture-dir-id" "Fixture directory"/)
-        const taskRole = await (await f.app.request(previewUrl.replace('/general/', '/verify/'), owner)).json()
-        assert.doesNotMatch(taskRole.systemPrompt, /Device Inventory/)
+        for (const [role, marker, mode] of [
+          ['sub', /Complete the assigned outcome/, 'session'],
+          ['verify', /Verification is not repair/, 'task'],
+          ['plan', /Do not execute the plan/, 'session'],
+          ['explore', /Stay read-only/, 'session'],
+        ] as const) {
+          const response = await f.app.request(previewUrl.replace('/general/', `/${role}/`), owner)
+          assert.equal(response.status, 200)
+          const preview = await response.json()
+          assert.equal(f.contexts.at(-1)?.mode, mode)
+          assert.match(preview.systemPrompt, marker)
+          assert.doesNotMatch(preview.systemPrompt, /<!-- capability:/)
+          assert.equal(await vfs.resolve(`v:agents/${role}/context/web/system-prompt`, context), preview.systemPrompt)
+          if (role === 'verify') assert.doesNotMatch(preview.systemPrompt, /Device Inventory/)
+        }
         await assert.rejects(f.sessions.getContext({ sessionId: 'web:real', agentType: 'general', channel: 'web', rolePreview: 'owner-web' }), /cannot use a real conversation/)
         assert.equal(await vfs.resolve(`${candidatePath}/system-prompt`, context), candidate.systemPrompt)
         assert.deepEqual(candidate.tools, ui.tools)
@@ -193,7 +206,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const baselineTools = section(ui, 'tool-guidance')
         const coordinationAt = candidateTools.indexOf('### Delegation and coordination')
         assert(coordinationAt > 0)
-        assert.equal(candidateTools.slice(candidateTools.indexOf('### Shared work notes'), coordinationAt),
+        assert.equal(candidateTools.slice(candidateTools.indexOf('### Shared work notes'), candidateTools.indexOf('### Text edits')),
           baselineTools.slice(baselineTools.indexOf('### Shared work notes'), baselineTools.indexOf('### Executions')))
         assert.match(candidateTools, /Use the live schema, not copied examples/)
         assert.match(candidateTools, /Before adding, removing, or changing an MCP server, read `v:skills\/mcp-config`/)
@@ -205,7 +218,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.match(candidateTools, /Admission is not a result/)
         assert.match(candidateTools, /confirmed cancellation, then reread/)
         assert.match(candidateTools, /A receipt is admission, not execution or transfer of responsibility/)
-        assert.match(candidateTools, /### Session metadata\n\nSet a stable topic/)
+        assert.match(candidateTools, /### Text edits\n\nUse the `write` tool/)
+        assert.match(candidateTools, /### Session metadata\n\nBefore substantive work.*use `write` on `v:sessions\/self\.json`/)
+        assert.match(candidateTools, /Before the final response, write `completed: true`/)
+        assert.doesNotMatch(baselineTools, /### Text edits|Before the final response, write `completed: true`/)
         assert.doesNotMatch(candidateTools, /^### (Executions|Delegation|Peer conversations|Messaging)$/m)
         const candidateRole = section(candidate, 'AGENT.md')
         assert.match(candidateRole, /Do not turn a review into a change, or a draft into an applied change/)

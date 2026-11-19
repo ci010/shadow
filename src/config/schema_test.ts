@@ -26,7 +26,7 @@ test('QQ defaults existing and new bot configurations to mention-only triggering
   }
 })
 
-test('Node-only execution is an explicit boolean opt-in and preserves other configuration', () => {
+test('JavaScript-only execution (existing nodeOnly key) is an explicit boolean opt-in and preserves other configuration', () => {
   assert.equal(ConfigSchema.parse({}).tools.exec, undefined)
   assert.equal(ConfigSchema.parse({ tools: { exec: {} } }).tools.exec?.nodeOnly, undefined)
   for (const nodeOnly of [true, false]) {

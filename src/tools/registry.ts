@@ -170,7 +170,7 @@ export class Tools {
       text = await this.onAfter(name, args, text, context)
 
       if (
-        text.length > this.truncationThreshold &&
+        !context.javascriptInvocation && text.length > this.truncationThreshold &&
         !EXEMPT_TOOLS.has(name) && !tool.preserveOutput &&
         !(name === 'search' && (
           (args.handler === 'grep' || args.handler === 'glob') && typeof args.path === 'string' && isVirtualPath(args.path) ||
@@ -185,7 +185,10 @@ export class Tools {
       ) {
         text = await this.truncateAndSave(name, text)
       }
-      return images.length ? { content: [{ type: 'text', text }, ...images], ...(typeof result !== 'string' && result.isError ? { isError: true } : {}) } : text
+      const isError = typeof result !== 'string' && result.isError
+      return images.length || (context.javascriptInvocation && isError)
+        ? { content: [{ type: 'text', text }, ...images], ...(isError ? { isError: true } : {}) }
+        : text
     } catch (err) {
       admission?.finish(true, !context.signal?.aborted && err instanceof ToolNoEffectError ? 'none' : undefined)
       // Preserve cancellation and missing-effect evidence through nested callers.

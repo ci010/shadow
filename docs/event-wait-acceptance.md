@@ -227,10 +227,10 @@ the external UUID and payload's exact CI/CD/deployment identities. The first
 failed trial is retained; it is not counted as a success or explained away as
 an agent strategy failure.
 
-In the successful trial, the agent first read the Node skill and capability
+In this historical trial (before the removal of the privileged Node exec entry), the agent first read the Node skill and capability
 contract. It generated an `exec` script with `shell: "node"` and
 `timeout_ms: 1000`, which became managed background execution
-`bg:0a05f795fc124879`, then installed a continuation:
+`bg:0a05f795fc124879`, then installed a continuation. This historical script is not runnable on current versions; use direct capability and continuation calls instead:
 
 ```typescript
 const ci = await invoke_tool({ name: 'github_actions', args: { action: 'watch', run_id: ciId } })

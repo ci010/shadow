@@ -11,7 +11,7 @@ import { runEventWait } from './event-wait-acceptance.ts'
 import { GitHubWait } from './event-wait-github.ts'
 import { createBuildReceipt } from './event-wait-github-step.mjs'
 
-test('real Project Node shell calls the authenticated host capability, preserves credentials and verifies the exact CI build', async () => {
+test('real Project directly calls the authenticated host capability, preserves credentials and verifies the exact CI build', async () => {
   await withTempWorkspace(async root => {
     const identity = { requestId: '1e2303bd-a72b-4dc1-a5d7-3486d55b9c46', repository: 'test/repo', sha: 'a'.repeat(40), runId: 1 }
     let ciReads = 0
@@ -79,15 +79,16 @@ test('real Project Node shell calls the authenticated host capability, preserves
       name: 'fixture', listModels: () => ['fixture'],
       async chat(messages) {
         modelCalls++
-        if (modelCalls === 1) return { content: null, toolCalls: [{
-          id: 'host-sdk-test', name: 'exec', arguments: {
-            shell: 'node', timeout_ms: 20_000,
-            script: `const call = args => invoke_tool({name:"github_actions",args});
-const ci = await call({action:"watch",run_id:1}); if(ci.conclusion!=="success") throw new Error("CI failed");
-const cd = await call({action:"dispatch"}); const value = await call({action:"watch_signal"});
-const processed = await call({action:"process",url:value.signal.url});
-const finished = await call({action:"watch",run_id:cd.id}); console.log({processed,finished});`,
-          },
+        const actions = [
+          { action: 'watch', run_id: 1 },
+          { action: 'dispatch' },
+          { action: 'watch_signal' },
+          { action: 'process', url: signal.url },
+          { action: 'watch', run_id: 2 },
+        ]
+        const args = actions[modelCalls - 1]
+        if (args) return { content: null, toolCalls: [{
+          id: `host-capability-${modelCalls}`, name: 'invoke_tool', arguments: { name: 'github_actions', args },
         }] }
         assert.match(JSON.stringify(messages), /verified|acknowledgement/)
         assert.doesNotMatch(JSON.stringify(messages), /Project execution requires an injected eval bridge/)
@@ -97,16 +98,16 @@ const finished = await call({action:"watch",run_id:cd.id}); console.log({process
     const output = join(root, 'evaluation')
     const result = await runEventWait({
       output, scenario: 'cold', model: 'fixture', storage: 'sqlite', holdMs: 0,
-      timeoutMs: 30_000, maxCalls: 3, urlTimeoutMs: 60_000, external: capability.asScenario(),
+      timeoutMs: 30_000, maxCalls: 8, urlTimeoutMs: 60_000, external: capability.asScenario(),
     }, provider)
     assert.equal(result.passed, true, JSON.stringify(result))
     assert.equal(dispatched, true)
     assert.equal(acknowledged, true)
     assert.equal(capability.dispatches.length, 1)
     assert.equal(capability.attempts.length, 1)
-    assert.equal(modelCalls, 2)
+    assert.equal(modelCalls, 6)
     const calls: unknown = JSON.parse(await readFile(join(output, 'tool-calls.json'), 'utf8'))
-    assert.match(JSON.stringify(calls), /"shell":"node"/)
+    assert.match(JSON.stringify(calls), /"name":"github_actions"/)
     assert.doesNotMatch(JSON.stringify(calls), /Project execution requires|authorization|GH_TOKEN|GITHUB_TOKEN/)
   })
 })

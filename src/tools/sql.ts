@@ -5,6 +5,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 
 export class SqlTool implements Tool {
   readonly name = 'sql'
+  readonly javascriptBridge = 'read-only'
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) => {

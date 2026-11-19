@@ -9,7 +9,10 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   const modes = allows('subagent')
     ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
   const sections: string[] = []
-  if (mode !== 'call' && allows('work')) {
+  const readOnlyExplore = ctx.agent.source === 'builtin' && ctx.agent.name === 'explore'
+  if (mode !== 'call' && allows('work') && readOnlyExplore) {
+    sections.push('### Shared work notes\n\nRead existing Work via `v:works/overview` when relevant to the investigation. Do not update it.')
+  } else if (mode !== 'call' && allows('work')) {
     sections.push(`### Shared work notes
 
 Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.`)
@@ -21,16 +24,19 @@ Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create
 Use sql to discover Project conventions when relevant. Convention writes require genuine human instructions or decisions, never inferred approval. Keep personal preferences in profiles and task constraints in Work; historical conventions are not current rules.`)
   }
 
-  if (allows('exec')) {
+  const evidenceOnlyRole = ctx.agent.source === 'builtin' && ['verify', 'explore'].includes(ctx.agent.name)
+  if (allows('exec') && !evidenceOnlyRole) {
     sections.push(`### Shell
 
 ${ctx.execNodeOnly
-    ? '- **`exec`** — Inline TypeScript only; omit `shell` or select `node`. Use Node APIs for files and `execFile/spawn` with argument arrays and `shell:false` for external programs; do not start OS shells.'
-    : '- **`exec`** — Run a script using a detected shell from Runtime, or `shell: "node"` for inline TypeScript.'}
+    ? '- **`exec`** — Inline JavaScript only; omit `shell` or select `javascript`. No OS shells, native modules, process or environment.'
+    : '- **`exec`** — Run a script using a detected shell from Runtime, or `shell: "javascript"` for bounded JavaScript with workspace-bound filesystem tools. Not a security sandbox.'}
 ${mode === 'call'
     ? '- Follow the local foreground-only limits in Execution Contract; `timeout_ms` defaults to 120000.'
-    : '- Provide `timeout_ms` when you expect output; use `timeout_ms: 0` for background execution. On timeout, the process keeps running and appears in `v:bg`.'}
-- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.`)
+    : ctx.execNodeOnly ? '- JavaScript is foreground only: 1–120000 ms.'
+    : '- For supported OS shells, use `timeout_ms: 0` for background work. JavaScript is foreground only: 1–120000 ms.'}
+- The bridge keeps calls on one resolved workspace and cannot run JavaScript recursively.${ctx.execNodeOnly ? '' : ' Nested OS `exec` requires an explicit shell and existing permission.'}
+- JavaScript: use direct \`write\` for ordinary edits and direct \`exec\` for one command. Use \`shell: "javascript"\` for dependent read → write → test steps using admitted tool globals like \`await read({ path: "notes.txt" })\` without imports. Use direct calls for lifecycle or lazy tools; do not use scripts to bypass tool permissions or routine session metadata writes. \`infer()\` handles semantic judgments, not deterministic work. Read \`javascript-scripting\` first for API, budgets, errors and direct-only boundaries.`)
   }
 
   if (mode !== 'call' && !channelSupportsAsk(ctx.channel, ctx.sessionId)) {
@@ -51,6 +57,9 @@ ${allows('reply')
   }
 
   if (ctx.agent.name === 'general-v2' && mode === 'session') {
+    if (allows('write') && allows('exec')) sections.push(`### Text edits
+
+Use the \`write\` tool to create ordinary text files or apply exact local replacements. Read the relevant lines with \`read\` first when editing an existing file; if an exact match fails, reread and refine the match. Then use \`exec\` to run focused validation. Use \`exec\` also for generators and transformations that actually require scripting.`)
     const coordination: string[] = []
     if (allows('cancel')) coordination.push('Read `v:bg` for execution output. `cancel({executionId})` waits for local cleanup or reports remote state. Do not poll.')
     if (modes.includes('call')) coordination.push('Set `mode: "call"` explicitly for a blocking, inherited-context result. Invoke `subagent` directly, never through scripts.')
@@ -63,7 +72,9 @@ ${allows('reply')
     if (coordination.length) sections.push(['### Delegation and coordination', '', ...coordination.map(line => `- ${line}`)].join('\n'))
     if (allows('read') && allows('write')) sections.push(`### Session metadata
 
-Set a stable topic in \`v:sessions/self.json\`; use focus for the current phase. \`completed\` tracks conversation responsibility, not Work. Reopen only for a new request that requires work, not an acknowledgement or metadata cleanup.`)
+Before substantive work on a new request, use \`write\` on \`v:sessions/self.json\` if the topic is empty or the session is marked completed: set a stable topic if missing, a focus for the current phase, and \`completed: false\`. Preserve an existing topic unless the conversation changes direction. Update focus only for meaningful phase changes.
+
+Before the final response, write \`completed: true\` when the request needs no further follow-up from this session; keep it false while follow-up is pending. This tracks conversation responsibility, not Work acceptance. Acknowledgements and routine notices do not reopen the session.`)
     return sections.join('\n\n')
   }
 
@@ -88,7 +99,8 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
   }
 
   if (mode === 'task' && allows('task')) sections.push('- Review a fixed revision with `task(action:review,sessionId,revision,outcome:pass|changes_requested|blocked,content)`. Only the designated reviewer may decide. Changes automatically rerun the worker; only PASS delivers success. Failure or exhausted rounds escalate; Work is unchanged.')
-  if (mode === 'task') sections.push('- Read/write `v:sessions/self.json` for current metadata. Task discovery title and description are parent-owned. Self topic adapts the parent title: omit it or preserve unchanged; focus may describe the current step. completed:true marks resolved and completed:false reopens; reviewable tasks must return a final response for review, never self-accept. An unchanged full JSON roundtrip is allowed.')
+  const planOnlyRole = ctx.agent.source === 'builtin' && ctx.agent.name === 'plan'
+  if (mode === 'task' && !evidenceOnlyRole && !planOnlyRole) sections.push('- Read/write `v:sessions/self.json` for current metadata. Task discovery title and description are parent-owned. Self topic adapts the parent title: omit it or preserve unchanged; focus may describe the current step. completed:true marks resolved and completed:false reopens; reviewable tasks must return a final response for review, never self-accept. An unchanged full JSON roundtrip is allowed.')
   if (mode === 'session' && allows('read') && allows('write')) sections.push('- Read/write `v:sessions/self.json`: topic/focus/completed. After understanding the first user request, set topic to the stable overarching conversation title. Subtask/debug phase changes update only focus (optional current step; display falls back to topic). Change topic only for a real overall topic shift, not continual polishing. completed:true ends responsibility, not Work. If completed, set completed:false before handling a new request requiring work; thanks, acknowledgements, or metadata-only tidying do not reopen it. Completion is independent of inferred running/waiting activity; no observer.')
   if (mode === 'session' && (allows('read') || allows('session'))) {
     const lines = ['### Peer conversations', '']

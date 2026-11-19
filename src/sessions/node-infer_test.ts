@@ -56,15 +56,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           }
           assert.doesNotMatch(JSON.stringify(messages), /Remaining execution budget|inference requests including this one/)
           return { content: null, toolCalls: [{ id: `exec-${parentRequests.length}`, name: 'exec', arguments: {
-            shell: 'node', timeout_ms: 15000,
-            script: `console.log(await infer({instructions:"Classify this fragment, unknown is allowed",
+            shell: 'javascript', timeout_ms: 15000,
+            script: `${nested === 0 ? '' : "import infer from '@shadow/infer';"} export default () => infer({instructions:"Classify this fragment, unknown is allowed",
               input:{evidence:"local fragment"},schema:{type:"object",properties:{choice:{enum:["unknown"]}},
-              required:["choice"],additionalProperties:false}}))`,
+              required:["choice"],additionalProperties:false}})`,
           } }] }
         },
       }
       const tools = new Tools(workspace)
-      tools.register(new ExecTool(workspace, 15000, new CommandHandlerManager(), new ProcessManager(), 'node', backgroundTasks))
+      tools.register(new ExecTool(workspace, 15000, new CommandHandlerManager(), new ProcessManager(), 'javascript', backgroundTasks))
       const sessions = new SessionManager({
         workspace, store, provider, bus, events, backgroundTasks, agentTypes, context: builder, tools,
         handoffManager: new HandoffManager(provider, 100000, { autoHandoff: false }, workspace, store),

@@ -40,16 +40,16 @@ test('coordinator policy allows exact reviewed objects; unknown and name-spoofed
   }
 })
 
-test('coordinator exec denies foreground, background and inline Node locally; remote dispatch works and failures never fall back', async () => {
+test('coordinator exec denies foreground, background and inline JavaScript locally; remote dispatch works and failures never fall back', async () => {
   const { policy, base, tools, context } = fixture()
   const exec = new ExecTool(process.cwd(), 1000, new CommandHandlerManager(), {
     spawn: () => assert.fail('Main spawn'),
-  } as unknown as ProcessManager, 'node', {} as BackgroundTaskManager, {
+  } as unknown as ProcessManager, 'sh', {} as BackgroundTaskManager, {
     startProcess: async () => assert.fail('Main executor'),
   })
   base.register(exec)
   policy.allowRemoteShell(exec)
-  for (const args of [{ script: 'forbidden' }, { script: 'forbidden', timeout_ms: 0 }, { script: 'forbidden', shell: 'node' }]) {
+  for (const args of [{ script: 'forbidden' }, { script: 'forbidden', timeout_ms: 0 }, { script: 'forbidden', shell: 'javascript' }]) {
     assert.match(requireToolText(await tools.execute('exec', args, context)), /local executor is disabled/)
   }
   let dispatched = 0
@@ -72,7 +72,11 @@ test('coordinator exec denies foreground, background and inline Node locally; re
     assert.equal(await tools.execute('exec', { script: 'pwd' }, remote), '(no output, exit code 0)')
   }
   assert.equal(dispatched, 2)
-  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', shell: 'node' }, remote)), /not supported on remote/)
+  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', shell: 'javascript' }, remote)), /local executor is disabled/)
+  policy.allowRemoteLayerFS(() => true)
+  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', shell: 'javascript' }, {
+    ...context, layerfsWorkdir: { workspace: 'layerfs:remote-only' },
+  })), /local executor is disabled/)
   tools.setExecutionScope('call', [])
   assert.equal(await tools.execute('exec', { script: 'pwd' }, remote), '(no output, exit code 0)')
   assert.equal(dispatched, 3)
