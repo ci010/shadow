@@ -1,3 +1,4 @@
+import type { PromptVersion } from '../agent/context/prompt-version.ts'
 import type { TaskRecord } from './task-record.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { providerFailureKinds, type ProviderFailureKind } from '../providers/provider.ts'
@@ -122,6 +123,9 @@ export interface ConversationArchiveRange { nextOffset?: number; records: Record
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
 export interface SessionState {
+  /** Assembly pin, independent of definition ID and draft revision. */
+  promptVersion?: PromptVersion
+  subDraft?: { revision: string; markdown: string }
   /** Most recent inference settings sent by a task or call, not current defaults. */
   executionInference?: import('../agent/llm-config.ts').ExecutionInference
   /** Current non-Discord execution activation; changes start a fresh model context. */

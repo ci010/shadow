@@ -14,6 +14,7 @@ import type { A2aSessions } from '../a2a/sessions.ts'
 import { workBindingSchema } from '../sessions/work-policy.ts'
 import { REASONING_EFFORTS, inferenceSettings, type InferenceSettings } from '../agent/llm-config.ts'
 import { z } from 'zod'
+import type { SubOverrideStore } from '../agent/context/sub-override.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { parseSessionName } from '../sessions/session-name.ts'
 
@@ -63,6 +64,7 @@ export class SubagentTool implements Tool {
         type: 'string', enum: ['task', 'call'],
         description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Remote workdirs support task only; call is rejected before creation because remote exec has no foreground lifecycle. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
       },
+      sub_revision: { type: 'string', description: 'Exact Project draft revision (built-in sub only). Missing explicit revisions fail closed; omission uses built-in behavior.' },
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
       model: { type: 'string', description: 'Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings.' },
       effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Task only: optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings.' },
@@ -107,6 +109,8 @@ export class SubagentTool implements Tool {
     private agentTypes: AgentTypesManager,
     private channels: ChannelManager,
     private remote?: Pick<A2aSessions, 'start'>,
+    private subOverrides?: SubOverrideStore,
+    private projectId?: string,
   ) { }
 
   async execute(
@@ -212,6 +216,14 @@ export class SubagentTool implements Tool {
       ? `${ctx.physicalSessionId}:${ctx.messageId}:${ctx.toolCallId}` : crypto.randomUUID()
     return this.sessions.executeOnce(executionKey, async () => {
     this.sessions.assertCanCreateChild(ctx.sessionId, mode)
+    let subDraft: { revision: string; markdown: string } | undefined
+    if (args.sub_revision !== undefined) {
+      if (agentType.source !== 'builtin' || agentType.name !== 'sub' || !this.subOverrides || !this.projectId ||
+        ctx.projectId !== this.projectId || parentState?.projectId !== this.projectId || typeof args.sub_revision !== 'string') {
+        throw new Error('Explicit sub drafts require a built-in sub execution in the same Project')
+      }
+      subDraft = { revision: args.sub_revision, markdown: await this.subOverrides.read(args.sub_revision) }
+    }
     if (args.model !== undefined || args.effort !== undefined) {
       await this.sessions.validateExecutionInference({
         ...(agentType.model ? { model: agentType.model } : {}),
@@ -248,6 +260,7 @@ export class SubagentTool implements Tool {
       parentPhysicalId ? { id: parentSessionId, physicalId: parentPhysicalId } : undefined,
       {
         agentType: typeName,
+        subDraft,
         mode,
         workPolicy,
         executionKey,
@@ -279,7 +292,7 @@ export class SubagentTool implements Tool {
     }
 
     return JSON.stringify({
-      sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName,
+      sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName, promptVersion: this.sessions.getSessionState(sessionId)?.promptVersion, ...(agentType.source === 'builtin' && agentType.name === 'sub' ? { subRevision: subDraft?.revision ?? 'builtin' } : {}),
       status: task ? 'running' : 'pending',
       message: 'Task started. Correct this assignment with message(sessionId, content); it applies at the next safe step. Do not take over its files until completion or confirmed cancellation. Review workflow is automatic. Parent review receives a review request and uses task(action=review) with the fixed revision; agent review needs no parent orchestration. Only PASS reports success; failures escalate.',
     })
