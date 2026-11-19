@@ -33,14 +33,15 @@ const images = { 'cuts/lower.png': pngFixture(240, 100), 'cuts/upper.png': pngFi
 const entry = `import 'uno.css'; import '/src/styles.css';
 import {createApp,h,ref,reactive} from 'vue';
 import FilePreviewModal from '/src/components/files/FilePreviewModal.vue';
-import {createOtioDraftBridge,OtioDraftKey} from '/src/otio-draft.ts';
+import {composeOtioReferenceMessage,createOtioDraftBridge,OtioDraftKey} from '/src/otio-draft.ts';
 import {appendChatAttachments,imageAttachmentReference} from '/src/chat-attachments.ts';
 const apiBase=location.origin, active=ref(true), inline=ref(true), open=ref(true), closes=ref(0);
 const pending=appendChatAttachments([], [new File(['existing pending image'], 'existing.png', {type:'image/png'})]);
 const initialText='Existing note '+imageAttachmentReference(pending[0]);
 const draft=reactive({key:'fixture-draft',label:'Fixture conversation',text:initialText,attachments:pending,canAttachFiles:true});
-const bridge=createOtioDraftBridge(base=>base===apiBase?draft:null,(text,attachments)=>Object.assign(draft,{text,attachments}));
-window.fixture={draft,initialText,active,inline,closes,imageAttachmentReference};
+const references=reactive([]);
+const bridge=createOtioDraftBridge(base=>base===apiBase?draft:null,reference=>references.push(reference));
+window.fixture={draft,initialText,active,inline,closes,imageAttachmentReference,composeOtioReferenceMessage,references};
 const fileEntry={name:'assembly.OTIO',ext:'.otio',mtime:${JSON.stringify(modified)},size:${Buffer.byteLength(timeline)},type:'file'};
 createApp({render:()=>h('main',{id:'workbench',style:{display:'flex',height:'calc(100dvh - 24px)',width:'calc(100dvw - 24px)',margin:'12px',minWidth:0,minHeight:0}},
   open.value?[h(FilePreviewModal,{apiBase,sessionId:'fixture',dir:'cuts',active:active.value,inline:inline.value,canQuote:true,entry:fileEntry,
@@ -123,11 +124,11 @@ app.whenReady().then(async()=>{
     const target=[...document.querySelectorAll(scope+' button')].find(e=>e.getClientRects().length && (e.getAttribute('aria-label')===label || e.textContent.trim()===label));
     if(!target||target.disabled)return false; target.click();return true;
   },label,scope),'enabled visible button: '+label);
-  const note=text=>run(text=>{const el=document.querySelector('.otio textarea');el.value=text;el.dispatchEvent(new Event('input',{bubbles:true}));},text);
   const state=()=>run(()=>{
-    const {draft,initialText,imageAttachmentReference}=window.fixture;
-    return {text:draft.text,initialText,records:[...draft.text.matchAll(/^\x60\x60\x60json\\n([^\\n]+)\\n\x60\x60\x60$/gm)].map(match=>JSON.parse(match[1])),
-      refs:draft.attachments.map(imageAttachmentReference),keys:draft.attachments.map(a=>a.key)};
+    const {draft,initialText,imageAttachmentReference,composeOtioReferenceMessage,references}=window.fixture;
+    const text=composeOtioReferenceMessage(draft.text,references), attachments=[...draft.attachments,...references.flatMap(r=>r.attachment?[r.attachment]:[])];
+    return {text,editorText:draft.text,initialText,labels:references.map(r=>r.label),records:[...text.matchAll(/^\x60\x60\x60json\\n([^\\n]+)\\n\x60\x60\x60$/gm)].map(match=>JSON.parse(match[1])),
+      refs:attachments.map(imageAttachmentReference),keys:attachments.map(a=>a.key)};
   });
   const layout=async(...selectors)=>{
     const result=await run(selectors=>{
@@ -155,10 +156,7 @@ app.whenReady().then(async()=>{
   for(const [index,[row,schema,pointer]] of elements.entries()){
     await run(row=>document.querySelectorAll('.outline .row')[row].click(),row);
     assert.equal(await run(()=>document.querySelector('.inspector .schema')?.textContent),schema);
-    await click('Annotate selection');
-    await note('Inspect '+schema);
-    assert.equal((await state()).records.length,index,'opening a review does not modify the draft');
-    await click('Add to chat');
+    await click('Reference selection');
     const staged=await state();
     assert.equal(staged.records.length,index+1);
     const record=staged.records.at(-1);
@@ -166,7 +164,9 @@ app.whenReady().then(async()=>{
     assert.equal(record.element.pointer,pointer);
     assert.equal(record.element.schema,schema);
     assert.ok(!record.markedFrame);
-    assert.ok(staged.text.includes('Inspect '+schema));
+    assert.equal(staged.editorText,initial.initialText);
+    assert.ok(staged.labels.at(-1).startsWith('OTIO selection:'));
+    assert.equal(await run(()=>!!document.querySelector('.otio textarea,.frame-editor')),false);
     assert.deepEqual(staged.refs,initial.refs);
   }
   await click('Clip: External','.tracks');
@@ -193,10 +193,10 @@ app.whenReady().then(async()=>{
       await click('Clip source','.modes');
     }
     await wait('ready '+mode,()=>!!document.querySelector('.mark-action:enabled'));
-    await click('Mark frame');
+    await click('Draw on frame');
     await wait('frozen editor',width=>document.querySelector('canvas.image-annotation-canvas')?.width===width && !!document.querySelector('.image-annotation-tool:enabled'),width);
     assert.equal(await run(()=>document.querySelector('.review-actions button').disabled),true,'marks required before staging');
-    await note('Marked '+mode);
+    assert.equal(await run(()=>!!document.querySelector('.otio textarea')),false);
     assert.equal((await state()).records.length,before.records.length+(mode==='clip'?1:0));
     const point=await run(()=>{
       const c=document.querySelector('canvas.image-annotation-canvas'); c.scrollIntoView({block:'center'});
@@ -217,7 +217,7 @@ app.whenReady().then(async()=>{
       await wait('original destination restored',()=>!document.querySelector('.review-actions button').disabled);
     }
     if(mode==='clip'&&${JSON.stringify(screenshot || '')}) writeFileSync(${JSON.stringify(screenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
-    await click('Add to chat');
+    await click('Add reference');
     const staged=await state(), record=staged.records.at(-1);
     assert.equal(staged.records.length,before.records.length+(mode==='clip'?2:1),await run(()=>document.querySelector('.review-error')?.textContent));
     assert.deepEqual(record.document,baseDocument);
@@ -229,9 +229,10 @@ app.whenReady().then(async()=>{
     assert.deepEqual(record.monitor.clip.source,{value:mode==='clip'?72:96,rate:24});
     assert.equal(record.monitor.clip.requestedMediaSeconds,mode==='clip'?1.5:0.5);
     assert.deepEqual(record.markedFrame,{presentedMediaSeconds:null});
-    assert.ok(staged.text.includes('Marked '+mode));
+    assert.equal(staged.labels.at(-1),'OTIO marked picture: Repeated · Frame 24');
+    assert.equal(staged.editorText,initial.initialText);
     const png=await run(async(px,py,path)=>{
-      const file=window.fixture.draft.attachments.at(-1).file;
+      const file=window.fixture.references.at(-1).attachment.file;
       const decoded=await createImageBitmap(file), original=await createImageBitmap(await (await fetch(path)).blob());
       const c=document.createElement('canvas');c.width=decoded.width;c.height=decoded.height;
       const ctx=c.getContext('2d',{willReadFrequently:true});
@@ -255,10 +256,7 @@ app.whenReady().then(async()=>{
   assert.equal(await run(()=>window.fixture.closes.value),0,'review-added must leave the inline tab open');
   await run(()=>{window.fixture.inline.value=false;window.fixture.active.value=true});
   await wait('standalone dialog',()=>document.querySelector('.file-modal[role=dialog] .mark-action:enabled'));
-  await click('Selection','.compact-tabs');
-  await click('Annotate selection');
-  await note('Standalone review closes on add');
-  await click('Add to chat');
+  await click('Reference selection');
   await wait('standalone closes after review-added',()=>window.fixture.closes.value===1&&!document.querySelector('.file-modal'));
   assert.equal((await state()).records.length,final.records.length+1);
   assert.deepEqual((await state()).refs,final.refs);

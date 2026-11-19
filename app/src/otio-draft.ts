@@ -1,8 +1,22 @@
-import { shallowReactive, type InjectionKey } from 'vue'
+import { shallowReactive, shallowRef, watch, type InjectionKey, type Ref } from 'vue'
 import type { EditorGroups } from './editor-groups.ts'
-import { appendChatAttachments, imageAttachmentReference, type PendingChatAttachment } from './chat-attachments.ts'
+import { appendChatAttachments, imageAttachmentReference, revokeChatAttachmentPreviews, type PendingChatAttachment } from './chat-attachments.ts'
+import { createUuid } from './uuid.ts'
 
-export interface OtioReview { text: string; file?: File }
+export interface OtioReview { label: string; text: string; file?: File }
+export interface OtioDraftReference {
+  key: string
+  label: string
+  text: string
+  attachment?: PendingChatAttachment
+}
+
+/** References are resolved into message content only at submission. */
+export function composeOtioReferenceMessage(text: string, references: readonly OtioDraftReference[]): string {
+  return [text, ...references.map(reference => reference.attachment
+    ? `${reference.text}\n${imageAttachmentReference(reference.attachment)}`
+    : reference.text)].filter(Boolean).join('\n\n')
+}
 export interface OtioDraftBridge {
   target(apiBase: string): { key: string; label: string } | null
   add(apiBase: string, key: string, review: OtioReview): boolean
@@ -12,15 +26,13 @@ export const OtioDraftKey: InjectionKey<OtioDraftBridge> = Symbol('OtioDraft')
 interface ReviewDraft {
   key: string
   label: string
-  text: string
-  attachments: readonly PendingChatAttachment[]
   canAttachFiles: boolean
 }
 
-/** Resolve and stage synchronously so a rejected review cannot change either draft field. */
+/** Resolve and stage synchronously so a rejected review cannot change the draft. */
 export function createOtioDraftBridge(
   resolve: (apiBase: string) => ReviewDraft | null,
-  commit: (text: string, attachments: PendingChatAttachment[]) => void,
+  commit: (reference: OtioDraftReference) => void,
 ): OtioDraftBridge {
   return {
     target(apiBase) {
@@ -29,23 +41,63 @@ export function createOtioDraftBridge(
     },
     add(apiBase, key, review) {
       const draft = resolve(apiBase)
-      if (!draft || draft.key !== key || typeof review.text !== 'string' || !review.text.trim()) return false
+      if (!draft || draft.key !== key || typeof review.text !== 'string' || !review.text.trim()
+        || typeof review.label !== 'string' || !review.label.trim()) return false
       const file = review.file
       if (file !== undefined && (!draft.canAttachFiles || typeof File !== 'function' || !(file instanceof File)
         || file.type !== 'image/png' || !/\.png$/i.test(file.name) || !file.size)) return false
 
-      let added: PendingChatAttachment[]
+      const reference: OtioDraftReference = { key: createUuid(), label: review.label.trim(), text: review.text }
       try {
-        // Unlike a file picker, each Add is a separate review. Do not deduplicate by
-        // file metadata: different frames can have identical names, sizes and timestamps.
-        added = file ? appendChatAttachments([], [file]) : []
+        // Each Add is a separate review, even if PNG metadata matches another frame.
+        if (file) reference.attachment = appendChatAttachments([], [file])[0]!
       } catch {
         return false
       }
-      const reference = added[0] && imageAttachmentReference(added[0])
-      const text = `${draft.text ? `${draft.text}\n\n` : ''}${review.text}${reference ? `\n${reference}` : ''}`
-      commit(text, [...draft.attachments, ...added])
+      commit(reference)
       return true
+    },
+  }
+}
+
+/** Like other context chips, references are kept per composer for the life of its controller. */
+export function useOtioReferenceDraft(key: Readonly<Ref<string>>) {
+  const items = shallowRef<OtioDraftReference[]>([])
+  const drafts = new Map<string, OtioDraftReference[]>()
+  let current = key.value
+  watch(key, next => {
+    if (next === current) return
+    if (items.value.length) drafts.set(current, items.value)
+    current = next
+    items.value = drafts.get(next) ?? []
+    drafts.delete(next)
+  }, { flush: 'sync' })
+  function discard(references: readonly OtioDraftReference[]) {
+    revokeChatAttachmentPreviews(references.flatMap(item => item.attachment ? [item.attachment] : []))
+  }
+  function remove(target: string, keys?: ReadonlySet<string>) {
+    const references = target === current ? items.value : drafts.get(target) ?? []
+    discard(keys ? references.filter(item => keys.has(item.key)) : references)
+    const remaining = keys ? references.filter(item => !keys.has(item.key)) : []
+    if (target === current) items.value = remaining
+    else if (remaining.length) drafts.set(target, remaining)
+    else drafts.delete(target)
+  }
+  return {
+    items,
+    append: (item: OtioDraftReference) => { items.value = [...items.value, item] },
+    migrate(next: string) {
+      if (next === current) return
+      discard(drafts.get(next) ?? [])
+      drafts.delete(next)
+      current = next
+    },
+    remove,
+    dispose() {
+      discard(items.value)
+      for (const references of drafts.values()) discard(references)
+      drafts.clear()
+      items.value = []
     },
   }
 }

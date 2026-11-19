@@ -62,10 +62,21 @@ export function mediaPosition(node: OtioNode, seconds: number): number | null {
 export function otioReviewAnchor(document: OtioDocument, model: OtioModel, node: OtioNode, frame: number,
   picture: OtioNode | null, mode: 'timeline' | 'clip', medium?: OtioMedium | null) {
   const at: OtioTime = { value: frame, rate: model.rate }, seconds = frame / model.rate
+  const first = firstOtioFrame(node.start, model.rate)
+  const after = firstOtioFrame(node.end, model.rate)
+  const atSelection = frame >= first && frame < after
+  const selectionFrame = atSelection ? frame : first
   return {
     document,
     element: { pointer: node.id, schema: node.schema, name: node.name,
-      enabled: node.enabled, timelineSeconds: { startInclusive: node.start, endExclusive: node.end },
+      kind: node.kind,
+      enabled: node.enabled,
+      // A structural reference is to the element, not whatever happens to be on the monitor.
+      referenceFrame: first < after ? {
+        basis: atSelection ? 'playhead-within-element' : 'first-frame-within-element',
+        relative: { value: selectionFrame, rate: model.rate },
+        source: node.kind === 'Clip' ? otioSourceTime(node, selectionFrame / model.rate) : null,
+      } : null, timelineSeconds: { startInclusive: node.start, endExclusive: node.end },
       ...(node.authoredRange && { sourceRange: node.authoredRange }),
       ...(node.transition && { transition: node.transition }),
       ...(node.activeMediaKey && { activeMediaKey: node.activeMediaKey }),
@@ -75,17 +86,17 @@ export function otioReviewAnchor(document: OtioDocument, model: OtioModel, node:
       value: model.globalStart.value + seconds * model.globalStart.rate, rate: model.globalStart.rate,
     } }) },
     // Selection may be a parent, audio item, transition or a clip below the top layer.
-    monitor: { mode, clip: picture ? { pointer: picture.id, name: picture.name, source: otioSourceTime(picture, seconds),
+    monitor: { mode, clip: picture ? { pointer: picture.id, name: picture.name, timing: 'calculated' as const, source: otioSourceTime(picture, seconds),
       ...(medium && { mediaPath: medium.path }), ...(picture.mediaStart && { mediaStart: picture.mediaStart }),
       requestedMediaSeconds: mediaPosition(picture, seconds),
     } : null, ...(model.warnings.length && { previewLimits: model.warnings }) },
   }
 }
 export type OtioAnchor = ReturnType<typeof otioReviewAnchor>
-export function otioReviewText(anchor: OtioAnchor, note: string, capture?: { presentedMediaSeconds: number | null }): string {
+export function otioReviewText(anchor: OtioAnchor, capture?: { presentedMediaSeconds: number | null }): string {
   // Preserve names/paths verbatim as JSON data, not Markdown links, attachment markers or new fences.
   const record = JSON.stringify({ ...anchor, ...(capture && { markedFrame: capture }) })
     .replaceAll('`', '\\u0060').replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')
   const schema = /^[a-z][\w.-]{0,63}$/i.test(anchor.element.schema) ? ` · ${anchor.element.schema}` : ''
-  return [`OpenTimelineIO${schema}\n\`\`\`json\n${record}\n\`\`\``, note.trim()].filter(Boolean).join('\n\n')
+  return `OpenTimelineIO${schema}\n\`\`\`json\n${record}\n\`\`\``
 }

@@ -627,16 +627,20 @@ sibling files. Remote workdirs with text-only file access can inspect complete
 timelines within that route's 64 KiB limit; they never stream from a local substitute.
 The local document limit is 8 MiB.
 
-**Annotate selection** freezes an element and its playhead position for a note.
-**Mark frame** freezes a paused picture at its native dimensions and opens the
-same freehand/straight-line tools as image preview. Finish a stroke, then choose
-**Add to chat**. The editable conversation receives a draft, not a sent message:
-it contains the file and owner, structural JSON Pointer, element schema, visible
-half-open range, frame and rate, and the monitor clip's source position. The
-record distinguishes OTIO source time from the position in the actual media;
-for video captures it includes the presented timestamp when the browser reports
-one. A marked PNG is attached to that specific note. Neither action writes to
-the edit or its media. To annotate an archive member, open an extracted copy in
+Use the two reference actions together in the viewer. To discuss the selected
+element, add its reference directly to the chat draft. The reference keeps the
+element's identity and the timeline frame and rate. If the playhead is outside
+the selection, it records the playhead separately and uses the first timeline
+frame in the element's range when there is one.
+
+To discuss what you **see**, pause on the frame and use the drawing action.
+Mark the monitor image with the freehand or straight-line tool, then add it to
+chat. The reference includes the marked PNG and identifies the displayed clip,
+which can differ from the selected element. For video, the reference separates
+the calculated source position from the presented timestamp reported by the
+browser, when available. Both actions add a chip without sending a message.
+Write your comment in the chat input, or remove the chip if you don't need it.
+Neither action writes to the edit or its media. To annotate an archive member, open an extracted copy in
 its own workspace instead. In narrow panes switch between monitor, structure
 and selection while keeping the tracks available.
 

@@ -124,7 +124,7 @@ test('main composer answers the pending question, retains rejected drafts and ne
   assert.equal(state.activeAsk, null)
 })
 
-test('OTIO reviews use the active composer and queue exact anchors with the pending PNG', async t => {
+test('OTIO chips keep text independent and queue exact anchors with the associated PNG', async t => {
   const f = fixture(t, true)
   const view = f.mount('a')
   const state = view.state()
@@ -139,24 +139,37 @@ test('OTIO reviews use the active composer and queue exact anchors with the pend
   const anchor = 'Review cut.otio · V1 / Shot 01 · frame 84'
   const image = new File(['Synthetic PNG'], 'marked-84.png', { type: 'image/png' })
   assert.equal(state.canAttachFiles, false)
-  assert.equal(bridge.add(base, initial.key, { text: anchor, file: image }), false)
+  assert.equal(bridge.add(base, initial.key, { label: 'Frame 84', text: anchor, file: image }), false)
   assert.equal(state.inputText, 'Keep this exact unsent draft')
-  assert.equal(bridge.add(base, initial.key, { text: 'Review cut.otio · V1' }), true)
+  assert.equal(bridge.add(base, initial.key, { label: 'Track · V1', text: 'Review cut.otio · V1' }), true)
   state.currentWorkdir = { kind: 'local', displayPath: '/fixture' }
-  assert.equal(bridge.add(base, initial.key, { text: anchor, file: image }), true)
-  assert.equal(state.pendingAttachments.length, 1)
-  const attachment = state.pendingAttachments[0]
+  assert.equal(bridge.add(base, initial.key, { label: 'Frame 84', text: anchor, file: image }), true)
+  assert.equal(state.pendingAttachments.length, 0)
+  assert.deepEqual(state.otioReferences.map((item: { label: string }) => item.label), ['Track · V1', 'Frame 84'])
+  assert.equal(bridge.add(base, initial.key, { label: 'Discard', text: 'Do not send this', file: image }), true)
+  state.otioReferenceDraft.remove(state.composerKey, new Set([state.otioReferences[2].key]))
+  const attachment = state.otioReferences[1].attachment
   assert.equal(attachment.file, image)
   assert.equal(attachment.kind, 'image')
   assert.equal(attachment.source, undefined)
   const reference = imageAttachmentReference(attachment)
   const body = `Keep this exact unsent draft\n\nReview cut.otio · V1\n\n${anchor}\n${reference}`
-  assert.equal(state.inputText, body)
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  state.inputText = ''
+  assert.equal(state.canSend, true, 'chips can be sent without editable text')
+  state.inputText = 'Keep this exact unsent draft'
   assert.ok(!f.requests.some(request => /\/(upload|send)$/.test(request.path)))
+
+  const failed = state.sendMessage(undefined, { queue: true })
+  await settle()
+  f.requests.find(request => request.path.endsWith('/upload'))!.finish({ error: 'Unavailable' }, 503)
+  await failed
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  assert.equal(state.otioReferences[1].attachment.file, image, 'failed upload leaves the chip intact')
 
   const sending = state.sendMessage(undefined, { queue: true })
   await settle()
-  const upload = f.requests.find(request => request.path.endsWith('/upload'))!
+  const upload = f.requests.findLast(request => request.path.endsWith('/upload'))!
   assert.equal((upload.body as FormData).get('chatId'), root.slice(4))
   assert.equal((upload.body as FormData).get('file'), image)
   upload.finish({ path: '/fixture/uploads/marked-84.png' })
@@ -168,9 +181,11 @@ test('OTIO reviews use the active composer and queue exact anchors with the pend
   assert.deepEqual(payload.media, ['/fixture/uploads/marked-84.png'])
   assert.ok(payload.content.startsWith(`${body}\n\n`))
   assert.ok(payload.content.includes('/fixture/uploads/marked-84.png'))
+  assert.ok(!payload.content.includes('Do not send this'))
   send.finish({ chatId: root.slice(4), requestId: 'queued-review' })
   await sending
   assert.equal(state.pendingAttachments.length, 0)
+  assert.equal(state.otioReferences.length, 0)
 
   state.selectSession(peer, false)
   state.loadingHistory = false
@@ -179,13 +194,13 @@ test('OTIO reviews use the active composer and queue exact anchors with the pend
   const current = bridge.target(base)!
   assert.notEqual(current.key, initial.key)
   state.submittingMessage = true
-  assert.equal(bridge.add(base, current.key, { text: anchor }), false)
+  assert.equal(bridge.add(base, current.key, { label: 'Frame 84', text: anchor }), false)
   state.submittingMessage = false
   state.viewingPhysicalId = 'historic-segment'
-  assert.equal(bridge.add(base, current.key, { text: anchor }), false)
+  assert.equal(bridge.add(base, current.key, { label: 'Frame 84', text: anchor }), false)
   state.viewingPhysicalId = undefined
-  assert.equal(bridge.add(base, initial.key, { text: anchor, file: image }), false)
-  assert.equal(bridge.add(base, current.key, { text: anchor, file: new File(['not PNG'], 'marked.jpg', { type: 'image/jpeg' }) }), false)
+  assert.equal(bridge.add(base, initial.key, { label: 'Frame 84', text: anchor, file: image }), false)
+  assert.equal(bridge.add(base, current.key, { label: 'Frame 84', text: anchor, file: new File(['not PNG'], 'marked.jpg', { type: 'image/jpeg' }) }), false)
   assert.equal(state.inputText, 'Do not change this other draft')
   assert.equal(state.pendingAttachments.length, 0)
 })
