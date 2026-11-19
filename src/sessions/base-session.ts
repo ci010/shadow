@@ -54,6 +54,7 @@ import { isToolUncertaintyResult, toolInvocationKey, toolUncertaintyResult, unce
 import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
 import { modelMessages } from '../providers/message-content.ts'
+import { ToolOutputProjection } from './tool-output.ts'
 import { prepareNewMessageImages } from '../providers/new-message-images.ts'
 import { usageProvider } from './usage.ts'
 import { providerFailureKind, type ProviderFailureKind } from '../providers/provider.ts'
@@ -76,6 +77,7 @@ export abstract class BaseSession {
   private imagePreparationSignal?: AbortSignal
   private providerFailure?: ProviderFailureKind
   private providerWaiting?: RateLimitWait
+  private readonly toolOutput: ToolOutputProjection
   get rateLimitWait(): RateLimitWait | undefined { return this.providerWaiting }
 
   constructor(
@@ -93,6 +95,7 @@ export abstract class BaseSession {
     protected readonly promptCaptures?: PromptCaptureStore,
   ) {
     this.provider = usageProvider(provider, store, () => this.usageDestination)
+    this.toolOutput = new ToolOutputProjection(workspace)
   }
 
   protected get usageDestination(): { sessionId: string; physicalId: string } {
@@ -373,11 +376,16 @@ export abstract class BaseSession {
         offeredToolNames: toolDefs.map(def => def.function.name) }
       const boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
       await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
-      const durableMessages = modelMessages(this.messages, executionContext.channel === 'qq')
-      const inferenceMessages = transientResults.size ? modelMessages(this.messages.map(message =>
-        message.role === 'tool' && message.tool_call_id && transientResults.has(message.tool_call_id)
-          ? { ...message, content: transientResults.get(message.tool_call_id)! } : message,
-      ), executionContext.channel === 'qq') : durableMessages
+      const projected: ChatMessage[] = []
+      // Limit spill I/O to one result at a time when resuming older history.
+      for (const message of this.messages) {
+        if (message.role !== 'tool') { projected.push(message); continue }
+        signal.throwIfAborted()
+        const transient = message.tool_call_id ? transientResults.get(message.tool_call_id) : undefined
+        projected.push(transient ? await this.toolOutput.project({ ...message, content: transient }, true)
+          : await this.toolOutput.project(message))
+      }
+      const inferenceMessages = modelMessages(projected, executionContext.channel === 'qq')
       transientResults.clear()
       await this.tools.boundary?.beforeInference(signal)
       if (this.tools.boundary) await this.store.saveState(this.id, this.state)
