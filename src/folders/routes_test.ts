@@ -62,6 +62,58 @@ function cloneBody(parentPath: string, overrides: Record<string, unknown> = {}) 
 }
 
 describe('folder file browsing', () => {
+  test('authorized Main-local folder and session raw video requests support seeking', async t => {
+    const { app, folders, registry, root } = await setup(t)
+    const folder = await registry.register(folders)
+    sessionsApiPlugin({
+      workspace: folders,
+      assertHistoricalFolderAccess: async () => {},
+      readSessionState: async () => ({ sessionId: 'seeking', workdir: { version: 2, nodeId: 'local', workdirId: 'folder' } }),
+      workdirLookup: () => ({ node: 'online', workdir: { online: true, path: folders } }),
+    } as unknown as SessionManager)(app)
+    const bytes = '0123456789'
+    await writeFile(join(folders, 'clip.mp4'), bytes)
+    await writeFile(join(folders, 'empty.mp4'), '')
+    await writeFile(join(folders, 'clip.txt'), bytes)
+    await mkdir(join(root, 'outside'))
+    await writeFile(join(root, 'outside', 'clip.mp4'), bytes)
+    await symlink(join(root, 'outside'), join(folders, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+    for (const base of [`/api/folders/${folder.id}`, '/api/sessions/seeking']) {
+      for (const [header, status, contentRange, body] of [
+        ['bytes=2-4', 206, 'bytes 2-4/10', '234'],
+        ['bytes=7-', 206, 'bytes 7-9/10', '789'],
+        ['bytes=-2', 206, 'bytes 8-9/10', '89'],
+        ['bytes=8-99', 206, 'bytes 8-9/10', '89'],
+        ['bytes=10-', 416, 'bytes */10', ''],
+        ['bytes=-0', 416, 'bytes */10', ''],
+        ['bytes=4-2', 200, null, bytes],
+        ['bytes=0-1,4-5', 200, null, bytes],
+        ['bytes=-', 200, null, bytes],
+      ] as const) {
+        const response = await app.request(`${base}/raw?path=clip.mp4`, { headers: { Range: header } })
+        assert.equal(response.status, status)
+        assert.equal(response.headers.get('accept-ranges'), 'bytes')
+        assert.equal(response.headers.get('content-range'), contentRange)
+        assert.equal(response.headers.get('content-length'), String(body.length))
+        assert.equal(await response.text(), body)
+      }
+      const headers = { Range: 'bytes=0-1' }
+      const empty = await app.request(`${base}/raw?path=empty.mp4`, { headers })
+      assert.equal(empty.status, 416)
+      assert.equal(empty.headers.get('content-range'), 'bytes */0')
+      assert.equal(empty.headers.get('content-length'), '0')
+      const text = await app.request(`${base}/raw?path=clip.txt`, { headers })
+      assert.equal(text.status, 200)
+      assert.equal(text.headers.get('accept-ranges'), null)
+      assert.equal(await text.text(), bytes)
+      const conditional = await app.request(`${base}/raw?path=clip.mp4`, { headers: { ...headers, 'If-Range': '"old"' } })
+      assert.equal(conditional.status, 200)
+      assert.equal(await conditional.text(), bytes)
+      const escaped = await app.request(`${base}/raw?path=escape/clip.mp4`, { headers })
+      assert.equal(escaped.status, 400)
+    }
+  })
+
   test('text encoding changes preserve exact Unicode paths and original bytes for folder and session previews', async t => {
     const { app, folders, registry } = await setup(t)
     const folder = await registry.register(folders)

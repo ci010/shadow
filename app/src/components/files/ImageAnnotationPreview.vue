@@ -31,7 +31,7 @@
               :disabled="!canUndo" @click="undoStroke">{{ t('Undo') }}</button>
           </template>
         </HoverInfo>
-        <HoverInfo text="Remove all marks and the marked image from the next message">
+        <HoverInfo :text="staged ? t('Remove all marks from this frame') : t('Remove all marks and the marked image from the next message')">
           <template #default="{ triggerProps }">
             <button v-bind="triggerProps" type="button" class="image-annotation-clear"
               :disabled="!editable || !active || !hasMarks" @click="clearMarks">{{ t('Clear') }}</button>
@@ -66,7 +66,7 @@
       {{ drawing ? t('Marking image…') : t('Preparing marked image…') }}
     </p>
     <p v-else-if="hasMarks && !exportError" class="image-annotation-status" role="status">
-      {{ editable ? t('Marked preview · Finish a stroke to update the attached copy.') : t('Marked preview · Ctrl-drag to attach elsewhere') }}
+      {{ staged ? t('Marks stay on this frame until you add the review to chat.') : editable ? t('Marked preview · Finish a stroke to update the attached copy.') : t('Marked preview · Ctrl-drag to attach elsewhere') }}
     </p>
   </section>
 </template>
@@ -87,6 +87,8 @@ const props = withDefaults(defineProps<{
   active: boolean
   editable: boolean
   keyboardActive?: boolean
+  /** A frozen review frame is staged here and attached only on explicit confirmation. */
+  staged?: boolean
 }>(), { keyboardActive: true })
 const emit = defineEmits<{
   'image-context': [payload: ImageContextUpdate]

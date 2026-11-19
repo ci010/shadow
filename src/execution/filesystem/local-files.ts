@@ -2,6 +2,7 @@ import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { filePreviewLimit, type LocalFileEntry, type LocalFileOperation } from './contracts.ts'
+import { byteRange } from './byte-range.ts'
 import { decodeTextPreview, type TextEncoding } from './text-encoding.ts'
 
 export class FileReadError extends Error {
@@ -12,7 +13,7 @@ export class FileReadError extends Error {
 
 export type LocalFilesResult =
   | { operation: 'files'; base: string; path: string; entries: LocalFileEntry[] }
-  | { operation: 'raw'; target: string; size: number; stream: ReadableStream<Uint8Array> }
+  | { operation: 'raw'; target: string; size: number; range?: { start: number; end: number }; stream: ReadableStream<Uint8Array> | null }
   | { operation: 'preview'; target: string; preview: {
     path: string; size: number; truncated: boolean
   } & ReturnType<typeof decodeTextPreview> }
@@ -44,6 +45,7 @@ export async function localFiles(
   signal: AbortSignal,
   maxBytes = filePreviewLimit(undefined),
   encoding: TextEncoding = 'auto',
+  rangeForTarget?: (canonicalTarget: string) => string | null,
 ): Promise<LocalFilesResult> {
   signal.throwIfAborted()
   base = await realpath(base)
@@ -78,9 +80,13 @@ export async function localFiles(
     if (!info.isFile()) throw new FileReadError('not_a_file')
     signal.throwIfAborted()
     if (operation === 'raw') {
-      const stream = file.createReadStream({ signal, autoClose: true })
-      const result = { operation, target, size: info.size,
-        stream: Readable.toWeb(stream) as ReadableStream<Uint8Array> }
+      const range = byteRange(rangeForTarget?.(target) ?? null, info.size)
+      if (range === 'unsatisfiable') return { operation, target, size: info.size, stream: null }
+      const stream = file.createReadStream({ signal, autoClose: true, ...range })
+      const result = { operation, target, size: info.size, range,
+        stream: Readable.toWeb(stream, {
+          strategy: { highWaterMark: 64 * 1024, size: chunk => chunk.byteLength },
+        }) as ReadableStream<Uint8Array> }
       streaming = true
       return result
     }

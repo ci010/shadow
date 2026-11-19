@@ -397,6 +397,31 @@ test('folder children report offline to the explorer, but never from stale proje
   assert.equal(state().loadError, '')
 })
 
+test('OTIO file reads keep attachment, archive and remote scopes separate; incomplete remote timelines never acquire media', async t => {
+  const pending = requests(t)
+  const params = { ...base, remote: false, path: 'shots.otio', mtime: null, canReview: true, sessionId: 'web:chat-review', folderId: undefined }
+  const timeline = JSON.stringify({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [] } })
+  const remote = mount(t, 'OtioFilePreview', { ...params, remote: true })
+  assert.equal(pending[0]!.url.pathname, '/api/sessions/web%3Achat-review/preview')
+  pending[0]!.finish({ binary: false, truncated: true, content: timeline, size: 74_000 }); await settle()
+  assert.match(remote.state().error, /remote timeline/)
+  const reloading = remote.state().load()
+  pending[1]!.finish({ binary: false, content: timeline, size: timeline.length }); await reloading
+  assert.equal(remote.state().snapshot.model.root.kind, 'Timeline')
+  assert.equal(remote.state().mediaFor({ targetUrl: 'file:///other/clip.mp4' }), null)
+  const attachmentUrl = 'http://localhost/api/media?chatId=chat-review&path=uploads%2Fshots.otio&ticket=not-in-quote'
+  const attachment = mount(t, 'OtioFilePreview', { ...params, attachmentUrl })
+  assert.equal(pending[2]!.url.href, attachmentUrl)
+  pending[2]!.finishBlob(timeline)
+  const archive = mount(t, 'OtioFilePreview', { ...params, sourceBlob: new Blob([timeline]) })
+  await t.waitFor(() => assert.ok(attachment.state().snapshot && archive.state().snapshot))
+  assert.equal(attachment.state().snapshot.source.path, 'uploads/shots.otio')
+  assert.equal(attachment.state().snapshot.source.owner.space, 'attachment')
+  assert.doesNotMatch(JSON.stringify(attachment.state().snapshot.source), /ticket/)
+  for (const view of [attachment, archive]) assert.equal(view.state().mediaFor({ targetUrl: 'clip.mp4' }), null)
+  assert.equal(pending.length, 3, 'no folder probing or Main fallback from isolated sources')
+})
+
 for (const ext of ['.txt', '.png', '.html', '.mp4']) {
   test(`${ext} previews show explicit offline state, recover and reject previous project responses`, async t => {
     const pending = requests(t)

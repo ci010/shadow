@@ -69,3 +69,19 @@ test('local raw streams preserve bytes and remain cancellable after ownership tr
   controller.abort()
   await assert.rejects(new Response(cancelled.stream).arrayBuffer(), { name: 'AbortError' })
 })
+
+test('partial raw streams propagate request abort and allow consumer cancellation', async t => {
+  const { folders } = await folderFixture(t)
+  await writeFile(join(folders, 'clip.mp4'), Buffer.alloc(512 * 1024))
+  const controller = new AbortController()
+  const readRange = () => localFiles(folders, 'raw', 'clip.mp4', controller.signal,
+    undefined, undefined, () => 'bytes=64-262143')
+  const cancelled = await readRange()
+  if (cancelled.operation !== 'raw' || !cancelled.stream) assert.fail('Expected partial stream')
+  assert.deepEqual(cancelled.range, { start: 64, end: 262143 })
+  await cancelled.stream.cancel()
+  const aborted = await readRange()
+  if (aborted.operation !== 'raw' || !aborted.stream) assert.fail('Expected partial stream')
+  controller.abort()
+  await assert.rejects(new Response(aborted.stream).arrayBuffer(), { name: 'AbortError' })
+})

@@ -82,7 +82,7 @@ const extensions = associations<MaterialIcon>({
   'png jpg jpeg gif webp avif bmp tiff tif ico heic': 'i-material-icon-theme-image',
   'svg': 'i-material-icon-theme-svg',
   'mp3 wav ogg flac m4a aac': 'i-material-icon-theme-audio',
-  'mp4 webm mov avi mkv': 'i-material-icon-theme-video',
+  'mp4 webm mov avi mkv otio otio.json': 'i-material-icon-theme-video',
   'pdf': 'i-material-icon-theme-pdf',
   'zip tar gz bz2 xz tgz 7z rar': 'i-material-icon-theme-zip',
   'woff woff2 ttf otf eot': 'i-material-icon-theme-font',

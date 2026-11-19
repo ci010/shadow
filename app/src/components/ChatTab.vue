@@ -602,6 +602,8 @@ import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatE
 import { activeSubagentsByOwner, executionStages, executionTraceDetail, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
+import { createOtioDraftBridge, OtioDraftKey, registerOtioDraft } from '../otio-draft.ts'
+import { createUuid } from '../uuid.ts'
 import { automationChatLocation } from '../automations.ts'
 import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'
@@ -2257,6 +2259,40 @@ async function appendDraft(text: string) {
   inputText.value = inputText.value ? `${inputText.value}\n\n${text}` : text
   await nextTick()
   focusConversation()
+}
+// The persisted composer key alone is not a lease: returning to the same
+// session or replacing a scratch draft must not revive an old marked frame.
+const otioDraftKey = ref(createUuid())
+watch([composerKey, () => props.projectId, () => activeSessionId.value ? undefined : draft.value],
+  () => { otioDraftKey.value = createUuid() }, { flush: 'sync' })
+const otioDraft = createOtioDraftBridge(apiBase => {
+  if (apiBase !== props.apiBase || disposed || !paneActive.value || !chatRouteActive.value
+    || !canQuoteSelection.value || loadingHistory.value
+    || (sessionStage.value === 'waiting' && activeAsk.value?.sessionId === activeSessionId.value)
+    || answeringQuestion.value || awaitingCall.value || composerComposing.value || props.inspection
+    || (activeSessionId.value && !activeSession.value)
+    || (editorGroups && !editorGroups.side(`${editorOwner}:`))) return null
+  return {
+    key: otioDraftKey.value,
+    label: activeSessionId.value ? conversationTitle.value : t('New conversation'),
+    text: inputText.value,
+    attachments: pendingAttachments.value,
+    canAttachFiles: canAttachFiles.value,
+  }
+}, (text, attachments) => {
+  const key = otioDraftKey.value
+  pendingAttachments.value = attachments
+  inputText.value = text
+  workbench.value?.showConversation()
+  void nextTick(() => {
+    if (!disposed && paneActive.value && key === otioDraftKey.value && conversationFocused.value && composerVisible.value) focusConversation()
+  })
+})
+provide(OtioDraftKey, otioDraft)
+if (editorGroups && editorOwner) {
+  const unregister = registerOtioDraft(editorGroups, `${editorOwner}:`, sessionId =>
+    sessionId === activeSessionId.value ? otioDraft : undefined)
+  onUnmounted(unregister)
 }
 async function openProjectWork(key: string) {
   const id = props.projectId || liveProjectId(props.apiBase)

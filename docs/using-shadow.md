@@ -597,6 +597,45 @@ previews and, for supported Git folders, a read-only **Changes** view. Git
 inspection does not stage or commit changes. Files can be quoted into the
 current conversation without sending a new message.
 
+### Reviewing an OpenTimelineIO edit
+
+Open a `.otio` (or `.otio.json`) timeline from **Files**. The structure pane selects
+Timeline, Stack, Track, Clip, Gap and Transition objects, including nested or
+same-named items. The tracks share a ruler and playhead. Click or drag the ruler
+to seek; focus it and use the arrow keys to step one timeline frame. Selecting a
+visual clip opens its **Clip source**; choose **Timeline** to see the top visible
+picture at the same position. This is a read-only viewer, not a timeline editor.
+
+For a diffusion.cpp review, keep the edit and its generated PNG/WebM files under
+one browsable root. For example, put `cut.otio` in **Session files** beside the
+`media/` directory, and use `media/shot-02.webm` as a clip's `ExternalReference`
+`target_url`. To review a project on disk, keep the media in that workspace and
+open the edit from its file tree instead. Relative paths resolve from the edit;
+absolute paths and local `file:///` URLs must resolve inside its verified local
+root. Network URLs are not loaded. Browser-decodable stills and video play in
+the monitor; the clip's embedded sound can be unmuted. There is no separate
+audio-track mix, effect renderer or alpha compositor. Transitions preview as
+cuts, and unsupported or missing pictures remain explicit. A standalone message
+attachment or archived edit can show its structure, but cannot grant access to
+sibling files. Remote workdirs with text-only file access can inspect complete
+timelines within that route's 64 KiB limit; they never stream from a local substitute.
+The local document limit is 8 MiB.
+
+**Annotate selection** freezes an element and its playhead position for a note.
+**Mark frame** freezes a paused picture at its native dimensions and opens the
+same freehand/straight-line tools as image preview. Finish a stroke, then choose
+**Add to chat**. The editable conversation receives a draft, not a sent message:
+it contains the file and owner, structural JSON Pointer, element schema, visible
+half-open range, frame and rate, and the monitor clip's source position. The
+record distinguishes OTIO source time from the position in the actual media;
+for video captures it includes the presented timestamp when the browser reports
+one. A marked PNG is attached to that specific note. Neither action writes to
+the edit or its media. To annotate an archive member, open an extracted copy in
+its own workspace instead. In narrow panes switch between monitor, structure
+and selection while keeping the tracks available.
+
+### Other file previews
+
 File tabs use [Open File Viewer](https://github.com/xushanpei/open-file-viewer)
 for four groups: PDF/Office (including EPUB/OFD/XPS), Engineering (CAD, 3D,
 drawings and GIS), Email, and Assets/Data. Image/media and text/code SDK

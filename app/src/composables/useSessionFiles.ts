@@ -161,7 +161,8 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
     return buildUrl(apiBase, `${root(sessionId)}/raw`, { path })
   }
 
-  async function readBlob(sessionId: string, path: string, signal?: AbortSignal, maxBytes = Infinity): Promise<Blob> {
+  async function readBlob(sessionId: string, path: string, signal?: AbortSignal, maxBytes = Infinity,
+    limitMessage = 'Archives larger than 128 MB must be downloaded to browse locally.'): Promise<Blob> {
     const deadline = AbortSignal.timeout(30_000)
     const combined = signal ? AbortSignal.any([signal, deadline]) : deadline
     try {
@@ -175,13 +176,13 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
         const parts: Uint8Array<ArrayBuffer>[] = []
         let size = 0
         try {
-          if (Number(response.headers.get('content-length')) > maxBytes) throw new Error('Archives larger than 128 MB must be downloaded to browse locally.')
+          if (Number(response.headers.get('content-length')) > maxBytes) throw new Error(limitMessage)
           for (;;) {
             combined.throwIfAborted()
             const { done, value } = await reader.read()
             if (done) break
             size += value.byteLength
-            if (size > maxBytes) throw new Error('Archives larger than 128 MB must be downloaded to browse locally.')
+            if (size > maxBytes) throw new Error(limitMessage)
             parts.push(value)
           }
           return new Blob(parts, { type: response.headers.get('content-type') ?? '' })
