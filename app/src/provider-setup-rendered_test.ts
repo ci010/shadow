@@ -623,12 +623,15 @@ test('composer usage is demand-loaded and follows the exact provider instance', 
   assert.equal(row(), undefined)
   current.value = 'same@billing-main'
   await nextTick()
-  requests[3]!.resolve(Response.json({ kind: 'unavailable' }))
-  await flush()
-  assert.equal(row(), undefined)
-  current.value = 'same@copilot-work'
+  assert.match(text(row()!), /API balance: 12.30 USD/)
+  assert.equal(requests.length, 3)
+  await view.click('Close settings')
+  await view.click('Open settings')
+  assert.match(text(row()!), /API balance: 12.30 USD/)
+  assert.equal(requests.length, 3)
+  current.value = 'same@copilot-personal'
   await nextTick()
   await view.click('Close settings')
-  assert.equal(requests[4]!.signal?.aborted, true)
+  assert.equal(requests[3]!.signal?.aborted, true)
   assert.equal(row(), undefined)
 })

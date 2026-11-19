@@ -71,7 +71,7 @@ import { formatNumber, t } from '../i18n.ts'
 import { hostBase } from '../api-url.ts'
 import { createProviderSetupClient } from '../provider-setup.ts'
 import type { ProviderUsage } from '../../../src/shared/provider-usage.ts'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReasoningControls from './ReasoningControls.vue'
 import { filterModelOptions, modelProviderFilters, modelProviderGroup, modelCompactAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
@@ -115,20 +115,42 @@ const usageKind = computed(() => {
 })
 const usage = ref<Exclude<ProviderUsage, { kind: 'unavailable' }>>()
 const usageUnavailable = ref(false)
+// Memory only, scoped to this selector and the exact host/provider instance.
+const usageCache = new Map<string, { value: NonNullable<typeof usage.value>; fetchedAt: number }>()
+const usageCacheTtl = 30_000
+const usageCacheMaxAge = 300_000
+const usageRevision = ref(0)
+const invalidateUsageCache = () => {
+  usageCache.clear()
+  usageRevision.value++
+}
+onMounted(() => window.addEventListener('shadow:config-changed', invalidateUsageCache))
+onBeforeUnmount(() => window.removeEventListener('shadow:config-changed', invalidateUsageCache))
 watch([
   () => opened.value && page.value === 'menu' ? props.usageApiBase : undefined,
-  usageProvider, usageKind,
+  usageProvider, usageKind, usageRevision,
 ], async ([base, provider, kind], _previous, onCleanup) => {
   usage.value = undefined
   usageUnavailable.value = false
   if (base === undefined || !provider || !kind) return
+  const host = hostBase(base)
+  const key = JSON.stringify([host, provider, kind])
+  const cached = usageCache.get(key)
+  if (cached) {
+    const age = Date.now() - cached.fetchedAt
+    if (age < usageCacheMaxAge) usage.value = cached.value
+    if (age < usageCacheTtl) return
+    if (age >= usageCacheMaxAge) usageCache.delete(key)
+  }
   const controller = new AbortController()
   onCleanup(() => controller.abort())
   try {
-    const result = await createProviderSetupClient(hostBase(base)).usage(provider, controller.signal)
+    const result = await createProviderSetupClient(host).usage(provider, controller.signal)
     if (controller.signal.aborted) return
-    if (result.kind === kind) usage.value = result
-    else usageUnavailable.value = true
+    if (result.kind === kind) {
+      usageCache.set(key, { value: result, fetchedAt: Date.now() })
+      usage.value = result
+    } else usageUnavailable.value = !usage.value
   } catch {
     if (!controller.signal.aborted) usageUnavailable.value = true
   }
