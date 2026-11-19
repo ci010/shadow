@@ -16,7 +16,7 @@ test('native asset staging is required on Windows by default and allowlisted', a
   try {
     const output = join(root, 'dist')
     const opts = { platform: 'win32', arch: 'x64' }
-    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /pnpm desktop:repair-native -Arch x64/)
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /win32-x64.*rerun pnpm install/)
     const source = join(root, 'integrations/agent-desktop')
     await mkdir(join(source, 'artifacts/win32-x64'), { recursive: true })
     await writeFile(join(source, 'artifacts/win32-x64/shadow-agent-desktop.node'), 'synthetic non-executable artifact; never load')
@@ -50,7 +50,7 @@ test('native asset staging is required on Windows by default and allowlisted', a
     await writeFile(join(source, 'artifacts/win32-x64/shadow-input-guard.exe'), '')
     await assert.rejects(copyAgentDesktopAssets(root, output, opts), /missing or invalid/)
     await assert.rejects(copyAgentDesktopAssets(root, output, { platform: 'win32', arch: 'ia32' }), /supports only/)
-    await assert.rejects(copyAgentDesktopAssets(root, output, { platform: 'win32', arch: 'arm64' }), /pnpm desktop:repair-native -Arch arm64/)
+    await assert.rejects(copyAgentDesktopAssets(root, output, { platform: 'win32', arch: 'arm64' }), /win32-arm64.*rerun pnpm install/)
     assert.equal(await copyAgentDesktopAssets(root, output, { platform: 'linux' }), false)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

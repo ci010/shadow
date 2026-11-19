@@ -25,9 +25,9 @@ export async function nativeSourceFingerprint(root: string): Promise<string> {
   return digest.digest('hex')
 }
 
-export async function recordNativeBuild(root: string, arch: string): Promise<void> {
+export async function recordNativeBuild(root: string, arch: string, releaseFiles: string[] = []): Promise<void> {
   const directory = join(root, native, 'artifacts', `win32-${arch}`)
-  const artifacts = Object.fromEntries(await Promise.all(binaries.map(async file => [file, hash(await readFile(join(directory, file)))])))
+  const artifacts = Object.fromEntries(await Promise.all([...binaries, ...releaseFiles].map(async file => [file, hash(await readFile(join(directory, file)))])))
   await writeFile(join(directory, 'build-manifest.json'), JSON.stringify({ version: 1, arch, source: await nativeSourceFingerprint(root), artifacts }, null, 2) + '\n')
 }
 
@@ -37,7 +37,9 @@ export async function verifyNativeBuild(root: string, arch: string): Promise<voi
   if (manifest.version !== 1 || manifest.arch !== arch || manifest.source !== await nativeSourceFingerprint(root)) {
     throw new Error('Stale agent-desktop source/worker build fingerprint')
   }
-  for (const file of binaries) {
+  if (binaries.some(file => !manifest.artifacts?.[file])) throw new Error('Incomplete native inventory')
+  for (const file of Object.keys(manifest.artifacts ?? {})) {
+    if (![...binaries, 'LICENSE', 'NOTICE', 'source.tar.gz', 'THIRD-PARTY-NOTICES.json', 'provenance.json'].includes(file)) throw new Error('Unsafe native inventory entry')
     if (manifest.artifacts?.[file] !== hash(await readFile(join(directory, file)))) throw new Error(`Stale agent-desktop binary: ${file}`)
   }
 }

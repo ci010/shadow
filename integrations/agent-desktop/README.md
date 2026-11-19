@@ -149,24 +149,12 @@ terminate the disposable worker, never unload a live addon. A dedicated native t
 MTA/DPI/WindowsAdapter, serializes requests and drops local COM interfaces before
 DPI restoration/CoUninitialize. No persistent interface crosses that thread.
 
-## Reproduce Windows x64
+## Reproduce the native Windows x64 artifact from source
 
-From an ordinary terminal at the repository root:
+This is for native artifact maintainers only. Normal Windows development uses
+`pnpm install` to fetch and verify the pinned prebuilt release.
 
-```powershell
-pnpm desktop:repair-native
-pnpm build
-```
-
-The repair command discovers Visual Studio C++ tools, selects an installed MSVC
-Rust toolchain meeting `Cargo.toml`'s minimum version, fetches the pinned upstream
-only if absent, and runs the existing locked native/guard builder to regenerate
-the integrity manifest. It does not install toolchains, change global Rust
-defaults, or bypass freshness checks. Rerun it after native/worker source changes.
-For ARM64, use `pnpm desktop:repair-native -Arch arm64` with the matching VS tools
-and Rust target installed; target-device acceptance is still required.
-
-Manual alternative: requires Git, Node 24.15+, Rust >=1.89, VS2022 C++/Windows SDK. From this directory
+Source reproduction requires Git, Node 24.15+, Rust >=1.89, VS2022 C++/Windows SDK. From this directory
 in an x64 VS developer shell (MSVC link.exe first):
 
     node scripts/fetch.mjs
@@ -180,16 +168,6 @@ HEAD, refuses non-owned lib.rs edits and writes only the owned module declaratio
 and crates/windows/src/shadow_observe.rs plus shadow_gate.rs. No other upstream file/directory is
 reset, cleaned, checked out or overwritten. Fresh fetch accepts a local clone as
 its single argument. No upstream scripts execute. HTTPS fetch was not exercised.
-
-To import the existing local VS helper from repository root in PowerShell:
-
-    $lines = & cmd /c integrations\agent-desktop\target\shadow-msvc-env.cmd
-    foreach ($line in $lines) {
-      if ($line -match '^([^=]+)=(.*)$') {
-        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
-      }
-    }
-    $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 
 Do not expand/restore an old CMD %PATH% on one command line; that can restore Git
 link.exe ahead of MSVC. Normal builds use --locked; lock re-resolution is explicit.
@@ -337,12 +315,9 @@ build evidence, not a signature. Old artifacts without a receipt must be rebuilt
 existence/nonzero size is no longer sufficient. Cross-architecture builds record
 hashes but still need target-device identity/ABI acceptance.
 
-The build fails with the exact native build command rather than silently running
-an expensive native compilation/toolchain install. Run `pnpm desktop:repair-native`
-from the repository root, then rerun the backend build. For manual builds, use a VS developer shell and
-an already installed Rust >=1.89; if your default Rust is older, select a suitable
-installed version with `RUSTUP_TOOLCHAIN` (for example `1.98.0`). Do not remove
-`--locked`. Then rerun the backend build. Native source/patch changes also invalidate
+Normal application builds do not compile native code. If native assets are missing
+or invalid, check access to the pinned release and rerun `pnpm install` before
+rerunning the application build. Native source/patch changes also invalidate
 prepared-release source fingerprints. `desktop:install` installs/verifies an
 already built release; it does not rebuild it or hot-replace a running application.
 

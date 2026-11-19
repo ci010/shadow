@@ -13,7 +13,7 @@
   "scripts": {
     "pnpm:devPreinstall": "node scripts/postinstall-native.ts",
     "postinstall": "node scripts/postinstall-native.ts",
-    "dev": "node --env-file-if-exists=.env --import tsx scripts/desktop.ts dev",
+    "dev": "node scripts/dev.ts",
     "start": "node --env-file-if-exists=.env --import tsx scripts/start.ts",
     "a2a:bridge": "node --import tsx integrations/a2a/cli.ts",
     "a2a:mcp": "node --import tsx src/a2a/mcp-cli.ts",
@@ -30,7 +30,6 @@
     "desktop:install": "node --import tsx scripts/install-local.ts",
     "desktop:build": "node --import tsx scripts/desktop.ts build",
     "desktop:prepare-aria2": "node --import tsx scripts/local-aria2.ts",
-    "desktop:repair-native": "powershell -NoProfile -File scripts/repair-agent-desktop.ps1",
     "release": "node --import tsx scripts/release-mac.ts",
     "desktop:package": "node --import tsx scripts/desktop.ts package",
     "release:prepare": "node --import tsx scripts/prepared-build.ts prepare",

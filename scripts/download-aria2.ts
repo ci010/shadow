@@ -43,16 +43,16 @@ export function verifyArchiveDigest(bytes: Buffer, expected: string): void {
 // Node 24 native proxy support respects explicit HTTPS_PROXY/NO_PROXY without
 // changing TLS verification. Hosted CI normally downloads directly.
 const agent = new Agent({ proxyEnv: process.env })
-export function download(url: string, redirects = 0): Promise<Buffer> {
+export function download(url: string, redirects = 0, maxBytes = 60 * 1024 * 1024): Promise<Buffer> {
   if (redirects > 5 || new URL(url).protocol !== 'https:') throw new Error('Unsafe download redirect')
   return new Promise((resolve, reject) => {
     const request = get(url, { agent }, response => {
       if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0) && response.headers.location) {
-        response.resume(); download(new URL(response.headers.location, url).href, redirects + 1).then(resolve, reject); return
+        response.resume(); download(new URL(response.headers.location, url).href, redirects + 1, maxBytes).then(resolve, reject); return
       }
       if (response.statusCode !== 200) { response.resume(); reject(new Error(`Download HTTP ${response.statusCode}`)); return }
       const chunks: Buffer[] = []; let size = 0
-      response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 60 * 1024 * 1024) response.destroy(new Error('Archive too large')); else chunks.push(chunk) })
+      response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > maxBytes) response.destroy(new Error('Archive too large')); else chunks.push(chunk) })
       response.on('error', reject); response.on('end', () => resolve(Buffer.concat(chunks)))
     })
     request.setTimeout(60_000, () => request.destroy(new Error('Download timeout')))
