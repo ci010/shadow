@@ -290,13 +290,14 @@ function contains(query: number, start: number, end: number): boolean {
     query < end && !atBoundary(query, end, span)
 }
 
-export function otioPictureAt(model: OtioModel, seconds: number): OtioNode | null {
+export function otioPictureAt(model: OtioModel, seconds: number, track?: OtioNode): OtioNode | null {
   if (!Number.isFinite(seconds) || !contains(seconds, 0, model.duration)) return null
   // Reversed preorder visits the highest stack layer first. Transitions do
   // not participate in lookup: the adjacent clips meet at the hard cut.
   const pictures = pictureIndex.get(model) ?? indexPictures(model)
   for (let i = pictures.length - 1; i >= 0; i--) {
     const { node, blocked } = pictures[i]!
+    if (track && !node.id.startsWith(`${track.id}/children/`)) continue
     if (contains(seconds, node.start, node.end)) return blocked ? null : node
   }
   return null
@@ -308,4 +309,59 @@ export function otioSourceTime(node: OtioNode, seconds: number): OtioTime | null
   const elapsed = atBoundary(seconds, node.start, node.end - node.start) ? 0 : seconds - node.start
   const result = value + elapsed * rate
   return Number.isFinite(result) ? { value: result, rate } : null
+}
+
+/** Flatten the same hard-cut picture stack as the monitor, highest preorder index wins. */
+export function otioPictureSpans(model: OtioModel, track?: OtioNode) {
+  const pictures = pictureIndex.get(model) ?? indexPictures(model)
+  const events: { time: number; index: number; start: boolean }[] = []
+  pictures.forEach(({ node }, index) => {
+    if (track && !node.id.startsWith(`${track.id}/children/`)) return
+    events.push({ time: node.start, index, start: true }, { time: node.end, index, start: false })
+  })
+  events.sort((a, b) => a.time - b.time)
+  const heap: number[] = [], live = new Set<number>()
+  const push = (index: number) => {
+    let i = heap.length
+    heap.push(index)
+    while (i > 0) {
+      const p = (i - 1) >> 1
+      if (heap[p]! >= index) break
+      heap[i] = heap[p]!; i = p
+    }
+    heap[i] = index
+  }
+  const prune = () => {
+    while (heap.length && !live.has(heap[0]!)) {
+      const tail = heap.pop()!
+      if (!heap.length) break
+      let i = 0
+      while (i * 2 + 1 < heap.length) {
+        let c = i * 2 + 1
+        if (c + 1 < heap.length && heap[c + 1]! > heap[c]!) c++
+        if (heap[c]! <= tail) break
+        heap[i] = heap[c]!; i = c
+      }
+      heap[i] = tail
+    }
+  }
+  const spans: { start: number; end: number; node: OtioNode | null }[] = []
+  let start = 0
+  const append = (end: number) => {
+    if (end <= start) return
+    prune()
+    const picture = pictures[heap[0]!]
+    const node = picture && !picture.blocked ? picture.node : null
+    const previous = spans.at(-1)
+    if (previous?.node === node) previous.end = end
+    else spans.push({ start, end, node })
+    start = end
+  }
+  for (const event of events) {
+    append(event.time)
+    if (event.start) { live.add(event.index); push(event.index) }
+    else live.delete(event.index)
+  }
+  append(model.duration)
+  return spans
 }

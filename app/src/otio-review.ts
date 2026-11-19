@@ -60,7 +60,7 @@ export function mediaPosition(node: OtioNode, seconds: number): number | null {
   return source ? source.value / source.rate - (node.mediaStart ? node.mediaStart.value / node.mediaStart.rate : 0) : null
 }
 export function otioReviewAnchor(document: OtioDocument, model: OtioModel, node: OtioNode, frame: number,
-  picture: OtioNode | null, mode: 'timeline' | 'clip', medium?: OtioMedium | null) {
+  picture: OtioNode | null, mode: 'timeline' | 'clip' | 'track', medium?: OtioMedium | null, track?: OtioNode) {
   const at: OtioTime = { value: frame, rate: model.rate }, seconds = frame / model.rate
   const first = firstOtioFrame(node.start, model.rate)
   const after = firstOtioFrame(node.end, model.rate)
@@ -86,7 +86,7 @@ export function otioReviewAnchor(document: OtioDocument, model: OtioModel, node:
       value: model.globalStart.value + seconds * model.globalStart.rate, rate: model.globalStart.rate,
     } }) },
     // Selection may be a parent, audio item, transition or a clip below the top layer.
-    monitor: { mode, clip: picture ? { pointer: picture.id, name: picture.name, timing: 'calculated' as const, source: otioSourceTime(picture, seconds),
+    monitor: { mode, ...(mode === 'track' && track && { track: { pointer: track.id, name: track.name } }), clip: picture ? { pointer: picture.id, name: picture.name, timing: 'calculated' as const, source: otioSourceTime(picture, seconds),
       ...(medium && { mediaPath: medium.path }), ...(picture.mediaStart && { mediaStart: picture.mediaStart }),
       requestedMediaSeconds: mediaPosition(picture, seconds),
     } : null, ...(model.warnings.length && { previewLimits: model.warnings }) },

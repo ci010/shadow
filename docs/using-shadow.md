@@ -612,6 +612,28 @@ to seek; focus it and use the arrow keys to step one timeline frame. Selecting a
 visual clip opens its **Clip source**; choose **Timeline** to see the top visible
 picture at the same position. This is a read-only viewer, not a timeline editor.
 
+Use **Storyboard** in the existing viewer toolbar to scan representative pictures.
+**Final timeline** follows the monitor's top visible picture and hard cuts; select a
+video track or a clip on it to make that track available as a solo source. **Per
+visible shot** omits gaps and samples the start of each uninterrupted visible run
+(a clip can reappear after an overlay). **Every 2 seconds** samples `0, 2, 4, …`
+strictly before the timeline end and labels samples with no picture. Without valid
+local media, cards show an unavailable-picture state rather than a substitute.
+Click a card to select its position, or double-click it (or press Enter on the
+focused card) to open the Monitor there. The tracks and selection inspector are
+still available. Frame drawing happens in the Monitor.
+
+Use **Add description** or **Edit description** on a card to add a caption; all
+samples of that clip share it, with one caption per clip on each page. Save a blank
+description to remove it. **Missing descriptions only** excludes gaps and clips
+that already have a caption. Descriptions are plain text stored in this browser
+profile, scoped to the connected project, file owner and path, and exact file
+contents. They are not written to the OTIO, shared across devices, or sent to chat.
+Moving or editing the file can start a new description set. Local descriptions are
+unavailable on attachment/archive and remote preview routes or when the browser
+cannot verify the file revision or read its storage. Failed writes are reported and
+do not replace the displayed saved description.
+
 For a diffusion.cpp review, keep the edit and its generated PNG/WebM files under
 one browsable root. For example, put `cut.otio` in **Session files** beside the
 `media/` directory, and use `media/shot-02.webm` as a clip's `ExternalReference`

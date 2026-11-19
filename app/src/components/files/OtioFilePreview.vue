@@ -69,8 +69,8 @@ async function load() {
       : { session: props.sessionId, space: props.attachmentUrl ? 'attachment' : props.sessionWorkspace ? 'session-files' : 'workdir' },
       ...(props.mtime && { modified: props.mtime }) }
     if (!props.remote && globalThis.crypto?.subtle) {
-      const hash = await crypto.subtle.digest('SHA-256', bytes)
-      document.sha256 = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')
+      const hash = await crypto.subtle.digest('SHA-256', bytes).catch(() => undefined)
+      if (hash) document.sha256 = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')
     }
     // Absolute file references are useful in exported edits, but only relative to the verified local owner.
     // Don't enumerate a directory for ordinary relative media references.
