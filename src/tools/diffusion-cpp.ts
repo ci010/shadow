@@ -20,7 +20,7 @@ export class DiffusionCppTool implements Tool {
   readonly name = 'diffusion_cpp'
   readonly description =
     'Optional local stable-diffusion.cpp image/video generation. Discover and reuse existing model weights; configure ' +
-    'Qwen Image 2.1, legacy Qwen-Image-Edit, Z-Image-Turbo, Anima or MiniMax-H3 explicitly. No implicit downloads. Read v:skills/diffusion-cpp.'
+    'Qwen Image 2.1, legacy Qwen-Image-Edit, Z-Image-Turbo, Anima, MOSS-Image SFT or MiniMax-H3 explicitly. No implicit downloads. Read v:skills/diffusion-cpp.'
   readonly readonly = (args: Record<string, unknown>) =>
     args.action === 'status' || args.action === 'discover' || args.action === 'inspect'
   readonly parameters: ToolParameters = {
@@ -30,9 +30,10 @@ export class DiffusionCppTool implements Tool {
       roots: { type: 'array', items: { type: 'string' }, description: 'discover: up to six additional, approved, absolute model directories' },
       which: { type: 'string', enum: ['help', 'devices'], description: 'inspect: CLI help or backend devices' },
       binary: { type: 'string', description: 'configure: absolute sd-cli path; PATH and SDCPP_CLI_PATH also supported' },
-      preset: { type: 'string', enum: ['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'minimax_h3'], description: 'configure or image; omitted for image means Qwen Image 2.1' },
+      preset: { type: 'string', enum: ['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'moss_image_sft', 'minimax_h3'], description: 'configure or image; omitted for image means Qwen Image 2.1' },
       diffusion: { type: 'string', description: 'configure: absolute diffusion GGUF, safetensors or legacy Qwen Diffusers index path' },
       vae: { type: 'string', description: 'configure: absolute dedicated VAE path' },
+      tokenizer: { type: 'string', description: 'configure: absolute external tokenizer.json path required for MOSS-Image SFT' },
       llm: { type: 'string', description: 'configure: absolute compatible encoder path (legacy Qwen uses its Diffusers index); H3 requires its specialized Qwen3-VL-32B variant' },
       vision: { type: 'string', description: 'configure: optional GGUF vision projection; required for Qwen 2.1 editing; empty string clears it' },
       audioVae: { type: 'string', description: 'configure: MiniMax-H3 audio VAE, required for synchronized audio/video' },
@@ -45,7 +46,7 @@ export class DiffusionCppTool implements Tool {
       steps: { type: 'integer', description: 'optional inference steps; Z-Image-Turbo defaults to eight' },
       cfgScale: { type: 'number', description: 'image: classifier-free guidance; model-specific defaults apply' },
       seed: { type: 'integer', description: 'optional reproducible seed' },
-      reference: { type: 'string', description: 'image: Qwen 2.1 editing reference; required for legacy Qwen-Image-Edit, unsupported for Z or Anima' },
+      reference: { type: 'string', description: 'image: Qwen 2.1 editing reference; required for legacy Qwen-Image-Edit, unsupported for Z, Anima or MOSS-Image SFT' },
       mode: { type: 'string', enum: ['fl2va', 'ref2va'], description: 'video: text/first-last-frame or reference-conditioned generation' },
       frames: { type: 'integer', description: 'video: 17k+5 frames, 5..226; default 56 at 24 fps' },
       initImage: { type: 'string', description: 'video fl2va: optional first frame' },

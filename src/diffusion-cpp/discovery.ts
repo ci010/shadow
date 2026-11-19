@@ -5,9 +5,9 @@ import { readdir, realpath, stat } from 'node:fs/promises'
 import type { Dirent, Stats } from 'node:fs'
 import { validateQwenEditCache } from './qwen-edit-cache.ts'
 
-export const presets = ['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'minimax_h3'] as const
+export const presets = ['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'moss_image_sft', 'minimax_h3'] as const
 export type Preset = typeof presets[number]
-export type Component = 'diffusion' | 'vae' | 'llm' | 'vision' | 'audioVae' | 'refDiffusion'
+export type Component = 'diffusion' | 'vae' | 'llm' | 'vision' | 'audioVae' | 'refDiffusion' | 'tokenizer'
 
 const names: Array<{ preset: Preset; component: Component; pattern: RegExp }> = [
   { preset: 'qwen_image_2_1', component: 'diffusion', pattern: /^qwen_image_2\.1-.*\.gguf$|^qwen_image_2\.1_(?:int8_convrot|bf16)\.safetensors$/i },
@@ -17,6 +17,9 @@ const names: Array<{ preset: Preset; component: Component; pattern: RegExp }> = 
   { preset: 'anima', component: 'diffusion', pattern: /^anima-(?:preview(?:2|3-base)?|base-v1\.0|aesthetic-v1\.(?:0b?|1)|turbo-v1\.[01])\.safetensors$|^anima-(?:preview|base|aesthetic|turbo)[-\w.]*\.gguf$/i },
   { preset: 'anima', component: 'vae', pattern: /^qwen_image_vae\.safetensors$/i },
   { preset: 'anima', component: 'llm', pattern: /^qwen_3_06b_base\.safetensors$|^Qwen3-0\.6B-Base[-_].*\.gguf$/i },
+  { preset: 'moss_image_sft', component: 'diffusion', pattern: /^moss[-_]image[-_]sft(?:[-_][\w.-]+)?\.gguf$|^moss_image_sft_int8_convrot_attn\.safetensors$/i },
+  { preset: 'moss_image_sft', component: 'llm', pattern: /^Qwen3\.5-9B-.*\.gguf$/i },
+  { preset: 'moss_image_sft', component: 'vae', pattern: /^flux2_ae\.safetensors$/i },
   { preset: 'z_image_turbo', component: 'diffusion', pattern: /^z_image_turbo[-_].*\.(?:gguf|safetensors)$/i },
   { preset: 'z_image_turbo', component: 'vae', pattern: /^ae\.safetensors$/i },
   { preset: 'z_image_turbo', component: 'llm', pattern: /^Qwen3-4B-Instruct-2507-.*\.gguf$/i },
@@ -29,6 +32,8 @@ const names: Array<{ preset: Preset; component: Component; pattern: RegExp }> = 
 ]
 
 export function matchesComponent(preset: Preset, component: Component, filename: string): boolean {
+  // Generic tokenizer.json files cannot be attributed to MOSS by discovery.
+  if (component === 'tokenizer') return preset === 'moss_image_sft' && filename === 'tokenizer.json'
   return names.some(entry => entry.preset === preset && entry.component === component && entry.pattern.test(filename))
 }
 

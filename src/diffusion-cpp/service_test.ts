@@ -284,3 +284,51 @@ test('Anima requires matching components and uses separate turbo generation defa
     assert.equal(aesthetic[aesthetic.indexOf('--cfg-scale') + 1], '4.5')
   })
 })
+
+test('MOSS-Image SFT validates four components and uses the upstream image arguments', async () => {
+  await withTempWorkspace(async workspace => {
+    const preset = 'moss_image_sft' as const
+    const diffusion = await model(join(workspace, 'moss_image_sft_int8_convrot_attn.safetensors'))
+    const vae = await model(join(workspace, 'flux2_ae.safetensors'))
+    const llm = await model(join(workspace, 'Qwen3.5-9B-Q4_K_M.gguf'))
+    const tokenizer = join(workspace, 'tokenizer.json')
+    const calls: string[][] = []
+    const service = new DiffusionCppService(workspace, async (_binary, args) => {
+      if (args[0] === '--help') return '--diffusion-model --video-frames'
+      calls.push(args)
+      await writeFile(args[args.indexOf('-o') + 1], png)
+      return ''
+    })
+    const selection = { preset, diffusion, vae, llm, licenseAcknowledged: true as const }
+    assert.deepEqual((await service.status()).presets[preset].missing, ['diffusion', 'vae', 'llm', 'tokenizer'])
+    await service.configure({ binary: process.execPath })
+    await assert.rejects(() => service.configure(selection), /Missing moss_image_sft tokenizer/)
+    await writeFile(tokenizer, '{}')
+    await assert.rejects(() => service.configure({ ...selection, tokenizer }), /Invalid tokenizer JSON/)
+    await writeFile(tokenizer, JSON.stringify({ model: { type: 'BPE', vocab: { hello: 0 } } }))
+    const base = await model(join(workspace, 'moss_image_base_int8_convrot_attn.safetensors'))
+    await assert.rejects(() => service.configure({ ...selection, tokenizer, diffusion: base }), /unexpected model name/)
+    await assert.rejects(() => service.configure({ ...selection, tokenizer, options: [`--tokenizer=${tokenizer}`] }), /owned by Shadow/)
+    await service.configure({ ...selection, tokenizer })
+    const status = (await service.status()).presets[preset]
+    assert.equal(status.status, 'path_accessible')
+    assert.ok('tokenizer' in status.components)
+
+    assert.deepEqual(status.components.tokenizer, { path: tokenizer, status: 'path_accessible' })
+    const output = join(workspace, 'moss.png')
+    await assert.rejects(() => service.image({ preset, prompt: 'hello', width: 65 }, output), /multiples of 16/)
+    await assert.rejects(() => service.image({ preset, prompt: 'hello', reference: output }, output), /not reference editing/)
+    await service.image({ preset, prompt: 'hello', width: 80, height: 96 }, output)
+    assert.deepEqual(calls, [[
+      '--diffusion-model', diffusion, '--vae', vae, '--llm', llm, '--tokenizer', tokenizer,
+      '-p', 'hello', '-W', '80', '-H', '96', '--cfg-scale', '3', '--offload-to-cpu', '-o', output,
+    ]])
+    await writeFile(tokenizer, '{}')
+    const invalid = (await service.status()).presets[preset]
+    assert.equal(invalid.status, 'invalid')
+    assert.ok('tokenizer' in invalid.components)
+    assert.match(JSON.stringify(invalid.components.tokenizer), /Invalid tokenizer JSON/)
+    await assert.rejects(() => service.image({ preset, prompt: 'hello' }, output), /Invalid tokenizer JSON/)
+    assert.equal(calls.length, 1)
+  })
+})

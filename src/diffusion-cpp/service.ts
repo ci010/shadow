@@ -9,10 +9,11 @@ import { workspacePath } from '../utils/paths.ts'
 import { discoverModels, knownModelRoots, matchesComponent, type Component, type Preset } from './discovery.ts'
 import { validateQwenEditCache } from './qwen-edit-cache.ts'
 
-const presetName = z.enum(['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'minimax_h3'])
+const presetName = z.enum(['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'moss_image_sft', 'minimax_h3'])
 const modelPaths = z.object({
   diffusion: z.string().min(1),
   vae: z.string().min(1),
+  tokenizer: z.string().min(1).optional(),
   llm: z.string().min(1),
   vision: z.string().min(1).optional(),
   audioVae: z.string().min(1).optional(),
@@ -28,6 +29,7 @@ const configSchema = z.object({
     qwen_image_edit: modelPaths.optional(),
     z_image_turbo: modelPaths.optional(),
     anima: modelPaths.optional(),
+    moss_image_sft: modelPaths.optional(),
     minimax_h3: modelPaths.optional(),
   }).strict().default({}),
 }).strict()
@@ -36,6 +38,7 @@ export const configureSchema = z.object({
   preset: presetName.optional(),
   diffusion: z.string().min(1).optional(),
   vae: z.string().min(1).optional(),
+  tokenizer: z.string().min(1).optional(),
   llm: z.string().min(1).optional(),
   vision: z.string().optional(),
   audioVae: z.string().min(1).optional(),
@@ -44,7 +47,7 @@ export const configureSchema = z.object({
   licenseAcknowledged: z.literal(true).optional(),
 }).strict()
 export const imageSchema = z.object({
-  preset: z.enum(['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima']).default('qwen_image_2_1'),
+  preset: z.enum(['qwen_image_2_1', 'qwen_image_edit', 'z_image_turbo', 'anima', 'moss_image_sft']).default('qwen_image_2_1'),
   prompt: z.string().trim().min(1).max(8000),
   width: z.number().int().min(64).max(2048).default(512),
   height: z.number().int().min(64).max(2048).default(512),
@@ -70,10 +73,10 @@ export type ImageRequest = z.input<typeof imageSchema>
 export type VideoRequest = z.input<typeof videoSchema>
 type ModelPaths = z.infer<typeof modelPaths>
 type Config = z.infer<typeof configSchema>
-const COMPONENTS = ['diffusion', 'vae', 'llm', 'vision', 'audioVae', 'refDiffusion'] as const
+const COMPONENTS = ['diffusion', 'vae', 'llm', 'vision', 'audioVae', 'refDiffusion', 'tokenizer'] as const
 const OWNED_FLAGS = new Set([
   '-M', '--mode', '-m', '--model', '--diffusion-model', '--vae', '--audio-vae',
-  '--llm', '--llm_vision', '--llm-vision', '--init-img', '-i', '--end-img',
+  '--tokenizer', '--llm', '--llm_vision', '--llm-vision', '--init-img', '-i', '--end-img',
   '-r', '--ref-image', '--ref-video', '--ref-video-audio', '--ref-audio',
   '-p', '--prompt', '-o', '--output', '-W', '--width', '-H', '--height',
   '--fps', '--video-frames', '--cfg-scale', '--flow-shift', '--steps', '--seed', '--batch-count',
@@ -139,6 +142,25 @@ async function existingFile(path: string, preset?: Preset, component?: Component
     if (!matchesComponent(preset, component, basename(path))) {
       throw new TypeError(`The ${preset} ${component} file has an unexpected model name: ${basename(path)}`)
     }
+    if (component === 'tokenizer') {
+      const limit = 32 * 1024 * 1024
+      const file = await open(path, 'r')
+      try {
+        const size = (await file.stat()).size
+        if (size > limit) throw new TypeError(`Tokenizer JSON exceeds 32 MiB: ${path}`)
+        const content = Buffer.alloc(size + 1)
+        const { bytesRead } = await file.read(content, 0, content.length, 0)
+        const value = JSON.parse(content.toString('utf8', 0, bytesRead))
+        const vocab = value?.model?.vocab
+        if (value?.model?.type !== 'BPE' || !vocab || typeof vocab !== 'object'
+          || Array.isArray(vocab) || !Object.keys(vocab).length) {
+          throw new TypeError(`Invalid tokenizer JSON: expected a BPE model with vocabulary: ${path}`)
+        }
+      } finally {
+        await file.close()
+      }
+      return path
+    }
     const file = await open(path, 'r')
     try {
       const header = Buffer.alloc(12)
@@ -192,6 +214,7 @@ async function checkOutput(path: string, kind: 'image' | 'video'): Promise<void>
 }
 
 function requiredComponents(preset: Preset): Component[] {
+  if (preset === 'moss_image_sft') return ['diffusion', 'vae', 'llm', 'tokenizer']
   return preset === 'minimax_h3' ? ['diffusion', 'vae', 'audioVae', 'llm'] : ['diffusion', 'vae', 'llm']
 }
 
@@ -282,6 +305,7 @@ export class DiffusionCppService {
         qwen_image_edit: await presetStatus('qwen_image_edit'),
         z_image_turbo: await presetStatus('z_image_turbo'),
         anima: await presetStatus('anima'),
+        moss_image_sft: await presetStatus('moss_image_sft'),
         minimax_h3: await presetStatus('minimax_h3'),
       },
       guide: 'v:skills/diffusion-cpp',
@@ -319,6 +343,7 @@ export class DiffusionCppService {
           throw new TypeError(`Review the ${preset} model license and explicitly acknowledge it before configuring`)
         }
         const selected = modelPaths.parse({
+          tokenizer: update.tokenizer ?? old?.tokenizer,
           diffusion: update.diffusion ?? old?.diffusion,
           vae: update.vae ?? old?.vae,
           llm: update.llm ?? old?.llm,
@@ -328,9 +353,10 @@ export class DiffusionCppService {
           options: update.options ?? old?.options ?? [],
           licenseAcknowledged: update.licenseAcknowledged ?? old?.licenseAcknowledged,
         })
-        if (['z_image_turbo', 'qwen_image_edit', 'anima'].includes(preset)
+        if (['z_image_turbo', 'qwen_image_edit', 'anima', 'moss_image_sft'].includes(preset)
           && (selected.vision || selected.audioVae || selected.refDiffusion)
-          || preset === 'qwen_image_2_1' && (selected.audioVae || selected.refDiffusion)) {
+          || preset === 'qwen_image_2_1' && (selected.audioVae || selected.refDiffusion)
+          || preset !== 'moss_image_sft' && selected.tokenizer) {
           throw new TypeError(`Unexpected components for ${preset}`)
         }
         for (const required of requiredComponents(preset)) {
@@ -372,6 +398,7 @@ export class DiffusionCppService {
     }
     if (preset === 'qwen_image_edit') await validateQwenEditComponents(entry)
     if (preset === 'minimax_h3' && !entry.audioVae) throw new Error('MiniMax-H3 audio VAE is not configured')
+    if (preset === 'moss_image_sft' && !entry.tokenizer) throw new Error('MOSS-Image SFT tokenizer is not configured')
     return { binary, entry }
   }
 
@@ -397,7 +424,12 @@ export class DiffusionCppService {
 
   async image(request: ImageRequest, output: string, signal?: AbortSignal): Promise<string> {
     const input = imageSchema.parse(request)
-    if (input.width % 32 || input.height % 32) throw new TypeError('Image dimensions must be multiples of 32')
+    const moss = input.preset === 'moss_image_sft'
+    const multiple = moss ? 16 : 32
+    if (input.width % multiple || input.height % multiple) {
+      throw new TypeError(`Image dimensions must be multiples of ${multiple}`)
+    }
+    if (moss && input.reference) throw new TypeError('MOSS-Image SFT supports text-to-image, not reference editing')
     if (input.preset === 'z_image_turbo' && input.reference) {
       throw new TypeError('Z-Image-Turbo is not configured as a Qwen Image 2.1 editing replacement')
     }
@@ -414,17 +446,18 @@ export class DiffusionCppService {
     const reference = input.reference ? await imageFile(input.reference) : undefined
     const args = ['--diffusion-model', entry.diffusion, '--vae', entry.vae, '--llm', entry.llm]
     if (entry.vision) args.push('--llm_vision', entry.vision)
+    if (moss && entry.tokenizer) args.push('--tokenizer', entry.tokenizer)
     const animaTurbo = input.preset === 'anima' && /anima-turbo/i.test(basename(entry.diffusion))
     args.push('-p', input.prompt, '-W', String(input.width), '-H', String(input.height),
       '--cfg-scale', String(input.cfgScale ?? (input.preset === 'z_image_turbo' || animaTurbo ? 1
-        : input.preset === 'qwen_image_edit' ? 2.5 : input.preset === 'anima' ? 4.5 : 6)),
+        : input.preset === 'qwen_image_edit' ? 2.5 : input.preset === 'anima' ? 4.5 : moss ? 3 : 6)),
       ...(input.preset === 'z_image_turbo'
         ? ['--steps', String(input.steps ?? 8), '--diffusion-fa']
         : input.preset === 'qwen_image_edit'
           ? ['--sampling-method', 'euler', '--diffusion-fa', '--flow-shift', '3', ...(input.steps ? ['--steps', String(input.steps)] : [])]
           : input.preset === 'anima'
             ? ['--sampling-method', 'euler', '--diffusion-fa', '--steps', String(input.steps ?? (animaTurbo ? 10 : 35))]
-            : ['--sampling-method', 'euler', '--fa', ...(input.steps ? ['--steps', String(input.steps)] : [])]),
+            : [...(moss ? [] : ['--sampling-method', 'euler', '--fa']), ...(input.steps ? ['--steps', String(input.steps)] : [])]),
       '--offload-to-cpu')
     if (input.seed !== undefined) args.push('--seed', String(input.seed))
     if (reference) args.push('-r', reference)

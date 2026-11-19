@@ -3683,7 +3683,9 @@ legacy Qwen-Image-Edit is a separate optional editing preset that checks
 Diffusers shard indexes in an existing cache, and Anima is an optional
 text-to-image preset with its own encoder, VAE and non-commercial license.
 Z-Image-Turbo is an explicit lower-resource text-to-image alternative;
-MiniMax-H3 is the video/audio preset. Project-local `.diffusion-cpp.json`
+MOSS-Image SFT is an opt-in text-to-image preset requiring its diffusion
+model, Qwen3.5 encoder, FLUX.2 VAE and external tokenizer JSON (MOSS-Image
+Base is CLI-only). MiniMax-H3 is the video/audio preset. Project-local `.diffusion-cpp.json`
 stores references to existing model files, including other applications'
 caches, rather than copying weights into the Project. Bounded discovery
 reports filename/size candidates (or indexed-shard/header presence for the
