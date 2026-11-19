@@ -34,6 +34,12 @@ lookup shows “unavailable,” not zero, and does not change model access.
   DeepSeek says it is insufficient for API calls. The balance is not a spending
   limit. The check is not made for custom endpoints or DeepSeek Account browser sign-in.
 
+In the chat composer, the top-level model/settings popover shows the same
+credit usage or official DeepSeek balance above **Model** for the selected
+provider instance. It looks up account usage only while that menu is open and
+omits the row if the provider instance cannot be identified, the provider is
+unsupported, or no figures are available yet.
+
 ## Configuration and compatibility
 
 The `providers` record key is the stable instance ID. Optional `type` chooses the
