@@ -28,7 +28,7 @@
           <label :for="`${id}-${item.id}`">{{ item.label }} {{ t('API key') }}</label>
           <span :id="`${id}-${item.id}-status`" class="key-status">{{ state?.keys[item.id] ? t('Configured') : t('Not configured') }}</span>
         </div>
-        <input :id="`${id}-${item.id}`" v-model="keys[item.id].value" type="password" autocomplete="new-password"
+        <UiInput :id="`${id}-${item.id}`" v-model="keys[item.id].value" type="password" autocomplete="new-password"
           :disabled="keys[item.id].remove" :maxlength="4096" :spellcheck="false" autocapitalize="none"
           :aria-describedby="`${id}-${item.id}-status`"
           :placeholder="state?.keys[item.id] ? t('Enter a replacement key') : t('Enter an API key')" />
@@ -52,6 +52,7 @@
 </template>
 
 <script setup lang="ts">
+import UiInput from './UiInput.vue'
 import UiSelect from './UiSelect.vue'
 import { t } from '../i18n.ts'
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
@@ -123,8 +124,7 @@ fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .key-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: 13px; }
 .key-status, .key-help { color: var(--c-text-secondary); font-size: 12px; }
 .key-help { margin: 8px 0 0; line-height: 1.6; }
-input[type="password"], .ui-select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 14px; }
-input::placeholder { color: var(--c-text-secondary); opacity: 1; }
+.key-row .ui-input, .settings-field .ui-select { width: 100%; min-height: 44px; }
 .remove-key { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--c-text-secondary); font-size: 13px; cursor: pointer; }
 .remove-key input { margin: 0; width: 16px; height: 16px; accent-color: var(--c-primary-bg); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 16px; }
@@ -133,5 +133,5 @@ input::placeholder { color: var(--c-text-secondary); opacity: 1; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .save-settings { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .save-settings:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
-input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), button:where(:not(.ui-select)):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 </style>

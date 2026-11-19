@@ -14,8 +14,8 @@
         <p>{{ t('Detected source') }}: {{ sourceLabel }}</p>
         <p v-if="state.source === 'windows-auto'">{{ t('Windows automatic proxy (PAC / auto-detect): the route is resolved separately for each destination.') }}</p>
         <p v-if="state.source === 'macos-auto'">{{ t('macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.') }}</p>
-        <label v-if="state.http">HTTP<input :value="state.http" readonly /></label>
-        <label v-if="state.https">HTTPS<input :value="state.https" readonly /></label>
+        <label v-if="state.http">HTTP<UiInput :value="state.http" readonly /></label>
+        <label v-if="state.https">HTTPS<UiInput :value="state.https" readonly /></label>
       </template>
       <p>{{ t('Changes are saved and apply immediately to new Main requests and downloads. In-flight requests are not interrupted. Restart already-running microapps to apply the change; remote nodes and external tools manage their own proxy settings.') }}</p>
     </template>
@@ -23,6 +23,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import UiInput from './UiInput.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { t } from '../i18n.ts'
 import { createProxySettingsClient, type ProxyStatus } from '../proxy-settings.ts'
@@ -57,9 +58,9 @@ watch(() => props.apiBase, () => { state.value = null; void run() })
 h2 { margin-top: 0; font-size: 20px; }
 p { color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; }
 label { display: flex; align-items: center; gap: 12px; margin: 16px 0; font-size: 14px; }
-input[readonly] { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--c-border); background: var(--c-bg-muted); color: var(--c-text); border-radius: var(--radius-control); }
 button { padding: 10px 16px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-muted); color: var(--c-text); cursor: pointer; }
 button:disabled { opacity: .6; cursor: default; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.ui-input { width: 100%; }
+button:focus-visible, .proxy-toggle input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .error { color: var(--c-red); }
 </style>

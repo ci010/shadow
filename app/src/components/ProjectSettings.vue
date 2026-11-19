@@ -14,8 +14,8 @@
         <p v-if="notice" class="settings-notice" role="status">{{ notice }}</p>
         <form v-show="section === 'general'" @submit.prevent="rename">
           <h2>{{ t('General') }}</h2>
-          <label class="settings-field">{{ t('Project name') }}<input v-model="name" required maxlength="100" :disabled="saving || !project" /></label>
-          <label class="settings-field">{{ t('Home') }}<input :value="config?.agent.workspace ?? ''" readonly aria-describedby="home-description" /></label>
+          <label class="settings-field">{{ t('Project name') }}<UiInput v-model="name" required maxlength="100" :disabled="saving || !project" /></label>
+          <label class="settings-field">{{ t('Home') }}<UiInput :value="config?.agent.workspace ?? ''" readonly aria-describedby="home-description" /></label>
           <p id="home-description" class="settings-help">{{ t('This project\'s memory, skills, learning and scratch chats live here. Renaming does not move its Home.') }}</p>
           <button class="btn primary" :disabled="saving || !project || !name.trim()">{{ saving ? t('Saving...') : t('Save name') }}</button>
         </form>
@@ -40,6 +40,7 @@
 </template>
 
 <script setup lang="ts">
+import UiInput from './UiInput.vue'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -136,7 +137,7 @@ onUnmounted(() => { request?.abort(); mutation?.abort() })
 .settings-content { min-width: 0; }
 .settings-content h2 { margin: 0 0 16px; font-size: 20px; }
 .settings-field { display: grid; gap: 8px; max-width: 600px; margin: 20px 0; font-size: 13px; }
-.settings-field input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
+.settings-field .ui-input { width: 100%; }
 .settings-effort { padding: 0; margin: 20px 0; border: 0; max-width: 600px; }
 .settings-effort legend { margin-bottom: 8px; font-size: 13px; }
 .settings-checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }
@@ -145,7 +146,7 @@ onUnmounted(() => { request?.abort(); mutation?.abort() })
 .settings-notice { color: var(--c-text-secondary); font-size: 13px; }
 .project-danger { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--c-border); }
 .delete-project { color: var(--c-error); border-color: var(--c-error); }
-a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @media (max-width: 700px) {
   .project-settings-view { padding: 20px 16px 32px; }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }

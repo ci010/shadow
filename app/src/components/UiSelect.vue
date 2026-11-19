@@ -1,5 +1,5 @@
 <template>
-  <span ref="root" class="ui-select" :class="attrs.class" :style="attrs.style as StyleValue"
+  <span ref="root" class="ui-field ui-select" :class="attrs.class" :style="attrs.style as StyleValue"
     :data-disabled="disabled || undefined" :data-open="open || undefined" :data-invalid="invalid || undefined">
     <button ref="trigger" v-bind="triggerAttrs()" class="ui-select-trigger" type="button" role="combobox"
       :data-ui-select-trigger="uid" :disabled="disabled" :aria-expanded="open" aria-haspopup="listbox"
@@ -307,14 +307,10 @@ defineExpose({ focus: () => trigger.value?.focus(), checkValidity: () => native.
 </script>
 
 <style scoped>
-.ui-select { position: relative; display: inline-flex; vertical-align: middle; align-items: stretch; min-width: 0; max-width: 100%; min-height: 36px; box-sizing: border-box; padding: 5px 9px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; line-height: 1.4; text-align: start; }
+.ui-select { position: relative; display: inline-flex; vertical-align: middle; align-items: stretch; text-align: start; }
 .ui-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 1; min-width: 0; width: 100%; max-width: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; cursor: pointer; outline: none; }
 .ui-select-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-select-chevron, .ui-select-check { flex: none; color: var(--c-text-muted); }
-.ui-select:has(.ui-select-trigger:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.ui-select[data-open] { border-color: var(--c-blue); }
-.ui-select[data-invalid] { border-color: var(--c-error); }
-.ui-select[data-disabled] { opacity: .5; }
 .ui-select-trigger:disabled { cursor: not-allowed; }
 .ui-select-native { position: absolute !important; width: 1px !important; height: 1px !important; min-width: 0 !important; min-height: 0 !important; padding: 0 !important; margin: 0 !important; border: 0 !important; opacity: 0 !important; overflow: hidden !important; clip-path: inset(50%) !important; pointer-events: none !important; }
 .ui-select-popup { position: fixed; z-index: 2000; box-sizing: border-box; overflow: auto; overscroll-behavior: contain; padding: 3px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 12px 36px var(--c-shadow); font: 13px/1.4 Inter, system-ui, sans-serif; text-align: start; scroll-behavior: auto; }
@@ -325,11 +321,9 @@ defineExpose({ focus: () => trigger.value?.focus(), checkValidity: () => native.
 .ui-select-option[aria-disabled='true'] { color: var(--c-text-muted); opacity: .5; cursor: not-allowed; }
 .ui-select-check { color: currentColor; }
 @media (hover: hover) and (pointer: fine) {
-  .ui-select:not([data-disabled]):hover { border-color: var(--c-border-hover); }
   .ui-select-option:not([aria-disabled='true']):hover { background: var(--c-selection-bg); }
 }
 @media (max-width: 700px), (pointer: coarse) {
-  .ui-select { min-height: 44px; font-size: 16px; }
   .ui-select-option { min-height: 44px; }
 }
 /* High-frequency selection and keyboard navigation are deliberately instant, including reduced motion. */

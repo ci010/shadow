@@ -42,7 +42,7 @@
             <legend>{{ t('Private credentials') }}</legend>
             <p class="muted">{{ t('Enter credentials only here, never in chat. Blank fields keep saved values. Other settings are handled in conversation.') }}</p>
             <label v-for="field in fields" :key="field.key">{{ field.label }}
-              <input v-model="draft[field.key]" :name="field.key" :type="field.kind === 'password' ? 'password' : 'text'" :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false" :placeholder="hasSaved(field.key) ? t('Saved — leave blank to keep') : undefined" />
+              <UiInput :model-value="String(draft[field.key] ?? '')" @update:model-value="draft[field.key] = $event" :name="field.key" :type="field.kind === 'password' ? 'password' : 'text'" :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false" :placeholder="hasSaved(field.key) ? t('Saved — leave blank to keep') : undefined" />
             </label>
             <div class="actions"><button class="btn-primary" type="submit" :disabled="selected.purpose === 'legacy'">{{ selected.enabled ? t('Save and reconnect') : t('Save and connect') }}</button><button v-if="!selected.enabled" type="button" @click="saveCredentials(false)">{{ t('Save without connecting') }}</button><button type="button" @click="clearCredentials">{{ t('Cancel') }}</button></div>
           </fieldset>
@@ -94,6 +94,7 @@
 </template>
 
 <script setup lang="ts">
+import UiInput from './UiInput.vue'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import UiSelect from './UiSelect.vue'
@@ -272,19 +273,18 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 legend { font-weight: 600; padding: 0; }
 .private-fields { margin-top: 16px; }
 .private-fields label { margin-block: 12px; }
-input { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-input); font: inherit; }
-input::placeholder { color: var(--c-text-secondary); opacity: 1; }
+.ui-input { width: 100%; }
 button { min-height: 36px; padding: 7px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; cursor: pointer; }
 button:hover:not(:disabled) { background: var(--c-bg-muted); }
 button.btn-primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 button.btn-primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 button:disabled { opacity: .6; cursor: not-allowed; }
-button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .owner-pairing, .platform-help { margin-top: 12px; }
 summary { cursor: pointer; padding-block: 8px; }
 .platform-help { color: var(--c-text-secondary); }
 .platform-help summary { color: var(--c-text); }
 .remove-connection { margin-top: 16px; }
 img { max-width: 100%; height: auto; }
-@media (max-width: 700px), (pointer: coarse) { button, input, summary { min-height: 44px; box-sizing: border-box; } input { font-size: 16px; } }
+@media (max-width: 700px), (pointer: coarse) { button, summary { min-height: 44px; box-sizing: border-box; } }
 </style>

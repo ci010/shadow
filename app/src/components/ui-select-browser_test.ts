@@ -13,7 +13,7 @@ import { withTempWorkspace } from '../../../src/testing/workspace.ts'
 const root = fileURLToPath(new URL('../../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../../desktop/package.json', import.meta.url))
 
-test('UiSelect browser: keyboard, live options, real change targets, forms, nested overlays, viewport and teardown', {
+test('Shared settings fields in Electron: forms, IME, language selection, keyboard and viewport', {
   timeout: 60_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async () => {
@@ -29,8 +29,12 @@ test('UiSelect browser: keyboard, live options, real change targets, forms, nest
             import {reactive,nextTick} from 'vue';
             window.flush=async()=>{await nextTick();await nextTick();await nextTick();};
             import UiSelect from '/src/components/UiSelect.vue';
+            import UiInput from '/src/components/UiInput.vue';
+            import LanguageSelector from '/src/components/LanguageSelector.vue';
+            import {initializeI18n} from '/src/i18n.ts';
+            initializeI18n(window);
             import {isSelectPopupEventInside} from '/src/select-control.ts';
-            const state = window.fixture = reactive({model:2, controlled:'a', disabled:false, mounted:true, changes:[], outside:0,
+            const state = window.fixture = reactive({model:2, text:'', controlled:'a', disabled:false, mounted:true, changes:[], outside:0,
               options:[{value:1,label:'Apple'},{value:2,label:'Apricot'},{value:3,label:'Banana',disabled:true},{value:4,label:'Blueberry'}]});
             function change(event) {state.changes.push({value:event.target.value,native:event.target instanceof HTMLSelectElement,model:state.model});}
             document.addEventListener('pointerdown',event=>{const parent=document.querySelector('#parent'); if(parent && !event.composedPath().includes(parent) && !isSelectPopupEventInside(event,parent))state.outside++;},true);
@@ -45,7 +49,9 @@ test('UiSelect browser: keyboard, live options, real change targets, forms, nest
             <UiSelect id="string-number" v-model.number="state.numeric" aria-label="Numeric strings"><option value="10">Ten</option><option value="20">Twenty</option></UiSelect>
             <UiSelect id="uncontrolled" aria-label="Uncontrolled"><option>First</option><optgroup label="Disabled group" disabled><option>Blocked</option></optgroup><option selected>Last</option></UiSelect>
             <UiSelect id="all-disabled" aria-label="All disabled"><option disabled>Disabled</option></UiSelect>
-          </div><button id="outside" type="button">Outside</button></main></template>
+          </div><form id="text-form"><label for="text-field">Endpoint</label>
+            <UiInput id="text-field" v-model="state.text" type="url" name="endpoint" required />
+            </form><div id="locale-test"><LanguageSelector /></div><button id="outside" type="button">Outside</button></main></template>
           <style scoped>.custom-field {border-width:2px;padding:4px 8px;min-height:32px} @media(max-width:700px){.custom-field{min-height:44px}}</style>`
         },
         configureServer(server) {
@@ -154,6 +160,25 @@ test('UiSelect browser: keyboard, live options, real change targets, forms, nest
             await execute('window.fixture.mounted=false'); await flush();
             assert.equal(await execute('document.querySelector(".ui-select-popup")'),null);
             await execute('window.dispatchEvent(new Event("resize"));window.dispatchEvent(new Event("scroll"))');
+            assert.equal(await execute('document.querySelector("#text-field").labels[0].textContent'),'Endpoint');
+            assert.equal(await execute('document.querySelector("#text-form").checkValidity()'),false);
+            await execute('(()=>{const el=document.querySelector("#text-field");el.dispatchEvent(new CompositionEvent("compositionstart"));el.value="https://example.test";el.dispatchEvent(new Event("input",{bubbles:true}));})()');
+            assert.equal(await execute('window.fixture.text'),'','IME updates wait for compositionend');
+            await execute('document.querySelector("#text-field").dispatchEvent(new CompositionEvent("compositionend"))'); await flush();
+            assert.equal(await execute('window.fixture.text'),'https://example.test');
+            assert.equal(await execute('new FormData(document.querySelector("#text-form")).get("endpoint")'),'https://example.test');
+            assert.equal(await execute('document.querySelector("#text-form").checkValidity()'),true);
+            for(const [width,dark] of [[1000,false],[390,true]]){
+              window.setContentSize(width,800); await delay(40);
+              await execute('document.documentElement.classList.toggle("dark",'+dark+')');
+              assert.deepEqual(await execute('Array.from(document.querySelectorAll("#text-field,#locale-test .ui-select"),el=>[getComputedStyle(el).minHeight,getComputedStyle(el).fontSize])'),width===390?[['44px','16px'],['44px','16px']]:[['36px','13px'],['36px','13px']]);
+              assert.equal(await execute('getComputedStyle(document.querySelector("#text-field")).backgroundColor===getComputedStyle(document.querySelector("#locale-test .ui-select")).backgroundColor'),true);
+            }
+            await click('#locale-test [role="combobox"]');
+            await click('.ui-select-option:last-child');
+            assert.equal(await execute('localStorage.getItem("shadow.locale")'),'zh-CN');
+            assert.equal(await execute('document.documentElement.lang'),'zh-CN');
+            assert.equal(await execute('document.activeElement===document.querySelector("#locale-test [role=combobox]")'),true);
             console.log('UI_SELECT_BROWSER_OK');
           }finally{window.destroy();}
         }
