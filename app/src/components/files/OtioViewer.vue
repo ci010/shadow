@@ -3,12 +3,6 @@
     <div v-if="!review" class="compact-tabs" role="group" :aria-label="t('Review panels')">
       <button v-for="panel in panels" :key="panel.id" type="button" :aria-pressed="compact === panel.id" @click="pause(); compact = panel.id">{{ t(panel.label) }}</button>
     </div>
-    <div v-if="!review" class="reference-actions" role="group" :aria-label="t('Reference actions')">
-      <button type="button" class="reference-action" :disabled="!destination || locked" @click="begin(false)"><span class="i-lucide-message-square-plus" aria-hidden="true" />{{ t('Reference selection') }}</button>
-      <HoverInfo :text="captureHint" v-slot="{ triggerProps }">
-        <button v-bind="triggerProps" type="button" class="mark-action" :disabled="!destination || !captureReady || locked || playing" @click="begin(true)"><span class="i-lucide-pencil" aria-hidden="true" />{{ t('Draw on frame') }}</button>
-      </HoverInfo>
-    </div>
     <div class="bench" :class="{ reviewing: review }" :data-panel="compact">
       <OtioOutline v-if="!review" class="outline-pane" :model="model" :selected-id="selected.id" @select="select" />
       <section class="monitor-pane" :aria-label="t('Picture monitor')">
@@ -56,6 +50,12 @@
           <template v-else>
             <p v-if="!destination" class="destination">{{ t('Open an editable conversation to add a review.') }}</p>
             <details v-if="model.warnings.length" class="limits"><summary>{{ t('Preview limits') }}</summary><ul><li v-for="warning in model.warnings" :key="warning">{{ t(warnings[warning]) }}</li></ul></details>
+            <div class="reference-actions" role="group" :aria-label="t('Reference actions')">
+              <button type="button" class="reference-action" :disabled="!destination || locked" @click="begin(false)"><span class="i-lucide-message-square-plus" aria-hidden="true" />{{ t('Reference selection') }}</button>
+              <HoverInfo :text="captureHint" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" type="button" class="mark-action" :disabled="!destination || !captureReady || locked || playing" @click="begin(true)"><span class="i-lucide-pencil" aria-hidden="true" />{{ t('Draw on frame') }}</button>
+              </HoverInfo>
+            </div>
           </template>
         </div>
       </section>
@@ -223,8 +223,9 @@ onBeforeUnmount(() => { pause(); generation++; document.removeEventListener('vis
 .transport { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 3px 8px; border-top: 1px solid var(--c-border); }
 .transport-buttons button, .reference-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; }
 .transport button span, .reference-actions button span { width: 16px; height: 16px; }
-.reference-actions { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px 8px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); }
-.reference-actions button { gap: 6px; padding-inline: 8px; }
+.reference-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 10px; }
+.reference-actions button { gap: 6px; min-width: 0; max-width: 100%; padding-inline: 8px; text-align: start; }
+.reference-actions button span { flex: 0 0 16px; }
 .readout, .numeric, .pointer, .schema, .rate { font-family: var(--font-mono, 'IBM Plex Mono', ui-monospace, monospace); font-variant-numeric: tabular-nums; }
 .rate, .picture-caption, .schema, .destination, .limits { color: var(--c-text-muted); font-size: 12px; }
 .picture-caption { margin: 0; padding: 0 12px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -246,7 +247,7 @@ onBeforeUnmount(() => { pause(); generation++; document.removeEventListener('vis
 .review-error { margin: 0; padding: 8px 12px; color: var(--c-error); border-top: 1px solid var(--c-border); }
 .compact-tabs { display: none; }
 @container otio (max-width: 740px) {
-  .compact-tabs { display: flex; border-bottom: 1px solid var(--c-border); }
+  .compact-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--c-border); }
   .compact-tabs button { padding: 4px 12px; min-height: 38px; }
   .bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'panel' 'tracks'; grid-template-rows: minmax(160px, 1fr) minmax(116px, 30%); }
   .bench:not(.reviewing) > :is(.outline-pane, .monitor-pane, .inspector) { display: none; grid-area: panel; border-inline: 0; }

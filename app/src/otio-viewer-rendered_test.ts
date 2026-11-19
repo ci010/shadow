@@ -149,6 +149,11 @@ app.whenReady().then(async()=>{
   assert.equal(await run(()=>document.querySelector('.file-modal').getAttribute('role')),'region');
   const [monitor,tracks,inspector]=await layout('.monitor-pane','.tracks-pane','.inspector');
   assert.ok(monitor.right<=inspector.left+1 && monitor.bottom<=tracks.top+1 && inspector.bottom<=tracks.top+1);
+  assert.ok(await run(()=>{
+    const limits=document.querySelector('.inspector details.limits'), actions=document.querySelector('.reference-actions');
+    return limits && !limits.open && limits.nextElementSibling===actions &&
+      document.querySelectorAll('.reference-actions').length===1 && actions.querySelectorAll('button').length===2;
+  }), 'both actions follow the collapsed Preview limits in the inspector');
   if(${JSON.stringify(desktopScreenshot || '')}) writeFileSync(${JSON.stringify(desktopScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
   const initial=await state();
   const baseDocument={path:${JSON.stringify(documentPath)},owner:{session:'fixture',space:'workdir'},modified:${JSON.stringify(modified)},sha256:${JSON.stringify(createHash('sha256').update(timeline).digest('hex'))}};
@@ -191,6 +196,15 @@ app.whenReady().then(async()=>{
       assert.ok(await run(()=>document.querySelector('.outline').getClientRects().length&&!document.querySelector('.monitor-pane').getClientRects().length));
       await click('Picture monitor','.compact-tabs');
       await click('Clip source','.modes');
+      await click('Selection','.compact-tabs');
+      await wait('compact actions ready in Selection',()=>{
+        const pane=document.querySelector('.inspector'), button=pane.querySelector('.mark-action:enabled');
+        if(!button || !button.getClientRects().length) return false;
+        button.focus();
+        const bounds=pane.getBoundingClientRect(), action=button.getBoundingClientRect();
+        return document.activeElement===button && pane.scrollWidth<=pane.clientWidth+1 &&
+          action.top>=bounds.top-1 && action.bottom<=bounds.bottom+1;
+      });
     }
     await wait('ready '+mode,()=>!!document.querySelector('.mark-action:enabled'));
     await click('Draw on frame');
