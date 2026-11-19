@@ -1,4 +1,4 @@
-import { copyFile, mkdir, stat } from 'node:fs/promises'
+import { copyFile, mkdir, stat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { verifyNativeBuild } from './agent-desktop-integrity.ts'
 
@@ -19,6 +19,11 @@ export async function copyAgentDesktopAssets(root: string, output: string, optio
   const artifact = join('artifacts', `${platform}-${arch}`, name)
   const guard = join('artifacts', `${platform}-${arch}`, 'shadow-input-guard.exe')
   const files = [artifact, guard, 'LICENSE', 'NOTICE']
+  // Published bundles carry complete corresponding source/licenses into every package.
+  const receipt = JSON.parse(await readFile(join(source, 'artifacts', `${platform}-${arch}`, 'build-manifest.json'), 'utf8').catch(() => '{}'))
+  if (receipt.artifacts?.['provenance.json']) {
+    files.splice(2, 2, ...['LICENSE', 'NOTICE', 'source.tar.gz', 'THIRD-PARTY-NOTICES.json', 'provenance.json'].map(name => join('artifacts', `${platform}-${arch}`, name)))
+  }
   try {
     await verifyNativeBuild(root, arch)
     for (const file of files) {
@@ -26,8 +31,7 @@ export async function copyAgentDesktopAssets(root: string, output: string, optio
       if (!info.isFile() || info.size === 0) throw new Error(`Invalid agent-desktop release asset: ${file}`)
     }
   } catch (error) {
-    const triple = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
-    throw new Error(`agent-desktop native assets are missing or invalid (or stale; rebuild required) for ${platform}-${arch}. From the repository root, run pnpm desktop:repair-native -Arch ${arch}, then rebuild the backend. Manual alternative: from integrations/agent-desktop, run node scripts/fetch.mjs (only on first setup) and node scripts/build.mjs ${triple} in a VS developer shell. See integrations/agent-desktop/README.md.`, { cause: error })
+    throw new Error(`agent-desktop native assets are missing or invalid (or stale) for ${platform}-${arch}. Check access to the pinned release and rerun pnpm install.`, { cause: error })
   }
   for (const file of files) {
     const target = join(output, 'integrations/agent-desktop', file)

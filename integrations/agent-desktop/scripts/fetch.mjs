@@ -17,7 +17,9 @@ if (existsSync(upstream)) {
  if (!sync) throw new Error('Existing .upstream: use --sync to update only the owned Shadow extension');
 } else {
  if (sync) throw new Error('--sync requires existing pinned .upstream');
- git(['clone', '--no-checkout', '--', process.argv[2] ?? 'https://github.com/lahfir/agent-desktop.git', upstream]);
+ git(['init', upstream]);
+ git(['remote', 'add', 'origin', process.argv[2] ?? 'https://github.com/lahfir/agent-desktop.git'], upstream);
+ git(['fetch', '--depth=1', 'origin', revision], upstream);
  git(['-c', 'core.hooksPath=NUL', 'checkout', '--detach', revision], upstream);
 }
 if (git(['rev-parse', 'HEAD'], upstream) !== revision) throw new Error('Upstream revision mismatch');

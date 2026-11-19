@@ -67,15 +67,15 @@ test('rechecks the cache after acquiring a lock instead of rebuilding another in
   assert.deepEqual(f.warnings, [])
 })
 
-test('missing toolchains, offline fetches and build failures warn without rejecting install or leaking locks', async () => {
-  for (const reason of ['rustup missing', 'MSVC missing', 'offline Cargo dependency', 'spawn failed', 'binary in use']) {
+test('native download failures warn without rejecting install or leaking locks', async () => {
+  for (const reason of ['offline', 'release unavailable', 'checksum mismatch', 'binary in use']) {
     const f = fixture()
     f.dependencies.repair = () => { throw new Error(reason) }
     await prepareNativeAfterInstall('unused', {}, 'win32', 'arm64', f.dependencies)
     assert.equal(f.calls.at(-1), 'release')
     assert.equal(f.warnings.length, 1)
     assert.ok(f.warnings[0]!.includes(reason))
-    assert.match(f.warnings[0]!, /pnpm desktop:repair-native -Arch arm64/)
+    assert.match(f.warnings[0]!, /rerun pnpm install/)
     assert.doesNotMatch(f.info.join('\n'), /native assets verified/)
   }
 })

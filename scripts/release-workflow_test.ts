@@ -68,11 +68,12 @@ test('caches separate native downloads by OS/arch and do not retain signing mate
   assert.equal(signingSwift.with.path, 'mobile/ios/SourcePackages')
 })
 
-test('Windows native gate accepts postinstall preparation but retains pinned source validation', async () => {
+test('Windows native gate consumes a locked release without fetching or compiling upstream', async () => {
   const workflow = await yaml('../.github/workflows/release-check.yml')
-  const step = workflow.jobs['windows-release'].steps.find((step: { name?: string }) => step.name === 'Build pinned Windows desktop native resources')
-  assert.match(step.run, /if \(-not \(Test-Path integrations\/agent-desktop\/\.upstream\)\) \{\s+node integrations\/agent-desktop\/scripts\/fetch\.mjs\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\s+\}/)
-  assert.match(step.run, /node integrations\/agent-desktop\/scripts\/build\.mjs x86_64-pc-windows-msvc\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
+  const steps = workflow.jobs['windows-release'].steps
+  const step = steps.find((step: { name?: string }) => step.name === 'Install pinned Windows desktop native release')
+  assert.equal(step.run, 'node scripts/download-agent-desktop.ts x64')
+  assert.doesNotMatch(JSON.stringify(steps), /msvc-dev-cmd|scripts\/fetch\.mjs|scripts\/build\.mjs|cargo build/)
   const build = await readFile(new URL('../integrations/agent-desktop/scripts/build.mjs', import.meta.url), 'utf8')
   assert.match(build, /\['scripts\/fetch\.mjs', '--sync'\]/)
   assert.match(build, /'--locked'/)

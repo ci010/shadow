@@ -1,3 +1,12 @@
 scripts/build-aria2-native.sh text eol=lf
 desktop/assets/*.plist text eol=lf
 patches/*.patch text eol=lf
+
+# The Agent Desktop prebuilt lock hashes the exact native recipe bytes.
+integrations/agent-desktop/Cargo.toml text eol=lf
+integrations/agent-desktop/Cargo.lock text eol=lf
+integrations/agent-desktop/build.rs text eol=lf
+integrations/agent-desktop/src/** text eol=lf
+integrations/agent-desktop/patches/** text eol=lf
+src/execution/computer/windows-input.cs text eol=lf
+scripts/agent-desktop-input-guard.ts text eol=lf

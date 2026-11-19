@@ -1,0 +1,16 @@
+{
+  "release": "agent-desktop-0.10.1-shadow.1",
+  "sourceRevision": "5a2c9ad43e269164a8adc8978a733c40b1d38a8b",
+  "commit": "089dfeab3206034a54627d2c9f07075809996d15",
+  "nativeInputs": "b6fc3353ebe6b5feb4ae5066658e29a2b26b0d2cb9508d54fe62369d231881fb",
+  "assets": {
+    "win32-x64": {
+      "url": "https://github.com/ci010/shadow-native-deps/releases/download/agent-desktop-0.10.1-shadow.1/agent-desktop-0.10.1-shadow.1-win32-x64.tar.gz",
+      "sha256": "4bd13467626c9ac6828522bdcee244115559a0f8470c6f8fa74178d582672994"
+    },
+    "win32-arm64": {
+      "url": "https://github.com/ci010/shadow-native-deps/releases/download/agent-desktop-0.10.1-shadow.1/agent-desktop-0.10.1-shadow.1-win32-arm64.tar.gz",
+      "sha256": "beaf234034271919b4e585a547fd60b63a3bb24543e6f3af183795f2990fa931"
+    }
+  }
+}
