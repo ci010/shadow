@@ -393,6 +393,19 @@
               </HoverInfo>
             </span>
           </div>
+          <div v-if="otioReferences.length" class="composer-context" :aria-label="t('Attached context')">
+            <span v-for="item in otioReferences" :key="item.key" class="context-chip otio-reference-chip">
+              <button v-if="item.attachment?.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="t('View image: {name}', { name: item.attachment.file.name })"
+                @click="openImagePreview({ src: item.attachment.previewUrl, name: item.attachment.file.name, trigger: $event.currentTarget as HTMLButtonElement })">
+                <img :src="item.attachment.previewUrl" class="attachment-thumb" alt="">
+              </button>
+              <span v-else class="context-icon i-lucide-film" aria-hidden="true" />
+              <span>{{ item.label }}</span>
+              <HoverInfo :text="t('Remove {name}', { name: item.label })" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" type="button" :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: item.label })" @click="otioReferenceDraft.remove(composerKey, new Set([item.key]))"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              </HoverInfo>
+            </span>
+          </div>
           <div v-if="inputReferences.length" class="composer-context" :aria-label="t('Attached context')">
             <span v-for="(item, index) in inputReferences" :key="inputReferenceKey(item.reference)" class="context-chip">
               <span class="context-icon i-lucide-workflow" aria-hidden="true" />
@@ -479,7 +492,7 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0 || inputReferences.length > 0 || !!selectedWorkflowReference" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0 || inputReferences.length > 0 || otioReferences.length > 0 || !!selectedWorkflowReference" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
                 @request="sendMessage($event)" />
             <button
               v-if="showComposerSend"
@@ -602,7 +615,7 @@ import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatE
 import { activeSubagentsByOwner, executionStages, executionTraceDetail, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
-import { createOtioDraftBridge, OtioDraftKey, registerOtioDraft } from '../otio-draft.ts'
+import { composeOtioReferenceMessage, createOtioDraftBridge, OtioDraftKey, registerOtioDraft, useOtioReferenceDraft } from '../otio-draft.ts'
 import { createUuid } from '../uuid.ts'
 import { automationChatLocation } from '../automations.ts'
 import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
@@ -821,7 +834,7 @@ const composerPopoverTitle = computed(() =>
     : t('Folder context requires the local Main desktop app'))
 const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
-  contextItems.value.length + inputReferences.value.length + (selectedWorkflowReference.value ? 1 : 0),
+  contextItems.value.length + inputReferences.value.length + (answeringQuestion.value ? 0 : otioReferences.value.length) + (selectedWorkflowReference.value ? 1 : 0),
   pendingAttachments.value.length,
 ) && !submissionBusy.value && !currentRequest.value?.state.stopping
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
@@ -871,6 +884,8 @@ const composerKey = computed(() => composerDraftKey(props.apiBase, props.project
 const composerDraft = useComposerDraft(composerKey, () => window.localStorage)
 const referenceDraft = useInputReferenceDraft(composerKey)
 const inputReferences = referenceDraft.items
+const otioReferenceDraft = useOtioReferenceDraft(composerKey)
+const otioReferences = otioReferenceDraft.items
 const workflowReferenceHub = inject(WorkflowInputReferencesKey, undefined)
 // Dynamic selection is never stored in the per-conversation attachment draft.
 // Resolving against the current editor lease prevents stale targets and child injection.
@@ -1568,7 +1583,7 @@ function previewImageKeydown(event: KeyboardEvent) {
 }
 watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId, viewingPhysicalId, paneActive, conversationDocumentVisible, activePanel, () => route.fullPath],
   () => { imagePreview.value = undefined })
-watch(() => pendingAttachments.value.map(item => item.previewUrl), (urls, previous) => {
+watch(() => [...pendingAttachments.value.map(item => item.previewUrl), ...otioReferences.value.map(item => item.attachment?.previewUrl)], (urls, previous) => {
   const image = imagePreview.value
   if (image?.attachmentKey) {
     if (!pendingAttachments.value.some(item => item.key === image.attachmentKey)) imagePreview.value = undefined
@@ -1935,6 +1950,7 @@ async function chooseRemoteExecution() {
 
 function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePicker = false): void {
   resetConversation()
+  otioReferenceDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', ''))
   draftFolder.value = folder
   draft.value = createFolderChatDraft(foldersClient, folder)
   activeSessionId.value = ''
@@ -2189,7 +2205,11 @@ function deleteSession(sessionId: string): void {
 async function sessionsDeleted(ids: string[]): Promise<void> {
   deletion.value = undefined
   const activeDeleted = ids.includes(activeSessionId.value)
-  for (const id of ids) composerDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', id))
+  for (const id of ids) {
+    const key = composerDraftKey(props.apiBase, props.projectId ?? '', id)
+    composerDraft.remove(key)
+    otioReferenceDraft.remove(key)
+  }
   for (const id of ids) emit('deleted', id)
   if (activeDeleted) createNewWebChat()
   await loadSessionList()
@@ -2275,14 +2295,11 @@ const otioDraft = createOtioDraftBridge(apiBase => {
   return {
     key: otioDraftKey.value,
     label: activeSessionId.value ? conversationTitle.value : t('New conversation'),
-    text: inputText.value,
-    attachments: pendingAttachments.value,
     canAttachFiles: canAttachFiles.value,
   }
-}, (text, attachments) => {
+}, reference => {
   const key = otioDraftKey.value
-  pendingAttachments.value = attachments
-  inputText.value = text
+  otioReferenceDraft.append(reference)
   workbench.value?.showConversation()
   void nextTick(() => {
     if (!disposed && paneActive.value && key === otioDraftKey.value && conversationFocused.value && composerVisible.value) focusConversation()
@@ -2315,7 +2332,7 @@ function canReplaceSidebarTab(): boolean {
     || loadingHistory.value || sessionsLoading.value || !!sessionsError.value || !!composerError.value
     || !activeSessionId.value || requestBusy.value
     || submissionBusy.value || !!activeAsk.value || activeSubagents.value.length > 0
-    || !!activeSession.value?.hasBackgroundTasks || !!inputText.value || pendingAttachments.value.length > 0
+    || !!activeSession.value?.hasBackgroundTasks || !!inputText.value || pendingAttachments.value.length > 0 || otioReferences.value.length > 0
     || contextItems.value.length > 0 || inputReferences.value.length > 0 || pastingFiles.value
     || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0, activityKnown)
 }
@@ -2925,7 +2942,7 @@ async function sendMessage(overrideContent?: string, opts?: {
   }
   const retry = opts?.retry === true
   const submittedText = inputText.value
-  const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
+  const draftContent = retry ? '' : composeChatMessage(overrideContent ?? submittedText.trim(), contextItems.value)
   const selectedReference = selectedWorkflowReference.value
   const referenceItems = selectedReference
     ? [...inputReferences.value.filter(item => inputReferenceKey(item.reference) !== inputReferenceKey(selectedReference.reference)), selectedReference]
@@ -2933,12 +2950,15 @@ async function sendMessage(overrideContent?: string, opts?: {
   if (!retry && referenceItems.length > 8) { composerError.value = t('Attach up to 8 workflow references.'); return }
   const references = retry ? [] : captureInputReferences(referenceItems)
   let referenceDraftKey = composerKey.value
-  const isCommand = !retry && content.trimStart().startsWith('/')
+  const isCommand = !retry && draftContent.trimStart().startsWith('/')
+  // Commands, question replies and retries leave staged timeline context untouched.
+  const sentOtioReferences = retry || isCommand || answeringQuestion.value || overrideContent !== undefined ? [] : otioReferences.value
+  const content = composeOtioReferenceMessage(draftContent, sentOtioReferences)
   if (references.length && (isCommand || answeringQuestion.value)) {
     composerError.value = t('Remove workflow references before sending a command or answering a question.')
     return
   }
-  const attachments = retry ? [] : [...pendingAttachments.value]
+  const attachments = retry ? [] : [...pendingAttachments.value, ...sentOtioReferences.flatMap(item => item.attachment ? [item.attachment] : [])]
   const model = explicitModel.value
   const savedDraftKey = pendingDraftSettings.value ? draftSettingsKey.value : undefined
   if (remoteConversation.value && (attachments.some(item => item.kind !== 'image') || contextItems.value.length)) {
@@ -2993,6 +3013,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       referenceDraftKey = composerDraftKey(props.apiBase, props.projectId ?? '', sessionId)
       composerDraft.migrate(referenceDraftKey)
       referenceDraft.migrate(referenceDraftKey)
+      otioReferenceDraft.migrate(referenceDraftKey)
     }
     if (startingDraft) unpersistedDrafts.value.add(sessionId)
     activeSessionId.value = sessionId
@@ -3067,6 +3088,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     }
     accepted = true
     if (!retry) referenceDraft.admitted(referenceDraftKey, references)
+    if (sentOtioReferences.length) otioReferenceDraft.remove(referenceDraftKey, new Set(sentOtioReferences.map(item => item.key)))
     // The visible text was cleared at submission, not after Main's admission.
     // Do not clear again here: the user may already be composing the next message.
     // Steered inputs are admitted before the tool boundary writes them to history.
@@ -3370,6 +3392,7 @@ onUnmounted(() => {
   window.removeEventListener('shadow:config-changed', onGlobalConfigChanged)
   disconnectEventStream()
   clearPendingAttachments()
+  otioReferenceDraft.dispose()
 })
 
 onMounted(async () => {

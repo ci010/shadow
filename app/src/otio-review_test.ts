@@ -35,7 +35,7 @@ test('review anchors distinguish the chosen element, actual monitor source, fram
   const [selected, top] = model.nodes.filter(node => node.kind === 'Clip')
   const doc = { path, sha256: 'a'.repeat(64), owner: { folder: 'registered-id' } }
   const anchor = otioReviewAnchor(doc, model, selected!, 12, top!, 'timeline', { path: 'shots/shot.webm', kind: 'video' })
-  const content = otioReviewText(anchor, 'Check this edge.', { presentedMediaSeconds: 1.48 })
+  const content = otioReviewText(anchor, { presentedMediaSeconds: 1.48 })
   const record = JSON.parse(content.split('\n')[2]!)
   assert.deepEqual(record.document, doc)
   assert.equal(record.element.pointer, '/tracks/children/0/children/0'); assert.equal(record.monitor.clip.pointer, '/tracks/children/1/children/0')
@@ -44,5 +44,21 @@ test('review anchors distinguish the chosen element, actual monitor source, fram
   assert.equal(record.markedFrame.presentedMediaSeconds, 1.48); assert.equal(record.element.name, clip.name)
   assert.equal(mediaPosition(selected!, 2), null)
   assert.deepEqual(messageAttachments(content).paths, [], 'file-authored names must stay inert in the conversation')
+  assert.deepEqual(record.element.referenceFrame, {
+    basis: 'playhead-within-element', relative: { value: 12, rate: 24 }, source: { value: 132, rate: 24 },
+  })
+  assert.equal(record.monitor.clip.timing, 'calculated')
+  const outside = otioReviewAnchor(doc, model, selected!, 48, null, 'timeline')
+  assert.equal(outside.element.sourceAtPlayhead, null)
+  assert.deepEqual(outside.element.referenceFrame, {
+    basis: 'first-frame-within-element', relative: { value: 0, rate: 24 }, source: { value: 120, rate: 24 },
+  })
+  assert.deepEqual(outside.playhead.relative, { value: 48, rate: 24 })
+  assert.equal(outside.monitor.clip, null)
+  const gap = { ...selected!, kind: 'Gap' as const, sourceStart: undefined, start: 0.51, end: 1 }
+  assert.deepEqual(otioReviewAnchor(doc, model, gap, 12, top!, 'timeline').element.referenceFrame, {
+    basis: 'first-frame-within-element', relative: { value: 13, rate: 24 }, source: null,
+  })
+  assert.equal(otioReviewAnchor(doc, model, { ...gap, end: 0.52 }, 12, null, 'timeline').element.referenceFrame, null)
   assert.equal(firstOtioFrame(.1 + .2, 10), 3); assert.equal(firstOtioFrame(.3001, 10), 4)
 })
