@@ -60,7 +60,9 @@ test('unsupported host fails without preparing resources', async () => {
 
 test('dev and source start prepare before building/importing; installed entry is unchanged', async () => {
   const desktop = await readFile(new URL('./desktop.ts', import.meta.url), 'utf8')
-  assert(desktop.indexOf("if (mode === 'dev') await ensureDevelopmentSafegit") < desktop.indexOf("await runPnpm(['build'])"))
+  const buildAt = desktop.indexOf("await runPnpm(mode === 'dev' ? ['build', '--development'] : ['build'])")
+  assert(buildAt >= 0)
+  assert(desktop.indexOf("if (mode === 'dev') await ensureDevelopmentSafegit") < buildAt)
   const start = await readFile(new URL('./start.ts', import.meta.url), 'utf8')
   assert(start.indexOf('await ensureDevelopmentSafegit') < start.indexOf("await import('../src/index.ts')"))
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))

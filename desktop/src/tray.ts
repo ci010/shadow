@@ -40,6 +40,7 @@ export function installTrayMenu(
   quit: () => void,
   restart?: () => void,
   development = !!restart,
+  restartBackend?: () => void,
 ): () => void {
   let disposed = false
   const available = () => !disposed && !window.isDestroyed() && !window.webContents.isDestroyed()
@@ -60,6 +61,7 @@ export function installTrayMenu(
         window.webContents.openDevTools({ mode: 'detach' })
       },
     },
+    ...(development && restartBackend ? [{ label: '重启后端（开发）', click: () => { if (!disposed) restartBackend() } }] : []),
     ...(restart ? [{ label: '重启 Shadow（开发）', click: () => { if (!disposed) restart() } }] : []),
     { type: 'separator' },
     { label: '退出', click: () => { if (!disposed) quit() } },

@@ -267,6 +267,15 @@ export class BootstrapCoordinator {
     return this.serialize(async () => this.ensureRuntimeForState(await this.load()))
   }
 
+  restartRuntime(replace: () => Promise<void>): Promise<EnsureRuntimeResult> {
+    return this.serialize(async () => {
+      const current = await this.load()
+      if (current.step !== 'complete') return { ok: false, code: 'invalid-state' }
+      await replace()
+      return this.ensureRuntimeForState(current)
+    })
+  }
+
   private async ensureRuntimeForState(current: WizardState): Promise<EnsureRuntimeResult> {
     if (current.mode === null || (current.step !== 'complete'
       && !(current.mode === 'main' && (current.step === 'configure-provider' || current.step === 'launch-main')))) {

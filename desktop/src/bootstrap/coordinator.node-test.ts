@@ -501,3 +501,24 @@ test('Main directory isolation is still checked before config writes and runtime
   assert.deepEqual(await coordinator.ensureRuntime(), { ok: false, code: 'runtime-unavailable' })
   assert.equal(starts, 0)
 })
+
+test('backend replacement serializes with retry and role switching', async () => {
+  const state = transitionWizard(mainLaunchState(), { type: 'sidecar-ready' })
+  const order: string[] = []
+  const coordinator = createCoordinator(new MemoryStorage(state), { start: async profile => {
+    assert.equal(profile.port, 43123)
+    order.push('launch')
+    return { phase: 'ready', apiBase: 'http://127.0.0.1:43123' }
+  } }, new MemoryLaunchProfiles({ version: 1, role: 'main', port: 43123, localExecutor: false }))
+  let release!: () => void
+  const stopped = new Promise<void>(resolve => { release = resolve })
+  const restart = coordinator.restartRuntime(async () => { order.push('replace'); await stopped })
+  const retry = coordinator.ensureRuntime()
+  const switching = coordinator.switchRole('child', async () => { order.push('switch') })
+  release()
+  assert.equal((await restart).ok, true)
+  assert.equal((await retry).ok, true)
+  await switching
+  assert.deepEqual(order, ['replace', 'launch', 'launch', 'switch'])
+  await assert.rejects(coordinator.restartRuntime(async () => assert.fail('must not replace after role switching')), /switch is in progress/)
+})
