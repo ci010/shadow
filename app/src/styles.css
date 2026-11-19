@@ -313,6 +313,37 @@ input:not([type]), textarea {
   cursor: text;
 }
 
+/* Shared settings fields; call sites own width and surrounding layout. */
+.ui-field {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--c-control-border);
+  border-radius: var(--radius-control);
+  background: var(--c-bg-input);
+  color: var(--c-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.ui-input::placeholder { color: var(--c-text-secondary); opacity: 1; }
+@media (hover: hover) and (pointer: fine) {
+  .ui-field:not(:disabled, [data-disabled]):hover { border-color: var(--c-border-hover); }
+}
+.ui-field[data-open] { border-color: var(--c-blue); }
+.ui-field:is([data-invalid], [aria-invalid='true']) { border-color: var(--c-error); }
+.ui-field:is(:focus-visible, :has(.ui-select-trigger:focus-visible)) {
+  outline: 2px solid var(--c-blue);
+  outline-offset: 2px;
+}
+.ui-field:is(:disabled, [data-disabled]) { opacity: .5; }
+.ui-input:disabled { cursor: not-allowed; }
+@media (max-width: 700px), (pointer: coarse) {
+  .ui-field { min-height: 44px; font-size: 16px; }
+}
+
 /* Low-specificity defaults keep component-owned controls in control of their layout. */
 :where(button) {
   appearance: none;

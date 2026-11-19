@@ -5,7 +5,7 @@
       {{ mode === 'edit' ? t('{value1} settings', { value1: editingLabel }) : mode === 'add' ? t('Add provider') : t('Connect a model provider') }}
     </h2>
     <p class="lead">{{ lead }}</p>
-    <label>{{ t('Display name') }} <input v-model="displayName" required maxlength="100" :disabled="busy || saving"></label>
+    <label>{{ t('Display name') }} <UiInput v-model="displayName" required maxlength="100" :disabled="busy || saving" /></label>
     <p v-if="mode === 'edit'" class="help">{{ status?.provider }}</p>
     <button v-if="mode === 'edit'" :disabled="busy || saving || !displayName.trim()" @click="renameInstance">{{ t('Rename') }}</button>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
@@ -29,7 +29,7 @@
         </UiSelect>
       </label>
       <label v-if="copilotHostType === 'enterprise'">{{ t('Enterprise subdomain prefix') }}
-        <span class="enterprise-host-field"><input v-model="enterpriseHost" placeholder="octocat" maxlength="63" aria-describedby="enterprise-host-suffix" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy || saving" :aria-invalid="!!hostError"><span id="enterprise-host-suffix" class="enterprise-host-suffix">.ghe.com</span></span>
+        <span class="enterprise-host-field"><UiInput v-model="enterpriseHost" placeholder="octocat" maxlength="63" aria-describedby="enterprise-host-suffix" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy || saving" :aria-invalid="!!hostError" /><span id="enterprise-host-suffix" class="enterprise-host-suffix">.ghe.com</span></span>
         <span v-if="hostError" class="help error">{{ hostError }}</span>
         <span v-else class="help">{{ t('Enter only your enterprise subdomain, for example octocat. The .ghe.com suffix is added automatically.') }}</span>
       </label>
@@ -70,12 +70,12 @@
         </UiSelect>
       </label>
       <label v-if="provider === 'custom'">{{ t('Provider name') }}
-        <input v-model="customProvider" required pattern="[a-zA-Z][a-zA-Z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
+        <UiInput v-model="customProvider" required pattern="[a-zA-Z][a-zA-Z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'" />
       </label>
-      <label>{{ t('Connection model') }} <input v-model="model" required :placeholder="t('Model ID from your provider')" :disabled="saving"></label>
-      <label v-if="provider === 'custom'">{{ t('API base URL') }} <input v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving"></label>
-      <label>{{ t('API key') }} <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
-        :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? t('Leave blank to keep the saved key') : provider === 'custom' ? t('Optional for local endpoints') : t('Enter your provider API key')"></label>
+      <label>{{ t('Connection model') }} <UiInput v-model="model" required :placeholder="t('Model ID from your provider')" :disabled="saving" /></label>
+      <label v-if="provider === 'custom'">{{ t('API base URL') }} <UiInput v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving" /></label>
+      <label>{{ t('API key') }} <UiInput v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
+        :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? t('Leave blank to keep the saved key') : provider === 'custom' ? t('Optional for local endpoints') : t('Enter your provider API key')" /></label>
       <p class="help">{{ t('Keys are saved by Main in this installation\'s configuration, never in browser storage. Keyless local endpoints do not require a key.') }}</p>
       <div class="actions"><button class="primary" :disabled="saving || !displayName.trim()">{{ saving ? t('Saving...') : t('Save provider connection') }}</button></div>
     </form>
@@ -88,6 +88,7 @@
 </template>
 
 <script setup lang="ts">
+import UiInput from './components/UiInput.vue'
 import { enterprisePrefix, enterpriseHostFromPrefix } from './copilot-host-input.ts'
 import { createUuid } from './uuid.ts'
 import DeepSeekAccountSetup from './DeepSeekAccountSetup.vue'
@@ -328,13 +329,12 @@ h2 { font-size: 17px; }
 .method-tabs, .actions, .footer-actions, .device-code { display: flex; flex-wrap: wrap; gap: 10px; }
 .method-tabs { margin: 22px 0; }.method-tabs [aria-pressed="true"] { border-color: var(--c-success); color: var(--c-success); }
 button:where(:not(.ui-select)) { padding: 9px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; cursor: pointer; }
-button:where(:not(.ui-select)):disabled { opacity: .55; cursor: not-allowed; } button:where(:not(.ui-select)):focus-visible, input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-success); outline-offset: 2px; }
+button:where(:not(.ui-select)):disabled { opacity: .55; cursor: not-allowed; } button:where(:not(.ui-select)):focus-visible { outline: 2px solid var(--c-success); outline-offset: 2px; }
 .primary { background: #147a57; border-color: #147a57; color: white; }.actions { justify-content: flex-end; margin-top: 20px; }
 .method-panel { display: grid; gap: 12px; } label { display: grid; gap: 6px; font-size: 13px; }
 .enterprise-host-field { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.enterprise-host-field input { flex: 1; width: 0; }
+.enterprise-host-field .ui-input { flex: 1; width: 0; }
 .enterprise-host-suffix { color: var(--c-text-secondary); white-space: nowrap; }
-input, .ui-select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
 .help { font-size: 12px; }.notice { padding: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); line-height: 1.5; }.error { border-color: var(--c-error); color: var(--c-error); }
 .device-panel { display: grid; gap: 14px; padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }.device-panel span { font-size: 13px; color: var(--c-text-secondary); }
 .device-code { align-items: center; justify-content: space-between; }.device-code code { -webkit-user-select: text; user-select: text; font: 700 26px monospace; letter-spacing: .08em; }
