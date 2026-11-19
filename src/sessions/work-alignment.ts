@@ -3,7 +3,7 @@ import { AUTOMATIC_WORK_GUIDANCE } from '../cron/work-dispatch-contract.ts'
 
 import { z } from 'zod'
 import type { InitiativeStore } from '../initiatives/store.ts'
-import { WorkConflict, workDefinitionSchema, workProgressSchema, workKey, type WorkActor, type WorkRecord, type WorkStamp } from '../initiatives/work-contract.ts'
+import { WorkConflict, workDefinitionSchema, workProgressSchema, workAutomaticDispatchSchema, workKey, type WorkActor, type WorkRecord, type WorkStamp } from '../initiatives/work-contract.ts'
 import type { YieldRequest } from './yield-contract.ts'
 import type { DecisionEvidence } from './decision-brief.ts'
 import { decisionEvidenceSchema } from './decision-brief.ts'
@@ -47,12 +47,14 @@ export const WORK_HELP = {
   create: { title: 'Short name', definition: { objective: 'Desired outcome; acceptance and boundaries are optional lists' },
     idempotencyKey: 'Optional creator/Project-scoped retry key (max 200); normalized identical requests return existing Work, changed parameters conflict. Retries do not republish saved creation.',
     parentKey: 'Optional existing parent', assignee: 'Optional durable session ID or null',
+    automaticDispatch: 'Optional manual|ready scheduling intent, never permission. Omitted findings are tracking-only; omitted tasks retain legacy eligibility. Manual also excludes descendants.',
     notes: { kind: 'goal|approach|task|finding', relation: { kind: 'supports|requires|assumption', reason: 'Why this branch follows from the parent; omit for roots' } },
     requestQuote: 'Optional exact quote from the current user input; the host supplies its source' },
   update: { notes: { summary: 'Current conclusion', plan: ['Editable steps, not mandatory gates'], next: 'Next useful action or wait',
     artifacts: [{ label: 'Result', href: 'HTTP(S) or Project-relative resource URL' }], html: 'Optional read-only HTML exhibit; scripts and forms are not supported',
     attention: { kind: 'assumption|scope|dependency|decision|blocker', summary: 'Only material changes needing the coordinator to act', awaitingResponse: 'Optional boolean: the executor is waiting for a response; omitted legacy attention is nonwaiting' } },
     status: 'Optional pending|in_progress|blocked|done|cancelled', blockedReason: 'Required when blocked',
+    automaticDispatch: 'Coordinator/human only: manual|ready scheduling intent. Ready permits consideration, not authority, and never overrides pause, dependencies, assignment or terminal boundaries.',
     definition: 'Coordinator/human only; same shape as create. Do not turn implementation preferences into user requirements.' },
   assign: { assignee: 'Existing durable session ID or null; responsibility only, not cancellation or permission' },
   review: { conclusion: 'Coordinator interpretation of a reported impact; does not approve operations', disposition: 'Optional record|return_to_assignee; waiting attention defaults to return, otherwise record. Return does not unblock, reassign, approve, or require acknowledgement; executor must read latest Work.' },
@@ -308,6 +310,7 @@ export class WorkAlignment implements WorkToolGuard {
     const patch = z.object({
       title: z.string().trim().min(1).max(160).optional(),
       definition: workDefinitionSchema.optional(),
+      automaticDispatch: workAutomaticDispatchSchema.optional(),
       parentKey: z.string().min(1).max(600).nullable().optional(),
       dependencies: z.array(z.string().min(1).max(600)).max(100).optional(),
       notes: workNotePatchSchema.optional(),
@@ -330,6 +333,7 @@ export class WorkAlignment implements WorkToolGuard {
     if (!prior.workflow) throw new WorkConflict('This work has no notebook workflow.')
     const structural = patch.definition !== undefined || patch.parentKey !== undefined || patch.dependencies !== undefined
       || patch.title !== undefined || patch.notes?.relation !== undefined || patch.notes?.kind !== undefined
+      || patch.automaticDispatch !== undefined
     if (structural) this.assertController(prior, actor)
     const parentKey = patch.parentKey === undefined ? prior.workflow.parentKey : patch.parentKey ?? undefined
     if (parentKey && parentKey !== prior.workflow.parentKey) {
@@ -382,6 +386,7 @@ export class WorkAlignment implements WorkToolGuard {
       changedBy: this.actorName(actor), changedAt: now, reason: 'Shared work note updated',
       workflow: { ...prior.workflow, title: patch.title ?? prior.workflow.title, parentKey,
         dependencies: patch.dependencies ?? prior.workflow.dependencies,
+        automaticDispatch: patch.automaticDispatch ?? prior.workflow.automaticDispatch,
         status, blockedReason, blockedScope: status === 'blocked' ? 'step' : undefined,
         result: status === 'done' ? { summary: notes.summary, evidence: definition.evidence } : undefined,
       },
@@ -487,6 +492,7 @@ export class WorkAlignment implements WorkToolGuard {
         key: record.key, goalRevision: record.revision, version: record.sequence,
         title: record.workflow?.title, parentKey: record.workflow?.parentKey, status: record.workflow?.status,
         kind: record.notes?.kind, summary: record.notes?.summary, contextNeedsReview: this.contextChanged(record),
+        automaticDispatch: record.workflow?.automaticDispatch,
         authority: this.store.workAuthority(record.subject),
       }))
       const nextOffset = request.offset + items.length
@@ -498,6 +504,7 @@ export class WorkAlignment implements WorkToolGuard {
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
         title: z.string().trim().min(1).max(160), parentKey: z.string().min(1).max(600).optional(),
         assignee: z.string().min(1).max(512).nullable().optional(),
+        automaticDispatch: workAutomaticDispatchSchema.optional(),
         definition: workDefinitionSchema, reason: z.string().trim().min(1).max(2000).default('Working interpretation, not new authorization'),
         notes: workNotesSchema.omit({ attention: true, basis: true }).default({}),
         requestQuote: decisionEvidenceSchema.shape.quote.optional(),
@@ -541,7 +548,7 @@ export class WorkAlignment implements WorkToolGuard {
         changedBy: this.actorName(actor), changedAt: new Date().toISOString(),
         change: 'understanding', reason: request.reason, paused: false,
         notes: { ...request.notes, basis: this.basis(request.parentKey) }, requestSource,
-        workflow: { title: request.title, parentKey: request.parentKey,
+        workflow: { title: request.title, parentKey: request.parentKey, automaticDispatch: request.automaticDispatch,
           manager: actor.kind === 'session' ? actor.sessionId : parent ? this.store.workAuthority(parent.subject).manager : assignee,
           assignee, assignmentRevision: 1, status: 'pending', dependencies: [] },
       }

@@ -203,6 +203,13 @@ export class InitiativeStore {
     this.#transaction(actor, () => {
       const prior = this.#one('work_contracts', parsed.key)
       if ((Number(prior?.sequence) || 0) !== expectedSequence) throw new WorkConflict('Work contract changed; reload before applying.')
+      // Readiness is manager/human scheduling intent, never a worker or sync side effect.
+      // Check the prior manager so replacing manager and readiness together cannot bypass authority.
+      const previousRecord = prior ? parseStoredWorkRecord(JSON.parse(String(prior.data))) : undefined
+      if (parsed.workflow?.automaticDispatch !== previousRecord?.workflow?.automaticDispatch
+        && actor !== 'human' && actor !== (previousRecord ?? parsed).workflow?.manager) {
+        throw new WorkConflict('Only the work controller or authenticated human may change automatic dispatch readiness.')
+      }
       // Creation identity is immutable, including through legacy record replacement paths.
       if (prior) {
         const original = parseStoredWorkRecord(JSON.parse(String(prior.data))).creationRequest
@@ -538,11 +545,12 @@ export class InitiativeStore {
 export function automaticWorkEligible(record: WorkRecord, records: readonly WorkRecord[]): boolean {
   const flow = record.workflow
   if (!flow || flow.assignee !== null || ['done', 'cancelled'].includes(flow.status) || record.paused) return false
+  if (record.notes?.kind === 'finding' && flow.automaticDispatch !== 'ready') return false
   const byKey = new Map(records.map(item => [item.key, item]))
   const seen = new Set<string>()
   let current: WorkRecord | undefined = record
   while (current) {
-    if (seen.has(current.key) || current.paused
+    if (seen.has(current.key) || current.paused || current.workflow?.automaticDispatch === 'manual'
       || current.workflow && ['done', 'cancelled'].includes(current.workflow.status)
       || !workDependenciesSatisfied(current, records)) return false
     seen.add(current.key)

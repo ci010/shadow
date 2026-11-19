@@ -28,7 +28,10 @@ export const workDefinitionSchema = z.object({
 }).strict()
 export type WorkDefinition = z.infer<typeof workDefinitionSchema>
 export const workProgressSchema = z.enum(['pending', 'in_progress', 'blocked', 'done', 'cancelled'])
+/** Scheduling intent only; ready never grants external-action authority. Omission preserves legacy task eligibility. */
+export const workAutomaticDispatchSchema = z.enum(['manual', 'ready'])
 export const workWorkflowSchema = z.object({
+  automaticDispatch: workAutomaticDispatchSchema.optional(),
   title: z.string().trim().min(1).max(160),
   parentKey: z.string().min(1).max(600).optional(),
   manager: z.string().min(1).max(512).nullable(),

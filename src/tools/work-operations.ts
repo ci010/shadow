@@ -19,10 +19,11 @@ const notes = {
   artifacts: array(object({ label: string(160), href: { ...string(2000), description: 'HTTP(S) artifact link without credentials, or Project-relative resource URL.' } }, ['label', 'href']), 20), html: string(48000, 0),
 }
 const nullable = (value: object) => ({ anyOf: [value, { type: 'null' }] })
+const automaticDispatch = { type: 'string', enum: ['manual', 'ready'], description: 'Coordinator/human scheduling intent, never external-action authority. Manual excludes this Work and descendants; ready opts findings into consideration without overriding eligibility checks. Omitted findings are tracking-only; other Work retains legacy eligibility.' }
 const schemas: Record<Operation, ToolParameters> = {
-  create: object({ idempotencyKey: string(200), title: string(160), parentKey: key, assignee: nullable(string(512)), definition,
+  create: object({ idempotencyKey: string(200), title: string(160), parentKey: key, assignee: nullable(string(512)), definition, automaticDispatch,
     reason: string(2000), notes: object(notes), requestQuote: string(2000) }, ['title', 'definition']) as ToolParameters,
-  update: object({ key, version, title: string(160), definition, parentKey: nullable(key), dependencies: array(key, 100),
+  update: object({ key, version, title: string(160), definition, parentKey: nullable(key), dependencies: array(key, 100), automaticDispatch,
     notes: object({ ...notes, attention: object({ kind: { type: 'string', enum: ['assumption', 'scope', 'dependency', 'decision', 'blocker'] }, summary: string(2000), awaitingResponse: { type: 'boolean', description: 'True when the assignee is waiting for a coordinator response. Not authorization.' } }, ['kind', 'summary']) }),
     status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'done', 'cancelled'] }, blockedReason: string(2000), requestQuote: string(2000) }, ['key', 'version']) as ToolParameters,
   assign: object({ key, version, assignee: nullable(string(512)) }, ['key', 'version', 'assignee']) as ToolParameters,
