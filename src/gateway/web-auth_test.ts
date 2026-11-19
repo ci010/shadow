@@ -217,7 +217,7 @@ test('unprotected local development retains access and trusted Vite origin suppo
   assert.equal((await local.request('/api/private')).status, 200)
   const headers = { cookie: cookie(await dev.pair(await dev.code(), { origin: 'http://127.0.0.1:5273' })), origin: 'http://127.0.0.1:5273' }
   assert.equal((await dev.request('/api/private', { headers, method: 'POST' })).status, 200)
-  for (const path of ['/', '/assets/app.js', '/projects/default/chat/web%3Atest', '/settings', '/nodes',
+  for (const path of ['/', '/assets/app.js', '/projects/default/chat/web%3Atest', '/settings', '/nodes', '/usage', '/usage/',
     '/workspaces', '/providers', '/approvals', '/settings/channels', '/settings/models/', '/settings/providers',
     '/manifest.webmanifest', '/sw.js', '/pwa/icon-192.png', '/pwa/icon-512.png', '/pwa/apple-touch-icon.png']) {
     assert(isPublicWebShell(new Request(origin + path)), path)
