@@ -68,6 +68,7 @@
 import { deepSeekReferenceRates } from '../../../src/providers/cost.ts'
 import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
 import { formatNumber, t } from '../i18n.ts'
+import { hostBase } from '../api-url.ts'
 import { createProviderSetupClient } from '../provider-setup.ts'
 import type { ProviderUsage } from '../../../src/shared/provider-usage.ts'
 import { computed, nextTick, ref, watch } from 'vue'
@@ -124,7 +125,7 @@ watch([
   const controller = new AbortController()
   onCleanup(() => controller.abort())
   try {
-    const result = await createProviderSetupClient(base).usage(provider, controller.signal)
+    const result = await createProviderSetupClient(hostBase(base)).usage(provider, controller.signal)
     if (controller.signal.aborted) return
     if (result.kind === kind) usage.value = result
     else usageUnavailable.value = true
