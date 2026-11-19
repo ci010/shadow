@@ -5,8 +5,7 @@ import { extractFile, listPackage } from '@electron/asar'
 import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 const sourceInputs = [
-  'integrations/agent-desktop/src', 'integrations/agent-desktop/patches', 'integrations/agent-desktop/scripts',
-  'integrations/agent-desktop/Cargo.toml', 'integrations/agent-desktop/Cargo.lock', 'integrations/agent-desktop/build.rs',
+  'scripts/agent-desktop-lock.json',
   'integrations/agent-desktop/LICENSE', 'integrations/agent-desktop/NOTICE',
   'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2', 'desktop/safegit',
   'build.ts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',

@@ -19,11 +19,12 @@ Requires **Node.js 24.15+** and **pnpm 12.3.1**.
 
 ```sh
 npm install --global pnpm@12.3.1
-pnpm install
 pnpm dev
 ```
 
-Run these commands from the repository root; packages share one lockfile.
+Run these commands from the repository root. `pnpm dev` installs missing JS
+dependencies and prepares the pinned official desktop MCP assets without compiling
+native desktop code.
 Electron setup initializes or reuses your configuration. Choose a provider and
 model in the app.
 
@@ -48,6 +49,7 @@ pnpm start
 To serve the built web UI:
 
 ```sh
+pnpm desktop:prepare-agent-desktop
 pnpm build:all
 node --env-file-if-exists=.env dist/src/index.js
 ```

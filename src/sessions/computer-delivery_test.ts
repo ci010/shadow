@@ -11,8 +11,7 @@ import { Bus } from '../bus/bus.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import { ImportTool } from '../tools/load-tool.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
-import { computerTools } from '../tools/computer.ts'
-import { fixture, frame, owner } from '../computer/testing/fixture.ts'
+import { McpConnection } from '../mcp/client.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 
@@ -25,20 +24,27 @@ class ComputerSession extends BaseSession {
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   for (const endpoint of ['/responses', '/chat/completions']) {
     for (const screenshot of [false, true]) {
-      for (const entry of ['connect', 'select', 'observe'] as const) {
-        test(`${Store.name} ${endpoint} ${entry} screenshot=${screenshot}: native fake → invoke_tool → aggregated → Copilot wire, private once`, async t => withTempWorkspace(async home => {
-          const f = await fixture(t)
-          f.desktop.observation.screenshot = frame
-          if (entry === 'select') {
-            await f.service.release(owner)
-            await f.service.windows(owner, f.signal)
-          }
+        test(`${Store.name} ${endpoint} screenshot=${screenshot}: official MCP adapter → invoke_tool → aggregated → Copilot wire and history`, async t => withTempWorkspace(async home => {
+          const owner = { projectId: 'p', sessionId: 'web:official-desktop' }
+          const frame = { base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jELkAAAAASUVORK5CYII=', mime: 'image/png' }
+          const f = { signal: new AbortController().signal }
           const store = new Store(join(home, '.sessions'))
           await store.init()
           try {
             const base = new Tools(home)
             const importer = new ImportTool(new Map(), home)
-            for (const tool of computerTools(f.service, owner.projectId, id => assert.equal(id, owner.sessionId))) importer.registerBuiltin(tool.name, tool)
+            const connection = new McpConnection({ name: 'agent-desktop', transport: 'stdio', command: '/inert/fixture' })
+            t.mock.method(connection, 'callTool', async () => ({ content: [
+              { type: 'text' as const, text: JSON.stringify({ text: 'Synthetic field', structuredContent: { original: true } }) },
+              ...(screenshot ? [{ type: 'image_url' as const, image_url: { url: `data:${frame.mime};base64,${frame.base64}` } }] : []),
+            ] }))
+            const toolInfo = { name: 'desktop_snapshot', description: 'Official fake snapshot', inputSchema: { type: 'object', properties: {} } }
+            t.mock.method(connection, 'connect', async () => {})
+            t.mock.method(connection, 'disconnect', async () => {})
+            t.mock.method(connection, 'listTools', async () => [toolInfo])
+            importer.registerBuiltin('agent-desktop', { config: connection.config, managed: {
+              authorize() {}, configuration: async () => connection.config, connection: () => connection,
+            } })
             base.register(new InvokeTool(importer))
             const tools = new SessionTools(base, home)
             tools.setExecutionScope('session', ['call'])
@@ -56,7 +62,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
               assert.equal(new URL(String(url)).pathname, endpoint)
               wire.push(JSON.parse(String(init?.body)))
               const step = wire.length
-              const args = step === 1 ? entry !== 'observe' ? { name: 'computer_setup', args: { action: 'connect', screenshot, ...(entry === 'select' ? { windowId: f.desktop.window.id } : {}) } } : { name: 'computer_observe', args: { screenshot } } : { name: 'computer_setup', args: { action: 'release' } }
+              const args = { name: 'agent-desktop__desktop_snapshot', args: {} }
               const call = { id: `call-${step}`, type: 'function', function: { name: 'invoke_tool', arguments: JSON.stringify(args) } }
               if (endpoint === '/chat/completions') return Response.json({ model: 'synthetic', choices: [{ message: step < 3 ? { content: null, tool_calls: [call] } : { content: 'Finished' }, finish_reason: step < 3 ? 'tool_calls' : 'stop' }] })
               const response = { id: `response-${step}`, model: 'synthetic', status: 'completed', output: step < 3
@@ -77,20 +83,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             assert.equal(wire.length, 3)
             assert.match(JSON.stringify(wire[1]), /Synthetic field/)
             assert.equal(JSON.stringify(wire[1]).includes(frame.base64), screenshot)
-            assert.doesNotMatch(JSON.stringify(wire[2]), /Synthetic field|data:image/)
-            // A later turn cannot revive the one-inference attachment from session state.
+            assert.match(JSON.stringify(wire[2]), /Synthetic field/)
+            // Official MCP content follows normal retained tool-history behavior.
             await session.run(context)
             assert.equal(wire.length, 4)
-            assert.doesNotMatch(JSON.stringify(wire[3]), /Synthetic field|data:image/)
+            assert.match(JSON.stringify(wire[3]), /Synthetic field/)
             const records = await Array.fromAsync(store.readSessionLog(session.physicalSessionId))
             for (const value of [records, outputs, hooks]) {
-              assert.doesNotMatch(JSON.stringify(value), /Synthetic field|data:image/)
-              assert.match(JSON.stringify(value), /Private desktop observation omitted/)
+              assert.match(JSON.stringify(value), /Synthetic field/)
+              assert.doesNotMatch(JSON.stringify(value), /Private desktop observation omitted/)
             }
-            assert.equal((await readdir(home, { recursive: true })).some(path => path.endsWith('.png') || path.includes('tool-result-')), false)
+            assert.equal((await readdir(home, { recursive: true })).some(path => path.endsWith('.png') || path.includes('tool-result-')), screenshot)
           } finally { store.close?.() }
         }))
-      }
     }
   }
 }

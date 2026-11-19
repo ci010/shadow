@@ -53,24 +53,8 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
       assert.doesNotMatch(code, /__shadow_module_(?:url|dir)__/)
       execFileSync(process.execPath, ['--check', file], { cwd: root, stdio: 'pipe' })
     }
-    // Unknown wire operations are rejected before addon load. Do not use an
-    // actual foreground/observe request to probe packaging without a user grant.
-    const nativeId = '11111111-1111-4111-8111-111111111111'
-    assert.throws(() => execFileSync(process.execPath,
-      [join(target, 'dist/src/execution/computer/agent-desktop-worker.js')], {
-        cwd: root, encoding: 'utf8', timeout: 5000,
-        input: JSON.stringify({ id: nativeId, method: '__invalid_wire_probe__' }) + '\n',
-        env: { ...process.env, NODE_OPTIONS: '' },
-      }), (error: unknown) => {
-        const failure = error as { status?: number; stdout?: string }
-        return failure.status === 2 && String(failure.stdout) === ''
-      })
-    const chunks = await readdir(join(target, 'dist/_chunks'))
-    for (const chunk of chunks) {
-      assert.doesNotMatch(await readFile(join(target, 'dist/_chunks', chunk), 'utf8'), /__shadow_module_(?:url|dir)__/)
-    }
     for (const asset of ['agent/context/AGENTS.tools.md', 'sessions/handoff/HANDOFF.md',
-      'execution/processes/windows-guardian.ps1', 'execution/computer/windows-input.cs',
+      'execution/processes/windows-guardian.ps1',
       'skills/builtin/computer-use/SKILL.md', 'microapps/sdk.js']) assert.ok(await readFile(join(target, 'dist/src', asset)))
     await assert.rejects(readFile(join(target, 'dist/src/execution/computer/windows-host.cs')), { code: 'ENOENT' })
     await assert.rejects(readFile(join(target, 'dist/src/execution/computer/testing/window.cs')), { code: 'ENOENT' })

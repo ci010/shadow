@@ -1,53 +1,27 @@
-import { access } from 'node:fs/promises'
-import { createRequire } from 'node:module'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { verifyNativeBuild } from './agent-desktop-integrity.ts'
-import { prepareNativeAfterInstall } from './postinstall-native.ts'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { downloadAgentDesktop } from './download-agent-desktop.ts'
 import { manageChildren, runPnpm, startNode } from './processes.ts'
 
-export async function prepareDevelopment(operations: {
-  dependenciesReady: () => Promise<boolean>
-  install: () => Promise<void>
-  prepareNative: () => Promise<void>
-  verifyNative: () => Promise<void>
-}): Promise<void> {
-  if (!await operations.dependenciesReady()) {
-    await operations.install()
-    if (!await operations.dependenciesReady()) throw new Error('Development dependencies are still missing after pnpm install.')
-    // pnpm install already ran the native preparation hook.
-  } else {
-    await operations.prepareNative()
+export async function prepareDevelopment(root: string, operations = {
+  exists: existsSync, install: runPnpm, prepareDesktop: downloadAgentDesktop,
+}) {
+  const required = ['node_modules/tsx/package.json', 'desktop/node_modules/electron/package.json',
+    'app/node_modules/vite/package.json']
+  const missingModules = () => required.filter(path => !operations.exists(resolve(root, path)))
+  if (missingModules().length) {
+    await operations.install(['install', '--frozen-lockfile', '--prod=false'])
+    const missing = missingModules()
+    if (missing.length) throw new Error(`Development dependencies still missing after pnpm install: ${missing.join(', ')}`)
   }
-  await operations.verifyNative()
+  await operations.prepareDesktop(root)
 }
 
-async function main(root: string) {
-  await prepareDevelopment({
-    async dependenciesReady() {
-      try {
-        await access(join(root, 'node_modules/.modules.yaml'))
-        createRequire(join(root, 'package.json')).resolve('tsx')
-        createRequire(join(root, 'desktop/package.json')).resolve('electron')
-        createRequire(join(root, 'app/package.json')).resolve('vite')
-        return true
-      } catch (error) {
-        if (['ENOENT', 'MODULE_NOT_FOUND'].includes((error as NodeJS.ErrnoException).code ?? '')) return false
-        throw error
-      }
-    },
-    install: () => runPnpm(['install', '--frozen-lockfile', '--prod=false']),
-    prepareNative: () => prepareNativeAfterInstall(root),
-    async verifyNative() {
-      if (process.platform !== 'win32') return
-      try {
-        await verifyNativeBuild(root, process.arch)
-      } catch (cause) {
-        throw new Error('Agent Desktop native assets are not ready. Check the install warnings and access to the pinned Windows release, then rerun pnpm dev.', { cause })
-      }
-    },
-  })
-  await manageChildren([startNode(['--env-file-if-exists=.env', '--import', 'tsx', 'scripts/desktop.ts', 'dev'])]).wait()
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const root = fileURLToPath(new URL('../', import.meta.url))
+  process.chdir(root)
+  await prepareDevelopment(root)
+  await manageChildren([startNode(['--env-file-if-exists=.env', '--import', 'tsx',
+    'scripts/desktop.ts', 'dev', ...process.argv.slice(2)])]).wait()
 }
-
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) await main(process.cwd())

@@ -6,12 +6,14 @@ On Windows x64, run from the repository root:
 
 ```sh
 pnpm desktop:prepare-aria2
+pnpm desktop:prepare-agent-desktop
 pnpm desktop:build
 pnpm desktop:install
 ```
 
 These commands have separate responsibilities. `desktop:prepare-aria2` only
-prepares and validates aria2 materials. `desktop:build` compiles the backend,
+prepares and validates aria2 materials. `desktop:prepare-agent-desktop`
+downloads and verifies the pinned official MCP CLI and required helpers. `desktop:build` compiles the backend,
 Electron host and renderer, deploys production dependencies and creates the
 native installer. It does not run typechecks, test suites or packaged smoke
 tests, and does not install anything. `desktop:install` only installs an existing
@@ -162,6 +164,7 @@ Run from the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
+pnpm desktop:prepare-agent-desktop
 pnpm typecheck
 pnpm test:release
 pnpm desktop
@@ -217,6 +220,10 @@ without reading or changing the runner's system proxy configuration.
 
 Run `pnpm desktop` on the matching operating system and architecture; target
 selection follows the native Node host and rejects unsupported combinations.
+Prepare the pinned official CLI and adjacent helpers on that host with
+`pnpm desktop:prepare-agent-desktop` before building or packaging. For a split
+build, prepare assets on both the shared build host and each native packaging
+runner; verified package output uses only the native runner’s target assets.
 Do not substitute raw `electron-builder` for this command: it omits preparation
 and verification.
 
@@ -225,6 +232,7 @@ and verification.
 The split commands are intended for CI:
 
 ```sh
+pnpm desktop:prepare-agent-desktop        # official assets for the current host
 pnpm release:prepare all                  # typechecks, then selected JS/Web builds
 pnpm release:verify-prepared desktop      # verifies current source and output bytes
 pnpm test:release                        # run on the native desktop host

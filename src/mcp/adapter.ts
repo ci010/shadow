@@ -44,6 +44,6 @@ export class McpToolAdapter implements Tool<ToolResult> {
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
     validateChromeCall(this.connection.config, this.toolInfo, args)
-    return this.connection.callTool(this.toolInfo.name, args, context.signal)
+    return this.connection.callToolInContext(this.toolInfo.name, args, context)
   }
 }
