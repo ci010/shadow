@@ -76,6 +76,15 @@ test('standard program automation persists its 60s schedule, target, limits and 
   } finally { release?.(); await cron.stop() }
 }))
 
+test('stored cron records cannot select the unbudgeted reflector policy', () => {
+  const job = { id: 'reflector-fixture', createdAt: new Date().toISOString(), schedule: 'every 30m',
+    agentType: 'reflector', session: 'fresh', source: 'learning' }
+  const parse = (executionLimits: object) => parseStoredCronJobs({ version: 1, ownershipVersion: 2,
+    jobs: [{ ...job, executionLimits }] })
+  assert.doesNotThrow(() => parse({ allowedTools: ['read'], inferenceRequests: 6, toolCalls: 18, argumentBytes: 96_000 }))
+  assert.throws(() => parse({ allowedTools: ['read'], inferenceRequests: null }), /Invalid or duplicate cron job/)
+})
+
 test('program mutation and recovery fail closed when no human authorization controller is installed', async () => withTempWorkspace(async home => {
   const cron = new CronService(home)
   try {

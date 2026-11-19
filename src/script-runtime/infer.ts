@@ -47,7 +47,8 @@ export function createNodeInference(options: {
     span.setAttributes({ model, 'infer.max_tokens': maxTokens })
     // Leave a parent request to inspect results/errors rather than consuming its last call.
     options.budget.take(1)
-    span.setAttribute('infer.remaining_requests', options.budget.remaining)
+    const remaining = options.budget.remaining
+    if (remaining !== undefined) span.setAttribute('infer.remaining_requests', remaining)
     const response = await options.provider.chat([
       { role: 'system', content: `${INFER_SYSTEM_PROMPT}\n\nInstructions:\n${input.instructions}\n\nJSON schema:\n${schema}` },
       { role: 'user', content: encodeJson(input.input, 'infer input') },

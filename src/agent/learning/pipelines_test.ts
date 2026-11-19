@@ -57,7 +57,7 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
       assert.match(task, /stopping before line 312/)
       assert.match(task, /Read each assigned overview range once/)
       assert.match(task, /Do not expand every tool call/)
-      assert.match(task, /submit partial with the unread scope/)
+      assert.match(task, /Report partial\/blocked for unread or unresolved scope/)
       assert.match(task, /\/calls\/<encoded-id>/)
       assert.match(task, /\/c\/<message>\.<call>/)
       assert.match(task, /\[28, 900\)/)
@@ -464,7 +464,7 @@ test('batch instructions mention only pipeline-specific mutation tools', async (
       if (pipeline === 'reflector') assert.doesNotMatch(prompt, /learned_skill/)
       else assert.match(prompt, /learned_skill/)
     }
-    assert.equal(LEARNING_LIMITS[pipeline].inferenceRequests, pipeline === 'reflector' ? 6 : pipeline === 'encapsulator' ? 8 : 4)
+    assert.equal(LEARNING_LIMITS[pipeline].inferenceRequests, pipeline === 'reflector' ? null : pipeline === 'encapsulator' ? 8 : 4)
   }
 }))
 

@@ -72,7 +72,7 @@ export abstract class BaseSession {
   private suppressWakeOutput = false
   protected messagePersistenceFailed = false
   private boundedSystemTask = false
-  private boundedLearningTask = false
+  private trustedLearningTask = false
   private imagePreparationSignal?: AbortSignal
   private providerFailure?: ProviderFailureKind
   private providerWaiting?: RateLimitWait
@@ -305,14 +305,12 @@ export abstract class BaseSession {
     const reasoningEffort = executionContext.reasoningEffort ??
       llm.reasoningEffort
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
-    const boundedLearning = this.state.mode === 'task' && executionContext.channel === 'cron'
+    const trustedLearning = this.state.mode === 'task' && executionContext.channel === 'cron'
       && this.state.automation?.config?.source === 'learning'
       && ['reflector', 'encapsulator', 'soul-reflector'].includes(this.state.agentType ?? '')
       && this.tools.inferenceRequestLimit !== undefined
-    this.boundedLearningTask = boundedLearning
-    if (boundedLearning) this.tools.reserveReceipt('learning_result')
-    const boundedReflector = boundedLearning && this.state.agentType === 'reflector'
-    if (boundedReflector) this.tools.reserveReflectorRetention()
+    this.trustedLearningTask = trustedLearning
+    if (trustedLearning && this.tools.inferenceRequestLimit !== null) this.tools.reserveReceipt('learning_result')
     const budget = new InferenceBudget(this.tools.inferenceRequestLimit)
     let contextRecoveryAttempted = false
     let timeoutRecovery: { error: ProviderHttpError; sourcePhysicalId: string } | undefined
@@ -344,7 +342,7 @@ export abstract class BaseSession {
     }
 
     await this.ensureWorkingContext()
-    for (let i = 0; budget.remaining > 0; i++) {
+    for (let i = 0; budget.hasRemaining; i++) {
       // Resolve at inference boundaries, not by mutating any in-flight call's context.
       const current = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup).workdir
       if (!current.available) throw new Error(`Session workdir unavailable: ${current.reason}`)
@@ -358,15 +356,7 @@ export abstract class BaseSession {
         } : undefined,
       }
       if (!this.boundedSystemTask && this.state.workingContext !== undefined) await this.recordContextEvent('working-context', this.state.workingContext)
-      if (boundedReflector && budget.remaining === 3) {
-        this.tools.enterReflectorRetention()
-        await this.appendMessages(llm, { role: 'user', content: 'Host reflector retention boundary: this fourth inference prepares supported candidates; use necessary exact source evidence, current-memory deduplication and fresh read_wiki now. The fifth inference closes source exploration and protects a save/log opportunity; the sixth is receipt-only. Do not postpone fresh Wiki reads or deduplication until the fifth if a supported candidate is ready. Use evidence already read; unread/unknown scope must remain partial. Current v:memory reads/searches remain available, including in the fifth for safety, but a check alone is not a saved effect. Saves retain normal revision, evidence, provenance, readback and failure checks. Do not force a write or infer authority. Prefer one supported retention over optional further memory browsing; if nothing qualifies, report honestly. Pending Wiki recovery notes remain available in the final receipt.' })
-      }
-      if (boundedReflector && budget.remaining === 2) {
-        this.tools.closeReflectorSources()
-        await this.appendMessages(llm, { role: 'user', content: 'Host reflector save boundary: source exploration is closed. Persist a sufficiently supported prepared candidate now. Current Wiki revision and log dedup checks remain allowed for safety; if these or missing evidence prevent saving, report partial honestly rather than claiming retention. No write is required. Next inference is receipt-only.' })
-      }
-      const receiptOnly = boundedLearning && budget.remaining === 1
+      const receiptOnly = trustedLearning && budget.remaining === 1
       if (receiptOnly) {
         this.tools.restrictToReceipt('learning_result')
         await this.appendMessages(llm, { role: 'user', content: 'Host finish boundary: only learning_result is available now. Submit an honest receipt using evidence already read. Use partial or blocked for unread or unresolved scope; do not claim no_change merely because the budget is ending. No further writes or reads are allowed.' })
@@ -482,7 +472,7 @@ export abstract class BaseSession {
           await recordTimeoutRecovery('retry-exhausted', response)
           span.span.setAttribute('provider.recovery.reason', 'image-request-timeout')
         }
-        if (!contextRecoveryAttempted && (!imageTimeout || budget.remaining > 0)) {
+        if (!contextRecoveryAttempted && (!imageTimeout || budget.hasRemaining)) {
           contextRecoveryAttempted = true
           if (imageTimeout) {
             timeoutRecovery = { error: response, sourcePhysicalId: this.physicalSessionId }
@@ -610,7 +600,7 @@ export abstract class BaseSession {
       }
       // learning_result already verified/proposed the receipt. No extra inference is
       // needed to turn its successful tool result into session completion.
-      if (this.boundedLearningTask && call.name === 'learning_result'
+      if (this.trustedLearningTask && call.name === 'learning_result'
         && result === LEARNING_RECEIPT_RECORDED) terminal = result
       const transient = transientToolSummary(result)
       // Prepare before closing the durable tool pair: cancellation/validation

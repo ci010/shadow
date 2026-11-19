@@ -1,9 +1,9 @@
-# Bounded learning finish and retry recovery
+# Learning finish and retry recovery
 
 Project learning uses the existing SessionManager loop, tool validation and journal;
-this is not a second model loop. Trusted pipeline inference ceilings remain 6 for
-reflection, 8 for encapsulation and 4 for Soul reflection. No unrestricted extra
-iterations are added.
+this is not a second model loop. Project reflection has no aggregate limit on model
+requests, tool calls or tool-argument bytes. The inference ceilings remain 8 for
+encapsulation and 4 for Soul reflection.
 
 ## Source readiness before reflection
 
@@ -24,23 +24,22 @@ not cancel an already-dispatched reflection or expand its pinned source ranges.
 Existing completed-attempt recovery still verifies already-recorded effects.
 
 This is admission and fixed-range protection, not semantic phase identification
-or cross-fragment synthesis. Reading budgets and the six-inference limit below
-are unchanged. See [the learning design and evaluation protocol](self-reflection-learning.md).
+or cross-fragment synthesis. Source selection and reading targets are unchanged. See [the learning design and evaluation protocol](self-reflection-learning.md).
 
 ## Host finish boundary
 
-For task-mode cron runs with learning automation provenance, a dedicated learning
-agent and trusted execution limits, BaseSession reserves the last existing inference
-for `learning_result`. It persists a finish instruction in the message history,
+For task-mode encapsulator and Soul reflector runs with learning automation
+provenance and trusted numeric limits, BaseSession reserves the last inference for
+`learning_result`. It persists a finish instruction in the message history,
 exposes only that tool, and denies other tools at execution too. This is separate
 from ordinary cron, Discord learning and interactive sessions.
 
-SessionTools also reserves one tool call and up to 8,000 argument bytes (at most a
+For those budgeted runs, SessionTools also reserves one tool call and up to 8,000 argument bytes (at most a
 quarter of the argument ceiling). Work calls cannot spend that capacity. Rejected
 work calls do not consume the reserve. Receipt calls still respect the overall
 ceilings; malformed or repeatedly rejected receipts can exhaust it.
 
-A successful `learning_result` tool return ends this bounded session without another
+A successful `learning_result` tool return ends the learning session without another
 model request. Tool errors and ordinary model replies are not receipts. Tool-result
 persistence and the normal session-completion lifecycle still run. LearningRuntime
 still verifies effects and commits the proposal only after successful execution;
@@ -55,47 +54,28 @@ failure/truncation recovery and effect checks remain, but successful read tools 
 do not establish exhaustive source coverage or semantic understanding. Completion,
 read coverage and downstream learning usefulness are distinct. A model that omits
 the receipt, misreports coverage or ignores the boundary is not repaired by inventing
-success. Provider failures or invalid final receipts can still fail the run.
+success. Provider failures or ending without a valid receipt can still fail the run.
 
-## Reflector preparation and save opportunity
+## Reflector execution and receipt repair
 
-Reflector alone reallocates its existing six requests; encapsulator, Soul and
-ordinary sessions keep their prior behavior. The first three requests investigate
-the assigned sources. At request four the host appends a preparation boundary and
-releases protected capacity: prepare a supported candidate with necessary exact
-source details, current-memory deduplication and a fresh `read_wiki`. Request five
-closes further source exploration at execution and hides non-retention tools;
-`learning_memory`, `log`, `learning_result` and canonical `v:memory` read/grep/glob
-remain available. HTTP reads, other virtual roots, workspace overrides, traversal
-and web search cannot bypass that restriction. Request six remains receipt-only,
-including the existing explicit pending-Wiki recovery queue semantics.
+The host-selected Project reflector has no aggregate limit on model requests,
+tool calls or tool-argument bytes. It does not inherit the ordinary session
+iteration ceiling. Its 30-minute eligibility check, trusted tool allowlist,
+assigned evidence scope, non-concurrency and cancellation are unchanged. Provider
+context limits, individual tool constraints and Wiki/provenance validation still
+apply. Editable cron records cannot select the reflector's unbudgeted policy.
 
-During the first three requests, four of the existing 18 tool calls and 48,000 of
-the existing 96,000 argument bytes are protected (including receipt capacity).
-At preparation these become available, still reserving the ordinary one-call /
-8,000-byte receipt capacity. No counter is reset, no extra inference or retry is
-added. This protects one practical check/save/log opportunity, not unlimited
-candidates, a publication quota or a guarantee that every draft fits. Saves may
-also happen earlier. The two formal persistence routes are unchanged: revision-
-bound Wiki save with exact assigned evidence, managed provenance, readback and
-provenance log; or standalone attributed log with batch/origin/key deduplication.
+Previously the reflector had six requests, 18 tool calls and 96,000 argument
+bytes with fixed preparation, save and receipt stages on requests four through
+six. Those stages are removed: the model can read assigned evidence, make a
+supported save, and correct a rejected receipt in the same attempt. There is no
+required write. A verified receipt still ends the session without another model
+call; partial/blocked still reports unresolved scope without acknowledging it.
+The ordinary session limit and all other automation budgets are unchanged.
 
-Safety checks remain available at request five, but a fresh Wiki read or dedup
-search alone is not retention. A stale/failed save or a late check with no time
-to save must remain unresolved in an honest partial/blocked receipt. Nothing is
-autosaved from prose. Unknown or unread source evidence never becomes publishable
-just because the save window has arrived.
-
-Tradeoff: request four can still read necessary source details, but request five
-can no longer expand a missing source call. A synthetic 400-line overview that
-still needs an exact call therefore remains partial with zero effects. This does
-not solve arbitrarily long assigned sources, semantic coverage, or repeated reads
-across attempts; it may reduce investigation capacity for those batches. No
-coverage cursor, cross-attempt source-read reuse, journal migration, live replay
-or recovery broadening is introduced. The observed failure receipts motivated
-protecting a save opportunity for already-supported candidates, not a claim that
-real learning quality has improved. Deployment and later real-run auditing remain
-separate.
+This applies to new attempts under the updated backend. Existing pending batches
+retain their scope, effects, counters and automatic retry caps. The change does
+not authorize a replay, bulk retry or retry-cap reset.
 
 ## Finite automatic retries
 
@@ -167,8 +147,8 @@ or successful publication: interruption/restart cannot renew it. It is per batch
 not per path, candidate edit, resolution or apparent progress. The fourth deferral
 parks unresolved work; a crash before that deferral also cannot re-admit the spent
 continuation automatically. Without manual retries, the bound is three ordinary
-deferrals plus one candidate continuation, each under the existing execution
-ceilings. No extra inference/tool budget is added within an attempt.
+deferrals plus one candidate continuation. The continued attempt follows the same
+execution policy as any other reflector attempt; its admission does not reset counters.
 
 Selection retains the existing persisted fresh/retry alternation and orders due
 batches by `notBefore`; the extra opportunity cannot take every fresh-work slot.

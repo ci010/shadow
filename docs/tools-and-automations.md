@@ -211,7 +211,7 @@ completion counts, observed costs or live configuration values.
 | --- | --- | --- | --- |
 | Organizer delta | Coalesced saved-topic changes, or explicit delta action | 4 | 12 / 96,000 |
 | Organizer full | Explicit action | 8 | 24 / 192,000 |
-| Reflector | 30-minute check, pending evidence only | 6 | 18 / 96,000 |
+| Reflector | 30-minute check, pending evidence only | No aggregate ceiling | No aggregate ceiling |
 | Encapsulator | 2-hour check, unconsumed logs only | 8 | 24 / 192,000 |
 | Soul reflector | 12-hour check, unconsumed logs only | 4 | 12 / 48,000 |
 
@@ -237,16 +237,20 @@ to use the Work record sequence, so a member's metadata-only change is not a new
 independent Work revision. This is incremental presentation organization, not
 longitudinal title-history reconstruction or self-reflection learning.
 
-Learning ceilings are selected by the trusted LearningRuntime pipeline, not an
-editable cron override; ordinary cron jobs retain their existing execution defaults.
+Learning execution policies are selected by the trusted LearningRuntime pipeline,
+not an editable cron override. The reflector has no fixed preparation, save or
+receipt-only request stages. A rejected receipt can be corrected; a verified
+receipt ends the session without another model request. The tool allowlist,
+assigned scope, cancellation and non-concurrency still apply. Ordinary cron
+jobs retain their existing execution defaults.
 New reflector batches target an overview reading budget of 12,000 characters /
 160 lines across at most four sources; persisted cursors still count messages,
-not display lines. This leaves room for relevant lookups, writes and receipts,
-but is not a guarantee of completion within the tool ceiling. A single oversized
-atomic message is isolated, not skipped; Partial retains that batch for retry
-without preventing other available evidence from being processed.
+not display lines. This targets manageable source batches without capping
+aggregate execution. A single oversized atomic message is isolated, not skipped;
+partial retains that batch for retry without blocking other available evidence.
 Existing pending batches preserve their scope and effects rather than silently
-shrinking or acknowledging unread evidence.
+shrinking or acknowledging unread evidence. Existing automatic retry caps stay in
+force; lifting per-attempt budgets does not authorize bulk retries.
 
 Writers need separate read, validated-write and learning_result/final stages and
 are not one-shot. Exhaustion may leave partial effects, which are retained for

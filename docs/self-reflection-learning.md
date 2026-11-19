@@ -178,7 +178,8 @@ Dreams API 生成独立输出 store；cookbook 夜间示例则原地更新。不
 - Reflector / Encapsulator 指导加入 what/why/how 分工、带竞争解释的目标假设，以及“读取分片不是完整阶段”的边界。
 - 来源门禁使用宿主完成标记或 24 小时静默；权限过滤独立不变，新来源和旧 pending 一视同仁。
 - 关键词入口可读取有界的 authored description / 标题；无 Work / working-set 信号时不自动注入其他会话日志。
-- 保留原有来源游标、重试语义、六轮预算和物理范围，未改为完整语义阶段综合。
+- 保留原有来源游标、重试语义和物理范围，未改为完整语义阶段综合。
+- 第一阶段曾保留六轮预算；现行 [Reflector 执行策略](learning-finish-boundary.md#reflector-execution-and-receipt-repair) 已取消模型请求次数、工具调用次数和工具参数总量的上限，也不再按固定轮次切换读写和回执阶段。30 分钟检查频率与既有 pending 批次的自动重试上限不变。
 
 尚未验收交付：跨分片语义进度与最终整合、独立语义 organizer、结构化复用收益归因，以及真实旧知识归档/种子切换的部署与人类确认执行。现有[受保护 owner 文档维护入口](learning-maintenance-owner-entry.md)已在代码中连接 durable local owner、现有 ownerOnly 人类 Ask UI、完整计划内容/保护分类与独立执行确认；代码及合成验证不等于部署、真人批准或真实归档。epoch/history 边界仍须另行审批，不得先删文件再补状态。
 
