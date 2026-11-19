@@ -1,37 +1,20 @@
 # Local development
 
 See the [quick start](../README.md#get-started) for prerequisites and installation.
-Run `pnpm dev` from the repository root. It installs missing workspace
-dependencies from the lockfile before loading the desktop launcher. On Windows
-x64/arm64 it also checks the Agent Desktop native assets even if `node_modules`
-is already present. If the required native assets cannot be verified after
-preparation, `pnpm dev` stops before building or launching Electron.
+Run `pnpm dev` from the repository root.
 
-For an isolated Windows dev data directory:
+`pnpm dev` installs missing JS dependencies (including dev dependencies even if
+`NODE_ENV=production` is inherited), checks that they are present, and
+prepares the pinned official desktop CLI for the current host. For a separate
+build without launching Electron, run `pnpm install --frozen-lockfile` and
+`pnpm desktop:prepare-agent-desktop` explicitly.
 
-```powershell
-$env:SHADOW_DESKTOP_DEV_MAIN_DIRECTORY = Join-Path (Get-Location) '.shadow-test-dev'
-pnpm dev
-```
-
-The install hook verifies source and binary hashes before doing any work.
-It also runs through `pnpm:devPreinstall` because pnpm can skip `postinstall`
-on an otherwise up-to-date install.
-Valid cached assets require no compilation or network access. Missing, modified
-or stale assets are downloaded from the pinned Windows native release and verified.
-No Rust/MSVC toolchain is installed or invoked.
-
-Native preparation failures warn without failing dependency installation.
-Windows startup/build still rejects missing or invalid assets. Check access to the
-pinned release and rerun `pnpm install`.
-Non-Windows installs do not prepare these Windows-only assets. The hook uses
-Node's built-in TypeScript support, not development dependencies, so production-only
-installs can run it too. Set `SHADOW_SKIP_NATIVE_BUILD=1` to explicitly skip native
-preparation, or use `pnpm install --ignore-scripts` to disable all lifecycle hooks.
-Concurrent installers do not start a second native download. An interrupted install
-can leave the Git-ignored `integrations/agent-desktop/artifacts/.postinstall-win32-<arch>.lock`;
-remove that exact file only after confirming no installer is running, then retry.
-See the [native artifact reproduction instructions](../integrations/agent-desktop/README.md#reproduce-the-native-windows-x64-artifact-from-source) for maintainer-only source builds.
+The postinstall hook prints guidance only, so ordinary JS dependency installs
+do not depend on access to the desktop release or run desktop code. No Rust/MSVC addon or
+Windows input guard is required. Preparation verifies a fixed official archive
+hash and required adjacent helpers; build/runtime fail closed if assets are
+missing or invalid. No system dependencies or OS permissions are installed or
+changed automatically. See the [official CLI preparation guide](../integrations/agent-desktop/README.md).
 
 This builds the backend and desktop shell, starts Vite, and launches Electron.
 Development uses the same Main data directory as production: `~/.shadow`
@@ -44,6 +27,13 @@ backend uses port `43124` rather than production's `43123`; existing saved dev
 launch ports are overridden at runtime, without rewriting the saved profile.
 Distinct ports do not bypass Main data ownership: stop production before using
 the same Main directory, or select isolated development data.
+For an isolated Windows dev data directory:
+
+```powershell
+$env:SHADOW_DESKTOP_DEV_MAIN_DIRECTORY = Join-Path (Get-Location) '.shadow-test-dev'
+pnpm dev
+```
+
 Use **重启后端（开发）** in the `pnpm dev` tray menu for backend-only changes.
 It runs a development backend build with a separate output directory while the current backend
 keeps serving, so a failed build leaves the running backend and `dist` untouched.
@@ -86,6 +76,7 @@ optional argument selects another bot config: `pnpm start path-to-bot-config.jso
 For a production web build:
 
 ```sh
+pnpm desktop:prepare-agent-desktop
 pnpm build:all
 node --env-file-if-exists=.env dist/src/index.js
 ```

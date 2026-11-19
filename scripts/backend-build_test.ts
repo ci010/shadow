@@ -9,28 +9,11 @@ import { buildBackend } from './backend-build.ts'
 import { backendEntries, compileBackend } from './backend-bundle.ts'
 
 async function fixture(root: string): Promise<void> {
-  if (process.platform === 'win32') {
-    const repository = fileURLToPath(new URL('..', import.meta.url))
-    const source = join(repository, 'integrations/agent-desktop')
-    const target = join(root, 'integrations/agent-desktop')
-    await mkdir(target, { recursive: true })
-    for (const path of [`artifacts/win32-${process.arch}`, 'LICENSE', 'NOTICE']) {
-      await cp(join(source, path), join(target, path), { recursive: true })
-    }
-    // Preserve the real receipt and all fingerprint inputs, rather than minting
-    // a new receipt or bypassing verification for this isolated build fixture.
-    for (const path of ['integrations/agent-desktop/src', 'integrations/agent-desktop/patches',
-      'integrations/agent-desktop/scripts', 'integrations/agent-desktop/Cargo.toml',
-      'integrations/agent-desktop/Cargo.lock', 'integrations/agent-desktop/build.rs',
-      'src/execution/computer/agent-desktop-worker.js', 'src/execution/computer/agent-desktop-errors.js',
-      'src/execution/computer/agent-desktop-errors.d.ts',
-      'src/execution/computer/agent-desktop-actions.js',
-      'src/execution/computer/stdio-transport.ts', 'src/execution/computer/contracts.ts',
-      'src/execution/computer/windows-input.cs',
-      'scripts/agent-desktop-input-guard.ts', 'scripts/agent-desktop-integrity.ts']) {
-      await mkdir(join(root, path, '..'), { recursive: true })
-      await cp(join(repository, path), join(root, path), { recursive: true })
-    }
+  const repository = fileURLToPath(new URL('..', import.meta.url))
+  const target = `artifacts/${process.platform}-${process.arch}`
+  await mkdir(join(root, 'integrations/agent-desktop'), { recursive: true })
+  for (const path of [target, 'LICENSE', 'NOTICE']) {
+    await cp(join(repository, 'integrations/agent-desktop', path), join(root, 'integrations/agent-desktop', path), { recursive: true })
   }
   await mkdir(join(root, 'src'), { recursive: true })
   await writeFile(join(root, 'package.json'), '{"type":"module"}')
@@ -38,6 +21,10 @@ async function fixture(root: string): Promise<void> {
     const file = join(root, 'src', entry + (entry === 'utils/image-codec-worker' ? '.js' : '.ts'))
     await mkdir(join(file, '..'), { recursive: true })
     await writeFile(file, 'export {}')
+  }
+  await mkdir(join(root, 'src/script-runtime'), { recursive: true })
+  for (const entry of ['html-module.ts', 'html-base64.ts']) {
+    await writeFile(join(root, 'src/script-runtime', entry), 'export {}')
   }
   await writeFile(join(root, 'tsconfig.build.json'), JSON.stringify({
     compilerOptions: {
@@ -149,6 +136,7 @@ test('built session routes and usage aggregates run with native Node', async () 
       const change = ${JSON.stringify(change)};
       const { sessionId } = change;
       const manager = {
+        resolveSessionIdentity: id => id,
         readSessionState: async id => id === sessionId ? { sessionId, segmentIndex: 0 } : null,
         store: { async *readSessionLog(id) {
           assert.equal(id, 'web_patch-fixture-0');

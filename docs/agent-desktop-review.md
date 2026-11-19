@@ -1,3 +1,10 @@
+# Historical addon review — superseded
+
+The addon/guard implementation described below has been removed. Its hashes,
+window restrictions and transient-observation safety claims are historical only,
+not current product behavior. See [official MCP integration](agent-desktop.md)
+and [current access/recovery](computer-use.md).
+
 # agent-desktop 桥接审核记录（真机验收待进行）
 
 ## 当前交付边界

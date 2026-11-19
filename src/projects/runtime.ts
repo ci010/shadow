@@ -9,7 +9,6 @@ import type { ProjectCatalog } from './catalog.ts'
 import type { ProjectConfigStore } from './config-store.ts'
 import type { ProjectRecord } from './contracts.ts'
 import type { RealtimeHub } from '../realtime/hub.ts'
-import type { ComputerService } from '../computer/service.ts'
 
 export interface ProjectRuntimeDependencies {
   presence?: import('../sessions/presence.ts').UserPresence
@@ -32,7 +31,6 @@ export interface ProjectRuntimeDependencies {
   /** Host-attested display name of the sending device, if known. */
   webClientDeviceName?: (request: Request) => string | undefined
   realtimeHub?: RealtimeHub
-  computer?: ComputerService
   /** Desktop grants require a local owner, not mobile/device credentials. */
 }
 

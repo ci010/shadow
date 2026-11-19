@@ -68,17 +68,13 @@ test('caches separate native downloads by OS/arch and do not retain signing mate
   assert.equal(signingSwift.with.path, 'mobile/ios/SourcePackages')
 })
 
-test('Windows native gate consumes a locked release without fetching or compiling upstream', async () => {
+test('desktop release gates explicitly prepare the pinned official CLI without addon builds', async () => {
   const workflow = await yaml('../.github/workflows/release-check.yml')
-  const steps = workflow.jobs['windows-release'].steps
-  const step = steps.find((step: { name?: string }) => step.name === 'Install pinned Windows desktop native release')
-  assert.equal(step.run, 'node scripts/download-agent-desktop.ts x64')
-  assert.doesNotMatch(JSON.stringify(steps), /msvc-dev-cmd|scripts\/fetch\.mjs|scripts\/build\.mjs|cargo build/)
-  const build = await readFile(new URL('../integrations/agent-desktop/scripts/build.mjs', import.meta.url), 'utf8')
-  assert.match(build, /\['scripts\/fetch\.mjs', '--sync'\]/)
-  assert.match(build, /'--locked'/)
-  const fetch = await readFile(new URL('../integrations/agent-desktop/scripts/fetch.mjs', import.meta.url), 'utf8')
-  assert.match(fetch, /if \(git\(\['rev-parse', 'HEAD'\], upstream\) !== revision\) throw new Error\('Upstream revision mismatch'\)/)
+  const step = workflow.jobs['windows-release'].steps.find((step: { name?: string }) => step.name === 'Prepare pinned official desktop CLI')
+  assert.match(step.run, /node scripts\/download-agent-desktop\.ts win32 x64/)
+  assert.match(step.run, /if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
+  const source = await readFile(new URL('../.github/workflows/release-check.yml', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /fetch\.mjs|build\.mjs|msvc-dev-cmd/)
 })
 
 test('daily builds reuse native release gates and skip only previously successful commits', async () => {

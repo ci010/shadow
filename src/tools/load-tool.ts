@@ -43,6 +43,12 @@ import { toolResultText } from './tool.ts'
  */
 export interface McpLoadable {
   config: McpServerConfig
+  /** Host-owned managed sources cannot be configured by MCP documents. */
+  managed?: {
+    authorize(context: ExecutionContext): void
+    configuration(tools: SessionTools): Promise<McpServerConfig>
+    connection(config: McpServerConfig, tools: SessionTools): McpConnection
+  }
   folderSource?: FolderMcpSource
   /**
    * Absolute path to a JSON config file with persistent extra args.
@@ -437,6 +443,12 @@ export class ImportTool implements Tool {
   }
 
   resolveInvocationTools(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string {
+    const managedName = toolName.split('__')[0]
+    const managedEntry = this.builtins.get(managedName)
+    if (managedEntry && isMcpLoadable(managedEntry) && managedEntry.managed) {
+      if (!context.tools.canUseDynamic(toolName)) return 'Error: source is unavailable for this role.'
+      try { managedEntry.managed.authorize(context) } catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}` }
+    }
     if (!toolName.startsWith('chrome-devtools__') || !this.sessionBrowsersEnabled()) {
       return instance === undefined ? context.tools : 'Error: instance is supported only for the built-in session browser.'
     }
@@ -564,6 +576,8 @@ export class ImportTool implements Tool {
     }
     const next = new Map<string, McpLoadable>()
     for (const server of servers) {
+      const builtin = this.builtins.get(server.name)
+      if (builtin && isMcpLoadable(builtin) && builtin.managed) throw new Error(`MCP source "${server.name}" is reserved for its host-managed builtin`)
       const config = parseMcpServerConfig(server.name, server)
       if (next.has(config.name)) throw new Error(`Duplicate MCP server "${config.name}"`)
       const existing = this.configured.get(config.name)
@@ -903,6 +917,9 @@ export class ImportTool implements Tool {
     }
     const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
     if (entry && isMcpLoadable(entry)) {
+      if (entry.managed) {
+        try { entry.managed.authorize(context) } catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}` }
+      }
       if (entry.config.name === 'chrome-devtools') {
         if (context.projectId !== this.projectId) return 'Error: import tool Chrome project binding mismatch'
         const scope = getProjectScope()
@@ -1090,6 +1107,17 @@ export class ImportTool implements Tool {
     extraCliArgs: string[],
     options: ImportOptions,
   ): Promise<Tool[] | string> {
+    const managedBuiltin = this.builtins.get(name) ?? this.builtins.get(entry.config.name)
+    if (managedBuiltin && isMcpLoadable(managedBuiltin) && managedBuiltin.managed && managedBuiltin !== entry) {
+      throw new Error('Host-managed MCP source identity cannot be replaced')
+    }
+    if (entry.managed) {
+      if (extraCliArgs.length || entry.configPath || entry.sharedConn || entry.toolFilter) return 'Error: built-in managed MCP startup is fixed.'
+      const config = await entry.managed.configuration(sessionTools)
+      return this.connectMcp(config, config.name, sessionTools, undefined, options,
+        () => this.catalogFor(sessionTools).get(name) === entry, undefined,
+        () => entry.managed!.connection(config, sessionTools))
+    }
     // If this entry shares a connection with another loadable, resolve it
     const connOwner = entry.sharedConn ?? entry
     const connKey = extraCliArgs.length > 0
@@ -1160,13 +1188,14 @@ export class ImportTool implements Tool {
     options: ImportOptions,
     isCurrent: () => boolean = () => true,
     indexConfig?: McpServerConfig,
+    connectionFactory?: () => McpConnection,
   ): Promise<Tool[]> {
     const checkCurrent = () => {
       options.signal.throwIfAborted()
       if (!isCurrent()) throw new Error('MCP configuration changed during import; import the source again.')
     }
     checkCurrent()
-    const browserRoot = this.browsers.forTools(sessionTools)?.fileRoot
+    const browserRoot = connectionFactory ? undefined : this.browsers.forTools(sessionTools)?.fileRoot
     let cached = sessionTools.getMcpConn(connKey)
     if (cached && (JSON.stringify(cached.conn.config) !== JSON.stringify(config) || cached.conn.workspaceRoot !== browserRoot)) {
       await sessionTools.disconnectMcpConn(connKey)
@@ -1176,7 +1205,7 @@ export class ImportTool implements Tool {
       checkCurrent()
       // Adapter startup is application-owned; file roots remain session-owned.
       const cwd = config.name === 'chrome-devtools' ? bundledChromeAdapter().cwd : browserRoot ?? options.cwd ?? this.workspace
-      const conn = new McpConnection(config, cwd, browserRoot)
+      const conn = connectionFactory ? connectionFactory() : new McpConnection(config, cwd, browserRoot)
       try {
         await conn.connect(options.signal)
         checkCurrent()
@@ -1259,6 +1288,7 @@ export class ImportTool implements Tool {
 
     const results: string[] = []
     for (const config of configs) {
+      if (config.name === 'agent-desktop') throw new Error('agent-desktop is a reserved host-managed source')
       if (config.name === 'chrome-devtools' || config.args?.some(arg => arg.includes('chrome-devtools-mcp'))) {
         results.push('Error: Chrome imports must use the built-in chrome-devtools source and browser_setup connection binding.')
         continue

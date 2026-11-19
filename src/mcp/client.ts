@@ -15,6 +15,7 @@ import { decodeChunks } from '../utils/decode-chunks.ts'
 import { parseMcpServerConfig } from './config.ts'
 import { mcpCleanupFailure, mcpFailure, mcpSecrets, type McpPhase } from './errors.ts'
 import { readableMcpText } from './text.ts'
+import { completedToolFailure } from '../tools/tool.ts'
 
 export interface McpToolInfo {
   name: string
@@ -153,7 +154,7 @@ export class McpConnection {
     }
   }
 
-  private async createTransport(config: McpServerConfig, signal: AbortSignal): Promise<Transport> {
+  protected async createTransport(config: McpServerConfig, signal: AbortSignal): Promise<Transport> {
     switch (config.transport) {
       case 'stdio': {
         if (!config.command) {
@@ -288,6 +289,13 @@ export class McpConnection {
     return tools
   }
 
+  validateContext(_context: import('../tools/context.ts').ExecutionContext): void {}
+
+  async callToolInContext(name: string, args: Record<string, unknown>, context: import('../tools/context.ts').ExecutionContext): Promise<import('../tools/tool.ts').ToolResult> {
+    this.validateContext(context)
+    return this.callTool(name, args, context.signal)
+  }
+
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<import('../tools/tool.ts').ToolResult> {
     signal?.throwIfAborted()
     if (this.state) this.state.transportError = undefined
@@ -297,6 +305,13 @@ export class McpConnection {
     const parsed = CallToolResultSchema.safeParse(raw)
     if (!parsed.success) throw this.safeFailure(new Error('Malformed MCP tool result'), 'call_tool', signal)
     const result = parsed.data
+    if (this.config.name === 'agent-desktop') {
+      const content: import('../providers/provider.ts').ContentPart[] = result.content.map(block => block.type === 'image'
+        ? { type: 'image_url', image_url: { url: `data:${block.mimeType};base64,${block.data}`, detail: 'auto' } }
+        : { type: 'text', text: block.type === 'text' ? block.text : JSON.stringify(block) })
+      if (result.structuredContent !== undefined) content.push({ type: 'text', text: JSON.stringify({ structuredContent: result.structuredContent }) })
+      return result.isError ? completedToolFailure({ content, isError: true }) : { content, isError: false }
+    }
     if (result.content.some(block => block.type === 'image')) {
       const content: import('../providers/provider.ts').ContentPart[] = result.content.map(block => {
         if (block.type === 'image') return {
