@@ -306,6 +306,12 @@ export class Tools {
   }
 }
 
+/** Host-only policy: null explicitly disables aggregate budgets, not the allowlist. */
+export type TrustedExecutionLimits = { allowedTools: readonly string[] } & (
+  | { inferenceRequests: number; toolCalls: number; argumentBytes: number }
+  | { inferenceRequests: null; toolCalls?: never; argumentBytes?: never }
+)
+
 /**
  * Per-session tool overlay.
  *
@@ -316,47 +322,35 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
-  inferenceRequestLimit?: number
-  private trustedLimits?: { allowedTools?: readonly string[]; toolCalls: number; argumentBytes: number }
+  inferenceRequestLimit?: number | null
+  private trustedAllowlist?: readonly string[]
+  private trustedBudgets?: { toolCalls: number; argumentBytes: number }
   private reservedReceipt?: string
   reserveReceipt(name: string): void {
-    if (!this.trustedLimits?.allowedTools?.includes(name)) throw new Error('Receipt is outside trusted limits')
+    if (!this.trustedAllowlist?.includes(name)) throw new Error('Receipt is outside trusted limits')
     this.reservedReceipt = name
   }
   private receiptOnly?: string
-  private reflectorRetention: 'reserved' | 'preparation' | 'active' | undefined
-  /** Host-only allocation within the reflector's existing six requests. */
-  reserveReflectorRetention(): void {
-    if (!this.reservedReceipt || !this.trustedLimits?.allowedTools?.includes('learning_memory')) {
-      throw new Error('Reflector retention requires trusted learning limits and a receipt reserve')
-    }
-    this.reflectorRetention = 'reserved'
-  }
-  enterReflectorRetention(): void {
-    if (this.reflectorRetention === 'reserved') this.reflectorRetention = 'preparation'
-  }
-  closeReflectorSources(): void {
-    if (this.reflectorRetention === 'preparation') this.reflectorRetention = 'active'
-  }
-  private retentionToolAllowed(name: string): boolean {
-    return this.reflectorRetention !== 'active'
-      || ['read', 'search', 'learning_memory', 'log', 'learning_result'].includes(name)
-  }
   /** Host loop may narrow a bounded task at its final inference boundary. */
   restrictToReceipt(name: string): void {
-    if (!this.trustedLimits?.allowedTools?.includes(name)) throw new Error('Receipt is outside trusted limits')
+    if (!this.trustedAllowlist?.includes(name)) throw new Error('Receipt is outside trusted limits')
     this.receiptOnly = name
   }
   private trustedCalls = 0
   private trustedBytes = 0
   /** Apply host ceilings without widening or replacing the role's tool permissions. */
   setTrustedBudgets(limits: { inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
-    this.trustedLimits = { toolCalls: limits.toolCalls, argumentBytes: limits.argumentBytes }
+    this.trustedBudgets = { toolCalls: limits.toolCalls, argumentBytes: limits.argumentBytes }
     this.inferenceRequestLimit = limits.inferenceRequests
   }
-  setTrustedLimits(limits: { allowedTools: readonly string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
-    this.trustedLimits = { ...limits, allowedTools: [...limits.allowedTools] }
-    this.inferenceRequestLimit = limits.inferenceRequests
+  setTrustedLimits(limits: TrustedExecutionLimits): void {
+    this.trustedAllowlist = [...limits.allowedTools]
+    if (limits.inferenceRequests === null) {
+      this.trustedBudgets = undefined
+      this.inferenceRequestLimit = null
+    } else {
+      this.setTrustedBudgets(limits)
+    }
   }
   override getExecutionPolicy(): ToolExecutionPolicy | undefined { return super.getExecutionPolicy() ?? this.base.getExecutionPolicy() }
   private askAvailable = true
@@ -593,17 +587,10 @@ export class SessionTools extends Tools {
 
   executionDenial(name: string, args: Record<string, unknown>): string | undefined {
     if (this.receiptOnly && name !== this.receiptOnly) return this.rejectExecution('Only the learning receipt is allowed at this finish boundary.')
-    if (!this.retentionToolAllowed(name)) return this.rejectExecution('Reflector retention boundary: only current memory checks, supported saves/logs and an honest receipt are allowed.')
-    if (this.reflectorRetention === 'active' && (name === 'read' || name === 'search')) {
-      if (typeof args.path !== 'string' || (!/^v:memory(?:\/[a-zA-Z0-9_.-]+)*\/?$/.test(args.path) || args.path.split('/').includes('..'))
-        || args.workspace !== undefined || (name === 'search' && !['grep', 'glob'].includes(String(args.handler)))) {
-        return this.rejectExecution('Reflector retention boundary: read/search must target v:memory for current Wiki/log deduplication. Unread source evidence remains partial; no further source exploration.')
-      }
-    }
-    if (this.trustedLimits?.allowedTools && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
-    if (this.trustedLimits?.allowedTools && name === 'import_tool' &&
+    if (this.trustedAllowlist && !this.trustedAllowlist.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
+    if (this.trustedAllowlist && name === 'import_tool' &&
       (typeof args.source !== 'string' || !args.source.startsWith('v:tools/') ||
-        !this.trustedLimits.allowedTools.includes(args.source.slice('v:tools/'.length)) ||
+        !this.trustedAllowlist.includes(args.source.slice('v:tools/'.length)) ||
         args.args !== undefined || args.server !== undefined)) {
       return this.rejectExecution('Trusted executions may import only explicitly granted catalog sources without extra arguments.')
     }
@@ -722,7 +709,7 @@ export class SessionTools extends Tools {
     this.boundary?.assertCurrent()
     const scope = this.scope
     return this.base.getDefinitions().filter((d) =>
-      this.isToolAllowed(d.function.name) && this.retentionToolAllowed(d.function.name)
+      this.isToolAllowed(d.function.name)
     ).map(def => def.function.name === 'subagent' && scope
       ? { ...def, function: { ...def.function,
         description: scope.modes.includes('call')
@@ -770,25 +757,21 @@ export class SessionTools extends Tools {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
-    if (this.reservedReceipt && this.trustedLimits) {
+    if (this.reservedReceipt && this.trustedBudgets) {
       const denial = this.executionDenial(name, args)
       if (denial) return denial
       const bytes = Buffer.byteLength(JSON.stringify(args), 'utf8')
-      const retentionReserved = this.reflectorRetention === 'reserved' && name !== this.reservedReceipt
-      const reserve = name === this.reservedReceipt ? 0 : retentionReserved ? 4 : 1
-      const byteReserve = retentionReserved ? Math.min(48000, Math.floor(this.trustedLimits.argumentBytes / 2))
-        : reserve ? Math.min(8000, Math.floor(this.trustedLimits.argumentBytes / 4)) : 0
-      if (this.trustedCalls + 1 > this.trustedLimits.toolCalls - reserve
-        || this.trustedBytes + bytes > this.trustedLimits.argumentBytes - byteReserve) {
-        return this.rejectExecution(retentionReserved
-          ? 'Reflector investigation budget reached protected retention/receipt capacity. No counters were reset. Capacity becomes available at the fourth-inference preparation boundary; do not claim a save or full coverage from this rejection.'
-          : 'Learning work budget exhausted; submit learning_result using remaining receipt capacity.')
+      const reserve = name === this.reservedReceipt ? 0 : 1
+      const byteReserve = reserve ? Math.min(8000, Math.floor(this.trustedBudgets.argumentBytes / 4)) : 0
+      if (this.trustedCalls + 1 > this.trustedBudgets.toolCalls - reserve
+        || this.trustedBytes + bytes > this.trustedBudgets.argumentBytes - byteReserve) {
+        return this.rejectExecution('Learning work budget exhausted; submit learning_result using remaining receipt capacity.')
       }
     }
-    if (this.trustedLimits) {
+    if (this.trustedBudgets) {
       this.trustedCalls++
       this.trustedBytes += Buffer.byteLength(JSON.stringify(args), "utf8")
-      if (this.trustedCalls > this.trustedLimits.toolCalls || this.trustedBytes > this.trustedLimits.argumentBytes) throw new Error("One-shot tool budget exhausted")
+      if (this.trustedCalls > this.trustedBudgets.toolCalls || this.trustedBytes > this.trustedBudgets.argumentBytes) throw new Error("One-shot tool budget exhausted")
     }
     const denial = this.executionDenial(name, args)
     if (denial) return denial

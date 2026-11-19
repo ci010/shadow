@@ -102,6 +102,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
   events.emit = async value => { reports.push(value); await emit(value) }
   const sessions: SessionManager = new SessionManager({
     workspace, store, provider, bus, tools, agentTypes, events, projectId:settings.projectId,
+    backgroundTasks: { listTasks: () => [] },
     handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
     context: {
       buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }),
@@ -2116,8 +2117,40 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   })
 }
 
+test('SessionManager rejects unbudgeted execution outside trusted Project reflector tasks', async () => withTempWorkspace(async workspace => {
+  const store = new JsonlSessionStore(join(workspace, 'sessions')); await store.init()
+  const f = fixture(workspace, store, { projectId: 'fixture' })
+  const base = {
+    agentType: 'reflector', channel: 'cron', mode: 'task' as const, task: 'Synthetic admission fixture',
+    automation: {
+      jobId: 'reflector-fixture', runId: 'fixture', name: 'Fixture', startedAt: new Date().toISOString(),
+      contextMode: 'fresh' as const, config: { source: 'learning' as const, schedule: 'manual', agentType: 'reflector' },
+    },
+    executionLimits: { allowedTools: ['read'], inferenceRequests: null },
+  }
+  type Options = Parameters<SessionManager['startSession']>[0]
+  const invalidCases: Array<[string, Options]> = [
+    ['ordinary cron', { ...base, automation: { ...base.automation, config: { ...base.automation.config, source: 'cron' } } }],
+    ['encapsulator', { ...base, agentType: 'encapsulator', automation: { ...base.automation, config: { ...base.automation.config, agentType: 'encapsulator' } } }],
+    ['non-task', { ...base, mode: 'session' }],
+    ['non-cron channel', { ...base, channel: 'web' }],
+    ...(['toolCalls', 'argumentBytes'] as const).map(field => [field, {
+      ...base, executionLimits: { ...base.executionLimits, [field]: 1 } as unknown as Options['executionLimits'],
+    }] satisfies [string, Options]),
+  ]
+  try {
+    await f.sessions.start()
+    for (const [label, opts] of invalidCases) {
+      const chatId = crypto.randomUUID()
+      await assert.rejects(f.sessions.startSession({ ...opts, chatId }), /Invalid one-shot execution limits/, label)
+      assert.equal(f.sessions.getSessionState(`${opts.channel}:${chatId}`), null, label)
+    }
+    assert.equal(f.requests.length, 0)
+  } finally { await f.sessions.stop() }
+}))
+
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  for (const status of ['no_change', 'partial', 'blocked'] as const) test(`${Store.name}: bounded learning reserves final inference and completes on verified receipt (${status})`, async () => withTempWorkspace(async workspace => {
+  for (const status of ['no_change', 'partial', 'blocked'] as const) test(`${Store.name}: reflector exceeds old limits, repairs a receipt and finishes on verification (${status})`, async () => withTempWorkspace(async workspace => {
     const { LearningRuntime } = await import('../agent/learning/pipelines.ts')
     const { LearningTools } = await import('../agent/learning/tools.ts')
     const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
@@ -2125,7 +2158,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const runtime = new LearningRuntime(f.sessions, 'fixture')
     const tools = new LearningTools(runtime)
     f.tools.register(tools.result)
-    f.tools.register({ name: 'search', description: 'Synthetic bounded lookup', parameters: { type: 'object', properties: {} }, execute: async () => 'No additional evidence' })
+    f.tools.register(tools.memory)
+    let calls = 0, argumentBytes = 0
+    f.tools.register({ name: 'search', description: 'Synthetic lookup', parameters: { type: 'object', properties: {}, additionalProperties: true }, execute: async args => {
+      calls++; argumentBytes += Buffer.byteLength(JSON.stringify(args)); return 'No additional evidence'
+    } })
     // An event-free pending batch isolates finish mechanics from source selection.
     const batch = runtime.ledger.create('reflector', [], [])
     try {
@@ -2133,21 +2170,63 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const accepted = Promise.withResolvers<string>()
       const run = runtime.run('reflector', new AbortController().signal, undefined, accepted.resolve)
       const id = await accepted.promise
-      for (let i = 0; i < 5; i++) {
+      await assert.rejects(runtime.run('reflector', new AbortController().signal), /already running/)
+      for (let i = 0; i < 7; i++) {
         const request = await f.next(id)
-        if (i >= 3) assert.match(JSON.stringify(request.messages), /Host reflector retention boundary/)
-        request.resolve(invoke('search', { path: i >= 3 ? 'v:memory' : 'v:sessions', handler: 'grep', query: 'fixture' }))
+        assert(request.names.includes('search'))
+        request.resolve({ content: '', toolCalls: Array.from({ length: 3 }, () => ({
+          name: 'search', id: crypto.randomUUID(), arguments: { path: 'v:memory', handler: 'grep', query: 'x'.repeat(5000) },
+        })) })
       }
+      const invalid = await f.next(id)
+      assert.equal(calls, 21)
+      assert(argumentBytes > 96_000)
+      invalid.resolve(invoke('learning_result', { status: 'partial', summary: 'Incorrect artifact reference.',
+        artifactReconciliations: [{ path: 'memory/topics/nonexistent.md', priorRevision: 'a'.repeat(64),
+          currentRevision: 'b'.repeat(64), outcome: 'retained', reason: 'Synthetic invalid reconciliation.' }],
+      }))
+      const correction = await f.next(id)
+      assert.match(JSON.stringify(correction.messages.at(-1)), /requires an exact historical artifact and fresh read_wiki/)
+      assert(correction.names.includes('learning_memory'))
+      correction.resolve(invoke('learning_memory', { action: 'read_wiki', path: 'topics/nonexistent.md' }))
       const last = await f.next(id)
-      assert.deepEqual(last.names, ['learning_result'])
-      assert.match(JSON.stringify(last.messages), /Host finish boundary/)
+      assert.deepEqual(JSON.parse(String(last.messages.at(-1)?.content)), {
+        path: 'memory/topics/nonexistent.md', revision: '', content: '',
+      })
+      assert(last.names.includes('learning_result'))
+      assert.doesNotMatch(JSON.stringify(last.messages), /Host (?:reflector|finish) boundary/)
       const settlement = status === 'no_change' ? run.then(result => assert.equal(result, id)) : assert.rejects(run, new RegExp(status))
       last.resolve(invoke('learning_result', { status, summary: 'No assigned evidence or effects in this fixture; partial/blocked must remain unfinished.' }))
       await settlement
-      assert.equal(f.requests.filter(r => r.sessionId === id).length, 6)
+      assert.equal(f.requests.filter(r => r.sessionId === id).length, 10)
       assert.equal((await f.sessions.getExecutionResult(id))?.status, 'completed')
       assert.equal(runtime.ledger.batch(batch.id).state, status === 'no_change' ? 'done' : 'pending')
       assert.equal(runtime.ledger.outcome(id)?.status, status)
+    } finally { await f.sessions.stop(); await store.close?.() }
+  }))
+
+  test(`${Store.name}: cancelling unbudgeted reflector aborts its in-flight request without acknowledging the batch`, async () => withTempWorkspace(async workspace => {
+    const { LearningRuntime } = await import('../agent/learning/pipelines.ts')
+    const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
+    const f = fixture(workspace, store, { projectId: 'fixture' })
+    const runtime = new LearningRuntime(f.sessions, 'fixture')
+    const batch = runtime.ledger.create('reflector', [], [])
+    const controller = new AbortController()
+    try {
+      await f.sessions.start()
+      const accepted = Promise.withResolvers<string>()
+      const run = runtime.run('reflector', controller.signal, undefined, accepted.resolve)
+      const rejection = assert.rejects(run, /cancel/i)
+      const id = await accepted.promise
+      const request = await f.next(id)
+      controller.abort(new Error('Cancelled reflector fixture'))
+      await rejection
+      assert(request.signal.aborted)
+      assert.equal((await f.sessions.getExecutionResult(id))?.status, 'cancelled')
+      assert.equal(runtime.ledger.batch(batch.id).state, 'pending')
+      assert.equal(runtime.ledger.outcome(id)?.status, 'blocked')
+      assert.equal(runtime.ledger.batch(batch.id).proposal, undefined)
+      assert.equal(f.requests.filter(r => r.sessionId === id).length, 1)
     } finally { await f.sessions.stop(); await store.close?.() }
   }))
 
@@ -2229,7 +2308,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     f.tools.register(new LogTool(workspace, (entry, key, ctx) => learning.appendLog(entry, key, ctx)))
     f.tools.register({ name: 'search', description: 'Synthetic scoped lookup', parameters: { type: 'object', properties: {}, additionalProperties: true }, execute: async () => 'No duplicate in synthetic memory' })
     f.tools.register({ name: 'read', description: 'Synthetic assigned evidence', parameters: { type: 'object', properties: {}, additionalProperties: true }, execute: async () => destination === 'insufficient' ? Array.from({ length: 100 }, (_, i) => `Overview line ${i}: synthetic long-range context; exact call still required, not sufficient evidence.`).join('\n') : 'Fixture source message 0: reported refactor completion did not establish legacy cleanup; no deployment verified.' })
-    await store.saveState('web:source', { sessionId: 'web:source', segmentIndex: 0, mode: 'session' })
+    const quietAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+    await store.saveState('web:source', { sessionId: 'web:source', segmentIndex: 0, mode: 'session', lastActivityAt: quietAt, lastUserMessageAt: quietAt })
     const source = { sessionId: 'web:source', physicalId: physicalSessionId({ sessionId: 'web:source', segmentIndex: 0 }), segmentIndex: 0, offset: 0, end: 1 }
     await store.appendMessages(source.physicalId, [{ role: 'user', content: 'Synthetic fixture: reported completion is not verified cleanup.', timestamp: new Date().toISOString() }])
     const batch = runtime.ledger.create('reflector', [source], [])
@@ -2245,7 +2325,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         ? invoke('read', { path: 'v:sessions/web_source-0/overview', offset: 101 + i * 100, limit: 100 })
         : invoke('search', { path: 'v:memory', handler: 'grep', query: 'legacy cleanup' }))
       const preparation = await f.next(id)
-      assert.match(JSON.stringify(preparation.messages), /Host reflector retention boundary/)
+      assert(preparation.names.includes('read'))
       preparation.resolve(destination === 'wiki' || destination === 'stale'
         ? invoke('learning_memory', { action: 'read_wiki', path: 'topics/fixture-cleanup.md' })
         : destination === 'insufficient'
@@ -2258,16 +2338,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         wikiEvidence: [{ sessionId: source.sessionId, physicalId: source.physicalId, offset: 0, end: 1 }] }))
       else if (destination === 'log') persist.resolve(invoke('log', { who: 'fixture assistant', what: 'Reported refactor completion did not establish legacy cleanup; not independently verified.', summary: 'Fixture: reported completion is not verified cleanup.', session: source.sessionId, key: 'message-0-cleanup', refs: ['v:sessions/web_source-0/full'] }))
       else if (destination === 'late-check') persist.resolve(invoke('learning_memory', { action: 'read_wiki', path: 'topics/fixture-cleanup.md' }))
-      else persist.resolve(invoke('read', { path: 'v:sessions/web_source-0/c/1.1' })) // Hidden execution is denied too.
+      else persist.resolve(invoke('read', { path: 'v:sessions/web_source-0/c/1.1' })) // Assigned source remains available.
       const finish = await f.next(id)
-      assert.deepEqual(finish.names, ['learning_result'])
+      assert(finish.names.includes('read'))
       const retained = runtime.ledger.batch(batch.id)
       assert.equal(retained.events.length, hasEffect ? 1 : 0)
       if (destination === 'stale') assert.match(JSON.stringify(finish.messages), /Wiki changed since read/)
       assert.equal(retained.artifacts.length, destination === 'wiki' ? 1 : 0)
       if (destination === 'wiki') assert.match(await readFile(projectStoragePath(workspace, 'memory/topics/fixture-cleanup.md'), 'utf8'), /Learning provenance[\s\S]*web_source-0/)
       if (destination === 'log') assert.match(await readFile(projectStoragePath(workspace, retained.events[0].path), 'utf8'), /message|reported completion/)
-      if (destination === 'insufficient') assert.match(JSON.stringify(finish.messages), /no further source exploration/)
+      if (destination === 'insufficient') assert.match(JSON.stringify(finish.messages), /exact call still required/)
       finish.resolve(invoke('learning_result', { status: hasEffect ? 'applied' : 'partial', summary: !hasEffect ? 'Missing source detail, failed stale save or late safety check; nothing saved. Unresolved scope remains partial.' : 'Retained synthetic attributed evidence, not independent cleanup verification; full fixture source reviewed.' }))
       await settlement
       assert.equal(f.requests.filter(r => r.sessionId === id).length, 6)

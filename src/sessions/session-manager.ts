@@ -43,7 +43,7 @@ import { channelSessionId, channelAddressFromSessionId, deriveSessionId, type In
 import type { HandoffManager } from './handoff/manager.ts'
 import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { ImportTool } from '../tools/load-tool.ts'
-import { SessionTools, Tools } from '../tools/registry.ts'
+import { SessionTools, Tools, type TrustedExecutionLimits } from '../tools/registry.ts'
 import type { ExecShell } from '../tools/shell.ts'
 import {
   sanitizeToolPairs,
@@ -208,8 +208,8 @@ export interface StartSessionOptions {
   reasoningEffort?: SessionConfig['reasoningEffort']
   /** Trusted internal caller output ceiling; persisted with this execution, not a provider retry. */
   maxTokens?: number
-  /** Host-only one-shot ceilings, never accepted from model arguments or persisted settings. */
-  executionLimits?: { allowedTools: readonly string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }
+  /** Trusted one-shot policy; only host-dispatched Project reflection may omit aggregate ceilings. */
+  executionLimits?: TrustedExecutionLimits
   /** Additional context appended to the task. */
   context?: string
 }
@@ -2318,7 +2318,12 @@ ${JSON.stringify(request)}`,
     const sessionId = `${channel}:${chatId}`
 
     if (opts.executionLimits) {
-      if (opts.mode !== "task" || Object.values(opts.executionLimits).filter(v => typeof v === "number").some(v => !Number.isSafeInteger(v) || (v as number) < 1)) throw new Error("Invalid one-shot execution limits")
+      const limits = opts.executionLimits
+      const validBudget = limits.inferenceRequests === null
+        ? opts.agentType === 'reflector' && opts.channel === 'cron' && opts.automation?.config?.source === 'learning'
+          && limits.toolCalls === undefined && limits.argumentBytes === undefined
+        : [limits.inferenceRequests, limits.toolCalls, limits.argumentBytes].every(value => Number.isSafeInteger(value) && value > 0)
+      if (opts.mode !== 'task' || !validBudget) throw new Error('Invalid one-shot execution limits')
       this.executionLimits.set(sessionId, { ...opts.executionLimits, allowedTools: [...opts.executionLimits.allowedTools] })
     }
 

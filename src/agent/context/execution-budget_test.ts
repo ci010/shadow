@@ -34,3 +34,14 @@ test('inference limits and reservations require valid safe integers', () => {
     assert.equal(budget.remaining, 2)
   }
 })
+
+
+test('explicitly unbudgeted execution does not inherit the ordinary iteration ceiling', () => {
+  const budget = new InferenceBudget(null)
+  for (let i = 0; i <= SESSION_ITERATION_LIMIT; i++) {
+    assert(budget.hasRemaining)
+    budget.take(i % 2)
+  }
+  assert(budget.hasRemaining)
+  assert.equal(budget.remaining, undefined)
+})
