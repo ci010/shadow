@@ -48,7 +48,7 @@ const duration = computed(() => props.model.duration)
 const rate = computed(() => props.model.rate)
 const maxFrame = computed(() => lastOtioFrame(duration.value, rate.value))
 const currentFrame = computed(() => Math.max(0, Math.min(maxFrame.value, Math.round(props.frame))))
-const seconds = computed(() => rate.value > 0 ? currentFrame.value / rate.value : 0)
+const seconds = computed(() => rate.value > 0 ? props.frame / rate.value : 0)
 const playhead = computed(() => `${otioPercent(seconds.value, duration.value)}%`)
 const positionLabel = computed(() => t('Frame {frame} · {seconds}s', { frame: currentFrame.value, seconds: formatSeconds(seconds.value) }))
 const lanes = computed(() => otioLanes(props.model).map(lane => ({

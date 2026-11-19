@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import test from 'node:test'
@@ -23,7 +23,8 @@ const clip = (name: string, source: number, duration: number, url: string) => sc
 const track = (name: string, children: unknown[]) => schema('Track', { name, kind: 'Video', children })
 const timeline = JSON.stringify(schema('Timeline', { name: 'Assembly', global_start_time: time(240), tracks: schema('Stack', { children: [
   track('Lower', [clip('Repeated', 48, 48, 'lower.png'), schema('Transition', { in_offset: time(4), out_offset: time(4), transition_type: 'SMPTE_Dissolve' }),
-    clip('External', 12, 48, 'https://blocked.invalid/sentinel.png')]),
+    clip('External', 12, 48, 'https://blocked.invalid/sentinel.png'), clip('Moonrise', 12, 96, 'moonrise.mp4'),
+    schema('Gap', { source_range: range(0, 48) })]),
   track('Upper', [schema('Gap', { source_range: range(0, 24) }), clip('Repeated', 96, 24, 'upper.png')]),
 ] }) }))
 const documentPath = 'cuts/assembly.OTIO'
@@ -48,13 +49,15 @@ createApp({render:()=>h('main',{id:'workbench',style:{display:'flex',height:'cal
     onClose:()=>{closes.value++;open.value=false}})]:[])})
   .provide(OtioDraftKey,bridge).mount('#app');`
 
-test('OTIO file preview stages structural and pixel-marked reviews without writing or sending', {
+test('OTIO file preview renders storyboards and stages reviews without writing the timeline', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
   const directory = resolve(root, '.test-artifacts', `otio-viewer-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
+  const videoPath = 'cuts/moonrise.mp4'
+  const video = await readFile(resolve(root, 'examples/otio-first-cut/media/moonrise.mp4'))
   const requests: { method?: string; route: string; path: string | null }[] = []
   const server = await createServer({
     configFile: false, envDir: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
@@ -82,6 +85,17 @@ test('OTIO file preview stages structural and pixel-marked reviews without writi
           requests.push({ method: req.method, route: url.pathname, path })
           if (req.method === 'GET' && url.pathname === '/api/sessions/fixture/raw') {
             if (path === documentPath) { res.setHeader('Content-Type', 'application/json'); res.end(timeline); return }
+            if (path === videoPath) {
+              res.setHeader('Content-Type', 'video/mp4')
+              res.setHeader('Accept-Ranges', 'bytes')
+              const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '')
+              if (range) {
+                const start = Number(range[1]), end = Math.min(range[2] ? Number(range[2]) : video.length - 1, video.length - 1)
+                res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${video.length}`, 'Content-Length': end + 1 - start })
+                res.end(video.subarray(start, end + 1))
+              } else { res.setHeader('Content-Length', video.length); res.end(video) }
+              return
+            }
             if (path && Object.hasOwn(images, path)) { res.setHeader('Content-Type', 'image/png'); res.end(images[path as keyof typeof images]); return }
           }
           res.statusCode = 403; res.end('Outside fixture scope')
@@ -155,9 +169,64 @@ app.whenReady().then(async()=>{
       document.querySelectorAll('.reference-actions').length===1 && actions.querySelectorAll('button').length===2;
   }), 'both actions follow the collapsed Preview limits in the inspector');
   if(${JSON.stringify(desktopScreenshot || '')}) writeFileSync(${JSON.stringify(desktopScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
+  await click('Storyboard','.viewer-modes');
+  const [board,boardTracks,boardInspector]=await layout('.storyboard-pane','.tracks-pane','.inspector');
+  assert.ok(board.left<=monitor.left && board.right<=boardInspector.left+1 && board.bottom<=boardTracks.top+1);
+  await wait('decoded storyboard still and video pixels',()=>{
+    const cards=[...document.querySelectorAll('.storyboard .card')];
+    const pixels=card=>card?.querySelector('[data-state=ready] canvas')?.getContext('2d').getImageData(160,90,1,1).data;
+    return cards.length===4 && pixels(cards[0])?.[3]===255 && pixels(cards[3])?.[3]===255;
+  });
+  const setSampling=interval=>run(interval=>{
+    const select=document.querySelectorAll('.storyboard select')[1];select.selectedIndex=interval?1:0;select.dispatchEvent(new Event('change'));
+  },interval);
+  await setSampling(true);
+  await wait('interval ordering and labeled gap',()=>{
+    const board=document.querySelector('.storyboard');
+    return [...board.querySelectorAll('time')].map(e=>e.textContent).join(',')==='0 s,2 s,4 s,6 s,8 s' && board.querySelector('.card:last-child').textContent.includes('No picture / gap');
+  });
+  assert.equal(await run(()=>[...document.querySelectorAll('.card')].filter(e=>e.textContent.includes('Moonrise')).reduce((n,e)=>n+e.querySelectorAll('.caption-action').length,0)),1);
+  const fill=async text=>run(text=>{
+    const field=document.querySelector('.description-editor textarea'); field.value=text; field.dispatchEvent(new Event('input'));
+  },text);
+  await click('Add description','.card:nth-child(3)');
+  await fill('Moonrise <b>wide</b>');
+  await run(()=>{const save=Storage.prototype.setItem; Storage.prototype.setItem=function(key,value){if(key.startsWith('shadow:otio-description:'))throw new DOMException('Full','QuotaExceededError');return save.call(this,key,value)};window.restoreStorage=()=>{Storage.prototype.setItem=save}});
+  await click('Save','.description-editor');
+  assert.ok(await run(()=>document.querySelector('.description-editor [role=alert]').textContent.includes('could not be saved')));
+  await run(()=>window.restoreStorage());
+  await click('Save','.description-editor');
+  assert.deepEqual(await run(()=>[...document.querySelectorAll('.caption')].map(e=>[e.textContent,e.children.length])),[['Moonrise <b>wide</b>',0]]);
+  await run(()=>document.querySelector('.storyboard input[type=checkbox]').click());
+  assert.deepEqual(await run(()=>[...document.querySelectorAll('.storyboard time')].map(e=>e.textContent)),['0 s','2 s']);
+  assert.equal((await state()).records.length,0);
+  await win.reload();
+  await wait('reloaded monitor',()=>document.querySelector('.picture img')?.naturalWidth===240);
+  await click('Storyboard','.viewer-modes');
+  assert.equal(await run(()=>document.querySelector('.caption').textContent),'Moonrise <b>wide</b>');
+  await click('Edit description','.card:nth-child(4)');
+  assert.equal(await run(()=>document.querySelector('.description-editor textarea').value),'Moonrise <b>wide</b>');
+  await fill('Moonrise wide'); await click('Save','.description-editor');
+  await run(()=>document.querySelector('.card:nth-child(2) .sample').click());
+  assert.equal(await run(()=>document.querySelector('.card:nth-child(2) .sample').getAttribute('aria-current')),'true');
+  await run(()=>document.querySelector('.card:nth-child(2) .sample').dispatchEvent(new MouseEvent('dblclick',{bubbles:true})));
+  await wait('card opens monitor at exact selected shot',()=>document.querySelector('.picture img')?.naturalWidth===180 && document.querySelector('.transport .readout').textContent==='Frame 24');
+  await run(()=>document.querySelectorAll('.outline .row')[2].click());
+  await click('Storyboard','.viewer-modes');
+  await run(()=>{const source=document.querySelector('.storyboard select');source.selectedIndex=1;source.dispatchEvent(new Event('change'))});
+  assert.equal(await run(()=>document.querySelectorAll('.storyboard .card').length),3);
+  win.setSize(420,820);
+  await wait('narrow storyboard tabs',()=>!!document.querySelector('.compact-tabs').getClientRects().length);
+  await layout('.storyboard-pane','.tracks-pane');
+  await click('Selection','.compact-tabs');
+  await layout('.inspector','.tracks-pane');
+  await click('Storyboard','.compact-tabs');
+  await click('Monitor','.viewer-modes');
+  win.setSize(1180,850);
+  await wait('desktop monitor restored',()=>!document.querySelector('.compact-tabs').getClientRects().length);
   const initial=await state();
   const baseDocument={path:${JSON.stringify(documentPath)},owner:{session:'fixture',space:'workdir'},modified:${JSON.stringify(modified)},sha256:${JSON.stringify(createHash('sha256').update(timeline).digest('hex'))}};
-  const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[4,'Transition.1','/tracks/children/0/children/1'],[7,'Gap.1','/tracks/children/1/children/0']];
+  const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[4,'Transition.1','/tracks/children/0/children/1'],[9,'Gap.1','/tracks/children/1/children/0']];
   for(const [index,[row,schema,pointer]] of elements.entries()){
     await run(row=>document.querySelectorAll('.outline .row')[row].click(),row);
     assert.equal(await run(()=>document.querySelector('.inspector .schema')?.textContent),schema);
@@ -290,8 +359,8 @@ app.whenReady().then(async()=>{
   const [code] = await once(child, 'close')
   assert.equal(code, 0, output)
   assert.match(output, /OTIO_VIEWER_OK/)
-  assert.ok(requests.every(({ method, route, path }) => method === 'GET' && route === '/api/sessions/fixture/raw' && path && [documentPath, ...Object.keys(images)].includes(path)), JSON.stringify(requests))
-  assert.deepEqual(new Set(requests.map(({ path }) => path)), new Set([documentPath, ...Object.keys(images)]))
+  assert.ok(requests.every(({ method, route, path }) => method === 'GET' && route === '/api/sessions/fixture/raw' && path && [documentPath, videoPath, ...Object.keys(images)].includes(path)), JSON.stringify(requests))
+  assert.deepEqual(new Set(requests.map(({ path }) => path)), new Set([documentPath, videoPath, ...Object.keys(images)]))
   if (desktopScreenshot) t.diagnostic(`Desktop overview screenshot: ${desktopScreenshot}`)
   if (screenshot) t.diagnostic(`Narrow review screenshot: ${screenshot}`)
 })
