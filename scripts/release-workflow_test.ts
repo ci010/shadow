@@ -68,16 +68,13 @@ test('caches separate native downloads by OS/arch and do not retain signing mate
   assert.equal(signingSwift.with.path, 'mobile/ios/SourcePackages')
 })
 
-test('Windows native gate accepts postinstall preparation but retains pinned source validation', async () => {
+test('desktop release gates explicitly prepare the pinned official CLI without addon builds', async () => {
   const workflow = await yaml('../.github/workflows/release-check.yml')
-  const step = workflow.jobs['windows-release'].steps.find((step: { name?: string }) => step.name === 'Build pinned Windows desktop native resources')
-  assert.match(step.run, /if \(-not \(Test-Path integrations\/agent-desktop\/\.upstream\)\) \{\s+node integrations\/agent-desktop\/scripts\/fetch\.mjs\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\s+\}/)
-  assert.match(step.run, /node integrations\/agent-desktop\/scripts\/build\.mjs x86_64-pc-windows-msvc\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
-  const build = await readFile(new URL('../integrations/agent-desktop/scripts/build.mjs', import.meta.url), 'utf8')
-  assert.match(build, /\['scripts\/fetch\.mjs', '--sync'\]/)
-  assert.match(build, /'--locked'/)
-  const fetch = await readFile(new URL('../integrations/agent-desktop/scripts/fetch.mjs', import.meta.url), 'utf8')
-  assert.match(fetch, /if \(git\(\['rev-parse', 'HEAD'\], upstream\) !== revision\) throw new Error\('Upstream revision mismatch'\)/)
+  const step = workflow.jobs['windows-release'].steps.find((step: { name?: string }) => step.name === 'Prepare pinned official desktop CLI')
+  assert.match(step.run, /node scripts\/download-agent-desktop\.ts win32 x64/)
+  assert.match(step.run, /if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
+  const source = await readFile(new URL('../.github/workflows/release-check.yml', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /fetch\.mjs|build\.mjs|msvc-dev-cmd/)
 })
 
 test('daily builds reuse native release gates and skip only previously successful commits', async () => {

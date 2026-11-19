@@ -54,24 +54,21 @@ stage checks the provider connection instead of treating the former information
 page as completed authentication. An older Desktop without the provider-setup
 runtime command must be updated; setup does not silently skip the connection.
 
-## Windows computer use
+## Desktop applications
 
-In a local Main conversation, ask for the application task. The assistant lists
-and selects a task-relevant existing window; no manual sharing or keyboard/mouse
-switch is needed. Access lasts up to 10 minutes. All actions execute through
-ordinary tools; consequential actions requiring confirmation use the existing
-agent ask flow before execution. There is no dedicated computer-use UI or HTTP
-API, per-action approval panel, coordinate review or monitor-stop control. Normal
-turn cancellation and the release tool stop access. Browser work uses browser tools.
+In an authorized local Main conversation, the assistant can initialize the built-in
+`agent-desktop` source and use the complete official MCP catalog. This grants broad
+logged-in-user desktop capability within OS permissions: applications, screenshots,
+input, clipboard and application launch, not access isolated to a bound window.
+Shadow and browser windows are not excluded. Consequential actions still need
+existing user confirmation. Screen/clipboard content can reach the configured model
+and normal tool history; do not assume automatic redaction.
 
-This version prefers Windows accessibility controls and window-only screenshots.
-UIA usually operates in the background, though applications can react by activating
-a window. Screenshots remain temporarily in memory for coordinate validation,
-not approval frames. Foreground input uses the real interactive desktop and may
-take focus or move the user's pointer; it is not isolated background input.
-Taking over stops further input, not input already delivered. Elevated applications
-and remote desktops remain unsupported. Window contents go to the configured model.
-Read [computer use](computer-use.md) for privacy, recovery and compatibility limits.
+Calls are serialized on this host. A cancelled/lost dispatched result is not replayed;
+when its completion is unknown, desktop actions are blocked until the user checks
+and reconciles the desktop, ensures activity has stopped, and restarts Shadow.
+Normal completed calls do not require recovery. See [desktop use](computer-use.md)
+for access, privacy and lifecycle details. Browser-specific tools remain unchanged.
 
 ## Language
 

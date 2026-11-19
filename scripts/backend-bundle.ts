@@ -12,7 +12,6 @@ export const backendEntries = [
   'execution/processes/guardian-worker', 'execution/processes/posix-controller',
   'execution/network/proxy-preload', 'utils/image-codec-worker',
   'runtime/startup-profile-preload', 'script-runtime/runtime', 'channels/feishu-transport',
-  'execution/computer/agent-desktop-worker',
 ]
 // Copy these packages intact: adjacent WASM/compiler/native assets and the Chrome
 // adapter child entry (with its bundled dependencies and license notices) are not
@@ -108,7 +107,7 @@ export async function compileBackend(root: string, output: string, entries = bac
       minify: false, sourcemap: false,
       rollupOptions: {
         input: Object.fromEntries(entries.map(name => ['src/' + name,
-          join(src, name + (['utils/image-codec-worker', 'execution/computer/agent-desktop-worker'].includes(name) ? '.js' : '.ts'))])),
+          join(src, name + (name === 'utils/image-codec-worker' ? '.js' : '.ts'))])),
         external: id => id.startsWith('node:') || builtinModules.includes(id)
           || backendExternals.some(name => id === name || id.startsWith(name + '/')),
         output: { format: 'es', entryFileNames: '[name].js', chunkFileNames: '_chunks/[name]-[hash].js' },
