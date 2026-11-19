@@ -1,4 +1,5 @@
 {
+  "DeepSeek API reference (off-peak, USD / 1M tokens): input {input} · cached {cached} · output {output}": "DeepSeek API 参考价（非高峰，美元 / 百万 Token）：输入 {input} · 缓存命中 {cached} · 输出 {output}",
   "{used} / {allowance} AI credits": "{used} / {allowance} AI 积分",
   "API balance: {amount} {currency}": "API 余额：{amount} {currency}",
   "Balance is insufficient for API calls.": "余额不足，无法调用 API。",

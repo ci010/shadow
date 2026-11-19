@@ -53,6 +53,11 @@ const DEEPSEEK: Record<string, Rates> = {
   'deepseek-v4-pro': [0.66, 0.022, 1.98],
 }
 
+/** Published DeepSeek API reference rates, not account-specific billing. */
+export function deepSeekReferenceRates(model: string): Rates | undefined {
+  return Object.hasOwn(DEEPSEEK, model) ? DEEPSEEK[model] : undefined
+}
+
 /** An estimate of token consumption, not an invoice or remaining balance. */
 export function estimateUsageCost(provider: string, model: string, usage: LLMResponseUsage, at = new Date()): LLMResponseUsage {
   const table = provider === 'copilot' ? COPILOT : provider === 'deepseek' ? DEEPSEEK : undefined

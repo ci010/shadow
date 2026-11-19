@@ -1,4 +1,5 @@
 {
+  "DeepSeek API reference (off-peak, USD / 1M tokens): input {input} · cached {cached} · output {output}": "DeepSeek API reference (off-peak, USD / 1M tokens): input {input} · cached {cached} · output {output}",
   "{used} / {allowance} AI credits": "{used} / {allowance} AI credits",
   "API balance: {amount} {currency}": "API balance: {amount} {currency}",
   "Balance is insufficient for API calls.": "Balance is insufficient for API calls.",
