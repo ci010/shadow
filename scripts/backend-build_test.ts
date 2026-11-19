@@ -34,7 +34,7 @@ async function fixture(root: string): Promise<void> {
   }
   await mkdir(join(root, 'src'), { recursive: true })
   await writeFile(join(root, 'package.json'), '{"type":"module"}')
-  for (const entry of backendEntries.filter(name => name !== 'index')) {
+  for (const entry of [...backendEntries.filter(name => name !== 'index'), 'script-runtime/html-base64', 'script-runtime/html-module']) {
     const file = join(root, 'src', entry + (entry === 'utils/image-codec-worker' ? '.js' : '.ts'))
     await mkdir(join(file, '..'), { recursive: true })
     await writeFile(file, 'export {}')
@@ -109,6 +109,22 @@ test('backend build rejects compilation failures instead of copying success-shap
     await assert.rejects(buildBackend(root))
     await assert.rejects(readFile(join(root, 'dist/src/index.js')), { code: 'ENOENT' })
     await assert.rejects(readFile(join(root, 'dist/src/SKILL.md')), { code: 'ENOENT' })
+  })
+})
+
+test('development backend bundles despite type errors, including with a staged output', async () => {
+  await withTempWorkspace(async root => {
+    await fixture(root)
+    await writeFile(join(root, 'src/index.ts'), 'export const value: number = "development"\n')
+    const output = join(root, 'stage', 'dist')
+    await mkdir(join(root, 'stage'))
+    const cli = fileURLToPath(new URL('../build.ts', import.meta.url))
+    const tsx = fileURLToPath(import.meta.resolve('tsx'))
+    execFileSync(process.execPath, ['--import', tsx, cli, '--development', '--desktop-stage', join(root, 'stage')], {
+      cwd: root, stdio: 'pipe',
+    })
+    assert.match(await readFile(join(output, 'src/index.js'), 'utf8'), /"development"/)
+    await assert.rejects(readFile(join(root, 'dist/src/index.js')), { code: 'ENOENT' })
   })
 })
 

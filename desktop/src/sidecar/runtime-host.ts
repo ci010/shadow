@@ -96,6 +96,7 @@ export function createRuntimeLaunchToken(): string {
 
 export class RuntimeHost {
   private readonly paths: RuntimePaths
+  private developmentEntry: string | undefined
   private readonly tokenFactory: RuntimeTokenFactory
   private supervisor: SidecarSupervisor | undefined
   private launchRequest: SidecarStartRequest | undefined
@@ -138,7 +139,7 @@ export class RuntimeHost {
     const request: SidecarStartRequest = this.launchRequest ?? {
       role: options.role,
       executablePath: this.paths.executablePath,
-      entryPath: this.paths.entryPath,
+      entryPath: this.developmentEntry ?? this.paths.entryPath,
       configPath: this.paths.configPath,
       launchToken: this.tokenFactory(),
       port: options.port,
@@ -173,6 +174,18 @@ export class RuntimeHost {
       if (this.options.revalidateOnStart) this.startPromise = undefined
     })
     return this.startPromise
+  }
+
+  /** Called inside the bootstrap coordinator's serialized lifecycle. */
+  async replaceDevelopmentBuild(entry: string): Promise<void> {
+    if (this.options.paths.packaged || this.stopping || this.startPromise && this.status.phase === 'starting') {
+      throw new Error('Development backend replacement is unavailable')
+    }
+    await this.stopActiveRuntime()
+    this.launchRequest = undefined
+    this.startPromise = undefined
+    this.supervisor = undefined
+    this.developmentEntry = entry
   }
 
   stop(): Promise<void> {

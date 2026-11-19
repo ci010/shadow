@@ -67,7 +67,7 @@ export function superviseDesktopDevelopment(options: {
         if (stopped) break
         if (!restart || code !== 0) { signals.exitCode = code; stop(); break }
         // Exit is required before rebuilding: backend has stopped and the single-instance lock is free.
-        for (const args of [['build'], ['--filter', '@shadow/desktop', 'build']]) {
+        for (const args of [['build', '--development'], ['--filter', '@shadow/desktop', 'build']]) {
           if (stopped) break
           const code = await track(options.spawnBuild(args))
           if (!stopped && code !== 0) throw new Error(`Development restart: pnpm ${args.join(' ')} exited with code ${code}`)

@@ -72,6 +72,7 @@ import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './devel
 import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, MAIN_WINDOW_MAX_LISTENERS, removeNativeMenus } from './window-controls.js'
 import { createTrayImage, installTrayMenu } from './tray.js'
 import { createDevelopmentRestart } from './development-restart.js'
+import { buildDevelopmentBackend, DevelopmentBackendRestart } from './development-backend-restart.js'
 import { installBackgroundWindow } from './background-window.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
 import { installFileExplorer } from './file-explorer.js'
@@ -380,15 +381,38 @@ async function start(): Promise<void> {
     if (state.mode === null) await coordinator.dispatch({ type: 'select-role', mode: 'main' })
     else if (state.mode !== 'main') throw new Error('Managed Main profile contains a different role; existing configuration was not changed')
   }
-  registerRuntimeHostQuitLifecycle(app, {
-    stop: async () => {
-      try {
-        await microApps?.shutdown()
-        await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
-      } finally { await publication.close() }
-    },
-  })
   const startup = new RuntimeStartup(() => coordinator.ensureRuntime(), () => runtimeHost.status)
+  const devNode = process.env.SHADOW_DESKTOP_DEV_NODE
+  const devPnpm = process.env.npm_execpath
+  const backendRestart = restart && process.env.NODE_ENV !== 'production' && devNode && devPnpm
+    ? new DevelopmentBackendRestart(
+      stage => buildDevelopmentBackend(join(app.getAppPath(), '..'), stage, devNode, devPnpm),
+      async (entry, activate) => {
+        let replaced = false
+        const result = await startup.start(() => coordinator.restartRuntime(async () => {
+          await runtimeHost.replaceDevelopmentBuild(entry)
+          activate()
+          replaced = true
+        }))
+        // Re-bootstrap the existing window with the new authorization and SSE connection.
+        // On startup failure, bootstrap instead displays the normal recovery screen.
+        if (replaced) mainWindow?.webContents.reload()
+        if (!result.ok) throw new Error(`Development backend restart failed: ${result.code}`)
+      },
+      error => {
+        console.error('[desktop] Development backend restart failed:', error)
+        dialog.showErrorBox('无法重启开发后端', '请查看运行 pnpm dev 的终端了解失败原因。')
+      },
+    ) : undefined
+  const stop = async () => {
+    try {
+      await microApps?.shutdown()
+      await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
+    } finally { await publication.close() }
+  }
+  registerRuntimeHostQuitLifecycle(app, {
+    stop: () => backendRestart ? backendRestart.close(stop) : stop(),
+  })
   if ((await coordinator.load()).step === 'complete') void startup.start()
   ipcMain.handle(IPC_CHANNELS.switchRole, async (event, ...args: unknown[]) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
@@ -553,7 +577,7 @@ async function start(): Promise<void> {
     await microApps!.open(identity)
   }
   mainTray = new Tray(createTrayImage(desktopTrayIconPath(app.isPackaged), nativeImage))
-  const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged)
+  const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged, backendRestart ? () => { void backendRestart.request() } : undefined)
   const disposeBackground = installBackgroundWindow(app, mainWindow)
   app.once('will-quit', () => {
     disposeBackground()
