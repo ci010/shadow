@@ -1,6 +1,6 @@
 ---
 name: diffusion-cpp
-description: "Use optional local stable-diffusion.cpp for Qwen Image 2.1 images/edits, legacy Qwen-Image-Edit, Anima, Z-Image-Turbo on constrained hardware, MiniMax-H3 audio/video, and MOSS-Image Base/SFT via explicit upstream CLI (no Shadow preset). Reuse existing weights first; inspect hardware, licenses, ModelScope downloads and CLI failures."
+description: "Use optional local stable-diffusion.cpp for Qwen Image 2.1 images/edits, legacy Qwen-Image-Edit, Anima, Z-Image-Turbo on constrained hardware, MiniMax-H3 audio/video, and MOSS-Image SFT as an opt-in preset (Base via upstream CLI only). Reuse existing weights first; inspect hardware, licenses, ModelScope downloads and CLI failures."
 core: true
 metadata:
   category: tools
@@ -207,7 +207,7 @@ with `modelscope download --model circlestone-labs/Anima
 user approves destination, license and disk usage. No automatic
 download or replacement of Qwen 2.1's default image preset.
 
-## MOSS-Image Base / SFT (explicit upstream CLI only)
+## MOSS-Image Base / SFT (SFT preset; Base via upstream CLI only)
 
 The [upstream MOSS guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/moss_image.md)
 supports both **Base and SFT**: a 5B diffusion transformer, Qwen3.5-9B text
@@ -220,13 +220,12 @@ contains it; this is a known-containing release, not a claim of the minimum
 release. Inspect the installed version/help and backend first; do not replace
 an existing installation automatically.
 
-**Shadow has no MOSS preset**: `diffusion_cpp configure` and `image` do not
-accept MOSS, and there is no tokenizer configuration field. Discovery does not
-validate a complete MOSS setup. Do not impersonate another preset or pass model
-selectors through `options`. Use an explicitly approved local `sd-cli` command
-on the executing device, outside the integrated generation tool; no automatic
-Project configuration, generation locking/cancellation or media delivery is
-provided by that direct route.
+Use `preset: "moss_image_sft"` with `diffusion_cpp configure` and `image`
+for **SFT text-to-image**. Base is not a Shadow preset; use the explicit CLI
+example below if approved. `status` checks SFT component paths, weight headers
+and basic tokenizer JSON structure; it does not prove model compatibility.
+Discovery offers filename/size candidates for weights, not a tokenizer match
+or a complete compatible setup. Do not pass `--tokenizer` through `options`.
 
 ### Short end-to-end setup and first run
 
@@ -254,15 +253,14 @@ execution decisions, and stop with a precise blocker when necessary.
    rather than inventing a digest. Parse the tokenizer as JSON, require its
    vocabulary/model structure, and confirm its upstream origin/revision; a
    filename or successful JSON parse alone does not establish compatibility.
-4. **Wire the paths.** Record the resolved absolute CLI and four component
-   paths plus source revisions in a small setup manifest in the chosen model
-   directory, without overwriting an existing file. Pass those actual paths to
-   the example below, especially `--tokenizer`; do not call MOSS `configure`
-   or substitute another preset. Files may stay in separate existing caches:
-   the example's common `MOSS_ROOT` is only a layout illustration, not a copy
-   requirement. The manifest is a reuse aid, not a Shadow configuration file.
-5. **Run one smoke generation.** Use the approved prompt and a new durable
-   output path, one job at a time on the device. Start with a modest size
+4. **Wire the paths.** For SFT, configure `preset: "moss_image_sft"` with
+   the four absolute paths (`diffusion`, `llm`, `vae`, `tokenizer`) and
+   `licenseAcknowledged: true` after user review. For Base, pass the four
+   actual paths to the CLI example below. Files can stay in separate caches.
+5. **Run one smoke generation.** For SFT, call `image` with
+   `preset: "moss_image_sft"` and the approved prompt; the result uses the
+   session's media directory. For Base, use a new approved output path.
+   Run one job at a time on the device. Start with a modest size
    divisible by 16 (for example 512 x 512; the upstream example is 1024 x 1024),
    using the MOSS flags below. Retain the process result/log and elapsed time;
    use the execution tool's supported timeout/cancellation handling. On OOM,
@@ -271,7 +269,7 @@ execution decisions, and stop with a precise blocker when necessary.
 6. **Verify and hand back.** Require a successful process exit, then open the
    resulting PNG to check it decodes, has the requested dimensions and contains
    a plausible result. Report its actual output path, runtime/backend, variant,
-   reusable component/manifest paths and measured elapsed time (resource peaks
+   reusable component paths and measured elapsed time (resource peaks
    only if measured). CLI help, configured paths or a file existing alone are
    not end-to-end success. If generation is deferred or fails, say setup is
    partial and give the exact next action; do not claim successful inference.
@@ -281,10 +279,10 @@ Select one diffusion variant, plus all three matching sidecars:
 | Component | Upstream file / source |
 | --- | --- |
 | Base diffusion | `diffusion_models/moss_image_base_int8_convrot_attn.safetensors` from [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models), or [leejet/MOSS-Image-Base-GGUF](https://huggingface.co/leejet/MOSS-Image-Base-GGUF) |
-| SFT diffusion (alternative, not an extra requirement) | `diffusion_models/moss_image_sft_int8_convrot_attn.safetensors` from the same Comfy-Org repository, or [leejet/MOSS-Image-SFT-GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF) |
-| Text encoder | `Qwen3.5-9B-Q4_K_M.gguf` from [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) |
-| VAE | `vae/flux2_ae.safetensors` from [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/vae) |
-| External tokenizer | `tokenizer/tokenizer.json` from [OpenMOSS-Team/MOSS-Image-Base](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
+| SFT diffusion (`diffusion` for the SFT preset) | `diffusion_models/moss_image_sft_int8_convrot_attn.safetensors` from the same Comfy-Org repository, or [leejet/MOSS-Image-SFT-GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF) |
+| Text encoder (`llm`) | `Qwen3.5-9B-Q4_K_M.gguf` from [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) |
+| VAE (`vae`) | `vae/flux2_ae.safetensors` from [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/vae) |
+| External tokenizer (`tokenizer`) | `tokenizer/tokenizer.json` from [OpenMOSS-Team/MOSS-Image-Base](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 
 `--tokenizer` is required: Qwen3.5 has a different vocabulary from the embedded
 Qwen tokenizer. Do not substitute Qwen3/Qwen3-VL encoders, Qwen Image VAEs or
@@ -310,8 +308,8 @@ OUTPUT='/absolute/path/to/new-moss-base.png'
   -v --offload-to-cpu -H 1024 -W 1024 -o "$OUTPUT"
 ```
 
-For SFT, replace only the diffusion path with the selected
-`moss_image_sft_int8_convrot_attn.safetensors` and choose a distinct output.
+The SFT preset uses CFG 3 and CPU offload, leaving sampling method, steps
+and time shift to the CLI by default (steps and CFG can be set on `image`).
 Dimensions must be divisible by 16. The default discrete scheduler uses time
 shift 5; `--flow-shift` overrides it. The negative CFG branch skips DiT layer
 22 (zero-based). Do not transplant Qwen/Z/Anima sampling defaults or claim
