@@ -295,3 +295,33 @@ test('development port policy is gated, validates overrides, and never uses prod
   }
   assert.equal(resolveRuntimeLaunchOptions({ role: 'child', port: 43123 }, false, { SHADOW_DESKTOP_DEV_IPC: '1' }).port, 43124)
 })
+
+test('development replacement stops the old supervisor and publishes fresh authorization only after readiness', async () => {
+  const first = new DeferredSupervisor()
+  const second = new DeferredSupervisor()
+  const supervisors = [first, second]
+  const auth: unknown[] = []
+  let tokens = 0
+  const host = new RuntimeHost({
+    paths: { ...paths, packaged: false }, environment: {},
+    supervisorFactory: () => supervisors.shift()!,
+    tokenFactory: () => `token-${++tokens}`,
+    onAuthorizationChanged: value => auth.push(value),
+  })
+  const options = { role: 'main', port: 43123 } as const
+  const initial = host.start(options)
+  first.ready()
+  await initial
+  const entry = join(fixtureRoot, 'staged', 'dist', 'src', 'index.js')
+  await host.replaceDevelopmentBuild(entry)
+  assert.equal(first.stopCount, 1)
+  const replacement = host.start(options)
+  assert.deepEqual(auth, [{ apiBase: 'http://127.0.0.1:43123', launchToken: 'token-1' }, null])
+  assert.equal(second.starts[0]?.entryPath, entry)
+  assert.equal(second.starts[0]?.role, options.role)
+  second.ready()
+  assert.equal((await replacement).phase, 'ready')
+  assert.deepEqual(auth.at(-1), { apiBase: 'http://127.0.0.1:43123', launchToken: 'token-2' })
+  await host.stop()
+  assert.equal(second.stopCount, 1)
+})

@@ -24,7 +24,7 @@ if (mode === 'dev') await ensureDevelopmentSafegit(process.cwd())
 const sourceHash = mode === 'package' ? await verifyPreparedBuild(process.cwd(), 'desktop')
   : target ? await sourceFingerprint(process.cwd()) : undefined
 if (mode !== 'package') {
-  await runPnpm(['build'])
+  await runPnpm(mode === 'dev' ? ['build', '--development'] : ['build'])
   await runPnpm(['--filter', '@shadow/desktop', 'build'])
 }
 
@@ -60,6 +60,7 @@ if (target) {
   const environment: NodeJS.ProcessEnv = {
     ...process.env, NODE_ENV: process.env.NODE_ENV ?? 'development', VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1',
     SHADOW_BROWSER_PIN_FILE: resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'),
+    SHADOW_DESKTOP_DEV_NODE: process.execPath,
   }
   // Consume a local one-shot marker only on a fresh manual dev launch.
   // A failed first sidecar and its retry share this bounded diagnostic launch.

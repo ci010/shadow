@@ -16,12 +16,13 @@ function child() {
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 function fixture() {
   const vite = child(); const electrons: ReturnType<typeof child>[] = []; const builds: ReturnType<typeof child>[] = []
+  const buildArgs: string[][] = []
   const signals = new EventEmitter() as NodeJS.Process
   const supervisor = superviseDesktopDevelopment({ vite: vite.process, signals, ready: async () => {},
     spawnElectron() { const next = child(); electrons.push(next); return next.process },
-    spawnBuild() { const next = child(); builds.push(next); return next.process },
+    spawnBuild(args) { buildArgs.push([...args]); const next = child(); builds.push(next); return next.process },
   })
-  return { vite, electrons, builds, signals, supervisor }
+  return { vite, electrons, builds, buildArgs, signals, supervisor }
 }
 
 test('restart waits for exit, rebuilds sequentially, keeps Vite and reconnects endpoints', async () => {
@@ -34,7 +35,7 @@ test('restart waits for exit, rebuilds sequentially, keeps Vite and reconnects e
   old.emitter.emit('exit', 0, null); await tick()
   assert.equal(f.builds.length, 1)
   f.builds[0]!.emitter.emit('exit', 0, null); await tick()
-  assert.equal(f.builds.length, 2)
+  assert.deepEqual(f.buildArgs, [['build', '--development'], ['--filter', '@shadow/desktop', 'build']])
   f.builds[1]!.emitter.emit('exit', 0, null); await tick()
   assert.equal(f.electrons.length, 2)
   f.electrons[1]!.emitter.emit('message', { type: 'shadow:runtime-ready', apiBase: 'http://127.0.0.1:1234' })

@@ -51,10 +51,25 @@ backend uses port `43124` rather than production's `43123`; existing saved dev
 launch ports are overridden at runtime, without rewriting the saved profile.
 Distinct ports do not bypass Main data ownership: stop production before using
 the same Main directory, or select isolated development data.
+Use **重启后端（开发）** in the `pnpm dev` tray menu for backend-only changes.
+It runs a development backend build with a separate output directory while the current backend
+keeps serving, so a failed build leaves the running backend and `dist` untouched.
+After a successful build, Electron stops and replaces the backend utility
+process using the existing role and launch profile. The same main window reloads
+its page after the startup attempt to reconnect or show recovery if startup
+fails. In-flight backend work may be interrupted, and unsaved page state may be
+lost. Repeated clicks share one restart attempt. This action does not rebuild
+the Electron shell and is not available in packaged builds.
+
 Use **重启 Shadow（开发）** in the development tray menu to stop the current Electron
 Main and its backend, rebuild the backend/desktop shell, and launch a new
 Electron process while keeping Vite running. Normal quit still stops the entire
 development process tree; this restart entry is absent in packaged builds.
+
+Initial `pnpm dev` startup and both development restart actions bundle the
+backend without running its TypeScript checker. Run `pnpm typecheck` explicitly
+for workspace-wide checks. Electron shell build checks and production/release
+checks are unchanged.
 
 The same supervised development restart is available to local admin sessions as
 an on-demand dynamic tool: `invoke_tool({ name: 'development_restart', args: {} })`.
