@@ -238,9 +238,9 @@ test('release downloads reject insecure sources and unverified service binaries'
 
 test('prepared release source fingerprint includes owned native patches but excludes Cargo outputs', async () => {
   await withTempWorkspace(async root => {
-    await file(root, 'integrations/agent-desktop/patches/shadow_observe.rs', 'v3')
+    await file(root, 'scripts/agent-desktop-lock.json', 'v3')
     const before = await sourceFingerprint(root)
-    await file(root, 'integrations/agent-desktop/patches/shadow_observe.rs', 'v4')
+    await file(root, 'scripts/agent-desktop-lock.json', 'v4')
     const after = await sourceFingerprint(root)
     assert.notEqual(before, after)
     await file(root, 'integrations/agent-desktop/target/debug/build-state', 'ephemeral')

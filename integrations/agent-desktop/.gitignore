@@ -1,5 +1,2 @@
-.upstream/
-target/
-dist/
-node_modules/
+# Verified official CLI installs and exclusive/staging download state.
 artifacts/

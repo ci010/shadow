@@ -22,7 +22,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Directory BOTs](bots.md), [external input routing](input-routing.md)
 - [Project Micro Apps](microapps.md)
 - [Inline visual answers](inline-visual-answers.md)
-- [Windows computer use](computer-use.md)
+- [Desktop MCP use](computer-use.md)
 - [Audio setup](audio-setup.md)
 - [Mobile client](mobile.md)
 - [A2A text integration](a2a.md)

@@ -48,8 +48,6 @@ import { mobileGatewayConfig } from '../../gateway/mobile-access.ts'
 import { MainMobileNetwork } from './mobile-network.ts'
 import { a2aRequestProject } from '../../a2a/config.ts'
 import { FolderError } from '../../folders/registry.ts'
-import { ComputerService } from '../../computer/service.ts'
-import { createComputerDesktop } from '../../execution/computer/factory.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -189,8 +187,6 @@ export async function startProjectHost(
   let stopping = false
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticatorV2()
-  const computer = new ComputerService(createComputerDesktop(), { enabled: options.localExecutor !== false })
-  cleanup.push(() => computer.close())
   let provider = createAggregatedProvider(config, copilotAuth, hostHome)
   const mainCluster = await startup.measure('cluster', () => createMainCluster({
     authorizeInventory: authorize,
@@ -286,7 +282,7 @@ export async function startProjectHost(
           debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, realtimeHub, computer,
+          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, realtimeHub,
           webClientDeviceName: request => deviceUi?.clientDeviceName(request),
           localExecutor: options.localExecutor !== false,
         }))
@@ -394,7 +390,6 @@ export async function startProjectHost(
     }
     runtimes.clear()
     stores.clear()
-    await clean(() => computer.close())
     await clean(() => providerSetup.dispose())
     await clean(() => deviceNetwork.shutdown())
     await clean(() => mainCluster.closeNodeConnections())

@@ -285,10 +285,7 @@ import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { CoordinatorExecutionPolicy } from '../../execution/coordinator-policy.ts'
-import { ComputerService } from '../../computer/service.ts'
-import { ComputerError } from '../../execution/computer/contracts.ts'
-import { createComputerDesktop } from '../../execution/computer/factory.ts'
-import { computerTools } from '../../tools/computer.ts'
+import { managedDesktopSource } from '../../desktop-mcp/service.ts'
 
 function resolvePrimaryProviderName(modelSpec: string): string {
   const { model, provider } = parseModelSpec(modelSpec)
@@ -393,13 +390,6 @@ export async function createProjectRuntime(
   const vfs = new VirtualFs()
   const tools = new Tools(workspace)
   const coordinator = dependencies.localExecutor === false ? new CoordinatorExecutionPolicy() : undefined
-  const computer = dependencies.computer ?? new ComputerService(createComputerDesktop(), { enabled: !coordinator })
-  const stopComputer = () => dependencies.computer ? computer.stopProject(project.id) : computer.close()
-  const releaseComputerSession = (sessionId: string) => {
-    void computer.release({ projectId: project.id, sessionId })
-      .catch(() => console.error('[computer] Could not stop desktop access for the closing session.'))
-  }
-  cleanup.push(stopComputer)
   if (coordinator) tools.setExecutionPolicy(coordinator.check)
   tools.register(new ReadTool(workspace, vfs))
   tools.register(
@@ -876,7 +866,7 @@ export async function createProjectRuntime(
         }),
       }
     },
-    onSessionStopped: (id) => { releaseComputerSession(id); backgroundTasks.handleSessionStopped(id) },
+    onSessionStopped: (id) => { backgroundTasks.handleSessionStopped(id) },
     hasPendingExternalExecution: id => a2a.hasPendingOwner(id),
   })
   cleanup.push(() => sessions.stop())
@@ -890,26 +880,15 @@ export async function createProjectRuntime(
     const state = sessions.getSessionState(sessionId)
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
       || state.parentSessionId || state.automation) {
-      throw new ComputerError('invalid_session', 'Computer use requires a local, user-owned web conversation.', 403)
+      throw new Error('Desktop MCP requires a local, user-owned web conversation.')
     }
     sessions.assertFolderAccess(sessionId)
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
     if (!locations.workdir.available || locations.workdir.locality === 'remote') {
-      throw new ComputerError('local_only', 'Computer use is not available in a remote or unavailable workdir.', 403)
+      throw new Error('Desktop MCP is not available in a remote or unavailable workdir.')
     }
   }
-  for (const tool of computerTools(computer, project.id, assertComputerSession)) importTool.registerBuiltin(tool.name, tool)
-  const computerSubscriptions = [
-    bus.on('session.ended', fact => releaseComputerSession(fact.sessionId)),
-    bus.on('session.handoff', fact => releaseComputerSession(fact.sessionId)),
-    bus.on('session.changed', fact => { if (!sessions.getSessionState(fact.sessionId)) releaseComputerSession(fact.sessionId) }),
-    bus.on('session.turn.finished', fact => { if (fact.status !== 'completed') releaseComputerSession(fact.sessionId) }),
-  ]
-  const closeComputer = async () => {
-    for (const subscription of computerSubscriptions) bus.off(subscription)
-    await stopComputer()
-  }
-  cleanup.push(closeComputer)
+  importTool.registerBuiltin('agent-desktop', managedDesktopSource(project.id, workspace, assertComputerSession, !coordinator))
   const a2a = createA2aRuntime({ projectId: project.id, workspace, config: config.a2a, app, sessions, bus, agentTypes })
   cleanup.push(() => a2a.close())
   for (const tool of a2a.tools) {
@@ -2172,7 +2151,6 @@ export async function createProjectRuntime(
     // Quiesce producers before draining output; one failed cleanup must not
     // leave the remaining channels, persistence writes, or gateway running.
     for (const close of [
-      closeComputer,
       () => audioRoutes.close(),
       () => a2a.close(),
       () => credentialRequests.stop(),
