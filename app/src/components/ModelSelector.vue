@@ -9,12 +9,13 @@
     <template #default="{ close }">
       <div ref="menu" class="model-menu" @keydown="submenuKey">
       <template v-if="page === 'menu'">
-        <div v-if="usage" class="model-usage-row">
-          <template v-if="usage.kind === 'copilot-credits'">
+        <div v-if="usage || deepSeekRates" class="model-usage-row" :class="{ 'model-usage-deepseek': deepSeekRates }">
+          <template v-if="usage?.kind === 'copilot-credits'">
             <span>{{ t('{used} / {allowance} AI credits', { used: formatNumber(usage.used), allowance: formatNumber(usage.allowance) }) }}</span>
             <progress aria-hidden="true" :value="usage.used" :max="usage.allowance" />
           </template>
-          <span v-else>{{ usage.balances.map(({ total, currency }) => t('API balance: {amount} {currency}', { amount: total, currency })).join(' · ') }}</span>
+          <span v-else-if="usage?.kind === 'deepseek-balance'">{{ usage.balances.map(({ total, currency }) => t('API balance: {amount} {currency}', { amount: total, currency })).join(' · ') }}</span>
+          <span v-if="deepSeekRates">{{ t('DeepSeek API reference (off-peak, USD / 1M tokens): input {input} · cached {cached} · output {output}', { input: formatNumber(deepSeekRates[0]), cached: formatNumber(deepSeekRates[1]), output: formatNumber(deepSeekRates[2]) }) }}</span>
         </div>
         <button ref="modelRow" type="button" class="model-setting-row model-menu-model" @click="openPage('model')" @keydown.right.prevent="openPage('model')">
           <span>{{ t('Model') }}</span><span class="model-menu-value">{{ modelDisplayName(selection.current.value) || t('Choose model') }}</span><span class="model-chevron i-lucide-chevron-right" aria-hidden="true" />
@@ -63,6 +64,7 @@
 </template>
 
 <script setup lang="ts">
+import { deepSeekReferenceRates } from '../../../src/providers/cost.ts'
 import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
 import { formatNumber, t } from '../i18n.ts'
 import { createProviderSetupClient } from '../provider-setup.ts'
@@ -101,8 +103,11 @@ const providerLabel = computed(() => {
   return selection?.providers?.value.find(provider => provider.id === id)?.name || id
 })
 const usageProvider = computed(() => modelProvider(selection?.current.value ?? ''))
+const usageProviderType = computed(() => selection?.providers?.value.find(provider => provider.id === usageProvider.value)?.type)
+const deepSeekRates = computed(() => usageProviderType.value === 'deepseek' || usageProviderType.value === 'deepseek-account'
+  ? deepSeekReferenceRates(modelDisplayName(selection?.current.value ?? '')) : undefined)
 const usageKind = computed(() => {
-  const type = selection?.providers?.value.find(provider => provider.id === usageProvider.value)?.type
+  const type = usageProviderType.value
   if (type === 'copilot' || type === 'copilot-v2') return 'copilot-credits'
   if (type === 'deepseek') return 'deepseek-balance'
 })
@@ -178,6 +183,7 @@ function chooseEffort(patch: ReasoningSettings, close: () => void) {
 .model-menu { display: flex; flex-direction: column; min-height: 0; }
 .model-setting-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 9px 10px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .model-usage-row { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 9px 10px; color: var(--c-text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.model-usage-deepseek { flex-direction: column; align-items: flex-start; gap: 2px; }
 .model-usage-row progress { flex: 1 1 72px; min-width: 24px; height: 5px; appearance: none; overflow: hidden; border: 0; border-radius: var(--radius-control); background: var(--c-bg-muted); }
 .model-usage-row progress::-webkit-progress-bar { background: transparent; }
 .model-usage-row progress::-webkit-progress-value { background: var(--c-blue); border-radius: var(--radius-control); }
