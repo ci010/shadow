@@ -5,16 +5,16 @@
     <header v-if="!mobile?.enabled.value" class="editor-workspace-header">
       <HoverInfo v-if="apiBase" :text="knowledgeContext ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="knowledgeContext ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-${knowledgeContext ? 'explorer' : 'files'}`" :aria-expanded="explorerOpen" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
-        <span v-if="projectName && (state.left.length || state.right.length)" class="editor-project-marker" :id="`${hostId}-project`">{{ projectName }}</span>
+        <span v-if="showProjectMarker" class="editor-project-marker" :id="`${hostId}-project`">{{ projectName }}</span>
         <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined">
-          <div class="editor-tabs" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)" @dragenter="drag.enter($event, side)" @dragover="drag.enter($event, side)" @dragleave="leaveDrop($event, side)" @drop="dropTab($event, side)" role="tablist" :aria-describedby="projectName && (state.left.length || state.right.length) ? `${hostId}-project` : undefined" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
+          <div class="editor-tabs" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)" @dragenter="drag.enter($event, side)" @dragover="drag.enter($event, side)" @dragleave="leaveDrop($event, side)" @drop="dropTab($event, side)" role="tablist" :aria-describedby="showProjectMarker ? `${hostId}-project` : undefined" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
             <div v-for="editor in entries(side)" :key="editor.id" class="editor-tab" :class="{ selected: state.selected[side] === editor.id }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, editor.id)" @contextmenu.prevent="openMenu($event, editor.id)">
               <HoverInfo :text="editor.label" v-slot="{ triggerProps }"><button v-bind="triggerProps" draggable="true" @dragstart="drag.start($event, editor.id)" @dragend="drag.clear" :id="`${hostId}-tab-${encodeURIComponent(editor.id)}`" role="tab" :aria-controls="`${hostId}-${side}`" :aria-selected="state.selected[side] === editor.id" :tabindex="state.selected[side] === editor.id ? 0 : -1" @click="groups.activate(editor.id)" @keydown="tabKey($event, side, editor.id)"><SessionActivity v-if="editor.activity" v-bind="editor.activity" compact icon-only status-icons /><span v-else :class="editor.icon" aria-hidden="true" /><span class="editor-tab-label">{{ editor.label }}</span></button></HoverInfo>
               <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: editor.label })" @click="groups.close(editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
             </div>
             <span v-if="dragging && !state[side].length" class="editor-drop-label">{{ t(side === 'left' ? 'Move to main area' : 'Move to right') }}</span>
           </div>
-          <ProjectEditorTabs v-if="active && side === (state.right.length ? 'right' : 'left') && otherProjectTabs?.length" class="other-project-tabs" :groups="otherProjectTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
+          <ProjectEditorTabs v-if="active && side === (state.right.length ? 'right' : 'left') && otherProjectTabs?.length" class="other-project-tabs" :groups="otherProjectTabs" :has-adjacent-project="hasLocalTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
         </div>
       </div>
     </header>
@@ -65,6 +65,8 @@ const mobile = useMobileChrome()
 const mobileExplorerTarget = ref<HTMLElement>()
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
+const hasLocalTabs = computed(() => Boolean(state.value.left.length || state.value.right.length))
+const showProjectMarker = computed(() => Boolean(props.projectName && hasLocalTabs.value && props.active && props.otherProjectTabs?.length))
 const knowledgeContext = computed(() => groups.active(props.projectId)?.explorer)
 const explorerOpen = computed(() => groups.explorerOpen(props.projectId))
 // Open Knowledge navigation without changing the file explorer preference.

@@ -12,7 +12,7 @@ import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const require = createRequire(new URL('../../desktop/package.json', import.meta.url))
-test('Project explorer roots stay left, expand independently and show only bound workspace sources', { timeout: 90000, skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY }, async t => {
+test('Project explorer roots stay left, expand independently and show the current session and bound workspace sources', { timeout: 90000, skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY }, async t => {
   const directory = resolve(root, '.test-artifacts', `project-explorer-${randomUUID()}`)
   await mkdir(directory, { recursive: true }); t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const requests: string[] = []
@@ -39,7 +39,7 @@ test('Project explorer roots stay left, expand independently and show only bound
   await server.listen(); t.after(() => { server.httpServer?.closeAllConnections(); return server.close() })
   const url = server.resolvedUrls!.local[0]
   const script = String.raw`const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});(async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1300,height:800,webPreferences:{backgroundThrottling:false}});const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<200;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw Error('Timeout '+s+' '+await run('document.body.innerText'))};await win.loadURL(${JSON.stringify(url)});
-    await wait('document.querySelectorAll(".explorer-root").length===2');
+    await wait('document.querySelectorAll(".explorer-root").length===3');
     const paneWidth = 'document.querySelector(".project-file-explorer").getBoundingClientRect().width';
     assert.equal(await run(paneWidth),0,'opening conversations starts with the file pane closed');
     await run('[...document.querySelectorAll(".editor-tab [role=tab]")].find(tab=>tab.textContent==="A").click()');
@@ -47,14 +47,15 @@ test('Project explorer roots stay left, expand independently and show only bound
     assert.equal(await run(paneWidth),0,'switching conversation tabs keeps the file pane closed');
     await run('document.querySelector(".project-explorer-toggle").click()');
     const expanded = id => run('document.querySelector('+JSON.stringify('[data-root-id="'+id+'"] .root-toggle')+').getAttribute("aria-expanded")');
-    assert.equal(await run('document.querySelectorAll(\'[data-root-id^="session:"]\').length'),0,'conversation data is not an explorer root');
+    assert.equal(await run('document.querySelectorAll(\'[data-root-id^="session:"]\').length'),1,'only the current session is an explorer root');
     await run('window.groups.move("B","right");window.groups.focus("p","right")');await delay(80);
-    assert.equal(await run('document.querySelectorAll(".explorer-root").length'),2,'split focus does not add session roots');
+    assert.equal(await run('document.querySelectorAll(".explorer-root").length'),3,'split focus replaces the session root without adding a second one');
+    assert.equal(await expanded('session:web:B'),'true');
     await run('window.groups.move("B","left")');await delay(80);
     for(const id of ['folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';if(await expanded(id)==='false')await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
     await run('window.groups.toggleExplorer("p");window.groups.activate("A");window.groups.toggleExplorer("p")');await delay(80);
     assert.equal(await expanded('folder:one'),'true','manual folder expansion survives reopen');
-    assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),2);
+    assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),3);
     // Real layout/scroll regression: every dynamic resource heading stays visible,
     // not just the first sticky row. Exercise both desktop and narrow panes.
     for (const width of [1300, 500]) {
@@ -93,13 +94,17 @@ test('Project explorer roots stay left, expand independently and show only bound
     assert.equal(await run('!!document.querySelector(\'[data-root-id="folder:two"]\')'),true,'two bound aliases of the same node/root deduplicate');
     await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"two"}});void 0');
     await wait('!document.querySelector(\'[data-root-id="folder:one"]\')');
-    await run('window.groups.close("B")');await wait('!document.querySelector(\'[data-root-id="session:web:B"]\')');
+    await run('window.groups.close("B");window.groups.activate("A")');await wait('!document.querySelector(\'[data-root-id="session:web:B"]\')');
     assert.equal(await run('!!document.querySelector(\'[data-root-id="folder:two"]\')'),true,'another open binding retains the shared root');
     await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"two-alias"}});void 0');
     await wait('!!document.querySelector(\'[data-root-id="folder:two-alias"]\')&&!document.querySelector(\'[data-root-id="folder:two"]\')');
     await run('window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true}});void 0');
     await wait('!document.querySelector(\'[data-root-id^="folder:"]\')');
-    assert.equal(await run('!!document.querySelector(\'[data-root-id="session:web:A"]\')'),false,'unbound session adds no session-data root');
+    await wait('document.querySelector(\'[data-root-id="session:web:A"]\')?.textContent.includes("same.md")');
+    assert.equal(await run('!!document.querySelector(".catalog-empty")'),false,'a from-scratch session does not get the choose-workspace prompt');
+    await run('document.querySelector(\'[data-root-id="session:web:A"] .tree-row[data-path="same.md"]\').click()');
+    await wait('document.body.innerText.includes("/sessions/web%3AA/workspace/preview")');
+    assert.equal(await expanded('session:web:A'),'true','the session tree stays available while previewing its file');
     await run('window.groups.open({id:"project-only",projectId:"p",owner:"project",label:"Settings",icon:"i-lucide-settings",closable:true,select(){},close(){}});void 0');
     assert.equal(await run('document.querySelectorAll(\'[data-root-id^="folder:"]\').length'),0,'project-only tabs never expose the catalog');
     await run('window.groups.close("project-only");window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"one"}});void 0');
@@ -116,7 +121,7 @@ test('Project explorer roots stay left, expand independently and show only bound
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 75000); t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); assert.equal(code, 0, output); assert.match(output, /PROJECT_EXPLORER_OK/)
-  assert.equal(requests.some(path => path.includes('/sessions/')), false, 'explorer never fetches session data')
+  assert(requests.some(path => path.startsWith('/projects/p/api/sessions/web%3AA/workspace/files')), 'lists the session data directory, not the effective workspace')
   for (const source of ['folders/one', 'folders/two']) {
     assert(requests.some(path => path.startsWith('/projects/p/api/' + source + '/preview')), source + ' preview stays source scoped')
     assert(requests.some(path => path.startsWith('/projects/p/api/' + source + '/git/status')), source + ' Git stays source scoped')

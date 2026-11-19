@@ -1,7 +1,7 @@
 <template>
   <nav class="project-editor-tabs" :aria-label="t('Open documents')" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)">
     <div v-for="group in groups" :key="group.id" class="project-editor-tab-group" role="group" :aria-label="group.name" :data-project-id="group.id">
-      <span class="editor-project-marker" aria-hidden="true">{{ group.name }}</span>
+      <span v-if="hasAdjacentProject || groups.length > 1" class="editor-project-marker" aria-hidden="true">{{ group.name }}</span>
       <div v-for="editor in group.tabs" :key="editor.id" class="project-editor-tab" @mousedown="$event.button === 1 && $event.preventDefault()" @auxclick="middleClose($event, editor.id, editor.closable)">
         <HoverInfo :text="editor.label" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" class="project-editor-label" @click="emit('activate', editor.id)"><SessionActivity v-if="editor.activity" v-bind="editor.activity" compact icon-only status-icons /><span v-else :class="editor.icon" aria-hidden="true" /><span>{{ editor.label }}</span></button></HoverInfo>
         <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" :aria-label="t('Close {value1}', { value1: editor.label })" @click="emit('close', editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
@@ -17,7 +17,7 @@ import { t } from '../i18n.ts'
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
 
-defineProps<{ groups: ProjectTopTabGroup[] }>()
+defineProps<{ groups: ProjectTopTabGroup[]; hasAdjacentProject?: boolean }>()
 const emit = defineEmits<{ activate: [id: string]; close: [id: string] }>()
 function middleClose(event: MouseEvent, id: string, closable: boolean) {
   if (event.button !== 1 || !closable) return
@@ -37,5 +37,5 @@ function middleClose(event: MouseEvent, id: string, closable: boolean) {
 </style>
 
 <style>
-.editor-project-marker { align-self: center; flex: none; max-width: 8rem; margin-inline: 5px; padding: 2px 6px; border-radius: 4px; background: var(--c-bg-muted); color: var(--c-text-secondary); font-size: 0.65rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.editor-project-marker { align-self: center; flex: none; max-width: 8rem; margin-inline: 5px; padding: 2px 6px; border-radius: var(--radius-control); background: var(--c-bg-muted); color: var(--c-text-secondary); font-size: 0.65rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

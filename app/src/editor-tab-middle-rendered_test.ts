@@ -24,15 +24,18 @@ test('native middle clicks close only their closable tab across split and standa
     name: 'middle-tabs-fixture', resolveId: id => id === '/fixture.ts' ? '\0fixture' : undefined,
     load(id) {
       if (id !== '\0fixture') return
-      return `import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, provide, ref} from 'vue';import Host from '/src/components/EditorGroupHost.vue';import Workbench from '/src/components/files/FileWorkbench.vue';import {createEditorGroups,EditorGroupsKey} from '/src/editor-groups.ts';import {setLocalePreference} from '/src/i18n.ts';import '/src/styles.css';import 'virtual:uno.css';setLocalePreference('en');
+      return `import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, provide, ref} from 'vue';import Host from '/src/components/EditorGroupHost.vue';import ProjectTabs from '/src/components/ProjectEditorTabs.vue';import {projectTopTabGroups} from '/src/project-top-tabs.ts';import Workbench from '/src/components/files/FileWorkbench.vue';import {createEditorGroups,EditorGroupsKey} from '/src/editor-groups.ts';import {setLocalePreference} from '/src/i18n.ts';import '/src/styles.css';import 'virtual:uno.css';setLocalePreference('en');
         const groups=createEditorGroups();window.groups=groups;
         for(const id of ['L1','L2','R1','R2','Pinned'])groups.open({id,projectId:'p',owner:id,label:id,icon:'i-lucide-file',closable:id!=='Pinned',select(){},close(){}},id.startsWith('R')?'right':'left');
         groups.activate('R1');groups.activate('L1');
-        createApp({setup(){provide(EditorGroupsKey,groups);return()=>h(Host,{projectId:'p',active:true})}}).mount('#groups');
+        const projectTabs=()=>projectTopTabGroups(groups,[{id:'p',name:'Alpha'},{id:'q',name:'Beta'}],()=>true);
+        window.openBeta=()=>groups.open({id:'B1',projectId:'q',owner:'q',label:'B1',icon:'',closable:true,select(){},close(){}});
+        createApp({setup(){provide(EditorGroupsKey,groups);return()=>h(Host,{projectId:'p',projectName:'Alpha',otherProjectTabs:projectTabs().filter(g=>g.id!=='p'),active:true})}}).mount('#groups');
+        createApp({render:()=>h(ProjectTabs,{groups:projectTabs()})}).mount('#dashboard');
         createApp({setup(){const workbench=ref();return()=>h(Workbench,{ref:el=>{workbench.value=el;window.workbench=el},apiBase:location.origin,sessionId:'',contextKey:'standalone',active:true,explorerEnabled:false,diagnosisEnabled:true},{default:()=>h('p','Conversation body'),diagnosis:()=>h('p','Diagnosis body')})}}).mount('#standalone');`
     },
     configureServer(server) { server.middlewares.use((req, res, next) => {
-      if (req.url === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<html><body style="margin:0"><div id="groups" style="display:flex;height:360px"></div><div id="standalone" style="display:flex;height:360px"></div><script type="module" src="/fixture.ts"></script></body></html>'); return }
+      if (req.url === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<html><body style="margin:0"><div id="groups" style="display:flex;height:360px"></div><div id="standalone" style="display:flex;height:360px"></div><div id="dashboard"></div><script type="module" src="/fixture.ts"></script></body></html>'); return }
       if (!req.url?.startsWith('/api/')) return next()
       res.setHeader('Content-Type', 'application/json'); res.end('{}')
     }) },
@@ -42,6 +45,13 @@ test('native middle clicks close only their closable tab across split and standa
   const script = `const assert=require('node:assert/strict');const {app,BrowserWindow}=require('electron');const {setTimeout:delay}=require('node:timers/promises');app.setPath('userData',require('node:path').join(process.cwd(),'profile'));app.on('window-all-closed',()=>{});
     (async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1300,height:850,webPreferences:{backgroundThrottling:false}});win.webContents.on('console-message',d=>console.error('Renderer:',d.message));const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<200;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw Error('Timeout '+s+' '+await run('document.body.innerText'))};
     await win.loadURL(${JSON.stringify(server.resolvedUrls!.local[0])});await wait('window.workbench&&document.querySelectorAll(".editor-tab").length===5');
+    assert.equal(await run('document.querySelectorAll(".editor-project-marker").length'),0,'one project has no label in either header');
+    await run('window.openBeta()');await wait('document.querySelectorAll(".editor-project-marker").length===4');
+    for (const header of ['groups','dashboard']) {
+      assert.deepEqual(await run('Array.from(document.querySelectorAll("#'+header+' .editor-project-marker"),e=>[e.textContent,getComputedStyle(e).borderRadius])'),[['Alpha','0px'],['Beta','0px']]);
+    }
+    await run('window.groups.close("B1")');await wait('!document.querySelector(".editor-project-marker")');
+    await run('window.groups.activate("L1")');
     const tab=id=>'[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.textContent.trim()==='+JSON.stringify(id)+')';
     const click=async(selector,button)=>{const point=await run('(()=>{const r=('+selector+').getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}})()');await win.webContents.sendInputEvent({type:'mouseDown',...point,button,clickCount:1});await win.webContents.sendInputEvent({type:'mouseUp',...point,button,clickCount:1});await delay(100)};
     await click(tab('L2'),'middle');await wait('!('+tab('L2')+')');

@@ -1,6 +1,7 @@
 <template>
   <aside v-show="open" :id="explorerId" class="project-file-explorer" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
-    <p v-if="!relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
+    <ProjectExplorerRoot v-if="sessionId" :key="`session:${sessionId}`" :root-id="`session:${sessionId}`" :api-base="apiBase" :session-id="sessionId" :label="t('Session files')" :hint="`${t('Session files')}: ${sessionEditor?.label}`" :reveal="active && open" :active="active && open" @open="openFile" />
+    <p v-if="!sessionId && !relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
     <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
   </aside>
@@ -95,6 +96,16 @@ watch(() => [props.active, props.apiBase, props.projectId] as const, () => {
 }, { immediate: true })
 onUnmounted(() => { catalog?.dispose(); controller?.abort() })
 const files = ref<OpenFile[]>([])
+const sessionEditor = computed(() => {
+  const editor = groups.active(props.projectId)
+  if (editor?.owner !== `${props.projectId}:explorer`) return editor
+  // Keep the source session available while browsing its files, even if read-only.
+  const source = files.value.find(file => editorId(file) === editor.id)?.source
+  return source?.sessionWorkspace
+    ? conversations.value.find(item => item.conversation?.sessionId === source.sessionId)
+    : groups.referenceTarget(props.projectId)
+})
+const sessionId = computed(() => sessionEditor.value?.conversation?.sessionId)
 function editorId(file: OpenFile) { return JSON.stringify([props.projectId, 'explorer-file', fileTabKey(file)]) }
 function close(file: OpenFile) { descriptors.delete(editorId(file)); files.value = files.value.filter(item => fileTabKey(item) !== fileTabKey(file)) }
 const descriptors = new Map<string, EditorDescriptor>()
