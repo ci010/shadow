@@ -1,6 +1,7 @@
+import { resolvePrompt } from './prompt-version.ts'
 import { readFileSync } from 'node:fs'
 import { GENERAL_V2_WEB_RESPONSE_GUIDANCE, SESSION_RESPONSE_GUIDANCE } from './response-audience.ts'
-import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
+import type { SessionPromptContext, SystemPromptProvider, SystemPromptSection } from './builder.ts'
 import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { capabilityPrompt } from './capability-prompt.ts'
@@ -40,26 +41,53 @@ Read the exact returned skill path before using its instructions or tools.
 For MCP recovery, read \`v:skills/tool-operations\`. If execution may have occurred, check the outcome before retrying.
 <!-- /capability -->`, ctx)
   }
-  const compact = ctx.agent.name === 'general-v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session'
+  const compact = (ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session'
   return capabilityPrompt(compact ? COMPACT_TOOLS : TOOLS, ctx)
+}
+
+const SUB_BEHAVIOR = readFileSync(new URL('./sub-behavior.md', import.meta.url), 'utf8')
+
+function subGuidelineSections(ctx: SessionPromptContext): SystemPromptSection[] | undefined {
+  if (ctx.agent.source !== 'builtin' || ctx.agent.name !== 'sub') return
+  const behavior = capabilityPrompt(ctx.subDraft?.markdown ?? SUB_BEHAVIOR, ctx).trim()
+  const parts: Array<Omit<SystemPromptSection, 'characters'>> = [
+    { name: 'AGENT.md', content: capabilityPrompt(ctx.agent.prompt, ctx), kind: 'behavior', editability: 'editable' },
+    ...(ctx.personalBotPrompt === undefined ? [] : [{ name: 'BOT.md (personal deployment)', content: capabilityPrompt(`# Personal BOT instructions\n${ctx.personalBotPrompt}`, ctx), kind: 'behavior' as const, editability: 'editable' as const }]),
+    { name: ctx.subDraft ? `sub-behavior.md@${ctx.subDraft.revision}` : 'sub-behavior.md', content: behavior ? `## Tool selection and coordination\n\n${ctx.subDraft ? 'Project draft: behavior only; fixed guidance and permissions take precedence.\n\n' : ''}${behavior}` : '', kind: 'behavior', editability: 'editable' },
+    { name: 'tool-discovery-reference', content: toolDiscoveryGuidance(ctx), kind: 'information', editability: 'fixed' },
+    { name: 'tool-operations', content: toolsGuideline(ctx), ...(ctx.promptVersion === 'v2' ? { kind: 'contract' as const } : {}), editability: 'fixed' },
+  ]
+  return parts.flatMap(part => {
+    const content = part.content.trim()
+    return content ? [{ ...part, content, characters: content.length }] : []
+  }).map((part, index) => ({ ...part, separatorBefore: index ? '\n\n' : '' }))
 }
 
 export function guidelineProvider(): SystemPromptProvider {
   return {
     name: 'guideline',
     getPromptSections(ctx) {
+      const sub = subGuidelineSections(ctx)
+      if (sub) return sub
       const entries: Array<[string, string]> = [
         ['AGENT.md', capabilityPrompt(ctx.agent.prompt, ctx)],
         ...(ctx.personalBotPrompt !== undefined ? [['BOT.md (personal deployment)', capabilityPrompt(`# Personal BOT instructions\n${ctx.personalBotPrompt}`, ctx)] as [string, string]] : []),
-        ['tool-guidance', [toolDiscoveryGuidance(ctx), toolsGuideline(ctx)].join('\n\n')],
+        ...(ctx.promptVersion === 'v2'
+          ? [['tool-discovery-reference', toolDiscoveryGuidance(ctx)], ['tool-operations', toolsGuideline(ctx)]] as Array<[string, string]>
+          : [['tool-guidance', [toolDiscoveryGuidance(ctx), toolsGuideline(ctx)].join('\n\n')]] as Array<[string, string]>),
       ]
       return entries.map(([name, text], index) => {
         // Only the whole provider was trimmed historically, not internal sources.
         const content = index === 0 ? text.trimStart() : index === entries.length - 1 ? text.trimEnd() : text
-        return { name, content, characters: content.length, separatorBefore: index ? '\n\n' : '' }
+        return { name, content, characters: content.length, separatorBefore: index ? '\n\n' : '',
+          ...(ctx.promptVersion === 'v2' ? (name.endsWith('.md') || name.startsWith('BOT.md')
+            ? { kind: 'behavior' as const, editability: 'editable' as const }
+            : { kind: name === 'tool-operations' ? 'contract' as const : 'information' as const, editability: 'fixed' as const }) : {}) }
       })
     },
     getPromptSection(ctx) {
+      const sub = subGuidelineSections(ctx)
+      if (sub) return sub.map(part => part.separatorBefore + part.content).join('')
       const agentType = ctx.agent
 
       // Preserve the original Personal BOT merge before capability expansion.
@@ -75,7 +103,15 @@ export function guidelineProvider(): SystemPromptProvider {
 }
 
 export function executionContractProvider(): SystemPromptProvider {
-  return { name: 'execution-contract', getPromptSection: executionModeGuideline }
+  return {
+    name: 'execution-contract',
+    getPromptSection: executionModeGuideline,
+    getPromptSections(ctx) {
+      if (ctx.agent.source !== 'builtin' || ctx.agent.name !== 'sub') return []
+      const content = executionModeGuideline(ctx).trim()
+      return [{ name: 'execution-contract', content, characters: content.length, editability: 'fixed' }]
+    },
+  }
 }
 
 export function executionModeGuideline(ctx: SessionPromptContext): string {
@@ -130,7 +166,7 @@ ${modes.length
 
 This is a reusable conversation. Complete the current request; a final response ends the turn, not the conversation, and is delivered to this conversation's reader.
 
-${ctx.agent.name === 'general-v2' && ctx.channel === 'web' ? GENERAL_V2_WEB_RESPONSE_GUIDANCE : SESSION_RESPONSE_GUIDANCE}
+${(ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && ctx.channel === 'web' ? GENERAL_V2_WEB_RESPONSE_GUIDANCE : SESSION_RESPONSE_GUIDANCE}
 
 Allowed delegation modes:
 ${modes.join(', ') || 'none'}. Role tool restrictions still apply.`

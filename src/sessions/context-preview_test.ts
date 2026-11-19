@@ -13,7 +13,7 @@ import { agentTypesPlugin } from '../agent/types/routes.ts'
 import { Bus } from '../bus/bus.ts'
 import { EventService } from '../events/service.ts'
 import { InitiativeStore } from '../initiatives/store.ts'
-import type { LLMProvider } from '../providers/provider.ts'
+import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { ReadTool } from '../tools/read.ts'
 import { Tools } from '../tools/registry.ts'
@@ -28,11 +28,16 @@ import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore } from './session-store.ts'
 import { WorkAlignment } from './work-alignment.ts'
 
-async function fixture(workspace: string, store: SessionStore) {
+async function fixture(workspace: string, store: SessionStore, execute = false) {
+  const requests: ChatMessage[][] = []
   const bus = new Bus()
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => [],
-    chat: async () => { throw new Error('Context previews must not call a model') },
+    chat: async messages => {
+      if (!execute) throw new Error('Context previews must not call a model')
+      requests.push(structuredClone(messages))
+      return { content: 'Fixture response', toolCalls: [] }
+    },
   }
   const events = new EventService(workspace, bus, async () => { throw new Error('No delivery expected') })
   const backgroundTasks = new BackgroundTaskManager(bus, events)
@@ -70,6 +75,7 @@ async function fixture(workspace: string, store: SessionStore) {
   const policyLookups: string[] = []
   const sessions = new SessionManager({
     projectId: 'preview-project', workspace, store, bus, provider, events, backgroundTasks,
+    getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128_000, temperature: 0 }),
     handoffManager, agentTypes, context, tools, identity: new IdentityManager(workspace),
     conversationPolicies: {
       resolve: sessionId => { policyLookups.push(sessionId); return undefined },
@@ -100,7 +106,7 @@ async function fixture(workspace: string, store: SessionStore) {
   })
   agentTypesPlugin(sessions, agentTypes, request => request.headers.get('x-owner') === 'yes')(app)
   return {
-    sessions, alignment, app, agentTypes, contexts, policyLookups, errors,
+    sessions, alignment, app, agentTypes, contexts, policyLookups, errors, requests,
     async close() {
       await sessions.stop()
       await handoffManager.stop()
@@ -115,6 +121,8 @@ async function fixture(workspace: string, store: SessionStore) {
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: agent role previews need no session and preserve strict real-session Work checks`, async () => {
+    const original = process.env.SHADOW_BUILTIN_PROMPT_VERSION
+    process.env.SHADOW_BUILTIN_PROMPT_VERSION = 'v1'
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       const f = await fixture(workspace, store)
@@ -159,6 +167,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(response.headers.get('Cache-Control'), 'no-store')
         const ui = await response.json()
         assert.equal(ui.rolePreview, 'owner-web')
+        assert.deepEqual(ui.promptIdentity, { role: 'general', definition: 'general', version: 'v1', mode: 'session', behaviorSource: 'builtin' })
         assert.match(ui.systemPrompt, /Device Inventory/)
         assert.match(ui.systemPrompt, /Owner-only fixture device/)
         // A renderer from before the owner-web query was introduced still sees the same preview.
@@ -167,17 +176,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(legacyRenderer.headers.get('Cache-Control'), 'no-store')
         assert.deepEqual(await legacyRenderer.json(), ui)
         assert.deepEqual(JSON.parse((await vfs.resolve(path, context))!), {
-          agentType: 'general', channel: 'web', source: ui.source, rolePreview: 'owner-web', systemPrompt: ui.systemPrompt, sections: ui.sections,
+          agentType: 'general', channel: 'web', source: ui.source, rolePreview: 'owner-web', promptIdentity: ui.promptIdentity, systemPrompt: ui.systemPrompt, sections: ui.sections,
         })
         assert.deepEqual(ui.sections.map((section: { name: string }) => section.name),
           ['fixture', 'runtime', 'execution-contract', 'AGENT.md', 'tool-guidance'])
         assert.equal(await vfs.resolve(`${path}/system-prompt`, context), ui.systemPrompt)
 
+        process.env.SHADOW_BUILTIN_PROMPT_VERSION = 'v2'
         const candidatePath = 'v:agents/general-v2/context/web'
         const candidate = await (await f.app.request(previewUrl.replace('/general/', '/general-v2/'), owner)).json()
         assert.deepEqual(JSON.parse((await vfs.resolve(candidatePath, context))!), {
-          agentType: 'general-v2', channel: 'web', source: 'preview', rolePreview: 'owner-web', systemPrompt: candidate.systemPrompt, sections: candidate.sections,
+          agentType: 'general-v2', channel: 'web', source: 'preview', rolePreview: 'owner-web', promptIdentity: candidate.promptIdentity, systemPrompt: candidate.systemPrompt, sections: candidate.sections,
         })
+        assert.equal(candidate.promptIdentity.version, 'v2')
         assert.match(candidate.systemPrompt, /"owner-child" "Owner-only fixture device" \(child, connected\)/)
         assert.match(candidate.systemPrompt, /Read `v:devices` for live status and supported operations/)
         assert.doesNotMatch(candidate.systemPrompt, /fixture-dir-id|Fixture directory|supported operations "filesystem\.read"/)
@@ -202,7 +213,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(candidate.tools, ui.tools)
         assert(candidate.tools.some((tool: { name: string }) => tool.name === 'ask'))
         const section = (preview: typeof ui, name: string): string => preview.sections.find((part: { name: string }) => part.name === name).content
-        const candidateTools = section(candidate, 'tool-guidance')
+        const candidateTools = section(candidate, 'tool-discovery-reference') + '\n\n' + section(candidate, 'tool-operations')
         const baselineTools = section(ui, 'tool-guidance')
         const coordinationAt = candidateTools.indexOf('### Delegation and coordination')
         assert(coordinationAt > 0)
@@ -259,7 +270,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.throws(() => f.alignment.required('heartbeat:heartbeat'), /Session not found in this Project/)
         await assert.rejects(f.sessions.getContext({ sessionId: 'heartbeat:heartbeat', preview: true }),
           /Session not found in this Project/)
-      } finally { await f.close() }
+      } finally {
+        if (original === undefined) delete process.env.SHADOW_BUILTIN_PROMPT_VERSION
+        else process.env.SHADOW_BUILTIN_PROMPT_VERSION = original
+        await f.close()
+      }
     })
   })
 
@@ -304,6 +319,81 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.match(stillReal.systemPrompt, /### Shared work notes/)
         assert.equal(f.contexts.at(-1)?.sessionId, sessionId)
       } finally { await f.close() }
+    })
+  })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: assembly switch is shared by Knowledge, VFS and runtime; existing sessions remain pinned`, async () => {
+    const key = 'SHADOW_BUILTIN_PROMPT_VERSION'
+    const original = process.env[key]
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      await store.saveState('web:legacy-assembly', { sessionId: 'web:legacy-assembly', segmentIndex: 0, agentType: 'sub', mode: 'session' })
+      const f = await fixture(workspace, store, true)
+      try {
+        const vfs = new VirtualFs()
+        const preview = createAgentsHandler(f.agentTypes, undefined, { types: f.agentTypes, sessions: f.sessions, canRead: () => true })
+        vfs.mount('v:agents', 'role preview', preview.read, preview.list)
+        const vfsContext = { signal: new AbortController().signal } as ExecutionContext
+        const owner = { headers: { 'x-owner': 'yes' } }
+        for (const role of ['general', 'general-v2', 'sub', 'verify', 'plan', 'explore']) {
+          for (const version of ['v1', 'v2'] as const) {
+            process.env[key] = version
+            const result = await f.app.request(`/api/agent-types/${role}/context?channel=web&rolePreview=owner-web`, owner)
+            assert.equal(result.status, 200)
+            const ui = await result.json()
+            assert.equal(ui.promptIdentity.version, version)
+            assert.equal(ui.promptIdentity.definition, role)
+            assert.equal(ui.promptIdentity.behaviorSource, 'builtin')
+            assert.equal(ui.systemPrompt.startsWith('# Information\n'), version === 'v2')
+            const text = await vfs.resolve(`v:agents/${role}/context/web`, vfsContext)
+            assert.deepEqual(JSON.parse(text!).promptIdentity, ui.promptIdentity)
+            assert.equal(JSON.parse(text!).systemPrompt, ui.systemPrompt)
+          }
+        }
+        assert.equal(f.requests.length, 0, 'preview does not invoke a provider')
+        const legacy = await f.sessions.getContext({ sessionId: 'web:legacy-assembly', preview: true })
+        assert.equal(legacy.promptIdentity?.version, 'v1')
+        const revision = 'a'.repeat(64)
+        const draft = { revision, markdown: 'Use the assembly verification sentinel.' }
+        let expected = 0
+        for (const role of ['general-v2', 'sub', 'verify', 'plan', 'explore']) for (const version of ['v1', 'v2'] as const) {
+          const sessionId = `web:${role}-${version}`
+          const mode = role === 'verify' ? 'task' : 'session'
+          const subDraft = role === 'sub' ? draft : undefined
+          process.env[key] = version
+          await f.sessions.buildSession(sessionId, undefined, { agentType: role, mode, subDraft })
+          assert.equal((await store.getState(sessionId))?.promptVersion, version)
+          assert.deepEqual((await store.getState(sessionId))?.subDraft, subDraft)
+          process.env[key] = version === 'v1' ? 'v2' : 'v1'
+          const rebuilt = await f.sessions.getContext({ sessionId, preview: true })
+          assert.deepEqual(rebuilt.promptIdentity, { role: role === 'general-v2' ? 'general' : role, definition: role, version, mode,
+            ...(subDraft ? { behaviorSource: 'sub-draft', subRevision: revision } : { behaviorSource: 'builtin' }) })
+          await f.sessions.deliver(sessionId, {
+            kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), content: 'Fixture input', policy: 'queue',
+            source: { kind: 'event', eventId: crypto.randomUUID(), type: 'fixture', source: 'fixture' },
+          })
+          const finishBy = Date.now() + 4000
+          expected++
+          while (f.requests.length < expected) {
+            assert.ok(Date.now() < finishBy, 'provider did not receive the runtime prompt')
+            await new Promise(resolve => setTimeout(resolve, 5))
+          }
+          const system = f.requests.at(-1)?.[0]
+          assert.equal(system?.role, 'system')
+          assert.equal(String(system?.content).includes('assembly verification sentinel'), !!subDraft)
+          assert.equal(String(system?.content).startsWith('# Information\n'), version === 'v2')
+          const live = await f.sessions.getContext({ sessionId })
+          assert.deepEqual(live.promptIdentity, rebuilt.promptIdentity)
+          assert.equal(live.systemPrompt, system?.content)
+        }
+      } finally {
+        if (original === undefined) delete process.env[key]
+        else process.env[key] = original
+        await f.close()
+      }
     })
   })
 }

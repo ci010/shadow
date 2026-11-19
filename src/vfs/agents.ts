@@ -44,7 +44,7 @@ export function createAgentsHandler(
           context.signal.throwIfAborted()
           if (raw) return result.systemPrompt
           return JSON.stringify({ agentType: role.name, channel: 'web', source: result.source,
-            rolePreview: result.rolePreview, systemPrompt: result.systemPrompt, sections: result.sections }, null, 2)
+            rolePreview: result.rolePreview, promptIdentity: result.promptIdentity, systemPrompt: result.systemPrompt, sections: result.sections }, null, 2)
         })
       }
       const all = entries(context)

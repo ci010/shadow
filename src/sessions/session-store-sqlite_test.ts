@@ -52,6 +52,18 @@ test('SqliteSessionStore preserves folder identity alongside unknown prototype m
   }
 })
 
+test('SqliteSessionStore preserves pinned sub draft across reopen', async () => {
+  const directory = await createTempWorkspace()
+  try {
+    const state: SessionState = { sessionId: 'virtual:sub-draft', segmentIndex: 0, mode: 'task', agentType: 'sub',
+      subDraft: { revision: 'a'.repeat(64), markdown: '# Pinned behavior' } }
+    const writer = new SqliteSessionStore(directory)
+    try { await writer.saveState(state.sessionId, state) } finally { writer.close() }
+    const reader = new SqliteSessionStore(directory)
+    try { assertEquals((await reader.getState(state.sessionId))?.subDraft, state.subDraft) } finally { reader.close() }
+  } finally { await rm(directory, { recursive: true }) }
+})
+
 test('SqliteSessionStore round-trips complete SessionState metadata', async () => {
   const sessionsDir = await createTempWorkspace()
   const state: SessionState = {

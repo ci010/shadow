@@ -9,6 +9,40 @@ import type { SessionState } from '../sessions/session-store.ts'
 import { SubagentTool } from './subagent.ts'
 import type { InferenceSettings } from '../agent/llm-config.ts'
 import { Tools } from './registry.ts'
+import { SubOverrideStore } from '../agent/context/sub-override.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+test('sub task and call explicitly pin a same-Project draft; omission stays built-in', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'shadow-sub-select-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new SubOverrideStore(root)
+  const revision = await store.save('Original behavior')
+  const parent: SessionState = { sessionId: 'web:parent', segmentIndex: 0, projectId: 'p' }
+  const fields: Array<Parameters<SessionManager['buildSession']>[2]> = []
+  const sessions = {
+    getSessionState: () => parent, getAllowedSubagentModes: () => ['task', 'call'], assertCanCreateChild() {},
+    executeOnce: (_key: string, run: () => Promise<string>) => run(),
+    buildSession: async (_id: string, _parent: unknown, value: Parameters<SessionManager['buildSession']>[2]) => { fields.push(value) },
+    configureTaskReview: async () => {}, startChild: async () => {}, startCall: async () => 'result',
+  } as unknown as SessionManager
+  const types = { resolve: (name: string) => ({ name, source: 'builtin' }) } as unknown as AgentTypesManager
+  const tool = new SubagentTool({} as Bus, sessions, types, {} as ChannelManager, undefined, store, 'p')
+  const ctx = { sessionId: parent.sessionId, projectId: 'p', physicalSessionId: 'physical', messageId: 'input' } as ExecutionContext
+  const request = { agent_type: 'sub', description: 'Task', task: 'Work' }
+  const receipt = JSON.parse(await tool.execute({ ...request, mode: 'task', sub_revision: revision }, ctx))
+  assert.equal(receipt.subRevision, revision)
+  await store.save('Replacement behavior')
+  assert.equal(await tool.execute({ ...request, mode: 'call', sub_revision: revision }, ctx), 'result')
+  assert.deepEqual(fields.slice(0, 2).map(field => field?.subDraft), [0, 1].map(() => ({ revision, markdown: 'Original behavior' })))
+  assert.equal(JSON.parse(await tool.execute(request, ctx)).subRevision, 'builtin')
+  assert.equal(fields[2]?.subDraft, undefined)
+  await assert.rejects(tool.execute({ ...request, sub_revision: 'f'.repeat(64) }, ctx), /not found/)
+  await assert.rejects(tool.execute({ ...request, agent_type: 'verify', sub_revision: revision }, ctx), /built-in sub/)
+  await assert.rejects(tool.execute({ ...request, sub_revision: revision }, { ...ctx, projectId: 'other' }), /same Project/)
+  assert.equal(fields.length, 3)
+})
 
 test('subagent only creates temporary work, preserving explicit workdir and ignoring reusable role defaults', async () => {
   const workdir = { version: 2 as const, nodeId: 'node-a', workdirId: 'folder-a' }
