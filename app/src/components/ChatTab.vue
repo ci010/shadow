@@ -457,13 +457,13 @@
                     {{ t('Upload image / file') }}
                   </button>
                   <div v-if="mobileLayout" class="mobile-message-settings">
-                    <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+                    <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" :usage-api-base="paneActive && composerVisible && chatRouteActive ? apiBase : undefined" @change-settings="changeReasoningSettings" />
 
                     <button v-if="requestBusy && !answeringQuestion" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">{{ t('Send guidance to running agent') }}</button>
                   </div>
                 </template>
               </ComposerPopover>
-              <ModelSelector v-if="!mobileLayout" :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+              <ModelSelector v-if="!mobileLayout" :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" :usage-api-base="paneActive && composerVisible && chatRouteActive ? apiBase : undefined" @change-settings="changeReasoningSettings" />
 
             </div>
             <div class="composer-submit">

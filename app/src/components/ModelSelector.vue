@@ -1,5 +1,5 @@
 <template>
-  <ComposerPopover v-if="selection" :label="t('Choose model')" :title="triggerTitle" :disabled="unavailable" :busy="pending" @opened="resetMenu">
+  <ComposerPopover v-if="selection" :label="t('Choose model')" :title="triggerTitle" :disabled="unavailable" :busy="pending" @opened="resetMenu" @closed="opened = false">
     <template #trigger>
       <span class="model-label">{{ modelDisplayName(selection.current.value) || (selection.loading.value ? t('Loading models...') : t('Choose model')) }}</span>
       <span v-if="settings && effectiveEffortLabel" class="model-effort"><span aria-hidden="true">·</span> {{ effectiveEffortLabel }}</span>
@@ -9,6 +9,13 @@
     <template #default="{ close }">
       <div ref="menu" class="model-menu" @keydown="submenuKey">
       <template v-if="page === 'menu'">
+        <div v-if="usage" class="model-usage-row">
+          <template v-if="usage.kind === 'copilot-credits'">
+            <span>{{ t('{used} / {allowance} AI credits', { used: formatNumber(usage.used), allowance: formatNumber(usage.allowance) }) }}</span>
+            <progress aria-hidden="true" :value="usage.used" :max="usage.allowance" />
+          </template>
+          <span v-else>{{ usage.balances.map(({ total, currency }) => t('API balance: {amount} {currency}', { amount: total, currency })).join(' · ') }}</span>
+        </div>
         <button ref="modelRow" type="button" class="model-setting-row model-menu-model" @click="openPage('model')" @keydown.right.prevent="openPage('model')">
           <span>{{ t('Model') }}</span><span class="model-menu-value">{{ modelDisplayName(selection.current.value) || t('Choose model') }}</span><span class="model-chevron i-lucide-chevron-right" aria-hidden="true" />
         </button>
@@ -57,16 +64,19 @@
 
 <script setup lang="ts">
 import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
-import { t } from '../i18n.ts'
-import { computed, nextTick, ref } from 'vue'
+import { formatNumber, t } from '../i18n.ts'
+import { createProviderSetupClient } from '../provider-setup.ts'
+import type { ProviderUsage } from '../../../src/shared/provider-usage.ts'
+import { computed, nextTick, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReasoningControls from './ReasoningControls.vue'
 import { filterModelOptions, modelProviderFilters, modelProviderGroup, modelCompactAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
 import { contextWindowLabel, currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
-const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean; futureRuns?: boolean }>()
+const props = defineProps<{ usageApiBase?: string; settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean; futureRuns?: boolean }>()
 const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
+const opened = ref(false)
 const query = ref('')
 const activeProvider = ref('')
 const page = ref<'menu' | 'model' | 'effort' | 'context'>(props.settings ? 'menu' : 'model')
@@ -90,6 +100,26 @@ const providerLabel = computed(() => {
   const id = modelProvider(selection?.current.value ?? '')
   return selection?.providers?.value.find(provider => provider.id === id)?.name || id
 })
+const usageProvider = computed(() => modelProvider(selection?.current.value ?? ''))
+const usageKind = computed(() => {
+  const type = selection?.providers?.value.find(provider => provider.id === usageProvider.value)?.type
+  if (type === 'copilot' || type === 'copilot-v2') return 'copilot-credits'
+  if (type === 'deepseek') return 'deepseek-balance'
+})
+const usage = ref<Exclude<ProviderUsage, { kind: 'unavailable' }>>()
+watch([
+  () => opened.value && page.value === 'menu' && !pending.value && !unavailable.value ? props.usageApiBase : undefined,
+  usageProvider, usageKind,
+], async ([base, provider, kind], _previous, onCleanup) => {
+  usage.value = undefined
+  if (base === undefined || !provider || !kind) return
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  try {
+    const result = await createProviderSetupClient(base).usage(provider, controller.signal)
+    if (!controller.signal.aborted && result.kind === kind) usage.value = result
+  } catch { /* Optional account data: leave the row hidden. */ }
+})
 const triggerTitle = computed(() => `${selection?.current.value || t('Choose model')}${props.settings && effectiveEffortLabel.value ? ` · ${effectiveEffortLabel.value}` : ''}`)
 const allOptions = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', '', selection?.providers?.value))
 const providerFilters = computed(() => modelProviderFilters(allOptions.value, selection?.providers?.value))
@@ -99,6 +129,7 @@ function resetMenu() {
   activeProvider.value = ''
   page.value = props.settings ? 'menu' : 'model'
   query.value = ''
+  opened.value = true
 }
 async function openPage(next: 'model' | 'effort' | 'context') {
   if (next !== 'model' && props.settingsDisabled) return
@@ -146,6 +177,12 @@ function chooseEffort(patch: ReasoningSettings, close: () => void) {
 .model-effort { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap; }
 .model-menu { display: flex; flex-direction: column; min-height: 0; }
 .model-setting-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 9px 10px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.model-usage-row { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 9px 10px; color: var(--c-text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.model-usage-row progress { flex: 1 1 72px; min-width: 24px; height: 5px; appearance: none; overflow: hidden; border: 0; border-radius: var(--radius-control); background: var(--c-bg-muted); }
+.model-usage-row progress::-webkit-progress-bar { background: transparent; }
+.model-usage-row progress::-webkit-progress-value { background: var(--c-blue); border-radius: var(--radius-control); }
+.model-usage-row progress::-moz-progress-bar { background: var(--c-blue); border-radius: var(--radius-control); }
+@media (forced-colors: active) { .model-usage-row progress { appearance: auto; } }
 .model-setting-row:hover:not(:disabled) { background: var(--c-bg-muted); }
 .model-setting-row:disabled { opacity: .5; cursor: not-allowed; }
 .model-menu-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--c-text-secondary); }

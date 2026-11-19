@@ -17,11 +17,13 @@ interface Element {
   children: Element[]
   parent?: Element
   value?: string
+  focused?: boolean
+  focus: () => void
   addEventListener: () => void
   getRootNode: () => { activeElement: null }
 }
 const element = (tag: string, text = ''): Element => ({
-  tag, text, props: {}, style: {}, children: [], addEventListener() {}, getRootNode: () => ({ activeElement: null }),
+  tag, text, props: {}, style: {}, children: [], addEventListener() {}, focus() { this.focused = true }, getRootNode: () => ({ activeElement: null }),
 })
 const text = (node: Element): string => node.tag === '#comment' ? '' : [node.text, ...node.children.map(text)].join(' ')
 
@@ -33,7 +35,11 @@ function loadComponent(url: URL): Component {
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)(
     (id: string) => id.endsWith('/ComposerPopover.vue') ? { default: defineComponent({
-      setup(_props, { slots }) { return () => h('div', [slots.trigger?.(), slots.default?.({ close() {} })]) },
+      emits: ['opened', 'closed'],
+      setup(_props, { slots, emit }) {
+        return () => h('div', [h('button', { onClick: () => emit('opened') }, 'Open settings'),
+          h('button', { onClick: () => emit('closed') }, 'Close settings'), slots.trigger?.(), slots.default?.({ close() {} })])
+      },
     }) } : id.endsWith('/UiSelect.vue') ? { default: defineComponent({
       props: ['modelValue', 'disabled'], emits: ['update:modelValue'],
       setup(props, { emit, slots }) {
@@ -558,3 +564,71 @@ for (const mode of ['add', 'setup', 'edit']) {
     else assert.equal(requests[0]!.provider, mode === 'edit' ? 'existing-endpoint' : 'nvidia')
   })
 }
+
+
+test('composer usage is demand-loaded and follows the exact provider instance', async t => {
+  const current = ref('same@copilot-personal')
+  const requests: { url: string; signal?: AbortSignal | null; resolve: (response: Response) => void }[] = []
+  t.mock.method(globalThis, 'fetch', (input, init) => new Promise<Response>(resolve => {
+    requests.push({ url: String(input), signal: init?.signal, resolve })
+  }))
+  const selector = loadComponent(new URL('./components/ModelSelector.vue', import.meta.url))
+  const wrapper = defineComponent({ setup() {
+    provideModelSelection({ current, providers: ref([
+      { id: 'copilot-personal', type: 'copilot' }, { id: 'copilot-work', type: 'copilot-v2' },
+      { id: 'billing-main', type: 'deepseek' }, { id: 'other', type: 'openai' },
+    ]), options: ref([]), disabled: ref(false), loading: ref(false), error: ref(''), async select() {} })
+    return () => h(selector, { settings: {}, usageApiBase: 'http://fixture.invalid' })
+  } })
+  const view = mount(t, {}, undefined, undefined, wrapper)
+  const row = () => view.nodes().find(node => node.props.class === 'model-usage-row')
+  const requested = (index: number, id: string) => assert.equal(new URL(requests[index]!.url).pathname, `/api/provider/usage/${id}`)
+  assert.equal(requests.length, 0)
+  assert.equal(row(), undefined)
+  await view.click('Open settings')
+  requested(0, 'copilot-personal')
+  assert.equal(row(), undefined)
+  current.value = 'same@copilot-work'
+  await nextTick()
+  assert.equal(requests[0]!.signal?.aborted, true)
+  requested(1, 'copilot-work')
+  requests[0]!.resolve(Response.json({ kind: 'copilot-credits', used: 8, allowance: 10 }))
+  await flush()
+  assert.equal(row(), undefined)
+  requests[1]!.resolve(Response.json({ kind: 'copilot-credits', used: 2, allowance: 10 }))
+  await flush()
+  const credits = row()!
+  assert.ok(text(credits).includes('2 / 10 AI credits'))
+  assert.equal(credits.tag, 'div')
+  assert.equal(credits.props.tabindex, undefined)
+  const siblings = credits.parent!.children
+  assert.equal(siblings[siblings.indexOf(credits) + 1], view.button('Model'))
+  assert.equal(view.nodes(credits).find(node => node.tag === 'progress')?.props.value, 2)
+  await view.click('Model')
+  assert.equal(view.nodes().find(node => node.props.type === 'search')?.focused, true)
+  assert.equal(row(), undefined)
+  current.value = 'same@billing-main'
+  await nextTick()
+  assert.equal(requests.length, 2)
+  await view.click('Back to model settings')
+  assert.equal(view.button('Model').focused, true)
+  requested(2, 'billing-main')
+  requests[2]!.resolve(Response.json({ kind: 'deepseek-balance', sufficient: true, balances: [{ currency: 'USD', total: '12.30' }] }))
+  await flush()
+  assert.match(text(row()!), /API balance: 12.30 USD/)
+  assert.equal(view.nodes(row()).some(node => node.tag === 'progress'), false)
+  current.value = 'same@other'
+  await nextTick()
+  assert.equal(requests.length, 3)
+  assert.equal(row(), undefined)
+  current.value = 'same@billing-main'
+  await nextTick()
+  requests[3]!.resolve(Response.json({ kind: 'unavailable' }))
+  await flush()
+  assert.equal(row(), undefined)
+  current.value = 'same@copilot-work'
+  await nextTick()
+  await view.click('Close settings')
+  assert.equal(requests[4]!.signal?.aborted, true)
+  assert.equal(row(), undefined)
+})
