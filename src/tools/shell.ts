@@ -273,7 +273,7 @@ export class ExecTool implements Tool<ToolResult> {
         ...original, remoteWorkdir: undefined, layerfsWorkdir: undefined,
       })
       if (denied) throw new ToolNoEffectError(denied)
-      if (String(args.workspace ?? args.folder ?? '').startsWith('device:')) throw new ToolNoEffectError('JavaScript requires a registered workspace; device home is unavailable.')
+      if (String(args.workspace ?? args.folder ?? '').startsWith('device:')) throw new ToolNoEffectError('JavaScript requires a registered workspace; direct device targeting is OS-shell only.')
       context = await executionTargetContext(args, context, 'workdir.process.execute-once')
       if ((args.workspace !== undefined || args.folder !== undefined) && !context.cwd && !context.remoteWorkdir && !context.layerfsWorkdir) {
         throw new ToolNoEffectError('JavaScript workspace resolved without an execution target; no Main fallback is allowed.')
