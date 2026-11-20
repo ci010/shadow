@@ -74,6 +74,7 @@
             <label class="detail-scope">{{ t('Preview channel') }}<UiSelect v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></UiSelect></label>
           </template>
           <template #inspection-status>
+              <p v-if="promptIdentity" class="agent-note">{{ formatPromptIdentity(promptIdentity) }}</p>
               <p v-if="loadingContext" class="agent-note" role="status">{{ t('Loading') }} {{ requestedAgent.name }} {{ t('preview for') }} {{ channel }}...</p>
               <div v-if="contextError" class="agent-error" role="alert"><p>{{ contextError }}</p><button type="button" class="text-action" @click="retryContext">{{ t('Retry preview') }}</button></div>
               <p v-if="selected && (loadingContext || contextError || !contextMatchesSelection)" class="previous-context" role="status">{{ t('Showing the previous preview:') }} <strong>{{ selected.name }}</strong> / {{ resolvedChannel }}{{ t('. The requested preview is not available yet.') }}</p>
@@ -97,7 +98,7 @@ import { t } from '../i18n.ts'
 import { computed, inject, nextTick, onScopeDispose, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiUrl } from '../api-url.ts'
-import { parseAgentContext, parseAgentTypes, type AgentTypeMeta } from '../agent-types.ts'
+import { formatPromptIdentity, parseAgentContext, parseAgentTypes, type AgentTypeMeta, type PromptIdentity } from '../agent-types.ts'
 import DefinitionDetail from './DefinitionDetail.vue'
 import type { ToolDef } from './ToolsCard.vue'
 
@@ -140,6 +141,7 @@ const sections = ref<import('../prompt-sections.ts').PromptSection[]>([])
 const resolvedTools = ref<ToolDef[]>([])
 const resolvedChannel = ref('')
 const ownerWebPreview = ref(false)
+const promptIdentity = ref<PromptIdentity>()
 const loadingContext = ref(false)
 const loadingList = ref(true)
 const listError = ref('')
@@ -193,6 +195,7 @@ async function loadContext(agent: AgentTypeMeta) {
     if (request.signal.aborted) return
     selected.value = agent
     resolvedChannel.value = previewChannel
+    promptIdentity.value = data.promptIdentity
     ownerWebPreview.value = data.rolePreview === 'owner-web'
     renderedSystemPrompt.value = data.systemPrompt
     sections.value = data.sections
@@ -231,6 +234,7 @@ watch(() => [props.apiBase, props.agentName, props.active] as const, () => {
   resolvedTools.value = []
   resolvedChannel.value = ''
   ownerWebPreview.value = false
+  promptIdentity.value = undefined
   contextError.value = ''
   loadingContext.value = false
   agentQuery.value = ''

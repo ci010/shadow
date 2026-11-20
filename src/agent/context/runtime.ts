@@ -1,3 +1,4 @@
+import { resolvePrompt } from './prompt-version.ts'
 import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 import {
   availableExecShells,
@@ -148,8 +149,8 @@ export function runtimeIdentityProvider(
         : ctx.channel === 'web' ? 'web' : 'unknown'
       const isGroup = conversation === 'group' || conversation === 'thread'
       const sharedAudience = (isGroup && !trusted) || conversation === 'unknown'
-      // Opt-in comparison: keep the legacy role and other channel/mode prompts unchanged.
-      const compactWebRuntime = ctx.agent.name === 'general-v2' && ctx.channel === 'web' &&
+      // Compact presentation only; runtime facts and authority stay shared.
+      const compactWebRuntime = (ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && ctx.channel === 'web' &&
         (ctx.mode ?? ctx.agent.defaultMode) === 'session' && ctx.isGroup !== true && !sharedAudience && !isGroup
 
       const lines = [

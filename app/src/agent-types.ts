@@ -51,11 +51,39 @@ export function parseAgentTypes(value: unknown): AgentTypeMeta[] {
   }
   return value
 }
-export function parseAgentContext(value: unknown): { systemPrompt: string; sections: PromptSection[]; tools: ToolDef[]; rolePreview?: 'owner-web' } {
+export interface PromptIdentity {
+  role: string
+  definition: string
+  version: 'v1' | 'v2'
+  mode: 'session' | 'task' | 'call'
+  behaviorSource: 'builtin' | 'workspace' | 'sub-draft'
+  subRevision?: string
+}
+
+export function parsePromptIdentity(value: unknown): PromptIdentity | undefined {
+  if (!record(value) || typeof value.role !== 'string' || typeof value.definition !== 'string'
+    || (value.version !== 'v1' && value.version !== 'v2')
+    || (value.mode !== 'session' && value.mode !== 'task' && value.mode !== 'call')
+    || (value.behaviorSource !== 'builtin' && value.behaviorSource !== 'workspace' && value.behaviorSource !== 'sub-draft')) return
+  const revision = value.subRevision
+  if (value.behaviorSource === 'sub-draft' && (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision))) return
+  return { role: value.role, definition: value.definition, version: value.version, mode: value.mode,
+    behaviorSource: value.behaviorSource, ...(typeof revision === 'string' && value.behaviorSource === 'sub-draft' ? { subRevision: revision } : {}) }
+}
+
+export function formatPromptIdentity(prompt: PromptIdentity) {
+  const subject = prompt.role === prompt.definition ? prompt.role : `${prompt.role} (${prompt.definition})`
+  const source = prompt.behaviorSource === 'sub-draft' ? `${t('Project draft')} @${prompt.subRevision}`
+    : prompt.behaviorSource === 'workspace' ? t('Workspace') : t('Built-in default')
+  return `${subject} · ${prompt.version.toUpperCase()} · ${prompt.mode} · ${source}`
+}
+
+export function parseAgentContext(value: unknown): { systemPrompt: string; sections: PromptSection[]; tools: ToolDef[]; rolePreview?: 'owner-web'; promptIdentity?: PromptIdentity } {
   if (!record(value) || typeof value.systemPrompt !== 'string' || !Array.isArray(value.tools)
     || !value.tools.every(isTool) || new Set(value.tools.map(tool => tool.name)).size !== value.tools.length) {
     throw new Error(t('Cannot read the assembled agent preview. Retry the preview.'))
   }
-  return { systemPrompt: value.systemPrompt, sections: promptSections(value.systemPrompt, value.sections), tools: value.tools,
+  const promptIdentity = parsePromptIdentity(value.promptIdentity)
+  return { ...(promptIdentity ? { promptIdentity } : {}), systemPrompt: value.systemPrompt, sections: promptSections(value.systemPrompt, value.sections), tools: value.tools,
     ...(value.rolePreview === 'owner-web' ? { rolePreview: 'owner-web' as const } : {}) }
 }

@@ -1,3 +1,4 @@
+import { resolvePrompt } from './prompt-version.ts'
 import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 import type { VirtualFs } from '../../vfs/virtual-fs.ts'
 import {
@@ -8,7 +9,7 @@ import type { ProjectFolderDiscovery } from '../../folders/discovery.ts'
 import { projectProvider } from './project.ts'
 
 export function usesWebWorkspacePreview(ctx: SessionPromptContext): boolean {
-  return ctx.agent.name === 'general-v2' && ctx.channel === 'web' &&
+  return (ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && ctx.channel === 'web' &&
     (ctx.mode ?? ctx.agent.defaultMode) === 'session'
 }
 

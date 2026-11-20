@@ -272,6 +272,7 @@ export const TunnelSchema = z.object({
 // ── Root config ─────────────────────────────────────────────────────────
 
 export const ConfigSchema = z.object({
+  builtinPromptVersion: z.enum(['v1', 'v2']).optional(),
   agentVersionDefaults: AgentVersionDefaultsSchema.default({}),
   network: z.object({ proxyEnabled: z.boolean().default(true) }).strict().optional(),
   a2a: A2aConfigSchema.optional(),

@@ -6,6 +6,9 @@ import type { ExecShell } from '../../tools/shell.ts'
 import { resolve } from 'node:path'
 import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 import type { ChannelAddress } from '../../bus/events.ts'
+import { resolvePrompt, type PromptVersion } from './prompt-version.ts'
+import { assemblePromptV1, PROMPT_SEPARATOR } from './prompt-v1.ts'
+import { assemblePromptV2 } from './prompt-v2.ts'
 
 // ── Session-scoped context for system prompt building ──────────────────
 
@@ -39,6 +42,8 @@ export interface SessionPromptContext {
   agent: AgentTypeDefinition
   /** Personal BOT deployment instructions, separate from the role definition. */
   personalBotPrompt?: string
+  promptVersion?: PromptVersion
+  subDraft?: { revision: string; markdown: string }
   /** Stable Work ID for shared work context (from SessionState). */
   initiativeId?: string
   /** Explicit display/goal metadata for the acting durable session, never authority. */
@@ -80,6 +85,10 @@ export interface SystemPromptSection {
   name: string
   content: string
   characters: number
+  /** Optional source classification; mixed sections may leave kind unspecified. */
+  kind?: 'information' | 'contract' | 'behavior'
+  /** Whether the text is source-authored behavior, not an in-product edit permission. */
+  editability?: 'editable' | 'fixed'
   /** Exact separator before this segment; absent on legacy metadata. */
   separatorBefore?: string
 }
@@ -119,6 +128,8 @@ export class ContextBuilder {
   async buildSystemPromptDetails(
     ctx: SessionPromptContext,
   ): Promise<{ systemPrompt: string; sections: SystemPromptSection[] }> {
+    const version = ctx.promptVersion ?? resolvePrompt(ctx.agent).version
+    ctx = { ...ctx, promptVersion: version }
     // Host-owned presentation tasks have no general workspace capability.
     // Do not even evaluate general providers (shell discovery, memory, devices, etc.).
     const boundedSystemTask = ctx.mode === 'task' && ctx.channel === ctx.agent.name &&
@@ -154,17 +165,16 @@ export class ContextBuilder {
       section.characters = section.content.length
     }
 
-    // Preserve the established provider trimming, catalog filtering and joining
-    // byte-for-byte. Source annotations cannot modify the canonical prompt.
-    const systemPrompt = sections.map(section => section.content).join('\n\n---\n\n')
+    // Only exact source annotations participate; a provider cannot replace its own canonical text.
     const annotated = sections.flatMap((section, index) => {
       const candidates = this.providers.find(provider => provider.name === section.name)?.getPromptSections?.(ctx)
       const matches = candidates?.length && candidates.every(part => part.content.length > 0) &&
         candidates.map((part, i) => (i ? part.separatorBefore ?? '' : '') + part.content).join('') === section.content
       const parts = matches ? candidates! : [section]
       return parts.map((part, i) => ({ ...part, characters: part.content.length,
-        separatorBefore: i ? part.separatorBefore ?? '' : index ? '\n\n---\n\n' : '' }))
+        ...(version === 'v2' && section.name === 'execution-contract' ? { kind: 'contract' as const, editability: 'fixed' as const } : {}),
+        separatorBefore: i ? part.separatorBefore ?? '' : index ? PROMPT_SEPARATOR : '' }))
     })
-    return { systemPrompt, sections: annotated }
+    return version === 'v2' ? assemblePromptV2(annotated) : { systemPrompt: assemblePromptV1(annotated), sections: annotated }
   }
 }

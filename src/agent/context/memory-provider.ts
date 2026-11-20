@@ -1,3 +1,4 @@
+import { resolvePrompt } from './prompt-version.ts'
 import type { MemoryStore } from '../memory.ts'
 import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 
@@ -38,7 +39,7 @@ export function memoryProvider(
       ].filter(Boolean)
       if (!sections.length) return null
       for (const entry of recalledLogs) recall?.(entry)
-      if (ctx.agent.name === 'general-v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session') {
+      if ((ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session') {
         return [
           '# Historical reference',
           'Top-of-mind memory, not current state or authorization. When relevant, search `v:memory` for source records or browse `v:knowledge` for references and logs. Check current evidence before relying on a past decision.',

@@ -1,3 +1,4 @@
+import { isPromptVersion } from '../agent/context/prompt-version.ts'
 import { parseExecutionInference } from '../agent/llm-config.ts'
 import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
@@ -78,6 +79,8 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'workingContext',
   'reportTo',
   'originUser',
+  'promptVersion',
+  'subDraft',
   'description',
   'children',
   'preloadTools',
@@ -149,6 +152,10 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   }
   if (value.executionInference !== undefined) metadata.executionInference = parseExecutionInference(value.executionInference)
   if (isRecord(value.config)) metadata.config = value.config as SessionConfig
+  if (isPromptVersion(value.promptVersion)) metadata.promptVersion = value.promptVersion
+  if (isRecord(value.subDraft) && typeof value.subDraft.revision === 'string' && typeof value.subDraft.markdown === 'string') {
+    metadata.subDraft = { revision: value.subDraft.revision, markdown: value.subDraft.markdown }
+  }
   if (isSessionParent(value.parent)) metadata.parent = value.parent
   const workdir = parseWorkdirRef(value.workdir)
   if (workdir) metadata.workdir = workdir
@@ -456,6 +463,8 @@ export class SqliteSessionStore implements SessionStore {
         automationVersion: state.automationVersion,
         reportTo: state.reportTo,
         originUser: state.originUser,
+        promptVersion: state.promptVersion,
+        subDraft: state.subDraft,
         description: state.description,
         children: state.children,
         preloadTools: state.preloadTools,
