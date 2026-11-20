@@ -1,0 +1,5 @@
+{
+  "files": ["main.mjs"],
+  "assets": [],
+  "preview": { "toneMapping": "aces", "exposure": 1.16 }
+}

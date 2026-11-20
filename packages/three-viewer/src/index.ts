@@ -1,12 +1,12 @@
 import {
-  AmbientLight, BufferAttribute, BufferGeometry, Color, DirectionalLight, DynamicDrawUsage, Euler, GridHelper, LineBasicMaterial,
+  ACESFilmicToneMapping, NoToneMapping, AmbientLight, BufferAttribute, BufferGeometry, Color, DirectionalLight, DynamicDrawUsage, Euler, GridHelper, Group, LineBasicMaterial,
   LineSegments, Mesh, PerspectiveCamera, Raycaster, Scene, ShaderChunk, ShaderMaterial, SRGBColorSpace, Vector2, Vector3,
   WebGLRenderer, WebGLRenderTarget, MOUSE,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { snapshot, type ModelInput } from './input.js';
 import { decode, stale, type Model, type ModelOutlineRow, type Part } from './model.js';
-export { limits, type ModelInput, type ShaderBinding } from './input.js';
+export { limits, type ModelInput, type ModelPreview, type ShaderBinding } from './input.js';
 export type { ModelOutlineRow } from './model.js';
 
 const emptyOutline: readonly ModelOutlineRow[] = Object.freeze([]);
@@ -53,6 +53,7 @@ export class ThreeViewer {
   private readonly keys = new Set<string>();
   private readonly listeners = new AbortController();
   private readonly picking = new Raycaster();
+  private readonly studio = new Group();
   private model?: Model;
   private scope?: string;
   private version: string | null = null;
@@ -93,7 +94,8 @@ export class ThreeViewer {
     this.controls.addEventListener('change', () => { this.dirty = true; });
     const light = new DirectionalLight(0xffffff, 2); light.position.set(3, 5, 4);
     this.selectionOutline.visible = false; this.selectionOutline.frustumCulled = false; this.selectionOutline.renderOrder = 1;
-    this.scene.add(new AmbientLight(0xffffff, 1.3), light, this.selectionOutline);
+    this.studio.add(new AmbientLight(0xffffff, 1.3), light);
+    this.scene.add(this.studio, this.selectionOutline);
     if (options.ground) {
       this.ground = new GridHelper(1, 16, 0x777777, 0x999999);
       this.ground.material.transparent = true;
@@ -162,18 +164,37 @@ export class ThreeViewer {
     try {
       next = await decode(job.input, current);
       if (!current()) throw stale();
-      for (const { objectId, slot, vertex, fragment } of job.input.shaders ?? []) {
-        if (shaders.get(objectId)?.has(slot)) throw new Error(`Duplicate shader binding: ${objectId}[${slot}]`);
-        this.applyShader(next, shaders, objectId, slot, ({ material }) => {
-          const shader = new ShaderMaterial({
-            vertexShader: vertex, fragmentShader: fragment,
-            uniforms: { playgroundTime: previewTime, playgroundOpacity: { value: material.opacity } },
-            opacity: material.opacity, transparent: material.transparent, side: material.side,
-            depthTest: material.depthTest, depthWrite: material.depthWrite, depthFunc: material.depthFunc,
-          });
-          owned.add(shader);
-          return shader;
-        });
+      const toneMapping = job.input.preview?.toneMapping === 'aces' ? ACESFilmicToneMapping : NoToneMapping;
+      const exposure = job.input.preview?.exposure ?? 1;
+      if (job.input.shaders?.length) {
+        const pendingScene = new Scene();
+        pendingScene.add(next.root);
+        if (!next.hasPunctualLights) {
+          const studio = this.studio.clone(); studio.visible = true;
+          pendingScene.add(studio);
+        }
+        const { toneMapping: priorToneMapping, toneMappingExposure: priorExposure } = this.renderer;
+        this.renderer.toneMapping = toneMapping;
+        this.renderer.toneMappingExposure = exposure;
+        try {
+          for (const { objectId, slot, vertex, fragment } of job.input.shaders) {
+            if (shaders.get(objectId)?.has(slot)) throw new Error(`Duplicate shader binding: ${objectId}[${slot}]`);
+            this.applyShader(next, shaders, objectId, slot, ({ material }) => {
+              const shader = new ShaderMaterial({
+                vertexShader: vertex, fragmentShader: fragment,
+                uniforms: { playgroundTime: previewTime, playgroundOpacity: { value: material.opacity } },
+                opacity: material.opacity, transparent: material.transparent, side: material.side,
+                depthTest: material.depthTest, depthWrite: material.depthWrite, depthFunc: material.depthFunc,
+              });
+              owned.add(shader);
+              return shader;
+            }, pendingScene);
+          }
+        } finally {
+          this.renderer.toneMapping = priorToneMapping;
+          this.renderer.toneMappingExposure = priorExposure;
+          pendingScene.remove(next.root);
+        }
       }
       if (!current()) throw stale();
       const previous = this.model;
@@ -184,6 +205,9 @@ export class ThreeViewer {
       this.ownedShaders = owned; this.shaders = shaders;
       this.previewTime = previewTime; this.previewStart = undefined;
       this.model = next; this.scope = scope; this.version = job.input.version;
+      this.renderer.toneMapping = toneMapping;
+      this.renderer.toneMappingExposure = exposure;
+      this.studio.visible = !next.hasPunctualLights;
       this.scene.add(next.root); next = undefined;
       if (this.ground) {
         const { bounds } = this.model;
@@ -253,7 +277,7 @@ export class ThreeViewer {
     this.dirty = true;
   }
 
-  private applyShader(model: Model, shaders: Map<string, Map<number, ShaderMaterial[]>>, id: string, slot: number, create: ((part: Part) => ShaderMaterial) | null) {
+  private applyShader(model: Model, shaders: Map<string, Map<number, ShaderMaterial[]>>, id: string, slot: number, create: ((part: Part) => ShaderMaterial) | null, lighting = this.scene) {
     const obj = model.objects.get(id);
     if (!obj) throw new RangeError(`Unknown objectId: ${id}`);
     const parts = obj.parts.filter(part => part.slot === slot);
@@ -264,7 +288,7 @@ export class ThreeViewer {
     const materials = create ? parts.map(part => {
       const shader = create(part);
       if (!shader.isShaderMaterial) throw new TypeError('Expected ShaderMaterial');
-      this.checkShader(part.mesh, shader, `${id}[${slot}]`);
+      this.checkShader(part.mesh, shader, `${id}[${slot}]`, lighting);
       return shader;
     }) : undefined;
     const overrides = shaders.get(id) ?? new Map<number, ShaderMaterial[]>();
@@ -273,7 +297,7 @@ export class ThreeViewer {
     parts.forEach(({ mesh, material }, i) => { mesh.material = materials?.[i] ?? material; });
   }
 
-  private checkShader(mesh: Mesh, shader: ShaderMaterial, binding: string) {
+  private checkShader(mesh: Mesh, shader: ShaderMaterial, binding: string, lighting: Scene) {
     const scene = new Scene(), sample = new Mesh(mesh.geometry, shader);
     sample.matrixAutoUpdate = false; sample.matrix.copy(mesh.matrixWorld); sample.frustumCulled = false; scene.add(sample);
     try {
@@ -290,8 +314,8 @@ export class ThreeViewer {
       checkChunks(shader.vertexShader, 0); checkChunks(shader.fragmentShader, 0);
       const gl = this.renderer.getContext();
       if (gl.isContextLost()) throw new Error('WebGL context is lost');
-      // Use the live renderer/lighting configuration but don't draw or execute the shader.
-      this.renderer.compile(scene, this.camera, this.scene);
+      // Check the shader against the lighting and tone mapping it will actually render with.
+      this.renderer.compile(scene, this.camera, lighting);
       const properties = this.renderer.properties.get(shader) as { currentProgram?: { program?: WebGLProgram } };
       const program = properties.currentProgram?.program;
       if (!program) throw new Error('No WebGL shader program');
@@ -514,7 +538,12 @@ export class ThreeViewer {
     surface.width = width; surface.height = height;
     const ctx = surface.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Cannot create inspection canvas');
-    const target = new WebGLRenderTarget(width, height, { colorSpace: SRGBColorSpace });
+    // Three r180 ordinarily treats render targets as linear intermediate passes
+    // and skips tone mapping. Use its XR final-output path to match the canvas.
+    // Explicit RGBA8 stores shader-encoded sRGB without a second framebuffer conversion.
+    const target = Object.assign(new WebGLRenderTarget(width, height, {
+      colorSpace: SRGBColorSpace, internalFormat: 'RGBA8',
+    }), { isXRRenderTarget: true });
     const prior = this.renderer.getRenderTarget();
     try {
       const pixels = new Uint8Array(width * height * 4);

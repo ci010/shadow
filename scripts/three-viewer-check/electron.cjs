@@ -19,6 +19,7 @@ app.whenReady().then(async () => {
   window.show(); window.focus(); contents.focus();
 
   const result = mode === 'marker' ? await contents.executeJavaScript(`window.runThreeMarkerCheck(${Number(expectedShaders)})`, true)
+    : mode === 'lighting' ? await contents.executeJavaScript('window.runThreeLightingCheck()', true)
     : mode === 'ui'
     ? await require('./ui-driver.cjs')(contents, fixtureScene)
     : mode === 'outline' ? await require('./outline-driver.cjs')(contents)
@@ -28,7 +29,7 @@ app.whenReady().then(async () => {
     delete result.png;
     if (screenshot) result.screenshot = screenshot;
   }
-  if (!['product', 'outline', 'marker'].includes(mode)) {
+  if (!['product', 'outline', 'marker', 'lighting'].includes(mode)) {
     const deadline = Date.now() + 5000;
     while (!download && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
     if (!download) throw new Error('No browser download observed');
