@@ -251,45 +251,12 @@ Remote-workdir invocation through `invoke_tool` retains its existing restriction
 
 ## Call user-installed Claude Code or Codex
 
-The separate `integrations/a2a` workspace launches **user-installed CLIs**, not
-vendor SDKs. Shadow does not install, bundle, download, update, or log in coding
-agents. Install and authenticate the official CLI yourself before starting a
-bridge. Normal subscription/CLI authentication is supported; SDK API keys are
-not required. Run bridges from the repository checkout.
-
-Create an operator-owned JSON configuration outside source control:
-
-```json
-{
-  "projectId": "coding",
-  "stateDirectory": "C:/a2a-data/claude",
-  "cwd": "C:/code/my-project",
-  "port": 3001,
-  "server": {
-    "url": "http://127.0.0.1:3001/projects/coding/a2a",
-    "callers": { "shadow": "SHADOW_TO_CLAUDE_TOKEN" },
-    "timeoutMs": 300000
-  },
-  "backend": { "type": "claude", "tools": [] },
-  "environment": []
-}
-```
-
-Use absolute local paths appropriate to your OS. `cwd` is operator-authorized,
-never remote-controlled. `stateDirectory` must be dedicated to one bridge and
-outside its coding workdir. Set the A2A caller token in the bridge environment:
-
-```powershell
-pnpm a2a:bridge --config C:/a2a-config/claude.json
-```
-
-Optional `executable` is an absolute path to a native CLI executable or its
-official `.js`/`.mjs` entrypoint. Otherwise Shadow resolves `claude` or `codex`
-from PATH (including Windows `Path`). Windows npm `.cmd` shims are never run
-through a shell: only a known sibling official JS entrypoint is supported;
-other shims require an explicit executable path. Prompts are written to stdin,
-not interpolated into shell commands. The listener binds only `127.0.0.1`.
-Use distinct state directories, ports and caller credentials per bridge.
+Shadow manages user-installed Claude Code and Codex through the local
+[`a2a_setup` skill](../src/skills/builtin/a2a-setup/SKILL.md) and tool. Install
+and authenticate the official CLI yourself. While Shadow is running, configure
+an authorized local workdir and explicit permissions, then start the target
+through Shadow. Discover it in `v:agents` and delegate with `subagent`. Saved
+targets are stopped after backend restart until explicitly started again.
 
 - Claude: `{"type":"claude","tools":[]}` defaults to text-only. Print JSON
   mode uses `--restricted` (Claude Code **v2.1.248+**), `dontAsk`, empty setting
@@ -347,26 +314,6 @@ were unavailable locally; argv/output contracts were checked against official
 [Codex CLI reference](https://developers.openai.com/codex/cli/reference/), with
 Copilot `--help`/`--version` checked locally. Older CLIs may reject flags; update
 manually rather than dropping safety flags.
-
-To call this bridge, add an agent in the Shadow Project:
-
-```json
-{
-  "a2a": {
-    "agents": {
-      "claude": {
-        "cardUrl": "http://127.0.0.1:3001/projects/coding/a2a/.well-known/agent-card.json",
-        "endpointUrl": "http://127.0.0.1:3001/projects/coding/a2a",
-        "tokenEnv": "SHADOW_TO_CLAUDE_TOKEN"
-      }
-    }
-  }
-}
-```
-
-Restart Shadow, discover `a2a:claude` in `v:agents`, and delegate with `subagent`.
-The compatibility equivalent is `a2a_send` with `agent: "claude"`. Repeat the same
-pattern for Codex. Do not expose tool-enabled bridges to untrusted callers.
 
 ## Let coding clients call Shadow through MCP
 
@@ -467,10 +414,6 @@ records per direction per Project, with at most 64 input replies per task.
 Storage exhaustion rejects new work.
 No automatic retention/pruning is implemented; archive records only while
 stopped, understanding that removing them removes their deduplication history.
-Standalone bridges exclusively lock their state directories. After a hard
-process kill, inspect the PID in `.lock`, verify that owner is no longer running,
-then remove **that lock file only** before restarting. Never run two writers
-against one state directory.
 
 ## Implementation and validation boundaries
 
@@ -483,8 +426,7 @@ completion facts instead of treating input acceptance as completion.
 Focused tests exercise live loopback HTTP, official A2A and MCP transports,
 requested-input continuation, notification recovery, mocked CLI process adapter
 contracts, fail-closed unsupported backends, and the actual SessionManager runner with both
-session stores using a synthetic provider. Typechecking includes the separate
-bridge workspace. These tests do not exercise real paid provider accounts,
+session stores using a synthetic provider. These tests do not exercise real paid provider accounts,
 certify every A2A implementation, or validate public TLS or native desktop
 packaging. File/data parts, remote permission approval, webhooks, REST/gRPC and
 v0.3 compatibility are intentionally unsupported, not silently approximated.
