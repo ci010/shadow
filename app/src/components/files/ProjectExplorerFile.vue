@@ -6,6 +6,7 @@
 import { computed, inject, provide } from 'vue'
 import { EditorGroupsKey } from '../../editor-groups.ts'
 import { createExplorerOtioDraftBridge, OtioDraftKey } from '../../otio-draft.ts'
+import { createExplorerGltfReferenceDraftBridge, GltfReferenceDraftKey } from '../../gltf-reference.ts'
 import { liveProjectId } from '../../composables/useLiveClient.ts'
 import { fileTabKey, type OpenFile } from '../../file-workbench.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
@@ -15,6 +16,9 @@ const props = defineProps<{ apiBase: string; file: OpenFile; active: boolean; ca
 const emit = defineEmits<{ open: [file: OpenFile]; close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)
 if (groups) provide(OtioDraftKey, createExplorerOtioDraftBridge(groups, () => props.active
+  ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase) }
+  : null))
+if (groups) provide(GltfReferenceDraftKey, createExplorerGltfReferenceDraftBridge(groups, () => props.active
   ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase) }
   : null))
 // Central explorer always supplies a concrete source; never infer another conversation.

@@ -9,6 +9,8 @@ import { decodeDeviceChallengeProtocol } from './device-challenge.ts'
 import type { MainCluster } from './main-cluster.ts'
 import type { DeviceAuthenticationV1 } from './registry.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
+import type { ApprovedNodeV1 } from './contracts.ts'
+import { GLTF_CAPTURE_HEADER, GLTF_CAPTURE_PATH } from '../gltf-capture-contract.ts'
 
 export const DEVICE_UI_CHALLENGE = '/cluster/v1/ui/challenges'
 export const DEVICE_UI_HMR = '/cluster/v1/ui/hmr'
@@ -49,18 +51,34 @@ export function deviceUiResourcePath(value: string): boolean {
 export function deviceUiRequestPath(path: string, method: string): boolean {
   return deviceUiPath(path, method) || (['GET', 'HEAD'].includes(method) && deviceUiResourcePath(path))
 }
-export function deviceUiHeaders(headers: Headers): Headers {
+function deviceUiCapturePath(path: string, method: string): boolean {
+  if (method !== 'POST' || !deviceUiPath(path, method)) return false
+  const bare = new URL(path, 'http://workspace.internal').pathname.replace(/^\/projects\/[^/]+(?=\/)/, '')
+  return bare === '/api/chat/send' || (bare.startsWith(`${GLTF_CAPTURE_PATH}/`) &&
+    ['register', 'poll', 'version', 'result', 'unregister'].includes(bare.slice(GLTF_CAPTURE_PATH.length + 1)))
+}
+
+export function deviceUiHeaders(headers: Headers, path: string, method: string): Headers {
   const result = new Headers()
   for (const key of ['content-type', 'accept', 'accept-encoding', 'range', 'if-none-match', 'if-modified-since']) {
     const value = headers.get(key); if (value) result.set(key, value)
   }
+  if (deviceUiCapturePath(path, method)) {
+    const binding = headers.get(GLTF_CAPTURE_HEADER)
+    if (binding) result.set(GLTF_CAPTURE_HEADER, binding)
+  }
   return result
 }
+
+const captureCredentialEpoch = (node: ApprovedNodeV1) => JSON.stringify([
+  node.deviceId, node.nodeId, node.credentialId, node.deviceIdentityFingerprint, node.approvedAt,
+])
 
 /** Authenticated identity is attached to a Request object, never exposed as an admin bearer. */
 export class MainDeviceUi {
   private readonly identities = new Map<string, DeviceAuthenticationV1>()
   private readonly active = new Map<AbortController, DeviceAuthenticationV1>()
+  private readonly captureOwners = new Map<string, { controller: AbortController; authentication: DeviceAuthenticationV1; epoch: string }>()
   private readonly diagnostics = createForwardDiagnostics('main')
   private closed = false
   private timer: ReturnType<typeof setInterval>
@@ -69,6 +87,11 @@ export class MainDeviceUi {
       for (const [controller, authentication] of this.active) {
         try { cluster.registry.authenticate(authentication) }
         catch { controller.abort(); this.active.delete(controller) }
+      }
+      for (const [key, owner] of this.captureOwners) {
+        try { if (captureCredentialEpoch(cluster.registry.authenticate(owner.authentication)) === owner.epoch) continue } catch { /* revoked */ }
+        this.captureOwners.delete(key)
+        owner.controller.abort()
       }
     }, 500)
     this.timer.unref()
@@ -79,9 +102,32 @@ export class MainDeviceUi {
     try { return this.cluster.registry.authenticate(authentication) } catch { return undefined }
   }
   authorize(request: Request): boolean { return !!this.approvedClient(request) }
+  /** Capture-only, in-process principal from the actual proof-authenticated request.
+   * Stable across request nonces; scoped to the approval epoch, and revocable. */
+  viewerCaptureOwner(request: Request): AbortSignal | undefined {
+    if (!deviceUiCapturePath(new URL(request.url).pathname, request.method)) return
+    const node = this.approvedClient(request)
+    if (!node) return
+    const key = this.clientAddresses.resolve(request)
+    const epoch = captureCredentialEpoch(node)
+    const previous = this.captureOwners.get(key)
+    if (previous?.epoch === epoch) return previous.controller.signal
+    previous?.controller.abort()
+    const controller = new AbortController()
+    this.captureOwners.set(key, { controller, epoch, authentication: { deviceId: node.deviceId, nodeId: node.nodeId, credentialId: node.credentialId } })
+    return controller.signal
+  }
   /** Display context from the verified UI ingress, never from request headers/body. */
   clientDeviceName(request: Request): string | undefined { return this.approvedClient(request)?.displayName }
-  close(): void { this.closed = true; this.identities.clear(); clearInterval(this.timer); for (const controller of this.active.keys()) controller.abort(); this.active.clear() }
+  close(): void {
+    this.closed = true
+    this.identities.clear()
+    clearInterval(this.timer)
+    for (const controller of this.active.keys()) controller.abort()
+    this.active.clear()
+    for (const owner of this.captureOwners.values()) owner.controller.abort()
+    this.captureOwners.clear()
+  }
   plugin(): GatewayPlugin {
     return app => {
       app.use('/cluster/v1/ui/*', async (c, next) => {
@@ -122,7 +168,7 @@ export class MainDeviceUi {
         const controller = new AbortController()
         this.active.set(controller, authentication)
         const signal = AbortSignal.any([c.req.raw.signal, controller.signal])
-        const headers = deviceUiHeaders(c.req.raw.headers)
+        const headers = deviceUiHeaders(c.req.raw.headers, path, method)
         // Encoding is not authority. This explicit compatibility signal keeps old Child
         // versions (which do not normalize fetch-decoded response headers) on
         // identity inner responses, even when Node fetch adds Accept-Encoding.

@@ -42,6 +42,7 @@ import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { privateLanAddresses } from '../../gateway/lan-browser.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
+import { createGltfCaptureOwner } from '../../gateway/gltf-capture-auth.ts'
 import { MainDeviceUi } from '../../cluster/device-ui.ts'
 import { MainDeviceNetwork } from './device-network.ts'
 import { mobileGatewayConfig } from '../../gateway/mobile-access.ts'
@@ -169,6 +170,11 @@ export async function startProjectHost(
   // Recall names are privileged metadata: a delegated device or mobile bearer alone is insufficient.
   const authorizeRecall = (request: Request) => browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
+  const authorizeViewerCapture = createGltfCaptureOwner({ browser: browserAuth, clientAddresses, launchCredential,
+    developmentUrl: process.env.VITE_DEV_URL,
+    deviceViewer: request => deviceUi?.viewerCaptureOwner(request),
+    delegated: request => !!deviceUi?.authorize(request) || mobileAccess.authorizeMain(request),
+  })
   const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeRecall(request)
   const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
@@ -283,7 +289,7 @@ export async function startProjectHost(
           debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, realtimeHub,
+          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, authorizeViewerCapture, realtimeHub,
           webClientDeviceName: request => deviceUi?.clientDeviceName(request),
           localExecutor: options.localExecutor !== false,
         }))

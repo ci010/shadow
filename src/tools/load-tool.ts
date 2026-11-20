@@ -197,6 +197,7 @@ export class ImportTool implements Tool {
   private readonly configured = new Map<string, McpLoadable>()
   private readonly skillTools = new WeakMap<SessionTools, Map<string, ScriptLoadable>>()
   private readonly builtins: Map<string, LoadableEntry>
+  private readonly scopedBuiltins = new Map<string, (context: ExecutionContext) => boolean>()
   private readonly sessions = new Set<SessionTools>()
   private readonly imports = new WeakMap<SessionTools, Promise<unknown>>()
   private readonly scope = getProjectScope()
@@ -443,6 +444,8 @@ export class ImportTool implements Tool {
   }
 
   resolveInvocationTools(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string {
+    const scope = this.scopedBuiltins.get(toolName)
+    if (scope && !scope(context)) return 'Error: this tool requires an active binding for the current turn.'
     const managedName = toolName.split('__')[0]
     const managedEntry = this.builtins.get(managedName)
     if (managedEntry && isMcpLoadable(managedEntry) && managedEntry.managed) {
@@ -465,11 +468,12 @@ export class ImportTool implements Tool {
         : !isMcpLoadable(entry) && !isScriptLoadable(entry) && entry.name === name)
   }
 
-  registerBuiltin(name: string, entry: LoadableEntry): void {
+  registerBuiltin(name: string, entry: LoadableEntry, available?: (context: ExecutionContext) => boolean): void {
     if (this.configured.has(name) || [...this.sessions].some(tools => this.skillTools.get(tools)?.has(name))) {
       throw new Error(`Built-in source "${name}" conflicts with an installed catalog source`)
     }
     this.builtins.set(name, entry)
+    if (available) this.scopedBuiltins.set(name, available)
     this.loadable.set(name, entry)
   }
 
@@ -602,6 +606,7 @@ export class ImportTool implements Tool {
   catalogEntries(tools: SessionTools): Array<{ name: string; content: string }> {
     const entries = new Map<string, { name: string; content: string }>()
     for (const summary of this.sourceCatalogEntries(tools)) {
+      if (this.scopedBuiltins.has(summary.name)) continue
       const entry = this.catalogFor(tools).get(summary.name)!
       const contracts = isFactoryLoadable(entry) ? entry.contracts ?? []
         : isMcpLoadable(entry) ? [] : [isScriptLoadable(entry) ? { name: summary.name, ...entry.script } : entry]
@@ -746,6 +751,8 @@ export class ImportTool implements Tool {
     for (const [name, entry] of this.catalogFor(requester)) {
       if ((selected && name !== selected) || (owners && !owners.has(name))) continue
       signal.throwIfAborted()
+      const available = this.scopedBuiltins.get(name)
+      if (available && !available(context)) continue
       const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
       const children: VirtualEntry[] = []
       let warning: string | undefined
@@ -915,7 +922,10 @@ export class ImportTool implements Tool {
       (!source.startsWith(VIRTUAL_TOOLS_PREFIX) || !this.canInvokeFromRemote(source.slice(VIRTUAL_TOOLS_PREFIX.length)))) {
       return 'Error: remote workdirs can import only the built-in Project-Home session tool.'
     }
-    const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
+    const name = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? source.slice(VIRTUAL_TOOLS_PREFIX.length) : ''
+    const available = this.scopedBuiltins.get(name)
+    if (available && !available(context)) return 'Error: this tool requires an active binding for the current turn.'
+    const entry = this.loadable.get(name)
     if (entry && isMcpLoadable(entry)) {
       if (entry.managed) {
         try { entry.managed.authorize(context) } catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}` }

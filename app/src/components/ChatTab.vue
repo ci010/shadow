@@ -396,6 +396,17 @@
               </HoverInfo>
             </span>
           </div>
+          <div v-if="gltfReferences.length" class="composer-context gltf-reference-context" :aria-label="t('Attached context')">
+            <span v-for="item in gltfChips" :key="item.key" class="context-chip">
+              <span class="context-icon i-lucide-box" aria-hidden="true" />
+              <HoverInfo :text="item.details" v-slot="{ triggerProps }">
+                <span v-bind="triggerProps" tabindex="0" class="gltf-reference-label">{{ item.label }}</span>
+              </HoverInfo>
+              <HoverInfo :text="t('Remove {name}', { name: item.label })" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" type="button" :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: item.label })" @click="gltfReferenceDraft.remove(composerKey, new Set([item.key]))"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              </HoverInfo>
+            </span>
+          </div>
           <div v-if="otioReferences.length" class="composer-context" :aria-label="t('Attached context')">
             <span v-for="item in otioReferences" :key="item.key" class="context-chip otio-reference-chip">
               <button v-if="item.attachment?.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="t('View image: {name}', { name: item.attachment.file.name })"
@@ -619,6 +630,8 @@ import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatE
 import { activeSubagentsByOwner, executionStages, executionTraceDetail, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
+import { gltfCaptureChatHeaders } from '../gltf-capture-bridge.ts'
+import { composeGltfReferenceMessage, createGltfReferenceDraftBridge, GltfReferenceDraftKey, gltfReferenceChips, prepareGltfDraftCapture, registerGltfReferenceDraft, useGltfReferenceDraft } from '../gltf-reference.ts'
 import { composeOtioReferenceMessage, createOtioDraftBridge, OtioDraftKey, registerOtioDraft, useOtioReferenceDraft } from '../otio-draft.ts'
 import { createUuid } from '../uuid.ts'
 import { automationChatLocation } from '../automations.ts'
@@ -838,7 +851,7 @@ const composerPopoverTitle = computed(() =>
     : t('Folder context requires the local Main desktop app'))
 const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
-  contextItems.value.length + manuallyAttachedReferences.value.length + (answeringQuestion.value ? 0 : otioReferences.value.length) + (selectedWorkflowReference.value ? 1 : 0),
+  contextItems.value.length + manuallyAttachedReferences.value.length + (answeringQuestion.value ? 0 : otioReferences.value.length + gltfReferences.value.length) + (selectedWorkflowReference.value ? 1 : 0),
   pendingAttachments.value.length,
 ) && !submissionBusy.value && !currentRequest.value?.state.stopping
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
@@ -890,6 +903,9 @@ const referenceDraft = useInputReferenceDraft(composerKey)
 const inputReferences = referenceDraft.items
 const otioReferenceDraft = useOtioReferenceDraft(composerKey)
 const otioReferences = otioReferenceDraft.items
+const gltfReferenceDraft = useGltfReferenceDraft(composerKey)
+const gltfReferences = gltfReferenceDraft.items
+const gltfChips = computed(() => gltfReferenceChips(gltfReferences.value))
 const workflowReferenceHub = inject(WorkflowInputReferencesKey, undefined)
 // Dynamic selection is never stored in the per-conversation attachment draft.
 // Resolving against the current editor lease prevents stale targets and child injection.
@@ -1977,6 +1993,7 @@ async function chooseRemoteExecution() {
 function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePicker = false): void {
   resetConversation()
   otioReferenceDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', ''))
+  gltfReferenceDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', ''))
   draftFolder.value = folder
   draft.value = createFolderChatDraft(foldersClient, folder)
   activeSessionId.value = ''
@@ -2235,6 +2252,7 @@ async function sessionsDeleted(ids: string[]): Promise<void> {
     const key = composerDraftKey(props.apiBase, props.projectId ?? '', id)
     composerDraft.remove(key)
     otioReferenceDraft.remove(key)
+    gltfReferenceDraft.remove(key)
   }
   for (const id of ids) emit('deleted', id)
   if (activeDeleted) createNewWebChat()
@@ -2336,6 +2354,36 @@ if (editorGroups && editorOwner) {
     sessionId === activeSessionId.value ? otioDraft : undefined)
   onUnmounted(unregister)
 }
+const gltfDraftKey = ref(createUuid())
+watch([composerKey, paneActive, fileContextKey, () => activeSessionId.value ? undefined : draft.value],
+  () => { gltfDraftKey.value = createUuid() }, { flush: 'sync' })
+const gltfDraft = createGltfReferenceDraftBridge(source => {
+  if (source.apiBase !== props.apiBase || source.projectId !== (props.projectId || liveProjectId(props.apiBase))
+    || disposed || !paneActive.value || !chatRouteActive.value || !canQuoteSelection.value || loadingHistory.value
+    || answeringQuestion.value || awaitingCall.value || composerComposing.value || props.inspection
+    || (sessionStage.value === 'waiting' && activeAsk.value?.sessionId === activeSessionId.value)
+    || (activeSessionId.value && !activeSession.value)
+    || (editorGroups && !editorGroups.side(`${editorOwner}:`))) return null
+  return {
+    key: gltfDraftKey.value,
+    label: activeSessionId.value ? conversationTitle.value : t('New conversation'),
+    sessionId: activeSessionId.value || null,
+  }
+}, references => {
+  if (!gltfReferenceDraft.append(references)) return false
+  const key = gltfDraftKey.value
+  workbench.value?.showConversation()
+  void nextTick(() => {
+    if (!disposed && paneActive.value && key === gltfDraftKey.value && conversationFocused.value && composerVisible.value) focusConversation()
+  })
+  return true
+})
+provide(GltfReferenceDraftKey, gltfDraft)
+if (editorGroups && editorOwner) {
+  const unregister = registerGltfReferenceDraft(editorGroups, `${editorOwner}:`, sessionId =>
+    sessionId === activeSessionId.value ? gltfDraft : undefined)
+  onUnmounted(unregister)
+}
 async function openProjectWork(key: string) {
   const id = props.projectId || liveProjectId(props.apiBase)
   const source = route.fullPath
@@ -2357,7 +2405,7 @@ function canReplaceSidebarTab(): boolean {
     || loadingHistory.value || sessionsLoading.value || !!sessionsError.value || !!composerError.value
     || !activeSessionId.value || requestBusy.value
     || submissionBusy.value || !!activeAsk.value || activeSubagents.value.length > 0
-    || !!activeSession.value?.hasBackgroundTasks || !!inputText.value || pendingAttachments.value.length > 0 || otioReferences.value.length > 0
+    || !!activeSession.value?.hasBackgroundTasks || !!inputText.value || pendingAttachments.value.length > 0 || otioReferences.value.length > 0 || gltfReferences.value.length > 0
     || contextItems.value.length > 0 || inputReferences.value.length > 0 || pastingFiles.value
     || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0, activityKnown)
 }
@@ -2993,7 +3041,8 @@ async function sendMessage(overrideContent?: string, opts?: {
   const isCommand = !retry && draftContent.trimStart().startsWith('/')
   // Commands, question replies and retries leave staged timeline context untouched.
   const sentOtioReferences = retry || isCommand || answeringQuestion.value || overrideContent !== undefined ? [] : otioReferences.value
-  const content = composeOtioReferenceMessage(draftContent, sentOtioReferences)
+  const sentGltfReferences = retry || isCommand || answeringQuestion.value || overrideContent !== undefined ? [] : gltfReferences.value
+  const content = composeGltfReferenceMessage(composeOtioReferenceMessage(draftContent, sentOtioReferences), sentGltfReferences)
   if (references.length && (isCommand || answeringQuestion.value)) {
     composerError.value = t('Remove workflow references before sending a command or answering a question.')
     return
@@ -3026,6 +3075,10 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (!followUp) requestControls.set(activeSessionId.value, control)
   } else draftRequest.value = control
   const startingDraft = !activeSessionId.value
+  const captureDraft = draft.value
+  const captureDraftKey = gltfDraftKey.value
+  const captureApiBase = props.apiBase
+  const captureProjectId = props.projectId || liveProjectId(captureApiBase)
   preparingSend.value = startingDraft
   composerError.value = ''
   let accepted = false
@@ -3042,8 +3095,19 @@ async function sendMessage(overrideContent?: string, opts?: {
   }
 
   try {
-    const sessionId = activeSessionId.value || await draft.value.prepare(controller.signal)
+    const sessionId = activeSessionId.value || await captureDraft.prepare(controller.signal)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    // Register before switching tabs or reporting the allocated ID. A scratch
+    // send must never pick up an unrelated registration for its new session.
+    const scratchCaptureReady = startingDraft && !draftRemote.value && sentGltfReferences.length > 0
+      && !Object.keys(gltfCaptureChatHeaders(captureApiBase, captureProjectId, sessionId)).length
+      && await prepareGltfDraftCapture(sentGltfReferences, () => !disposed && paneActive.value
+        && !activeSessionId.value && captureDraft === draft.value && captureDraftKey === gltfDraftKey.value
+        && props.apiBase === captureApiBase && (props.projectId || liveProjectId(props.apiBase)) === captureProjectId
+        && generation === sessionSelectionGeneration ? gltfReferences.value : null,
+      { apiBase: captureApiBase, projectId: captureProjectId, sessionId }, controller.signal)
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    const scratchCaptureHeaders = scratchCaptureReady ? gltfCaptureChatHeaders(captureApiBase, captureProjectId, sessionId) : {}
     if (!followUp) requestControls.set(sessionId, control)
     draftRequest.value = undefined
     // Never load context/history for a draft: that endpoint materializes a session.
@@ -3056,6 +3120,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       composerDraft.migrate(referenceDraftKey)
       referenceDraft.migrate(referenceDraftKey)
       otioReferenceDraft.migrate(referenceDraftKey)
+      gltfReferenceDraft.migrate(referenceDraftKey)
     }
     if (startingDraft) unpersistedDrafts.value.add(sessionId)
     activeSessionId.value = sessionId
@@ -3109,11 +3174,14 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (opts?.parentSessionId) payload.parentSessionId = opts.parentSessionId
     if (pendingDraftSettings.value || model) payload.config = { ...pendingDraftSettings.value, ...(model ? { model } : {}) }
 
+    const liveCaptureHeaders = !retry ? gltfCaptureChatHeaders(props.apiBase, props.projectId || liveProjectId(props.apiBase), sessionId) : {}
+    const captureHeaders = !startingDraft ? liveCaptureHeaders
+      : Object.fromEntries(Object.entries(scratchCaptureHeaders).filter(([name, value]) => liveCaptureHeaders[name] === value))
     control.submitting(sessionId)
     submitted = true
     const res = await fetch(buildUrl('/api/chat/send'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...captureHeaders },
       body: JSON.stringify(payload),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
     })
@@ -3134,6 +3202,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (admittedMessage) admittedMessage.requestId = admission.requestId
     if (!retry) referenceDraft.admitted(referenceDraftKey, references)
     if (sentOtioReferences.length) otioReferenceDraft.remove(referenceDraftKey, new Set(sentOtioReferences.map(item => item.key)))
+    if (sentGltfReferences.length) gltfReferenceDraft.remove(referenceDraftKey, new Set(sentGltfReferences.map(item => item.key)))
     // The visible text was cleared at submission, not after Main's admission.
     // Do not clear again here: the user may already be composing the next message.
     if (!retry && generation === sessionSelectionGeneration) {
@@ -3434,6 +3503,7 @@ onUnmounted(() => {
   disconnectEventStream()
   clearPendingAttachments()
   otioReferenceDraft.dispose()
+  gltfReferenceDraft.dispose()
 })
 
 onMounted(async () => {
@@ -3675,6 +3745,9 @@ function resendLastMessage() {
 .attachment-reference-label { color: var(--c-text-secondary); font-size: 11px; }
 .attachment-source-path { color: var(--c-text-secondary); font-size: 11px; }
 .context-chip.attachment-reference button { width: 32px; min-height: 32px; }
+.gltf-reference-context { max-height: min(9rem, 24dvh); overflow-y: auto; padding-top: 4px; }
+.gltf-reference-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gltf-reference-label:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .context-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-icon { flex-shrink: 0; width: 17px; height: 17px; }
 .context-chip button { flex-shrink: 0; padding: 0 3px; border: 0; background: transparent; color: var(--c-text-secondary); font-size: 17px; cursor: pointer; }

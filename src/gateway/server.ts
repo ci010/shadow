@@ -1,3 +1,4 @@
+import { GLTF_CAPTURE_HEADER } from '../gltf-capture-contract.ts'
 import { HtmlPreviewLeases, previewContext } from './html-preview.ts'
 import type { Hono } from 'hono'
 import { serve } from '@hono/node-server'
@@ -53,7 +54,7 @@ export interface GatewayRouteOptions {
 }
 
 const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
-const CORS_HEADERS = ['Content-Type', 'Authorization', 'If-None-Match'] as const
+const CORS_HEADERS = ['Content-Type', 'Authorization', 'If-None-Match', GLTF_CAPTURE_HEADER] as const
 
 // A 32 KiB live-topic JSON query can occupy 96 KiB after percent encoding.
 // Bound the parser while retaining room for the cursor and ordinary headers.

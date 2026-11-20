@@ -1,4 +1,5 @@
 import { Session } from './session.ts'
+import { serveThreeSnapshot } from '../gateway/three-snapshot.ts'
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
@@ -1013,6 +1014,24 @@ export function sessionsApiPlugin(
       }
       return serveLocalFiles(c, base.path, { key }, 'raw', relPath)
     })
+
+    for (const route of ['/api/sessions/:key/three-snapshot', '/api/sessions/:key/workspace/three-snapshot']) app.get(route, c => serveThreeSnapshot(c, async () => {
+      const key = c.req.param('key')!
+      if (!sessions) return { error: 'sessions_unavailable', status: 501 }
+      if (!await sessions.readSessionState(key)) return { error: 'session_not_found', status: 404 }
+      try { await sessions.assertHistoricalFolderAccess(key) }
+      catch (error) {
+        if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) {
+          return { error: error.code, status: error.status }
+        }
+        throw error
+      }
+      const base = await sessionFileBase(sessions, key, route.includes('/workspace/'))
+      const locality = base.available ? base.locality : base.workdir.nodeId === 'local' ? 'local' : base.workdir.nodeId === 'layerfs' ? 'layerfs' : 'remote'
+      if (locality !== 'local') return { error: `${locality}_unsupported`, status: 501, message: 'Three.js snapshots require a local file root; no Main fallback.' }
+      if (!base.available || base.locality !== 'local') return { error: 'snapshot_root_unavailable', status: 503 }
+      return { path: base.path }
+    }))
 
     for (const route of ['/api/sessions/:key/html-preview', '/api/sessions/:key/workspace/html-preview']) app.post(route, c => {
       const key = c.req.param('key')!
