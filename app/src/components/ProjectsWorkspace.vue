@@ -99,7 +99,7 @@
     <template v-for="[projectId, state] in projectDocuments.projects" :key="projectId">
       <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && !appTab && selectedProjectId === projectId">
         <div class="project-document-host">
-          <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" />
+          <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" @clear-selection="workflowQueries.delete(projectId)" />
           <ProjectWorkbench v-else-if="tab === 'board'" mode="board" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
             :project-name="projects.find(project => project.id === projectId)?.name ?? projectId"
             :visible="visible && !appTab && selectedProjectId === projectId && !dashboardProject && editorGroups.visible(projectEditorId(projectId, tab))"
@@ -278,8 +278,8 @@ provide(WorkflowInputReferencesKey, {
   selection(projectId, owner, sessionId) {
     const item = workflowSelections.value.get(projectId)?.item
     const editor = editorGroups.referenceTarget(projectId)
-    if (!props.visible || selectedProjectId.value !== projectId || item?.reference.projectId !== projectId
-      || !sessionId || editor?.owner !== owner || editor.conversation?.sessionId !== sessionId) return
+    if (!props.visible || appTab.value || dashboardProject.value || selectedProjectId.value !== projectId || item?.reference.projectId !== projectId
+      || editor?.owner !== owner || editor.conversation?.sessionId !== sessionId) return
     return item
   },
   attach(item) {

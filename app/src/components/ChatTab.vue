@@ -389,7 +389,7 @@
               <span class="context-icon i-lucide-workflow" aria-hidden="true" />
               <span>{{ t('Current selection') }}: {{ selectedWorkflowReference.label }}</span>
               <HoverInfo :text="t('Clear selection')" v-slot="{ triggerProps }">
-                <button v-bind="triggerProps" :aria-label="t('Clear selection')" @click="workflowReferenceHub?.clearSelection?.()"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+                <button v-bind="triggerProps" :aria-label="t('Clear selection')" type="button" @click="clearWorkflowReference"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
               </HoverInfo>
             </span>
           </div>
@@ -406,12 +406,12 @@
               </HoverInfo>
             </span>
           </div>
-          <div v-if="inputReferences.length" class="composer-context" :aria-label="t('Attached context')">
-            <span v-for="(item, index) in inputReferences" :key="inputReferenceKey(item.reference)" class="context-chip">
+          <div v-if="manuallyAttachedReferences.length" class="composer-context" :aria-label="t('Attached context')">
+            <span v-for="item in manuallyAttachedReferences" :key="inputReferenceKey(item.reference)" class="context-chip">
               <span class="context-icon i-lucide-workflow" aria-hidden="true" />
               <span>{{ item.label }}</span>
               <HoverInfo :text="t('Remove {name}', { name: item.label })" v-slot="{ triggerProps }">
-                <button v-bind="triggerProps" :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: item.label })" @click="inputReferences.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+                <button v-bind="triggerProps" :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: item.label })" @click="removeInputReference(inputReferenceKey(item.reference))"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
               </HoverInfo>
             </span>
           </div>
@@ -834,7 +834,7 @@ const composerPopoverTitle = computed(() =>
     : t('Folder context requires the local Main desktop app'))
 const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
-  contextItems.value.length + inputReferences.value.length + (answeringQuestion.value ? 0 : otioReferences.value.length) + (selectedWorkflowReference.value ? 1 : 0),
+  contextItems.value.length + manuallyAttachedReferences.value.length + (answeringQuestion.value ? 0 : otioReferences.value.length) + (selectedWorkflowReference.value ? 1 : 0),
   pendingAttachments.value.length,
 ) && !submissionBusy.value && !currentRequest.value?.state.stopping
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
@@ -889,8 +889,18 @@ const otioReferences = otioReferenceDraft.items
 const workflowReferenceHub = inject(WorkflowInputReferencesKey, undefined)
 // Dynamic selection is never stored in the per-conversation attachment draft.
 // Resolving against the current editor lease prevents stale targets and child injection.
-const selectedWorkflowReference = computed(() => !props.embedded && isDirectChat.value && !viewingPhysicalId.value && !isExecution.value
+const selectedWorkflowReference = computed(() => !props.embedded && !props.inspection && (!activeSessionId.value || isDirectChat.value)
+  && !viewingPhysicalId.value && !isExecution.value
   ? workflowReferenceHub?.selection?.(props.projectId || liveProjectId(props.apiBase), editorOwner, activeSessionId.value) : undefined)
+const selectedWorkflowReferenceKey = computed(() => selectedWorkflowReference.value && inputReferenceKey(selectedWorkflowReference.value.reference))
+const manuallyAttachedReferences = computed(() => inputReferences.value.filter(item => inputReferenceKey(item.reference) !== selectedWorkflowReferenceKey.value))
+function removeInputReference(key: string) {
+  inputReferences.value = inputReferences.value.filter(item => inputReferenceKey(item.reference) !== key)
+}
+function clearWorkflowReference() {
+  if (selectedWorkflowReferenceKey.value) removeInputReference(selectedWorkflowReferenceKey.value)
+  workflowReferenceHub?.clearSelection?.()
+}
 const inputText = composerDraft.text
 watch(inputText, () => { void nextTick(autoResize) })
 onMounted(autoResize)
@@ -2945,7 +2955,7 @@ async function sendMessage(overrideContent?: string, opts?: {
   const draftContent = retry ? '' : composeChatMessage(overrideContent ?? submittedText.trim(), contextItems.value)
   const selectedReference = selectedWorkflowReference.value
   const referenceItems = selectedReference
-    ? [...inputReferences.value.filter(item => inputReferenceKey(item.reference) !== inputReferenceKey(selectedReference.reference)), selectedReference]
+    ? [...manuallyAttachedReferences.value, selectedReference]
     : inputReferences.value
   if (!retry && referenceItems.length > 8) { composerError.value = t('Attach up to 8 workflow references.'); return }
   const references = retry ? [] : captureInputReferences(referenceItems)
