@@ -5,7 +5,6 @@ import { test } from 'node:test'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { AudioCppService, runAudioCpp } from './service.ts'
-import { ToolNoEffectError } from '../tools/tool.ts'
 
 test('audio.cpp remains optional and reports broken explicit configuration', async () => {
   await withTempWorkspace(async workspace => {
@@ -20,7 +19,6 @@ test('audio.cpp remains optional and reports broken explicit configuration', asy
     const broken = await service.status()
     assert.equal(broken.status, 'binary_error')
     assert.match(broken.error ?? '', /missing-cli/)
-    await assert.rejects(() => service.inspect(undefined), { code: 'ENOENT' })
   })
 })
 
@@ -39,7 +37,6 @@ test('configure validates binary, model and reserved flags; ASR and TTS use the 
       calls.push(args)
       if (args[0] === '--list-loaders') return invalidLoader
         ? '{}' : '[{"family":"qwen3_asr"},{"family":"kokoro_tts"}]'
-      if (args[0] === '--help') return 'loader help'
       if (args.includes('--audio')) {
         if (failAsr) throw new Error('bad model')
         await writeFile(args[args.indexOf('--text-out') + 1], 'transcribed')
@@ -64,7 +61,6 @@ test('configure validates binary, model and reserved flags; ASR and TTS use the 
     await service.configure({ task: 'asr', family: 'qwen3_asr', path: model, options: ['--language', 'en'] })
     await service.configure({ task: 'tts', family: 'kokoro_tts', path: model })
     assert.equal((await service.status()).models.asr.status, 'path_accessible')
-    assert.equal(await service.inspect('asr'), 'loader help')
     assert.equal(await service.transcribe(input), 'transcribed')
     assert.equal(await service.speak('hello', output), output)
     assert.equal((await readFile(output)).toString('ascii', 0, 4), 'RIFF')
@@ -113,7 +109,7 @@ test('configure accepts both loader catalog generations and leaves saved setting
     for (const catalog of ['not json', '{}', '[]', '{"schema_version":2,"loaders":{}}',
       '{"schema_version":1,"loaders":{"kokoro_tts":{"tasks":"tts"}}}']) {
       const service = new AudioCppService(workspace, async () => catalog)
-      await assert.rejects(service.configure({ binary: process.execPath }), ToolNoEffectError)
+      await assert.rejects(service.configure({ binary: process.execPath }), /unsupported loader catalog/)
       assert.equal(await readFile(projectStoragePath(workspace, '.audio-cpp.json'), 'utf8'), config)
     }
   })

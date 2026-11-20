@@ -277,9 +277,7 @@ import { microAppsPlugin } from '../../microapps/routes.ts'
 import { MicroAppTool } from '../../tools/micro-app.ts'
 import { AudioCppService } from '../../audio-cpp/service.ts'
 import { registerAudioRoutes } from '../../audio-cpp/routes.ts'
-import { AudioCppTool } from '../../tools/audio-cpp.ts'
-import { DiffusionCppService } from '../../diffusion-cpp/service.ts'
-import { DiffusionCppTool } from '../../tools/diffusion-cpp.ts'
+import { mountCppInstallations } from '../../vfs/cpp-installations.ts'
 import { Aria2Downloader } from '../../downloader/aria2.ts'
 import { DownloadTool } from '../../tools/download.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
@@ -1009,15 +1007,6 @@ export async function createProjectRuntime(
     },
   })
   cleanup.push(() => audioRoutes.close())
-  importTool.registerBuiltin('audio_cpp', new AudioCppTool(audioService, project.id, workspace))
-  importTool.registerBuiltin('audio', new AudioCppTool(audioService, project.id, workspace, 'audio'))
-  importTool.registerBuiltin('diffusion_cpp', new DiffusionCppTool(
-    new DiffusionCppService(workspace), project.id, workspace, sessionId => {
-      const state = sessions.getSessionState(sessionId)
-      if (!state) throw new Error('sd-cli session no longer exists')
-      return resolveSessionLocations(workspace, state).sessionDataDir
-    },
-  ))
   importTool.registerBuiltin('download', new DownloadTool(new Aria2Downloader(), project.id, backgroundTasks))
 
   const initiatives = new InitiativeStore(workspace, {
@@ -1272,6 +1261,9 @@ export async function createProjectRuntime(
     homeAvailable: nodeId => !coordinator && mainCluster.workdirLookup({ version: 2, nodeId, workdirId: DEVICE_HOME_WORKDIR }, 'filesystem.read').workdir?.online === true,
   })
   vfs.mount('v:devices', 'read-only live device inventory for owner Web turns; connection, protocol and directory-picker support, no filesystem browsing or latency probes', devicesVfs.read, devicesVfs.list)
+
+  mountCppInstallations(vfs, workspace, project.id,
+    mainCluster.getNodeInventory().nodes.find(node => node.role === 'main')?.nodeId ?? 'local')
 
   const projectFoldersVfs = projectFolderDiscovery.handlers()
   const dispatchFiles = new ProjectDispatchFiles(workspace, project.id)

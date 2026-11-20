@@ -67,7 +67,6 @@ export const PROJECT_STORAGE_ENTRIES: Readonly<Record<string, readonly string[]>
   'github-integration.json': ['config', 'github-integration.json'],
   'user-actions.v1.json': ['config', 'user-actions.v1.json'],
   '.audio-cpp.json': ['config', 'audio-cpp.json'],
-  '.diffusion-cpp.json': ['config', 'diffusion-cpp.json'],
   '.chrome-devtools.json': ['config', 'chrome-devtools.json'],
   '.env': ['config', '.env'],
   'SOUL.md': ['config', 'SOUL.md'],

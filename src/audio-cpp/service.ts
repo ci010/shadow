@@ -10,7 +10,6 @@ import { delimiter, dirname, extname, join } from 'node:path'
 import { z } from 'zod'
 import { writePrivateFile } from '../config/store.ts'
 import { workspacePath } from '../utils/paths.ts'
-import { ToolNoEffectError } from '../tools/tool.ts'
 
 const model = z.object({
   family: z.string().regex(/^[a-z][a-z0-9_]*$/),
@@ -197,7 +196,7 @@ export class AudioCppService {
         try { loaderCatalog.parse(JSON.parse(catalog)) }
         catch (error) {
           if (!(error instanceof SyntaxError || error instanceof z.ZodError)) throw error
-          throw new ToolNoEffectError('audio.cpp returned an unsupported loader catalog; expected a nonempty family array or schema_version=1 with a loaders object. Configuration was not written.', { cause: error })
+          throw new Error('audio.cpp returned an unsupported loader catalog; expected a nonempty family array or schema_version=1 with a loaders object. Configuration was not written.', { cause: error })
         }
         next.binary = binary
       }
@@ -263,17 +262,6 @@ export class AudioCppService {
     })
     this.pending = operation
     return operation
-  }
-
-  async inspect(task: Task | undefined, signal?: AbortSignal): Promise<string> {
-    const config = await this.read()
-    const binary = await this.binary(config)
-    if (!binary) throw new Error('audio.cpp CLI not installed; read v:skills/audio-cpp')
-    const entry = task && config[task]
-    const args = entry
-      ? ['--help', '--task', task, '--family', entry.family, '--model', entry.path]
-      : ['--list-loaders', '--json']
-    return (await this.run(binary, args, signal, PROBE_TIMEOUT_MS)).slice(0, 30000)
   }
 
   async transcribe(input: string, signal?: AbortSignal, expectedRoute?: 'local' | 'remote'): Promise<string> {

@@ -8,18 +8,36 @@ metadata:
 
 # Local image and video with stable-diffusion.cpp
 
-Shadow ships neither `sd-cli` nor weights. Start with `diffusion_cpp status` and
-`diffusion_cpp discover` (find its contract with
-`search(query="diffusion_cpp", handler="grep", path="v:tools")` and call via
-`invoke_tool`). `status` distinguishes missing configuration from accessible
-paths; **neither an accessible path nor a discovery candidate proves the model
-can run**. `inspect` can show CLI `help` or `devices`. All operations are local
-to the owning Project and execution node; never interpret a remote workdir
-display path on Main. `image` defaults to Qwen Image 2.1. Z-Image-Turbo is an
-explicit lower-resource text-to-image alternative, not an automatic fallback
-or a replacement for Qwen editing. Legacy Qwen-Image-Edit and Anima are
-separate opt-in image presets. `video` uses MiniMax-H3. Do not download,
-run, or switch models silently.
+Shadow ships neither `sd-cli` nor weights. Use the inventory and the selected
+execution device's ordinary shell. Qwen Image 2.1 is the usual image choice;
+Z-Image-Turbo, Anima, MOSS and legacy Qwen edit are explicit alternatives.
+MiniMax-H3 is for video/audio. Do not download, run or switch models silently.
+
+## Project inventory and device scope
+
+Use `read` and `write` on `v:cpp-installations/diffusion-cpp` and ordinary
+OS-shell `exec` on the **same selected device** for discovery, hashing, probes
+and inference. Select the execution workspace first; if it is unavailable,
+stop. Do not mix per-call workspace overrides with inventory reads/writes; a
+Child path is never a Main path. LayerFS is not an installation device.
+
+Read the virtual file first. Copy `schemaVersion`, `projectId`, `node` and
+`runtime` from the receipt, omit `installed`, and write a complete JSON record:
+`binary` has `path`, `version`, `source`, `expectedSha256`, `observedSha256`;
+`weights` is an array of objects with `role`, `path`, `source`,
+`expectedSha256`, `observedSha256`. Use absolute **file** paths. Record every
+required sidecar separately, with roles identifying the task/model component.
+Use revision-pinned sources where known (never credentials), or `null` for
+unknown provenance. Use `null` for an unavailable trusted expected digest,
+never copy the measured hash into that field. Hash the files on the executing
+device with `shasum -a 256` (macOS), `sha256sum` (Linux) or `Get-FileHash
+-Algorithm SHA256` (PowerShell); record lowercase hex. Stop on a mismatch;
+do not run untrusted files. Missing inventory is not evidence that the files
+are absent. A cached digest is a historical observation, not a fresh check;
+recheck before reuse and treat unverified provenance as a limitation requiring
+review. Inventory writes do not install files, change Audio UI settings,
+validate bytes on a remote device or authorize execution. Full writes replace
+only the selected device/runtime record; preserve entries you still need.
 
 ## Device-local shared runtime and model storage
 
@@ -54,36 +72,18 @@ storage policy does not itself authorize downloading, installing or execution.
 
 ## First look for what the user already has
 
-1. Run `status` and `discover` **before any network request**. Discovery checks
-   `SHADOW_MODELS_DIR`, `HF_HUB_CACHE` (or `HF_HOME\hub`), `MODELSCOPE_CACHE`
-   (normally `~\.cache\modelscope\hub`), common ComfyUI `models` paths,
-   and the device-local `stable-diffusion.cpp/models/` default.
-   Add user-approved absolute directories through `discover.roots`; inspect
-   ComfyUI's configured `extra_model_paths.yaml` with the user's permission
-   when it points elsewhere. HF snapshots often contain symlinks to blobs.
-   Never sweep a whole disk or examine unrelated/private files to find models.
-2. Most candidates report `filename_and_size_only`; the legacy Qwen Diffusers
-   cache reports `index_and_shard_headers_only` only after checking its
-   manifest, both weight indexes, every named shard and the VAE header.
-   Neither check proves tensor integrity or successful inference. Discovery also reports unreadable
-paths in `warnings` and incomplete scans with `truncated`. Verify actual format, variant,
-   license and provenance. `configure` checks exact family-specific component
-   names and GGUF/safetensors headers; it does **not** verify the tensors,
-   provenance, SHA-256, GPU support, or inference. Compare downloaded files
-   with the selected repository/revision's published SHA-256 when available,
-   then do a small real generation on that device. An ordinary
-   Qwen3-VL-32B weight is **not** the MiniMax-H3 encoder: H3's checkpoint
-   is truncated to 50 language layers, omits final LM normalization, and
-   requires its matching vision tower/DeepStack mergers. The Qwen Image
-   2.1 VAE is not interchangeable with older Qwen/Wan VAEs; a generic
-   `ae.safetensors` must be identified by origin before using it for Z.
-3. If all compatible files exist, configure their absolute paths in place:
-   no rename, copy, conversion, or second download. Config lives in the
-   owning Project Home's `.diffusion-cpp.json`; another Project must opt in
-   separately. Outputs are created under the current session's private
-   `media` directory, never beside the weights. Ask the user to review the
-   weight license **before** setting `licenseAcknowledged: true`, including
-   when importing existing files or changing a configured model component.
+1. Read the device inventory and use bounded `exec` searches **before any
+   network request**. Check `SHADOW_MODELS_DIR`, `HF_HUB_CACHE` (or `HF_HOME`),
+   `MODELSCOPE_CACHE`, known ComfyUI model directories, and the device-local
+   runtime storage. Inspect `extra_model_paths.yaml` only with permission.
+   HF snapshots can link to blobs. Never sweep a whole disk or private files.
+2. Filenames, sizes and file headers identify candidates only. Check exact
+   variant, sidecars, hashes and license. A generic Qwen3-VL-32B is not the
+   MiniMax-H3 encoder; Qwen Image 2.1 requires its matching VAE. Identify
+   a generic `ae.safetensors` by source before using it for Z-Image-Turbo.
+3. Record the verified paths in place. Do not copy, convert or redownload
+   usable files. Review each component's license before using cached or new
+   weights. Keep generated outputs separate from dependencies.
 
 There is no universal shared cache. HF Hub commonly uses
 `~\.cache\huggingface\hub`, ModelScope commonly uses
@@ -96,7 +96,7 @@ ask before downloading. Prefer the user's existing cache or a persistent
 shared directory they choose (including an external disk). If neither is
 available, use the device-local `stable-diffusion.cpp/models/` default above.
 Use a pinned revision, per-file download, checksum verification and a
-complete file before calling `configure`; do not fetch entire Diffusers
+complete file before recording it; do not fetch entire Diffusers
 repositories just to obtain a few components. GitHub release archives
 with a published SHA-256 can be transferred via `v:skills/download`
 and the bundled `download` tool; provider CLIs remain responsible for
@@ -111,7 +111,7 @@ unverified installer/mirror. No automatic startup installs.
 Use the [upstream guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/qwen_image_2.1.md).
 The recommended Q4 combination is:
 
-| `configure` field | Filename | ModelScope repository |
+| Component | Filename | ModelScope repository |
 | --- | --- | --- |
 | `diffusion` | `qwen_image_2.1-Q4_K.gguf` | [`leejet/Qwen-Image-2.1-GGUF`](https://www.modelscope.cn/models/leejet/Qwen-Image-2.1-GGUF) |
 | `vae` | `qwen_image_2.1_vae_bf16.safetensors` under `vae/` | [`Comfy-Org/Qwen-Image-2.1`](https://www.modelscope.cn/models/Comfy-Org/Qwen-Image-2.1) |
@@ -120,8 +120,7 @@ The recommended Q4 combination is:
 
 Text-to-image downloads total approximately **9.90 GB**; editing adds
 approximately **1.16 GB**. These figures exclude runtime buffers and
-download staging. Edit by passing `reference` to `image`, only once the
-matching `vision` file is configured; an ordinary text-to-image setup does
+download staging. Pass the reference image and matching vision projection using the installed CLI edit flags; an ordinary text-to-image setup does
 not enable editing. Qwen uses `--cfg-scale 6 --sampling-method euler --fa
 --offload-to-cpu`; sizes must be multiples of 32. A lower-bit GGUF saves
 weight space at a quality cost but does not remove encoder/activation and
@@ -142,17 +141,15 @@ Image VAE. Its Diffusers cache can be used in place if it contains a
 `QwenImageEditPipeline` manifest, the `qwen2_5_vl` text encoder config,
 both complete shard indexes and a VAE. For example, the usual ModelScope
 root is `~\.cache\modelscope\hub\models\Qwen\Qwen-Image-Edit`;
-`discover` returns the absolute paths. Configure **all three from this
-same cache**, without copying or converting any weights:
+resolve and record **all three from this same cache**, without copying or converting any weights:
 
-| `configure` field | Path beneath the cache root |
+| Component | Path beneath the cache root |
 | --- | --- |
 | `diffusion` | `transformer\diffusion_pytorch_model.safetensors.index.json` |
 | `llm` | `text_encoder\model.safetensors.index.json` |
 | `vae` | `vae\diffusion_pytorch_model.safetensors` |
 
-Pass a `reference` image on every `image` request with
-`preset: "qwen_image_edit"`; this is **not text-to-image**. The upstream
+Pass a reference image using the installed CLI edit flags; this is **not text-to-image**. The upstream
 [edit guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/qwen_image_edit.md)
 uses `--cfg-scale 2.5 --sampling-method euler --diffusion-fa
 --flow-shift 3 --offload-to-cpu`, not the Qwen 2.1 flags. The indexed
@@ -176,7 +173,7 @@ not an SDXL checkpoint or Qwen Image 2.1. The upstream
 uses `--diffusion-model`, `--llm`, `--vae`, Euler sampling and
 `--diffusion-fa --offload-to-cpu`. Use the three *matching* files:
 
-| `configure` field | Official `circlestone-labs/Anima` file |
+| Component | Official `circlestone-labs/Anima` file |
 | --- | --- |
 | `diffusion` | `split_files/diffusion_models/anima-turbo-v1.1.safetensors` (or an explicitly selected preview/base/aesthetic variant) |
 | `llm` | `split_files/text_encoders/qwen_3_06b_base.safetensors` |
@@ -220,12 +217,9 @@ contains it; this is a known-containing release, not a claim of the minimum
 release. Inspect the installed version/help and backend first; do not replace
 an existing installation automatically.
 
-Use `preset: "moss_image_sft"` with `diffusion_cpp configure` and `image`
+Use the `moss_image_sft` component set with direct CLI inference
 for **SFT text-to-image**. Base is not a Shadow preset; use the explicit CLI
-example below if approved. `status` checks SFT component paths, weight headers
-and basic tokenizer JSON structure; it does not prove model compatibility.
-Discovery offers filename/size candidates for weights, not a tokenizer match
-or a complete compatible setup. Do not pass `--tokenizer` through `options`.
+example below if approved. Paths, headers and tokenizer JSON structure do not prove compatibility.
 
 ### Short end-to-end setup and first run
 
@@ -233,7 +227,7 @@ Treat a request to set up MOSS as the following workflow, not just a command
 example. Carry out authorized steps; ask only for missing download/license or
 execution decisions, and stop with a precise blocker when necessary.
 
-1. **Check the execution device.** Run `status`/`discover` first, inspect the
+1. **Check the execution device.** Read the inventory, inspect the
    installed CLI version/help and GPU backend, and check free disk/RAM/VRAM.
    Reuse a compatible runtime; if missing or too old, obtain approval for a
    pinned, checksum-verified release and install its complete package (including
@@ -253,13 +247,9 @@ execution decisions, and stop with a precise blocker when necessary.
    rather than inventing a digest. Parse the tokenizer as JSON, require its
    vocabulary/model structure, and confirm its upstream origin/revision; a
    filename or successful JSON parse alone does not establish compatibility.
-4. **Wire the paths.** For SFT, configure `preset: "moss_image_sft"` with
-   the four absolute paths (`diffusion`, `llm`, `vae`, `tokenizer`) and
-   `licenseAcknowledged: true` after user review. For Base, pass the four
-   actual paths to the CLI example below. Files can stay in separate caches.
-5. **Run one smoke generation.** For SFT, call `image` with
-   `preset: "moss_image_sft"` and the approved prompt; the result uses the
-   session's media directory. For Base, use a new approved output path.
+4. **Wire the paths.** Record the four absolute paths (`diffusion`, `llm`, `vae`,
+   `tokenizer`) for the reviewed variant and pass them to the CLI. Files can stay in separate caches.
+5. **Run one smoke generation.** Use the approved prompt and a new approved output path.
    Run one job at a time on the device. Start with a modest size
    divisible by 16 (for example 512 x 512; the upstream example is 1024 x 1024),
    using the MOSS flags below. Retain the process result/log and elapsed time;
@@ -309,7 +299,7 @@ OUTPUT='/absolute/path/to/new-moss-base.png'
 ```
 
 The SFT preset uses CFG 3 and CPU offload, leaving sampling method, steps
-and time shift to the CLI by default (steps and CFG can be set on `image`).
+and time shift to the CLI by default.
 Dimensions must be divisible by 16. The default discrete scheduler uses time
 shift 5; `--flow-shift` overrides it. The negative CFG branch skips DiT layer
 22 (zero-based). Do not transplant Qwen/Z/Anima sampling defaults or claim
@@ -338,7 +328,7 @@ are not substitutes for upstream weight rights.
 ## Lower-resource text-to-image: Z-Image-Turbo
 
 When the GPU/available RAM cannot reasonably support Qwen 2.1, run
-`diffusion_cpp inspect` with `which: "devices"`, check available RAM, VRAM
+the installed CLI’s device-list option from `--help`, check available RAM, VRAM
 and disk, explain quantization/CPU-offload tradeoffs and **recommend** the
 Z-Image-Turbo setup. Do not switch the preset without user approval.
 On Windows, `Get-CimInstance Win32_ComputerSystem` reports physical RAM
@@ -351,7 +341,7 @@ space for staging; never download solely on the basis of a model size.
 The upstream [Z-Image guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/z_image.md)
 demonstrates:
 
-| `configure` field | Filename | ModelScope repository |
+| Component | Filename | ModelScope repository |
 | --- | --- | --- |
 | `diffusion` | `z_image_turbo-Q3_K.gguf` | [`hf/leejet-Z-Image-Turbo-GGUF`](https://www.modelscope.cn/models/hf/leejet-Z-Image-Turbo-GGUF) |
 | `llm` | `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` | [`unsloth/Qwen3-4B-Instruct-2507-GGUF`](https://www.modelscope.cn/models/unsloth/Qwen3-4B-Instruct-2507-GGUF) |
@@ -369,7 +359,7 @@ Review each component's original license before use.
 
 Follow the [upstream MiniMax-H3 guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/minimax_h3.md):
 
-| `configure` field | Filename | ModelScope repository |
+| Component | Filename | ModelScope repository |
 | --- | --- | --- |
 | `diffusion` | `minimax_h3_fl2va-Q4_K_M.gguf` | [`leejet/MiniMax-H3-GGUF`](https://www.modelscope.cn/models/leejet/MiniMax-H3-GGUF) |
 | `llm` | `qwen3vl_32b_minimax_h3-Q4_K_M.gguf` | same GGUF repository; **not** general Qwen3-VL-32B |
@@ -382,15 +372,13 @@ before inference memory, staging or an optional separate Ref2VA model. Some
 pruned/repacked variants have different sizes and capabilities; verify their
 compatibility independently. If the specialized H3 encoder's vision tower
 is stored separately, configure its matching `vision` projection as well;
-the suggested combined GGUF does not require another file. `video` defaults to FL2VA; `initImage` sets the
-first frame, `endImage` requires the first, and `mode: "ref2va"` requires
-`refDiffusion` and accepts `referenceImages`. Video/audio references are
-described in the upstream CLI documentation but are **not exposed by this
-Shadow tool**. H3 requires 24 fps and frame counts of 17k+5 (e.g., 56).
-The tool outputs **WebM**, which `sd-cli` can mux with its audio; MP4 is
-not the CLI output in this integration. Agent replies can attach the tool's
-returned session-relative path with `MEDIA:media/<generated-file>.webm`.
-The same convention applies to the generated PNG.
+the suggested combined GGUF does not require another file. H3 requires
+24 fps and frame counts of 17k+5 (e.g., 56). The old Shadow wrapper builds
+`-M vid_gen --diffusion-model ... --vae ... --audio-vae ... --llm ...
+--fps 24 --video-frames ... -o ...`; this is a source reference, not a verified
+run or a claim that every build supports the same flags. Check installed help,
+the pinned upstream guide and new output path before running an approved
+job. Inspect the completed WebM for video and muxed audio.
 
 The [official MiniMax-H3 Community License](https://www.modelscope.cn/models/MiniMax/MiniMax-H3/file/view/master/LICENSE)
 excludes the US, EU, UK and Republic of Korea from its standard territory;
@@ -404,32 +392,14 @@ MIT license with rights to H3 weights.
 
 ## Invoking and troubleshooting
 
-`configure` accepts one preset's absolute `diffusion`, `vae`, `llm` and
-applicable sidecars, plus `licenseAcknowledged: true` after user review.
-It checks file presence, filename family and header, but a real
-device/model generation is still required to verify compatibility. An
-installed CLI on `PATH` or set by `SDCPP_CLI_PATH` does not need a binary
-configuration; to configure one explicitly, use its absolute `sd-cli` path.
-For example, after the user's license confirmation and discovery of actual
-files, a Qwen configuration is shaped as:
-
-```json
-{"action":"configure","preset":"qwen_image_2_1","diffusion":"D:\\AI\\models\\qwen_image_2.1-Q4_K.gguf","vae":"D:\\AI\\models\\qwen_image_2.1_vae_bf16.safetensors","llm":"D:\\AI\\models\\Qwen3VL-8B-Instruct-Q4_K_M.gguf","licenseAcknowledged":true}
-{"action":"image","prompt":"a cat by the sea","width":512,"height":512}
-{"action":"video","prompt":"a cat walking by the sea with matching ocean sound","frames":56}
-```
-
-The paths above are examples, **not** assumed installation locations;
-`video` requires the separately configured H3 preset. The `media` value
-returned by a generation is relative to the owning session data directory.
-`inspect` with `which: "help"` shows the installed version's live flags
-before adjusting advanced `options`. Options are a shell-free argv array;
-Shadow owns model/input/output/frame selectors. Request a short,
-low-resolution smoke generation before an expensive video request. Calls
-can be cancelled and one generation per Project runs at a time.
-To remove an optional Qwen editing projection or H3 Ref2VA model, pass
-an empty string as `vision` or `refDiffusion` in `configure` after license
-review; required base components cannot be cleared.
+Resolve an existing CLI using `SDCPP_CLI_PATH`, PATH (`command -v sd-cli` or
+`Get-Command sd-cli`) and bounded searches of known locations. Once verified,
+check installed CLI `--help` for backend and model flags. For a basic image,
+pass the verified `--diffusion-model`, `--vae`, `--llm` and any required
+sidecars, an approved prompt (`-p`), dimensions (`-W`/`-H`) and a new output
+path (`-o`). Check the upstream guide and installed CLI for each variant;
+do not reuse flags blindly. Use one job at a time and verify the resulting
+media actually decodes. Inspect exit status and diagnostics before retrying.
 
 For mainland China, use the verified ModelScope repositories above. Its
 [CLI](https://github.com/modelscope/modelscope/blob/master/docs/source/command.md)
@@ -467,7 +437,7 @@ silently substitute a different quantization, switch to Hugging Face,
 or treat a partial file as complete. HF and ModelScope do not share
 cache metadata; existing HF snapshots can still be used directly.
 
-If `status` reports a missing path, re-run bounded discovery. If the
+If an inventory path is missing, re-run bounded discovery. If the
 header is invalid, check for a truncated download or a Git LFS pointer.
 For CLI errors inspect `help`/`devices`, matching backend build and
 adjacent runtime libraries. Qwen edit requires its mmproj. H3 needs
