@@ -52,7 +52,6 @@
       "target": "nsis",
       "icon": "assets/icon.ico",
       "extraResources": [
-        { "from": "service", "to": "service", "filter": ["**/*"] },
         { "from": "aria2/aria2c.exe", "to": "aria2/aria2c.exe" },
         { "from": "safegit", "to": "safegit", "filter": ["safegit.exe", "LICENSE", "release.json"] }
       ]

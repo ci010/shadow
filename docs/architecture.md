@@ -105,11 +105,7 @@ build emits `app/dist`.
 The release command gates packaging on backend/Electron/Vue typechecks and
 focused release tests, then verifies source-bound hashes of the fresh package's
 resources and ASAR. See [release verification](release.md) for its exact limits.
-Opt-in Windows service mode uses a pinned WinSW host to run Electron in Node
-mode independently of the UI. Desktop service attachment has been removed;
-independent services retain browser access and CLI management. Desktop
-utility processes stop on explicit application quit, not window close. Installation
-and SCM lifecycle acceptance remain distinct from a passing packaged smoke.
+Desktop utility processes stop on explicit application quit, not window close.
 The eval child is the separate Node runner used by inline script execution, not
 another long-lived agent authority.
 
@@ -3354,8 +3350,7 @@ pending observation. Child hosts are not polled for Main session state.
 
 `pnpm dev` is the local Electron development path; `pnpm desktop` selects
 the native Windows x64 NSIS, macOS x64/arm64 ZIP, or Linux x64 tar.gz pipeline.
-The release workflow runs native jobs and uploads only verified artifacts; WinSW
-resources remain Windows-only. macOS test builds use ad-hoc signing without
+The release workflow runs native jobs and uploads only verified artifacts. macOS test builds use ad-hoc signing without
 notarization. Build configuration and artifacts are
 not evidence of clean-machine certification, signing/notarization, automated
 updates, or real-device pairing acceptance. Those require their own validation.

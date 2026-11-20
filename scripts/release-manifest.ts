@@ -7,7 +7,7 @@ import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 const sourceInputs = [
   'scripts/agent-desktop-lock.json',
   'integrations/agent-desktop/LICENSE', 'integrations/agent-desktop/NOTICE',
-  'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2', 'desktop/safegit',
+  'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/aria2', 'desktop/safegit',
   'build.ts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
   '.gitattributes', '.github/workflows/release-check.yml',
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
@@ -76,7 +76,6 @@ export async function sourceFingerprint(root: string): Promise<string> {
     if ((await stat(path)).isDirectory()) {
       for (const [name, bytes] of await tree(path, input === 'integrations/a2a' ? new Set(['node_modules', 'dist']) : undefined)) {
         // The pinned downloaded wrapper is an output, not source.
-        if (input === 'desktop/service' && name === 'ShadowService.exe') continue
         if (input === 'desktop/safegit' && ['safegit', 'safegit.exe', 'release.json', 'LICENSE'].includes(name)) continue
         if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',
           'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh', 'THIRD-PARTY-NOTICES.txt', 'wslay-autoconf.patch'].includes(name)) continue
@@ -102,7 +101,6 @@ export async function createReleaseManifest(
     ['desktop/aria2', 'resources/aria2'],
     ...(target.platform !== 'win32' && await exists(join(root, 'desktop', 'safegit', 'release.json'))
       ? [['desktop/safegit', 'resources/safegit']] : []),
-    ...(target.platform === 'win32' ? [['desktop/service', 'resources/service']] : []),
     ['desktop/dist', 'asar/dist'],
     ['desktop/assets', 'asar/assets'],
   ]) {
@@ -159,7 +157,6 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
     ...(legacy ? [] : [`resources/aria2/${target.platform === 'win32' ? 'aria2c.exe' : 'aria2c'}`,
       'resources/aria2/COPYING', 'resources/aria2/LICENSE.OpenSSL',
       'resources/aria2/aria2-1.37.0-source.tar.gz', 'resources/aria2/BUILD.md', 'resources/aria2/build-aria2-native.sh']),
-    ...(target.platform === 'win32' ? ['resources/service/ShadowService.exe'] : []),
     'asar/dist/main.js', 'asar/dist/preload.cjs']) {
     if (!(required in files)) throw new Error(`Release manifest is missing ${required}`)
   }
@@ -199,7 +196,7 @@ export async function verifyReleaseManifest(
   }
   for (const directory of ['backend', 'app-dist', ...(!legacy ? ['aria2'] : []),
     ...(Object.keys(manifest.files).some(name => name.startsWith('resources/safegit/')) ? ['safegit'] : []),
-    ...(target.platform === 'win32' ? ['service'] : [])]) {
+    ...((await readdir(resources)).includes('service') ? ['service'] : [])]) {
     for (const [name, bytes] of await tree(join(resources, directory))) {
       actual.set(`resources/${directory}/${name}`, bytes)
     }
