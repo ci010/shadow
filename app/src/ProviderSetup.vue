@@ -72,7 +72,8 @@
       <label v-if="provider === 'custom'">{{ t('Provider name') }}
         <UiInput v-model="customProvider" required pattern="[a-zA-Z][a-zA-Z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'" />
       </label>
-      <label>{{ t('Connection model') }} <UiInput v-model="model" required :placeholder="t('Model ID from your provider')" :disabled="saving" /></label>
+      <label>{{ openRouter ? t('Connection model (optional)') : t('Connection model') }} <UiInput v-model="model" :required="!openRouter" :placeholder="t('Model ID from your provider')" :disabled="saving" /></label>
+      <p v-if="openRouter" class="help">{{ t('Leave the model blank to choose from the OpenRouter catalog in the composer.') }}</p>
       <label v-if="provider === 'custom'">{{ t('API base URL') }} <UiInput v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving" /></label>
       <label>{{ t('API key') }} <UiInput v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
         :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? t('Leave blank to keep the saved key') : provider === 'custom' ? t('Optional for local endpoints') : t('Enter your provider API key')" /></label>
@@ -107,7 +108,7 @@ const props = withDefaults(defineProps<{
   apiBase: string; status: ProviderSetupStatus | null; error?: string
   mode?: 'setup' | 'add' | 'edit'; excludedProviders?: string[]; canClose?: boolean; active?: boolean
 }>(), { mode: 'setup', excludedProviders: () => [], active: true })
-const emit = defineEmits<{ configured: []; retry: []; close: []; cancel: []; saving: [value: boolean] }>()
+const emit = defineEmits<{ configured: [status?: ProviderSetupStatus]; retry: []; close: []; cancel: []; saving: [value: boolean] }>()
 const title = ref<HTMLElement | null>(null)
 const editingLabel = computed(() => props.status?.name
   ? `${props.status.name} · ${providerDisplayName(props.status.type ?? props.status.provider)}`
@@ -125,10 +126,11 @@ const method = ref(props.status?.authMode === 'deepseek-account' && props.mode !
 const initialProvider = props.mode === 'add' ? availablePresets.value[0]?.id ?? 'custom'
   : props.status?.authMode === 'copilot' ? 'openai' : props.status?.type ?? props.status?.provider ?? 'openai'
 const provider = ref(props.status?.authMode === 'none' || !knownProviders.includes(initialProvider) ? 'custom' : initialProvider)
+const openRouter = computed(() => provider.value === 'openrouter')
 const customProvider = ref(props.mode !== 'add' && provider.value === 'custom' ? initialProvider : 'local')
 const model = ref(props.mode === 'add' || props.status?.authMode === 'copilot'
   ? providerPresets.find(item => item.id === initialProvider)?.model ?? ''
-  : props.status?.model ?? 'gpt-4.1')
+  : props.status?.model ?? (openRouter.value ? '' : 'gpt-4.1'))
 const baseUrl = ref(props.mode === 'add' || props.status?.authMode === 'copilot' ? '' : props.status?.baseUrl ?? '')
 const initialCopilotHost = props.mode !== 'add' && props.status?.authMode === 'copilot' ? props.status.host ?? 'github.com' : 'github.com'
 const copilotHostType = ref(initialCopilotHost === 'github.com' ? 'github' : 'enterprise')
@@ -226,12 +228,12 @@ async function saveProvider() {
     const result = await client.save({
       provider: instanceId.value, type: props.mode === 'edit' ? props.status?.type ?? name : name,
       ...(displayName.value.trim() ? { name: displayName.value.trim() } : {}),
-      model: model.value.trim(),
+      ...(model.value.trim() || !openRouter.value ? { model: model.value.trim() } : {}),
       ...(apiKey.value ? { apiKey: apiKey.value } : {}),
       ...(provider.value === 'custom' ? { baseUrl: baseUrl.value.trim() } : {}),
     })
     apiKey.value = ''
-    if (result.ready) emit('configured')
+    if (result.ready) emit('configured', result)
     else {
       message.value = t('Configuration was not saved. {value1}', { value1: readinessMessages[result.reason ?? ''] ?? t('Check credentials and connectivity, then retry.') })
     }
