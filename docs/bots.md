@@ -555,9 +555,13 @@ The common guest context is deliberately capability-backed:
   HTTPS origin/method/path and optionally body schema; private secret references
   inject credentials in the broker, never into script source or context. The same
   grants are available to service bindings and Discord directory bindings.
-- Static `@shadow/<grant-id>` imports expose the same controlled call API. Relative
-  JS/TS helpers resolve only within the frozen file map. Dynamic import/require,
-  Node/native modules, host file loaders and unapproved external imports are denied.
+- Call grants only through `ctx.services.call(grantId, input)`. Static
+  `@shadow/<grant-id>` imports are no longer supported: replace them in the tool
+  source and republish the BOT package. Keep the existing `@shadow/<grant-id>`
+  entries in `imports` and `allowedModules`; these are permission declarations,
+  not source imports. The built-in `@shadow/bot-sdk` and relative JS/TS helpers in
+  the frozen file map remain importable. Dynamic import/require, Node/native
+  modules, host file loaders and other external imports are denied.
 - `ctx.storage.get(key)`, `.set(key, value)`, `.delete(key)`: BOT/conversation-scoped
   JSON storage. Keys are bounded alphanumeric/underscore/hyphen names; values max
   256 KB, 256 keys and 8 MiB per namespace. Storage persists independently of releases.

@@ -58,9 +58,18 @@ test('missing callbacks, invalid context inputs and revoked capability fail clos
   assert.equal(touched, false)
 })
 
-test('approved @shadow module works, undeclared imports and native APIs are denied', async () => {
+test('declared service grants are callable through context but not importable', async () => {
   const files = botFiles(`import lookup from '@shadow/lookup'; export default {execute: args => lookup(args)}`, { allowedModules: ['@shadow/lookup'], tools: [{ name: 'custom_tool', description: 'lookup', parameters: {type: 'object'}, module: 'tools/main.ts', imports: ['@shadow/lookup'] }] })
-  assert.deepEqual(await executeBotTool(options('', { files, callModule: async (name, input) => ({name, ...input}) })), {name: 'lookup', text: 'hello'})
+  const calls: unknown[] = []
+  const input = options('', { files, services: async (name, args) => { calls.push(name); return args } })
+  await assert.rejects(executeBotTool(input), /Bot service imports are no longer supported: @shadow\/lookup.*ctx\.services\.call/)
+  assert.deepEqual(calls, [])
+  files['tools/main.ts'] = tool(`return ctx.services.call('lookup', args)`)
+  assert.deepEqual(await executeBotTool(input), {text: 'hello'})
+  assert.deepEqual(calls, ['lookup'])
+})
+
+test('undeclared imports and native APIs are denied', async () => {
   for (const source of [
     `import fs from 'node:fs'; export default {execute:()=>fs.readFileSync('/etc/passwd','utf8')}`,
     `import secret from '/etc/passwd'; export default {execute:()=>secret}`,
@@ -115,12 +124,6 @@ test('adversarial constructor chains cannot recover host process from any expose
   }
   // Rejected host errors are replaced with a fresh guest Error, never passed through.
   assert.deepEqual(await executeBotTool(options(tool(`try { await ctx.services.call('fail', {}); } catch (error) { try { return {escaped:error.constructor.constructor('return process.version')()}; } catch { return {blocked:true}; } }`), { services: async () => { throw new Error('host private diagnostic') } })), {blocked:true})
-  // Static imports go through guest-realm adapters too, including namespace exports.
-  const imports = ['lookup', 'lookup.call', 'lookup.fetch', 'lookup.default', 'lookup.default({}).then']
-  for (const expression of imports) {
-    const files = botFiles(`import * as lookup from '@shadow/lookup'; export default {async execute() { try {const exposed = ${expression}; const ctor = typeof exposed === 'function' ? exposed.constructor : exposed.constructor.constructor; return {escaped:await ctor('return process.version')()}; } catch {return {blocked:true};} }}`, { allowedModules: ['@shadow/lookup'], tools: [{name:'custom_tool',description:'test',parameters:{type:'object'},module:'tools/main.ts',imports:['@shadow/lookup']}] })
-    assert.deepEqual(await executeBotTool(options('', {files, callModule: async () => ({value:1})})), {blocked:true}, expression)
-  }
 })
 
 
