@@ -1,0 +1,948 @@
+diff --git a/docs/bots.md b/docs/bots.md
+index e4e8f6a6..70474107 100644
+--- a/docs/bots.md
++++ b/docs/bots.md
+@@ -118,7 +118,7 @@ falls back to Main's filesystem.
+   `agent`; followed by the Agent prompt.
+ - `bot.json` (or the JSON path in `config`): data-only `connection`,
+   `subscriptions`, `bindings`, `tools`, `allowedModules`, `skills`, and read scopes
+-  (`readResources` and Discord’s `readDomains`, legacy `sourceFolders`, and `discordHistory`). Scope restrictions by mode
++  (`readResourcesModel`, `readResources`, and Discord’s `readDomains` and `discordHistory`). Scope restrictions by mode
+   still apply. Credentials never belong in either file.
+ - JS/TS tool modules and their relative JS/TS helpers.
+ - No executable configuration imports, initialization hooks, package installation,
+@@ -140,6 +140,7 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
+ 
+ ```json
+ {
++  "readResourcesModel": "bot-wide",
+   "allowedModules": [],
+   "tools": [{
+     "name": "remember_note",
+@@ -161,7 +162,6 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
+     "trigger": "mention",
+     "tools": ["remember_note"],
+     "allowFrom": ["<allowed sender ID>"],
+-    "readFolders": [],
+     "parameters": {},
+     "grants": []
+   }]
+@@ -418,21 +418,35 @@ thread, and live platform checks.
+ 
+ ### Built-in read/search for Service BOTs
+ 
+-QQ, Feishu, and Discord use the same `readResources` config in the BOT companion
+-JSON. Put the **maximum** scope on the BOT and only the subset actually needed
+-on each binding. Example value at either level:
++In the Service BOT companion JSON, set `readResourcesModel` to `"bot-wide"`
++and put the actual grant in optional top-level `readResources`. All QQ, Feishu,
++and Discord bindings of that BOT inherit the same grant, including newly linked
++channels. Do not put `readResources`, `readFolders`, or `sourceFolders` on a
++binding. Each binding still selects its permitted built-in tools (`read`,
++`search`) separately. Omitting the grant gives no folders or Project views.
+ 
+ ```json
+-{"readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
++{"readResourcesModel":"bot-wide","readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
+ ```
+ 
+-A top-level ceiling does not grant anything by itself. Each binding must
+-explicitly select the resources and enable the built-in `read` and/or `search`
+-tools it needs. Omission grants neither view and no new folders. An owner should
+-review the exact registered folders and intended channel audience before
+-publishing: view grants expose **current and future** eligible content, not a
+-frozen copy. Owner authoring and the publication summary show both the ceiling
+-and effective binding grants.
++Review the exact registered folders and all intended channel audiences before
++publishing or linking a channel. Project views expose **current and future**
++eligible content, not a frozen copy. Assignment previews and publication
++summaries show the inherited grant, including when it is empty. Use separate
++BOTs when channels need different read scopes. Personal BOTs are unchanged.
++
++Unmarked packages retain their original per-binding grants and platform backend
++checks, even when their scopes differ. A ceiling alone never grants access.
++`v:bots/deployments/<id>/status` reports migration guidance without altering
++active deployments or unrelated Personal routing. Assign/link converts only
++when the existing scopes agree and backend checks can be preserved; it copies
++only the shared effective scope, never the ceiling. `propose` also rejects a
++non-lossless in-place conversion of an active legacy BOT, even with exact
++revisions. Unlike ordinary authenticated owner authoring, an intentional scope
++change as part of conversion needs an exact-revision, host-enforced owner decision;
++this tool has no such approval path. Keep the legacy deployment while planning
++separate BOTs for different audiences or arranging explicit owner review. No
++model-supplied confirmation can override this restriction.
+ 
+ - `read({path:"."})` lists only authorized folder route names. A unique local
+   folder uses its real basename, including spaces, e.g.
+@@ -463,12 +477,9 @@ and effective binding grants.
+   restrictions. No session memory, raw logs or log projections, internal state,
+   or other virtual namespaces are included. Project-internal text must not be
+   stored in a shared Wiki category if it is not intended for the granted audience.
+-- Existing QQ/Feishu `readFolders` and Discord `sourceFolders` retain their
+-  existing grants and backends. Do not mix a legacy folder list and
+-  `readResources.folders` at the same scope. Existing model paths
+-  `folder:<id>/…` and `v:source/…` are replaced by `read({path:"."})` discovery;
+-  update any BOT prompts that hardcode old paths before publishing. No existing
+-  folder grant is automatically converted to a Project view grant.
++- Use `read({path:"."})` to discover folder routes. Update BOT prompts that
++  hardcode the retired `folder:<id>/…` or `v:source/…` routes before publishing.
++  A folder grant never implies a Project view grant.
+ - Existing Discord-only `v:sessions/current` and scoped memory domain/record
+   routes remain active under their original permissions. A pathless legacy
+   `search({query:"…"})` returns scoped record paths, not Wiki results; use an
+@@ -642,14 +653,14 @@ native SDKs or host access.
+ 
+ ## Discord-specific declarations
+ 
+-The top-level optional scopes are `readDomains`, `sourceFolders`, `discordHistory`
+-and prompt-only `skills`. Discord bindings use `platform: "discord"` plus the
++In addition to the shared Bot-wide read grant, optional Discord scopes are
++`readDomains` and `discordHistory`. BOTs can also declare prompt-only `skills`. Discord bindings use `platform: "discord"` plus the
+ validated Discord binding contract (`src/channels/integration-contract.ts`): stable
+ UUID `id`, connection `botInstanceId`, verified `botUserId`, `target` channel/guild
+ or DM user, `enabled`, `trigger`, `participants`, `tools`, `readDomains`,
+-`inheritThreads`, `manage`, and optional processor/observation/source/history/grants.
++`inheritThreads`, `manage`, and optional processor/observation/history/grants.
+ Do not supply `agentId` or `epochRevision`: the host derives identity and deployment
+-epoch. Bindings may only narrow Agent folder/domain/history ceilings. Role IDs,
++epoch. Discord bindings may only narrow the Bot’s Discord domain and history ceilings. Role IDs,
+ Bot identity and selected history channels are revalidated before and after the
+ human delay. Thread modes are none/public-active/public-archived; private thread
+ access is not granted by these declarations. `preEpoch` concerns platform history,
+diff --git a/docs/channels.md b/docs/channels.md
+index 217d73f6..18442cfd 100644
+--- a/docs/channels.md
++++ b/docs/channels.md
+@@ -152,9 +152,10 @@ Bot, select and review the required Skills in its published configuration. Skill
+ selection is not blanket authorization: Agent tool/module ceilings, readable
+ resources and applicable capability grants must also allow the operation. Prefer
+ scoped read-only capabilities for FAQ/status roles. See [built-in Service BOT read/search](bots.md#built-in-readsearch-for-service-bots)
+-for explicit Project view and registered-folder grants. Raw native
++for the Service BOT-wide Project view and registered-folder grant inherited by
++every QQ, Feishu, and Discord binding. Raw native
+ filesystem/network modules have host authority and are not sandboxed by
+-`readResources`, legacy `readFolders`, or grants.
++`readResources` or grants.
+ 
+ ### Owner setup API
+ 
+diff --git a/src/bots/assignment-validation.ts b/src/bots/assignment-validation.ts
+index 01f2781c..628f535e 100644
+--- a/src/bots/assignment-validation.ts
++++ b/src/bots/assignment-validation.ts
+@@ -1,6 +1,6 @@
+ import { resourceFolders } from './read-scope.ts'
+ import type { BotInstanceStore } from '../channels/bot-store.ts'
+-import type { BotDefinition } from './sdk.ts'
++import { botReadResources, type BotDefinition } from './sdk.ts'
+ 
+ /** Production and synthetic chat-assignment validation share the same service
+  * connection/ownership rules. Discord's live identity/role/epoch validation stays
+@@ -8,8 +8,9 @@ import type { BotDefinition } from './sdk.ts'
+ export async function validateServiceAssignments(projectId: string, bots: BotInstanceStore,
+   candidate: BotDefinition, other: readonly BotDefinition[], requireFolder: (id: string) => Promise<unknown>): Promise<void> {
+   if (bots.projectId !== projectId) throw new Error('BOT assignment Project mismatch')
++  for (const id of botReadResources(candidate)?.folders ?? []) await requireFolder(id)
+   const keys = new Set<string>()
+-  for (const binding of [...other.flatMap(bot => bot.bindings), ...candidate.bindings]) {
++  for (const bot of [...other, candidate]) for (const binding of bot.bindings) {
+     if (binding.platform === 'discord') continue
+     bots.assertAccess(binding.botInstanceId)
+     const connection = bots.get(binding.botInstanceId)
+@@ -17,6 +18,7 @@ export async function validateServiceAssignments(projectId: string, bots: BotIns
+     const key = JSON.stringify([binding.botInstanceId, binding.platform, binding.conversationId])
+     if (keys.has(key)) throw new Error('Conversation already belongs to another BOT.')
+     keys.add(key)
+-    for (const id of resourceFolders(binding.readResources, binding.readFolders)) await requireFolder(id)
++    if (bot.readResourcesModel !== 'bot-wide') for (const id of resourceFolders(binding.readResources, binding.readFolders)) await requireFolder(id)
++    else if (bot !== candidate) for (const id of botReadResources(bot)?.folders ?? []) await requireFolder(id)
+   }
+ }
+diff --git a/src/bots/channel-assignment.ts b/src/bots/channel-assignment.ts
+index a001cd85..e4537fa3 100644
+--- a/src/bots/channel-assignment.ts
++++ b/src/bots/channel-assignment.ts
+@@ -1,5 +1,5 @@
+ import { randomUUID } from 'node:crypto'
+-import { BotBindingSchema, bindingSubscription, botSubscriptionKey, parseBotPackage } from './sdk.ts'
++import { BotBindingSchema, migratableReadResources, withoutBindingReadScope, bindingSubscription, botSubscriptionKey, parseBotPackage } from './sdk.ts'
+ import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
+ 
+ /** Target identity comes exclusively from a host-recorded inbox, never the model's policy JSON. */
+@@ -10,6 +10,7 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
+   if (bot.mode !== 'service') throw new Error('Personal BOTs cannot receive service channel assignments')
+   if (!policy || typeof policy !== 'object' || Array.isArray(policy)) throw new Error('Explicit binding policy object required')
+   for (const key of ['id', 'platform', 'botInstanceId', 'botUserId', 'target', 'conversationId']) if (Object.hasOwn(policy, key)) throw new Error('Binding targets must come from the referenced channel session')
++  for (const key of ['readResources', 'readFolders', 'sourceFolders']) if (Object.hasOwn(policy, key)) throw new Error('Read scope is inherited from the BOT; configure top-level readResources instead')
+   const permissions = policy as Record<string, unknown>
+   if (scope === 'parent' && (source.platform !== 'discord' || source.kind !== 'thread' || !source.parentId || !source.guildId || permissions.inheritThreads !== true)) throw new Error('Parent rules require a verified public Discord thread and explicit inheritThreads:true')
+   if (source.platform === 'discord' && source.kind === 'thread' && scope === 'conversation' && permissions.inheritThreads !== false) throw new Error('Exact thread assignment requires inheritThreads:false; choose scope:parent explicitly for a parent rule')
+@@ -30,7 +31,11 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
+   }
+   const binding = BotBindingSchema.parse({ ...permissions, ...target })
+   const config = JSON.parse(files[configPath]!)
+-  config.bindings = [...bot.bindings.filter(item => item !== existing), binding]
++  const readResources = migratableReadResources(bot)
++  config.readResourcesModel = 'bot-wide'
++  config.readResources = readResources
++  delete config.sourceFolders
++  config.bindings = [...bot.bindings.filter(item => item !== existing), binding].map(withoutBindingReadScope)
+   if (bot.subscriptions !== undefined) {
+     const ref = bindingSubscription(binding), key = botSubscriptionKey(ref)
+     config.subscriptions = [...bot.subscriptions.filter(item => botSubscriptionKey(item) !== key), ...(binding.enabled ? [ref] : [])]
+@@ -39,6 +44,6 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
+   const content = (JSON.stringify(config, null, 2) + '\n').replace(/\n/g, eol)
+   const updated = { ...files, [configPath]: content }
+   parseBotPackage(updated)
+-  return { files: updated, configPath, content, binding }
++  return { files: updated, configPath, content, binding, readResources }
+ }
+ 
+diff --git a/src/bots/channel-assignment_test.ts b/src/bots/channel-assignment_test.ts
+index 76f92ab0..9a98a670 100644
+--- a/src/bots/channel-assignment_test.ts
++++ b/src/bots/channel-assignment_test.ts
+@@ -106,6 +106,12 @@ test('shared production assignment validation rejects another Project, personal
+     const candidate = parseBot(assignChannelSource(files, origin, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
+     const folder = async () => { throw new Error('No read grants expected') }
+     await validateServiceAssignments('p', bots, candidate, [], folder)
++    const id = '10000000-0000-4000-8000-000000000001'
++    const withGrant = { ...candidate, readResources: { folders: [id] } }
++    const checked: string[] = []
++    await validateServiceAssignments('p', bots, withGrant, [], async folderId => { checked.push(folderId) })
++    assert.deepEqual(checked, [id])
++    await assert.rejects(() => validateServiceAssignments('p', bots, withGrant, [], folder), /No read grants expected/)
+     await assert.rejects(() => validateServiceAssignments('other', bots, candidate, [], folder), /Project mismatch/)
+     await assert.rejects(() => validateServiceAssignments('p', bots, candidate, [{ ...candidate, id: 'other' }], folder), /another BOT/)
+     const personal = bots.create('qq', 'Personal', { enabled: false }, undefined, 'personal')
+diff --git a/src/bots/contracts.ts b/src/bots/contracts.ts
+index 0530ff4e..e79da881 100644
+--- a/src/bots/contracts.ts
++++ b/src/bots/contracts.ts
+@@ -6,13 +6,15 @@ import { CapabilityGrantSchema, ResourceName } from '../execution/grant-contract
+ 
+ const identifier = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
+ 
++export const ConversationReadFoldersSchema = z.array(identifier).max(32)
++
+ export const ConversationBindingSchema = z.object({
+   botInstanceId: identifier, platform: z.enum(['qq', 'discord', 'feishu']),
+   conversationId: identifier, enabled: z.boolean().default(true),
+   agent: ResourceName, skills: z.array(ResourceName).max(32).default([]),
+   allowFrom: z.array(identifier).max(1000).optional(),
+   readResources: ReadResourcesSchema.optional(),
+-  readFolders: z.array(identifier).max(32).default([]),
++  readFolders: ConversationReadFoldersSchema.default([]),
+   parameters: z.record(z.unknown()).default({}),
+   grants: z.array(CapabilityGrantSchema).max(32).default([]),
+ }).strict()
+diff --git a/src/bots/conversation-policy_test.ts b/src/bots/conversation-policy_test.ts
+index b7d4cdc7..7db17f72 100644
+--- a/src/bots/conversation-policy_test.ts
++++ b/src/bots/conversation-policy_test.ts
+@@ -36,9 +36,9 @@ for (const platform of ['qq', 'feishu'] as const) test(`${platform}: directory p
+     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'bots'), runGit: async () => { throw new Error('No git') } })
+     const bots = new DirectoryBots(deployments)
+     const address = { projectId, botInstanceId: 'connection', platform, conversationId: 'group:one' }
+-    const deploy = async (enabled: boolean) => {
++    const deploy = async (enabled: boolean, grants = true) => {
+       const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nPublic BOT prompt',
+-        'bot.json': JSON.stringify({ mode: 'service', tools: [], readResources: { wiki: true, knowledge: true, folders: [folderId] }, allowedModules: ['@shadow/private_lookup'], bindings: [{ ...address, projectId: undefined, enabled, tools: ['read', 'search'], ...(platform === 'qq' ? { readFolders: [folderId], readResources: { wiki: true } } : { readResources: { folders: [folderId], knowledge: true } }), allowFrom: ['member'], grants: [{ id: 'private_lookup', kind: 'http', origin: 'https://private-api.example.com', routes: [{ method: 'GET', path: '/internal-route' }] }] }] }) })
++        'bot.json': JSON.stringify({ mode: 'service', tools: [], readResourcesModel: 'bot-wide', readResources: grants ? { wiki: platform === 'qq', knowledge: platform === 'feishu', folders: [folderId] } : undefined, allowedModules: ['@shadow/private_lookup'], bindings: [{ ...address, projectId: undefined, enabled, tools: ['read', 'search'], allowFrom: ['member'], grants: [{ id: 'private_lookup', kind: 'http', origin: 'https://private-api.example.com', routes: [{ method: 'GET', path: '/internal-route' }] }] }] }) })
+       await deployments.deploy({ id: 'support', source: { folderId, directory: '' }, ...frozen, expectedRevision: deployments.read('support')?.deployment.revision })
+     }
+     await deploy(true)
+@@ -117,6 +117,9 @@ for (const platform of ['qq', 'feishu'] as const) test(`${platform}: directory p
+     folderAvailable = false
+     await assert.rejects(tools.get('read')!.execute({ path }, context), /Folder unavailable/)
+     folderAvailable = true
++    await deploy(true, false)
++    await assert.rejects(tools.get('read')!.execute({ path }, context), /changed/)
++    assert.equal(service.resolve(id)?.binding.readResources, undefined)
+     await deploy(false)
+     await assert.rejects(tools.get('read')!.execute({ path }, context), /disabled|changed/)
+     assert.throws(() => service.resolve(id), /disabled/)
+@@ -136,7 +139,7 @@ test('remote Service folder only requests existing file-only reads, never remote
+     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'bots'), runGit: async () => { throw new Error('No git') } })
+     const address = { projectId, botInstanceId: 'connection', platform: 'qq', conversationId: 'group:child' }
+     const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nPublic BOT prompt',
+-      'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings: [{ ...address, projectId: undefined, readFolders: [folderId], tools: ['read', 'search'] }] }) })
++      'bot.json': JSON.stringify({ mode: 'service', readResourcesModel: 'bot-wide', readResources: { folders: [folderId] }, allowedModules: [], tools: [], bindings: [{ ...address, projectId: undefined, tools: ['read', 'search'] }] }) })
+     await deployments.deploy({ id: 'support', source: { folderId, directory: '' }, ...frozen })
+     const filesystem = new CapabilityFilesystem([{ workdirId: folder.workdir.workdirId, rootPath: remoteRoot }])
+     const requests: unknown[] = []
+diff --git a/src/bots/management.ts b/src/bots/management.ts
+index 1b0859a7..6ef72dc5 100644
+--- a/src/bots/management.ts
++++ b/src/bots/management.ts
+@@ -1,4 +1,4 @@
+-import type { ReadResources } from './read-scope.ts'
++import { equalResourceScopes, type ReadResources } from './read-scope.ts'
+ import { stringify } from 'yaml'
+ import { writePrivateFile } from '../utils/private-file.ts'
+ import { assignChannelSource } from './channel-assignment.ts'
+@@ -10,7 +10,7 @@ import type { Hono } from 'hono'
+ import type { Tool, ToolResult } from '../tools/tool.ts'
+ import type { FolderRegistry } from '../folders/registry.ts'
+ import { BotDeployments } from './deployments.ts'
+-import { parseBotPackage, bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
++import { parseBotPackage, botReadResources, withoutBindingReadScope, legacyReadMigrationGuidance, migratableReadResources, bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
+ import { DirectoryBots } from './runtime.ts'
+ import { snapshotBotDirectory, sourceUsesGit } from './directory.ts'
+ import { botProposalBaseline } from './format.ts'
+@@ -37,11 +37,12 @@ function location(binding: ReturnType<typeof parseBot>['bindings'][number]): str
+   return binding.platform === 'discord' ? `Discord ${binding.target.kind === 'dm' ? 'DM '+binding.target.userId : binding.target.guildId+'/'+binding.target.channelId}` : `${binding.platform} ${binding.botInstanceId}/${binding.conversationId}`
+ }
+ function resourceFacts(prefix: string, scope?: ReadResources): string[] {
+-  return [
++  const facts = [
+     ...(scope?.knowledge ? [`${prefix} Project Knowledge metadata and scoped relations (v:knowledge)`] : []),
+     ...(scope?.wiki ? [`${prefix} shared Project Wiki content (v:memory)`] : []),
+     ...(scope?.folders ?? []).map(id => `${prefix} registered folder ${id}`),
+   ]
++  return facts.length ? facts : [`${prefix} none`]
+ }
+ 
+ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> {
+@@ -51,27 +52,28 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string>
+   facts.push(...bot.tools.flatMap(tool=>tool.imports.map(name=>`tool ${tool.name}: service module ${name}`)))
+   for(const operation of bot.hostCapabilities ?? [])facts.push(`BOT host capability ${operation} (invoking binding only)`)
+   for(const name of bot.allowedModules)facts.push(`BOT module ceiling ${name}`)
+-  facts.push(...resourceFacts('BOT read ceiling:', bot.readResources))
+-  for(const id of bot.sourceFolders ?? [])facts.push(`BOT source-folder ceiling ${id}`)
++  if (bot.mode === 'service' && bot.readResourcesModel === 'bot-wide') facts.push(...resourceFacts('BOT-wide read grant:', botReadResources(bot)))
+   for(const id of bot.readDomains ?? [])facts.push(`BOT memory-domain ceiling ${id}`)
+   if(bot.discordHistory)facts.push(`BOT history ceiling ${bot.discordHistory.guildId}/${bot.discordHistory.channelIds.join(',')} threads=${bot.discordHistory.threads} preEpoch=${bot.discordHistory.preEpoch}`)
+   for(const binding of bot.bindings){
+     const target=location(binding)
+     facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
+     facts.push(`${target}: trigger ${binding.trigger}`)
+-    facts.push(...resourceFacts(`${target}:`, binding.readResources))
++    if (bot.readResourcesModel === 'bot-wide') facts.push(...resourceFacts(`${target}: inherits BOT-wide read grant:`, botReadResources(bot)))
++    else {
++      facts.push(...resourceFacts(`${target}: legacy binding read grant:`, binding.readResources))
++      for (const id of (binding.platform === 'discord' ? binding.sourceFolders : binding.readFolders) ?? []) facts.push(`${target}: legacy folder ${id}`)
++    }
+     for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
+     for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+grant.sessionId+' (raw content)'}`)
+     if(binding.platform==='discord'){
+       facts.push(`${target}: participants ${binding.participants.everyone ? 'everyone' : [...binding.participants.userIds.map(id=>'user '+id),...binding.participants.roleIds.map(id=>'role '+id)].join(', ')}`)
+-      for(const folder of binding.sourceFolders ?? [])facts.push(`${target}: folder ${folder}`)
+       for(const domain of binding.readDomains)facts.push(`${target}: domain ${domain}`)
+       if(binding.discordHistory)facts.push(`${target}: history ${binding.discordHistory.guildId}/${binding.discordHistory.channelIds.join(',')} threads=${binding.discordHistory.threads} preEpoch=${binding.discordHistory.preEpoch}`)
+       if(binding.observation)facts.push(`${target}: observation ${binding.observation.enabled?'enabled':'disabled'} sources=${binding.observation.channelIds.join(',')}`)
+       if(binding.inheritThreads)facts.push(`${target}: inherited threads`)
+       if(binding.manage)facts.push(`${target}: configuration management`)
+     }else{
+-      for(const folder of binding.readFolders)facts.push(`${target}: folder ${folder}`)
+       if(binding.allowFrom)facts.push(`${target}: allowed senders ${binding.allowFrom.join(',') || 'nobody'}`)
+       else facts.push(`${target}: inherited channel admission`)
+     }
+@@ -79,19 +81,27 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string>
+   return new Set(facts)
+ }
+ 
++function assertReadTransition(active: BotDefinition | undefined, candidate: BotDefinition): void {
++  if (active?.mode !== 'service' || active.readResourcesModel === 'bot-wide' || candidate.mode !== 'service' || candidate.readResourcesModel !== 'bot-wide') return
++  const shared = migratableReadResources(active)
++  if (!equalResourceScopes(shared, botReadResources(candidate))) throw new Error('Non-lossless legacy read migration blocked. Keep the existing deployment, or publish the same effective scope without copying the ceiling. Changing the scope as part of conversion requires host-enforced owner approval of the exact revisions; this tool does not support it.')
++}
++
+ function disclosedBindings(bot: BotDefinition): unknown[] {
+-  return bot.bindings.map(binding => ({ ...binding, grants: binding.grants?.map(grant => {
+-    if (grant.kind !== 'http') return grant
+-    const { credential, ...scope } = grant
+-    // Deployment files may reference private credential configuration. The owner
+-    // reviews destination/route authority here, not secret refs or header values.
+-    return { ...scope, ...(credential ? { credential: { configured: true } } : {}) }
+-  }) }))
++  return bot.bindings.map(binding => {
++    const data = bot.readResourcesModel === 'bot-wide' ? withoutBindingReadScope(binding) : binding
++    return { ...data, ...(bot.readResourcesModel === 'bot-wide' ? { inheritedReadResources: botReadResources(bot) ?? null } : {}), grants: binding.grants?.map(grant => {
++      if (grant.kind !== 'http') return grant
++      const { credential, ...scope } = grant
++      // Review destination/route authority, not secret refs or header values.
++      return { ...scope, ...(credential ? { credential: { configured: true } } : {}) }
++    }) }
++  })
+ }
+ 
+ export function botPackageTool(options: Options): Tool {
+   return {name:'bot_package',optIn:true,
+-    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Direct thread/DM assignment is forbidden. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. All platform policies may include readResources:{folders?,knowledge?,wiki?} within the explicit BOT ceiling in the companion JSON. QQ/Feishu policy: {enabled,trigger,allowFrom,tools,readResources?,readFolders?}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readResources?,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel. Exact thread and DM assignment is forbidden; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
++    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Direct thread/DM assignment is forbidden. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. Non-lossless legacy read migrations are blocked; keep the existing deployment if the effective scope or backend cannot be preserved. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. All bindings inherit the BOT-wide read grant (companion JSON readResourcesModel:"bot-wide" and optional top-level readResources:{folders?,knowledge?,wiki?}); do not put read scope in bindingJson. QQ/Feishu policy: {enabled,trigger,allowFrom,tools}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel. Exact thread and DM assignment is forbidden; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
+     parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','link','assign','propose']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},sourceRevision:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
+     execute:async(raw,context) => {
+       context.signal.throwIfAborted()
+@@ -105,7 +115,7 @@ export function botPackageTool(options: Options): Tool {
+         if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT directory without traversal.')
+         if (options.deployments.read(input.id)) throw new Error('BOT already exists; use link or propose with its exact revision')
+         const files = { 'BOT.md': `---\n${stringify({ id: input.id, config: 'bot.json', mode: 'service' })}---\n${input.prompt}\n`,
+-          'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }, null, 2) + '\n' }
++          'bot.json': JSON.stringify({ readResourcesModel: 'bot-wide', allowedModules: [], tools: [], bindings: [], subscriptions: [] }, null, 2) + '\n' }
+         parseBot(files); await options.validate(files, context.signal)
+         const release = options.folders.acquireAccess()
+         try {
+@@ -142,7 +152,7 @@ export function botPackageTool(options: Options): Tool {
+         frozen = options.deployments.freeze(snapshotBotDirectory(path))
+         if (input.action === 'source') {
+           const parsed = parseBotPackage(frozen.files)
+-          return JSON.stringify({ sourceRevision: frozen.revision, bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, note: 'Read-only origin evidence; choose permissions explicitly. Source edits and publication retain optimistic revision and live authority checks; no extra approval is required.' })
++          return JSON.stringify({ sourceRevision: frozen.revision, bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, migrationGuidance: legacyReadMigrationGuidance(parsed.bot), projectReadGrants: parsed.bot.mode === 'service' && !legacyReadMigrationGuidance(parsed.bot) ? resourceFacts('Inherited BOT-wide read grant:', migratableReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. Source edits and publication retain optimistic revision and live authority checks; no extra approval is required.' })
+         }
+         if (input.action === 'assign') {
+           if (frozen.revision !== input.sourceRevision) throw new Error('BOT source changed; inspect it again before assignment')
+@@ -153,6 +163,9 @@ export function botPackageTool(options: Options): Tool {
+           await options.validate(updated.files, context.signal)
+           context.signal.throwIfAborted()
+           if (linking) {
++            const active = options.deployments.read(activeId)
++            if (active?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before assigning.')
++            assertReadTransition(active && botProposalBaseline(active.files).bot, parseBot(updated.files))
+             // Edit only the existing BOT companion; no Workflow/Connection copy of
+             // its address, filter or binding is made. Revision guards stay exact.
+             if (options.deployments.freeze(snapshotBotDirectory(path)).revision !== frozen.revision) throw new Error('BOT source changed before link')
+@@ -163,7 +176,7 @@ export function botPackageTool(options: Options): Tool {
+           } else {
+           return JSON.stringify({ status: 'assignment-prepared', scope: input.scope, source: { folderId: input.folderId, directory: input.directory }, channelSessionId: input.channelSessionId,
+             sourceRevision: frozen.revision, candidateRevision: options.deployments.freeze(updated.files).revision,
+-            projectReadGrants: resourceFacts('Binding:', updated.binding.readResources),
++            projectReadGrants: resourceFacts('Inherited BOT-wide read grant:', updated.readResources),
+             edit: { path: [...parts, updated.configPath].join('/'), match: frozen.files[updated.configPath], content: updated.content },
+             next: 'Use the ordinary authorized write tool for this registered source folder and exact match/content; then bot_package propose with sourceRevision=candidateRevision, the same expectedRevision and summary. Preparation is not a write, deployment, permission or history-replay grant.' })
+         }
+@@ -175,9 +188,12 @@ export function botPackageTool(options: Options): Tool {
+       const current = options.deployments.read(bot.id)?.deployment
+       if (current?.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before proposing.')
+       await options.validate(frozen.files,context.signal)
+-      const baseline = current ? botProposalBaseline(options.deployments.read(bot.id)!.files) : undefined
+-      if (baseline && baseline.bot.id !== bot.id) throw new Error('BOT active identity mismatch.')
++      const active = options.deployments.read(bot.id)
++      if (active?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before proposing.')
++      const baseline = active ? botProposalBaseline(active.files) : undefined
+       const before = baseline?.bot
++      if (before && before.id !== bot.id) throw new Error('BOT active identity mismatch.')
++      assertReadTransition(before, bot)
+       const oldAuthority=authorities(before),newAuthority=authorities(bot)
+       if (baseline?.removedProposalGrants?.length) for (const operation of before?.hostCapabilities ?? []) oldAuthority.delete(`BOT host capability ${operation} (invoking binding only)`)
+       for (const grant of baseline?.removedProposalGrants ?? []) oldAuthority.add(`Retired proposal-inbox grant ${grant.id}: ${grant.repository}/${grant.inbox} (inactive; no Work authority)`)
+@@ -194,7 +210,7 @@ export function botPackageTool(options: Options): Tool {
+         affected,addedPermissions:added,removedPermissions:removed,candidatePermissions:[...newAuthority],
+         credentialDisclosure:'Credential configuration is represented only by its presence; private references and header values are withheld. Origins, routes and body restrictions remain visible.',
+         mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:disclosedBindings(bot),subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
+-        hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],readResources:bot.readResources ?? null,sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
++        hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],readResources:botReadResources(bot) ?? null,discordHistory:bot.discordHistory ?? null,
+         storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
+         execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
+       // Direct authenticated authoring is the authorization. Exact revision,
+diff --git a/src/bots/management_test.ts b/src/bots/management_test.ts
+index 88490ea1..0a9fa9c2 100644
+--- a/src/bots/management_test.ts
++++ b/src/bots/management_test.ts
+@@ -194,17 +194,68 @@ test('owner assignment and deployment receipts explicitly surface shared Knowled
+   const source = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
+   const tool = botPackageTool({ ...f.options, channelSource: () => source })
+   const config = JSON.parse(files()['bot.json'])
++  config.readResourcesModel = 'bot-wide'
+   config.readResources = { knowledge: true, wiki: true }
+   writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+   const base = { action: 'assign', folderId: 'folder', summary: 'Review binding resources', channelSessionId: passiveChannelId(source), sourceRevision: f.deployments.freezeDirectory(f.source).revision }
+-  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'], readResources: { wiki: true } }
++  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'] }
+   const prepared = JSON.parse(await tool.execute({ ...base, bindingJson: JSON.stringify(binding) }, f.context) as string)
+-  assert.deepEqual(prepared.projectReadGrants, ['Binding: shared Project Wiki content (v:memory)'])
+-  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /read resources.*ceiling/i)
++  assert.deepEqual(prepared.projectReadGrants, ['Inherited BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)', 'Inherited BOT-wide read grant: shared Project Wiki content (v:memory)'])
++  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /inherited from the BOT/)
+   assert.equal(f.deployments.list().length, 0)
+   writeFileSync(join(f.source, prepared.edit.path), prepared.edit.content)
+   const receipt = JSON.parse(await f.propose() as string)
+   assert.deepEqual(receipt.changes.readResources, { knowledge: true, wiki: true })
+-  assert(receipt.changes.addedPermissions.includes('BOT read ceiling: Project Knowledge metadata and scoped relations (v:knowledge)'))
+-  assert(receipt.changes.addedPermissions.some((line: string) => !line.startsWith('BOT read ceiling:') && line.includes('shared Project Wiki content (v:memory)')))
++  assert(receipt.changes.addedPermissions.includes('BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)'))
++  assert(receipt.changes.addedPermissions.some((line: string) => line.includes('inherits BOT-wide read grant: shared Project Wiki content (v:memory)')))
++  assert.deepEqual(receipt.changes.bindings.at(-1).inheritedReadResources, { knowledge: true, wiki: true })
++})
++
++test('marker-only promotion is blocked even with exact revisions; no model-supplied approval', async t => {
++  const f = fixture(t)
++  const config = JSON.parse(files()['bot.json'])
++  config.readResources = { wiki: true }
++  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
++  const active = JSON.parse(await f.propose() as string).deployment.revision
++  config.readResourcesModel = 'bot-wide'
++  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
++  const request = { action: 'propose', folderId: 'folder', summary: 'Change Wiki access', expectedRevision: active, sourceRevision: f.deployments.freezeDirectory(f.source).revision }
++  await assert.rejects(() => f.tool.execute(request, f.context), /Non-lossless legacy read migration blocked/)
++  await assert.rejects(() => f.tool.execute({ ...request, confirmReadScopeChange: true }, f.context), /Unrecognized key/)
++  assert.equal(f.deployments.read('support')?.deployment.revision, active)
++  assert.equal(f.runtime.resolve(config.bindings[0])?.binding.readResources, undefined)
++})
++
++test('blocked legacy conversion preserves asymmetric grants and unrelated Personal role fallback', async t => {
++  const f = fixture(t)
++  const legacy = files(), config = JSON.parse(legacy['bot.json'])
++  config.readResources = { wiki: true }
++  config.bindings[0].readResources = { wiki: true }
++  config.bindings[0].readFolders = ['10000000-0000-4000-8000-000000000001']
++  config.bindings.push({ ...config.bindings[0], conversationId: 'group:two', readResources: undefined, readFolders: undefined })
++  legacy['bot.json'] = JSON.stringify(config)
++  const frozen = f.deployments.freeze(legacy)
++  await f.deployments.deploy({ id: 'support', source: { folderId: 'folder', directory: '' }, ...frozen })
++  const checkRuntime = () => {
++    assert.deepEqual(f.runtime.resolve(config.bindings[0])?.binding.readResources, { wiki: true })
++    assert.deepEqual(f.runtime.resolve(config.bindings[0])?.binding.readFolders, ['10000000-0000-4000-8000-000000000001'])
++    assert.equal(f.runtime.resolve(config.bindings[1])?.binding.readResources, undefined)
++    assert.equal(f.runtime.personal('legacy-qq'), undefined)
++    assert.equal(f.runtime.inspect('support')?.state, 'valid')
++    assert.match(JSON.stringify(f.runtime.inspect('support')), /Legacy platform-specific folder grants/)
++    assert.deepEqual({ ...f.deployments.read('support')?.files }, legacy)
++  }
++  checkRuntime()
++  delete config.bindings[0].readResources
++  delete config.bindings[0].readFolders
++  config.readResourcesModel = 'bot-wide'
++  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
++  await assert.rejects(() => f.propose(frozen.revision), /Non-lossless in-place conversion is blocked/)
++  const { passiveChannelId } = await import('../channels/passive-contract.ts')
++  const source = { version: 1, projectId: 'p', platform: 'qq', connectionId: 'bot', conversationId: 'group:three', kind: 'group' } as const
++  const linkTool = botPackageTool({ ...f.options, channelSource: () => source })
++  const sourceRevision = f.deployments.freezeDirectory(f.source).revision
++  await assert.rejects(() => linkTool.execute({ action: 'link', folderId: 'folder', expectedRevision: frozen.revision, sourceRevision, channelSessionId: passiveChannelId(source), summary: 'Link third group', bindingJson: JSON.stringify({ enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }) }, f.context), /Non-lossless in-place conversion is blocked/)
++  assert.equal(f.deployments.freezeDirectory(f.source).revision, sourceRevision)
++  checkRuntime()
+ })
+diff --git a/src/bots/read-scope-migration_test.ts b/src/bots/read-scope-migration_test.ts
+new file mode 100644
+index 00000000..b0f9da9a
+--- /dev/null
++++ b/src/bots/read-scope-migration_test.ts
+@@ -0,0 +1,121 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import { join } from 'node:path'
++import { withTempWorkspace } from '../testing/workspace.ts'
++import { BotDeployments } from './deployments.ts'
++import { DirectoryBots } from './runtime.ts'
++import { assignChannelSource } from './channel-assignment.ts'
++import { botReadResources, migratableReadResources, parseBot } from './sdk.ts'
++import type { ReadResources } from './read-scope.ts'
++import type { ChannelSource } from '../channels/passive-contract.ts'
++
++const folder = '10000000-0000-4000-8000-000000000001'
++const otherFolder = '10000000-0000-4000-8000-000000000002'
++const channelPolicy = { enabled: true, trigger: 'mention', tools: ['read'], allowFrom: ['member'] }
++const discordPolicy = { enabled: true, trigger: 'mention', tools: ['read'], participants: { everyone: true, userIds: [], roleIds: [] }, readDomains: [], manage: false, inheritThreads: false }
++const bindings = [
++  { ...channelPolicy, platform: 'qq', botInstanceId: 'qq', conversationId: 'group:one' },
++  { ...channelPolicy, platform: 'feishu', botInstanceId: 'feishu', conversationId: 'oc_one' },
++  { ...discordPolicy, platform: 'discord', id: '10000000-0000-4000-8000-000000000003', botInstanceId: 'discord', botUserId: '900', target: { kind: 'channel', guildId: '100', channelId: '200' } },
++]
++const packages = (extra: object) => ({
++  'BOT.md': '---\nid: support\nconfig: bot.json\nmode: service\n---\nShared support',
++  'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings, ...extra }),
++})
++const legacy = (scopes: Array<ReadResources | undefined>) => packages({
++  readResources: { wiki: true, knowledge: true, folders: [folder, otherFolder] },
++  bindings: scopes.map((readResources, index) => ({ ...bindings[index], readResources })),
++})
++const linked: ChannelSource = { version: 1, projectId: 'p', platform: 'qq', connectionId: 'qq', conversationId: 'group:two', kind: 'group' }
++
++test('legacy QQ, Feishu and Discord scope agreement compares grants, not field presence or folder order', () => {
++  const shared = { wiki: true, folders: [folder, otherFolder] }
++  const files = legacy([shared, { wiki: true, folders: [otherFolder, folder] }, { ...shared, knowledge: false }])
++  assert.deepEqual(migratableReadResources(parseBot(files)), shared)
++  const edit = assignChannelSource(files, linked, channelPolicy)
++  const config = JSON.parse(edit.content)
++  assert.equal(config.readResourcesModel, 'bot-wide')
++  assert.deepEqual(config.readResources, shared, 'only agreed scope, not the ceiling')
++  assert.equal(config.bindings.length, 4)
++  assert(config.bindings.every((binding: object) => !Object.hasOwn(binding, 'readResources')))
++  assert.deepEqual(botReadResources(parseBot(edit.files)), shared)
++  assert.equal(JSON.parse(files['bot.json']).readResources.knowledge, true, 'original frozen bytes unchanged')
++})
++
++test('legacy omission, empty scopes and zero bindings never promote the ceiling', () => {
++  for (const files of [legacy([]), legacy([undefined, undefined, undefined]), legacy([{ wiki: false, knowledge: false, folders: [] }, {}, undefined])]) {
++    assert.equal(botReadResources(parseBot(files)), undefined)
++    const edit = assignChannelSource(files, linked, channelPolicy)
++    assert(!Object.hasOwn(JSON.parse(edit.content), 'readResources'))
++    assert.equal(botReadResources(parseBot(edit.files)), undefined)
++  }
++})
++
++test('legacy migrations fail closed even with a disabled differing binding; old platform folder fields require review', () => {
++  assert.throws(() => migratableReadResources(parseBot(legacy([{ wiki: true }, undefined, { wiki: true }]))), /Legacy binding read scopes differ/)
++  assert.throws(() => migratableReadResources(parseBot(legacy([{ folders: [folder] }, { folders: [otherFolder] }, { folders: [folder] }]))), /do not copy the ceiling or union grants/i)
++  assert.throws(() => migratableReadResources(parseBot(packages({ readResources: { wiki: true }, bindings: [{ ...bindings[0], readResources: { wiki: true } }, { ...bindings[1], enabled: false }] }))), /Legacy binding read scopes differ/)
++  assert.throws(() => migratableReadResources(parseBot(packages({ sourceFolders: [folder], bindings: [bindings[2]] }))), /backend checks/)
++  for (const binding of [{ ...bindings[0], readFolders: [folder] }, { ...bindings[1], readFolders: [folder] }, { ...bindings[2], sourceFolders: [folder] }]) {
++    assert.throws(() => migratableReadResources(parseBot(packages({ sourceFolders: [folder], bindings: [binding] }))), /backend requirements/)
++  }
++})
++
++test('explicit Bot-wide packages inherit the top-level grant and reject binding configuration, including explicit empty fields', () => {
++  const grant = { wiki: true, knowledge: true, folders: [folder] }
++  const model = { readResourcesModel: 'bot-wide', readResources: grant }
++  const files = packages(model)
++  assert.deepEqual(botReadResources(parseBot(files)), grant)
++  assert.equal(botReadResources(parseBot(packages({ readResourcesModel: 'bot-wide' }))), undefined)
++  for (const [source, policy] of [
++    [linked, channelPolicy],
++    [{ ...linked, platform: 'feishu', connectionId: 'feishu', conversationId: 'oc_two' }, channelPolicy],
++    [{ version: 1, projectId: 'p', platform: 'discord', connectionId: 'discord', conversationId: '201', kind: 'channel', guildId: '100', botUserId: '900' }, discordPolicy],
++  ] as const) {
++    const edit = assignChannelSource(files, source, policy)
++    assert.deepEqual(edit.readResources, grant)
++    assert.equal(parseBot(edit.files).bindings.length, 4)
++    assert(!Object.hasOwn(JSON.parse(edit.content).bindings.at(-1), 'readResources'))
++  }
++  for (const binding of bindings) {
++    const oldFields = binding.platform === 'discord' ? { sourceFolders: [] } : { readFolders: [] }
++    for (const fields of [{ readResources: {} }, oldFields]) {
++      assert.throws(() => parseBot(packages({ ...model, bindings: [{ ...binding, ...fields }] })), /scope belongs only on the BOT/)
++    }
++  }
++  for (const fields of [{ readResources: {} }, { readFolders: [] }, { sourceFolders: [] }]) {
++    assert.throws(() => assignChannelSource(files, linked, { ...channelPolicy, ...fields }), /inherited from the BOT/)
++  }
++})
++
++
++test('one frozen Bot projects identical grants to QQ, Feishu and Discord, and retains legacy bindings without quarantining Personal fallback', async () => {
++  await withTempWorkspace(async workspace => {
++    const deployments = new BotDeployments({ projectId: 'p', directory: join(workspace, 'bots'), runGit: async () => { throw new Error('No git') } })
++    const runtime = new DirectoryBots(deployments)
++    const grant = { wiki: true, knowledge: true, folders: [folder] }
++    const qq = { platform: 'qq', botInstanceId: 'qq', conversationId: 'group:one' } as const
++    const feishu = { platform: 'feishu', botInstanceId: 'feishu', conversationId: 'oc_one' } as const
++    const deploy = (files: Record<string, string>, expectedRevision?: string) => deployments.deploy({ id: 'support', source: { folderId: folder, directory: '' }, ...deployments.freeze(files), expectedRevision })
++    const first = await deploy(packages({ readResourcesModel: 'bot-wide', readResources: grant }))
++    assert.deepEqual(runtime.resolve(qq)?.binding.readResources, grant)
++    assert.deepEqual(runtime.resolve(feishu)?.binding.readResources, grant)
++    assert.deepEqual(runtime.discord().bindings.map(binding => binding.readResources), [grant])
++    const second = await deploy(legacy([{ wiki: true }, { wiki: true }, { wiki: true }]), first.revision)
++    assert.deepEqual(runtime.resolve(qq)?.binding.readResources, { wiki: true })
++    assert.deepEqual(runtime.resolve(feishu)?.binding.readResources, { wiki: true })
++    assert.deepEqual(runtime.discord().bindings.map(binding => binding.readResources), [{ wiki: true }])
++    const invalid = await deploy(legacy([{ wiki: true }, undefined, { wiki: true }]), second.revision)
++    assert.equal(runtime.resolve(qq)?.revision, invalid.revision)
++    assert.deepEqual(runtime.resolve(qq)?.binding.readResources, { wiki: true })
++    assert.equal(runtime.resolve(feishu)?.binding.readResources, undefined)
++    assert.deepEqual(runtime.discord().bindings.map(binding => binding.readResources), [{ wiki: true }])
++    assert.equal(runtime.personal('legacy-qq'), undefined, 'ordinary role fallback remains available')
++    assert.deepEqual(runtime.diagnostics(), [])
++    const oldDiscord = packages({ sourceFolders: [folder], bindings: [{ ...bindings[2], sourceFolders: [folder] }] })
++    await deploy(oldDiscord, invalid.revision)
++    assert.deepEqual(runtime.discord().agents.map(agent => agent.sourceFolders), [[folder]])
++    assert.deepEqual(runtime.discord().bindings.map(binding => binding.sourceFolders), [[folder]])
++    assert.equal(runtime.personal('legacy-qq'), undefined)
++  })
++})
+diff --git a/src/bots/read-scope.ts b/src/bots/read-scope.ts
+index 10e68e2f..388fd24f 100644
+--- a/src/bots/read-scope.ts
++++ b/src/bots/read-scope.ts
+@@ -9,6 +9,10 @@ export function resourceSubset(scope?: ReadResources, ceiling?: ReadResources):
+     (scope?.folders ?? []).every(id => ceiling?.folders?.includes(id))
+ }
+ 
++export function equalResourceScopes(a?: ReadResources, b?: ReadResources): boolean {
++  return resourceSubset(a, b) && resourceSubset(b, a)
++}
++
+ export function unambiguousResourceFolders(scope?: ReadResources, legacy?: readonly string[]): boolean {
+   return scope?.folders === undefined || !legacy?.length
+ }
+diff --git a/src/bots/runtime.ts b/src/bots/runtime.ts
+index cd58c8c4..cd81bcb2 100644
+--- a/src/bots/runtime.ts
++++ b/src/bots/runtime.ts
+@@ -6,8 +6,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdir
+ import { join } from 'node:path'
+ import { stringify } from 'yaml'
+ import { assertPrivateFileBoundary } from '../utils/private-document.ts'
+-import { BotDeployments } from './deployments.ts'
+-import { bindingSubscribed, botInferenceSettings, parseBot, parseBotPackage, type BotDefinition } from './sdk.ts'
++import { BotDeployments, type BotDeployment } from './deployments.ts'
++import { bindingSubscribed, botInferenceSettings, botReadResources, legacyReadMigrationGuidance, parseBot, parseBotPackage, type BotDefinition } from './sdk.ts'
+ import { botInputListeners } from './input.ts'
+ import { executeBotTool } from './tool-runtime.ts'
+ import { parseAgentFile } from '../agent/types/parse.ts'
+@@ -56,7 +56,11 @@ export class DirectoryBots {
+    * bookkeeping nor logs, and a bad sibling cannot abort an object's inspection.
+    * It grants no policy: live routing still performs its normal strict reads.
+    */
+-  inspect(id: string) {
++  inspect(id: string): {
++    id: string; state: 'valid' | 'quarantined' | 'unavailable'; loaded: boolean
++    deployment?: BotDeployment; bot?: BotDefinition; format?: ReturnType<typeof parseBotPackage>['format']
++    error?: string; guidance?: string; listeners?: ReturnType<typeof botInputListeners>
++  } | undefined {
+     const current = this.deployments.inspect(id)
+     if (current.error) return { id, state: 'unavailable' as const, loaded: false, error: current.error }
+     if (!current.value) return undefined
+@@ -64,7 +68,8 @@ export class DirectoryBots {
+     try {
+       const { bot, format } = parseBotPackage(files)
+       if (bot.id !== id) return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'identity-mismatch' as const }
+-      return { id, deployment, bot, format, state: 'valid' as const, loaded: true, listeners: this.execution(bot.id).enabled ? botInputListeners(bot) : [] }
++      const guidance = legacyReadMigrationGuidance(bot)
++      return { id, deployment, bot, format, state: 'valid' as const, error: undefined, loaded: true, ...(guidance ? { guidance } : {}), listeners: this.execution(bot.id).enabled ? botInputListeners(bot) : [] }
+     } catch {
+       return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'invalid-package' as const }
+     }
+@@ -132,7 +137,7 @@ export class DirectoryBots {
+       const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
+       const data = { ...rawData, ...(upper ? { allowFrom: binding.allowFrom ? binding.allowFrom.filter(id => upper.includes(id)) : upper } : {}) }
+       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
+-      return [{ runtimeOrigin: { kind: 'bot' as const, id: bot.id, revision: deployment.revision }, generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
++      return [{ runtimeOrigin: { kind: 'bot' as const, id: bot.id, revision: deployment.revision }, generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, readFolders: data.readFolders ?? [], readResources: bot.readResourcesModel === 'bot-wide' ? botReadResources(bot) : data.readResources, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
+         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)) }]
+     }))
+     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
+@@ -146,6 +151,7 @@ export class DirectoryBots {
+       const selected = bot.bindings.filter(binding => binding.platform === 'discord')
+       if (!selected.length) continue
+       const id = publishedBotIntegrationId(bot.id)
++      const botWide = bot.readResourcesModel === 'bot-wide'
+       const tools = [...new Set(selected.flatMap(binding => binding.tools))]
+       agents.push({ id,name:agentName(bot.id),displayName:bot.id,markdown:`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id),defaultMode:'session',allowedTools:tools})}---\n${bot.prompt}`,
+         execution:'restricted',tools,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders,readResources:bot.readResources,discordHistory:bot.discordHistory,skills:bot.skills ?? [],
+@@ -153,7 +159,7 @@ export class DirectoryBots {
+       for (const binding of selected) {
+         const {platform: _platform,...data} = binding
+         const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
+-        bindings.push({...data,...(upper ? { allowFrom: data.allowFrom ? data.allowFrom.filter(id => upper.includes(id)) : upper } : {}),enabled:data.enabled && bindingSubscribed(bot,binding) && this.execution(bot.id).enabled,agentId:id,epochRevision:parseInt((deployment.generation ? digest([deployment.generation, this.execution(bot.id).generation]) : digest([deployment.revision, this.execution(bot.id).generation])).slice(0,12),16)})
++        bindings.push({...data,...(botWide ? { readResources: botReadResources(bot) } : {}),...(upper ? { allowFrom: data.allowFrom ? data.allowFrom.filter(id => upper.includes(id)) : upper } : {}),enabled:data.enabled && bindingSubscribed(bot,binding) && this.execution(bot.id).enabled,agentId:id,epochRevision:parseInt((deployment.generation ? digest([deployment.generation, this.execution(bot.id).generation]) : digest([deployment.revision, this.execution(bot.id).generation])).slice(0,12),16)})
+       }
+     }
+     if (new Set(bindings.map(binding => binding.id)).size !== bindings.length || new Set(bindings.map(binding => JSON.stringify([binding.botInstanceId,binding.target]))).size !== bindings.length) throw new Error('Discord conversation is owned by multiple BOT deployments.')
+diff --git a/src/bots/sdk.ts b/src/bots/sdk.ts
+index 435e0d9d..7decea02 100644
+--- a/src/bots/sdk.ts
++++ b/src/bots/sdk.ts
+@@ -1,4 +1,4 @@
+-import { ReadResourcesSchema, resourceSubset, unambiguousResourceFolders } from './read-scope.ts'
++import { ReadResourcesSchema, type ReadResources, equalResourceScopes, hasResourceGrants, resourceSubset, unambiguousResourceFolders } from './read-scope.ts'
+ import { BotConnectionPolicy } from '../channels/connection-config.ts'
+ import { z } from 'zod'
+ import { BotHostCapabilities } from './host-contract.ts'
+@@ -6,7 +6,7 @@ import { agentInferenceSchema } from '../agent/inference-schema.ts'
+ import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../agent/llm-config.ts'
+ import type { ModelInfo } from '../providers/provider.ts'
+ import { parseDocument } from 'yaml'
+-import { ConversationBindingSchema } from './contracts.ts'
++import { ConversationBindingSchema, ConversationReadFoldersSchema } from './contracts.ts'
+ import { ResourceName } from '../execution/grant-contract.ts'
+ import { assertSupportedJsonSchema } from '../execution/grants.ts'
+ import { DiscordBindingSchema, DiscordHistoryScopeSchema, SourceFoldersSchema } from '../channels/integration-contract.ts'
+@@ -22,6 +22,7 @@ export const BotSourcePathSchema = z.string().min(1).max(256).refine(s =>
+ // platform's mention/reply/topic default; connection-level `all` is never imported.
+ const binding = ConversationBindingSchema.omit({ agent: true, skills: true }).extend({
+   platform: z.enum(['qq', 'feishu']), tools: names,
++  readFolders: ConversationReadFoldersSchema.optional(),
+   trigger: z.enum(['mention', 'all']).default('mention'),
+ }).strict()
+ const discord = DiscordBindingSchema.omit({ agentId: true, epochRevision: true }).extend({ platform: z.literal('discord'), tools: names }).strict()
+@@ -60,6 +61,7 @@ const baseDefinition = z.object({
+   /** Owner-approved host SDK operations; omission grants none. Always scoped to the invoking binding. */
+   hostCapabilities: BotHostCapabilities.optional(),
+   readDomains: z.array(z.string().uuid()).max(32).optional(),
++  readResourcesModel: z.literal('bot-wide').optional(),
+   readResources: ReadResourcesSchema.optional(),
+   sourceFolders: SourceFoldersSchema.optional(),
+   discordHistory: DiscordHistoryScopeSchema.optional(),
+@@ -71,15 +73,21 @@ const definition = z.discriminatedUnion('mode', [
+ ]).superRefine((bot, ctx) => {
+   if (bot.mode === 'personal') {
+     if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })
+-    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResources || bot.sourceFolders || bot.discordHistory || bot.skills)
++    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResourcesModel || bot.readResources || bot.sourceFolders || bot.discordHistory || bot.skills)
+       ctx.addIssue({ code: 'custom', message: 'Personal BOT uses ordinary role tools/context; custom tools, service bindings and scopes are not supported' })
+   } else if (bot.connection || bot.agent) ctx.addIssue({ code: 'custom', message: 'Service BOT cannot select a personal connection or role' })
+-  if (!unambiguousResourceFolders(bot.readResources, bot.sourceFolders))
+-    ctx.addIssue({ code: 'custom', message: 'Do not mix legacy and new BOT folder ceilings' })
+-  for (const binding of bot.bindings) {
+-    const legacy = binding.platform === 'discord' ? binding.sourceFolders : binding.readFolders
+-    if (!resourceSubset(binding.readResources, bot.readResources) || !unambiguousResourceFolders(binding.readResources, legacy))
+-      ctx.addIssue({ code: 'custom', message: 'Read resources must narrow the BOT ceiling and cannot mix legacy and new folder grants' })
++  const issue = (message: string) => ctx.addIssue({ code: 'custom', path: ['readResources'], message })
++  if (bot.mode === 'service' && bot.readResourcesModel === 'bot-wide') {
++    if (bot.sourceFolders !== undefined || bot.bindings.some(binding => binding.readResources !== undefined ||
++      (binding.platform === 'discord' ? binding.sourceFolders !== undefined : binding.readFolders !== undefined)))
++      issue('Bot-wide read scope belongs only on the BOT. Remove binding readResources/readFolders/sourceFolders and the legacy BOT sourceFolders ceiling.')
++  } else {
++    if (!unambiguousResourceFolders(bot.readResources, bot.sourceFolders)) issue('Do not mix legacy and new BOT folder ceilings')
++    for (const binding of bot.bindings) {
++      const legacy = binding.platform === 'discord' ? binding.sourceFolders : binding.readFolders
++      if (!resourceSubset(binding.readResources, bot.readResources) || !unambiguousResourceFolders(binding.readResources, legacy))
++        issue('Legacy read resources must narrow the BOT ceiling and cannot mix legacy and new folder grants')
++    }
+   }
+   const bindingKeys = bot.bindings.map(value => botSubscriptionKey(bindingSubscription(value)))
+   if (new Set(bindingKeys).size !== bindingKeys.length) ctx.addIssue({ code: 'custom', message: 'Duplicate binding subscription identity' })
+@@ -96,6 +104,40 @@ const definition = z.discriminatedUnion('mode', [
+ export const BotDefinitionSchema = definition
+ export type BotDefinition = z.infer<typeof BotDefinitionSchema>
+ 
++export function legacyReadMigrationGuidance(bot: BotDefinition): string | undefined {
++  if (bot.mode !== 'service' || bot.readResourcesModel === 'bot-wide') return
++  const guidance = 'Keep the legacy deployment or plan separate Bots with distinct audiences and backend requirements. Non-lossless in-place conversion is blocked; do not copy the ceiling or union grants.'
++  if (bot.bindings.some(binding => binding.platform === 'discord' ? binding.sourceFolders?.length || bot.sourceFolders?.length : binding.readFolders?.length))
++    return `Legacy platform-specific folder grants or backend checks cannot be migrated automatically. ${guidance}`
++  if (bot.bindings.some(binding => !equalResourceScopes(binding.readResources, bot.bindings[0]?.readResources)))
++    return `Legacy binding read scopes differ. ${guidance}`
++}
++
++/** Read grant of the explicit model; legacy authority remains on each binding. */
++export function botReadResources(bot: BotDefinition): ReadResources | undefined {
++  return bot.mode === 'service' && bot.readResourcesModel === 'bot-wide' ? bot.readResources : undefined
++}
++
++/** Used only at the migration boundary, never to resolve a legacy binding. */
++export function migratableReadResources(bot: BotDefinition): ReadResources | undefined {
++  const guidance = legacyReadMigrationGuidance(bot)
++  if (guidance) throw new Error(guidance)
++  if (bot.readResourcesModel === 'bot-wide') return botReadResources(bot)
++  const shared = bot.bindings[0]?.readResources
++  return hasResourceGrants(shared) ? shared : undefined
++}
++
++/** Remove compatibility-only scope fields before writing or disclosing a binding. */
++export function withoutBindingReadScope(binding: BotDefinition['bindings'][number]) {
++  const { readResources: _resource, ...rest } = binding
++  if (rest.platform === 'discord') {
++    const { sourceFolders: _folders, ...data } = rest
++    return data
++  }
++  const { readFolders: _folders, ...data } = rest
++  return data
++}
++
+ export function subscribedBindings(bot: BotDefinition): BotDefinition['bindings'] {
+   if (bot.mode !== 'service') return []
+   const keys = bot.subscriptions && new Set(bot.subscriptions.map(botSubscriptionKey))
+diff --git a/src/channels/integration-contract.ts b/src/channels/integration-contract.ts
+index 7e454236..a7cd638b 100644
+--- a/src/channels/integration-contract.ts
++++ b/src/channels/integration-contract.ts
+@@ -112,7 +112,7 @@ export const integrationConfigurationGuide = {
+     'domain.revoke': 'Owner only: {kind:"domain.revoke",domainId}. Revokes future access and dependent executions.',
+   },
+   resources: {
+-    ownerReview: 'Use readResources?:{folders?:[<registered Folder UUID>],knowledge?:boolean,wiki?:boolean} on BOT/Agent and binding, with the binding narrowing the BOT/Agent ceiling. Legacy sourceFolders and Discord-only discordHistory?:{guildId,channelIds:[<exact channel IDs>],threads:"none"|"public-active"|"public-archived",preEpoch:boolean} on Agent and binding. Bindings may only narrow the Agent ceiling. Omitted means no new source/cross-channel/pre-epoch authority. Owner-only exact review; never arbitrary paths, private threads, writes or terminal access.',
++    ownerReview: 'Directory Service BOTs use readResourcesModel:"bot-wide" and optional top-level readResources:{folders?:[<registered Folder UUID>],knowledge?:boolean,wiki?:boolean}; each binding inherits that same grant. Standalone Integration Agents still use a readResources ceiling and binding subset, and may declare legacy sourceFolders. Discord-only discordHistory?:{guildId,channelIds:[<exact channel IDs>],threads:"none"|"public-active"|"public-archived",preEpoch:boolean} stays on Agent and binding. Discord history and standalone Agent binding scopes may only narrow their ceilings. Omission of the applicable scope grants no authority. Owner-only exact review; never arbitrary paths, private threads, writes or terminal access.',
+     source: 'Read . for authorized folder names. Read relative folder paths, with spaces, or explicitly granted v:knowledge/catalog and v:memory/. Use search {handler:"grep"|"glob",path,query,limit?}. Grep is literal; glob matches bounded names. Discord source filtering and registered local POSIX-only support are unchanged.',
+     history: 'discord_history {channelId?,limit?,before?,query?} scans one page (query is literal within that page, not server-wide search). discord_message_get {channelId?,messageId}. Discover public threads: discord_history {channelId,threads:"active",limit?,threadAfter?} or {channelId,threads:"archived",limit?,archiveBefore?}. preEpoch explicitly permits platform history before the current authorization, never older internal memory. Live caller/Bot visibility+history and equivalent output audiences are required on reads and delivery.',
+   },
+diff --git a/src/channels/integration-store.ts b/src/channels/integration-store.ts
+index 496121b8..06cbd864 100644
+--- a/src/channels/integration-store.ts
++++ b/src/channels/integration-store.ts
+@@ -145,8 +145,8 @@ export class IntegrationStore {
+   }
+ 
+   definition(agent: IntegrationAgent): AgentTypeDefinition {
+-    // The common BOT ceiling may include resources used only by QQ/Feishu.
+-    // Validate new folders against the Discord backend only on selection by a binding.
++    // Validate projected Service BOT grants and standalone Integration Agent
++    // resource scopes against the Discord backend on each binding.
+     const ids = agent.sourceFolders ?? []
+     if (!unambiguousResourceFolders(agent.readResources, agent.sourceFolders)) throw new IntegrationError('permission_ceiling', 'Do not mix legacy and new folder scopes.')
+     if (ids.length) {
+@@ -205,8 +205,8 @@ export class IntegrationStore {
+   }
+ 
+   private validateAgent(agent: z.infer<typeof IntegrationAgentSchema> | Extract<IntegrationChange, { kind: 'agent.save' }>['agent']): void {
+-    // The common BOT ceiling may include resources used only by QQ/Feishu.
+-    // Validate new folders against the Discord backend only on selection by a binding.
++    // Validate projected Service BOT grants and standalone Integration Agent
++    // resource scopes against the Discord backend on each binding.
+     const ids = agent.sourceFolders ?? []
+     if (!unambiguousResourceFolders(agent.readResources, agent.sourceFolders)) throw new IntegrationError('permission_ceiling', 'Do not mix legacy and new folder scopes.')
+     if (ids.length) {
+diff --git a/src/channels/integration_test.ts b/src/channels/integration_test.ts
+index df5c1291..19c6033b 100644
+--- a/src/channels/integration_test.ts
++++ b/src/channels/integration_test.ts
+@@ -1395,10 +1395,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
+   const runtime = new DirectoryBots(deployments)
+   await mkdir(join(f.home, 'memory', 'topics'), { recursive: true })
+   await writeFile(join(f.home, 'memory', 'topics', 'Shared.md'), 'DEPLOYED_WIKI_CANARY')
+-  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResources: { wiki: true, folders: [randomUUID()] } }) }
++  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResourcesModel: 'bot-wide', readResources: { wiki: true } }) }
+   const source = { version: 1, projectId: f.projectId, connectionId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
+-  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: ['read'], readResources: { wiki: true }, readDomains: [], inheritThreads: true, manage: false }
++  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: ['read'], readDomains: [], inheritThreads: true, manage: false }
+   let files = assignChannelSource(base, source, permission, 'parent').files
++  const { parseBot } = await import('../bots/sdk.ts')
++  const incompatible = { ...files, 'bot.json': JSON.stringify({ ...JSON.parse(files['bot.json']), readResources: { folders: [randomUUID()] } }) }
++  const draft = runtime.discord([{ bot: parseBot(incompatible), files: incompatible, deployment: {
++    id: 'parent-support', revision: deployments.freeze(incompatible).revision, source: { folderId: 'fixture', directory: 'parent-support' }, mode: 'bounded',
++  } }])
++  await assert.rejects(() => f.config.validateBotDeployment(draft.agents, draft.bindings, signal()), /source folder unavailable|source reads are unsupported/)
+   const publish = async () => {
+     const frozen = deployments.freeze(files)
+     await deployments.deploy({ id: 'parent-support', source: { folderId: 'fixture', directory: 'parent-support' }, ...frozen, expectedRevision: deployments.read('parent-support')?.deployment.revision })
+@@ -1428,8 +1434,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
+   files = assignChannelSource(files, source, { ...permission, enabled: false }, 'parent').files
+   await publish(); await assert.rejects(f.input('407'), /disabled|not assigned/)
+   files = assignChannelSource(files, source, permission, 'parent').files
++  const companion = JSON.parse(files['bot.json'])
++  delete companion.readResources
++  files = { ...files, 'bot.json': JSON.stringify(companion) }
+   await publish(); f.requests.length = 0
++  f.responses.push({ content: '', toolCalls: [{ id: 'revoked-wiki', name: 'read', arguments: { path: 'v:memory/topics/Shared.md' } }] })
+   await f.send('407', 'POST_B_NEW_GENERATION')
++  assert.doesNotMatch(JSON.stringify(f.requests), /DEPLOYED_WIKI_CANARY/)
+   assert.notEqual(f.sessions.getSessionState(f.id('407'))?.channelBoundary?.epoch, oldEpoch)
+   assert.doesNotMatch(JSON.stringify(f.requests), /POST_B_ONLY|POST_A_PRIVATE_CONTEXT/)
+ })
+diff --git a/src/vfs/bots.ts b/src/vfs/bots.ts
+index e3e62f43..537942c7 100644
+--- a/src/vfs/bots.ts
++++ b/src/vfs/bots.ts
+@@ -11,7 +11,7 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/
+ const AUTHORING = `BOT authoring and linking (current Project, read-only guide)
+ Connection is transport only; inspect v:connections/index.json and the selected canonical sink/receiver path. The common receipt sink records messages without a model BOT and retains the same address before and after a BOT is linked.
+ Use bot_package action create in a registered, authorized local source Folder to create a new BOT source directory and apply it with zero subscriptions. Inspect the live contract for required fields; then configure its prompt, skills and capabilities in BOT.md and its companion source as appropriate. Never put credentials in BOT.md. Action propose validates and applies the source directly; there is no separate native approval or publication stage.
+-BOT.md is the sole BOT listener and message-admission configuration. A service BOT defines id, mode: service, prompt, allowedModules, tools and bindings; subscriptions select those existing bindings and [] receives nothing. Set trigger, participants/allowFrom and tool/read scopes explicitly. Do not copy Connection-level filters or assume selection grants permissions.
++BOT.md is the sole BOT listener and message-admission configuration. A service BOT defines id, mode: service, prompt, allowedModules, tools and bindings; subscriptions select those existing bindings and [] receives nothing. Set trigger, participants/allowFrom and tools per binding. For Service read access use companion JSON readResourcesModel:"bot-wide" and optional top-level readResources; every binding inherits the same grant. Inspect that scope before linking a channel. Do not copy Connection-level filters or assume selection grants permissions.
+ Service skills are BOT.md skills: [{name, content}]; use only required skill content and configure the BOT tool/module capabilities separately. A skill name or content does not grant capabilities. Personal BOTs use the selected ordinary Agent role tools/context and do not support service skills/bindings.
+ To link an existing BOT, use bot_package action source to inspect its current source and revision, then action link to update that BOT's own companion bindings/subscriptions for the selected real receiver and apply it. Preserve other listeners and use source-revision concurrency checks; inspect the current tool contract for exact fields. Do not create a duplicate BOT, clone bindings into Workflow or widen a legacy thread rule to its parent. Workflow references BOT identity, not copied receive policy.
+ Graph receiver references identify top-level groups/parent channels only. Browse threads inside the existing parent channel content page; do not offer a thread assignment from this graph. Linking affects future admission only and never replays inbox history.
+@@ -89,7 +89,7 @@ export function createBotsHandler(options: Options): { read: VirtualFsHandler; l
+     const metadata = item.deployment && { revision: item.deployment.revision, previous: item.deployment.previous ?? null,
+       source: safeSource(item.deployment.source), storageMode: item.deployment.mode }
+     const common = { id, ...metadata, state: item.state, loaded: item.loaded ? 'lazy-validated' : item.state,
+-      error: item.error ?? null, format: item.format ?? null, processingSuccess: 'unknown', routing: 'not-probed' }
++      error: item.error ?? null, ...('guidance' in item && item.guidance ? { guidance: item.guidance } : {}), format: item.format ?? null, processingSuccess: 'unknown', routing: 'not-probed' }
+     if (view === 'listeners') return { ...common, projection: 'InputRouter botInputListeners',
+       personalIngress: item.bot?.mode === 'personal' ? 'host-session-listeners-not-exported' : undefined,
+       ...rowsPage(`deployments/${id}/listeners`, item.listeners ?? [], page) }
+diff --git a/src/vfs/bots_test.ts b/src/vfs/bots_test.ts
+index d5cba5f2..894e908d 100644
+--- a/src/vfs/bots_test.ts
++++ b/src/vfs/bots_test.ts
+@@ -146,6 +146,7 @@ test('invalid, quarantined, identity-mismatched and integrity-failed deployments
+     const status = await f.get('deployments/invalid/status')
+     assert.equal(status.state, 'quarantined')
+     assert.equal(status.error, 'invalid-package')
++    assert.equal(status.guidance, undefined)
+     assert.equal(status.revision, invalid.revision, 'Only integrity-verified metadata survives invalid package parsing')
+     assert.equal(status.format, null)
+     assert.equal(status.counts, null)
+@@ -167,6 +168,11 @@ test('invalid, quarantined, identity-mismatched and integrity-failed deployments
+     assert.equal((await f.get('deployments/mismatch/status')).error, 'identity-mismatch')
+     await f.deploy('malformed', { ...botFiles(), 'bot.json': '{"headers":"PRIVATE_BEARER", broken' })
+     assert.equal((await f.get('deployments/malformed/status')).error, 'invalid-package')
++    await f.deploy('legacy-read', botFiles('', { readResources: { wiki: true }, bindings: [{ ...qq(f.bot.id, 'group:one'), readResources: { wiki: true } }, qq(f.bot.id, 'group:two')] }))
++    const legacy = await f.get('deployments/legacy-read/status')
++    assert.equal(legacy.state, 'valid')
++    assert.match(legacy.guidance, /do not copy the ceiling or union grants/i)
++    assert.match(legacy.guidance, /Non-lossless in-place conversion is blocked/)
+     const metadataPath = join(workspace, 'deployments/healthy/active.json')
+     const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'))
+     metadata.current.headers = { Authorization: 'PRIVATE_BEARER' }
