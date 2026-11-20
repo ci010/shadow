@@ -291,6 +291,33 @@ app.whenReady().then(async()=>{
   }), 'both actions sit above the collapsed Preview limits in the inspector');
   if(${JSON.stringify(desktopScreenshot || '')}) writeFileSync(${JSON.stringify(desktopScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
   await click('Storyboard','.viewer-modes');
+  assert.ok(await run(()=>{
+    const toolbar=document.querySelector('.board-toolbar');
+    const mode=toolbar.querySelector('.board-primary .viewer-modes [aria-pressed=true]');
+    return mode===document.activeElement && toolbar.querySelector('.shot-count').textContent==='4 shots' &&
+      toolbar.querySelector('.board-primary .board-zoom') && !toolbar.textContent.includes('browser profile');
+  }), 'the compact toolbar groups viewing controls and preserves mode-switch focus');
+  await run(()=>{
+    const trigger=document.querySelector('.description-filter button[aria-label="Description storage"]');
+    trigger.focus();
+    if (document.activeElement!==trigger || trigger.tabIndex!==0) throw Error('Storage explanation must be focusable');
+    trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));
+  });
+  await wait('storage explanation can be read from the keyboard',()=>{
+    const popup=document.activeElement;
+    return popup.getAttribute('role')==='dialog' && popup.textContent.includes('The OTIO file is unchanged.');
+  });
+  await run(()=>document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
+  await wait('Escape closes storage explanation',()=>document.activeElement.getAttribute('aria-expanded')==='false');
+  await run(()=>{
+    const read=Storage.prototype.getItem;
+    Storage.prototype.getItem=function(key){if(key.startsWith('shadow:otio-description:'))throw new DOMException('Denied','SecurityError');return read.call(this,key)};
+    window.fixture.restoreRead=()=>{Storage.prototype.getItem=read;window.dispatchEvent(new StorageEvent('storage'))};
+    window.dispatchEvent(new StorageEvent('storage'));
+  });
+  assert.ok(await run(()=>document.querySelector('.description-warning[role=status]').textContent.includes('unavailable') && document.querySelector('.description-filter input').disabled));
+  await run(()=>window.fixture.restoreRead());
+  await wait('storage controls restored',()=>!document.querySelector('.description-warning') && !document.querySelector('.description-filter input').disabled);
   const [board,boardTracks,boardInspector]=await layout('.storyboard-pane','.tracks-pane','.inspector');
   assert.ok(board.left<=monitor.left && board.right<=boardInspector.left+1 && board.bottom<=boardTracks.top+1);
   await wait('decoded storyboard still and video pixels',()=>{
@@ -326,7 +353,8 @@ app.whenReady().then(async()=>{
   await setSampling(true);
   await wait('interval ordering and labeled gap',()=>{
     const board=document.querySelector('.storyboard');
-    return [...board.querySelectorAll('time')].map(e=>e.textContent).join(',')==='0 s,2 s,4 s,6 s,8 s' && board.querySelector('.vue-flow__node:last-child .card').textContent.includes('No picture / gap');
+    return board.querySelector('.shot-count').textContent==='5 shots' &&
+      [...board.querySelectorAll('time')].map(e=>e.textContent).join(',')==='0 s,2 s,4 s,6 s,8 s' && board.querySelector('.vue-flow__node:last-child .card').textContent.includes('No picture / gap');
   });
   assert.equal(await run(()=>[...document.querySelectorAll('.card')].filter(e=>e.textContent.includes('Moonrise')).reduce((n,e)=>n+e.querySelectorAll('.caption-action').length,0)),1);
   const fill=async text=>run(text=>{
@@ -390,6 +418,14 @@ app.whenReady().then(async()=>{
   win.setSize(420,820);
   await wait('narrow storyboard tabs',()=>!!document.querySelector('.compact-tabs').getClientRects().length);
   await layout('.storyboard-pane','.tracks-pane');
+  assert.ok(await run(()=>{
+    const toolbar=document.querySelector('.board-toolbar');
+    const {left,right}=toolbar.getBoundingClientRect();
+    return [...toolbar.querySelectorAll('button,select,input')].every(control=>{
+      const rect=control.getBoundingClientRect();
+      return rect.width>0 && rect.left>=left && rect.right<=right;
+    });
+  }), 'all narrow toolbar controls remain in bounds');
   await wait('narrow Flow wraps without clipping horizontally',()=>{
     const cards=[...document.querySelectorAll('.board-flow .card')].map(e=>e.getBoundingClientRect());
     const port=document.querySelector('.board-scroll');

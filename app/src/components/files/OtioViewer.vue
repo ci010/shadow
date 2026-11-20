@@ -5,22 +5,27 @@
     </div>
     <div class="bench" :class="{ reviewing: review }" :data-panel="compact">
       <OtioOutline v-if="!review && !board" class="outline-pane" :model="model" :selected-id="selected.id" @select="select" />
-      <section class="monitor-pane" :class="{ 'storyboard-pane': board && !review }" :aria-label="t(board ? 'Storyboard' : 'Picture monitor')">
-        <header class="panel-bar">
+      <section ref="monitorPane" class="monitor-pane" :class="{ 'storyboard-pane': board && !review }" :aria-label="t(board ? 'Storyboard' : 'Picture monitor')">
+        <header v-if="!board" class="panel-bar">
           <h3 v-if="review?.capture">{{ t('Frozen frame') }}</h3>
           <div v-else class="modes viewer-modes" role="group" :aria-label="t('Picture view')">
-            <button type="button" :aria-pressed="!board" :disabled="locked" @click="showBoard(false)">{{ t('Monitor') }}</button>
-            <button type="button" :aria-pressed="board" :disabled="locked" @click="showBoard(true)">{{ t('Storyboard') }}</button>
+            <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
           </div>
           <span v-if="review?.capture" class="readout">{{ t('Frame {frame}', { frame: format(frame) }) }} · {{ t('{rate} fps', { rate: format(model.rate) }) }}</span>
-          <div v-if="(canSolo || videoTrack) && !review && !board" class="modes" role="group" :aria-label="t('Monitor source')">
+          <div v-if="(canSolo || videoTrack) && !review" class="modes" role="group" :aria-label="t('Monitor source')">
             <button type="button" :aria-pressed="mode === 'timeline'" @click="setMode('timeline')">{{ t('Timeline') }}</button>
             <button v-if="videoTrack" type="button" :aria-pressed="mode === 'track'" @click="setMode('track')">{{ t('Solo video track') }}</button>
             <button v-if="canSolo" type="button" :aria-pressed="mode === 'clip'" @click="setMode('clip')">{{ t('Clip source') }}</button>
           </div>
         </header>
         <OtioStoryboard v-if="boardOpened" v-show="board" class="storyboard-content" :model="model" :source="source" :api-base="apiBase" :active="active && board"
-          :track="videoTrack" :hidden="hiddenVideoTracks" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition" />
+          :track="videoTrack" :hidden="hiddenVideoTracks" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition">
+          <template #mode>
+            <div v-if="board" class="modes viewer-modes" role="group" :aria-label="t('Picture view')">
+              <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
+            </div>
+          </template>
+        </OtioStoryboard>
         <template v-if="!board">
           <ImageAnnotationPreview v-if="review?.capture" class="frame-editor" staged src="" :local-file="review.capture.file" :name="review.capture.file.name"
             :source-key="review.id" :context-key="review.id" :editable="reviewAvailable && !staging" :active="active"
@@ -77,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { formatNumber, t } from '../../i18n.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { createOtioAudio, otioAudioPosition, otioAudioTracks } from '../../otio-audio.ts'
@@ -181,6 +186,14 @@ function select(id: string) {
   if ((frame.value < firstSelected.value || frame.value >= afterSelected.value) && firstSelected.value < afterSelected.value) frame.value = firstSelected.value
   mode.value = canSolo.value ? 'clip' : 'timeline'
   if (compact.value === 'outline') compact.value = 'selection'
+}
+const monitorPane = ref<HTMLElement>()
+const pictureViews = [{ label: 'Monitor', board: false }, { label: 'Storyboard', board: true }] as const
+function switchPictureView(next: boolean) {
+  if (locked.value || board.value === next) return
+  showBoard(next)
+  // The switch moves between the monitor header and the board toolbar.
+  void nextTick(() => monitorPane.value?.querySelector<HTMLElement>('.viewer-modes [aria-pressed="true"]')?.focus({ preventScroll: true }))
 }
 function showBoard(next: boolean) {
   if (locked.value) return
@@ -293,6 +306,7 @@ onBeforeUnmount(() => { pause(); generation++; stageRequest?.abort(); document.r
 .bench > .storyboard-pane { grid-area: outline-start / outline-start / monitor-end / monitor-end; }
 .storyboard-content { flex: 1; }
 .viewer-modes { margin-inline-end: auto; }
+.storyboard-pane .viewer-modes button { min-height: 32px; padding-inline: 10px; }
 .otio .viewer-modes button[aria-pressed='true'] { background: var(--c-selection-bg); color: var(--c-text); }
 .outline-pane { grid-area: outline; border-right: 1px solid var(--c-border); }
 .monitor-pane { grid-area: monitor; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
