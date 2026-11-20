@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
+import { reflectionProfileSourceSchema, type IdentityManager } from '../agent/identity.ts'
 import { Journal } from '../watermarks/journal.ts'
 import { Watermarks } from '../watermarks/store.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
@@ -15,7 +16,35 @@ const PREVIEW = 600
 const PAGE = 2000
 const MAX_MESSAGES = 12
 const MAX_BATCHES_PER_RUN = 8
-const inputMarker = z.object({ sessionId: z.string(), id: z.string().min(1), text: z.string().min(1), at: z.string().min(1) })
+const inputMarker = z.object({ sessionId: z.string(), id: z.string().min(1), text: z.string().min(1), at: z.string().min(1),
+  // Invalid/missing identity provenance must not change diary admission.
+  profileSource: reflectionProfileSourceSchema.optional().catch(undefined),
+})
+const profileReference = z.object({ sessionId: z.string(), inputId: z.string(), record: z.number(), at: z.string() })
+const profileEvidence = z.object({ source: reflectionProfileSourceSchema, name: z.string(), ref: profileReference,
+  kind: z.enum(['explicit-concise', 'explicit-detailed', 'request-concise']),
+})
+const profileChange = z.object({ name: z.string(), evidence: z.array(profileEvidence).min(1).max(2) })
+type ProfileEvidence = z.infer<typeof profileEvidence>
+type ProfileChange = z.infer<typeof profileChange>
+
+// A deliberately small allowlist. No model output, quotes, arbitrary facts, or
+// sensitive attributes can become profile content through this automation.
+function preference(text: string): ProfileEvidence['kind'] | undefined {
+  const normalized = text.trim().toLowerCase().replace(/[.!。！]$/, '')
+  if (/^(?:i (?:always )?prefer (?:concise|brief) (?:answers|replies)|我偏好(?:简洁|简短)的回复)$/.test(normalized)) return 'explicit-concise'
+  if (/^(?:i (?:always )?prefer detailed (?:answers|replies)|我偏好详细的回复)$/.test(normalized)) return 'explicit-detailed'
+  if (/^(?:please (?:be concise|keep (?:it|the answer|your reply) brief)|请简短回复)$/.test(normalized)) return 'request-concise'
+}
+
+function renderProfileEvidence(item: ProfileChange): string[] {
+  const kind = item.evidence[0]!.kind
+  const text = kind === 'request-concise' ? 'Tentative pattern (not a stated preference): has repeatedly asked for brief replies.'
+    : `Explicit preference: prefers ${kind === 'explicit-concise' ? 'concise' : 'detailed'} replies.`
+  // Encode identifiers instead of interpreting them as Markdown or interpolating source text.
+  const refs = item.evidence.map(({ ref }) => `${encodeURIComponent(ref.sessionId)}/${encodeURIComponent(ref.inputId)} at ${new Date(ref.at).toISOString()}`)
+  return [`- ${text} Evidence: ${refs.map(ref => `\`${ref}\``).join('; ')}.`]
+}
 const result = z.array(z.object({
   refs: z.array(z.number().int().min(1).max(MAX_MESSAGES)).min(1).max(MAX_MESSAGES),
   evidence: z.string().trim().min(1).max(1500),
@@ -29,8 +58,10 @@ type Input = z.infer<typeof inputMarker> & { record: number }
 type Round = { messages: Input[]; signal: AbortSignal; notes?: z.infer<typeof result> }
 const diarySchema = z.object({ version: z.literal(1), entries: z.array(z.object({
   batchId: z.string().uuid(), at: z.string(), physicalId: z.string(),
-  refs: z.array(z.object({ sessionId: z.string(), inputId: z.string(), record: z.number(), at: z.string() })), notes: result,
+  refs: z.array(profileReference), notes: result,
+  profileEvidence: z.array(profileEvidence).optional(), profileChanges: z.array(profileChange).optional(),
 })) })
+type DiaryEntry = z.infer<typeof diarySchema>['entries'][number]
 
 /** Read only trusted admission metadata. Historical unmarked and copied rows are not evidence. */
 export async function collectDiaryInputs(store: Pick<SessionStore, 'readSessionLog' | 'readArchivedLogRange'>,
@@ -87,7 +118,71 @@ export class ReflectionDiary implements Tool {
   private running = false
 
   constructor(private workspace: string, private projectId: string, private store: SessionStore,
-    private cron: Pick<CronDispatcher, 'dispatch'>) {}
+    private cron: Pick<CronDispatcher, 'dispatch'>,
+    private identity?: Pick<IdentityManager, 'reflectionProfile' | 'appendReflectionProfile'>) {}
+
+  private async planProfile(messages: Input[], entries: DiaryEntry[]) {
+    const evidence: ProfileEvidence[] = []
+    const changes = new Map<string, ProfileChange>()
+    if (!this.identity) return { evidence, changes: [] }
+    for (const msg of messages) {
+      const kind = preference(msg.text)
+      const source = msg.profileSource
+      if (!kind || !source || !Number.isFinite(Date.parse(msg.at))) continue
+      const name = await this.identity.reflectionProfile(source)
+      if (!name) continue
+      const item: ProfileEvidence = { name, source, kind, ref: { sessionId: msg.sessionId, inputId: msg.id, record: msg.record, at: msg.at } }
+      if (kind === 'request-concise') {
+        if (changes.has(name)) continue
+        let prior: ProfileEvidence | undefined
+        // Same admitted account, same canonical profile, distinct UTC dates. No
+        // retroactive linking of observations or inference over direct statements.
+        for (const observations of [...entries.map(entry => entry.profileEvidence ?? []), evidence]) {
+          for (const candidate of observations) {
+            if (candidate.kind !== kind || candidate.name !== name || candidate.ref.inputId === item.ref.inputId ||
+              candidate.source.channel !== source.channel || candidate.source.senderId !== source.senderId ||
+              candidate.source.channelAddress?.botInstanceId !== source.channelAddress?.botInstanceId ||
+              new Date(candidate.ref.at).toISOString().slice(0, 10) === new Date(msg.at).toISOString().slice(0, 10)) continue
+            prior = candidate
+          }
+        }
+        if (prior) changes.set(name, { name, evidence: [item, prior] })
+      } else {
+        const previous = changes.get(name)?.evidence[0]
+        if (!previous || previous.kind === 'request-concise' || Date.parse(previous.ref.at) < Date.parse(item.ref.at)) {
+          changes.set(name, { name, evidence: [item] })
+        }
+      }
+      evidence.push(item)
+    }
+    // Avoid re-appending repeated statements or replacing a stated preference
+    // with an inference. A later differing explicit statement can correct it.
+    const latest = new Map<string, ProfileEvidence>()
+    for (const entry of entries) {
+      for (const change of entry.profileChanges ?? []) latest.set(change.name, change.evidence[0]!)
+      for (const item of entry.profileEvidence ?? []) {
+        const before = latest.get(item.name)
+        if (item.kind !== 'request-concise' && (!before || before.kind === 'request-concise' || Date.parse(before.ref.at) < Date.parse(item.ref.at))) {
+          latest.set(item.name, item)
+        }
+      }
+    }
+    return { evidence, changes: [...changes.values()].filter(change => {
+      const before = latest.get(change.name)
+      const next = change.evidence[0]!
+      if (!before) return true
+      return before.kind !== next.kind && next.kind !== 'request-concise' &&
+        (before.kind === 'request-concise' || Date.parse(before.ref.at) < Date.parse(next.ref.at))
+    }) }
+  }
+
+  private async commitProfile(entry: DiaryEntry, signal: AbortSignal) {
+    for (const change of entry.profileChanges ?? []) {
+      signal.throwIfAborted()
+      if (!this.identity) throw new Error('Pending reflection profile update has no identity service')
+      await this.identity.appendReflectionProfile(change.evidence[0]!.source, change.name, renderProfileEvidence(change), entry.batchId)
+    }
+  }
 
   async execute(raw: Record<string, unknown>, context: ExecutionContext) {
     const round = this.rounds.get(context.sessionId)
@@ -119,11 +214,19 @@ export class ReflectionDiary implements Tool {
     const state = diary.read({ version: 1, entries: [] })
     const snapshot = marks.inspect()
     const pending = snapshot.batches.find(batch => batch.state !== 'done')
-    if (pending && state.entries.some(entry => entry.batchId === pending.id)) {
+    const committed = pending && state.entries.find(entry => entry.batchId === pending.id)
+    if (pending && committed) {
       signal.throwIfAborted()
       if (pending.state === 'running') marks.recover(pending.id)
       const attempt = randomUUID()
       marks.claim(pending.id, attempt)
+      try {
+        await this.commitProfile(committed, signal)
+        signal.throwIfAborted()
+      } catch (error) {
+        marks.retry(pending.id, attempt, 'Reflection profile commit incomplete; retry the saved plan')
+        throw error
+      }
       marks.ack(pending.id, attempt)
       return
     }
@@ -198,9 +301,16 @@ export class ReflectionDiary implements Tool {
         } finally { if (owner) this.rounds.delete(owner) }
         signal.throwIfAborted()
         if (!round.notes) throw new Error('Reflection finished without a diary submission')
-        state.entries.push({ batchId: batch.id, at: new Date().toISOString(), physicalId,
-          refs: round.messages.map(msg => ({ sessionId: msg.sessionId, inputId: msg.id, record: msg.record, at: msg.at })), notes: round.notes })
+        const { evidence, changes } = await this.planProfile(round.messages, state.entries)
+        signal.throwIfAborted()
+        const entry: DiaryEntry = { batchId: batch.id, at: new Date().toISOString(), physicalId,
+          refs: round.messages.map(msg => ({ sessionId: msg.sessionId, inputId: msg.id, record: msg.record, at: msg.at })), notes: round.notes,
+          ...(evidence.length ? { profileEvidence: evidence } : {}), ...(changes.length ? { profileChanges: changes } : {}),
+        }
+        state.entries.push(entry)
         diary.save(state)
+        await this.commitProfile(entry, signal)
+        signal.throwIfAborted()
       } catch (error) {
         marks.retry(batch.id, attempt, 'Reflection attempt did not finish; retry the same batch')
         throw error

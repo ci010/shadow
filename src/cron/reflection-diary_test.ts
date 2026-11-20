@@ -5,6 +5,8 @@ import { test } from 'node:test'
 import { ReflectionDiary } from './reflection-diary.ts'
 import { REFLECTION_DIARY_AUTOMATION, REFLECTION_DIARY_DEFAULT_KEY, REFLECTION_DIARY_ID } from './defaults.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
+import { IdentityManager } from '../agent/identity.ts'
+import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { Watermarks } from '../watermarks/store.ts'
@@ -104,3 +106,90 @@ test('reflection default is a daily Workflow and committed entries repair interr
     assert.equal(recovered.cursors[physical], '1')
   } finally { await cron.stop(); await rm(root, { recursive: true, force: true }) }
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: profile commit resumes the saved plan and preserves manual content`, async () => {
+    const root = await mkdtemp(join(process.cwd(), '.test-reflection-'))
+    const store = new Store(root)
+    try {
+      await store.init()
+      await store.saveState(session.sessionId, session)
+      const identity = new IdentityManager(root, 'test')
+      const source = { channel: 'web', senderId: 'owner' }
+      const assigned = await identity.assignProfile('web', 'owner', 'Owner')
+      const path = join(root, assigned.profilePath)
+      const manual = '# Owner\n\n## Preferences\n\nManual entry – keep this.\n'
+      await writeFile(path, manual)
+      const input = (id: string, text: string, date = at, profileSource = source) => ({
+        role: 'user', direct_input: { ...mark(id, text), at: date, profileSource },
+      })
+      await store.createSessionLog(physical, [
+        input('single-request', 'Please be concise.'),
+        input('other-account', 'I prefer detailed replies.', at, { channel: 'web', senderId: 'other' }),
+        { role: 'user', direct_input: mark('legacy', 'I prefer detailed replies.') },
+      ])
+      const ctx = { sessionId: 'cron:fixture', projectId: 'test', signal } as ExecutionContext
+      let dispatches = 0
+      let phase: 'normal' | 'fail' | 'lost-receipt' = 'normal'
+      const diary: ReflectionDiary = new ReflectionDiary(root, 'test', store, { dispatch: async (_job, _signal, task, accepted) => {
+        dispatches++
+        assert(!task?.includes('senderId'))
+        accepted?.(ctx.sessionId)
+        await assert.rejects(() => diary.execute({ action: 'submit', notes: [], profilePath: 'elsewhere.md' }, ctx))
+        await diary.execute({ action: 'submit', notes: [{ refs: [1], evidence: 'Model-supplied claim', inference: 'Speculative label' }] }, ctx)
+        return ctx.sessionId
+      } }, {
+        reflectionProfile: identity.reflectionProfile.bind(identity),
+        appendReflectionProfile: async (...args) => {
+          if (phase === 'fail') throw new Error('injected profile failure')
+          await identity.appendReflectionProfile(...args)
+          if (phase === 'lost-receipt') throw new Error('lost profile receipt')
+        },
+      })
+      const cursor = () => new Watermarks(root, 'test', 'reflection-diary-v1').inspect().cursors[physical]
+      const entries = async () => JSON.parse(await readFile(projectStoragePath(root, 'memory', 'reflection-diary.json'), 'utf8')).entries
+      await diary.run(job, signal)
+      assert.equal(cursor(), '3')
+      assert.equal(await readFile(path, 'utf8'), manual, 'single request and unscoped evidence do not update a profile')
+
+      await store.appendRawEvents(physical, [input('recurrence', 'Please keep it brief.', '2026-01-03T03:04:05.000Z')])
+      phase = 'fail'
+      await assert.rejects(() => diary.run(job, signal), /injected profile failure/)
+      assert.equal(cursor(), '3')
+      assert.equal((await entries()).length, 2, 'diary and profile plan are already saved')
+      phase = 'normal'
+      const alternate = await identity.assignProfile('web', 'owner', 'Alternate')
+      const alternatePath = join(root, alternate.profilePath)
+      const alternateBefore = await readFile(alternatePath, 'utf8')
+      await assert.rejects(() => diary.run(job, signal), /identity changed/)
+      assert.equal(cursor(), '3')
+      assert.equal(await readFile(alternatePath, 'utf8'), alternateBefore, 'a pending write cannot follow a relink')
+      await identity.assignProfile('web', 'owner', 'Owner')
+      const edited = manual + '\nManual edit made between attempts.\n'
+      await writeFile(path, edited)
+      phase = 'lost-receipt'
+      await assert.rejects(() => diary.run(job, signal), /lost profile receipt/)
+      assert.equal(cursor(), '3')
+      const updated = await readFile(path, 'utf8')
+      assert(updated.startsWith(edited))
+      assert.match(updated, /Tentative pattern.*recurrence.*single-request/)
+      assert.doesNotMatch(updated, /Speculative label|Model-supplied claim/)
+      phase = 'normal'
+      await diary.run(job, signal)
+      assert.equal(cursor(), '4')
+      assert.equal(dispatches, 2, 'neither retry dispatches the model')
+      assert.equal(await readFile(path, 'utf8'), updated, 'durable receipt prevents duplicate profile append')
+      assert.equal((await entries()).length, 2)
+
+      await store.appendRawEvents(physical, [input('explicit', 'I prefer detailed answers.', '2026-01-04T03:04:05.000Z')])
+      await diary.run(job, signal)
+      const explicit = await readFile(path, 'utf8')
+      assert(explicit.startsWith(updated))
+      assert.match(explicit, /Explicit preference: prefers detailed replies.*explicit/)
+      await store.appendRawEvents(physical, [input('repeat', 'I prefer detailed replies.', '2026-01-05T03:04:05.000Z')])
+      await diary.run(job, signal)
+      assert.equal(cursor(), '6')
+      assert.equal(await readFile(path, 'utf8'), explicit, 'same preference is not written again')
+    } finally { if (store instanceof SqliteSessionStore) store.close(); await rm(root, { recursive: true, force: true }) }
+  })
+}

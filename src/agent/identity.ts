@@ -1,3 +1,5 @@
+import { existsSync, lstatSync, openSync, closeSync, fstatSync, readFileSync, realpathSync, writeSync, fsyncSync, constants } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
@@ -56,6 +58,14 @@ export interface IdentityLinkOptions {
   targetBotInstanceId?: string
 }
 
+export interface ReflectionProfileSource {
+  channel: string
+  senderId: string
+  channelAddress?: ChannelAddress
+}
+
+export const reflectionProfileSourceSchema = z.object({ channel: z.string().min(1), senderId: z.string().min(1), channelAddress: addressSchema.optional() })
+
 export interface IdentityLookupResult {
   personContext: string
 }
@@ -93,6 +103,68 @@ export class IdentityManager {
     this.workspace = workspace
     this.identitiesDir = workspacePath(workspace, IDENTITIES_DIR)
     this.indexPath = workspacePath(workspace, INDEX_FILE)
+  }
+
+  /** Read the same Project identity map used by runtime context, without creating profiles. */
+  async reflectionProfile(source: ReflectionProfileSource): Promise<string | undefined> {
+    if (!existsSync(this.indexPath)) return
+    return this.withState(async state => {
+      const name = this.reflectionProfileIn(state, source)
+      if (name && this.reflectionProfileFile(name)) return name
+    })
+  }
+
+  private reflectionProfileIn(state: IdentityState, source: ReflectionProfileSource): string | undefined {
+    let key: string
+    try { key = this.accountKey(source.channel, source.senderId, source.channelAddress) }
+    catch { return }
+    const name = Object.hasOwn(state.accounts, key) ? state.accounts[key] : undefined
+    if (!name || this.sanitizeProfileName(name) !== name) return
+    // Different names can resolve to the same file on case-insensitive hosts.
+    if (Object.values(state.accounts).some(other => other !== name && other.normalize('NFKC').toLowerCase() === name.toLowerCase())) return
+    return name
+  }
+
+  private reflectionProfileFile(name: string): string | undefined {
+    try {
+      const directory = workspacePath(realpathSync(this.workspace), IDENTITIES_DIR)
+      const path = join(directory, `${name}.md`)
+      if (dirname(path) !== directory || realpathSync(directory) !== directory) return
+      const stat = lstatSync(path)
+      if (stat.isFile() && stat.nlink === 1) return path
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+
+  async appendReflectionProfile(source: ReflectionProfileSource, name: string, lines: string[], batchId: string): Promise<void> {
+    await this.withState(async state => {
+      if (this.reflectionProfileIn(state, source) !== name) throw new Error('Reflection profile identity changed; review the pending batch')
+      const path = this.reflectionProfileFile(name)
+      if (!path) throw new Error('Reflection requires an existing regular profile in the Project identity directory')
+      const fd = openSync(path, constants.O_RDWR | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0))
+      try {
+        const checkFile = () => {
+          const opened = fstatSync(fd)
+          const current = lstatSync(path)
+          if (!current.isFile() || opened.dev !== current.dev || opened.ino !== current.ino || opened.nlink !== 1) {
+            throw new Error('Reflection profile changed during append; retry the batch')
+          }
+        }
+        checkFile()
+        const marker = `<!-- reflection-diary:${batchId} -->`
+        if (!readFileSync(fd, 'utf8').split(/\r?\n/).includes(marker)) {
+          // Append rather than replace: preserve manual content, including edits made
+          // since planning. A concurrent replacement is detected by the inode check.
+          const block = Buffer.from(`\n\n## Reflection diary observations\n\nManual profile entries and direct user corrections take precedence. Check evidence dates before applying an observation.\n\n${lines.join('\n')}\n${marker}\n`)
+          checkFile()
+          if (writeSync(fd, block) !== block.length) throw new Error('Incomplete reflection profile append')
+        }
+        fsyncSync(fd)
+        checkFile()
+        if (!readFileSync(path, 'utf8').split(/\r?\n/).includes(marker)) throw new Error('Reflection profile append was not retained')
+      } finally { closeSync(fd) }
+    })
   }
 
   async lookupByAccount(

@@ -1600,7 +1600,34 @@ starts with timestamped previews. Its dedicated continuation can read only trunc
 from those batch references, not arbitrary conversation history. The host appends
 an entry to the Project's `memory/reflection-diary.json` only after a successful
 run with an explicit submission. An empty submission records that the batch had
-no durable observations. Evidence and tentative inference are separate; the run
-does not update the user's profile, Wiki pages, or existing diary entries. A failed
-run leaves the same batch pending, and a retry after a diary commit acknowledges
-that entry without appending it again.
+no model-written diary notes. Evidence and tentative inference are separate.
+Existing diary entries and Wiki pages are not changed.
+
+Independently of the model's notes, the host may append observations to the
+sender's existing Project identity profile (`memory/identities/<name>.md`). It
+uses the same account mapping as runtime user context, including the Project
+and bot scope for addressed channels. Only direct, non-group inputs with stored
+sender provenance are eligible; older records without it remain diary-only.
+Unmapped senders and absent profiles are skipped, not created or inferred from
+a chat ID or display name.
+
+Profile updates currently recognize a narrow English/Chinese allowlist for
+reply length. A standalone preference such as “I prefer detailed replies” is
+labeled **explicit**. Requests such as “Please be concise” require two distinct
+admissions from the same account on different UTC dates and are labeled a
+**tentative pattern**, not a preference. Repetition does not override an explicit
+preference. Profile entries cite the admission IDs and dates. Unrecognized or
+sensitive statements and model-generated labels are not profile inputs. Manual
+profile content and direct corrections take precedence. The reflection tool
+cannot choose a profile, write a file, or supply profile text.
+
+The diary records the required profile writes before attempting them. A batch
+advances its watermark only after its diary entry and any required profile
+appends have completed. An interrupted or partial commit retries the saved
+plan without rerunning the model or appending another diary entry. A receipt
+in each profile makes successful appends replay-safe; leave it attached to the
+observation while a run is pending. Appends preserve existing bytes and check
+for file replacement. A profile that disappears or is relinked after planning
+leaves the batch pending for review rather than silently redirecting or skipping
+it. This is restart recovery, not an atomic transaction across files or a
+merge with an external editor saving an older copy of the file.
