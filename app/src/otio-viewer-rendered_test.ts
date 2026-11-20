@@ -92,7 +92,9 @@ test('OTIO viewer renders reviews; the real shell stages into existing and fresh
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const videoPath = 'cuts/moonrise.mp4'
-  const video = await readFile(resolve(root, 'examples/otio-first-cut/media/moonrise.mp4'))
+  // Standalone fixture, generated with ffmpeg: -f lavfi -i testsrc2=size=96x54:rate=12:duration=5
+  // -an -c:v libx264 -pix_fmt yuv420p -crf 30 -movflags +faststart
+  const video = await readFile(new URL('./fixtures/otio-storyboard-motion.mp4', import.meta.url))
   const wave = waveFixture()
   const requests: { method?: string; route: string; path: string | null }[] = []
   let failNextFolderRead = false
