@@ -69,7 +69,7 @@
           </template>
         </div>
       </section>
-      <OtioTracks v-if="!review" class="tracks-pane" :model="model" :selected-id="selected.id" :frame="frame" :hidden="hiddenVideoTracks" :muted="mutedAudioTracks" @toggle="toggleTrack" @select="select" @seek="seek" />
+      <OtioTracks v-if="!review" class="tracks-pane" :model="model" :selected-id="selected.id" :frame="frame" :hidden="hiddenVideoTracks" :muted="mutedAudioTracks" :wave-media="active ? mediaFor : undefined" @toggle="toggleTrack" @select="select" @seek="seek" />
     </div>
     <p v-if="error" class="review-error" role="alert">{{ error }}</p>
   </section>
