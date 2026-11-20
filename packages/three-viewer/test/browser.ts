@@ -1,5 +1,5 @@
 import { ThreeViewer, type ModelInput } from '../src/index.js';
-import { fixture, glb } from './fixture.js';
+import { fixture, glb, packGlb } from './fixture.js';
 import { BufferGeometry, Float32BufferAttribute, Mesh, MeshBasicMaterial, Scene } from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
@@ -35,6 +35,118 @@ const equal = (actual: unknown, expected: unknown) => {
 async function rejects(promise: Promise<unknown>, pattern: RegExp) {
   try { await promise; } catch (error) { if (pattern.test(String(error))) return; throw error; }
   throw new Error(`expected rejection ${pattern}`);
+}
+
+async function lighting(viewer: ThreeViewer, center: (blob: Blob) => Promise<number[]>) {
+  const punctual = 'KHR_lights_punctual';
+  const { json, data } = fixture([undefined]);
+  const ref = (light: number) => ({ extensions: { [punctual]: { light } } });
+  function input(version: string, light?: object, options: {
+    scene?: number; rotated?: boolean; jsonInput?: boolean; meshLight?: boolean; meshId?: string;
+  } = {}): ModelInput {
+    const { scene = 0, rotated, jsonInput, meshLight = true, meshId } = options;
+    const mesh = { ...json.nodes[0], extras: { objectId: meshId } };
+    const document = {
+      ...json, scene, scenes: light ? [{ nodes: [0, 1] }, { nodes: [0] }] : [{ nodes: [0] }],
+      nodes: light ? [
+        { ...mesh, ...(meshLight ? ref(1) : {}) }, // mesh + light can omit an authored mesh ID
+        { name: 'Light rig', translation: [0, 0, 2], children: [2, 3] },
+        { name: 'Key', ...ref(0), ...(rotated ? { rotation: [0, 1, 0, 0] } : {}) },
+        { name: 'Other instance', ...ref(0), translation: [0, 0, -4], extras: { objectId: 'not-a-mesh' } },
+      ] : [mesh],
+      meshes: [{ primitives: [{ ...json.meshes[0].primitives[0], material: 0 }] }],
+      materials: [{ pbrMetallicRoughness: { metallicFactor: 0, roughnessFactor: 1 } }],
+      ...(light ? { extensionsUsed: [punctual], extensionsRequired: [punctual],
+        extensions: { [punctual]: { lights: [light, { type: 'point', intensity: 0 }] } } } : {}),
+    };
+    return { version, identity: 'playground', ...(jsonInput ? {
+      bytes: new TextEncoder().encode(JSON.stringify(document)), resources: new Map([['mesh.bin', data]]),
+    } : { bytes: packGlb(document, data) }) };
+  }
+  const get = async () => center(await viewer.capture('front'));
+  const fallback = input('fallback');
+  await viewer.load(fallback);
+  viewer.setView('front');
+  const liveCamera = viewer.getCamera(), framed = viewer.getCamera('front');
+  const studio = await get();
+  if (!(studio[0] > 80 && studio[0] === studio[1] && studio[0] === studio[2])) throw new Error(`expected studio-lit neutral surface: ${studio}`);
+
+  const variants = [
+    { type: 'directional', color: [1, 0, 0], intensity: 2 },
+    { type: 'point', color: [1, 0, 0], intensity: 16, range: 5 },
+    { type: 'spot', color: [1, 0, 0], intensity: 16, range: 5, spot: { innerConeAngle: 0.1, outerConeAngle: 0.2 } },
+  ];
+  for (const light of variants) {
+    const lit = input(light.type, light, { jsonInput: light.type === 'point' });
+    equal((await viewer.load(lit)).objectIds, []);
+    equal(viewer.outline, [
+      { key: 'node:0', parentKey: null, label: 'Triangle 1' },
+      { key: 'node:1', parentKey: null, label: 'Light rig' },
+      { key: 'node:2', parentKey: 'node:1', label: 'Key' },
+      { key: 'node:3', parentKey: 'node:1', label: 'Other instance' },
+    ]);
+    const pixel = await get();
+    if (!(pixel[0] > 100 && pixel[1] < 3 && pixel[2] < 3)) throw new Error(`expected red ${light.type} illumination without studio fill: ${pixel}`);
+    equal(viewer.getCamera('front'), framed); equal(viewer.getCamera(), liveCamera);
+    await rejects(viewer.load(input('bad', { ...light, color: [2, 0, 0] })), /RGB/);
+    equal(await get(), pixel);
+  }
+  await viewer.load(input('cutoff', { ...variants[1], range: 1 }));
+  equal(await get(), [0, 0, 0, 255]);
+  await viewer.load(input('away', variants[2], { rotated: true }));
+  equal(await get(), [0, 0, 0, 255]);
+  await viewer.load(input('other-scene', variants[0], { scene: 1 }));
+  // Even a zero-intensity active instance suppresses the fallback.
+  equal(await get(), [0, 0, 0, 255]);
+  await viewer.load(input('inactive-lights', variants[0], { scene: 1, meshLight: false }));
+  equal(await get(), studio);
+
+  const original = new Uint8Array(fallback.bytes as Uint8Array);
+  await viewer.load({ ...fallback, preview: { toneMapping: 'aces', exposure: 0.1 } });
+  const low = await get();
+  const compareLive = async () => {
+    const actual = await center(await viewer.capture());
+    const independent = await center(await viewer.capture(viewer.getCamera()));
+    if (actual.some((channel, i) => Math.abs(channel - independent[i]) > 1)) {
+      throw new Error(`preview and independent capture disagree: ${actual} vs ${independent}`);
+    }
+  };
+  await compareLive();
+  await viewer.load({ ...fallback, preview: { toneMapping: 'aces', exposure: 4 } });
+  const high = await get();
+  if (!(low[0] < studio[0] && high[0] > low[0] + 50)) throw new Error(`expected ACES exposure contrast: ${low} vs ${studio} vs ${high}`);
+  await compareLive();
+  await rejects(viewer.load({ ...fallback, preview: { toneMapping: 'aces', exposure: 5 } }), /exposure/);
+  await rejects(viewer.load({ ...input('bad-fallback', { type: 'spot' }), preview: { toneMapping: 'none' } }), /spot/);
+  const shader: ModelInput = {
+    ...input('shader-aces', undefined, { meshId: 'surface' }),
+    shaders: [{ objectId: 'surface', slot: 0,
+      vertex: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragment: `
+        #ifndef TONE_MAPPING
+        deliberately invalid without tone mapping
+        #endif
+        void main() {
+          gl_FragColor = vec4(vec3(0.5), 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+    }],
+  };
+  // The pending load requires a different shader variant than the current renderer.
+  await rejects(viewer.load(shader), /Shader surface/);
+  equal(await get(), high);
+  await viewer.load(fallback);
+  equal(await get(), studio);
+  await viewer.load({ ...shader, preview: { toneMapping: 'aces', exposure: 0.1 } });
+  await compareLive();
+  const shaderPixel = await get();
+  if (!(shaderPixel[0] > 0 && shaderPixel[0] < low[0] + 30)) throw new Error(`expected tone-mapped shader: ${shaderPixel}`);
+  const discarded = viewer.load({ ...shader, preview: { toneMapping: 'aces', exposure: 4 } });
+  const restore = viewer.load(fallback);
+  await rejects(discarded, /AbortError/); await restore;
+  equal(await get(), studio);
+  if (!(fallback.bytes as Uint8Array).every((byte, i) => byte === original[i])) throw new Error('preview mutated GLB bytes');
 }
 
 async function run() {
@@ -214,6 +326,7 @@ async function run() {
     viewer.setPlayerMode(true); canvas.focus();
     canvas.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', bubbles: true }));
     equal(modes, [true, false]);
+    await lighting(viewer, center);
   } finally { viewer.dispose(); }
 }
 

@@ -163,7 +163,7 @@ function start() {
       busy.value = true; error.value = ''
       const glb = await exportSnapshot(snapshot, signal)
       const version = `${snapshot.version}:${await modelVersion(new Uint8Array(glb), new Map())}`
-      await display({ bytes: glb, version, identity: 'playground', shaders: snapshot.shaders, signal }, glb)
+      await display({ bytes: glb, version, identity: 'playground', shaders: snapshot.shaders, preview: snapshot.preview, signal }, glb)
     },
   })
 }

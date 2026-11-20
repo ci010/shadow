@@ -15,6 +15,10 @@ export function fixture(ids: (string | undefined)[] = ['left', 'right']) {
 
 export function glb(ids?: (string | undefined)[]): Uint8Array {
   const { json, data } = fixture(ids);
+  return packGlb(json, data);
+}
+
+export function packGlb(json: { buffers: { uri?: string; byteLength: number }[] }, data: Uint8Array) {
   const { uri: _, ...bin } = json.buffers[0];
   const jsonBytes = new TextEncoder().encode(JSON.stringify({ ...json, buffers: [bin] }));
   const jsonSize = (jsonBytes.length + 3) & ~3;

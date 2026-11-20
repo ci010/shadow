@@ -83,6 +83,24 @@ test('Playground HTTP snapshots honor folder/session roots, poll via ETag, and n
   const url = '/api/sessions/play' + query()
   const original = await app.request(url)
   const previous = await original.json()
+  assert.equal(Object.hasOwn(previous, 'preview'), false)
+  const markerFile = join(folders, marker)
+  const manifest = { files: ['main.mjs'], assets: ['assets/a.bin', 'scene.json', 'assets/data.json'],
+    shaders: [{ objectId: 'cube', slot: 0, vertex: 'shaders/a.vert', fragment: 'shaders/a.frag' }] }
+  const preview = { toneMapping: 'aces', exposure: 4 }
+  await writeFile(markerFile, JSON.stringify({ ...manifest, preview }))
+  const previewResponse = await app.request(url, { headers: { 'If-None-Match': original.headers.get('etag')! } })
+  assert.equal(previewResponse.status, 200)
+  const previewBody = await previewResponse.json()
+  assert.notEqual(previewBody.version, previous.version)
+  assert.deepEqual({ ...previewBody, version: previous.version }, { ...previous, preview })
+  for (const bad of ['null', '[]', '{"toneMapping":"linear"}', '{"exposure":1e999}', '{"exposure":0}', '{"exposure":4.01}', '{"exposure":"1"}', '{"extra":true}']) {
+    await writeFile(markerFile, JSON.stringify(manifest).slice(0, -1) + `,"preview":${bad}}`)
+    const response = await app.request(url)
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error, 'invalid_snapshot_preview')
+  }
+  await writeFile(markerFile, JSON.stringify(manifest))
   const file = join(folders, 'scene.json')
   await utimes(file, 1000, 1000)
   const touched = await app.request(url, { headers: { 'If-None-Match': original.headers.get('etag')! } })

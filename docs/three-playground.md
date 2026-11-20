@@ -4,6 +4,10 @@ Open a `.gltf` or `.glb` in Shadow's Files pane to inspect the asset. It is not 
 
 For a first model without a Shadow source checkout, ask the agent to make an editable desk lamp. The built-in `v:skills/three-playground` guide includes a complete two-file starter and explains when to inspect an imported asset instead.
 
+## Shared context, not an export specification
+
+The editable deliverable is the project. Its marker, modules, declared resources, shader bindings and optional display settings define the shared preview. Selection chips and `capture_view` identify that preview by source and version. A standalone GLB is optional: export fidelity is a separate acceptance criterion only when requested. The current implementation still uses GLB as a validated carrier for the base model; shader source, preview time, tone mapping and exposure are not encoded into that carrier. The file format is not the definition of the complete scene the user sees.
+
 ## Try the cube and stand
 
 1. Open a conversation with access to the project folder. In Files, open [`examples/three-playground/cube-stand/playground.three.json`](../examples/three-playground/cube-stand/playground.three.json). Opening `main.mjs` as text does **not** execute it.
@@ -40,7 +44,9 @@ export async function build({ THREE, root, assets, random }) {
 }
 ```
 
-Each build gets Three.js **r180**, an empty root, `assets.has(path)` / `assets.read(path)` (a byte copy), and a seeded `random()` helper. IDs must describe logical objects across builds, not sibling order, display names or Three.js UUIDs. Do not recycle an ID for a different object. All model geometry and base materials are exported beneath the root; lighting and cameras belong to the viewer. Shader bindings address an explicit ID and authored material slot. They affect the preview only. A bad binding/compile does not silently replace the working view. As with other GPU programs, open custom GLSL from trusted project sources.
+Each build gets Three.js **r180**, an empty root, `assets.has(path)` / `assets.read(path)` (a byte copy), and a seeded `random()` helper. IDs must describe logical objects across builds, not sibling order, display names or Three.js UUIDs. Do not recycle an ID for a different object. Add authored point, spot and directional lights beneath `root`. They illuminate the shared scene and can also travel in an optional GLB via `KHR_lights_punctual`; viewer cameras, reference grids and inspection lights do not. When the active scene contains authored lights (even at zero intensity), they replace the default studio lights. See the [lit storefront example](../examples/three-playground/lit-storefront/playground.three.json). Shader bindings address an explicit ID and authored material slot. They affect the preview only. A bad binding/compile does not silently replace the working view. As with other GPU programs, open custom GLSL from trusted project sources.
+
+The marker can optionally include `"preview": { "toneMapping": "aces", "exposure": 1.2 }`. Both settings are optional: `toneMapping` accepts `"none"` or `"aces"`, and `exposure` accepts a finite number from 0.1 to 4 inclusive. Defaults are `none` and `1`. Changing these settings changes the snapshot version and applies to both the workbench preview and view captures, but does not change the downloaded GLB.
 
 The app checks the marker, declared modules, resources and shader files with conditional requests (normally once per second). A change invalidates obsolete work immediately and starts a replacement build after a 180 ms debounce. The host checks input identity/size/timestamps around the snapshot read. The app builds with the browser's own JavaScript engine in a fresh, terminable Worker behind an opaque-origin sandboxed frame, not in the workbench page. The parent enforces a deadline and validates the exported GLB before loading it. This is browser isolation, not a VM with a configurable per-build heap limit. Server limits include 32 modules / 1 MiB source, 16 assets / 1 MiB bytes and 16 shader bindings / 256 KiB source. See [builder limits and supported geometry/materials](../packages/three-playground/README.md).
 
