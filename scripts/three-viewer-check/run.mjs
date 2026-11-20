@@ -3,7 +3,7 @@ import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fixtureEndpoints } from './snapshot.mjs';
 import { marker, sessionId } from './constants.mjs';
 import { sessionWorkspacePath } from '../../src/utils/paths.ts';
@@ -11,7 +11,7 @@ import { sessionWorkspacePath } from '../../src/utils/paths.ts';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const requireApp = createRequire(join(repo, 'app/package.json'));
 const requireDesktop = createRequire(join(repo, 'desktop/package.json'));
-const vite = await import(requireApp.resolve('vite'));
+const vite = await import(pathToFileURL(requireApp.resolve('vite')).href);
 const viteFile = file => `/@fs/${encodeURI(vite.normalizePath(file))}`;
 const scriptDir = join(repo, 'scripts/three-viewer-check');
 const mode = process.argv[2] ?? 'product';
@@ -25,7 +25,7 @@ try {
   const requireViewer = createRequire(join(repo, 'packages/three-viewer/package.json'));
   const threeRoot = dirname(dirname(requireViewer.resolve('three')));
   const uiPlugins = ['ui', 'outline'].includes(mode) ? [
-    (await import(requireApp.resolve('@vitejs/plugin-vue'))).default(),
+    (await import(pathToFileURL(requireApp.resolve('@vitejs/plugin-vue')).href)).default(),
     (await import(new URL('../../app/pdf-viewer-assets.ts', import.meta.url))).pdfViewerAssets(),
   ] : [];
   endpoints = await fixtureEndpoints(fixtureWorkspace, fixtureScene, mode === 'ui');
@@ -51,7 +51,7 @@ try {
   });
   await server.listen();
   const address = server.httpServer.address();
-  const child = spawn(requireDesktop('electron'), [join(scriptDir, 'electron.cjs'), `http://127.0.0.1:${address.port}/__three-check`, fixture, mode, fixtureScene], { stdio: 'inherit' });
+  const child = spawn(requireDesktop('electron'), [join(scriptDir, 'electron.cjs'), fixture, mode, fixtureScene, `http://127.0.0.1:${address.port}/__three-check`], { stdio: 'inherit' });
   const code = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => child.kill('SIGKILL'), 120_000);
     child.once('error', error => { clearTimeout(timer); reject(error); });

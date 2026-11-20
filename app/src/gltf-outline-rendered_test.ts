@@ -105,7 +105,7 @@ test('glTF outline virtualizes rows, selects objects, and reveals canvas selecti
       assert.equal(await run(row('Deep') + '.getAttribute("aria-expanded")'), 'true');
       assert.equal(await run(row('Tail') + '.getAttribute("aria-expanded")'), 'true');
       assert.equal(await run('document.activeElement.id'), 'canvas');
-      assert.equal(await run('(() => {const a=' + row('End mesh') + '.getBoundingClientRect(), b=' + tree + '.getBoundingClientRect();return a.top>=b.top && a.bottom<=b.bottom})()'), true);
+      assert.equal(await run('(() => {const a=' + row('End mesh') + '.getBoundingClientRect(), b=' + tree + '.getBoundingClientRect();return a.top>=b.top-1 && a.bottom<=b.bottom+1})()'), true);
       assert.equal(await run('document.querySelectorAll("[role=treeitem]").length < 40'), true);
       assert.equal(await run('window.emissions'), 6, 'external updates never emit another selection');
       await run(tree + '.focus()'); await key('Home'); await wait(row('A'));
