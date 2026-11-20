@@ -2,6 +2,8 @@
 
 The document workbench starts with its file explorer collapsed, including on wide screens. Opening a conversation or switching tabs or Projects leaves the file explorer's open or closed state unchanged. Knowledge navigation opens independently and does not change file explorer visibility.
 
+On desktop, drag the right edge of the file explorer to resize it. You can also focus the divider and use Left/Right or Home/End. The toolbar icon still opens and closes the explorer, and reopening keeps the adjusted width. On phones the explorer remains a drawer.
+
 The explorer distinguishes two sources:
 
 - **Project files**: the selected registered Folder, using its registry-backed API and owning device. Drafts use their selected Folder; existing conversations use the persisted `folderId` from the scoped session graph, including after reload. Without a selected Folder this root is omitted. Folder identity is never inferred from a local or remote workdir display path. Project Home is not a file resource and is never substituted here.

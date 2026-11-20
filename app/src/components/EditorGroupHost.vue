@@ -23,7 +23,7 @@
       <Teleport :to="mobileExplorerTarget || 'body'" :disabled="!mobile?.enabled.value || !mobileExplorerTarget">
       <KnowledgeExplorer v-if="apiBase && knowledgeContext && explorerOpen" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="!!active" :explorer-id="`${hostId}-explorer`" :selected-id="knowledgeContext.entryId" @select="selectKnowledge" @close="closeExplorer" />
       <!-- The file owner stays mounted: its EditorViewHosts own open file lifetimes. -->
-      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="explorerOpen && !knowledgeContext" :explorer-id="`${hostId}-files`" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
+      <ProjectFileExplorer v-if="apiBase" :api-base="apiBase" :project-id="projectId" :active="!!active" :open="explorerOpen && !knowledgeContext" :explorer-id="`${hostId}-files`" :container-width="workspaceWidth" :folder-revision="folderRevision" :can-quote="!!groups.referenceTarget(projectId)" @quote="emit('quote', $event)" @close="closeExplorer" />
       </Teleport>
   <div ref="root" class="editor-groups">
     <nav v-if="state.left.length && state.right.length" class="mobile-group-switch" :aria-label="t('Open documents')"><button v-for="side in sides" :key="side" :aria-pressed="state.active === side" @click="groups.focus(projectId, side)">{{ t(side === 'left' ? 'Left editor group' : 'Right editor group') }}</button></nav>
@@ -107,10 +107,26 @@ function middleClickTab(event: MouseEvent, id: string) {
 }
 function closeExplorer() { groups.setExplorerOpen(props.projectId, false); explorerToggle.value?.focus() }
 const width = ref(1000), preferredWidth = ref(480)
+const workspaceWidth = ref(1000)
 const bounds = computed(() => ({ min: 240, max: Math.max(240, width.value - 280) }))
 const rightWidth = computed(() => Math.min(bounds.value.max, Math.max(bounds.value.min, preferredWidth.value)))
 let observer: ResizeObserver | undefined
-onMounted(() => { document.addEventListener('keydown', shortcut, true); window.addEventListener('dragend', drag.clear); window.addEventListener('drop', drag.clear); window.addEventListener('visibilitychange', hiddenDrag); window.addEventListener('keydown', cancelDrag, true); window.addEventListener('shadow:cycle-document-tab', nativeDocument); observer = new ResizeObserver(entries => { width.value = entries[0]?.contentRect.width ?? 1000 }); if (root.value) observer.observe(root.value) })
+onMounted(() => {
+  document.addEventListener('keydown', shortcut, true)
+  window.addEventListener('dragend', drag.clear)
+  window.addEventListener('drop', drag.clear)
+  window.addEventListener('visibilitychange', hiddenDrag)
+  window.addEventListener('keydown', cancelDrag, true)
+  window.addEventListener('shadow:cycle-document-tab', nativeDocument)
+  observer = new ResizeObserver(entries => {
+    for (const { target, contentRect } of entries) {
+      if (target === workspace.value) workspaceWidth.value = contentRect.width
+      else if (target === root.value) width.value = contentRect.width
+    }
+  })
+  if (root.value) observer.observe(root.value)
+  if (workspace.value) observer.observe(workspace.value)
+})
 onUnmounted(() => { document.removeEventListener('keydown', shortcut, true); drag.clear(); window.removeEventListener('dragend', drag.clear); window.removeEventListener('drop', drag.clear); window.removeEventListener('visibilitychange', hiddenDrag); window.removeEventListener('keydown', cancelDrag, true); observer?.disconnect(); window.removeEventListener('shadow:cycle-document-tab', nativeDocument); for (const side of sides) groups.targets.delete(`${props.projectId}:${side}`) })
 function entries(side: EditorSide) { return state.value[side].flatMap(id => { const editor = groups.descriptors.get(id); return editor ? [editor] : [] }) }
 function target(side: EditorSide, element: Element | ComponentPublicInstance | null) { if (element instanceof HTMLElement) groups.targets.set(`${props.projectId}:${side}`, element) }

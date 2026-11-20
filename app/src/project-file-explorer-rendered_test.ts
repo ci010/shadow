@@ -46,6 +46,32 @@ test('Project explorer roots stay left, expand independently and show the curren
     await wait('window.groups.active("p")?.id==="A"');
     assert.equal(await run(paneWidth),0,'switching conversation tabs keeps the file pane closed');
     await run('document.querySelector(".project-explorer-toggle").click()');
+    const divider = 'document.querySelector(".file-explorer-resizer")';
+    await wait(divider);
+    const initialWidth = await run(paneWidth);
+    const hit = await run('(()=>{const divider='+divider+', r=divider.getBoundingClientRect();const x=Math.floor(r.right-3),y=Math.floor(r.top+r.height/2);return {x,y,target:document.elementFromPoint(x,y)===divider}})()');
+    assert.equal(hit.target,true,'the divider is hittable over the file tree');
+    // Scripted pointer events cannot create native pointer capture. Stub only
+    // capture on this divider; the hit test above still checks the real layout.
+    await run('(()=>{const el='+divider+';let captured=false;el.setPointerCapture=()=>{captured=true};el.hasPointerCapture=()=>captured;el.releasePointerCapture=()=>{captured=false};const send=(type,x)=>el.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:1,isPrimary:true,button:0,clientX:x}));send("pointerdown",'+hit.x+');send("pointermove",'+(hit.x+56)+');send("pointerup",'+(hit.x+56)+');})()');
+    const draggedWidth = initialWidth+56;
+    await wait(paneWidth+'==='+draggedWidth);
+    await wait('!document.documentElement.classList.contains("sidebar-pointer-resizing")');
+    await run(divider+'.focus()');win.webContents.sendInputEvent({type:'keyDown',keyCode:'Right'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Right'});
+    await wait(paneWidth+'==='+ (draggedWidth+24));
+    await run('document.querySelector(".project-explorer-toggle").click()');
+    assert.equal(await run(paneWidth),0,'toolbar click still collapses the explorer');
+    assert.equal(await run('!'+divider),true,'collapsed explorer has no resize control');
+    await run('document.querySelector(".project-explorer-toggle").click()');
+    assert.equal(await run(paneWidth),draggedWidth+24,'reopening restores the adjusted width');
+    await run(divider+'.focus()');
+    win.setContentSize(710,800);
+    await wait(divider+'?.getAttribute("aria-valuemax")==="350"');
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'End'});
+    win.webContents.sendInputEvent({type:'keyUp',keyCode:'End'});
+    await wait(paneWidth+'===350');
+    win.setSize(1300,800);
+    await wait(divider+'?.getAttribute("aria-valuemax")==="400"');
     const expanded = id => run('document.querySelector('+JSON.stringify('[data-root-id="'+id+'"] .root-toggle')+').getAttribute("aria-expanded")');
     assert.equal(await run('document.querySelectorAll(\'[data-root-id^="session:"]\').length'),1,'only the current session is an explorer root');
     await run('window.groups.move("B","right");window.groups.focus("p","right")');await delay(80);
@@ -60,6 +86,7 @@ test('Project explorer roots stay left, expand independently and show the curren
     // not just the first sticky row. Exercise both desktop and narrow panes.
     for (const width of [1300, 500]) {
       win.setSize(width,800);await delay(100);
+      if(width===500) assert.equal(await run('!'+divider+' || '+divider+'.getBoundingClientRect().width===0'),true,'narrow layout does not expose a drag handle');
       assert.equal(await run("(()=>{         const pane=document.querySelector('.project-file-explorer'), bounds=pane.getBoundingClientRect();         const roots=[...pane.querySelectorAll('.explorer-root')];         const before=roots.map(root=>root.querySelector('.root-toggle').getBoundingClientRect());         const bodies=roots.map(root=>root.querySelector('.file-tree-body'));         const rows=bodies.map(body=>body.querySelector('.tree-row').getBoundingClientRect().top);         bodies.forEach(body=>{body.scrollTop=400;body.scrollLeft=100});         const after=roots.map(root=>root.querySelector('.root-toggle').getBoundingClientRect());         return after.every((r,i)=>r.height>0&&r.top>=bounds.top&&r.bottom<=bounds.bottom&&r.left>=bounds.left&&r.right<=bounds.right&&r.top===before[i].top&&(!i||r.top>=after[i-1].bottom))           &&bodies.every((body,i)=>body.scrollTop>0&&body.querySelector('.tree-row').getBoundingClientRect().top<rows[i])           &&pane.scrollTop===0;       })()"),true,'all resource headings stay in bounds while each file list scrolls');
       if(process.env.PROJECT_EXPLORER_SCROLL_SCREENSHOT) require('node:fs').writeFileSync(process.env.PROJECT_EXPLORER_SCROLL_SCREENSHOT+'-'+width+'.png',(await win.webContents.capturePage()).toPNG());
       await run('document.querySelectorAll(".file-tree-body").forEach(body=>body.scrollTop=0)');
