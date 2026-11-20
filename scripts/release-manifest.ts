@@ -7,7 +7,7 @@ import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 const sourceInputs = [
   'scripts/agent-desktop-lock.json',
   'integrations/agent-desktop/LICENSE', 'integrations/agent-desktop/NOTICE',
-  'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/aria2', 'desktop/safegit',
+  'src', 'scripts', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/aria2', 'desktop/safegit',
   'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
   '.gitattributes', '.github/workflows/release-check.yml',
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
@@ -74,7 +74,7 @@ export async function sourceFingerprint(root: string): Promise<string> {
     const path = resolve(root, input)
     if (!await exists(path)) continue
     if ((await stat(path)).isDirectory()) {
-      for (const [name, bytes] of await tree(path, input === 'integrations/a2a' ? new Set(['node_modules', 'dist']) : undefined)) {
+      for (const [name, bytes] of await tree(path)) {
         // The pinned downloaded wrapper is an output, not source.
         if (input === 'desktop/safegit' && ['safegit', 'safegit.exe', 'release.json', 'LICENSE'].includes(name)) continue
         if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',

@@ -2496,13 +2496,10 @@ handles; bounded polling queues completion/input updates to the owning session
 as external events. Uncertain submissions and notification deliveries are not
 blindly replayed.
 
-The independent [`integrations/a2a/`](../integrations/a2a/) workspace hosts
-user-installed Claude Code and Codex CLIs behind the same protocol service. No
-vendor SDK or coding runtime is installed/bundled by Shadow; Copilot currently
-fails closed because its CLI permission contract is insufficient. These bridges
-own explicit local workdirs and owner/policy-bound native session mappings, reuse
-normal CLI authentication, and never adopt arbitrary user chats or replace
-Shadow's session loop. A stdio MCP entry
+Shadow manages user-installed Claude Code and Codex through local,
+Project-owned targets tied to the running backend. It does not install or bundle
+coding CLIs. Targets own explicit local workdirs and owner/policy-bound native
+session mappings; they do not adopt arbitrary user chats. A stdio MCP entry
 lets external coding clients call configured A2A endpoints. Text input does not
 grant permissions. This is not a general remote-workdir capability or complete
 A2A binding parity. See [A2A setup and limitations](a2a.md).
