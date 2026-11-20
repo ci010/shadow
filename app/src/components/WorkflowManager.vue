@@ -113,6 +113,7 @@ import { isRecord } from '../folders-sidebar.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { createWorkflowClient, recentWorkflowRuns, workflowConversation, workflowGraph, workflowHint, workflowStatus, type WorkflowRun, type WorkflowSnapshot } from '../workflows.ts'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; active?: boolean }>(), { active: true })
+const emit = defineEmits<{ 'clear-selection': [] }>()
 const route = useRoute(), router = useRouter()
 // Other documents/routes must not clear an open Workflow's inspector.
 const documentQuery = shallowRef(route.query)
@@ -138,8 +139,11 @@ const runs = computed(() => definition.value && runSnapshot.value ? recentWorkfl
 const runWorkflow = computed(() => typeof documentQuery.value.workflow === 'string' && !documentQuery.value.bot ? definition.value?.id : undefined)
 const linkedRun = computed(() => typeof documentQuery.value.run === 'string' ? documentQuery.value.run : undefined)
 watch(() => [props.apiBase, props.projectId, enabled.value, runWorkflow.value, linkedRun.value] as const,
-  ([base, project, active, workflow, run], _old, cleanup) => {
-    if (!active || !workflow) { runLease.value = undefined; return }
+  ([base, project, active, workflow, run], old, cleanup) => {
+    // Keep the last snapshot for this inquiry when switching to the chat tab,
+    // but release polling and never reuse it for a different workflow/run.
+    if (!old || base !== old[0] || project !== old[1] || workflow !== old[3] || run !== old[4]) runLease.value = undefined
+    if (!active || !workflow) return
     const lease = owner.acquire(base, project, { workflow, run })
     runLease.value = lease
     cleanup(lease.release)
@@ -162,16 +166,23 @@ const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.i
 const botSelectedNode = computed(() => inspectedNode.value ?? (typeof documentQuery.value.bot === 'string' ? selectedBot.value?.selectionAliases?.[documentQuery.value.bot] : undefined))
 watch(() => documentQuery.value.bot, () => { inspectedNode.value = undefined })
 const inspectorOpen = computed(() => !!selectedBot.value || typeof documentQuery.value.workflow === 'string' && !!definition.value)
+// The open document owns the selection, not the canvas viewport. This also
+// supports one-pane layouts where switching to chat hides the canvas.
+const nodeScope = computed(() => JSON.stringify([props.projectId, displayed.value?.id, displayed.value?.revision, linkedRun.value]))
+const inspectedNodeScope = ref<string>()
 const referenceSelection = computed(() => {
-  if (!props.active || !activated.value || !inspectorOpen.value) return
+  if (!inspectorOpen.value) return
   if (selectedBot.value) return botInputReference(props.projectId, selectedBot.value, botSelectedNode.value)
-  return !selectedBot.value && displayed.value ? workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value) : undefined
+  if (linkedRun.value && !selectedRun.value) return
+  if (inspectedNode.value && (nodeScope.value !== inspectedNodeScope.value)) return
+  return displayed.value ? workflowInputReference(props.projectId, displayed.value, inspectedNode.value, selectedRun.value) : undefined
 })
 watch(referenceSelection, item => referenceHub?.select?.(item, () => { void closeInspector() }, props.projectId), { immediate: true, flush: 'sync' })
 onUnmounted(() => referenceHub?.select?.(undefined, undefined, props.projectId))
 async function closeInspector() {
   inspectedNode.value = undefined
   documentQuery.value = {}
+  emit('clear-selection')
   // In a split workbench the current route can belong to the chat target.
   // Clear this document's selection without changing that chat (or its child).
   if (route.name === 'project-workflows' && route.params.projectId === props.projectId) await router.replace({ query: {} })
@@ -197,7 +208,11 @@ const canvasFlows = computed(() => [...(snapshot.value?.definitions ?? []).map(f
 const selectedControl = computed(() => canvasFlows.value.find(flow => flow.definition.id === definition.value?.id)?.control)
 async function inspectFlow(id: string, nodeId?: string) {
   inspectedFlow.value = id
-  await router.replace({ name: 'project-workflows', params: { projectId: props.projectId }, query: botFlows.value.some(flow => flow.definition.id === id) ? { bot: id } : { workflow: id, ...(definition.value?.id === id && selectedRun.value ? { run: selectedRun.value.id } : {}) } })
+  const run = selectedRun.value?.workflow === id ? selectedRun.value : undefined
+  const clicked = run?.definition ?? snapshot.value?.definitions.find(flow => flow.id === id)
+  const scope = JSON.stringify([props.projectId, clicked?.id, clicked?.revision, run?.id])
+  await router.replace({ name: 'project-workflows', params: { projectId: props.projectId }, query: botFlows.value.some(flow => flow.definition.id === id) ? { bot: id } : { workflow: id, ...(run ? { run: run.id } : {}) } })
+  inspectedNodeScope.value = scope
   inspectedNode.value = nodeId
   confirmation.value = ''; operationError.value = ''; notice.value = ''
   await nextTick(); inspector.value?.focus({ preventScroll: true })
@@ -207,7 +222,7 @@ let mutation: AbortController | undefined
 function refreshAll() { catalog.refresh(); void refresh() }
 async function refresh() { if (enabled.value) await Promise.all([resourceLease.value?.refresh(), runLease.value?.refresh()]) }
 
-function selectRun(id?: string) { confirmation.value = ''; void router.replace({ query: { workflow: definition.value?.id, ...(id ? { run: id } : {}) } }) }
+function selectRun(id?: string) { inspectedNode.value = undefined; confirmation.value = ''; void router.replace({ query: { workflow: definition.value?.id, ...(id ? { run: id } : {}) } }) }
 function requestRetry(run: WorkflowRun) { if (run.status === 'blocked') confirmation.value = run.id; else void operate('retry', run.id) }
 async function operate(action: 'pause' | 'resume' | 'retry' | 'cancel', id: string, acknowledgeReplay = false) {
   if (busy.value) return
