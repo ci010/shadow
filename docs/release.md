@@ -442,16 +442,8 @@ Remove them from desktop shortcuts/environment before using Main or Child setup.
 The service connection descriptor remains available to service management and
 browser-pairing commands; do not delete its credentials or existing service data.
 
-The desktop is not required for browser access to this service. From a source
-checkout, run the pairing CLI as the selected local user who can read the
-service's protected control credential:
-
-```powershell
-pnpm web:pair --connection 'C:\ProgramData\ShadowService\control\connection.v1.json'
-```
-
-An installed application can use its bundled Node runtime instead, without a
-source checkout or a separate Node installation:
+The desktop UI is not required for browser access to this service. An installed
+application can use its bundled Node runtime to issue a browser code:
 
 ```powershell
 $previousNodeMode = $env:ELECTRON_RUN_AS_NODE

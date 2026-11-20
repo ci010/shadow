@@ -19,21 +19,8 @@ fails startup rather than disabling authentication. Do not put the PIN in
 URLs, source, or logs.
 
 When a launch credential is configured, Electron Main's **Connect phone or browser**
-control can issue a one-use pairing code. Without Electron, an authorized local
-terminal can issue one using a protected descriptor:
-
-```powershell
-pnpm web:pair --connection 'C:\ProgramData\ShadowService\control\connection.v1.json'
-```
-
-Or select a protected credential file and its explicit loopback backend:
-
-```powershell
-pnpm web:pair --url http://127.0.0.1:18800 --credential-file 'C:\ProgramData\ShadowService\control\launch-token'
-```
-
-These are example paths; use the descriptor for your running backend. Open the
-browser URL and enter the code. Codes expire after five minutes and can be used
+control can issue a one-use pairing code. Open the browser URL shown in the panel
+and enter the code. Codes expire after five minutes and can be used
 once. Codes are eight decimal digits (including any leading zero); issuing a new
 code invalidates the previous one. Pairing is limited globally to 20 attempts
 per minute, shared across clients and login methods. Browser sessions last twelve hours and end on logout or backend restart.
