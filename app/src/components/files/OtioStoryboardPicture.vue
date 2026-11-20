@@ -14,7 +14,8 @@ import type { OtioMedium } from '../../otio-review.ts'
 const props = defineProps<{ medium: (OtioMedium & { url: string }) | null; seconds: number | null; gap: boolean; active: boolean; unlinked: string }>()
 const element = ref<HTMLElement>(), canvas = ref<HTMLCanvasElement>(), visible = ref(false)
 const resources = useMobileResources()
-const resolved = computed(() => props.active && visible.value && documentVisible.value ? resources.resolve(props.medium?.url) : undefined)
+const resolved = computed(() => props.active && visible.value && documentVisible.value && props.medium?.kind !== 'audio'
+  ? resources.resolve(props.medium?.url) : undefined)
 const status = ref<'ready' | 'unavailable' | 'pending'>('pending')
 let observer: IntersectionObserver | undefined
 const documentVisible = ref(true)
@@ -29,7 +30,7 @@ onBeforeUnmount(() => { observer?.disconnect(); document.removeEventListener('vi
 watch(() => [props.active, documentVisible.value, visible.value, props.medium?.url, props.medium?.kind, props.seconds, resolved.value] as const,
   ([active, shown, seen, rawUrl, kind, seconds, url], previous, cleanup) => {
     if (!previous || rawUrl !== previous[3] || kind !== previous[4] || seconds !== previous[5]) status.value = 'pending'
-    if (!rawUrl || !kind || seconds === null) { status.value = 'unavailable'; return }
+    if (!rawUrl || !kind || kind === 'audio' || seconds === null) { status.value = 'unavailable'; return }
     if (!url || !active || !shown || !seen || !canvas.value || status.value !== 'pending') return
     const controller = new AbortController(), target = canvas.value
     cleanup(() => controller.abort())

@@ -26,7 +26,10 @@ const timeline = JSON.stringify(schema('Timeline', { name: 'Assembly', global_st
     clip('External', 12, 48, 'https://blocked.invalid/sentinel.png'), clip('Moonrise', 12, 96, 'moonrise.mp4'),
     schema('Gap', { source_range: range(0, 48) })]),
   track('Upper', [schema('Gap', { source_range: range(0, 24) }), clip('Repeated', 96, 24, 'upper.png')]),
-  schema('Track', { name: 'Dialogue', kind: 'Audio', children: [clip('Tone', 24, 96, 'tone.wav')] }),
+  schema('Track', { name: 'A1', kind: 'Audio', children: [clip('Chime', 24, 96, 'tone.wav'),
+    schema('Gap', { source_range: range(0, 24) }), clip('Repeat', 24, 48, 'tone.wav')] }),
+  schema('Track', { name: 'A2', kind: 'Audio', children: [schema('Gap', { source_range: range(0, 144) }),
+    clip('Other track', 24, 24, 'tone.wav')] }),
 ] }) }))
 const audioPath = 'cuts/tone.wav'
 function waveFixture() {
@@ -36,7 +39,15 @@ function waveFixture() {
   bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(1, 22)
   bytes.writeUInt32LE(rate, 24); bytes.writeUInt32LE(rate * 2, 28); bytes.writeUInt16LE(2, 32); bytes.writeUInt16LE(16, 34)
   bytes.write('data', 36); bytes.writeUInt32LE(frames * 2, 40)
-  for (let i = 0; i < frames; i++) bytes.writeInt16LE(Math.round(1800 * Math.sin(i * 2 * Math.PI * 440 / rate)), 44 + i * 2)
+  const events = [0.1, 0.75, 1.5, 2.25, 3, 3.75, 4.8] // First and last lie outside the visible trim.
+  for (let i = 0; i < frames; i++) {
+    const t = i / rate
+    const event = events.findIndex(start => t >= start && t < start + 0.22)
+    if (event < 0) continue
+    const elapsed = t - events[event]
+    const ring = 28500 * Math.exp(-elapsed * 10) * Math.sin(elapsed * 2 * Math.PI * (440 + event * 60))
+    bytes.writeInt16LE(Math.round(ring), 44 + i * 2)
+  }
   return bytes
 }
 const documentPath = 'cuts/assembly.OTIO'
@@ -48,6 +59,9 @@ import {createApp,h,ref,reactive} from 'vue';
 import FilePreviewModal from '/src/components/files/FilePreviewModal.vue';
 import {composeOtioReferenceMessage,createOtioDraftBridge,OtioDraftKey} from '/src/otio-draft.ts';
 import {appendChatAttachments,imageAttachmentReference} from '/src/chat-attachments.ts';
+window.fixtureVoices=[];
+const NativeAudio=window.Audio;
+window.Audio=function(){const voice=new NativeAudio();window.fixtureVoices.push(voice);return voice};
 const apiBase=location.origin, active=ref(true), inline=ref(true), open=ref(true), closes=ref(0);
 const pending=appendChatAttachments([], [new File(['existing pending image'], 'existing.png', {type:'image/png'})]);
 const initialText='Existing note '+imageAttachmentReference(pending[0]);
@@ -174,20 +188,57 @@ app.whenReady().then(async()=>{
   };
   await win.loadURL(${JSON.stringify(url.href)});
   await wait('timeline and lower still',()=>document.querySelector('.mark-action:enabled') && document.querySelector('.picture img')?.naturalWidth===240);
-  // Observe native HTMLAudioElements without replacing any media methods or clocks.
-  await run(()=>{
-    const NativeAudio=window.Audio;
-    window.fixtureVoices=[];
-    window.Audio=function(){const voice=new NativeAudio();window.fixtureVoices.push(voice);return voice};
+  const renderedWave = await wait('real WAV peaks painted inside all three audio clips',()=>{
+    const wave=document.querySelector('[aria-label="Clip: Chime"] svg.waveform');
+    if(!wave || document.querySelectorAll('.block .waveform').length!==3)return;
+    const bins=wave.viewBox.baseVal.width, path=wave.querySelector('path');
+    const points=Array.from(path.getAttribute('d').matchAll(/M([\\d.]+) [\\d.]+v([\\d.]+)/g),m=>[Number(m[1])/bins, Number(m[2])]);
+    const box=wave.getBoundingClientRect(), label=wave.previousElementSibling.getBoundingClientRect();
+    return {points, gap:!!document.querySelector('.gap .waveform'), width:box.width, height:box.height, clearsLabel:box.top>=label.bottom};
   });
+  assert.ok(renderedWave.width>0 && renderedWave.height>0 && renderedWave.clearsLabel);
+  assert.equal(renderedWave.gap,false);
+  const starts=[.0625,.25,.4375,.625,.8125];
+  for(const start of starts)assert.ok(renderedWave.points.some(([x,h])=>x>=start-.005&&x<start+.025&&h>14));
+  assert.ok(renderedWave.points.every(([x])=>starts.some(start=>x>=start-.005&&x<start+.061)), JSON.stringify(renderedWave));
+  for(const scheme of ['light','dark']){
+    const colors=await run(scheme=>{
+      document.documentElement.classList.toggle('dark',scheme==='dark');
+      const lanes=[...document.querySelectorAll('.lane-row[data-kind]')].slice(0,3);
+      const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+      const cx=canvas.getContext('2d',{willReadFrequently:true});
+      const luminance=color=>{
+        cx.clearRect(0,0,1,1);cx.fillStyle=color;cx.fillRect(0,0,1,1);
+        const rgb=[...cx.getImageData(0,0,1,1).data].slice(0,3).map(n=>n/255).map(n=>n<=.04045?n/12.92:((n+.055)/1.055)**2.4);
+        return .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+      };
+      const ratio=(a,b)=>{const values=[luminance(a),luminance(b)];return (Math.max(...values)+.05)/(Math.min(...values)+.05)};
+      return lanes.map(lane=>{
+        const row=getComputedStyle(lane), label=getComputedStyle(lane.querySelector('.lane-label'));
+        const clip=getComputedStyle(lane.querySelector('.block.clip'));
+        return [row.backgroundColor,clip.backgroundColor,ratio(row.backgroundColor,label.color),ratio(clip.backgroundColor,clip.color)];
+      });
+    },scheme);
+    assert.equal(new Set(colors.map(c=>c[0])).size,3,JSON.stringify(colors));
+    assert.equal(new Set(colors.map(c=>c[1])).size,3,JSON.stringify(colors));
+    assert.ok(colors.every(c=>c[2]>=4.5&&c[3]>=4.5),JSON.stringify(colors));
+  }
+  await run(()=>{document.documentElement.classList.remove('dark')});
+  assert.equal(await run(()=>window.fixtureVoices.length),0,'waveform must not create playback elements');
+  assert.equal(await run(()=>performance.getEntriesByType('resource').filter(entry=>entry.initiatorType==='fetch' && new URL(entry.name).searchParams.get('path')==='cuts/tone.wav').length),1,
+    'three clips sharing a WAV use one request');
   await click('Play preview');
   const first=await wait('real WAV plays from trimmed offset',()=>{
     const v=window.fixtureVoices[0];return v?.duration===6 && !v.paused && v.currentTime>=0.5 && v.currentTime<1.6 && v.currentTime;
   });
   await wait('native audio clock advances', first=>window.fixtureVoices[0].currentTime>first+0.12, first);
-  await click('Mute audio track: Dialogue');
+  await click('Mute audio track: A1');
   await wait('muted track releases media',()=>window.fixtureVoices[0].paused && !window.fixtureVoices[0].hasAttribute('src'));
-  await click('Mute audio track: Dialogue');
+  assert.ok(await run(()=>{
+    const clip=document.querySelector('[aria-label="Clip: Chime"]');
+    return clip.closest('.lane-row').classList.contains('excluded') && getComputedStyle(clip).borderStyle==='dashed' && !!clip.querySelector('.waveform path');
+  }));
+  await click('Mute audio track: A1');
   await wait('unmuted track resumes',()=>window.fixtureVoices[1]?.readyState>=2 && !window.fixtureVoices[1].paused);
   for(const key of ['Home','PageUp','PageUp']) await run(key=>{document.querySelector('.ruler').dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true}));},key);
   await wait('seek pauses and releases prior media',()=>window.fixtureVoices[1].paused && !window.fixtureVoices[1].hasAttribute('src') && document.querySelector('.transport .readout').textContent==='Frame 48');
