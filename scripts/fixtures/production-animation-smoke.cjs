@@ -1,4 +1,4 @@
-// Run after pnpm build:app: electron desktop/tests/fixtures/production-animation-smoke.cjs
+// Run after pnpm build:app: electron scripts/fixtures/production-animation-smoke.cjs
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')

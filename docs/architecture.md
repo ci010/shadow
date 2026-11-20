@@ -93,7 +93,7 @@ The backend runs directly on **Node.js 24.15+**. TypeScript development uses
 `tsx`; backend production output is Node ESM. The Vue package uses Vite.
 Electron launches that Node backend module in an Electron `utilityProcess`,
 owned by the desktop main process rather than the renderer. There is no Deno compatibility layer or parallel Deno runtime
-to maintain. Package scripts and `build.ts` own compilation/assets; do not infer
+to maintain. Package scripts and `scripts/build.ts` own compilation/assets; do not infer
 current packaging from the older compiled-sidecar proposals.
 
 The backend build emits ESM modules and supporting assets under `dist/src`,
@@ -3793,7 +3793,7 @@ run the Node backend directly; keep development services on trusted networks.
 | `src/utils`, `src/testing` | Shared paths/platform/media/watch helpers and test utilities |
 | `app/src` | Browser renderer, shared realtime client, desktop bootstrap UI |
 | `desktop/src` | Electron main/preload, setup state, authorization, process supervisor |
-| `scripts`, `build.ts` | Local development, compilation/packaging, pairing, migration |
+| `scripts/` | Local development, compilation/packaging, pairing, migration |
 
 Directory siblings are modules, not a claim that they occupy the same dependency
 layer. Main composition depends on domain services and execution adapters.
