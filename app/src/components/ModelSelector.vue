@@ -41,11 +41,16 @@
         <button type="button" class="model-provider-tag" :aria-pressed="!activeProvider" @click="activeProvider = ''">{{ t('All') }}</button>
         <button v-for="provider in providerFilters" :key="provider.id" type="button" class="model-provider-tag" :aria-pressed="activeProvider === provider.id" @click="activeProvider = provider.id">{{ provider.label }} <span class="model-provider-count">{{ provider.count }}</span></button>
       </div>
-      <div class="model-options" role="group" :aria-label="t('Available models')">
-        <button v-if="selection.inherited && !query.trim() && !activeProvider" class="model-option" :aria-pressed="selection.inheriting?.value" @click="choose('', close)">
+      <div v-if="pageCount > 1" class="model-pagination">
+        <button type="button" class="model-provider-tag" :disabled="resultPage === 0" @click="changeResultPage(-1)">{{ t('Previous models') }}</button>
+        <span role="status">{{ t('{start}–{end} of {total} models', { start: resultPage * MODELS_PER_PAGE + 1, end: resultPage * MODELS_PER_PAGE + visibleOptions.length, total: options.length }) }}</span>
+        <button type="button" class="model-provider-tag" :disabled="resultPage === pageCount - 1" @click="changeResultPage(1)">{{ t('Next models') }}</button>
+      </div>
+      <div ref="modelOptions" class="model-options" role="group" :aria-label="t('Available models')">
+        <button v-if="selection.inherited && resultPage === 0 && !query.trim() && !activeProvider" class="model-option" :aria-pressed="selection.inheriting?.value" @click="choose('', close)">
           <span class="model-option-copy"><span>{{ conversationDefaults ? t('Follow configured default') : t('Follow project default') }}</span><small>{{ modelDisplayName(selection.inherited.value) }}</small></span>
         </button>
-        <button v-for="model in options" :key="model" class="model-option" :aria-pressed="!selection.inheriting?.value && model === selection.current.value" :title="model" @click="choose(model, close)">
+        <button v-for="model in visibleOptions" :key="model" class="model-option" :aria-pressed="!selection.inheriting?.value && model === selection.current.value" :title="model" @click="choose(model, close)">
           <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelCompactAccountLabel(model, selection.providers?.value) }}</small></span>
           <span v-if="!selection.inheriting?.value && model === selection.current.value" class="model-check i-lucide-check" aria-hidden="true" />
         </button>
@@ -82,6 +87,9 @@ const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const opened = ref(false)
 const query = ref('')
+const MODELS_PER_PAGE = 60
+const resultPage = ref(0)
+const modelOptions = ref<HTMLElement>()
 const activeProvider = ref('')
 const page = ref<'menu' | 'model' | 'effort' | 'context'>(props.settings ? 'menu' : 'model')
 const contextRow = ref<HTMLButtonElement>()
@@ -160,7 +168,20 @@ const allOptions = computed(() => filterModelOptions(selection?.options.value ??
 const providerFilters = computed(() => modelProviderFilters(allOptions.value, selection?.providers?.value))
 const options = computed(() => filterModelOptions(allOptions.value, '', query.value, selection?.providers?.value)
   .filter(model => !activeProvider.value || !providerFilters.value.some(provider => provider.id === activeProvider.value) || modelProviderGroup(model, selection?.providers?.value) === activeProvider.value))
+const pageCount = computed(() => Math.ceil(options.value.length / MODELS_PER_PAGE))
+const visibleOptions = computed(() => options.value.slice(resultPage.value * MODELS_PER_PAGE, (resultPage.value + 1) * MODELS_PER_PAGE))
+watch([options, page], () => {
+  resultPage.value = 0
+  if (modelOptions.value) modelOptions.value.scrollTop = 0
+})
+async function changeResultPage(delta: number) {
+  resultPage.value += delta
+  await nextTick()
+  if (modelOptions.value) modelOptions.value.scrollTop = 0
+  modelOptions.value?.querySelector?.<HTMLButtonElement>('.model-option')?.focus({ preventScroll: true })
+}
 function resetMenu() {
+  resultPage.value = 0
   activeProvider.value = ''
   page.value = props.settings ? 'menu' : 'model'
   query.value = ''
@@ -232,6 +253,9 @@ function chooseEffort(patch: ReasoningSettings, close: () => void) {
 .model-provider-tag:hover { background: var(--c-bg-muted); }
 .model-provider-tag[aria-pressed="true"] { background: var(--c-selection-bg); color: var(--c-primary); border-color: currentColor; }
 .model-provider-count { font-size: 11px; opacity: .75; }
+.model-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; padding: 2px 4px 8px; color: var(--c-text-secondary); font-size: 12px; }
+@media (max-width: 700px), (pointer: coarse) { .model-pagination button { min-height: 44px; } }
+.model-pagination button:disabled { opacity: .5; cursor: default; }
 .model-options { overflow-y: auto; min-height: 0; max-height: 280px; }
 .model-option { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; padding: 9px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; cursor: pointer; }
 .model-option:hover { background: var(--c-bg-muted); }
