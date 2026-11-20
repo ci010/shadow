@@ -1,4 +1,4 @@
-import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs } from './device-home.ts'
+import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_SHELL_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs } from './device-home.ts'
 import { normalizeStoredWorkdirIdentity } from './workdir-storage.ts'
 import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from './derived-workspace-contract.ts'
 import { DERIVED_WORKSPACE_DIRECTORY, executeChildDerivedWorkspace, validateChildDerivedWorkspaceDirectory } from './child-derived-workspace.ts'
@@ -62,6 +62,7 @@ export class ManagedChildWorkdirs {
     readonly nodeId: string,
     readonly staticWorkdirs: readonly (WorkdirBinding & { displayName?: string })[],
     readonly deviceHomePath?: string,
+    readonly allowDeviceHomeRead = false,
   ) {
     if (!isAbsolute(rootPath) || (deviceHomePath !== undefined && !isAbsolute(deviceHomePath))) throw new TypeError('Managed storage and device home must be absolute')
     const ids = new Set<string>()
@@ -254,7 +255,11 @@ export class ManagedChildWorkdirs {
 
   #homeDescriptor(rootPath: string): WorkdirAdvertisement {
     const { displayPath: _omit, ...home } = this.#descriptor({ workdirId: DEVICE_HOME_WORKDIR, rootPath, displayName: 'Device home' })
-    return { ...home, support: { ...home.support, operations: [...DEVICE_HOME_OPERATIONS] } }
+    return { ...home, support: { ...home.support, operations: [...this.#homeOperations()] } }
+  }
+
+  #homeOperations(): readonly string[] {
+    return this.allowDeviceHomeRead ? DEVICE_HOME_OPERATIONS : DEVICE_HOME_SHELL_OPERATIONS
   }
 
   async #bindingIdentity(path: string): Promise<DirectoryIdentity> {
@@ -321,7 +326,7 @@ export class ManagedChildWorkdirs {
     signal.throwIfAborted()
     if (workdirIdOf(request) === DEVICE_HOME_WORKDIR) {
       const rootPath = this.deviceHomePath
-      if (!rootPath || !DEVICE_HOME_OPERATIONS.includes(request.operation)) throw new Error('Device home access is not enabled for this operation')
+      if (!rootPath || !this.#homeOperations().includes(request.operation)) throw new Error('Device home access is not enabled for this operation')
       await this.#assertBinding(DEVICE_HOME_WORKDIR, rootPath)
       return [{ workdirId: DEVICE_HOME_WORKDIR, rootPath }]
     }
