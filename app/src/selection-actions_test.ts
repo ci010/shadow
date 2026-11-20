@@ -13,10 +13,11 @@ test('selection commands use unmodified q and c, never modified typing or IME', 
     assert.equal(selectionAction({ ...key('c'), [flag]: true }), undefined)
   }
 })
-test('quoting inserts a markdown block at the caret without sending or losing draft text', () => {
-  assert.deepEqual(insertQuote('', 'first\r\nsecond', 0, 0), { text: '> first\n> second\n\n', caret: 18 })
-  const inserted = insertQuote('before after', 'quoted', 7, 7)
-  assert.equal(inserted.text, 'before \n\n> quoted\n\nafter')
-  assert.equal(inserted.text.slice(inserted.caret), 'after')
-  assert.equal(insertQuote('replace me', 'quoted', 0, 7).text, '> quoted\n\n me')
+test('quoting appends a Markdown block and places the caret at the end', () => {
+  assert.deepEqual(insertQuote('', 'first\r\nsecond'), { text: '> first\n> second\n\n', caret: 18 })
+  for (const draft of ['draft', 'draft\n', 'draft\n\n']) {
+    const text = 'draft\n\n> quoted\n\n'
+    assert.deepEqual(insertQuote(draft, 'quoted'), { text, caret: text.length })
+  }
+  assert.equal(insertQuote('draft\n\n> first\n\n', 'second').text, 'draft\n\n> first\n\n> second\n\n')
 })
