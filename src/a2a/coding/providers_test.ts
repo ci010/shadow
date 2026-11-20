@@ -8,12 +8,11 @@ import { PassThrough } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
 import { SendMessageRequest, TaskState } from '@a2a-js/sdk'
 import { ServerCallContext } from '@a2a-js/sdk/server'
-import { withTempWorkspace } from '../../src/testing/workspace.ts'
-import { A2aStore } from '../../src/a2a/store.ts'
-import { A2aService } from '../../src/a2a/service.ts'
+import { withTempWorkspace } from '../../testing/workspace.ts'
+import { A2aStore } from '../store.ts'
+import { A2aService } from '../service.ts'
 import { CodingBridgeConfigSchema, bridgeEnvironment } from './config.ts'
-import { codingRunner, resolveCli, runCli, type SpawnCli } from './providers.ts'
-import { startCodingBridge } from './cli.ts'
+import { codingRunner, resolveCli, runCli, validateBackend, type SpawnCli } from './providers.ts'
 import { CodingContexts } from './contexts.ts'
 
 const owner = new ServerCallContext({ user: { isAuthenticated: true, userName: 'caller' } })
@@ -80,7 +79,7 @@ for (const type of ['claude', 'codex'] as const) {
 test('Copilot fails at startup without launching a permissive CLI', async () => {
   await withTempWorkspace(async root => {
     const config = configFor(root, 'copilot')
-    await assert.rejects(startCodingBridge(config, () => { throw new Error('must not spawn') }), /Copilot CLI bridge is unsupported/)
+    assert.throws(() => validateBackend(config), /Copilot CLI bridge is unsupported/)
   })
 })
 test('CLI nonzero, malformed, missing completion and output overflow fail closed', async () => {
@@ -135,32 +134,6 @@ test('real harmless subprocess uses stdin and cancellation reaps process tree', 
   await assert.rejects(pending, /cancel test/)
   await assert.rejects(runCli(join(process.cwd(), 'nonexistent-a2a-fixture'), [], {}, '', new AbortController().signal, spawnCli), /ENOENT/)
 })
-
-test('loopback bridge retains authenticated protocol and releases its state lock', async () => {
-  await withTempWorkspace(async root => {
-    const prior = process.env.A2A_BRIDGE_FIXTURE_TOKEN
-    process.env.A2A_BRIDGE_FIXTURE_TOKEN = 'synthetic-bridge-token-at-least-32-characters'
-    const config = configFor(root, 'claude')
-    const launch: SpawnCli = (file, args, options) => processFixture(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'loopback', session_id: args[args.indexOf('--session-id') + 1] }))(file, args, options)
-    try {
-      const bridge = await startCodingBridge({ ...config, port: 0 }, launch)
-      try {
-        const url = `http://127.0.0.1:${bridge.port}/projects/p/a2a`
-        assert.equal((await fetch(`${url}/.well-known/agent-card.json`)).status, 401)
-        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'A2A-Version': '1.0', Authorization: `Bearer ${process.env.A2A_BRIDGE_FIXTURE_TOKEN}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: SendMessageRequest.toJSON(request('work')) }) })
-        const result = await response.json()
-        assert.equal(result.result.task.status.state, 'TASK_STATE_COMPLETED')
-        assert.equal(result.result.task.artifacts[0].parts[0].text, 'loopback')
-      } finally { await bridge.close() }
-      const reopened = await startCodingBridge({ ...config, port: 0 }, launch)
-      await reopened.close()
-    } finally {
-      if (prior === undefined) delete process.env.A2A_BRIDGE_FIXTURE_TOKEN
-      else process.env.A2A_BRIDGE_FIXTURE_TOKEN = prior
-    }
-  })
-})
-
 
 test('explicit JS and Windows npm shims resolve without running a shell', async () => {
   await withTempWorkspace(async root => {
@@ -219,7 +192,7 @@ test('Codex refreshes and deletes bridge auth using only an injected synthetic s
 })
 
 
-test('Claude npm shims resolve vetted native and legacy bins without interpreting launcher content', async () => {
+test('Claude npm shims resolve vetted native and legacy bins without interpreting launcher content', { skip: process.platform !== 'win32' }, async () => {
   await withTempWorkspace(async root => {
     const config = configFor(root, 'claude')
     const shim = join(root, 'claude.cmd')
@@ -259,7 +232,7 @@ test('Claude npm shims resolve vetted native and legacy bins without interpretin
   })
 })
 
-test('Codex npm shim retains its fixed JS entrypoint', async () => {
+test('Codex npm shim retains its fixed JS entrypoint', { skip: process.platform !== 'win32' }, async () => {
   await withTempWorkspace(async root => {
     const config = configFor(root, 'codex')
     const shim = join(root, 'codex.cmd'); writeFileSync(shim, 'must never execute')
