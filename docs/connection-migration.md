@@ -1,5 +1,7 @@
 # Offline Connection → BOT policy migration
 
+> Historical reference only. The migration CLI was removed from the current checkout. To migrate v2 data, use a revision that still contains the CLI; the current runtime does not migrate v2 data automatically.
+
 This command has **not** been run on Default, xmc, BOT or other real Projects.
 Do not distribute the v3-only reader before migrating each device's v2 files.
 Startup rejects v2 without writing it back. Locked/incomplete journals also block
