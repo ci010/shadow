@@ -1,5 +1,14 @@
 <template>
-  <div ref="workspaceElement" class="projects-workspace">
+  <div ref="workspaceElement" class="projects-workspace" :class="{ 'has-projects-topbar-toggle': topbarToggle }">
+    <Teleport v-if="topbarToggle && projectsToggleTarget" :to="projectsToggleTarget">
+      <HoverInfo :text="sidebarPinned ? t('Hide projects') : t('Show projects')"><template #default="{ triggerProps }">
+        <button ref="topbarButton" type="button" class="projects-topbar-toggle" v-bind="triggerProps"
+          :aria-label="sidebarPinned ? t('Hide projects') : t('Show projects')"
+          :aria-expanded="sidebarVisible" aria-controls="projects-sidebar" @click="togglePinned">
+          <span :class="sidebarPinned ? 'i-lucide-panel-left-close' : 'i-lucide-panel-left-open'" class="w-4 h-4" aria-hidden="true" />
+        </button>
+      </template></HoverInfo>
+    </Teleport>
     <button v-if="sidebarOpen && !sidebarPinned && !mobileIntegrated" class="projects-backdrop" tabindex="-1" :aria-label="t('Close projects')" @click="closeSidebar()" />
     <Teleport :to="mobile?.projectsTarget.value || 'body'" :disabled="!mobileIntegrated">
     <aside v-show="mobileIntegrated ? visible : sidebarVisible" id="projects-sidebar" ref="sidebarElement" class="projects-sidebar" :class="{ 'is-floating': !sidebarPinned && !mobileIntegrated, 'in-mobile-menu': mobileIntegrated }"
@@ -9,7 +18,7 @@
       <header class="projects-heading">
         <h1>{{ t('Projects') }}</h1>
         <div class="projects-heading-actions">
-          <HoverInfo v-if="desktop" :text="sidebarPinned ? t('Hide projects') : t('Pin projects')"><template #default="{ triggerProps }">
+          <HoverInfo v-if="desktop && !topbarToggle" :text="sidebarPinned ? t('Hide projects') : t('Pin projects')"><template #default="{ triggerProps }">
             <button ref="pinButton" class="project-add projects-pin-toggle" v-bind="triggerProps" :aria-label="sidebarPinned ? t('Hide projects') : t('Pin projects')"
               :aria-pressed="sidebarPinned" @click="togglePinned">
               <span :class="sidebarPinned ? 'i-lucide-panel-left-close' : 'i-lucide-pin'" class="w-4 h-4" aria-hidden="true" />
@@ -46,7 +55,7 @@
     </aside>
     </Teleport>
     <div class="project-conversations" @focusin="contentFocused">
-      <header v-if="!sidebarPinned && !mobileIntegrated" class="projects-toolbar">
+      <header v-if="!sidebarPinned && !mobileIntegrated && !topbarToggle" class="projects-toolbar">
         <button ref="sidebarTrigger" class="projects-toggle" :aria-expanded="sidebarOpen" aria-controls="projects-sidebar"
           :aria-label="t('Projects{value1}', { value1: selectedProjectName ? `: ${selectedProjectName}` : '' })" @click="toggleSidebar">
           <span class="i-lucide-panel-left-open w-4 h-4" aria-hidden="true" />
@@ -165,7 +174,7 @@ import { WorkflowInputReferencesKey } from '../workflow-input-references.ts'
 import { projectTabKey, projectTabLabel, projectTabIcon, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
-const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean }>(), { visible: true })
+const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean; projectsToggleTarget?: HTMLElement }>(), { visible: true })
 const projectDocuments = createProjectDocuments()
 provide(ProjectDocumentsKey, projectDocuments)
 const editorGroups = createEditorGroups()
@@ -392,6 +401,7 @@ const error = ref('')
 const workspaceElement = ref<HTMLElement>()
 const sidebarElement = ref<HTMLElement>()
 const sidebarTrigger = ref<HTMLButtonElement>()
+const topbarButton = ref<HTMLButtonElement>()
 const pinButton = ref<HTMLButtonElement>()
 const closeButton = ref<HTMLButtonElement>()
 const addProjectButton = ref<HTMLButtonElement>()
@@ -399,6 +409,7 @@ const desktop = ref(false)
 const sidebarHidden = ref(false)
 const preferredWidth = ref(DEFAULT_PROJECT_SIDEBAR.width)
 const containerWidth = ref(800)
+const topbarToggle = computed(() => props.visible && desktop.value && !!props.projectsToggleTarget)
 const sidebarPinned = computed(() => desktop.value && !sidebarHidden.value)
 const sidebarVisible = computed(() => sidebarPinned.value || sidebarOpen.value)
 const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 200, 440))
@@ -440,7 +451,7 @@ async function openSidebar() {
 function closeSidebar(restoreFocus = true) {
   if (!sidebarOpen.value) return
   sidebarOpen.value = false
-  if (restoreFocus && props.visible) void nextTick(() => (mobileIntegrated.value ? mobile?.trigger.value : sidebarTrigger.value)?.focus({ preventScroll: true }))
+  if (restoreFocus && props.visible) void nextTick(() => (mobileIntegrated.value ? mobile?.trigger.value : topbarButton.value ?? sidebarTrigger.value)?.focus({ preventScroll: true }))
 }
 function toggleSidebar() {
   if (sidebarOpen.value) closeSidebar()
@@ -451,7 +462,7 @@ async function togglePinned() {
   sidebarHidden.value = hiding
   sidebarOpen.value = false
   await nextTick()
-  const target = hiding ? sidebarTrigger.value : pinButton.value
+  const target = topbarButton.value ?? (hiding ? sidebarTrigger.value : pinButton.value)
   target?.focus({ preventScroll: true })
 }
 function cancelCreateProject() {
@@ -926,6 +937,10 @@ onUnmounted(() => {
 .project-create label { display: grid; gap: 8px; margin-bottom: 10px; }
 .project-create input { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--c-border); color: var(--c-text); background: var(--c-bg-input); font: inherit; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.projects-topbar-toggle { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; color: var(--c-text-secondary); background: transparent; }
+.projects-topbar-toggle:hover { background: var(--c-bg-muted); }
+.projects-topbar-toggle:focus-visible { outline-offset: -2px; }
+.has-projects-topbar-toggle .projects-sidebar.is-floating, .has-projects-topbar-toggle .projects-backdrop { top: 0; }
 .projects-toolbar { display: flex; align-items: center; flex: 0 0 44px; min-width: 0; padding-inline: 8px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
 .projects-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; min-height: 36px; padding: 4px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; }
 .projects-toggle:hover, .projects-toggle[aria-expanded="true"] { background: var(--c-bg-muted); }
