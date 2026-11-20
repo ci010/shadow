@@ -1,3 +1,4 @@
+import type { AgentTypeDefinition } from '../types/types.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, lstatSync, realpathSync } from 'node:fs'
 import { link, mkdir, open, unlink } from 'node:fs/promises'
@@ -9,11 +10,16 @@ const revisionOf = (text: string) => createHash('sha256').update(text).digest('h
 
 /** Host-owned project data, never a caller-selected path or execution workspace. */
 export class SubOverrideStore {
-  constructor(private projectHome: string) {}
+  constructor(private projectHome: string, private directoryName = 'sub-prompt-drafts') {}
+
+  forAgent(agent: AgentTypeDefinition): SubOverrideStore {
+    if (agent.source === 'builtin' && agent.name === 'sub' && !agent.runtimeOrigin) return this
+    return new SubOverrideStore(this.projectHome, `agent-prompt-drafts-${revisionOf(JSON.stringify(agentDraftScope(agent)))}`)
+  }
 
   private async directory(create: boolean): Promise<string> {
     const root = realpathSync(this.projectHome)
-    const directory = resolve(root, 'sub-prompt-drafts')
+    const directory = resolve(root, this.directoryName)
     if (create) await mkdir(directory, { mode: 0o700 }).catch(error => {
       if (error.code !== 'EEXIST') throw error
     })
@@ -67,4 +73,25 @@ export class SubOverrideStore {
     await this.read(revision)
     return revision
   }
+}
+
+/** The registry, not a path or a caller-provided identity, selects the namespace. */
+export function agentDraftScope(agent: AgentTypeDefinition) {
+  return [agent.source, agent.name, agent.runtimeOrigin?.kind, agent.runtimeOrigin?.id, agent.runtimeOrigin?.revision]
+}
+
+export type AgentPromptDraft = { scope: string; revision: string; markdown: string }
+
+export function parseAgentPromptDraft(value: unknown): AgentPromptDraft {
+  if (!value || typeof value !== 'object' || !('scope' in value) || typeof value.scope !== 'string' ||
+    !('revision' in value) || typeof value.revision !== 'string' || !validRevision.test(value.revision) ||
+    !('markdown' in value) || typeof value.markdown !== 'string' || Buffer.byteLength(value.markdown) > limit ||
+    revisionOf(value.markdown) !== value.revision) {
+    throw new Error('Invalid pinned agent prompt draft')
+  }
+  return { scope: value.scope, revision: value.revision, markdown: value.markdown }
+}
+
+export async function readAgentPromptDraft(store: SubOverrideStore, agent: AgentTypeDefinition, revision: string): Promise<AgentPromptDraft> {
+  return { scope: JSON.stringify(agentDraftScope(agent)), revision, markdown: await store.forAgent(agent).read(revision) }
 }

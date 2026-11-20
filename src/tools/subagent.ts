@@ -14,7 +14,7 @@ import type { A2aSessions } from '../a2a/sessions.ts'
 import { workBindingSchema } from '../sessions/work-policy.ts'
 import { REASONING_EFFORTS, inferenceSettings, type InferenceSettings } from '../agent/llm-config.ts'
 import { z } from 'zod'
-import type { SubOverrideStore } from '../agent/context/sub-override.ts'
+import { readAgentPromptDraft, type SubOverrideStore } from '../agent/context/sub-override.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { parseSessionName } from '../sessions/session-name.ts'
 
@@ -64,6 +64,7 @@ export class SubagentTool implements Tool {
         type: 'string', enum: ['task', 'call'],
         description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Remote workdirs support task only; call is rejected before creation because remote exec has no foreground lifecycle. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
       },
+      prompt_revision: { type: 'string', description: 'Exact Project draft revision for the selected local role definition. Omission uses its normal prompt. Not supported for remote A2A.' },
       sub_revision: { type: 'string', description: 'Exact Project draft revision (built-in sub only). Missing explicit revisions fail closed; omission uses built-in behavior.' },
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
       model: { type: 'string', description: 'Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings.' },
@@ -136,7 +137,9 @@ export class SubagentTool implements Tool {
     if (args.mode === undefined && !allowedModes.includes('task')) {
       return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
     }
+    if (args.prompt_revision !== undefined && args.sub_revision !== undefined) throw new Error('Choose prompt_revision or sub_revision, not both.')
     if (typeof args.agent_type === 'string' && args.agent_type.startsWith('a2a:')) {
+      if (args.prompt_revision !== undefined || args.sub_revision !== undefined) throw new Error('Remote A2A does not support local prompt drafts.')
       if (this.sessions.alignment?.required(ctx.sessionId)) throw new Error('Remote A2A execution does not enforce local Work bindings; managed delegation is unavailable.')
       if (!this.remote) throw new Error('A2A is not configured in this Project.')
       if (args.mode !== undefined && args.mode !== 'task') throw new Error('Remote agents support asynchronous task mode only.')
@@ -171,7 +174,10 @@ export class SubagentTool implements Tool {
       const builtin = ordinary ? delegatedBuiltinSelection(name) : undefined
       return builtin ? builtin.agentType ?? this.sessions.defaultBuiltinAgentType?.(builtin.role) ?? name : name
     }
-    const typeName = args.agent_type != null ? resolveSelection(String(args.agent_type)) : args.mode === 'call' ? inheritedRole : 'general'
+    const requestedType = args.agent_type != null ? String(args.agent_type) : undefined
+    // Draft namespaces use exact definition IDs, independent of default aliases.
+    const typeName = requestedType !== undefined ? (args.prompt_revision === undefined ? resolveSelection(requestedType) : requestedType)
+      : args.mode === 'call' ? inheritedRole : 'general'
     const reportTo = args.report_to != null ? String(args.report_to) : undefined
     const preloadTools = args.preload_tools && typeof args.preload_tools === 'object' && !Array.isArray(args.preload_tools)
       ? Object.fromEntries(
@@ -216,6 +222,16 @@ export class SubagentTool implements Tool {
       ? `${ctx.physicalSessionId}:${ctx.messageId}:${ctx.toolCallId}` : crypto.randomUUID()
     return this.sessions.executeOnce(executionKey, async () => {
     this.sessions.assertCanCreateChild(ctx.sessionId, mode)
+    let promptDraft
+    if (args.prompt_revision !== undefined) {
+      if (!this.subOverrides || !this.projectId || ctx.projectId !== this.projectId || parentState?.projectId !== this.projectId || typeof args.prompt_revision !== 'string') {
+        throw new Error('Explicit prompt drafts require a local role in the same Project.')
+      }
+      if (agentType.runtimeOrigin || parentState?.channelBoundary || parentState?.automation || this.sessions.isManagedConversation?.(ctx.sessionId)) {
+        throw new Error('Prompt drafts cannot override managed, published, or automated executions.')
+      }
+      promptDraft = await readAgentPromptDraft(this.subOverrides, agentType, args.prompt_revision)
+    }
     let subDraft: { revision: string; markdown: string } | undefined
     if (args.sub_revision !== undefined) {
       if (agentType.source !== 'builtin' || agentType.name !== 'sub' || !this.subOverrides || !this.projectId ||
@@ -261,6 +277,7 @@ export class SubagentTool implements Tool {
       {
         agentType: typeName,
         subDraft,
+        promptDraft,
         mode,
         workPolicy,
         executionKey,
@@ -292,7 +309,8 @@ export class SubagentTool implements Tool {
     }
 
     return JSON.stringify({
-      sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName, promptVersion: this.sessions.getSessionState(sessionId)?.promptVersion, ...(agentType.source === 'builtin' && agentType.name === 'sub' ? { subRevision: subDraft?.revision ?? 'builtin' } : {}),
+      sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName, promptVersion: this.sessions.getSessionState(sessionId)?.promptVersion, ...(agentType.source === 'builtin' && agentType.name === 'sub' ? { subRevision: promptDraft?.revision ?? subDraft?.revision ?? 'builtin' } : {}),
+      promptRevision: promptDraft?.revision ?? subDraft?.revision,
       status: task ? 'running' : 'pending',
       message: 'Task started. Correct this assignment with message(sessionId, content); it applies at the next safe step. Do not take over its files until completion or confirmed cancellation. Review workflow is automatic. Parent review receives a review request and uses task(action=review) with the fixed revision; agent review needs no parent orchestration. Only PASS reports success; failures escalate.',
     })

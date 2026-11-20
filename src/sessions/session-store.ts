@@ -1,3 +1,4 @@
+import type { AgentPromptDraft } from '../agent/context/sub-override.ts'
 import type { PromptVersion } from '../agent/context/prompt-version.ts'
 import type { TaskRecord } from './task-record.ts'
 import type { ChatMessage } from '../providers/provider.ts'
@@ -125,6 +126,7 @@ export interface ArchiveReference { projectId: string; folderId?: string; workdi
 export interface SessionState {
   /** Assembly pin, independent of definition ID and draft revision. */
   promptVersion?: PromptVersion
+  promptDraft?: AgentPromptDraft
   subDraft?: { revision: string; markdown: string }
   /** Most recent inference settings sent by a task or call, not current defaults. */
   executionInference?: import('../agent/llm-config.ts').ExecutionInference

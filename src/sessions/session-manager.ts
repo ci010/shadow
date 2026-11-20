@@ -1,3 +1,4 @@
+import { agentDraftScope, parseAgentPromptDraft } from '../agent/context/sub-override.ts'
 import { resolvePrompt, type PromptVersion } from '../agent/context/prompt-version.ts'
 import { builtinAgentVersion, type AgentVersionDefaults, type BuiltinAgentRole } from '../agent/types/versions.ts'
 import { isDisplayDuplicate, markRecordedChannelInput } from '../channels/recorded-input.ts'
@@ -254,7 +255,8 @@ interface PromptIdentity {
   definition: string
   version: PromptVersion
   mode: ExecutionMode
-  behaviorSource: 'builtin' | 'workspace' | 'sub-draft'
+  behaviorSource: 'builtin' | 'workspace' | 'sub-draft' | 'agent-draft'
+  promptRevision?: string
   subRevision?: string
 }
 
@@ -262,7 +264,8 @@ function promptIdentity(ctx: SessionPromptContext): PromptIdentity {
   const { role, version } = resolvePrompt(ctx.agent, { pinned: ctx.promptVersion })
   const subRevision = role === 'sub' && ctx.agent.source === 'builtin' ? ctx.subDraft?.revision : undefined
   return { role, definition: ctx.agent.name, version, mode: ctx.mode ?? ctx.agent.defaultMode,
-    behaviorSource: subRevision ? 'sub-draft' : ctx.agent.source, ...(subRevision ? { subRevision } : {}) }
+    ...(ctx.promptDraft ? { promptRevision: ctx.promptDraft.revision } : {}),
+    behaviorSource: ctx.promptDraft ? 'agent-draft' : subRevision ? 'sub-draft' : ctx.agent.source, ...(subRevision ? { subRevision } : {}) }
 }
 
 export class SessionManager {
@@ -547,7 +550,7 @@ export class SessionManager {
       const status = frame.blockedReason || declaredBlocked ? 'blocked' : declaredFailure ? 'failed' : fact?.status ?? 'cancelled'
       const receipt = {
         sessionId, executionId: sessionId, mode: 'call', status,
-        promptVersion: state.promptVersion, subRevision: state.subDraft?.revision,
+        promptVersion: state.promptVersion, subRevision: state.subDraft?.revision, promptRevision: state.promptDraft?.revision ?? state.subDraft?.revision,
         result: fact?.content ?? '',
         ...(blockedReason ? { blockedReason } : {}),
         ...(fact?.error || declaredFailure ? { error: fact?.error ?? declaredFailure } : {}),
@@ -566,7 +569,7 @@ export class SessionManager {
       const status = context.signal.aborted ? 'cancelled' : frame.blockedReason ? 'blocked' : 'failed'
       state.executionStatus = status === 'blocked' ? 'failed' : status
       const receipt = { sessionId, executionId: sessionId, mode: 'call', status,
-        promptVersion: state.promptVersion, subRevision: state.subDraft?.revision,
+        promptVersion: state.promptVersion, subRevision: state.subDraft?.revision, promptRevision: state.promptDraft?.revision ?? state.subDraft?.revision,
         result: '', error: errMsg(error), partialWork: '', blockedReason: frame.blockedReason,
         sideEffectsMayHaveOccurred: !!frame.session }
       await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{ call_result: receipt }])
@@ -614,7 +617,7 @@ export class SessionManager {
     return JSON.stringify({
       sessionId, executionId: state.executionId, mode: state.mode,
       status: state.executionStatus,
-      promptVersion: state.promptVersion, subRevision: state.subDraft?.revision,
+      promptVersion: state.promptVersion, subRevision: state.subDraft?.revision, promptRevision: state.promptDraft?.revision ?? state.subDraft?.revision,
       message: 'Execution admitted. Its final result is delivered asynchronously.',
     })
   }
@@ -2080,6 +2083,7 @@ ${JSON.stringify(request)}`,
       initiativeId?: string
       folderId?: string
       reportTo?: string
+      promptDraft?: SessionState['promptDraft']
       subDraft?: SessionState['subDraft']
       originUser?: string
       name?: string
@@ -2178,6 +2182,10 @@ ${JSON.stringify(request)}`,
       )
     }
     if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
+    const promptDraft = stateFields?.promptDraft === undefined ? undefined : parseAgentPromptDraft(stateFields.promptDraft)
+    if (promptDraft && (stateFields?.subDraft || promptDraft.scope !== JSON.stringify(agentDraftScope(agent)))) {
+      throw new Error('Pinned prompt draft does not match the selected role definition')
+    }
     const promptVersion = resolvePrompt(agent, { fresh: true, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version
     const mode = stateFields?.mode ?? agent.defaultMode ?? 'session'
     if (mode !== 'session' && (topicFields.topic || topicFields.sessionKind)) throw new Error('Topic metadata requires mode=session')
@@ -2272,6 +2280,7 @@ ${JSON.stringify(request)}`,
       originUser: stateFields?.originUser,
       promptVersion,
       subDraft: stateFields?.subDraft,
+      promptDraft,
       name: stateFields?.name === undefined
         ? mode === 'task' && ownerId
           ? parseSessionName((stateFields?.description ?? 'Task').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120) || 'Task')
@@ -3649,6 +3658,8 @@ ${JSON.stringify(request)}`,
       preview?: boolean
       /** Host-authorized role preview only; never inferred from caller-supplied session identity. */
       rolePreview?: 'owner-web'
+      /** Owner-authorized synthetic Web draft preview; not an actual turn. */
+      previewDraft?: { draft: NonNullable<SessionState['promptDraft']>; mode: ExecutionMode }
     },
   ): Promise<{
     systemPrompt: string
@@ -3662,6 +3673,7 @@ ${JSON.stringify(request)}`,
     if (ownerWebPreview && (opts.sessionId !== undefined || opts.channel !== 'web' || !opts.agentType || opts.chatId !== undefined)) {
       throw new Error('Owner Web role preview requires a role and cannot use a real conversation.')
     }
+    if (opts.previewDraft && !ownerWebPreview) throw new Error('Draft preview requires an authorized owner Web role preview.')
     if (opts.sessionId) this.assertFolderAccess(opts.sessionId)
     let sessionId: string
     let channel: string
@@ -3721,8 +3733,9 @@ ${JSON.stringify(request)}`,
       agent: agentType,
       promptVersion: resolvePrompt(agentType, { pinned: state?.promptVersion, fresh: !opts.sessionId, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version,
       subDraft: state?.subDraft,
+      promptDraft: opts.previewDraft?.draft ?? state?.promptDraft,
       personalBotPrompt: personal?.prompt,
-      mode: state?.mode ?? agentType.defaultMode,
+      mode: opts.previewDraft?.mode ?? state?.mode ?? agentType.defaultMode,
       taskReviewable: !!state?.task,
       ...(ownerWebPreview ? { admin: true, isGroup: false } : {}),
       workRequired: opts.sessionId ? this.alignment?.required(sessionId) ?? false : false,
@@ -3949,6 +3962,7 @@ ${JSON.stringify(request)}`,
       agent: resolvedAgentType,
       promptVersion: resolvePrompt(resolvedAgentType, { pinned: state.promptVersion }).version,
       subDraft: state.subDraft,
+      promptDraft: state.promptDraft,
       personalBotPrompt: personal?.prompt,
       mode: state.mode,
       taskReviewable: !!state.task,

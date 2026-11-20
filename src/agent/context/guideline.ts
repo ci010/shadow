@@ -1,3 +1,4 @@
+import { agentDraftScope } from './sub-override.ts'
 import { resolvePrompt } from './prompt-version.ts'
 import { readFileSync } from 'node:fs'
 import { GENERAL_V2_WEB_RESPONSE_GUIDANCE, SESSION_RESPONSE_GUIDANCE } from './response-audience.ts'
@@ -47,13 +48,21 @@ For MCP recovery, read \`v:skills/tool-operations\`. If execution may have occur
 
 const SUB_BEHAVIOR = readFileSync(new URL('./sub-behavior.md', import.meta.url), 'utf8')
 
+function draftMarkdown(ctx: SessionPromptContext) {
+  if (!ctx.promptDraft) return undefined
+  if (ctx.promptDraft.scope !== JSON.stringify(agentDraftScope(ctx.agent))) {
+    throw new Error('Pinned prompt draft does not match the current role definition')
+  }
+  return `Project draft: behavior only; fixed guidance and permissions take precedence.\n\n${ctx.promptDraft.markdown}`
+}
+
 function subGuidelineSections(ctx: SessionPromptContext): SystemPromptSection[] | undefined {
   if (ctx.agent.source !== 'builtin' || ctx.agent.name !== 'sub') return
-  const behavior = capabilityPrompt(ctx.subDraft?.markdown ?? SUB_BEHAVIOR, ctx).trim()
+  const behavior = capabilityPrompt(draftMarkdown(ctx) ?? ctx.subDraft?.markdown ?? SUB_BEHAVIOR, ctx).trim()
   const parts: Array<Omit<SystemPromptSection, 'characters'>> = [
     { name: 'AGENT.md', content: capabilityPrompt(ctx.agent.prompt, ctx), kind: 'behavior', editability: 'editable' },
     ...(ctx.personalBotPrompt === undefined ? [] : [{ name: 'BOT.md (personal deployment)', content: capabilityPrompt(`# Personal BOT instructions\n${ctx.personalBotPrompt}`, ctx), kind: 'behavior' as const, editability: 'editable' as const }]),
-    { name: ctx.subDraft ? `sub-behavior.md@${ctx.subDraft.revision}` : 'sub-behavior.md', content: behavior ? `## Tool selection and coordination\n\n${ctx.subDraft ? 'Project draft: behavior only; fixed guidance and permissions take precedence.\n\n' : ''}${behavior}` : '', kind: 'behavior', editability: 'editable' },
+    { name: ctx.promptDraft ? `sub-behavior.md@${ctx.promptDraft.revision}` : ctx.subDraft ? `sub-behavior.md@${ctx.subDraft.revision}` : 'sub-behavior.md', content: behavior ? `## Tool selection and coordination\n\n${ctx.subDraft ? 'Project draft: behavior only; fixed guidance and permissions take precedence.\n\n' : ''}${behavior}` : '', kind: 'behavior', editability: 'editable' },
     { name: 'tool-discovery-reference', content: toolDiscoveryGuidance(ctx), kind: 'information', editability: 'fixed' },
     { name: 'tool-operations', content: toolsGuideline(ctx), ...(ctx.promptVersion === 'v2' ? { kind: 'contract' as const } : {}), editability: 'fixed' },
   ]
@@ -70,7 +79,7 @@ export function guidelineProvider(): SystemPromptProvider {
       const sub = subGuidelineSections(ctx)
       if (sub) return sub
       const entries: Array<[string, string]> = [
-        ['AGENT.md', capabilityPrompt(ctx.agent.prompt, ctx)],
+        [ctx.promptDraft ? `AGENT.md@${ctx.promptDraft.revision}` : 'AGENT.md', capabilityPrompt(draftMarkdown(ctx) ?? ctx.agent.prompt, ctx)],
         ...(ctx.personalBotPrompt !== undefined ? [['BOT.md (personal deployment)', capabilityPrompt(`# Personal BOT instructions\n${ctx.personalBotPrompt}`, ctx)] as [string, string]] : []),
         ...(ctx.promptVersion === 'v2'
           ? [['tool-discovery-reference', toolDiscoveryGuidance(ctx)], ['tool-operations', toolsGuideline(ctx)]] as Array<[string, string]>
@@ -80,7 +89,7 @@ export function guidelineProvider(): SystemPromptProvider {
         // Only the whole provider was trimmed historically, not internal sources.
         const content = index === 0 ? text.trimStart() : index === entries.length - 1 ? text.trimEnd() : text
         return { name, content, characters: content.length, separatorBefore: index ? '\n\n' : '',
-          ...(ctx.promptVersion === 'v2' ? (name.endsWith('.md') || name.startsWith('BOT.md')
+          ...(ctx.promptVersion === 'v2' ? (name.startsWith('AGENT.md') || name.startsWith('BOT.md')
             ? { kind: 'behavior' as const, editability: 'editable' as const }
             : { kind: name === 'tool-operations' ? 'contract' as const : 'information' as const, editability: 'fixed' as const }) : {}) }
       })
@@ -88,11 +97,11 @@ export function guidelineProvider(): SystemPromptProvider {
     getPromptSection(ctx) {
       const sub = subGuidelineSections(ctx)
       if (sub) return sub.map(part => part.separatorBefore + part.content).join('')
-      const agentType = ctx.agent
+      const roleBehavior = draftMarkdown(ctx) ?? ctx.agent.prompt
 
       // Preserve the original Personal BOT merge before capability expansion.
       const rolePrompt = ctx.personalBotPrompt !== undefined
-        ? `${agentType.prompt}\n\n# Personal BOT instructions\n${ctx.personalBotPrompt}` : agentType.prompt
+        ? `${roleBehavior}\n\n# Personal BOT instructions\n${ctx.personalBotPrompt}` : roleBehavior
       const sections = [capabilityPrompt(rolePrompt, ctx)]
 
       sections.push(toolDiscoveryGuidance(ctx))

@@ -8,6 +8,8 @@ import { runtimeIdentityProvider } from '../agent/context/runtime.ts'
 import { unavailableCapabilities } from '../channels/capabilities.ts'
 import { IdentityManager } from '../agent/identity.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
+import { readAgentPromptDraft, SubOverrideStore } from '../agent/context/sub-override.ts'
+import { agentPromptDraftTools } from '../tools/agent-prompt-draft.ts'
 import { AgentTypesManager } from '../agent/types/manager.ts'
 import { agentTypesPlugin } from '../agent/types/routes.ts'
 import { Bus } from '../bus/bus.ts'
@@ -371,21 +373,56 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.requests.length, 0, 'preview does not invoke a provider')
         const legacy = await f.sessions.getContext({ sessionId: 'web:legacy-assembly', preview: true })
         assert.equal(legacy.promptIdentity?.version, 'v1')
+        const draftStore = new SubOverrideStore(workspace)
+        f.agentTypes.setWorkspaceType('custom-draft', {
+          name: 'custom-draft', source: 'workspace', prompt: 'Original custom behavior',
+          description: 'Custom draft', defaultMode: 'session', allowedTools: ['read'],
+        })
+        const tools = { executionMode: 'session' } as { executionMode: string; dynamicOwner?: object }
+        tools.dynamicOwner = tools
+        const ownerContext = { projectId: 'draft-test', sessionId: root, channel: 'web', admin: true, inputSource: 'user',
+          soleDirectToolCall: true, tools, signal: new AbortController().signal } as unknown as ExecutionContext
+        const [save, inspect, create] = agentPromptDraftTools(draftStore, 'draft-test', f.agentTypes, f.sessions, ctx => ctx.sessionId === root)
+        const markdown = 'Use the assembly verification sentinel.'
+        const saveDraft = async (agent_type: string, text = markdown) => JSON.parse(await save.execute({ agent_type, markdown: text }, ownerContext))
+        const saved = await saveDraft('general')
+        assert.equal(saved.enabled, false)
+        const args = { agent_type: 'general', prompt_revision: saved.revision }
+        const countBefore = (await store.listAllStates()).length
+        const inspection = JSON.parse(await inspect.execute(args, ownerContext))
+        assert.equal(inspection.source, 'preview')
+        assert.equal(inspection.sessionCreated, false)
+        assert.equal(inspection.promptIdentity.promptRevision, saved.revision)
+        assert.match(inspection.systemPrompt, /assembly verification sentinel/)
+        assert.equal((await store.listAllStates()).length, countBefore)
+        await assert.rejects(create.execute({ ...args, agent_type: 'general-v2' }, ownerContext), /not found/)
+        await assert.rejects(create.execute(args, { ...ownerContext, projectId: 'other' }), /direct authorized/)
+        await assert.rejects(save.execute({ agent_type: 'a2a:outside', markdown }, ownerContext), /remote A2A/)
+        const created = JSON.parse(await create.execute(args, ownerContext))
+        assert.equal(created.inferenceStarted, false)
+        assert.equal(created.promptRevision, saved.revision)
+        const before = await f.sessions.getContext({ sessionId: created.sessionId })
+        await saveDraft('general', 'Replacement revision')
+        assert.equal((await f.sessions.getContext({ sessionId: created.sessionId })).systemPrompt, before.systemPrompt)
+        assert.equal(f.requests.length, 0, 'save, preview and idle session creation must not start inference')
         const revision = 'a'.repeat(64)
         const draft = { revision, markdown: 'Use the assembly verification sentinel.' }
         let expected = 0
-        for (const role of ['general-v2', 'sub', 'verify', 'plan', 'explore']) for (const version of ['v1', 'v2'] as const) {
+        for (const role of ['general', 'general-v2', 'sub', 'verify', 'plan', 'explore', 'custom-draft']) for (const version of ['v1', 'v2'] as const) {
           const sessionId = `web:${role}-${version}`
           const mode = role === 'verify' ? 'task' : 'session'
-          const subDraft = role === 'sub' ? draft : undefined
+          const subDraft = role === 'sub' && version === 'v1' ? draft : undefined
+          const promptDraft = subDraft ? undefined : await readAgentPromptDraft(draftStore, f.agentTypes.resolve(role)!, (await saveDraft(role)).revision)
+          const assembly = role === 'custom-draft' ? 'v1' : version
           process.env[key] = version
-          await f.sessions.buildSession(sessionId, undefined, { agentType: role, mode, subDraft })
-          assert.equal((await store.getState(sessionId))?.promptVersion, version)
+          await f.sessions.buildSession(sessionId, undefined, { agentType: role, mode, subDraft, promptDraft })
+          assert.equal((await store.getState(sessionId))?.promptVersion, assembly)
+          assert.deepEqual((await store.getState(sessionId))?.promptDraft, promptDraft)
           assert.deepEqual((await store.getState(sessionId))?.subDraft, subDraft)
           process.env[key] = version === 'v1' ? 'v2' : 'v1'
           const rebuilt = await f.sessions.getContext({ sessionId, preview: true })
-          assert.deepEqual(rebuilt.promptIdentity, { role: role === 'general-v2' ? 'general' : role, definition: role, version, mode,
-            ...(subDraft ? { behaviorSource: 'sub-draft', subRevision: revision } : { behaviorSource: 'builtin' }) })
+          assert.deepEqual(rebuilt.promptIdentity, { role: role === 'general-v2' ? 'general' : role, definition: role, version: assembly, mode,
+            ...(subDraft ? { behaviorSource: 'sub-draft', subRevision: revision } : { behaviorSource: 'agent-draft', promptRevision: promptDraft!.revision }) })
           await f.sessions.deliver(sessionId, {
             kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), content: 'Fixture input', policy: 'queue',
             source: { kind: 'event', eventId: crypto.randomUUID(), type: 'fixture', source: 'fixture' },
@@ -398,8 +435,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           }
           const system = f.requests.at(-1)?.[0]
           assert.equal(system?.role, 'system')
-          assert.equal(String(system?.content).includes('assembly verification sentinel'), !!subDraft)
-          assert.equal(String(system?.content).startsWith('# Information\n'), version === 'v2')
+          assert.match(String(system?.content), /assembly verification sentinel/)
+          assert.match(String(system?.content), new RegExp(`Execution Contract: ${mode === 'task' ? 'Task' : 'Session'}`))
+          assert.equal(String(system?.content).startsWith('# Information\n'), assembly === 'v2')
           const live = await f.sessions.getContext({ sessionId })
           assert.deepEqual(live.promptIdentity, rebuilt.promptIdentity)
           assert.equal(live.systemPrompt, system?.content)

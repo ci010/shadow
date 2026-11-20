@@ -140,6 +140,7 @@ import { ProjectMaintenanceSources } from '../../agent/learning/maintenance-sour
 import { DocumentMaintenanceOperation, DocumentMaintenanceRestoration } from '../../agent/learning/maintenance-documents.ts'
 import { MaintenanceGate } from '../../agent/learning/maintenance-gate.ts'
 import { DocumentMaintenanceProtection } from '../../agent/learning/maintenance-protection.ts'
+import { agentPromptDraftTools } from '../../tools/agent-prompt-draft.ts'
 import { SubOverrideSaveTool } from '../../tools/sub-override-save.ts'
 import { SubOverrideStore } from '../../agent/context/sub-override.ts'
 import { LearningMaintenanceTool, maintenanceOwnerAccess } from '../../tools/learning-maintenance.ts'
@@ -1473,10 +1474,14 @@ export async function createProjectRuntime(
     })
   importTool.registerBuiltin('learning_maintenance', ownerMaintenance)
   const subOverrides = new SubOverrideStore(workspace)
-  importTool.registerBuiltin('sub_override_save', new SubOverrideSaveTool(subOverrides, project.id, context => {
+  const canAuthorPromptDraft = (context: import('../../tools/context.ts').ExecutionContext) => {
     const state = sessions.getSessionState(context.sessionId)
     return !!state && canAuthor(context.sessionId) && physicalSessionId(state) === context.physicalSessionId
-  }))
+  }
+  importTool.registerBuiltin('sub_override_save', new SubOverrideSaveTool(subOverrides, project.id, canAuthorPromptDraft))
+  for (const tool of agentPromptDraftTools(subOverrides, project.id, agentTypes, sessions, canAuthorPromptDraft)) {
+    importTool.registerBuiltin(tool.name, tool)
+  }
   workflows.bindHost('work-organizer', {
     current: () => organizationController.status().enabled,
     execute: async (observation, signal) => {
