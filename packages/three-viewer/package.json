@@ -1,0 +1,8 @@
+{
+  "name": "@shadow/three-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "three": "0.180.0", "@types/three": "0.180.0" }
+}

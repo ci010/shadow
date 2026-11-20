@@ -1,0 +1,47 @@
+# @shadow/three-viewer
+
+Browser/WebGL 2 package. Import `ThreeViewer` from `@shadow/three-viewer` and provide an app-owned canvas with a CSS layout size. The package does not read files, run Playground source, or mount a toolbar. Use `dispose()` when the editor closes.
+
+## Loading and identity
+
+```ts
+const viewer = new ThreeViewer(canvas, {
+  background: '#ededed',
+  ground: true,
+  ariaLabel: 'Model preview', instructions: localizedInstructions,
+  onSelectionChange: ({ selection, removed, reason }) => updateSelection(selection, removed, reason),
+  onPlayerModeChange: enabled => updateToolbar(enabled),
+});
+const { objectIds } = await viewer.load({ bytes, resources, version, signal });
+```
+
+- `load({ bytes, version, resources?, identity?, identityScope?, signal?, shaders? })` accepts `ArrayBuffer` or `Uint8Array`. `resources` is a `ReadonlyMap<string, Uint8Array>`, keyed by each exact glTF URI, not a path or URL resolver. Bounded embedded base64 is decoded locally. The loader only sees temporary blob references created from approved bytes and cannot fetch host or remote resources.
+- `version` is an immutable asset revision supplied by the caller (use a digest covering the document and resources). A newer request supersedes pending work; a pre-aborted input is not admitted. Superseded, aborted and disposed loads reject with `AbortError`. At most one decode and the latest queued input are held; an already-running browser decode can finish internally but cannot commit. Validation, decode and shader compile/link must succeed before the new scene is swapped in. Failures leave the visible model, camera, shaders, and selection unchanged. The first successful load is framed automatically if nonempty; subsequent replacements keep the camera/target. A successful replacement drops unavailable selected references and reports them as `removed` with `reason: 'load'`.
+- The default `identity: 'gltf'` uses opaque, reproducible IDs from scope, version, authored glTF node index and primitive index. Two nodes using the same mesh definition have distinct IDs. The same asset revision can be reopened without renumbering. Scope or version changes invalidate previous references; use an asset-specific `identityScope` if supplied versions are not globally content-addressed. `viewer.objectIds` lists all current referenceable IDs, and `labelFor(id)` gives a display label (or `undefined`). Do not parse IDs to resolve or display them.
+- `identity: 'playground'` uses the author's `mesh.userData.objectId`, exported by GLTFExporter as `node.extras.objectId`. It must be a nonempty string, unique across authored mesh nodes in the default scene. A node without an ID is rendered but cannot be referenced. A node with several primitives still has one logical ID; all its primitives pick that same ID and contribute to its outline. Only reuse stable IDs for the same logical objects. Use a distinct `identityScope` when reusing one viewer for another Playground.
+- Snapshot `shaders: [{ objectId, slot, vertex, fragment }]` bind only in Playground mode, in memory, and are not written to the GLB. The GLB retains its authored independent materials. A single ordinary glTF primitive uses viewer slot 0. For a Playground mesh with grouped materials, have the exporter set `node.extras.shadowMaterialSlots` to one authored slot per emitted primitive, in emitted order (`geometry.groups.map(g => g.materialIndex)` for Three r180's default exporter). This mapping supports out-of-order slots, duplicate groups for a slot, and unused slots. Single-material meshes can omit the mapping (slot 0); for multiple primitives without a mapping, selection works but shader binding fails instead of guessing. A compile/link or invalid binding error names the binding and preserves the previous preview. `bindShader(id, slot, shader)` borrows a caller-owned `ShaderMaterial`, and `bindShader(id, slot, null)` restores the imported material. Snapshot shader source is size-limited; callers must trust sources allowed to execute on the GPU. Use Three's `<colorspace_fragment>` shader chunk for consistent output color conversion.
+
+### Supported import profile
+
+Static glTF 2.0 triangle geometry and the default scene. Core PBR, unlit, texture transform, and Three r180's material-only KHR extensions for clearcoat, dispersion, IOR, sheen, specular, transmission, iridescence, anisotropy, volume and emissive strength are supported. These do not open loaders for additional resource or decoder types. No Draco, meshopt, Basis/KTX2, GPU instancing extension, lighting extension, skinning, animation, morph targets, sparse accessors or points/lines. Regular glTF nodes sharing a mesh are supported. PNG and baseline/progressive JPEG are supported; nonessential PNG ancillary metadata is removed before decode and APNG is rejected. Limits include 32 MiB document, 2 MiB JSON, 64 MiB provided bytes, 128 explicit resources, 4,096 nodes, 4,096 drawn primitives and 3,000,000 draw elements, plus aggregate decode and vertex/texture upload budgets (see `limits` and `src/input.ts`).
+
+## Preview ground
+
+`ground: true` enables a bounded neutral reference grid beneath the model. The viewer centers and scales it from the model bounds on each successful load. It appears in previews and captures, but never changes framing or participates in picking, selection, exported model data, or object IDs. The default is `false`.
+
+## Input and capture
+
+`selection` is a readonly list; `setSelection(iterable)` replaces it (unknown IDs throw). Left click picks a visible surface; Shift/Ctrl/Meta-click toggles. Left drag selects objects whose projected bounds centers fall inside the rectangle; a modifier extends the existing selection. Orbit uses right drag, middle pan and wheel zoom. `setPlayerMode(true)` enables fly controls for the focused canvas only: right drag to look, WASD, Shift for faster motion, Space to rise, Ctrl to descend. Escape and toolbar presets exit player mode and notify `onPlayerModeChange`. Losing focus clears held inputs.
+
+- `fit()` frames the model while retaining view direction. `setView('front' | 'back' | 'top')` frames and changes the visible camera. Front is +Z, back is −Z, and top is +Y.
+- `getCamera(view?)` returns `{ position, target }`. `captureFrame(view?)` returns `{ image: Blob, camera: { position, target }, objectIds, version }` for a single rendered snapshot. **The frame's IDs are the selection, not the scene inventory.** With no `view`, PNG comes from the actual canvas. Presets and explicit `{ position, target }` use an independent camera and a WebGL render target, without drawing to the user canvas or changing their camera. Both use the viewer's opaque baked-in background. A hidden canvas retains its last visible drawing size and aspect. PNG encoding may complete after a later model swap, but the result still describes the frame that was taken.
+
+## Focused checks
+
+From the repository root:
+
+```sh
+pnpm exec tsc --noEmit --target es2022 --module nodenext --strict --skipLibCheck --lib ES2022,DOM packages/three-viewer/src/index.ts packages/three-viewer/test/*.ts
+pnpm exec node --import tsx --test packages/three-viewer/test/input_test.ts
+CHROMIUM=/path/to/chromium node packages/three-viewer/test/run-browser.mjs
+```

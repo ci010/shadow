@@ -1,0 +1,5 @@
+{
+  "files": ["main.mjs", "cube.mjs", "stand.mjs"],
+  "assets": [],
+  "shaders": [{"objectId":"stand.badge","slot":0,"vertex":"shaders/badge.vert","fragment":"shaders/badge.frag"}]
+}

@@ -17,6 +17,8 @@
     "@mdit/plugin-tasklist": "1.2.0",
     "@monaco-editor/loader": "^1.7.0",
     "@open-file-viewer/core": "0.1.48",
+    "@shadow/three-playground": "workspace:*",
+    "@shadow/three-viewer": "workspace:*",
     "@vue-flow/background": "1.3.2",
     "@vue-flow/controls": "1.1.3",
     "@vue-flow/core": "1.41.5",

@@ -21,6 +21,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Quick Actions](quick-actions.md)
 - [Directory BOTs](bots.md), [external input routing](input-routing.md)
 - [Project Micro Apps](microapps.md)
+- [glTF Viewer and file-based Three.js Playground](three-playground.md)
 - [Inline visual answers](inline-visual-answers.md)
 - [Desktop MCP use](computer-use.md)
 - [Audio setup](audio-setup.md)

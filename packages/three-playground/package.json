@@ -1,0 +1,9 @@
+{
+  "name": "@shadow/three-playground",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./index.ts" },
+  "scripts": { "generate": "node generate.mjs", "postinstall": "node generate.mjs", "test": "node --test playground_test.ts" },
+  "dependencies": { "three": "0.180.0", "quickjs-emscripten": "0.31.0", "esbuild": "^0.28.2" }
+}
