@@ -1,3 +1,4 @@
+import { ReadResourcesSchema, resourceSubset, unambiguousResourceFolders } from './read-scope.ts'
 import { BotConnectionPolicy } from '../channels/connection-config.ts'
 import { z } from 'zod'
 import { BotHostCapabilities } from './host-contract.ts'
@@ -59,6 +60,7 @@ const baseDefinition = z.object({
   /** Owner-approved host SDK operations; omission grants none. Always scoped to the invoking binding. */
   hostCapabilities: BotHostCapabilities.optional(),
   readDomains: z.array(z.string().uuid()).max(32).optional(),
+  readResources: ReadResourcesSchema.optional(),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
   skills: z.array(z.object({ name: ResourceName, content: z.string().min(1).max(64_000) }).strict()).max(32).optional(),
@@ -69,9 +71,16 @@ const definition = z.discriminatedUnion('mode', [
 ]).superRefine((bot, ctx) => {
   if (bot.mode === 'personal') {
     if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })
-    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.sourceFolders || bot.discordHistory || bot.skills)
+    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResources || bot.sourceFolders || bot.discordHistory || bot.skills)
       ctx.addIssue({ code: 'custom', message: 'Personal BOT uses ordinary role tools/context; custom tools, service bindings and scopes are not supported' })
   } else if (bot.connection || bot.agent) ctx.addIssue({ code: 'custom', message: 'Service BOT cannot select a personal connection or role' })
+  if (!unambiguousResourceFolders(bot.readResources, bot.sourceFolders))
+    ctx.addIssue({ code: 'custom', message: 'Do not mix legacy and new BOT folder ceilings' })
+  for (const binding of bot.bindings) {
+    const legacy = binding.platform === 'discord' ? binding.sourceFolders : binding.readFolders
+    if (!resourceSubset(binding.readResources, bot.readResources) || !unambiguousResourceFolders(binding.readResources, legacy))
+      ctx.addIssue({ code: 'custom', message: 'Read resources must narrow the BOT ceiling and cannot mix legacy and new folder grants' })
+  }
   const bindingKeys = bot.bindings.map(value => botSubscriptionKey(bindingSubscription(value)))
   if (new Set(bindingKeys).size !== bindingKeys.length) ctx.addIssue({ code: 'custom', message: 'Duplicate binding subscription identity' })
   const subscriptionKeys = (bot.subscriptions ?? []).map(botSubscriptionKey)
