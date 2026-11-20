@@ -3333,7 +3333,7 @@ function clearSelection(): void {
 function quoteSelection(text: string): void {
   const input = chatInput.value
   if (!input || input.disabled || input.readOnly) return
-  const quote = insertQuote(inputText.value, text, input.selectionStart, input.selectionEnd)
+  const quote = insertQuote(inputText.value, text)
   inputText.value = quote.text
   void nextTick(() => {
     input.focus({ preventScroll: true })
