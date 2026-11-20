@@ -137,9 +137,9 @@ export class IdentityManager {
     }
   }
 
-  async appendReflectionProfile(source: ReflectionProfileSource, name: string, lines: string[], batchId: string): Promise<void> {
+  async appendReflectionProfile(sources: ReflectionProfileSource[], name: string, lines: string[], batchId: string): Promise<void> {
     await this.withState(async state => {
-      if (this.reflectionProfileIn(state, source) !== name) throw new Error('Reflection profile identity changed; review the pending batch')
+      if (!sources.length || sources.some(source => this.reflectionProfileIn(state, source) !== name)) throw new Error('Reflection profile identity changed; review the pending batch')
       const path = this.reflectionProfileFile(name)
       if (!path) throw new Error('Reflection requires an existing regular profile in the Project identity directory')
       const fd = openSync(path, constants.O_RDWR | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0))

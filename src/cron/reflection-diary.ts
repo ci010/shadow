@@ -21,26 +21,37 @@ const inputMarker = z.object({ sessionId: z.string(), id: z.string().min(1), tex
   profileSource: reflectionProfileSourceSchema.optional().catch(undefined),
 })
 const profileReference = z.object({ sessionId: z.string(), inputId: z.string(), record: z.number(), at: z.string() })
+const rules = {
+  'explicit-concise': ['length', /^(?:i (?:always )?prefer (?:concise|brief) (?:answers|replies)|我偏好(?:简洁|简短)的回复)$/, 'concise replies'],
+  'explicit-detailed': ['length', /^(?:i (?:always )?prefer detailed (?:answers|replies)|我偏好详细的回复)$/, 'detailed replies'],
+  'request-concise': ['length', /^(?:please (?:be concise|keep (?:it|the answer|your reply) brief)|请简短回复)$/, 'brief replies'],
+  'explicit-verification': ['verification', /^(?:i prefer (?:a )?verification summary (?:with|for) every delivery|我偏好每次交付都附上验证摘要)$/, 'a verification summary with each delivery'],
+  'request-verification': ['verification', /^(?:please (?:include|report) (?:the )?test results|请附上测试结果)$/, 'test results accompanying delivery'],
+  'explicit-bullets': ['format', /^(?:i prefer (?:bullet points|bulleted lists) (?:in|for) (?:answers|replies)|我偏好用项目符号列表回复)$/, 'bulleted replies'],
+  'explicit-prose': ['format', /^(?:i prefer prose (?:in|for) (?:answers|replies)|我偏好用段落回复)$/, 'replies in prose'],
+  'request-bullets': ['format', /^(?:please (?:use bullet points|reply in bullet points)|请用项目符号列表回复)$/, 'bulleted replies'],
+  'explicit-plan': ['workflow', /^(?:i prefer (?:a|to review the) plan before implementation|我偏好先审阅计划再实施)$/, 'reviewing a plan before implementation'],
+  'request-plan': ['workflow', /^(?:please (?:show me|share) (?:a|the) plan before implementation|请先给我看计划再实施)$/, 'seeing the plan before implementation'],
+} as const
 const profileEvidence = z.object({ source: reflectionProfileSourceSchema, name: z.string(), ref: profileReference,
-  kind: z.enum(['explicit-concise', 'explicit-detailed', 'request-concise']),
+  kind: z.enum(Object.keys(rules) as [keyof typeof rules, ...(keyof typeof rules)[]]),
 })
 const profileChange = z.object({ name: z.string(), evidence: z.array(profileEvidence).min(1).max(2) })
 type ProfileEvidence = z.infer<typeof profileEvidence>
 type ProfileChange = z.infer<typeof profileChange>
+const tentative = (kind: ProfileEvidence['kind']) => kind.startsWith('request-')
+const slot = (item: ProfileEvidence) => JSON.stringify([item.name, rules[item.kind][0]])
 
-// A deliberately small allowlist. No model output, quotes, arbitrary facts, or
-// sensitive attributes can become profile content through this automation.
+// Match standalone statements against admitted text, never model claims or quotes.
 function preference(text: string): ProfileEvidence['kind'] | undefined {
   const normalized = text.trim().toLowerCase().replace(/[.!。！]$/, '')
-  if (/^(?:i (?:always )?prefer (?:concise|brief) (?:answers|replies)|我偏好(?:简洁|简短)的回复)$/.test(normalized)) return 'explicit-concise'
-  if (/^(?:i (?:always )?prefer detailed (?:answers|replies)|我偏好详细的回复)$/.test(normalized)) return 'explicit-detailed'
-  if (/^(?:please (?:be concise|keep (?:it|the answer|your reply) brief)|请简短回复)$/.test(normalized)) return 'request-concise'
+  return (Object.keys(rules) as ProfileEvidence['kind'][]).find(kind => rules[kind][1].test(normalized))
 }
 
 function renderProfileEvidence(item: ProfileChange): string[] {
   const kind = item.evidence[0]!.kind
-  const text = kind === 'request-concise' ? 'Tentative pattern (not a stated preference): has repeatedly asked for brief replies.'
-    : `Explicit preference: prefers ${kind === 'explicit-concise' ? 'concise' : 'detailed'} replies.`
+  const text = tentative(kind) ? `Tentative pattern (not a stated preference): has repeatedly asked for ${rules[kind][2]}.`
+    : `Explicit preference: prefers ${rules[kind][2]}.`
   // Encode identifiers instead of interpreting them as Markdown or interpolating source text.
   const refs = item.evidence.map(({ ref }) => `${encodeURIComponent(ref.sessionId)}/${encodeURIComponent(ref.inputId)} at ${new Date(ref.at).toISOString()}`)
   return [`- ${text} Evidence: ${refs.map(ref => `\`${ref}\``).join('; ')}.`]
@@ -132,8 +143,8 @@ export class ReflectionDiary implements Tool {
       const name = await this.identity.reflectionProfile(source)
       if (!name) continue
       const item: ProfileEvidence = { name, source, kind, ref: { sessionId: msg.sessionId, inputId: msg.id, record: msg.record, at: msg.at } }
-      if (kind === 'request-concise') {
-        if (changes.has(name)) continue
+      if (tentative(kind)) {
+        if (changes.has(slot(item))) continue
         let prior: ProfileEvidence | undefined
         // Same admitted account, same canonical profile, distinct UTC dates. No
         // retroactive linking of observations or inference over direct statements.
@@ -146,11 +157,11 @@ export class ReflectionDiary implements Tool {
             prior = candidate
           }
         }
-        if (prior) changes.set(name, { name, evidence: [item, prior] })
+        if (prior) changes.set(slot(item), { name, evidence: [item, prior] })
       } else {
-        const previous = changes.get(name)?.evidence[0]
-        if (!previous || previous.kind === 'request-concise' || Date.parse(previous.ref.at) < Date.parse(item.ref.at)) {
-          changes.set(name, { name, evidence: [item] })
+        const previous = changes.get(slot(item))?.evidence[0]
+        if (!previous || tentative(previous.kind) || Date.parse(previous.ref.at) < Date.parse(item.ref.at)) {
+          changes.set(slot(item), { name, evidence: [item] })
         }
       }
       evidence.push(item)
@@ -159,28 +170,34 @@ export class ReflectionDiary implements Tool {
     // with an inference. A later differing explicit statement can correct it.
     const latest = new Map<string, ProfileEvidence>()
     for (const entry of entries) {
-      for (const change of entry.profileChanges ?? []) latest.set(change.name, change.evidence[0]!)
+      for (const change of entry.profileChanges ?? []) latest.set(slot(change.evidence[0]!), change.evidence[0]!)
       for (const item of entry.profileEvidence ?? []) {
-        const before = latest.get(item.name)
-        if (item.kind !== 'request-concise' && (!before || before.kind === 'request-concise' || Date.parse(before.ref.at) < Date.parse(item.ref.at))) {
-          latest.set(item.name, item)
+        const before = latest.get(slot(item))
+        if (!tentative(item.kind) && (!before || tentative(before.kind) || Date.parse(before.ref.at) < Date.parse(item.ref.at))) {
+          latest.set(slot(item), item)
         }
       }
     }
     return { evidence, changes: [...changes.values()].filter(change => {
-      const before = latest.get(change.name)
+      const before = latest.get(slot(change.evidence[0]!))
       const next = change.evidence[0]!
       if (!before) return true
-      return before.kind !== next.kind && next.kind !== 'request-concise' &&
-        (before.kind === 'request-concise' || Date.parse(before.ref.at) < Date.parse(next.ref.at))
+      return before.kind !== next.kind && !tentative(next.kind) &&
+        (tentative(before.kind) || Date.parse(before.ref.at) < Date.parse(next.ref.at))
     }) }
   }
 
   private async commitProfile(entry: DiaryEntry, signal: AbortSignal) {
+    const byProfile = new Map<string, ProfileChange[]>()
     for (const change of entry.profileChanges ?? []) {
+      const group = byProfile.get(change.name) ?? []
+      group.push(change)
+      byProfile.set(change.name, group)
+    }
+    for (const [name, group] of byProfile) {
       signal.throwIfAborted()
       if (!this.identity) throw new Error('Pending reflection profile update has no identity service')
-      await this.identity.appendReflectionProfile(change.evidence[0]!.source, change.name, renderProfileEvidence(change), entry.batchId)
+      await this.identity.appendReflectionProfile(group.flatMap(change => change.evidence.map(item => item.source)), name, group.flatMap(renderProfileEvidence), entry.batchId)
     }
   }
 

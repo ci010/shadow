@@ -1611,12 +1611,15 @@ sender provenance are eligible; older records without it remain diary-only.
 Unmapped senders and absent profiles are skipped, not created or inferred from
 a chat ID or display name.
 
-Profile updates currently recognize a narrow English/Chinese allowlist for
-reply length. A standalone preference such as “I prefer detailed replies” is
-labeled **explicit**. Requests such as “Please be concise” require two distinct
+Profile updates recognize a bounded English/Chinese set of standalone
+statements about reply length, reply format, delivery verification, and reviewing
+a plan before implementation. For example, “I prefer bullet points in replies”
+and “I prefer a verification summary with every delivery” are **explicit**.
+Matching requests such as “Please include the test results” require two distinct
 admissions from the same account on different UTC dates and are labeled a
 **tentative pattern**, not a preference. Repetition does not override an explicit
-preference. Profile entries cite the admission IDs and dates. Unrecognized or
+preference in the same category. These are descriptive preferences, not grants
+of permission or Project policy. Profile entries cite the admission IDs and dates. Unrecognized or
 sensitive statements and model-generated labels are not profile inputs. Manual
 profile content and direct corrections take precedence. The reflection tool
 cannot choose a profile, write a file, or supply profile text.
