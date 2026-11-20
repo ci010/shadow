@@ -235,7 +235,11 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       const snapshot = await refreshed.json() as { requestId: string; status: string }[]
       assert.deepEqual(Object.fromEntries(snapshot.map(entry => [entry.requestId, entry.status])), { [queued]: 'queue', [steer]: 'steer' })
       const rows = await Array.fromAsync(f.store.readSessionLog(physicalSessionId(f.state)))
-      assert(rows.some(row => webInputRequestId(row.content) === steer), 'the steer input is already persisted')
+      const steered = rows.find(row => webInputRequestId(row.content) === steer)
+      assert(steered, 'the steer input is already persisted')
+      assert.deepEqual(steered.direct_input, { sessionId: 'web:owner', id: steer, text: 'Identical text',
+        at: (steered.direct_input as { at: string }).at })
+      assert(!f.calls[0].messages.some(message => 'direct_input' in message), 'admission metadata stays out of model messages')
       dispatchGate.resolve()
       await waitFor(() => f.calls.length === 2)
       assert.deepEqual(view(), { [queued]: 'queue' })
