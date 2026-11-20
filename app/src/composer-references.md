@@ -25,6 +25,22 @@ No message, upload, queue, retry or draft-storage schema changes are involved.
 - Enter/queue shortcuts remain owned by ChatTab. Keyboard actions on chip controls
   do not submit the message. Chip controls have keyboard-accessible HoverInfo hints.
 
+## Workflow canvas references
+
+An open Workflows document shares its current selection with the same Project's
+editable conversation target, including an unsent draft. The chip follows the
+current target in a split workbench and remains available when switching from
+Workflows to Conversation in a single pane. Selecting another node replaces the
+selection; clearing it or closing Workflows removes it. It is not stored in the
+conversation draft. If the identical reference is already attached, the composer
+displays and sends it only once.
+
+Ordinary sends capture the workflow identity, revision and node selector (and the
+run ID when inspecting a historical run). The Project backend resolves and
+validates these identifiers before adding the snapshot to model input. A missing
+historical run cannot silently fall back to the current definition, and changing
+the definition revision cannot silently retarget a selected node index.
+
 ## Deliberate limits
 
 Only canonical Work/Session app links and references to currently pending images
