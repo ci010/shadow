@@ -1,7 +1,9 @@
 <template>
   <nav class="project-editor-tabs" :aria-label="t('Open documents')" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)">
     <div v-for="group in groups" :key="group.id" class="project-editor-tab-group" role="group" :aria-label="group.name" :data-project-id="group.id">
-      <span v-if="hasAdjacentProject || groups.length > 1" class="editor-project-marker" aria-hidden="true">{{ group.name }}</span>
+      <div v-if="hasAdjacentProject || groups.length > 1" class="project-editor-sticky-marker" aria-hidden="true">
+        <span class="editor-project-marker">{{ group.name }}</span>
+      </div>
       <div v-for="editor in group.tabs" :key="editor.id" class="project-editor-tab" @mousedown="$event.button === 1 && $event.preventDefault()" @auxclick="middleClose($event, editor.id, editor.closable)">
         <HoverInfo :text="editor.label" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" class="project-editor-label" @click="emit('activate', editor.id)"><SessionActivity v-if="editor.activity" v-bind="editor.activity" compact icon-only status-icons /><span v-else :class="editor.icon" aria-hidden="true" /><span>{{ editor.label }}</span></button></HoverInfo>
         <HoverInfo v-if="editor.closable" :text="t('Close')" v-slot="{ triggerProps }"><button v-bind="triggerProps" type="button" :aria-label="t('Close {value1}', { value1: editor.label })" @click="emit('close', editor.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
@@ -33,6 +35,8 @@ function middleClose(event: MouseEvent, id: string, closable: boolean) {
 .project-editor-tabs::-webkit-scrollbar-thumb { background: var(--c-scrollbar-thumb); border-radius: 0; }
 .project-editor-tabs::-webkit-scrollbar-thumb:hover { background: var(--c-scrollbar-thumb-hover); }
 .project-editor-tab-group, .project-editor-tab { display: flex; flex: none; align-items: stretch; }
+/* Pin the current project until its group scrolls out and the next takes over. */
+.project-editor-sticky-marker { position: sticky; inset-inline-start: 0; z-index: 1; display: flex; flex: none; height: 36px; background: var(--c-bg-soft); }
 .project-editor-tab { height: 36px; box-sizing: border-box; border-top: 2px solid transparent; border-inline-end: 1px solid var(--c-border); }
 .project-editor-tab button { display: flex; align-items: center; gap: 5px; padding: 0 6px; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .project-editor-tab button:hover { background: var(--c-bg-muted); color: var(--c-text); }
