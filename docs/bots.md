@@ -118,7 +118,7 @@ falls back to Main's filesystem.
   `agent`; followed by the Agent prompt.
 - `bot.json` (or the JSON path in `config`): data-only `connection`,
   `subscriptions`, `bindings`, `tools`, `allowedModules`, `skills`, and read scopes
-  (`readResources` and Discord’s `readDomains`, legacy `sourceFolders`, and `discordHistory`). Scope restrictions by mode
+  (`readResourcesModel`, `readResources`, and Discord’s `readDomains` and `discordHistory`). Scope restrictions by mode
   still apply. Credentials never belong in either file.
 - JS/TS tool modules and their relative JS/TS helpers.
 - No executable configuration imports, initialization hooks, package installation,
@@ -140,6 +140,7 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
 
 ```json
 {
+  "readResourcesModel": "bot-wide",
   "allowedModules": [],
   "tools": [{
     "name": "remember_note",
@@ -161,7 +162,6 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
     "trigger": "mention",
     "tools": ["remember_note"],
     "allowFrom": ["<allowed sender ID>"],
-    "readFolders": [],
     "parameters": {},
     "grants": []
   }]
@@ -418,21 +418,35 @@ thread, and live platform checks.
 
 ### Built-in read/search for Service BOTs
 
-QQ, Feishu, and Discord use the same `readResources` config in the BOT companion
-JSON. Put the **maximum** scope on the BOT and only the subset actually needed
-on each binding. Example value at either level:
+In the Service BOT companion JSON, set `readResourcesModel` to `"bot-wide"`
+and put the actual grant in optional top-level `readResources`. All QQ, Feishu,
+and Discord bindings of that BOT inherit the same grant, including newly linked
+channels. Do not put `readResources`, `readFolders`, or `sourceFolders` on a
+binding. Each binding still selects its permitted built-in tools (`read`,
+`search`) separately. Omitting the grant gives no folders or Project views.
 
 ```json
-{"readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
+{"readResourcesModel":"bot-wide","readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
 ```
 
-A top-level ceiling does not grant anything by itself. Each binding must
-explicitly select the resources and enable the built-in `read` and/or `search`
-tools it needs. Omission grants neither view and no new folders. An owner should
-review the exact registered folders and intended channel audience before
-publishing: view grants expose **current and future** eligible content, not a
-frozen copy. Owner authoring and the publication summary show both the ceiling
-and effective binding grants.
+Review the exact registered folders and all intended channel audiences before
+publishing or linking a channel. Project views expose **current and future**
+eligible content, not a frozen copy. Assignment previews and publication
+summaries show the inherited grant, including when it is empty. Use separate
+BOTs when channels need different read scopes. Personal BOTs are unchanged.
+
+Unmarked packages retain their original per-binding grants and platform backend
+checks, even when their scopes differ. A ceiling alone never grants access.
+`v:bots/deployments/<id>/status` reports migration guidance without altering
+active deployments or unrelated Personal routing. Assign/link converts only
+when the existing scopes agree and backend checks can be preserved; it copies
+only the shared effective scope, never the ceiling. `propose` also rejects a
+non-lossless in-place conversion of an active legacy BOT, even with exact
+revisions. Unlike ordinary authenticated owner authoring, an intentional scope
+change as part of conversion needs an exact-revision, host-enforced owner decision;
+this tool has no such approval path. Keep the legacy deployment while planning
+separate BOTs for different audiences or arranging explicit owner review. No
+model-supplied confirmation can override this restriction.
 
 - `read({path:"."})` lists only authorized folder route names. A unique local
   folder uses its real basename, including spaces, e.g.
@@ -463,12 +477,9 @@ and effective binding grants.
   restrictions. No session memory, raw logs or log projections, internal state,
   or other virtual namespaces are included. Project-internal text must not be
   stored in a shared Wiki category if it is not intended for the granted audience.
-- Existing QQ/Feishu `readFolders` and Discord `sourceFolders` retain their
-  existing grants and backends. Do not mix a legacy folder list and
-  `readResources.folders` at the same scope. Existing model paths
-  `folder:<id>/…` and `v:source/…` are replaced by `read({path:"."})` discovery;
-  update any BOT prompts that hardcode old paths before publishing. No existing
-  folder grant is automatically converted to a Project view grant.
+- Use `read({path:"."})` to discover folder routes. Update BOT prompts that
+  hardcode the retired `folder:<id>/…` or `v:source/…` routes before publishing.
+  A folder grant never implies a Project view grant.
 - Existing Discord-only `v:sessions/current` and scoped memory domain/record
   routes remain active under their original permissions. A pathless legacy
   `search({query:"…"})` returns scoped record paths, not Wiki results; use an
@@ -642,14 +653,14 @@ native SDKs or host access.
 
 ## Discord-specific declarations
 
-The top-level optional scopes are `readDomains`, `sourceFolders`, `discordHistory`
-and prompt-only `skills`. Discord bindings use `platform: "discord"` plus the
+In addition to the shared Bot-wide read grant, optional Discord scopes are
+`readDomains` and `discordHistory`. BOTs can also declare prompt-only `skills`. Discord bindings use `platform: "discord"` plus the
 validated Discord binding contract (`src/channels/integration-contract.ts`): stable
 UUID `id`, connection `botInstanceId`, verified `botUserId`, `target` channel/guild
 or DM user, `enabled`, `trigger`, `participants`, `tools`, `readDomains`,
-`inheritThreads`, `manage`, and optional processor/observation/source/history/grants.
+`inheritThreads`, `manage`, and optional processor/observation/history/grants.
 Do not supply `agentId` or `epochRevision`: the host derives identity and deployment
-epoch. Bindings may only narrow Agent folder/domain/history ceilings. Role IDs,
+epoch. Discord bindings may only narrow the Bot’s Discord domain and history ceilings. Role IDs,
 Bot identity and selected history channels are revalidated before and after the
 human delay. Thread modes are none/public-active/public-archived; private thread
 access is not granted by these declarations. `preEpoch` concerns platform history,

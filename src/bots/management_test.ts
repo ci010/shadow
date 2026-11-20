@@ -194,17 +194,68 @@ test('owner assignment and deployment receipts explicitly surface shared Knowled
   const source = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
   const tool = botPackageTool({ ...f.options, channelSource: () => source })
   const config = JSON.parse(files()['bot.json'])
+  config.readResourcesModel = 'bot-wide'
   config.readResources = { knowledge: true, wiki: true }
   writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
   const base = { action: 'assign', folderId: 'folder', summary: 'Review binding resources', channelSessionId: passiveChannelId(source), sourceRevision: f.deployments.freezeDirectory(f.source).revision }
-  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'], readResources: { wiki: true } }
+  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'] }
   const prepared = JSON.parse(await tool.execute({ ...base, bindingJson: JSON.stringify(binding) }, f.context) as string)
-  assert.deepEqual(prepared.projectReadGrants, ['Binding: shared Project Wiki content (v:memory)'])
-  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /read resources.*ceiling/i)
+  assert.deepEqual(prepared.projectReadGrants, ['Inherited BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)', 'Inherited BOT-wide read grant: shared Project Wiki content (v:memory)'])
+  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /inherited from the BOT/)
   assert.equal(f.deployments.list().length, 0)
   writeFileSync(join(f.source, prepared.edit.path), prepared.edit.content)
   const receipt = JSON.parse(await f.propose() as string)
   assert.deepEqual(receipt.changes.readResources, { knowledge: true, wiki: true })
-  assert(receipt.changes.addedPermissions.includes('BOT read ceiling: Project Knowledge metadata and scoped relations (v:knowledge)'))
-  assert(receipt.changes.addedPermissions.some((line: string) => !line.startsWith('BOT read ceiling:') && line.includes('shared Project Wiki content (v:memory)')))
+  assert(receipt.changes.addedPermissions.includes('BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)'))
+  assert(receipt.changes.addedPermissions.some((line: string) => line.includes('inherits BOT-wide read grant: shared Project Wiki content (v:memory)')))
+  assert.deepEqual(receipt.changes.bindings.at(-1).inheritedReadResources, { knowledge: true, wiki: true })
+})
+
+test('marker-only promotion is blocked even with exact revisions; no model-supplied approval', async t => {
+  const f = fixture(t)
+  const config = JSON.parse(files()['bot.json'])
+  config.readResources = { wiki: true }
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  const active = JSON.parse(await f.propose() as string).deployment.revision
+  config.readResourcesModel = 'bot-wide'
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  const request = { action: 'propose', folderId: 'folder', summary: 'Change Wiki access', expectedRevision: active, sourceRevision: f.deployments.freezeDirectory(f.source).revision }
+  await assert.rejects(() => f.tool.execute(request, f.context), /Non-lossless legacy read migration blocked/)
+  await assert.rejects(() => f.tool.execute({ ...request, confirmReadScopeChange: true }, f.context), /Unrecognized key/)
+  assert.equal(f.deployments.read('support')?.deployment.revision, active)
+  assert.equal(f.runtime.resolve(config.bindings[0])?.binding.readResources, undefined)
+})
+
+test('blocked legacy conversion preserves asymmetric grants and unrelated Personal role fallback', async t => {
+  const f = fixture(t)
+  const legacy = files(), config = JSON.parse(legacy['bot.json'])
+  config.readResources = { wiki: true }
+  config.bindings[0].readResources = { wiki: true }
+  config.bindings[0].readFolders = ['10000000-0000-4000-8000-000000000001']
+  config.bindings.push({ ...config.bindings[0], conversationId: 'group:two', readResources: undefined, readFolders: undefined })
+  legacy['bot.json'] = JSON.stringify(config)
+  const frozen = f.deployments.freeze(legacy)
+  await f.deployments.deploy({ id: 'support', source: { folderId: 'folder', directory: '' }, ...frozen })
+  const checkRuntime = () => {
+    assert.deepEqual(f.runtime.resolve(config.bindings[0])?.binding.readResources, { wiki: true })
+    assert.deepEqual(f.runtime.resolve(config.bindings[0])?.binding.readFolders, ['10000000-0000-4000-8000-000000000001'])
+    assert.equal(f.runtime.resolve(config.bindings[1])?.binding.readResources, undefined)
+    assert.equal(f.runtime.personal('legacy-qq'), undefined)
+    assert.equal(f.runtime.inspect('support')?.state, 'valid')
+    assert.match(JSON.stringify(f.runtime.inspect('support')), /Legacy platform-specific folder grants/)
+    assert.deepEqual({ ...f.deployments.read('support')?.files }, legacy)
+  }
+  checkRuntime()
+  delete config.bindings[0].readResources
+  delete config.bindings[0].readFolders
+  config.readResourcesModel = 'bot-wide'
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  await assert.rejects(() => f.propose(frozen.revision), /Non-lossless in-place conversion is blocked/)
+  const { passiveChannelId } = await import('../channels/passive-contract.ts')
+  const source = { version: 1, projectId: 'p', platform: 'qq', connectionId: 'bot', conversationId: 'group:three', kind: 'group' } as const
+  const linkTool = botPackageTool({ ...f.options, channelSource: () => source })
+  const sourceRevision = f.deployments.freezeDirectory(f.source).revision
+  await assert.rejects(() => linkTool.execute({ action: 'link', folderId: 'folder', expectedRevision: frozen.revision, sourceRevision, channelSessionId: passiveChannelId(source), summary: 'Link third group', bindingJson: JSON.stringify({ enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }) }, f.context), /Non-lossless in-place conversion is blocked/)
+  assert.equal(f.deployments.freezeDirectory(f.source).revision, sourceRevision)
+  checkRuntime()
 })

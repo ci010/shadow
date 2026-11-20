@@ -1,6 +1,6 @@
 import { resourceFolders } from './read-scope.ts'
 import type { BotInstanceStore } from '../channels/bot-store.ts'
-import type { BotDefinition } from './sdk.ts'
+import { botReadResources, type BotDefinition } from './sdk.ts'
 
 /** Production and synthetic chat-assignment validation share the same service
  * connection/ownership rules. Discord's live identity/role/epoch validation stays
@@ -8,8 +8,9 @@ import type { BotDefinition } from './sdk.ts'
 export async function validateServiceAssignments(projectId: string, bots: BotInstanceStore,
   candidate: BotDefinition, other: readonly BotDefinition[], requireFolder: (id: string) => Promise<unknown>): Promise<void> {
   if (bots.projectId !== projectId) throw new Error('BOT assignment Project mismatch')
+  for (const id of botReadResources(candidate)?.folders ?? []) await requireFolder(id)
   const keys = new Set<string>()
-  for (const binding of [...other.flatMap(bot => bot.bindings), ...candidate.bindings]) {
+  for (const bot of [...other, candidate]) for (const binding of bot.bindings) {
     if (binding.platform === 'discord') continue
     bots.assertAccess(binding.botInstanceId)
     const connection = bots.get(binding.botInstanceId)
@@ -17,6 +18,7 @@ export async function validateServiceAssignments(projectId: string, bots: BotIns
     const key = JSON.stringify([binding.botInstanceId, binding.platform, binding.conversationId])
     if (keys.has(key)) throw new Error('Conversation already belongs to another BOT.')
     keys.add(key)
-    for (const id of resourceFolders(binding.readResources, binding.readFolders)) await requireFolder(id)
+    if (bot.readResourcesModel !== 'bot-wide') for (const id of resourceFolders(binding.readResources, binding.readFolders)) await requireFolder(id)
+    else if (bot !== candidate) for (const id of botReadResources(bot)?.folders ?? []) await requireFolder(id)
   }
 }
