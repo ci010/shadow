@@ -68,6 +68,24 @@ Environment API keys are used only by legacy identities (`deepseek`, `openai`, e
 not by additional instances of those types. Additional instances require their own
 key or explicitly configured keyless endpoint; no other instance's key is borrowed.
 
+## OpenRouter
+
+In **App settings → Providers**, add an **OpenRouter** connection and enter
+its API key. You can leave **Connection model** blank. Saving the connection
+does not change App or project defaults. If you connect OpenRouter during Desktop
+first run and leave the model blank, Desktop initializes the App default to
+`openrouter/auto` on that connection so you can open the workspace.
+
+In the composer’s model picker, select the **OpenRouter** provider filter or
+search by model ID (for example `vendor/model`) or connection name. Search covers
+the entire catalog, including entries not on the current page. Selection still
+uses the exact model ID and connection; for a lasting default, use App or project
+model settings. A new search or provider filter starts on the first page.
+
+Main loads the catalog from the connection’s `/models` endpoint and caches it
+briefly. If discovery fails, other providers and the current model remain usable;
+reopen the conversation to request the catalog again after connectivity recovers.
+
 ## Copilot isolation
 
 Each instance has its own login attempts, credential refreshes, sign-out revision,

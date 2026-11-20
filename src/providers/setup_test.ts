@@ -964,3 +964,43 @@ test('locked Copilot secure storage does not hide unrelated configured providers
   assert.equal(body.providers.find((p: { provider: string }) => p.provider === 'copilot').reason, 'storage_error')
   assert.doesNotMatch(JSON.stringify(body), /synthetic-openai-key/)
 })
+
+test('OpenRouter saves a key without a model and exposes account-qualified catalog IDs', async t => {
+  const original = 'gpt-4.1@openai'
+  let keyStatus = 401
+  const f = fixture(t, { agent: { model: original }, providers: { openai: { apiKey: 'fixture-openai' } } }, authHarness(), (async (url, init) => {
+    assert.equal(url, 'https://openrouter.ai/api/v1/key')
+    assert.deepEqual(init?.headers, { authorization: 'Bearer fixture-router' })
+    return new Response(null, { status: keyStatus })
+  }) as typeof fetch, true)
+  const save = (body: object) => f.app.request('/api/provider/setup', { method: 'POST', body: JSON.stringify(body) })
+  const connection = { provider: 'named-router', type: 'openrouter', apiKey: 'fixture-router' }
+  assert.equal((await save({ provider: 'openai', model: '' })).status, 400)
+  assert.equal((await (await save(connection)).json()).reason, 'invalid_credentials')
+  assert.equal(f.active().providers['named-router'], undefined)
+  keyStatus = 200
+  const result = await (await save(connection)).json()
+  assert.equal(result.ready, true)
+  assert.equal(result.model, '')
+  assert.doesNotMatch(JSON.stringify(result), /fixture-router/)
+  assert.equal(f.active().agent.model, original)
+  assert.equal(f.active().providers['named-router'].apiKey, 'fixture-router')
+
+  const { createAggregatedProvider } = await import('./factory.ts')
+  let calls = 0
+  let reachable = true
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url !== 'https://openrouter.ai/api/v1/models') return Response.json({ data: [{ id: 'gpt-4.1' }] })
+    calls++
+    return reachable ? Response.json({ data: [{ id: 'vendor/model:free' }, null, { id: 'vendor/model:free' }, { id: 'bad@other' }] }) : new Response(null, { status: 503 })
+  })
+  const aggregate = createAggregatedProvider(f.active(), f.auth.auth)
+  const catalogApp = new Hono()
+  providerPlugin(aggregate)(catalogApp)
+  const catalog = await (await catalogApp.request('/api/models')).json()
+  assert.deepEqual(catalog.models, [original, 'vendor/model:free@named-router'])
+  assert.deepEqual(catalog.providers.find((provider: { id: string }) => provider.id === 'named-router'), { id: 'named-router', type: 'openrouter' })
+  assert.equal(calls, 1, 'model IDs and metadata share the cache')
+  reachable = false
+  assert.deepEqual(await createAggregatedProvider(f.active(), f.auth.auth).getProvider('named-router')!.listModels(), [], 'outages do not advertise a different provider’s model')
+})

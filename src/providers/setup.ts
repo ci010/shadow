@@ -70,7 +70,7 @@ const SetupInput = z.object({
   provider: ProviderName,
   type: ProviderName.optional(),
   name: z.string().trim().min(1).max(100).optional(),
-  model: Model,
+  model: Model.or(z.literal('')).optional(),
   apiKey: z.string().trim().max(16_384).refine((value) => value !== REDACTED_SECRET && !/[\r\n\x00]/.test(value)).optional(),
   baseUrl: z.string().trim().max(2048).refine((value) => {
     if (!value) return true
@@ -80,6 +80,7 @@ const SetupInput = z.object({
     } catch { return false }
   }).optional(),
 }).strict().refine(({ model, provider }) => {
+  if (!model) return true
   const spec = parseModelSpec(model)
   return !spec.provider || spec.provider === provider
 })
@@ -119,10 +120,6 @@ interface SetupOptions {
 
 const LOGIN_STATUS_TTL_MS = 10 * 60_000
 
-function selectedModel(input: SetupInput): string {
-  return `${parseModelSpec(input.model).model}@${input.provider}`
-}
-
 function changeSelection(raw: Record<string, unknown>, input: SetupInput): Record<string, unknown> {
   const providers = { ...(raw.providers as Record<string, Record<string, unknown>> ?? {}) }
   const provider = { ...providers[input.provider] }
@@ -141,7 +138,7 @@ function changeSelection(raw: Record<string, unknown>, input: SetupInput): Recor
   return {
     ...raw,
     providers,
-    agent: { ...(raw.agent as Record<string, unknown> ?? {}), model: selectedModel(input) },
+    ...(input.model ? { agent: { ...(raw.agent as Record<string, unknown> ?? {}), model: `${parseModelSpec(input.model).model}@${input.provider}` } } : {}),
   }
 }
 
@@ -281,15 +278,16 @@ export class ProviderSetup {
     return value
   }
 
-  private async check(config: Config, signal = this.shutdown.signal, refresh = false): Promise<ProviderSetupStatus> {
+  private async check(config: Config, signal = this.shutdown.signal, refresh = false, connection?: string): Promise<ProviderSetupStatus> {
     const spec = parseModelSpec(config.agent.model)
-    const provider = spec.provider ?? detectProvider(spec.model)
+    const primary = spec.provider ?? detectProvider(spec.model)
+    const provider = connection ?? primary
     const type = providerType(config, provider)
     const auth = isCopilotProviderType(type) ? copilotAuthForInstance(config, provider, this.rootAuth) : this.auth
     const settings = resolveProviderSettings(config, provider)
     const status: ProviderSetupStatus = {
       provider, type, name: config.providers[provider]?.name,
-      model: config.agent.model,
+      model: provider === primary ? config.agent.model : '',
       authMode: settings.authMode,
       ready: false,
       baseUrl: safeBaseUrl(settings.baseUrl),
@@ -326,7 +324,10 @@ export class ProviderSetup {
       const headers: Record<string, string> = type === 'anthropic'
         ? { 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' }
         : { authorization: `Bearer ${settings.apiKey}` }
-      const response = await this.request(`${status.baseUrl.replace(/\/+$/, '')}/models`, {
+      const base = status.baseUrl.replace(/\/+$/, '')
+      // OpenRouter’s public model catalog does not establish that the key is valid.
+      const endpoint = type === 'openrouter' && base === 'https://openrouter.ai/api/v1' ? 'key' : 'models'
+      const response = await this.request(`${base}/${endpoint}`, {
         headers, redirect: 'error',
         signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       })
@@ -336,15 +337,20 @@ export class ProviderSetup {
       // Agnes account/API-key permissions can deny access without rejecting the key.
       // Do not present a forbidden model listing as proof that credentials are wrong.
       if (response.status === 403) return finish(type === 'agnes' ? 'permission_denied' : 'invalid_credentials')
-      if (!response.ok && response.status !== 404 && response.status !== 405) return finish('network_error')
+      if (!response.ok && (endpoint === 'key' || (response.status !== 404 && response.status !== 405))) return finish('network_error')
       return finish('ready')
     } catch {
       return finish(signal.aborted ? 'cancelled_error' : 'network_error')
     }
   }
 
+  private canSaveWithoutModel(input: SetupInput): boolean {
+    return (input.type ?? providerType(this.options.getConfig(), input.provider)) === 'openrouter'
+  }
+
   async save(input: SetupInput, signal?: AbortSignal): Promise<ProviderSetupStatus> {
     if ((input.type ?? providerType(this.options.getConfig(), input.provider)) === 'deepseek-account' && (input.apiKey || input.baseUrl)) throw new Error('Account provider endpoints and authentication are fixed')
+    if (!input.model && !this.canSaveWithoutModel(input)) throw new Error('A model is required for this provider')
     this.cancelActive()
     const raw = changeSelection(await this.options.store.read(), input)
     const candidate = ConfigSchema.parse(raw)
@@ -353,7 +359,7 @@ export class ProviderSetup {
       candidate.providers[input.provider].apiKey = active.providers[input.provider]?.apiKey
     }
     const combined = signal ? AbortSignal.any([signal, this.shutdown.signal]) : this.shutdown.signal
-    const status = await this.check(candidate, combined)
+    const status = await this.check(candidate, combined, false, input.provider)
     if (!status.ready) return status
     await this.options.store.update((current) => changeSelection(current, input), combined)
     this.invalidate()
@@ -595,7 +601,7 @@ export class ProviderSetup {
       app.get('/api/provider/setup', async (c) => c.json(await this.status(c.req.query('refresh') === 'true')))
       app.post('/api/provider/setup', async (c) => {
         const input = SetupInput.safeParse(await c.req.json().catch(() => null))
-        if (!input.success) return c.json({ error: 'Invalid provider settings.' }, 400)
+        if (!input.success || (!input.data.model && !this.canSaveWithoutModel(input.data))) return c.json({ error: 'Invalid provider settings.' }, 400)
         try { return c.json(await this.save(input.data, c.req.raw.signal)) } catch {
           return c.json({ error: 'Provider settings could not be saved or activated.' }, 500)
         }

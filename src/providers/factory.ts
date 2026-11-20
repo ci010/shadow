@@ -1,6 +1,7 @@
 import type { LLMProvider } from './provider.ts'
 import type { Config } from '../config/schema.ts'
 import { env } from 'node:process'
+import { OpenRouterProvider } from './openrouter.ts'
 import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
 import { type CopilotAuthenticator } from './copilot.ts'
@@ -194,6 +195,7 @@ export function createProvider(
     throw new Error(`Provider "${name}" requires a baseUrl`)
   }
 
+  if (type === 'openrouter') return new OpenRouterProvider(name, apiKey, baseUrl, model)
   return new OpenAICompatibleProvider(name, apiKey, baseUrl, model)
 }
 
