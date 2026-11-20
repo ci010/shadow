@@ -16,7 +16,6 @@ export interface ExecuteBotToolOptions {
   allowedTools: readonly string[]
   /** Recheck current binding/identity/revision before execution AND every callback. */
   authorize(request: { bot: BotDefinition; tool: BotDefinition['tools'][number]; args: Record<string, unknown> }, signal: AbortSignal): void | Promise<void>
-  callModule?(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
   host?(operation: 'wake' | 'watermark' | 'messages' | 'work' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
   services?(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
   channel?(operation: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
@@ -62,8 +61,7 @@ async function bundle(files: Record<string, string>, tool: BotDefinition['tools'
         if (args.kind === 'entry-point') return { path: 'entry', namespace: 'bot-entry' }
         if (args.path === '@shadow/bot-runtime' && args.namespace === 'bot-entry') return { path: args.path, external: true }
         if (args.path === '@shadow/bot-sdk') return { path: 'sdk', namespace: 'bot-sdk' }
-        if (args.namespace === 'bot-capability' && args.path === args.importer) return { path: args.path, external: true }
-        if (tool.imports.includes(args.path)) return { path: args.path, namespace: 'bot-capability' }
+        if (tool.imports.includes(args.path)) throw new Error(`Bot service imports are no longer supported: ${args.path}. Use ctx.services.call instead.`)
         if (!args.path.startsWith('./') && !args.path.startsWith('../')) throw new Error(`Bot import denied: ${args.path}`)
         const path = posix.normalize(posix.join(args.namespace === 'bot-files' ? posix.dirname(args.importer) : '', args.path))
         BotSourcePathSchema.parse(path)
@@ -71,12 +69,6 @@ async function bundle(files: Record<string, string>, tool: BotDefinition['tools'
         return { path, namespace: 'bot-files' }
       })
       builder.onLoad({ filter: /.*/, namespace: 'bot-entry' }, () => ({contents: entrySource(tool.module, tool.export ?? 'default',tool.description,tool.parameters), loader: 'js'}))
-      builder.onLoad({ filter: /.*/, namespace: 'bot-capability' }, args => ({ contents: `
-        import raw from ${JSON.stringify(args.path)};
-        export const call = async (input = {}) => { try { return await raw(input); } catch { throw new Error('Bot capability failed'); } };
-        export default call;
-        export const fetch = async (path, options = {}) => call({...options, path, method: options.method ?? 'GET'});
-      `, loader: 'js' }))
       builder.onLoad({ filter: /.*/, namespace: 'bot-sdk' }, () => ({ contents: sdkSource, loader: 'js' }))
       builder.onLoad({ filter: /.*/, namespace: 'bot-files' }, args => {
         const contents = files[args.path]!
@@ -126,14 +118,11 @@ export async function executeBotTool(options: ExecuteBotToolOptions): Promise<un
   await authorize(options.signal)
   const result = await executeScript({
     code, args, entry: 'run', signal: options.signal,
-    policy: { kind: 'restricted', imports: [...tool.imports, '@shadow/bot-runtime'] },
+    policy: { kind: 'restricted', imports: ['@shadow/bot-runtime'] },
     timeoutMs, maxCalls,
     callModule: async (name, input, signal) => {
       await authorize(signal)
-      if (name !== 'bot-runtime') {
-        if (!tool.imports.includes(`@shadow/${name}`) || !options.callModule) throw new Error('Bot module capability denied')
-        return await options.callModule(name, input, signal)
-      }
+      if (name !== 'bot-runtime') throw new Error('Bot module capability denied')
       const request = requestSchema.parse(input)
       if (request.kind === 'host' && options.host) {
         const operation = z.enum(['wake', 'watermark', 'messages', 'work', 'send']).parse(request.name)
