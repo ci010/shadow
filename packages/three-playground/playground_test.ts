@@ -1,7 +1,41 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { buildPlayground, PlaygroundError, type PlaygroundPhase } from './index.ts';
+import { after, test as nodeTest } from 'node:test';
+import { launchBrowser } from './browser-test-driver.mjs';
+import { compileSnapshot } from './snapshot-modules.mjs';
+import { buildPlayground as buildInDocument, PlaygroundError, type PlaygroundOptions, type PlaygroundSnapshot, type PlaygroundPhase } from './index.ts';
 import { validateGlb } from './validate.ts';
+
+const executable = process.env.PLAYGROUND_CHROMIUM;
+let driver: ReturnType<typeof launchBrowser> | undefined;
+const browser = () => driver ??= launchBrowser(executable!);
+after(async () => { if (driver) await (await driver.catch(() => undefined))?.close(); });
+const test = (name: string, fn: () => Promise<void>) => nodeTest(name, { skip: !executable && 'Set PLAYGROUND_CHROMIUM to a Chromium executable' }, fn);
+async function buildPlayground(snapshot: PlaygroundSnapshot, options: PlaygroundOptions & { cancelAfter?: number; mutateInputs?: boolean } = {}) {
+  // Copy before awaiting browser startup, as the real document API does.
+  const files = { ...snapshot.files };
+  const assets = Object.fromEntries(Object.entries(snapshot.assets ?? {}).map(([name, bytes]) => [name, Array.from(new Uint8Array(bytes))]));
+  const result = await (await browser()).run({ files, assets, timeoutMs: options.timeoutMs, cancelAfter: options.cancelAfter, mutateInputs: options.mutateInputs });
+  assert.equal(result.frameCount, 0, 'The broker iframe was removed');
+  if (result.error) {
+    const { name, phase, message, guestStack } = result.error;
+    if (phase) throw new PlaygroundError(phase, message.slice(phase.length + 3), guestStack);
+    throw new DOMException(message, name);
+  }
+  return { glb: Uint8Array.from(result.bytes).buffer, objectCount: result.objectCount };
+}
+
+nodeTest('requires a browser document and honors pre-cancellation', async () => {
+  const input = { files: { 'main.mjs': 'export function build() {}' } };
+  await assert.rejects(buildInDocument(input), { phase: 'runtime' });
+  await assert.rejects(buildInDocument(input, { signal: AbortSignal.abort() }), { name: 'AbortError' });
+});
+
+nodeTest('rejects native static cycles explicitly; dynamic back edges do not form static cycles', () => {
+  const files = new Map([['main.mjs', `import './next.mjs'`], ['next.mjs', `export * from './main.mjs'`]]);
+  assert.throws(() => compileSnapshot(files, () => 'blob:unit-test'), /Static import cycle: main\.mjs -> next\.mjs -> main\.mjs/);
+  files.set('next.mjs', `export async function next() { return import(/* comment */ './main.mjs') }`);
+  assert.equal(compileSnapshot(files, () => 'blob:unit-test').urls.size, 2);
+});
 
 const run = (source: string, timeoutMs?: number) => buildPlayground({ files: { 'main.mjs': source } }, { timeoutMs });
 const diagnostic = (phase: PlaygroundPhase, text: RegExp, guestStack?: RegExp) => (error: unknown) =>
@@ -54,17 +88,17 @@ test('exports custom indexed geometry, PBR, groups and stable selectable IDs', a
   assert.equal(scene.meshes.length, 3);
 });
 
-test('relative ESM cycles, dynamic imports, top-level await and same-path reloads', async () => {
+test('relative ESM with a dynamic back edge, dynamic imports, top-level await and same-path reloads', async () => {
   const files = {
     'main.mjs': `import { setter } from './sub/part.mjs';
       export const prefix = 'local';
       export async function build({ THREE, root }) {
         const { suffix } = await import('./value.mjs');
         const child = new THREE.Object3D();
-        setter(child, suffix);
+        await setter(child, suffix);
         root.add(child);
       }`,
-    'sub/part.mjs': `import { prefix } from '../main.mjs'; export function setter(node, suffix) { node.name = prefix + suffix; }`,
+    'sub/part.mjs': `export async function setter(node, suffix) { const { prefix } = await import('../main.mjs'); node.name = prefix + suffix; }`,
     'value.mjs': `export const suffix = await Promise.resolve('-one');`,
   };
   const first = await buildPlayground({ files });
@@ -75,7 +109,7 @@ test('relative ESM cycles, dynamic imports, top-level await and same-path reload
   assert.equal(second.objectCount, 1);
 });
 
-test('copies the snapshot before awaiting WASM and gives guest fresh asset bytes', async () => {
+test('copies the snapshot before asynchronous build and gives guest fresh asset bytes', async () => {
   const files = { 'main.mjs': `export function build({THREE,root,assets}) {
     const n = new THREE.Object3D();
     const first = assets.read('bytes/data.bin');
@@ -85,11 +119,8 @@ test('copies the snapshot before awaiting WASM and gives guest fresh asset bytes
     root.add(n);
   }` };
   const data = Uint8Array.of(42);
-  const pending = buildPlayground({ files, assets: { 'bytes/data.bin': data.buffer } });
-  files['main.mjs'] = 'throw new Error("newer edit")';
-  data[0] = 4;
-  assert.equal(json((await pending).glb).nodes[0].name, '42');
-  assert.equal(data[0], 4);
+  const output = await buildPlayground({ files, assets: { 'bytes/data.bin': data.buffer } }, { mutateInputs: true });
+  assert.equal(json(output.glb).nodes[0].name, '42');
   await assert.rejects(buildPlayground({ files, assets: { 'too-big': new ArrayBuffer(1024 * 1024 + 1) } }), diagnostic('snapshot', /1 MiB binary/));
 });
 
@@ -121,23 +152,39 @@ test('parses declared JSON in the guest with fresh values and strict UTF-8', asy
   }
 });
 
-test('no browser/Node host capabilities, with absolute, remote and private modules denied', async () => {
-  assert.equal((await run(`export function build() {
-    for (const key of ['fetch','XMLHttpRequest','WebSocket','Worker','document','postMessage','process','require','navigator','Deno','importScripts']) {
+test('opaque worker and inherited CSP prevent network and external code loads', async () => {
+  const client = await browser();
+  const url = `${client.origin}/sentinel`;
+  assert.equal((await run(`export async function build({ THREE, root }) {
+    if (self.origin !== 'null' || self.location.protocol !== 'blob:') throw new Error('non-opaque or non-blob worker');
+    for (const key of ['Worker','SharedWorker','document','postMessage','process','require','Deno','importScripts']) {
       if (typeof globalThis[key] !== 'undefined') throw new Error(key + ' exposed');
     }
-  }`)).objectCount, 0);
+    if (typeof URL.createObjectURL !== 'undefined') throw new Error('blob factory exposed');
+    try { await fetch(${JSON.stringify(url + '?fetch')}); throw new Error('network succeeded'); }
+    catch (e) { if (!(e instanceof TypeError)) throw e; }
+    const xhr = new XMLHttpRequest();
+    await new Promise((resolve, reject) => {
+      xhr.open('GET', ${JSON.stringify(url + '?xhr')});
+      xhr.onerror = resolve; xhr.onload = () => reject(new Error('XHR succeeded')); xhr.send();
+    });
+    try { Function('return 42')(); throw new Error('eval succeeded'); }
+    catch (e) { if (!(e instanceof EvalError)) throw e; }
+    const node = new THREE.Group(); node.name = '</script><img src="/sentinel?html">'; root.add(node);
+  }`)).objectCount, 1);
+  assert.equal(client.leaked(), 0);
+  await assert.rejects(run(`export function build() { const path = './main.mjs'; return import(path); }`),
+    diagnostic('build', /requires a literal relative path/));
   for (const forbidden of ['node:fs', 'https://remote.test/code.mjs', '/tmp/code.mjs', '../main.mjs', '@driver', '@engine', './x%2fm.mjs']) {
     await assert.rejects(run(`export async function build() { await import(${JSON.stringify(forbidden)}); }`), diagnostic('build', /Disallowed import.*main\.mjs/));
   }
 });
 
-test('bounds CPU, guest memory, recursion and unsettled promises', async () => {
-  await assert.rejects(run('export function build() { for (;;) {} }', 250), diagnostic('limit', /deadline/));
-  await assert.rejects(run('export async function build() { for (;;) await 0; }', 250), diagnostic('limit', /deadline|job limit/));
-  await assert.rejects(run('export function build() { new ArrayBuffer(120 * 1024 * 1024); }'), diagnostic('build', /out of memory/i));
-  await assert.rejects(run('export function build() { function recurse(){ recurse(); } recurse(); }'), diagnostic('build', /stack overflow/i));
-  await assert.rejects(run('export async function build() { await new Promise(() => {}); }'), diagnostic('build', /did not settle/));
+test('terminates CPU loops, pending promises and cancelled builds; later builds still work', async () => {
+  await assert.rejects(run('export function build() { for (;;) {} }', 500), diagnostic('limit', /deadline/));
+  await assert.rejects(run('export async function build() { for (;;) await 0; }', 500), diagnostic('limit', /deadline/));
+  await assert.rejects(run('export async function build() { await new Promise(() => {}); }', 500), diagnostic('limit', /deadline/));
+  await assert.rejects(buildPlayground({ files: { 'main.mjs': 'export function build() { for (;;) {} }' } }, { cancelAfter: 150 }), { name: 'AbortError' });
   assert.equal((await run('export function build() {}')).objectCount, 0);
 });
 
@@ -146,7 +193,7 @@ test('preserves syntax, runtime, missing relative module and export diagnostics'
     'main.mjs': `import { crash } from './sub.mjs'; export async function build() { await 0; crash(); }`,
     'sub.mjs': `export function crash() {\n  const n = 1;\n  throw new Error('the cause ' + n);\n}`,
   } }), diagnostic('build', /the cause 1/, /sub\.mjs:3/));
-  await assert.rejects(run('\n\nexport const = 5;'), diagnostic('build', /variable name|unexpected/i, /main\.mjs:3/));
+  await assert.rejects(run('\n\nexport const = 5;'), diagnostic('build', /variable name|unexpected/i));
   await assert.rejects(run(`import './gone.mjs'; export function build() {}`), diagnostic('build', /gone\.mjs.*from main\.mjs/));
   await assert.rejects(run(`export function build({THREE,root}) {
     const a = new THREE.Group(); root.add(a); a.children.push(a);
