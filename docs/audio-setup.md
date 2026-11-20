@@ -88,10 +88,12 @@ Implementation checks use synthetic PCM, mocked capture lifecycle, rendered stat
 transitions, and authenticated endpoint fixtures. They do not exercise a real
 microphone or establish browser/OS capture readiness on a specific installation.
 
-## Supported Agent tool workflow
+## Legacy Audio UI setup workflow
 
-Import `audio` or its compatible `audio_cpp` name. Both use the same Project service,
-private configuration and per-task routes, not separate inference implementations.
+The Audio setup UI uses the legacy `audio` entry point, backed by the same
+Project service and per-task routes as before. For agent-local inference, use
+`v:skills/audio-cpp`, `v:cpp-installations/audio-cpp` and OS `exec`.
+The inventory does not configure or migrate Audio UI/API settings.
 
 1. `status`: inspect existing CLI/models and selected task routes.
 2. `assess` with `candidate`: family, backend, platform, arch, downloadBytes; optional

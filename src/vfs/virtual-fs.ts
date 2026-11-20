@@ -151,12 +151,13 @@ export class VirtualFs {
       return null
     }
     if (!mount.write) throw new Error('Virtual filesystem path is read-only.')
-    // Session metadata and the two Project dispatcher documents are control-plane
-    // files, independent of the selected execution device. Other configuration
-    // mounts retain their existing local-workdir requirement.
+    // Session metadata and Project dispatcher documents are control-plane files.
+    // The CPP inventory explicitly scopes records to the selected device. Other
+    // configuration mounts retain their existing local-workdir requirement.
     const projectDispatchFile = prefix === 'v:project' &&
       (subpath === 'dispatch-instructions.md' || subpath === 'dispatch-memory.md')
-    if (context.remoteWorkdir && !(prefix === 'v:sessions' && subpath === 'self.json') && !projectDispatchFile) throw new Error('Virtual configuration writes require a local workdir.')
+    const cppInventory = prefix === 'v:cpp-installations'
+    if (context.remoteWorkdir && !cppInventory && !(prefix === 'v:sessions' && subpath === 'self.json') && !projectDispatchFile) throw new Error('Virtual configuration writes require a local workdir.')
     if (context.tools.executionMode === 'call') throw new Error('Virtual configuration writes are unavailable in call mode.')
     context.signal.throwIfAborted()
     return Promise.resolve(mount.write(subpath, request, context))
