@@ -151,18 +151,40 @@ test('Project explorer roots stay left, expand independently and show the curren
       await wait(selector); await run(selector+'.click()');
     };
     const hosted = 'document.querySelector(".project-file-explorer .explorer-outline")';
-    const visibleOutlines = '[...document.querySelectorAll(".outline")].filter(e=>e.getClientRects().length)';
+    const visibleOutlines = '[...document.querySelectorAll(".otio-structure")].filter(e=>e.getClientRects().length)';
     await openTimeline('00-first');
     await wait(hosted+'?.textContent.includes("First assembly")');
     assert.equal(await run(visibleOutlines+'.length'),1);
-    assert.equal(await run('!!document.querySelector(".otio .outline")'),false,'no second tree inside the viewer');
+    assert.equal(await run('!!document.querySelector(".otio .otio-structure")'),false,'no second tree inside the viewer');
     assert.equal(await run('document.querySelector(".bench").classList.contains("with-inline-outline")'),false,'no reserved outline column');
     assert.equal(await run('document.querySelector(".project-file-explorer").lastElementChild.contains('+hosted+')'),true,'outline follows all file roots');
-    const nativeKey = async keyCode => { await win.webContents.sendInputEvent({type:'keyDown',keyCode});await win.webContents.sendInputEvent({type:'keyUp',keyCode}); };
-    await run(hosted+'.querySelector(".outline-toggle").focus()');await nativeKey('Space');
-    await wait(hosted+'.querySelector(".outline-toggle").getAttribute("aria-expanded")==="false"');
-    assert.equal(await run(hosted+'.querySelector(".viewport").getClientRects().length'),0);
-    await nativeKey('Space');await wait(hosted+'.querySelector(".viewport").getClientRects().length');
+    const nativeKey = async (keyCode, modifiers = []) => { await win.webContents.sendInputEvent({type:'keyDown',keyCode,modifiers});await win.webContents.sendInputEvent({type:'keyUp',keyCode,modifiers}); };
+    const toggle = hosted+'.querySelector(".outline-toggle")';
+    const expandedOutline = toggle+'.getAttribute("aria-expanded")';
+    const focusStyle = '(e => { const s = getComputedStyle(e); return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.outlineOffset] })';
+    const noOutline = async (target, message) => {
+      assert.equal((await run(focusStyle+'('+target+')'))[0], 'none', message);
+    };
+    for (const dark of [true, false]) {
+      const theme = dark ? 'dark' : 'light';
+      await run('document.documentElement.classList.toggle("dark",'+dark+'); document.activeElement.blur()');
+      await noOutline(hosted, theme + ' section has no decorative outline');
+      await noOutline(toggle, theme + ' idle disclosure matches file root');
+      const point = await run('(e => { const r = e.getBoundingClientRect(); return {x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2)} })('+toggle+')');
+      for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({type, button:'left', clickCount:1, ...point});
+      await wait(expandedOutline+'==="false"');
+      await noOutline(hosted, theme + ' collapsed section has no decorative outline');
+      await noOutline(toggle, theme + ' pointer click has no focus outline');
+      assert.equal(await run(hosted+'.querySelector(".viewport").getClientRects().length'),0);
+      await nativeKey('Tab', ['shift']);
+      await nativeKey('Tab');
+      await wait('document.activeElement === '+toggle+' && '+toggle+'.matches(":focus-visible")');
+      assert.deepEqual(await run(focusStyle+'('+toggle+')'),
+        ['solid', '2px', dark ? 'rgb(139, 183, 255)' : 'rgb(36, 91, 193)', '-2px'],
+        theme + ' keyboard disclosure has the inset theme-blue outline');
+      await nativeKey('Space'); await wait(expandedOutline+'==="true"');
+      await wait(hosted+'.querySelector(".viewport").getClientRects().length');
+    }
     await run(hosted+'.querySelector(\'[aria-label="Collapse Picture track"]\').focus()');await nativeKey('Space');
     await wait('!'+hosted+'.textContent.includes("Intro shot")');
     await nativeKey('Space');await wait(hosted+'.textContent.includes("Intro shot")');
@@ -189,7 +211,7 @@ test('Project explorer roots stay left, expand independently and show the curren
     await wait(hosted+'?.querySelector("[aria-current=true]")?.textContent.includes("Intro shot")');
     await run('[...document.querySelectorAll(".storyboard-pane .viewer-modes button")].find(e=>e.textContent==="Monitor").click()');
     await run('document.querySelector(".project-explorer-toggle").click()');
-    await wait('!'+hosted+' && '+visibleOutlines+'.length===1 && !!document.querySelector(".otio .outline")');
+    await wait('!'+hosted+' && '+visibleOutlines+'.length===1 && !!document.querySelector(".otio .otio-structure")');
     await run('document.querySelector(".project-explorer-toggle").click()');await wait(hosted+'?.textContent.includes("First assembly")');
     await run('document.querySelector(\'[aria-label="Close 00-first.otio"]\').click()');
     await wait('!'+hosted+'?.textContent.includes("First assembly")');

@@ -1,5 +1,5 @@
 <template>
-  <section class="outline" :class="{ 'explorer-outline': explorer, 'explorer-expanded': explorer && expanded }" :aria-label="t('Outline')">
+  <section class="otio-structure" :class="{ 'explorer-outline': explorer, 'explorer-expanded': explorer && expanded }" :aria-label="t('Outline')">
     <button v-if="explorer" type="button" class="outline-toggle" :aria-expanded="expanded" :aria-controls="treeId" @click="expanded = !expanded">
       <span :class="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
       <span class="i-lucide-list-tree" aria-hidden="true" />{{ t('Outline') }}
@@ -126,13 +126,14 @@ watch([() => props.model, () => props.selectedId], async () => {
 </script>
 
 <style scoped>
-.outline { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; container-type: inline-size; color: var(--c-text); background: var(--c-bg-card); }
+.otio-structure { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; container-type: inline-size; color: var(--c-text); background: var(--c-bg-card); }
 .explorer-outline { flex: 0 0 auto; border-block-start: 1px solid var(--c-border); background: transparent; }
 .explorer-expanded { flex: 1 1 0; }
 .outline-toggle { flex-shrink: 0; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 6px 8px; text-align: start; font-size: 12px; }
 .outline-toggle > span { flex: 0 0 14px; height: 14px; }
 .outline-toggle > span:nth-child(2) { color: var(--c-text-muted); }
 .outline-toggle:hover { background: var(--c-bg-muted); }
+.outline-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .explorer-outline li { border-block-end: 0; padding-inline-start: calc(var(--indent) * 10px); }
 .explorer-outline .square, .explorer-outline .spacer { flex-basis: var(--sidebar-disclosure, 20px); width: var(--sidebar-disclosure, 20px); }
 .explorer-outline .row { min-height: var(--sidebar-row-height, 32px); }
