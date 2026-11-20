@@ -1705,7 +1705,7 @@ export async function createProjectRuntime(
   tools.register(workDispatchAgent)
   coordinator?.allow(workDispatchAgent)
   workDispatcher.setRunner((job, signal) => workDispatchAgent.run(job, signal))
-  const reflectionDiary = new ReflectionDiary(workspace, project.id, aliasStore, cronDispatcher)
+  const reflectionDiary = new ReflectionDiary(workspace, project.id, aliasStore, cronDispatcher, identity)
   tools.register(reflectionDiary)
   coordinator?.allow(reflectionDiary)
   cronService.setHandler(async (job, signal) => {
