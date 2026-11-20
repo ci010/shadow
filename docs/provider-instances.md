@@ -86,6 +86,31 @@ Main loads the catalog from the connection’s `/models` endpoint and caches it
 briefly. If discovery fails, other providers and the current model remain usable;
 reopen the conversation to request the catalog again after connectivity recovers.
 
+### Generate an image in chat
+
+In a private Shadow Web conversation, ask the agent to generate an image. The
+`generate_image` tool uses the saved `openrouter` connection by default; name
+another saved OpenRouter connection in your request if needed. The image model
+is independent of the composer’s chat model: the tool defaults to
+`bytedance-seed/seedream-4.5` and accepts a different OpenRouter image model ID.
+
+Before every request, Shadow asks the authenticated owner to approve sending the
+exact prompt to OpenRouter, showing the connection and model. This may incur a
+charge. Declining, cancelling, or letting the confirmation expire sends nothing.
+The backend enforces confirmation; it does not try to infer intent from chat text.
+Only new owner turns in local private Web sessions are supported, not bot chats,
+delegated agents, automations, or remote and LayerFS workdirs.
+
+This version uses OpenRouter’s [dedicated Images endpoint](https://openrouter.ai/docs/api/api-reference/images/generate-an-image)
+for text-to-image only. It displays one inline raster image in the chat tool
+result (maximum 5 MiB and 25 million pixels). The image is stored in conversation
+history and can be passed to the chat model through the normal tool-result path;
+no workspace file is created. Custom provider endpoints, reference
+images, SVG, URL-only outputs, and chat-completions image modalities are not
+supported. The OpenRouter request times out after 120 seconds and never retries
+an ambiguous failure automatically: check for charges before approving another
+attempt.
+
 ## Copilot isolation
 
 Each instance has its own login attempts, credential refreshes, sign-out revision,

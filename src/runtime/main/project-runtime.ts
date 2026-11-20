@@ -182,6 +182,7 @@ import { Tools } from '../../tools/registry.ts'
 import { ExecTool } from '../../tools/shell.ts'
 import { SubagentTool } from '../../tools/subagent.ts'
 import { AskTool } from '../../tools/ask.ts'
+import { createGenerateImageTool } from '../../tools/generate-image.ts'
 import { ReplyTool } from '../../tools/reply.ts'
 import { remoteSessionPlugin } from '../../sessions/remote-session-routes.ts'
 import { isManagedWorkdir, ownsManagedWorkdir, MANAGED_SESSION_OPERATION } from '../../execution/managed-workdir.ts'
@@ -1536,6 +1537,11 @@ export async function createProjectRuntime(
     ),
   )
   tools.register(new AskTool(sessions.yields, sessions.inputs, () => alignment))
+  if (!coordinator) tools.register(createGenerateImageTool({
+    providers: () => activeConfig.providers,
+    ownerSession: context => context.projectId === project.id && canAuthor(context.sessionId),
+    askOwner: (...args) => sessions.yields.askOwner(...args),
+  }))
   tools.register(new ReplyTool(sessions.yields, sessions.inputs, a2a.sessions))
   tools.register(new CancelTool(sessions, a2a.sessions, backgroundTasks))
   tools.register(new ContinuationTool(backgroundTasks, sessions))
