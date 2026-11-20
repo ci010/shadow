@@ -20,7 +20,7 @@ test('loading stored voice settings warns without enabling STT or rewriting the 
     assert.equal(Object.hasOwn(config, 'voice'), false)
     assert.equal(await readFile(configPath, 'utf8'), original)
     assert.equal(warnings.length, 1)
-    assert.match(warnings[0], /voice.*audio_cpp/)
+    assert.match(warnings[0], /voice.*Composer audio input/)
     assert.doesNotMatch(warnings[0], /private-fixture|127\.0\.0\.1/)
   })
 })

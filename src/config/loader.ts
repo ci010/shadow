@@ -46,7 +46,7 @@ export function normalizePersistedConfig(value: unknown): Record<string, unknown
   }
   if (Object.hasOwn(raw, 'voice')) {
     delete raw.voice
-    console.warn('[config] Retired voice settings are ignored; automatic STT is no longer available. Use audio_cpp for transcription. The retired field is removed on the next configuration save.')
+    console.warn('[config] Retired voice settings are ignored; automatic STT is no longer available. Use Composer audio input or read v:skills/audio-cpp for local transcription. The retired field is removed on the next configuration save.')
   }
   return raw
 }

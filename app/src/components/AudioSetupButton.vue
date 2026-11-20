@@ -3,7 +3,7 @@
     <button type="button" data-composer-microphone :data-keyboard-active="visible && keyboardActive && !disabled && !loading && phase === 'idle' && entry === 'local-ready'" :disabled="disabled || loading || phase === 'processing'" :aria-label="t(phase === 'idle' ? 'Audio input' : 'Stop and transcribe')" :aria-expanded="panel || popup" aria-haspopup="dialog" :aria-controls="popupId" aria-keyshortcuts="Control+Shift" @click="click" @pointerdown="pointerDown" @pointercancel="cancel">
       <span class="audio-mic-indicator" :class="`audio-mic-${phase}`" :data-audio-phase="phase" :style="{ '--audio-level': level }" aria-hidden="true"><span class="i-lucide-mic w-5 h-5" /></span>
     </button>
-    <button v-if="entry !== 'setup' && phase === 'idle'" class="audio-touch-settings" type="button" :disabled="disabled || setupDisabled" :aria-label="t('Change audio setup')" @click="openSettings"><span class="i-lucide-settings-2 w-3 h-3" aria-hidden="true" /></button>
+    <button v-if="entry !== 'setup' && phase === 'idle'" class="audio-touch-settings" type="button" :disabled="disabled" :aria-label="t('Change audio setup')" @click="openSettings"><span class="i-lucide-settings-2 w-3 h-3" aria-hidden="true" /></button>
     <span v-if="loading" role="status">{{ t('Checking Project audio status…') }}</span>
     <span v-if="phase !== 'idle'" class="audio-state-sr" role="status" aria-live="polite">{{ t(phase === 'acquiring' ? 'Waiting for microphone…' : phase === 'recording' ? 'Recording…' : 'Processing audio…') }}</span>
     <button v-if="phase !== 'idle'" type="button" @click="cancel">{{ t('Cancel') }}</button>
@@ -13,15 +13,16 @@
     <div v-if="panel || popup" :id="popupId" class="audio-setup" role="dialog" :aria-label="t('Audio input')">
       <template v-if="!panel">
         <p>{{ t('Click to record; click again to transcribe. Hold microphone or Ctrl+Shift to talk.') }}</p>
-        <button type="button" :disabled="disabled || setupDisabled" @click="openSettings">{{ t('Change audio setup') }}</button>
+        <button type="button" :disabled="disabled" @click="openSettings">{{ t('Change audio setup') }}</button>
       </template>
       <template v-else>
-      <p v-if="entry === 'remote-ready'">{{ t('Remote transcription is configured. Composer microphone input currently supports local ASR only; use the configured audio tool for remote transcription.') }}</p>
+      <p v-if="entry === 'remote-ready'">{{ t('Remote transcription is configured. Composer microphone input currently supports local ASR only.') }}</p>
       <p v-if="status?.tts.ready && !status.asr.ready">{{ t('Speech output is configured, but transcription still needs setup.') }}</p>
       <template v-if="status">
         <p>{{ t('Choose where audio is processed. Setup does not record or upload audio.') }}</p>
-        <button type="button" :disabled="disabled || setupDisabled" @click="request('local')">{{ t('Local · assess this computer with Agent') }}</button>
-        <button type="button" :disabled="disabled || setupDisabled" @click="request('remote')">{{ t('Remote · configure API with Agent') }}</button>
+        <button type="button" :disabled="disabled" @click="setupChoice = 'local'">{{ t('Local · configure on this computer') }}</button>
+        <button type="button" :disabled="disabled" @click="setupChoice = 'remote'">{{ t('Remote · configure an API') }}</button>
+        <p v-if="setupChoice" role="status">{{ t('On the Shadow host, follow docs/audio-setup.md for the selected command, then refresh audio status.') }} <code>{{ setupChoice === 'local' ? 'project-audio configure' : 'project-audio configure-remote' }}</code></p>
       </template>
       <button type="button" @click="refresh(true, true)">{{ t('Refresh audio status') }}</button>
       </template>
@@ -32,19 +33,19 @@
 import { audioStatusResource } from '../audio-status-resource.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { computed, onMounted, onActivated, onDeactivated, onUnmounted, ref, watch, useId } from 'vue'
-import { audioSetupRequest } from '../audio-setup'
 import { audioEntry, recognizedTranscript, recordMicrophone, prepareMicrophone, type MicrophonePreparation, type AudioStatus, NoAudioSignalError } from '../audio-input'
 import { AudioSignalMeter } from '../audio-signal.ts'
 import { openAudioStream } from '../audio-stream.ts'
 import { apiUrl } from '../api-url'
 import { t } from '../i18n.ts'
-const props = withDefaults(defineProps<{ disabled: boolean; setupDisabled?: boolean; visible?: boolean; keyboardActive?: boolean; apiBase: string; draftKey: string; sessionId?: string }>(), { visible: true, keyboardActive: true })
+const props = withDefaults(defineProps<{ disabled: boolean; visible?: boolean; keyboardActive?: boolean; apiBase: string; draftKey: string; sessionId?: string }>(), { visible: true, keyboardActive: true })
 const livePool = useLiveClientPool()
-const emit = defineEmits<{ request: [text: string]; transcript: [text: string] }>()
+const emit = defineEmits<{ transcript: [text: string] }>()
 const status = ref<AudioStatus>(), loading = ref(false), error = ref(''), notice = ref(''), panel = ref(false)
+const setupChoice = ref<'local' | 'remote'>()
 const root = ref<HTMLElement>(), popup = ref(false), popupId = useId()
 let hoverTimer: ReturnType<typeof setTimeout> | undefined, closeTimer: ReturnType<typeof setTimeout> | undefined
-function closePopup() { clearTimeout(hoverTimer); clearTimeout(closeTimer); hoverTimer = closeTimer = undefined; popup.value = false; panel.value = false }
+function closePopup() { clearTimeout(hoverTimer); clearTimeout(closeTimer); hoverTimer = closeTimer = undefined; popup.value = false; panel.value = false; setupChoice.value = undefined }
 function canPopup() { return active && props.visible && !props.disabled && !loading.value && phase.value === 'idle' && !arm && !hold }
 function hoverEnter(e: PointerEvent) {
   clearTimeout(closeTimer)
@@ -58,7 +59,7 @@ function hoverLeave() {
 }
 function focusIn() { clearTimeout(closeTimer); if (canPopup()) { popup.value = true; if (entry.value !== 'local-ready') panel.value = true } }
 function focusOut(e: FocusEvent) { if (!root.value?.contains(e.relatedTarget as Node)) closePopup() }
-function openSettings() { if (!canPopup() || props.setupDisabled) return; clearTimeout(hoverTimer); popup.value = false; panel.value = true; void refresh(true, true) }
+function openSettings() { if (!canPopup()) return; clearTimeout(hoverTimer); popup.value = false; panel.value = true; void refresh(true, true) }
 const level = ref(0), provisional = ref('')
 let stream: Awaited<ReturnType<typeof openAudioStream>> | undefined
 let streaming: Promise<void> | undefined
@@ -89,7 +90,6 @@ async function refresh(fresh = false, preservePopup = false) {
   } catch (e) { if (own === generation) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (own === generation) loading.value = false }
 }
-function request(route: 'local' | 'remote') { if (props.disabled || props.setupDisabled) return; closePopup(); emit('request', audioSetupRequest(route)) }
 async function start(kind: typeof owner) {
   if (!active || props.disabled || phase.value !== 'idle' || entry.value !== 'local-ready') return
   closePopup(); owner = kind; pendingStop = false; error.value = ''; notice.value = ''; phase.value = 'acquiring'; const own = generation

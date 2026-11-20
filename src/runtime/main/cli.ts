@@ -44,8 +44,13 @@ export async function runBackendCli(
 
 export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
-): Promise<ProcessEntryResult | { readonly route: 'web-pair' | 'child-pair' }> {
-  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' ? 1 : 2)
+): Promise<ProcessEntryResult | { readonly route: 'web-pair' | 'child-pair' | 'project-audio' }> {
+  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' || hooks.argv[1] === 'project-audio' ? 1 : 2)
+  if (runtimeArgs[0] === 'project-audio') {
+    const { runProjectAudioCli } = await import('../../audio-cpp/host-cli.ts')
+    process.stdout.write(JSON.stringify(await runProjectAudioCli(runtimeArgs.slice(1)), null, 2) + '\n')
+    return { route: 'project-audio' }
+  }
   if (runtimeArgs[0] === 'child' && runtimeArgs[1] === 'pair') {
     try { await runChildPairingCli(runtimeArgs.slice(2)) }
     catch (error) {
