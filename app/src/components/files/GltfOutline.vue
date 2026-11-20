@@ -1,5 +1,5 @@
 <template>
-  <section class="outline">
+  <section class="gltf-structure">
     <h3 :id="`${id}-heading`">{{ t('Outline') }}</h3>
     <div ref="viewport" class="viewport" role="tree" :tabindex="visible.length ? 0 : -1"
       :aria-labelledby="`${id}-heading`" aria-multiselectable="true"
@@ -243,7 +243,7 @@ watch([index, () => [...props.selected]], async ([model, selected], previous, on
 </script>
 
 <style scoped>
-.outline { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; color: var(--c-text); background: var(--c-bg-card); }
+.gltf-structure { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; color: var(--c-text); background: var(--c-bg-card); }
 h3 { margin: 0; padding: 8px 10px; font-size: 12px; font-weight: 650; background: var(--c-bg-soft); border-block-end: 1px solid var(--c-border); }
 .viewport { overflow: auto; min-height: 0; max-height: 24rem; overscroll-behavior: contain; overflow-anchor: none; }
 .viewport:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -2px; }
