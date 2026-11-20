@@ -78,7 +78,7 @@ particular command covers all packages.
 | WIP device execution | `src/cluster/`, `src/execution/`, `src/sessions/locality.ts` |
 | Browser application | `app/src/` |
 | Electron host and preload | `desktop/src/` |
-| Development/build/migration | `scripts/`, `build.ts`, package manifests |
+| Development/build/migration | `scripts/`, package manifests |
 
 Before editing, inspect the worktree and preserve existing edits. Coordinate
 changes to shared composition files such as `src/index.ts`, configuration

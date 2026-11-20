@@ -8,7 +8,7 @@ const sourceInputs = [
   'scripts/agent-desktop-lock.json',
   'integrations/agent-desktop/LICENSE', 'integrations/agent-desktop/NOTICE',
   'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/aria2', 'desktop/safegit',
-  'build.ts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
+  'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
   '.gitattributes', '.github/workflows/release-check.yml',
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
   'app/index.html', 'app/vite.config.ts', 'app/unocss.config.ts',

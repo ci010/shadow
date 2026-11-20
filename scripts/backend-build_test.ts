@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
-import { buildBackend } from '../build.ts'
+import { buildBackend } from './build.ts'
 import { backendEntries, compileBackend } from './backend-bundle.ts'
 
 async function fixture(root: string): Promise<void> {
@@ -105,7 +105,7 @@ test('development backend bundles despite type errors, including with a staged o
     await writeFile(join(root, 'src/index.ts'), 'export const value: number = "development"\n')
     const output = join(root, 'stage', 'dist')
     await mkdir(join(root, 'stage'))
-    const cli = fileURLToPath(new URL('../build.ts', import.meta.url))
+    const cli = fileURLToPath(new URL('./build.ts', import.meta.url))
     const tsx = import.meta.resolve('tsx')
     execFileSync(process.execPath, ['--import', tsx, cli, '--development', '--desktop-stage', join(root, 'stage')], {
       cwd: root, stdio: 'pipe',

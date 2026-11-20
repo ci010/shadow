@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { compileBackend } from './scripts/backend-bundle.ts'
+import { compileBackend } from './backend-bundle.ts'
 
 /** Production checks without emitting; development only bundles. */
 export async function buildBackend(root: string, output = join(root, 'dist'), { development = false } = {}): Promise<void> {
