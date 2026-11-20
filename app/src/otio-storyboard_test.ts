@@ -43,3 +43,12 @@ test('caption storage isolates exact document snapshots and rejects malformed da
   assert.deepEqual([...readStoryboardDescriptions({ getItem: () => '{"/shot":"<script> is plain text"}' } as unknown as Storage, key)], [['/shot', '<script> is plain text']])
   assert.throws(() => readStoryboardDescriptions({ getItem: () => '{"/shot":42}' } as unknown as Storage, key))
 })
+
+test('local track visibility changes monitor and storyboard together without modifying tracks', () => {
+  const overlay = model.nodes.filter(node => node.kind === 'Track')[1]!
+  const hidden = new Set([overlay.id])
+  assert.equal(otioPictureAt(model, 2, undefined, hidden)?.name, 'base')
+  assert.equal(otioPictureAt(model, 2, overlay, hidden), null)
+  assert.deepEqual(summarize(storyboardOrder(model, undefined, false, undefined, hidden)), [[0, 'base']])
+  assert.equal(otioPictureAt(model, 2)?.name, 'overlay')
+})
