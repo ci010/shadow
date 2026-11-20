@@ -9,6 +9,7 @@
             <button type="button" class="tab" :class="{ active: navigationPage === item.name }"
               :aria-current="navigationPage === item.name ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
           </router-link>
+          <span v-if="!mobile.enabled.value" ref="projectsToggleTarget" class="projects-toggle-target" />
         </nav>
       </Teleport>
     </template>
@@ -60,7 +61,7 @@
           <component
             :is="Component"
             :key="workspaceRoutes.includes(String(viewRoute.name)) ? 'projects-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.projectId ?? '')}`"
-            v-bind="{ apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: workspaceRoutes.includes(String(route.name)) }"
+            v-bind="{ apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, projectsToggleTarget, visible: workspaceRoutes.includes(String(route.name)) }"
             @update:log-count="logCount = $event"
           >
             <template #app-settings="{ section, active, close }">
@@ -108,6 +109,7 @@ import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
 
 const route = useRoute()
+const projectsToggleTarget = ref<HTMLElement>()
 const workspaceRoutes: readonly string[] = ['chat', 'project-board', 'projects', 'project-dashboard', 'project-workflows', 'project-settings', 'usage', 'settings']
 const mobile = provideMobileChrome()
 const mobilePageTitles: Record<string, string> = { get 'project-board'() { return t('Board') }, get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get usage() { return t('Usage') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
@@ -312,6 +314,7 @@ onUnmounted(() => {
   color: var(--c-primary);
   border-bottom-color: var(--c-blue);
 }
+.projects-toggle-target { display: flex; flex: none; }
 .tab-nav.mobile-app-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: visible; }
 .mobile-app-nav .tab { min-height: 44px; padding: 8px; font-size: 13px; text-transform: none; letter-spacing: 0; border: 0; text-align: left; transform: none; transition: none; }
 .mobile-app-nav .tab.active { background: var(--c-selection-bg); }

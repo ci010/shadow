@@ -154,7 +154,14 @@ async function main() {
       await wait(`${route()}.name === 'project-settings' && ${route()}.params.projectId === 'other' && !!${visible('.project-settings-view')}`)
       const page = (label: string) => `Array.from(document.querySelectorAll('.desktop-title-bar .tab-nav button')).find(button => button.textContent.trim() === ${JSON.stringify(label)})`
       assert.equal(await execute(`${page('Chat')}.getAttribute('aria-current')`), 'page', 'Project routes keep the Chat tab selected')
-      assert.deepEqual(await execute(`Array.from(document.querySelectorAll('.desktop-title-bar .tab-nav button'), button => button.textContent.trim())`), ['Chat', 'Usage', 'Settings'])
+      assert.deepEqual(await execute(`Array.from(document.querySelectorAll('.desktop-title-bar .tab-nav .tab'), button => button.textContent.trim())`), ['Chat', 'Usage', 'Settings'])
+      const projectsToggle = `document.querySelector('.desktop-title-bar .tab-nav .projects-topbar-toggle')`
+      await wait(`${projectsToggle}?.getAttribute('aria-label') === 'Hide projects' && !!${visible('#projects-sidebar')}`)
+      await execute(`${projectsToggle}.click()`)
+      await wait(`${projectsToggle}?.getAttribute('aria-label') === 'Show projects' && !${visible('#projects-sidebar')}`)
+      assert.equal(await execute(`!!document.querySelector('.projects-toolbar')`), false)
+      await execute(`${projectsToggle}.click()`)
+      await wait(`${projectsToggle}?.getAttribute('aria-label') === 'Hide projects' && !!${visible('#projects-sidebar')}`)
       await execute(`${page('Usage')}.click()`)
       await wait(`${route()}.name === 'usage' && ${page('Usage')}.getAttribute('aria-current') === 'page' && !!${visible('.project-breakdown')}`)
       assert.equal(await execute(`document.querySelector('.project-filter [role=combobox]').textContent.trim()`), 'All projects')
