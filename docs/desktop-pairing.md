@@ -178,23 +178,30 @@ current Project; use `v:project/workspaces` for registered Workspace selectors. 
 contact Child, expose pairing credentials, browse its filesystem, or measure
 latency.
 
-## Optional Child home target for owner tools
+## Run an OS command on Child without registering a workspace
 
-To make a paired Child available before registering any workspace, update both
+When `v:devices` reports `deviceExecWorkspace`, pass that `device:<nodeId>`
+selector to `exec` and omit `cwd`. This is available in direct owner Web turns.
+The command starts in the home directory of the account running Shadow on
+Child. `cwd: "~"` is equivalent; a relative `cwd` is resolved from that home.
+This neither registers a Workspace nor changes the conversation's execution
+location. An unavailable Child never falls back to Main. OS commands run with
+the Child account's permissions; the starting directory is not an OS sandbox.
+
+## Optional direct Child home reads and searches
+
+To use `read` and `search` directly in Child home, update both
 peers and set `"allowDeviceHome": true` in the Child bootstrap configuration.
 For desktop installations this is `bootstrap/runtime-config.v1.json` under
 that Child profile's Electron user-data directory. Quit Child before changing
 this setting, retain its existing configuration, and restart it. Omission or
-`false` disables the home target. Pairing alone never enables it.
+`false` disables direct home reads and searches; it does not change the default
+working directory for paired OS-shell execution.
 
 When `v:devices` reports `deviceHomeWorkspace`, a direct owner Web turn can
 use `read` or `search` with `workspace: "device:<nodeId>"` and `path: "~"`.
-The Child resolves `~` to the home of the account running Shadow. OS-shell
-`exec` accepts that workspace selector and `cwd: "~"`; shell commands run with
-that account's permissions, not inside a home sandbox. Enable this only if you
-trust the paired Main with that level of access. Direct `write`, workspace
-switching, and automatic workspace registration are not part of this target.
-An unavailable Child never falls back to Main.
+Direct `write`, workspace switching, and automatic workspace registration are
+not part of this target.
 
 ## Prove that work runs on Child
 

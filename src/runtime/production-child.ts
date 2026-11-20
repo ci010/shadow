@@ -75,7 +75,7 @@ export async function startProductionChildRuntime(
   ])).digest('hex')
   const workdirs = new ManagedChildWorkdirs(
     join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, config.workdirs ?? [],
-    config.allowDeviceHome === true ? homedir() : undefined,
+    homedir(), config.allowDeviceHome === true,
   )
   await workdirs.init()
   const layerfsRuntimes = new RemoteLayerFSRuntimes(join(paths.dataDir, 'layerfs-project-services-v1', pairingScope), config.localNodeId, () => ({ online: connection === 'connected', epoch: connectionEpoch, pairingId: reference.credentialId }))

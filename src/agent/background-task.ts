@@ -1,6 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { projectStoragePath } from '../utils/data-paths.ts'
+import { OUTPUT_PREVIEW_CHARS } from '../utils/output-preview.ts'
+import { spillOutputPreview } from '../utils/output-spill.ts'
 import type { Bus } from '../bus/bus.ts'
 import { errMsg } from '../utils/truncate.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -11,8 +10,6 @@ import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
-// Match ordinary tool output's default preview budget (tools/registry.ts).
-const CALLBACK_OUTPUT_LIMIT = 12_000
 const CALLBACK_METADATA_LIMIT = 200
 const callbackSummary = (text: string) => text.length > CALLBACK_METADATA_LIMIT
   ? `${text.slice(0, CALLBACK_METADATA_LIMIT)}…`
@@ -476,22 +473,10 @@ export class BackgroundTaskManager {
     const rawDetail = task.status === 'completed' ? task.result ?? '' : task.error ?? 'unknown error'
     const rawContent = task.callback.contentPrefix
       ? `${task.callback.contentPrefix}\n\n${rawDetail}` : rawDetail
-    if (rawContent.length > CALLBACK_OUTPUT_LIMIT) {
-      content = rawContent.slice(0, CALLBACK_OUTPUT_LIMIT) +
-        `\n...[truncated: ${rawContent.length - CALLBACK_OUTPUT_LIMIT} chars remaining]\n`
-      try {
-        if (!this.workspace) throw new Error('Project Home is unavailable')
-        const filename = `background-task-${task.id}-${crypto.randomUUID()}.txt`
-        const directory = projectStoragePath(this.workspace, '.tmp')
-        await mkdir(directory, { recursive: true })
-        await writeFile(join(directory, filename), rawContent, { encoding: 'utf8', flag: 'wx' })
-        content += `Full output saved to: .tmp/${filename}\n` +
-          'Use read with this path and line-based offset/limit to read more.'
-      } catch (error) {
-        // Fail closed, including ENOSPC: no unbounded fallback or false saved-file claim.
-        content += `Full output was NOT saved: ${callbackSummary(errMsg(error))}.\n` +
-          `The full result/error remains available in memory at v:bg/${backgroundExecutionId(task.id)} while this runtime is alive.`
-      }
+    if (rawContent.length > OUTPUT_PREVIEW_CHARS) {
+      content = await spillOutputPreview(this.workspace, `background-task-${task.id}`, rawContent, OUTPUT_PREVIEW_CHARS,
+        error => `Full output was NOT saved: ${callbackSummary(errMsg(error))}.\n` +
+          `The full result/error remains available in memory at v:bg/${backgroundExecutionId(task.id)} while this runtime is alive.`)
     }
 
     const eventType = task.callback.eventType ?? 'background-task-complete'
