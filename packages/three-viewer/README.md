@@ -47,3 +47,53 @@ pnpm exec tsc --noEmit --target es2022 --module nodenext --strict --skipLibCheck
 pnpm exec node --import tsx --test packages/three-viewer/test/input_test.ts
 CHROMIUM=/path/to/chromium node packages/three-viewer/test/run-browser.mjs
 ```
+
+### File shader animation (preview only)
+
+Declare `uniform float playgroundTime;` in either GLSL stage that uses it. No
+manifest change is needed: the existing object ID and material slot select the
+shader files. The viewer supplies elapsed seconds (zero on the first frame of
+an accepted load); captures use the most recent preview time. A successful
+replacement starts a new clock, while a failed or superseded load leaves the
+active preview running. Direct `bindShader` materials do not receive this clock.
+There are no shader-authored per-frame JavaScript callbacks.
+
+Use time for fragment effects (rain, ripples, changing lights) or small vertex
+offsets. Keep offsets small: camera framing, selection outlines, culling and
+picking still use the original CPU geometry. Shader motion and output are not
+baked into the GLB; only the authored static geometry and PBR materials export.
+
+File shaders inherit the imported primitive's transparency mode (`transparent`),
+side and depth test/write/function. Declare `uniform float playgroundOpacity;`
+and use it in your fragment alpha to honor the authored opacity. The shader
+controls color and alpha; PBR shading, maps and alpha masking are not applied
+for you. For example, bind the following two files to a UV plane whose authored
+material is double-sided and uses glTF `alphaMode: "BLEND"` (Three's glTF loader
+sets depth writes off for this mode, leaving depth testing on):
+
+Vertex:
+
+```glsl
+varying vec2 vRainUV;
+void main() {
+  vRainUV = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+```
+
+Fragment:
+
+```glsl
+uniform float playgroundTime;
+uniform float playgroundOpacity;
+varying vec2 vRainUV;
+void main() {
+  float x = vRainUV.x * 64.0;
+  float seed = fract(sin(floor(x) * 127.1) * 43758.5453);
+  float y = fract(vRainUV.y * 7.0 + playgroundTime * (2.0 + seed) + seed);
+  float width = 1.0 - smoothstep(0.06, 0.18, abs(fract(x) - 0.5));
+  float streak = smoothstep(0.65, 0.95, y) * width;
+  gl_FragColor = vec4(0.42, 0.68, 0.95, streak * playgroundOpacity);
+  #include <colorspace_fragment>
+}
+```

@@ -5,7 +5,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { snapshot, type ModelInput } from './input.js';
-import { decode, stale, type Model, type ModelOutlineRow } from './model.js';
+import { decode, stale, type Model, type ModelOutlineRow, type Part } from './model.js';
 export { limits, type ModelInput, type ShaderBinding } from './input.js';
 export type { ModelOutlineRow } from './model.js';
 
@@ -62,7 +62,9 @@ export class ThreeViewer {
   private closed = false;
   private selected = new Set<string>();
   private ownedShaders = new Set<ShaderMaterial>();
-  private shaders = new Map<string, Map<number, ShaderMaterial>>();
+  private shaders = new Map<string, Map<number, ShaderMaterial[]>>();
+  private previewTime = { value: 0 };
+  private previewStart?: number;
   private player = false;
   private playerDistance = 1;
   private pointer?: { id: number; x: number; y: number; multi: boolean; look: boolean };
@@ -154,15 +156,24 @@ export class ThreeViewer {
     const job = this.active = this.queued; this.queued = undefined;
     const current = () => !this.closed && this.latest === job.generation && !job.input.signal?.aborted;
     let next: Model | undefined;
-    const owned = new Set<ShaderMaterial>(), shaders = new Map<string, Map<number, ShaderMaterial>>();
+    const owned = new Set<ShaderMaterial>(), shaders = new Map<string, Map<number, ShaderMaterial[]>>();
+    const previewTime = { value: 0 };
     let deleted: string[] = [];
     try {
       next = await decode(job.input, current);
       if (!current()) throw stale();
       for (const { objectId, slot, vertex, fragment } of job.input.shaders ?? []) {
         if (shaders.get(objectId)?.has(slot)) throw new Error(`Duplicate shader binding: ${objectId}[${slot}]`);
-        const shader = new ShaderMaterial({ vertexShader: vertex, fragmentShader: fragment }); owned.add(shader);
-        this.applyShader(next, shaders, objectId, slot, shader);
+        this.applyShader(next, shaders, objectId, slot, ({ material }) => {
+          const shader = new ShaderMaterial({
+            vertexShader: vertex, fragmentShader: fragment,
+            uniforms: { playgroundTime: previewTime, playgroundOpacity: { value: material.opacity } },
+            opacity: material.opacity, transparent: material.transparent, side: material.side,
+            depthTest: material.depthTest, depthWrite: material.depthWrite, depthFunc: material.depthFunc,
+          });
+          owned.add(shader);
+          return shader;
+        });
       }
       if (!current()) throw stale();
       const previous = this.model;
@@ -171,6 +182,7 @@ export class ThreeViewer {
       if (previous) { this.scene.remove(previous.root); previous.close(); }
       this.ownedShaders.forEach(s => s.dispose());
       this.ownedShaders = owned; this.shaders = shaders;
+      this.previewTime = previewTime; this.previewStart = undefined;
       this.model = next; this.scope = scope; this.version = job.input.version;
       this.scene.add(next.root); next = undefined;
       if (this.ground) {
@@ -233,11 +245,15 @@ export class ThreeViewer {
   bindShader(objectId: string, slot: number, shader: ShaderMaterial | null): void {
     this.assertOpen();
     if (!this.model) throw new RangeError(`Unknown objectId: ${objectId}`);
-    this.applyShader(this.model, this.shaders, objectId, slot, shader);
+    const previous = this.shaders.get(objectId)?.get(slot);
+    this.applyShader(this.model, this.shaders, objectId, slot, shader === null ? null : () => shader);
+    for (const old of previous ?? []) {
+      if (this.ownedShaders.delete(old)) old.dispose();
+    }
     this.dirty = true;
   }
 
-  private applyShader(model: Model, shaders: Map<string, Map<number, ShaderMaterial>>, id: string, slot: number, shader: ShaderMaterial | null) {
+  private applyShader(model: Model, shaders: Map<string, Map<number, ShaderMaterial[]>>, id: string, slot: number, create: ((part: Part) => ShaderMaterial) | null) {
     const obj = model.objects.get(id);
     if (!obj) throw new RangeError(`Unknown objectId: ${id}`);
     const parts = obj.parts.filter(part => part.slot === slot);
@@ -245,14 +261,16 @@ export class ThreeViewer {
       const reason = obj.parts.some(part => part.slot === undefined) ? 'Missing shadowMaterialSlots metadata' : 'Unknown material slot';
       throw new RangeError(`${reason}: ${id}[${slot}]`);
     }
-    if (shader !== null) {
+    const materials = create ? parts.map(part => {
+      const shader = create(part);
       if (!shader.isShaderMaterial) throw new TypeError('Expected ShaderMaterial');
-      for (const { mesh } of parts) this.checkShader(mesh, shader, `${id}[${slot}]`);
-    }
-    const overrides = shaders.get(id) ?? new Map<number, ShaderMaterial>();
-    if (shader) overrides.set(slot, shader); else overrides.delete(slot);
+      this.checkShader(part.mesh, shader, `${id}[${slot}]`);
+      return shader;
+    }) : undefined;
+    const overrides = shaders.get(id) ?? new Map<number, ShaderMaterial[]>();
+    if (materials) overrides.set(slot, materials); else overrides.delete(slot);
     if (overrides.size) shaders.set(id, overrides); else shaders.delete(id);
-    for (const { mesh, material } of parts) mesh.material = shader ?? material;
+    parts.forEach(({ mesh, material }, i) => { mesh.material = materials?.[i] ?? material; });
   }
 
   private checkShader(mesh: Mesh, shader: ShaderMaterial, binding: string) {
@@ -442,6 +460,10 @@ export class ThreeViewer {
       }
     }
     if (!this.observer) this.resize();
+    if (this.ownedShaders.size) {
+      this.previewStart ??= time;
+      this.previewTime.value = (time - this.previewStart) / 1000;
+    }
     if (this.dirty || this.shaders.size) { this.renderer.render(this.scene, this.camera); this.dirty = false; }
   };
 
