@@ -15,11 +15,16 @@ Implementation:
   `scripts/agent-desktop-integrity.ts`, `scripts/agent-desktop-assets.ts`: six fixed
   CLI archives, exclusive/atomic preparation, mandatory adjacent helpers and packaging.
 
+`pnpm install` does not prepare desktop native assets. `pnpm dev` prepares
+Agent Desktop automatically. Before standalone build or packaging, run
+`pnpm desktop:prepare-agent-desktop` (pass the target platform and architecture
+explicitly when preparing assets for a different target).
+
 Focused tests (no desktop operations):
 
 ```
 node --import tsx --test src/desktop-mcp/*_test.ts scripts/agent-desktop-assets_test.ts scripts/download-agent-desktop_test.ts scripts/agent-desktop-ownership_test.ts
-node --import tsx --test src/mcp/*_test.ts src/tools/load-tool_test.ts scripts/postinstall-native_test.ts scripts/release-workflow_test.ts scripts/release-manifest_test.ts
+node --import tsx --test src/mcp/*_test.ts src/tools/load-tool_test.ts scripts/release-workflow_test.ts scripts/release-manifest_test.ts
 ```
 
 Native macOS arm64 validation was limited to a verified CLI version and MCP
