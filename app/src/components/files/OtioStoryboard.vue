@@ -1,17 +1,52 @@
 <template>
   <section class="storyboard" :aria-label="t('Storyboard')">
-    <header class="board-controls">
-      <label>{{ t('Picture source') }} <select v-model="solo" class="input" :disabled="!track">
-        <option :value="false">{{ t('Final timeline') }}</option>
-        <option v-if="track" :value="true">{{ t('Solo: {name}', { name: track.name || t('Video track') }) }}</option>
-      </select></label>
-      <label>{{ t('Sampling') }} <select v-model="interval" class="input">
-        <option :value="false">{{ t('Per visible shot') }}</option>
-        <option :value="true">{{ t('Every 2 seconds') }}</option>
-      </select></label>
-      <label><input v-model="missing" type="checkbox" :disabled="!available"> {{ t('Missing descriptions only') }}</label>
+    <header class="board-toolbar">
+      <div class="board-primary">
+        <slot name="mode" />
+        <div class="board-view">
+          <span class="shot-count" role="status">{{ shotCount }}</span>
+          <div v-if="rows.length" class="board-zoom" role="group" :aria-label="t('Storyboard zoom')">
+            <HoverInfo v-for="control in zoomControls" :key="control.label" :text="t(control.label)" v-slot="{ triggerProps }">
+              <button type="button" class="board-action icon-action" v-bind="triggerProps" :aria-label="t(control.label)"
+                :disabled="control.step < 0 ? zoom <= MIN_ZOOM : zoom >= MAX_ZOOM" @click="changeZoom(control.step)">
+                <span :class="control.icon" aria-hidden="true" />
+              </button>
+            </HoverInfo>
+            <button class="board-action fit-width" type="button" @click="fitWidth">{{ t('Fit width') }}</button>
+          </div>
+        </div>
+      </div>
+      <div class="board-filters">
+        <label class="select-filter">{{ t('Picture source') }}
+          <span class="select-wrap">
+            <select v-model="solo" :disabled="!track">
+              <option :value="false">{{ t('Final timeline') }}</option>
+              <option v-if="track" :value="true">{{ t('Solo: {name}', { name: track.name || t('Video track') }) }}</option>
+            </select>
+            <span class="i-lucide-chevron-down" aria-hidden="true" />
+          </span>
+        </label>
+        <label class="select-filter">{{ t('Sampling') }}
+          <span class="select-wrap">
+            <select v-model="interval">
+              <option :value="false">{{ t('Per visible shot') }}</option>
+              <option :value="true">{{ t('Every 2 seconds') }}</option>
+            </select>
+            <span class="i-lucide-chevron-down" aria-hidden="true" />
+          </span>
+        </label>
+        <div class="description-filter">
+          <label><input v-model="missing" type="checkbox" :disabled="!available"> {{ t('Missing descriptions only') }}</label>
+          <HoverInfo v-if="available" interactive :label="t('Description storage')"
+            :text="t('Descriptions are saved in this browser profile for this timeline revision. The OTIO file is unchanged.')" v-slot="{ triggerProps, open }">
+            <button type="button" class="board-action icon-action" v-bind="triggerProps" :aria-label="t('Description storage')" @keydown.esc="open && $event.stopPropagation()">
+              <span class="i-lucide-info" aria-hidden="true" />
+            </button>
+          </HoverInfo>
+        </div>
+      </div>
+      <p v-if="!available" class="description-warning" role="status"><span class="i-lucide-triangle-alert" aria-hidden="true" />{{ t('Local descriptions are unavailable for this preview.') }}</p>
     </header>
-    <p class="description-scope" role="status">{{ available ? t('Descriptions are saved in this browser profile for this timeline revision. The OTIO file is unchanged.') : t('Local descriptions are unavailable for this preview.') }}</p>
     <form v-if="editing !== null && available" class="description-editor" @submit.prevent="save" @keydown.esc.stop="closeEditor">
       <label>{{ t('Shot description: {name}', { name: editingName }) }}
         <textarea ref="editor" v-model="text" class="input" :maxlength="DESCRIPTION_LIMIT" rows="2" />
@@ -20,14 +55,6 @@
         <button class="btn btn-sm" type="button" @click="closeEditor">{{ t('Cancel') }}</button></div>
       <p v-if="saveFailed" role="alert">{{ t('Description could not be saved to this browser.') }}</p>
     </form>
-    <div v-if="rows.length" class="board-navigation">
-      <span>{{ t('Shots {first}–{last} of {total}', { first: formatNumber(page * STORYBOARD_PAGE + 1), last: formatNumber(page * STORYBOARD_PAGE + rows.length), total: formatNumber(order.count) }) }}</span>
-      <div class="board-zoom">
-        <button class="btn btn-sm" type="button" :aria-label="t('Zoom out')" :disabled="zoom <= MIN_ZOOM" @click="changeZoom(-1)">−</button>
-        <button class="btn btn-sm" type="button" :aria-label="t('Zoom in')" :disabled="zoom >= MAX_ZOOM" @click="changeZoom(1)">+</button>
-        <button class="btn btn-sm" type="button" @click="fitWidth">{{ t('Fit width') }}</button>
-      </div>
-    </div>
     <div ref="scroll" class="board-scroll" :tabindex="rows.length ? 0 : undefined" role="region" :aria-label="t('Storyboard pictures')">
       <p v-if="!rows.length" class="empty-board" role="status">{{ missing ? t('No shots with missing descriptions.') : t('No storyboard pictures at this sampling.') }}</p>
       <VueFlow v-else class="board-flow" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }"
@@ -55,7 +82,7 @@
         </template>
       </VueFlow>
     </div>
-    <footer v-if="order.count > STORYBOARD_PAGE" class="board-controls">
+    <footer v-if="order.count > STORYBOARD_PAGE" class="board-pagination">
       <button class="btn btn-sm" type="button" :disabled="!page" @click="page--">{{ t('Previous page') }}</button>
       <span>{{ t('Page {page} of {total}', { page: page + 1, total: maxPage + 1 }) }}</span>
       <button class="btn btn-sm" type="button" :disabled="page === maxPage" @click="page++">{{ t('Next page') }}</button>
@@ -71,6 +98,7 @@ import { formatNumber, t } from '../../i18n.ts'
 import type { OtioModel, OtioNode } from '../../otio-model.ts'
 import { mediaPosition, type OtioDocument, type OtioMedium } from '../../otio-review.ts'
 import { DESCRIPTION_LIMIT, STORYBOARD_PAGE, readStoryboardDescriptions, storyboardKey, storyboardOrder } from '../../otio-storyboard.ts'
+import HoverInfo from '../HoverInfo.vue'
 import OtioStoryboardPicture from './OtioStoryboardPicture.vue'
 
 const props = defineProps<{ model: OtioModel; source: OtioDocument; apiBase: string; active: boolean; track?: OtioNode; hidden?: ReadonlySet<string>;
@@ -78,6 +106,7 @@ const props = defineProps<{ model: OtioModel; source: OtioDocument; apiBase: str
 const emit = defineEmits<{ position: [seconds: number, node: OtioNode | null, solo: boolean, monitor: boolean] }>()
 const interval = ref(false), missing = ref(false), solo = ref(false), page = ref(0), scroll = ref<HTMLElement>()
 const descriptions = shallowRef(new Map<string, string>()), available = ref(false), saveFailed = ref(false)
+const zoomControls = [{ label: 'Zoom out', icon: 'i-lucide-minus', step: -1 }, { label: 'Zoom in', icon: 'i-lucide-plus', step: 1 }] as const
 const MIN_ZOOM = .75, MAX_ZOOM = 1.5
 const zoom = ref(1), screenWidth = ref(0)
 const flow = useVueFlow()
@@ -143,6 +172,9 @@ const rows = computed(() => {
       position: row.node ? mediaPosition(row.node, row.seconds) : null }
   })
 })
+const shotCount = computed(() => order.value.count > STORYBOARD_PAGE && rows.value.length
+  ? t('Shots {first}–{last} of {total}', { first: formatNumber(page.value * STORYBOARD_PAGE + 1), last: formatNumber(page.value * STORYBOARD_PAGE + rows.value.length), total: formatNumber(order.value.count) })
+  : t('{count} shots', { count: formatNumber(order.value.count) }, order.value.count))
 type Shot = (typeof rows.value)[number]
 // A scaled Flow surface inside a native scrollport keeps wheel, touch and keyboard
 // scrolling predictable. Only the board's controls can change the viewport scale.
@@ -191,13 +223,31 @@ function choose(row: { seconds: number; node: OtioNode | null }, monitor: boolea
 
 <style scoped>
 .storyboard { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; }
-.board-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 10px; background: var(--c-bg-soft); border-block-end: 1px solid var(--c-border); }
-.board-controls label { display: inline-flex; gap: 5px; align-items: center; }
-select { max-width: 190px; color: var(--c-text); background: var(--c-bg-input); border: 1px solid var(--c-control-border); }
-.description-scope { color: var(--c-text-muted); margin: 0; padding: 5px 10px; font-size: 12px; }
-.board-navigation { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 12px; padding: 5px 12px; border-block: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 12px; }
-.board-zoom { display: flex; align-items: center; gap: 4px; }
-.board-zoom button { min-width: 24px; }
+.board-toolbar { flex: none; display: grid; gap: 4px; padding: 6px 12px 8px; background: var(--c-bg-soft); border-block-end: 1px solid var(--c-border); }
+.board-primary, .board-view, .board-filters, .description-filter { display: flex; flex-wrap: wrap; align-items: center; }
+.board-primary { justify-content: space-between; gap: 4px 12px; }
+.board-view { margin-inline-start: auto; gap: 6px 12px; }
+.shot-count { color: var(--c-text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.board-zoom { display: inline-flex; align-items: center; background: var(--c-bg-muted); border-radius: var(--radius-control); }
+.board-action { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; cursor: pointer; }
+.board-action:hover:not(:disabled) { background: var(--c-bg-card); color: var(--c-text); }
+.board-action:disabled { opacity: .48; cursor: not-allowed; }
+.icon-action { min-width: 32px; }
+.icon-action span { width: 15px; height: 15px; }
+.fit-width { font-size: 12px; }
+.board-filters { gap: 4px 14px; }
+.board-filters label { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; min-width: 0; color: var(--c-text-secondary); font-size: 12px; }
+.select-wrap { position: relative; display: inline-flex; min-width: 0; }
+.select-wrap span { position: absolute; inset-inline-end: 6px; inset-block-start: 50%; width: 13px; height: 13px; transform: translateY(-50%); pointer-events: none; }
+.select-wrap select { appearance: none; min-width: 0; max-width: 10rem; min-height: 32px; padding: 0 23px 0 8px; border: 0; border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-muted); font: inherit; text-overflow: ellipsis; }
+.select-wrap select:hover:not(:disabled) { background: var(--c-bg-card); }
+.select-wrap select:disabled { color: var(--c-text-muted); }
+.description-filter input { margin: 0; accent-color: var(--c-primary-bg); }
+.description-filter label:has(input:disabled) { color: var(--c-text-muted); }
+.board-toolbar :is(button, select, input):focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.description-warning { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; padding: 6px 8px; background: var(--c-warn-bg); color: var(--c-warn); font-size: 12px; }
+.description-warning span { flex: none; }
+.board-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 10px; background: var(--c-bg-soft); border-block-start: 1px solid var(--c-border); }
 .board-scroll { flex: 1 0 96px; min-width: 0; overflow: auto; scrollbar-gutter: stable; background: var(--c-bg); }
 .board-scroll:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .empty-board { padding: 18px 16px; margin: 0; color: var(--c-text-muted); }
