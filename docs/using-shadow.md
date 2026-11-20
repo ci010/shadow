@@ -656,19 +656,25 @@ sibling files. Remote workdirs with text-only file access can inspect complete
 timelines within that route's 64 KiB limit; they never stream from a local substitute.
 The local document limit is 8 MiB.
 
-Use the two reference actions together in the viewer. To discuss the selected
-element, add its reference directly to the chat draft. The reference keeps the
+Use **Reference selection** in the selection inspector to add the selected
+element directly to a chat draft. The reference keeps the
 element's identity and the timeline frame and rate. If the playhead is outside
 the selection, it records the playhead separately and uses the first timeline
 frame in the element's range when there is one.
 
-To discuss what you **see**, pause on the frame and use the drawing action.
+To discuss what you **see**, pause on the frame and choose **Draw on frame**.
 Mark the monitor image with the freehand or straight-line tool, then add it to
 chat. The reference includes the marked PNG and identifies the displayed clip,
 which can differ from the selected element. For video, the reference separates
 the calculated source position from the presented timestamp reported by the
 browser, when available. Both actions add a chip without sending a message.
-Write your comment in the chat input, or remove the chip if you don't need it.
+If an eligible local conversation already owns the source or uses its registered
+workspace, the viewer opens that composer. Otherwise, a local workspace file
+opens a fresh draft in the same project and workspace when you click **Reference
+selection** or confirm **Add reference**. Starting or cancelling a drawing does
+not open a draft. Session-file references keep the original session identity;
+a new draft does not copy or inherit its private files. Write your comment in
+the chat input, or remove the chip if you don't need it.
 Neither action writes to the edit or its media. To annotate an archive member, open an extracted copy in
 its own workspace instead. In narrow panes switch between monitor, structure
 and selection while keeping the tracks available.

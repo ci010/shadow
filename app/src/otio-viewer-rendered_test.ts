@@ -75,7 +75,16 @@ createApp({render:()=>h('main',{id:'workbench',style:{display:'flex',height:'cal
     onClose:()=>{closes.value++;open.value=false}})]:[])})
   .provide(OtioDraftKey,bridge).mount('#app');`
 
-test('OTIO file preview renders storyboards and stages reviews without writing the timeline', {
+const shellEntry = `import {createResourceApp} from '/src/stores/app.ts';
+import {h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
+import Workspace from '/src/components/ProjectsWorkspace.vue'; import {setLocalePreference} from '/src/i18n.ts';
+import '/src/styles.css'; import 'uno.css'; setLocalePreference('en');
+const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>null}},...['board','dashboard','workflows','settings','agents'].map(name=>({path:'/projects/:projectId/'+name+(name==='settings'?'/:section?':''),name:'project-'+name,component:{render:()=>null}})),{path:'/settings/:section?',name:'settings',component:{render:()=>null}}]});
+const app=createResourceApp({render:()=>h(Workspace,{apiBase:location.origin,visible:true})});
+app.provide(Symbol.for('shadow.live-client-pool'),{onDispose:()=>()=>{},observeHost:(_base,listener)=>{listener({phase:'live'});return()=>{}},client:()=>({subscribe:()=>({close(){},ready:async()=>{}})})});
+app.use(router); window.shellRouter=router; router.push({name:'chat',params:{projectId:'review'}}); router.isReady().then(()=>app.mount('#app'));`
+
+test('OTIO viewer renders reviews; the real shell stages into existing and fresh local drafts', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -86,17 +95,20 @@ test('OTIO file preview renders storyboards and stages reviews without writing t
   const video = await readFile(resolve(root, 'examples/otio-first-cut/media/moonrise.mp4'))
   const wave = waveFixture()
   const requests: { method?: string; route: string; path: string | null }[] = []
+  let failNextFolderRead = false
   const server = await createServer({
     configFile: false, envDir: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'vue-i18n', 'dompurify', 'zod', 'markdown-exit', '@mdit/plugin-tasklist', '@mdit/plugin-katex', 'katex'] },
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app/unocss.config.ts') }), {
       name: 'otio-viewer-fixture', enforce: 'pre',
       resolveId(id) {
+        if (id === '/otio-shell-fixture.ts') return '\0otio-shell-fixture'
         if (id === '/otio-fixture.ts') return '\0otio-fixture'
         if (/\/open-file-viewer-sdk(?:\.ts)?$/.test(id)) return '\0unused-rich-file-sdk'
       },
       load(id) {
         if (id === '\0otio-fixture') return entry
+        if (id === '\0otio-shell-fixture') return shellEntry
         if (id === '\0unused-rich-file-sdk') return 'export function mountFileViewer(){throw Error("Unexpected rich file SDK use")}'
       },
       configureServer(server) {
@@ -104,12 +116,29 @@ test('OTIO file preview renders storyboards and stages reviews without writing t
           const url = new URL(req.url!, 'http://fixture')
           if (url.pathname === '/__otio') {
             res.setHeader('Content-Type', 'text/html')
-            res.end('<!doctype html><meta charset="utf-8"><div id="app"></div><script>window.fixtureErrors=[];addEventListener("error",e=>fixtureErrors.push(e.message));addEventListener("unhandledrejection",e=>fixtureErrors.push(String(e.reason)));</script><script type="module" src="/otio-fixture.ts"></script>')
+            res.end(`<!doctype html><meta charset="utf-8"><div id="app"></div><script>window.fixtureErrors=[];addEventListener("error",e=>fixtureErrors.push(e.message));addEventListener("unhandledrejection",e=>fixtureErrors.push(String(e.reason)));</script><script type="module" src="${url.searchParams.has('shell') ? '/otio-shell-fixture.ts' : '/otio-fixture.ts'}"></script>`)
             return
           }
+          if (url.pathname === '/__fail-next-folder-read') { failNextFolderRead = true; res.end('ok'); return }
           if (!url.pathname.includes('/api/')) return next()
           const path = url.searchParams.get('path')
           requests.push({ method: req.method, route: url.pathname, path })
+          if (req.method === 'GET' && url.pathname === '/projects/review/api/folders/edit/raw') {
+            if (path === 'assembly.OTIO') { res.end(timeline); return }
+            const png = images[`cuts/${path}` as keyof typeof images]
+            if (png) { res.setHeader('Content-Type', 'image/png'); res.end(png); return }
+          }
+          if (req.method === 'GET' && (url.pathname === '/api/projects' || /^\/projects\/(review|other)\/api\//.test(url.pathname) || url.pathname.startsWith('/api/providers'))) {
+            const json = (body: unknown) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)) }
+            if (url.pathname === '/api/projects') return json({ projects: [{ id: 'review', name: 'Review project', createdAt: '2026-01-01' }, { id: 'other', name: 'Other project', createdAt: '2026-01-01' }] })
+            if (url.pathname === '/projects/other/api/folders') return json({ folders: [] })
+            if (url.pathname.endsWith('/api/folders')) {
+              if (failNextFolderRead) { failNextFolderRead = false; res.statusCode = 503; return json({ error: 'unavailable' }) }
+              return setTimeout(() => json({ folders: [{ id: 'edit', name: 'Edit workspace', path: '/synthetic/edit', createdAt: '2026-01-01' }] }), 60)
+            }
+            if (url.pathname.endsWith('/folders/edit/files')) return json({ path: '', entries: [{ name: 'assembly.OTIO', type: 'file', ext: '.otio', size: Buffer.byteLength(timeline), mtime: modified }] })
+            return json({ sessions: [], nodes: [], messages: [], tools: [], jobs: [], requests: [], models: [], providers: [], agent: { model: '' } })
+          }
           if (req.method === 'GET' && url.pathname === '/api/sessions/fixture/raw') {
             if (path === documentPath) { res.setHeader('Content-Type', 'application/json'); res.end(timeline); return }
             if (path === videoPath || path === audioPath) {
@@ -254,9 +283,9 @@ app.whenReady().then(async()=>{
   assert.ok(monitor.right<=inspector.left+1 && monitor.bottom<=tracks.top+1 && inspector.bottom<=tracks.top+1);
   assert.ok(await run(()=>{
     const limits=document.querySelector('.inspector details.limits'), actions=document.querySelector('.reference-actions');
-    return limits && !limits.open && limits.nextElementSibling===actions &&
+    return limits && !limits.open && actions.nextElementSibling===limits &&
       document.querySelectorAll('.reference-actions').length===1 && actions.querySelectorAll('button').length===2;
-  }), 'both actions follow the collapsed Preview limits in the inspector');
+  }), 'both actions sit above the collapsed Preview limits in the inspector');
   if(${JSON.stringify(desktopScreenshot || '')}) writeFileSync(${JSON.stringify(desktopScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
   await click('Storyboard','.viewer-modes');
   const [board,boardTracks,boardInspector]=await layout('.storyboard-pane','.tracks-pane','.inspector');
@@ -434,6 +463,129 @@ app.whenReady().then(async()=>{
   assert.deepEqual((await state()).refs,final.refs);
   assert.deepEqual(external,[]);
   assert.deepEqual(await run(()=>window.fixtureErrors),[]);
+  await win.loadURL(${JSON.stringify(new URL('/__otio?shell=1', url).href)});
+  win.setSize(1380,900);
+  await wait('real shell',()=>!!document.querySelector('.project-explorer-toggle'));
+  if(await run(()=>!document.querySelector('.folder-action-button').getClientRects().length)) await click('Projects: Review project');
+  await click('Group chats by folder');
+  await wait('folder in project sidebar',()=>document.querySelector('[aria-label="New conversation in Edit workspace"]')?.getClientRects().length);
+  await click('New conversation in Edit workspace');
+  const tabs=()=>[...document.querySelectorAll('.editor-tab [role=tab]')].filter(e=>e.getClientRects().length).length;
+  const shellFile=async()=>{
+    await wait('file tab',()=>[...document.querySelectorAll('.editor-tab [role=tab]')].some(e=>e.textContent.trim()==='assembly.OTIO'));
+    await click('assembly.OTIO');
+    await wait('OTIO visible',()=>document.querySelector('.otio')?.getClientRects().length);
+  };
+  await click('Toggle files');
+  await wait('bound folder',()=>document.querySelector('[data-root-id="folder:edit"] .root-toggle')?.getClientRects().length);
+  await run(()=>document.querySelector('[data-root-id="folder:edit"] .root-toggle').click());
+  await wait('timeline in real explorer',()=>document.querySelector('[data-root-id="folder:edit"] .tree-row[data-path="assembly.OTIO"]')?.getClientRects().length);
+  await run(()=>document.querySelector('[data-root-id="folder:edit"] .tree-row[data-path="assembly.OTIO"]').click());
+  await shellFile();
+  await click('Toggle files');
+  const initialTabs=await run(tabs);
+  const selectPanel=async()=>{
+    if(await run(()=>document.querySelector('.compact-tabs')?.getClientRects().length)) await click('Selection','.compact-tabs');
+    await wait('inspector available',()=>document.querySelector('.reference-action:enabled')?.getClientRects().length);
+  };
+  const cdp=win.webContents.debugger;
+  cdp.attach('1.3');
+  await cdp.sendCommand('DOM.enable'); await cdp.sendCommand('CSS.enable');
+  const {root:dom} = await cdp.sendCommand('DOM.getDocument');
+  const actionNodes = await cdp.sendCommand('DOM.querySelectorAll',{nodeId:dom.nodeId,selector:'.reference-actions button'});
+  for(const nodeId of actionNodes.nodeIds) await cdp.sendCommand('CSS.forcePseudoState',{nodeId,forcedPseudoClasses:['focus-visible']});
+  for(const [width,dark] of [[1380,false],[1380,true],[550,true],[550,false]]){
+    win.setSize(width,900);
+    await run(dark=>document.documentElement.classList.toggle('dark',dark),dark);
+    await new Promise(r=>setTimeout(r,80));
+    await selectPanel();
+    const layout=await run(()=>{
+      const a=document.querySelector('.reference-action'),b=document.querySelector('.mark-action'),r=a.getBoundingClientRect(),s=b.getBoundingClientRect();
+      const c=getComputedStyle(a), d=getComputedStyle(b);
+      return {stacked:r.bottom<s.top && Math.abs(r.x-s.x)<1 && Math.abs(r.width-s.width)<1,distinct:c.backgroundColor!==d.backgroundColor&&c.backgroundColor!=='rgba(0, 0, 0, 0)'&&d.backgroundColor!=='rgba(0, 0, 0, 0)',focus:[c,d].every(style=>style.outlineStyle==='solid'&&style.outlineOffset==='2px'),size:Math.min(r.height,s.height)};
+    });
+    assert.ok(layout.stacked&&layout.distinct&&layout.size>=40,JSON.stringify(layout));
+    assert.ok(layout.focus,'focus-visible outline is styled on both actions: '+JSON.stringify(layout));
+  }
+  cdp.detach();
+  win.setSize(1380,900); await selectPanel();
+  await click('Reference selection','.otio');
+  await wait('existing composer routed',()=>[...document.querySelectorAll('.otio-reference-chip')].some(e=>e.getClientRects().length));
+  assert.equal(await run(tabs),initialTabs,'existing matching folder draft was reused');
+  assert.equal(await run(()=>document.querySelectorAll('.otio-reference-chip').length),1);
+  await run(()=>{
+    const composer=document.querySelector('.otio-reference-chip').closest('.chat-composer').querySelector('.reference-composer');
+    composer.textContent='Keep this other draft';composer.dispatchEvent(new Event('input',{bubbles:true}));
+  });
+  const closeActiveChat=async()=>{
+    await run(()=>{
+      const close=[...document.querySelectorAll('.editor-tab.selected')].find(tab=>tab.querySelector('[aria-selected=true]')?.textContent.trim()==='New conversation')?.querySelector('button[aria-label^="Close"]');
+      if(!close)throw Error('Missing selected chat to close');close.click();
+    });
+    await shellFile();
+  };
+  await closeActiveChat();
+  await selectPanel();
+  const withoutChat=await run(tabs);
+  const doubleClick=async selector=>run(selector=>{
+    const button=document.querySelector(selector);
+    button.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+    button.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:2}));
+  },selector);
+  // Leave the project while the local folder identity is still being verified.
+  await run(async()=>{
+    document.querySelector('.reference-action').click();
+    await window.shellRouter.push({name:'chat',params:{projectId:'other'}});
+  });
+  await new Promise(r=>setTimeout(r,150));
+  assert.equal(await run(()=>[...document.querySelectorAll('.otio-reference-chip')].filter(e=>e.getClientRects().length).length),0);
+  await run(()=>window.shellRouter.push({name:'chat',params:{projectId:'review'}}));
+  await shellFile(); await selectPanel();
+  assert.equal(await run(()=>[...document.querySelectorAll('[data-editor-header-group] .editor-tab [role=tab]')].filter(e=>e.getClientRects().length).length),withoutChat,'stale review did not open a draft in its original project either');
+  await doubleClick('.reference-action');
+  await wait('fresh draft from reference selection',()=>[...document.querySelectorAll('.otio-reference-chip')].some(e=>e.getClientRects().length));
+  assert.equal(await run(tabs),withoutChat+1,'only one new editor for the two clicks');
+  assert.equal(await run(()=>[...document.querySelectorAll('.otio-reference-chip')].filter(e=>e.getClientRects().length).length),1);
+  assert.equal(await run(()=>[...document.querySelectorAll('.otio-reference-chip')].find(e=>e.getClientRects().length).querySelector('.attachment-preview')!==null),false);
+  assert.equal(await run(()=>[...document.querySelectorAll('.reference-composer')].find(e=>e.getClientRects().length).textContent),'','fresh composer does not copy unrelated unsent text');
+  await closeActiveChat();
+  await selectPanel();
+  const draw=async()=>{
+    await wait('capturable local picture',()=>document.querySelector('.mark-action:enabled')?.getClientRects().length);
+    await click('Draw on frame','.otio');
+    await wait('local frozen canvas',()=>document.querySelector('canvas.image-annotation-canvas')?.width===240);
+    assert.equal(await run(tabs),withoutChat,'starting markup must not open a draft');
+  };
+  await draw();
+  await click('Cancel','.review-actions');
+  assert.equal(await run(tabs),withoutChat,'cancelling markup must not open a draft');
+  await selectPanel();
+  await draw();
+  const point=await run(()=>{
+    const c=document.querySelector('canvas.image-annotation-canvas'); c.scrollIntoView({block:'center'});
+    const r=c.getBoundingClientRect(); return {x:Math.round(r.left+r.width*.5),y:Math.round(r.top+r.height*.5)};
+  });
+  win.webContents.sendInputEvent({type:'mouseDown',...point,button:'left',clickCount:1});
+  win.webContents.sendInputEvent({type:'mouseUp',...point,button:'left',clickCount:1});
+  await wait('marked local PNG ready',()=>document.querySelector('.review-actions button:enabled')?.textContent.trim()==='Add reference');
+  await run(()=>fetch('/__fail-next-folder-read'));
+  await click('Add reference','.review-actions');
+  await wait('failure surfaced without discarding marks',()=>document.querySelector('.review-error')?.textContent.includes('could not be added') && document.querySelector('.review-actions button:enabled')?.textContent.trim()==='Add reference');
+  assert.equal(await run(tabs),withoutChat);
+  await doubleClick('.review-actions button');
+  await wait('marked PNG attached in fresh composer',()=>document.querySelector('.otio-reference-chip img')?.naturalWidth===240);
+  assert.equal(await run(tabs),withoutChat+1);
+  assert.equal(await run(()=>[...document.querySelectorAll('.otio-reference-chip')].filter(e=>e.getClientRects().length).length),1);
+  assert.equal(await run(()=>[...document.querySelectorAll('.otio-reference-chip .attachment-preview')].find(e=>e.getClientRects().length)?.getAttribute('aria-label')),'View image: assembly-f0-marked.png');
+  assert.equal(await run(async()=>{
+    const img=[...document.querySelectorAll('.otio-reference-chip img')].find(e=>e.getClientRects().length);
+    const source=await createImageBitmap(await(await fetch('/projects/review/api/folders/edit/raw?path=lower.png')).blob());
+    const c=document.createElement('canvas');c.width=240;c.height=100;
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(source,0,0);const original=ctx.getImageData(117,47,6,6).data;
+    ctx.drawImage(img,0,0);return ctx.getImageData(117,47,6,6).data.some((value,i)=>value!==original[i]);
+  }),true,'the fresh composer preview contains the drawn pixels');
+  assert.deepEqual(await run(()=>window.fixtureErrors),[]);
   console.log('OTIO_VIEWER_OK'); app.exit(0);
 }).catch(error=>{console.error(error);app.exit(1)});`)
   const env: NodeJS.ProcessEnv = {}
@@ -448,8 +600,10 @@ app.whenReady().then(async()=>{
   const [code] = await once(child, 'close')
   assert.equal(code, 0, output)
   assert.match(output, /OTIO_VIEWER_OK/)
-  assert.ok(requests.every(({ method, route, path }) => method === 'GET' && route === '/api/sessions/fixture/raw' && path && [documentPath, videoPath, audioPath, ...Object.keys(images)].includes(path)), JSON.stringify(requests))
-  assert.deepEqual(new Set(requests.map(({ path }) => path)), new Set([documentPath, videoPath, audioPath, ...Object.keys(images)]))
+  assert.ok(requests.every(({ method }) => method === 'GET'), 'Neither flow sends, uploads, or creates a server session')
+  const isolated = requests.filter(({ route }) => route === '/api/sessions/fixture/raw')
+  assert.deepEqual(new Set(isolated.map(({ path }) => path)), new Set([documentPath, videoPath, audioPath, ...Object.keys(images)]))
+  assert.ok(requests.some(({ route, path }) => route === '/projects/review/api/folders/edit/raw' && path === 'assembly.OTIO'))
   if (desktopScreenshot) t.diagnostic(`Desktop overview screenshot: ${desktopScreenshot}`)
   if (screenshot) t.diagnostic(`Narrow review screenshot: ${screenshot}`)
 })

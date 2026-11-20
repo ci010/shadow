@@ -13,7 +13,7 @@
       <ChatTab v-else ref="primary" :api-base="apiBase" :embedded="embedded || inspection" :enable-child-pane="true"
         :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)"
-        :inspection="inspection" :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :automation-run="automationRun"
+        :inspection="inspection" :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :take-otio-reference="takeOtioReference" :open-remote="openRemote" :automation-run="automationRun"
         :visible="visible" :keyboard-active="keyboardActive"
         @open-child="target => emit('navigate', target.primaryId, target.childId)" @close-child="emit('navigate', sessionId || '')" @deleted="emit('deleted', $event)" @navigate="emit('navigate', $event)" @child-navigation="emit('navigate', sessionId || '', $event)" @prepared="emit('prepared', $event)">
         <template #notice><slot name="notice" /></template>
@@ -35,7 +35,7 @@ import { observedGroupKey } from '../service-groups.ts'
 import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean; inspection?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
+const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; takeOtioReference?: () => import('../otio-draft.ts').OtioDraftReference | undefined; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean; inspection?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
 const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string] }>()
 const primary = ref<InstanceType<typeof ChatTab>>()
 defineExpose({ canReplaceSidebarTab: () => primary.value?.canReplaceSidebarTab() ?? false, appendInputReference: (item: LabeledInputReference): AttachReferenceResult => primary.value?.appendInputReference(item) ?? 'unavailable',
