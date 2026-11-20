@@ -39,8 +39,8 @@ function escapeXml(text: string): string {
   })
 }
 
-function render(lines: string[]): string {
-  return `${GUIDANCE}\n<available_skills>\n${lines.join('\n')}\n</available_skills>`
+function render(lines: string[], guidance: string): string {
+  return `${guidance}\n<available_skills>\n${lines.join('\n')}\n</available_skills>`
 }
 
 function entry(skill: Skill): string | undefined {
@@ -109,6 +109,9 @@ export class SkillDisclosure {
 
   summary(visibleSkills: Skill[], sessionId?: string): string {
     const visible = new Map(visibleSkills.map(skill => [skill.meta.name, skill]))
+    const guidance = visible.has('three-playground')
+      ? `${GUIDANCE}\n- For ordinary 3D modeling (create a model, edit a part or export GLB), read("v:skills/three-playground"). Respect requested CAD, DCC or format requirements.`
+      : GUIDANCE
     const sorted = [...visibleSkills].sort((a, b) =>
       a.meta.name < b.meta.name ? -1 : a.meta.name > b.meta.name ? 1 : 0)
     const recent = (session: boolean): Skill[] => {
@@ -131,10 +134,10 @@ export class SkillDisclosure {
       if (selected.has(skill.meta.name)) continue
       selected.add(skill.meta.name)
       const line = entry(skill)
-      if (!line || tokens(render([...lines, line])) > SKILL_DISCLOSURE_TOKEN_LIMIT) continue
+      if (!line || tokens(render([...lines, line], guidance)) > SKILL_DISCLOSURE_TOKEN_LIMIT) continue
       lines.push(line)
       if (lines.length === SKILL_DISCLOSURE_ENTRY_LIMIT) break
     }
-    return render(lines)
+    return render(lines, guidance)
   }
 }
