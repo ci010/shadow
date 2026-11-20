@@ -628,7 +628,10 @@ strictly before the timeline end and labels samples with no picture. Without val
 local media, cards show an unavailable-picture state rather than a substitute.
 Click a card to select its position, or double-click it (or press Enter on the
 focused card) to open the Monitor there. The tracks and selection inspector are
-still available. Frame drawing happens in the Monitor.
+still available. Scroll or swipe to pan the board; use **−** and **+** to change
+the picture scale, and **Fit width** to restore the responsive layout. Shots are
+numbered in timeline order; panning and zooming do not move any clips. Frame
+drawing happens in the Monitor.
 
 Use **Add description** or **Edit description** on a card to add a caption; all
 samples of that clip share it, with one caption per clip on each page. Save a blank
