@@ -148,7 +148,10 @@ export abstract class BaseSession {
   protected async buildInputMessage(input: SessionMessageInput, cwd: string): Promise<ChatMessage> {
     const message = await buildUserChatMessage(input, this.workspace, cwd)
     if (input.source.kind === 'user' && input.content.trim()) {
-      this.directInputs.set(message, { sessionId: this.id, id: input.id, text: input.content, at: input.timestamp })
+      const { channel, senderId, channelAddress, isGroup } = input.source.sender
+      this.directInputs.set(message, { sessionId: this.id, id: input.id, text: input.content, at: input.timestamp,
+        ...(!isGroup && senderId.trim() ? { profileSource: { channel, senderId, channelAddress } } : {}),
+      })
     }
     const requestId = input.source.kind === 'user' && input.source.sender.channel === 'web' ? input.replyTo?.platformMessageId : undefined
     const sender = Array.isArray(message.content) ? message.content[0] : undefined
