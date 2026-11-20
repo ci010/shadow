@@ -87,7 +87,13 @@ test('opted-in Child home is a reserved read and shell root without a registered
   const disabled = new ManagedChildWorkdirs(storage, 'child', [])
   await disabled.init()
   await assert.rejects(disabled.assertCanExecute(access, signal), /missing|offline|withdrawn/)
-  const enabled = new ManagedChildWorkdirs(storage, 'child', [], home)
+  const shellOnly = new ManagedChildWorkdirs(storage, 'child', [], home)
+  await shellOnly.init()
+  await assert.rejects(shellOnly.assertCanExecute(access, signal), /No live support/)
+  for (const cwd of [undefined, '~']) {
+    await shellOnly.assertCanExecute({ ...access, operation: 'workdir.process.execute-once', args: { cwd, script: 'echo test' } }, signal)
+  }
+  const enabled = new ManagedChildWorkdirs(storage, 'child', [], home, true)
   await enabled.init()
   const descriptor = enabled.workdirs.find(dir => dir.workdirId === DEVICE_HOME_WORKDIR)
   assert.equal(descriptor?.online, true)

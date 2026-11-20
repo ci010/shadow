@@ -33,6 +33,19 @@ test('device VFS shows a live Child without a workspace and projects no private 
   assert.throws(() => vfs.write(path, { content: '{}' }, context), /read-only/)
 })
 
+test('device VFS advertises shell exec independently of Child home reads', () => {
+  const contextFor = (connection: NodeInventoryEntry['connection'], enabled: boolean) => createDevicesHandler({
+    projectId: 'p', assertSession: () => {}, execAvailable: () => enabled,
+    inventory: () => ({ version: 1, nodes: [{ ...child, connection }] }),
+  })
+  const read = (connection: NodeInventoryEntry['connection'], enabled: boolean) =>
+    JSON.parse(String(contextFor(connection, enabled).read('child%3A1', context)))
+  assert.equal(read('connected', true).deviceExecWorkspace, 'device:child:1')
+  assert.equal(read('connected', true).deviceHomeWorkspace, undefined)
+  assert.equal(read('offline', true).deviceExecWorkspace, undefined)
+  assert.equal(read('connected', false).deviceExecWorkspace, undefined)
+})
+
 test('device VFS checks session, Project and cancellation before inventory reads or search', () => {
   let reads = 0
   const handler = createDevicesHandler({ projectId: 'p', assertSession: ctx => {

@@ -606,6 +606,13 @@ to seek; focus it and use the arrow keys to step one timeline frame. Selecting a
 visual clip opens its **Clip source**; choose **Timeline** to see the top visible
 picture at the same position. This is a read-only viewer, not a timeline editor.
 
+Tracks use distinct colors; the track header identifies its type and provides local
+hide or mute controls. Audio clips show measured peaks from linked, uncompressed
+PCM or 32-bit float WAV files up to 8 MiB. The waveform follows the source trim
+and leaves gaps and silent portions quiet. Other formats, oversized or unavailable
+files retain their labeled clip blocks without a waveform. This display does not
+start playback or grant access to additional files.
+
 Use **Storyboard** in the existing viewer toolbar to scan representative pictures.
 **Final timeline** follows the monitor's top visible picture and hard cuts; select a
 video track or a clip on it to make that track available as a solo source. **Per

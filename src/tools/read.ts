@@ -2,6 +2,8 @@ import { layerfsRoute } from './layerfs-route.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { sessionWebFetch } from '../execution/network/session-proxy.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
+import { readOutputSpill } from '../utils/output-spill.ts'
+import { OUTPUT_PREVIEW_CHARS } from '../utils/output-preview.ts'
 import { extname, isAbsolute, join, relative } from 'node:path'
 import {
   mkdir,
@@ -210,7 +212,7 @@ export class ReadTool implements Tool<ToolResult> {
       offset: {
         type: 'number',
         description:
-          '1-based starting line for files, URLs and virtual text. With flag "l": item index.',
+          '1-based starting line for files, URLs and virtual text. With flag "l": item index. With flag "c": UTF-16 character offset in a generated output spill.',
       },
       limit: {
         type: 'number',
@@ -219,7 +221,7 @@ export class ReadTool implements Tool<ToolResult> {
       flag: {
         type: 'string',
         description:
-          'n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: "nl".',
+          'n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: "nl". c = character paging for generated Project Home output spills only; use alone.',
       },
     },
     required: ['path'],
@@ -231,6 +233,19 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    // A spill is an explicitly named Project resource, not a path on the selected
+    // Child/LayerFS workspace. Never try the local filesystem for a target path.
+    if (args.flag === 'c') {
+      if (args.workspace !== undefined || args.folder !== undefined || args.encoding !== undefined || context.javascriptInvocation) {
+        throw new Error('Output spill reads use Project Home; workspace, encoding and JavaScript bridge calls are not supported.')
+      }
+      for (const key of ['offset', 'limit']) {
+        if (args[key] !== undefined && (!Number.isSafeInteger(args[key]) || Number(args[key]) < 1)) {
+          throw new TypeError(`${key} must be a positive safe integer.`)
+        }
+      }
+      return readOutputSpill(this.workspace, String(args.path), Number(args.offset ?? 1), Number(args.limit ?? OUTPUT_PREVIEW_CHARS), context.signal)
+    }
     context = await executionTargetContext(args, context, 'filesystem.read')
     const layerResult = await layerfsRoute('read', args, context, this.workspace)
     if (layerResult !== undefined) return layerResult

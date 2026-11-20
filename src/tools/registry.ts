@@ -1,10 +1,9 @@
 import { isWorkTool } from './work-names.ts'
 import { executionTargetParameters, workspaceArguments } from './execution-target.ts'
 import { UseProjectTool } from './use-project.ts'
-import { projectStoragePath } from '../utils/data-paths.ts'
 import { trace } from '@opentelemetry/api'
-import { join } from 'node:path'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { OUTPUT_PREVIEW_CHARS } from '../utils/output-preview.ts'
+import { spillOutputPreview } from '../utils/output-spill.ts'
 import { ToolNoEffectError, ToolOutcomeUnknownError, isCompletedToolFailure, toolResultText, transientToolResult, transientToolSummary, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
 import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
@@ -22,9 +21,8 @@ type Tool = TypedTool<ToolResult>
 export type ToolExecutionPolicy = (tool: Tool, args: Record<string, unknown>, context: ExecutionContext) => string | undefined
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
-const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
-/** Self-limited outputs and structured execution receipts must remain intact. */
+/** These outputs keep their own pagination/receipt format up to the model-side ceiling. */
 const EXEMPT_TOOLS = new Set(['workspace_use', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'sql'])
 
 export function toolInvocationContract(tools: Tool[]): string {
@@ -51,7 +49,7 @@ export class Tools {
 
   constructor(
     workspace: string,
-    truncationThreshold = DEFAULT_TRUNCATION_THRESHOLD,
+    truncationThreshold = OUTPUT_PREVIEW_CHARS,
   ) {
     this.workspace = workspace
     this.truncationThreshold = truncationThreshold
@@ -180,8 +178,7 @@ export class Tools {
             /^(?:glob|grep)(?::.*)?$/.test(args.space) && typeof args.path === 'string' && isVirtualPath(args.path) ||
             /^(?:glob|glob:)$/.test(args.space) && args.path === undefined && typeof args.query === 'string' && isVirtualPath(args.query)
           )
-        )) &&
-        !(context.remoteWorkdir && name === 'exec')
+        ))
       ) {
         text = await this.truncateAndSave(name, text)
       }
@@ -203,7 +200,9 @@ export class Tools {
         s?.recordException(err)
       }
       s?.setStatus({ code: 2, message: msg })
-      return `Error executing ${name}: ${msg}`
+      const text = `Error executing ${name}: ${msg}`
+      return !context.javascriptInvocation && text.length > this.truncationThreshold
+        ? this.truncateAndSave(name, text) : text
     }
   }
 
@@ -255,30 +254,7 @@ export class Tools {
     toolName: string,
     result: string,
   ): Promise<string> {
-    const tmpDir = projectStoragePath(this.workspace, '.tmp')
-    try {
-      await mkdir(tmpDir, { recursive: true })
-    } catch { /* exists */ }
-
-    const now = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
-    const rand = crypto.getRandomValues(new Uint8Array(3))
-    const hex = Array.from(rand, (b) => b.toString(16).padStart(2, '0')).join(
-      '',
-    )
-    const filename = `tool-result-${toolName}-${now}-${hex}.txt`
-    const filePath = join(tmpDir, filename)
-    const relativePath = `.tmp/${filename}`
-
-    await writeFile(filePath, result)
-
-    const truncated = result.slice(0, this.truncationThreshold)
-    const remaining = result.length - this.truncationThreshold
-    return (
-      truncated +
-      `\n...[truncated: ${remaining} chars remaining]\n` +
-      `Full output saved to: ${relativePath}\n` +
-      `Use read with offset=${this.truncationThreshold} to read more.`
-    )
+    return spillOutputPreview(this.workspace, `tool-result-${toolName}`, result, this.truncationThreshold)
   }
 
   /** Return OpenAI function-calling compatible definitions. */
