@@ -2,6 +2,7 @@
   <section class="model-view" :aria-label="playground ? t('Three.js Playground') : t('3D model')">
     <header class="model-toolbar">
       <div class="model-tools" role="group" :aria-label="t('Camera')">
+        <button type="button" class="btn btn-sm" :disabled="!shown" :aria-expanded="outlineOpen" @click="toggleOutline">{{ t('Outline') }}</button>
         <button type="button" class="btn btn-sm" :disabled="!shown" @click="viewer?.setView('front')">{{ t('Front') }}</button>
         <button type="button" class="btn btn-sm" :disabled="!shown" @click="viewer?.setView('back')">{{ t('Back view') }}</button>
         <button type="button" class="btn btn-sm" :disabled="!shown" @click="viewer?.setView('top')">{{ t('Top') }}</button>
@@ -14,7 +15,15 @@
         <button type="button" class="btn btn-sm" :disabled="!shown" @click="saveView">{{ t('Save view') }}</button>
       </div>
     </header>
-    <div class="model-stage"><canvas ref="canvas" tabindex="0" :aria-label="t('3D model')" :aria-describedby="helpId" /></div>
+    <div class="model-body">
+      <Teleport v-if="shown && (dock || !docked && localOutline)" :to="dock || 'body'" :disabled="!dock">
+        <section class="model-outline-pane" :aria-label="t('Outline')">
+          <HoverInfo :text="path" v-slot="{ triggerProps }"><div class="model-outline-file" v-bind="triggerProps" tabindex="0">{{ (playground && path.split('/').at(-2)) || path.split('/').at(-1) }}</div></HoverInfo>
+          <GltfOutline :rows="shown.rows" :selected="selected" @select="selectFromOutline" />
+        </section>
+      </Teleport>
+      <div class="model-stage"><canvas ref="canvas" tabindex="0" :aria-label="t('3D model')" :aria-describedby="helpId" /></div>
+    </div>
     <div class="model-status">
       <div class="selection" aria-live="polite">
         <strong>{{ playground ? t('Three.js Playground') : t('glTF asset') }}</strong>
@@ -39,6 +48,9 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
 import { ThreeViewer, type ModelInput } from '@shadow/three-viewer'
 import HoverInfo from '../HoverInfo.vue'
+import GltfOutline from './GltfOutline.vue'
+import { EditorGroupsKey } from '../../editor-groups.ts'
+import { modelOutlineTarget, OutlineEditorKey } from '../../model-outline-host.ts'
 import { t } from '../../i18n.ts'
 import { apiUrl } from '../../api-url.ts'
 import { liveProjectId } from '../../composables/useLiveClient.ts'
@@ -53,7 +65,7 @@ import { exportSnapshot, fetchPlaygroundSnapshot, watchPlayground } from '../../
 
 // FilePreviewModal keys this editor by its source owner and path, never by mtime.
 const props = defineProps<{ apiBase: string; path: string; sessionId: string; folderId?: string; sessionWorkspace?: boolean;
-  active: boolean; canReview: boolean; remote?: boolean; attachmentUrl?: string; archive?: ArchiveReference; sourceBlob?: Blob }>()
+  active: boolean; canReview: boolean; fileEditor?: boolean; remote?: boolean; attachmentUrl?: string; archive?: ArchiveReference; sourceBlob?: Blob }>()
 const emit = defineEmits<{ added: [] }>()
 const helpId = useId(), canvas = ref<HTMLCanvasElement>(), viewer = shallowRef<ThreeViewer>()
 const draft = inject(GltfReferenceDraftKey, null)
@@ -71,7 +83,22 @@ const attachmentKey = props.attachmentUrl ? createUuid() : undefined
 const assetId = computed(() => { const { apiBase: _, ...owner } = source.value; return JSON.stringify([owner, path.value, ...(attachmentKey ? [attachmentKey] : [])]) })
 const playground = computed(() => !props.archive && !props.attachmentUrl && isPlaygroundFile(props.path.split('/').at(-1)!))
 const target = computed(() => props.canReview ? draft?.target(source.value) : null)
-const shown = shallowRef<{ version: string; glb?: ArrayBuffer }>()
+const shown = shallowRef<{ version: string; glb?: ArrayBuffer; rows: ThreeViewer['outline'] }>()
+const groups = inject(EditorGroupsKey, undefined), editor = inject(OutlineEditorKey, undefined)
+const docked = computed(() => !!(props.fileEditor && groups && editor && !editor.value.conversation))
+const dock = computed(() => docked.value && props.active && groups!.focused(editor!.value.id)
+  ? groups!.targets.get(modelOutlineTarget(editor!.value.projectId)) : undefined)
+const localOutline = ref(false)
+const outlineOpen = computed(() => docked.value ? !!dock.value : localOutline.value)
+function toggleOutline() {
+  if (!docked.value) { localOutline.value = !localOutline.value; return }
+  groups!.activate(editor!.value.id)
+  groups!.setExplorerOpen(editor!.value.projectId, !outlineOpen.value)
+}
+function selectFromOutline(ids: string[]) {
+  const view = viewer.value
+  if (view && props.active && outlineOpen.value && view.outline === shown.value?.rows) view.setSelection(ids)
+}
 const selected = shallowRef<readonly string[]>([]), missing = shallowRef<readonly string[]>([])
 const busy = ref(false), player = ref(false), error = ref(''), actionError = ref('')
 const mounted = ref(false), linked = ref<string | null>(null)
@@ -101,7 +128,7 @@ async function display(input: ModelInput, glb?: ArrayBuffer) {
   missing.value = []
   await view.load(input)
   input.signal?.throwIfAborted()
-  shown.value = { version: input.version, glb }; selected.value = view.selection; busy.value = false; error.value = ''
+  shown.value = { version: input.version, glb, rows: view.outline }; selected.value = view.selection; busy.value = false; error.value = ''
 }
 async function loadAsset() {
   assetRead?.abort()
@@ -194,6 +221,10 @@ onBeforeUnmount(() => { mounted.value = false; stop(); viewer.value?.dispose(); 
 .model-view { display:flex; flex-direction:column; width:100%; min-width:0; height:100%; min-height:0; overflow:auto; color:var(--c-text); background:var(--c-bg-card); font-size:13px }
 .model-toolbar,.model-status,.model-tools,.selection { display:flex; flex-wrap:wrap; align-items:center; gap:4px }
 .model-toolbar,.model-status { justify-content:space-between; gap:8px; padding:6px 10px; border-bottom:1px solid var(--c-border-soft) }
+.model-body { display:flex; flex:1 1 auto; min-height:140px; min-width:0; overflow:hidden }
+.model-outline-pane { display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden; flex:1 }
+.model-body > .model-outline-pane { flex:0 0 min(38%, 220px); border-inline-end:1px solid var(--c-border) }
+.model-outline-file { flex:none; padding:5px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--c-text-secondary) }
 .model-stage { flex:1 1 auto; min-height:140px; min-width:0; position:relative; background:var(--c-bg-soft) }
 .model-stage canvas { display:block; position:absolute; inset:0; width:100%; height:100%; outline-offset:-2px }
 .model-toolbar .btn[aria-pressed=true] { color:var(--c-primary); background:var(--c-selection-bg) }

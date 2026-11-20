@@ -45,7 +45,13 @@ async function run() {
   const vertex = 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
   const fragment = 'void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }';
   try {
+    equal(viewer.outline, []);
     equal((await viewer.load(model('1'))).objectIds, ['left', 'right']);
+    const originalOutline = viewer.outline;
+    equal(originalOutline, [
+      { key: 'node:0', parentKey: null, label: 'Triangle 1', objectId: 'left' },
+      { key: 'node:1', parentKey: null, label: 'Triangle 2', objectId: 'right' },
+    ]);
     equal(viewer.labelFor('left'), 'Triangle 1');
     const groundCanvas = canvas.cloneNode() as HTMLCanvasElement;
     groundCanvas.width = canvas.width; groundCanvas.height = canvas.height;
@@ -64,6 +70,7 @@ async function run() {
     await rejects(viewer.load({ ...model('missing'), shaders: [{ objectId: 'absent', slot: 0, vertex, fragment }] }), /Unknown objectId/);
     await rejects(viewer.load({ ...model('invalid'), shaders: [{ objectId: 'left', slot: 0, vertex, fragment: 'invalid shader' }] }), /Shader left\[0\]/);
     equal(viewer.getCamera(), pose); equal(viewer.selection, ['right']);
+    if (viewer.outline !== originalOutline) throw new Error('Rejected load changed the outline');
     const established = await viewer.captureFrame();
     equal(established.version, '1'); equal(established.objectIds, ['right']);
     const pending = viewer.load(model('old'));
@@ -133,6 +140,25 @@ async function run() {
     await rejects(viewer.load(unannotated), /Missing shadowMaterialSlots/);
     equal((await viewer.captureFrame()).version, 'multi');
     equal((await viewer.load({ ...unannotated, shaders: undefined })).objectIds, ['two-materials']);
+    equal(viewer.outline, [{ key: 'node:0', parentKey: null, label: 'two-materials', objectId: 'two-materials' }]);
+    const { json: tree, data: treeMesh } = fixture([undefined, undefined]);
+    const treeResult = await viewer.load({ version: 'tree', resources: new Map([['mesh.bin', treeMesh]]),
+      bytes: new TextEncoder().encode(JSON.stringify({ ...tree, scenes: [{ nodes: [2] }, { nodes: [3] }],
+        nodes: [...tree.nodes, { name: 'Group', children: [0, 1] }, { name: 'Inactive' }],
+        meshes: [{ primitives: [...tree.meshes[0].primitives, ...tree.meshes[0].primitives] }],
+      })),
+    });
+    equal(viewer.outline.map(({ key, parentKey, objectId }) => [key, parentKey, objectId]), [
+      ['node:2', null, undefined],
+      ['node:0', 'node:2', undefined],
+      ['node:0/primitive:0', 'node:0', treeResult.objectIds[0]],
+      ['node:0/primitive:1', 'node:0', treeResult.objectIds[1]],
+      ['node:1', 'node:2', undefined],
+      ['node:1/primitive:0', 'node:1', treeResult.objectIds[2]],
+      ['node:1/primitive:1', 'node:1', treeResult.objectIds[3]],
+    ]);
+    viewer.setSelection([treeResult.objectIds[3]]);
+    equal(viewer.selection, [treeResult.objectIds[3]]);
     viewer.setPlayerMode(true); canvas.focus();
     canvas.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', bubbles: true }));
     equal(modes, [true, false]);
