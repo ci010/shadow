@@ -599,12 +599,6 @@ current conversation without sending a new message.
 
 ### Reviewing an OpenTimelineIO edit
 
-Try [Moonrise: a playable eight-second example](../examples/otio-first-cut/README.md).
-Its `cut.otio`, two stills and video are ready to open together in a local
-workspace. The sample also includes an **optional folder-scoped `video-editor`
-Skill**: select the example folder itself to use its guided first-cut scaffold.
-It is not installed for other workspaces and does not change the viewer.
-
 Open a `.otio` (or `.otio.json`) timeline from **Files**. The structure pane selects
 Timeline, Stack, Track, Clip, Gap and Transition objects, including nested or
 same-named items. The tracks share a ruler and playhead. Click or drag the ruler
