@@ -2,9 +2,7 @@
 
 The backend gateway serves the built web UI alongside its APIs. Electron is
 optional for browser access, but an Electron-owned backend stops when Electron
-exits. A separately started Node backend or the
-[Windows service](release.md#opt-in-headless-windows-service) continues
-independently. The ordinary gateway listens on loopback by default.
+exits. A separately started Node backend continues independently. The ordinary gateway listens on loopback by default.
 
 ## Local browser login
 

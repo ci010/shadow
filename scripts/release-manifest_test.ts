@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { createPackage } from '@electron/asar'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { createReleaseManifest, parseReleaseManifest, sourceFingerprint, verifyReleaseManifest } from './release-manifest.ts'
-import { downloadUrl, verifyWinSW } from './release-downloads.ts'
+import { downloadUrl } from './release-downloads.ts'
 import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 const windows = desktopTarget('win32', 'x64')
@@ -27,7 +27,6 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/dist/preload.cjs', 'preload'],
     ['desktop/dist/service/connection.js', 'service connection'],
     ['desktop/assets/icon.ico', 'icon'],
-    ['desktop/service/ShadowService.exe', 'synthetic-wrapper'],
     ['desktop/aria2/aria2c.exe', 'MZ-synthetic-executable'],
     ['desktop/aria2/aria2c', 'ELF-synthetic-executable'],
     ['desktop/aria2/COPYING', 'synthetic license'],
@@ -46,7 +45,6 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/backend/package.json', 'resources/backend/package.json'],
     ['desktop/backend/dist/src/index.js', 'resources/backend/dist/src/index.js'],
     ['app/dist/index.html', 'resources/app-dist/index.html'],
-    ['desktop/service/ShadowService.exe', 'resources/service/ShadowService.exe'],
     // Model the real electron-builder allowlist, not a separately maintained copy.
     ...[...JSON.parse(await readFile(new URL('../desktop/package.json', import.meta.url), 'utf8'))
       .build.extraResources.find((resource: { from: string }) => resource.from === 'aria2').filter,
@@ -58,14 +56,13 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/dist/service/connection.js', 'archive/dist/service/connection.js'],
     ['desktop/assets/icon.ico', 'archive/assets/icon.ico'],
   ]) {
-    if (to.startsWith('resources/service/') && target.platform !== 'win32') continue
     await file(packaged, to.replace(/^resources/, target.resourcesRelativePath), await readFile(join(root, from), 'utf8'))
   }
   await createPackage(join(packaged, 'archive'), join(packaged, target.resourcesRelativePath, 'app.asar'))
   return packaged
 }
 
-test('release verification binds dirty source, renderer, service host and actual ASAR to one build', async () => {
+test('release verification binds dirty source, renderer and actual ASAR to one build', async () => {
   await withTempWorkspace(async root => {
     const packaged = await fixture(root)
     await verifyReleaseManifest(packaged, root, windows)
@@ -177,8 +174,6 @@ test('legacy v1 manifests are Windows x64 only', async () => {
     assert.deepEqual(parseReleaseManifest(parseReleaseManifest(manifest)), parseReleaseManifest(manifest))
     await verifyReleaseManifest(packaged, root, windows)
     await assert.rejects(verifyReleaseManifest(packaged, root, desktopTarget('linux', 'x64')), /target win32\/x64 does not match/)
-    delete manifest.files['resources/service/ShadowService.exe']
-    assert.throws(() => parseReleaseManifest(manifest), /missing resources\/service/)
   })
 })
 
@@ -228,12 +223,11 @@ test('v2 manifests reject unsupported targets, missing identity and wrong archit
   })
 })
 
-test('release downloads reject insecure sources and unverified service binaries', () => {
+test('release downloads reject insecure sources', () => {
   assert.equal(downloadUrl('https://example.test/pinned.exe'), 'https://example.test/pinned.exe')
   for (const value of ['http://example.test/tool.exe', 'https://user:password@example.test/tool.exe', 'file:///tool.exe']) {
     assert.throws(() => downloadUrl(value))
   }
-  assert.throws(() => verifyWinSW(Buffer.from('not WinSW')), /SHA-256 mismatch/)
 })
 
 test('prepared release source fingerprint includes owned native patches but excludes Cargo outputs', async () => {

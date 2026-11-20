@@ -48,7 +48,7 @@ test('portable releases validate native Electron distributions without downloadi
   }
 })
 
-test('packaging configuration keeps WinSW Windows-only and uses shared portable icons', async () => {
+test('packaging configuration omits the old service wrapper and uses shared portable icons', async () => {
   const desktop = JSON.parse(await readFile(new URL('../desktop/package.json', import.meta.url), 'utf8'))
   assert.equal(desktop.scripts.dist, 'electron-builder --publish never')
   assert.equal(desktop.build.win.target, 'nsis')
@@ -68,7 +68,7 @@ test('packaging configuration keeps WinSW Windows-only and uses shared portable 
   assert(!desktop.build.extraResources.some((item: { from: string }) => item.from === 'service'))
   assert(desktop.build.extraResources.some((item: { from: string; to: string }) =>
     item.from === 'aria2' && item.to === 'aria2'))
-  assert(desktop.build.win.extraResources.some((item: { from: string }) => item.from === 'service'))
+  assert(!desktop.build.win.extraResources.some((item: { from: string }) => item.from === 'service'))
   const aria2 = desktop.build.extraResources.find((item: { from: string }) => item.from === 'aria2')
   assert(!aria2.filter.includes('aria2c') && !aria2.filter.includes('aria2c.exe'))
   for (const platform of ['win', 'mac', 'linux']) {
