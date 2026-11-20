@@ -50,6 +50,7 @@ test('native middle clicks close only their closable tab across split and standa
     for (const header of ['groups','dashboard']) {
       assert.deepEqual(await run('Array.from(document.querySelectorAll("#'+header+' .editor-project-marker"),e=>[e.textContent,getComputedStyle(e).borderRadius])'),[['Alpha','0px'],['Beta','0px']]);
     }
+    assert.deepEqual(await run('(()=>{const nav=document.querySelector("#dashboard .project-editor-tabs");nav.style.width="100px";const marker=nav.querySelector(".editor-project-marker"),tab=nav.querySelector(".project-editor-tab");const before=marker.getBoundingClientRect().left, tabBefore=tab.getBoundingClientRect().left;nav.scrollLeft=20;const result=[nav.scrollLeft,marker.getBoundingClientRect().left-before,tab.getBoundingClientRect().left-tabBefore];nav.scrollLeft=0;nav.style.width="";return result})()'),[20,0,-20],'the project name stays pinned while its tabs scroll');
     await run('window.groups.close("B1")');await wait('!document.querySelector(".editor-project-marker")');
     await run('window.groups.activate("L1")');
     const tab=id=>'[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.textContent.trim()==='+JSON.stringify(id)+')';
