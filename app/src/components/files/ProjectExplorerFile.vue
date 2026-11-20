@@ -3,12 +3,15 @@
   <FilePreviewModal v-else inline :remote="source.remote" :api-base="apiBase" :session-id="source.sessionId ?? ''" :folder-id="source.folderId" :session-workspace="source.sessionWorkspace" :context-key="fileTabKey(file)" :active="active" :selection-active="active" :can-quote="canQuote" @quote="emit('quote', $event)" :entry="file.entry" :dir="file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''" @close="emit('close')" />
 </template>
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, provide } from 'vue'
+import { OtioOutlineHostKey } from '../../otio-outline-host.ts'
 import { fileTabKey, type OpenFile } from '../../file-workbench.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import FileDiffPreview from './FileDiffPreview.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
-const props = defineProps<{ apiBase: string; file: OpenFile; active: boolean; canQuote: boolean }>()
+const props = defineProps<{ apiBase: string; file: OpenFile; active: boolean; canQuote: boolean; outlineTarget?: HTMLElement; outlineInBackground?: boolean }>()
+// This context belongs to a single editor view, including its teleported preview.
+provide(OtioOutlineHostKey, { target: () => props.outlineTarget, background: () => !!props.outlineInBackground })
 const emit = defineEmits<{ open: [file: OpenFile]; close: []; quote: [text: string] }>()
 // Central explorer always supplies a concrete source; never infer another conversation.
 const source = computed(() => props.file.source!)
