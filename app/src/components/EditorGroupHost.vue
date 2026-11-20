@@ -174,7 +174,7 @@ function shortcut(event: KeyboardEvent) {
 <style scoped>
 .editor-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .editor-workspace-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
-.other-project-tabs { flex: 0 1 auto; max-width: 40%; border-inline-start: 1px solid var(--c-border); }
+.other-project-tabs { flex: 0 1 auto; border-inline-start: 1px solid var(--c-border); }
 .editor-header-groups { display: flex; flex: 1; min-width: 0; }
 .editor-header-group { display: flex; flex: 1; min-width: 0; }
 .editor-header-group .editor-tabs { flex: 1; min-width: 0; border-bottom: 0; }
