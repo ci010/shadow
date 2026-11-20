@@ -125,7 +125,7 @@ test('workflow selection syncs to the editable split target, replaces and clears
     const open=async(project,query={})=>{await run('window.fixture.router.push('+JSON.stringify({name:'project-workflows',params:{projectId:project},query})+')');await wait(visible('.workflow-manager'));await wait(visible('.graph-group'))};
     const sidebar=async project=>{const s='document.querySelector('+JSON.stringify('[data-project-id="'+project+'"] .automation-entry')+')';await wait(s);await run(s+'.click()');await wait('window.fixture.router.currentRoute.value.name==="project-workflows" && window.fixture.router.currentRoute.value.params.projectId==='+JSON.stringify(project));await wait(visible('.workflow-manager'));await wait(visible('.graph-group'))};
     await win.loadURL(${JSON.stringify(url)});
-    await wait(visible('.workflow-inspector'));
+    await wait(visible('.workflow-run-detail'));
     assert.equal(await run('document.querySelectorAll(".workflow-reference-actions button").length'),0);
     assert.equal(await run('document.querySelectorAll(".context-chip").length'),0,'selection without an existing target creates no context destination');
     const editorTab=label=>'[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.textContent.trim()==='+JSON.stringify(label)+' && e.getBoundingClientRect().width)';
@@ -133,6 +133,8 @@ test('workflow selection syncs to the editable split target, replaces and clears
     const move=async label=>{const target=editorTab(label);await wait(target);await run(target+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await wait(visible('.editor-menu'));await run('document.querySelector(".editor-menu button").click()')};
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
     await wait(visible('.reference-composer'));
+    await wait('document.querySelector(".context-chip")?.textContent.includes("run:a")');
+    assert.equal(await run('!!'+visible('.workflow-manager')),false,'Existing chat keeps the reference when the canvas is hidden');
     assert.equal(await run('document.querySelectorAll(".diagnosis-document").length'),0,'diagnosis does not register by default');
     await run('('+visible('.conversation-diagnosis')+').click()');await wait(editorTab('Diagnosis'));
     await wait(visible('.session-diagnosis'));
@@ -285,6 +287,7 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="schedule:a"&&e.dataset.nodeType==="action").click()');
     await wait('document.querySelector("[data-editor-group=right] .context-chip").textContent.includes("1: schedule-action")');
     await run('window.fixture.chatState.appendInputReference({label:"Manual workflow",reference:{kind:"workflow",projectId:"a",workflowId:"schedule:a",revision:1,runId:"run:a"}})');
+    await run('window.fixture.chatState.appendInputReference(window.fixture.chatState.selectedWorkflowReference)');
     await wait('document.querySelectorAll("[data-editor-group=right] .context-chip").length===2');
     // One ordinary submission after inspector focus, with immutable host references.
     await wait('!document.querySelector('+JSON.stringify('[data-editor-group=right] [aria-label="Send message"]')+').disabled');
@@ -381,6 +384,25 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await wait('!!document.querySelector(".receiver-directory a")');
     await run('[...document.querySelectorAll(".receiver-directory a")].find(e=>e.getAttribute("href").includes("discord-channel")).click()');
     await wait('window.fixture.router.currentRoute.value.name==="chat" && window.fixture.router.currentRoute.value.params.sessionId.includes("discord-channel:")');
+    // Start from a clean, single-pane workbench with no conversation selected.
+    await win.loadURL(${JSON.stringify(url)});
+    await wait(visible('.workflow-run-detail'));
+    // A scratch composer has an editor owner before it has a session ID.
+    await run('[...document.querySelectorAll(".graph-node")].find(e=>e.dataset.flow==="schedule:a"&&e.dataset.nodeType==="action").click()');
+    await wait('!!document.querySelector(".graph-node[data-node-type=action][aria-pressed=true]")');
+    await run('document.querySelector('+JSON.stringify('[data-project-id="a"] [aria-label="Start from scratch"]')+').click()');
+    await wait('window.fixture.router.currentRoute.value.name==="chat" && !window.fixture.router.currentRoute.value.params.sessionId');
+    const scratch='[data-editor-id*="scratch"]';
+    await wait('('+visible(scratch+' .context-chip')+')?.textContent.includes("1: schedule-action")');
+    await run('window.fixture.freshInput=('+visible(scratch+' .reference-composer')+');window.fixture.freshInput.textContent="Discuss selected action in new conversation";window.fixture.freshInput.dispatchEvent(new Event("input",{bubbles:true}))');
+    const freshSend=visible(scratch+' [aria-label="Send message"]');
+    await wait(freshSend+' && !('+freshSend+').disabled');
+    await run('('+freshSend+').click()');
+    await wait('window.fixture.router.currentRoute.value.params.sessionId?.startsWith("web:chat-") && "web:"+window.fixture.lastAdmission?.chatId===window.fixture.router.currentRoute.value.params.sessionId');
+    await run('('+visible(scratch+' [aria-label="Clear selection"]')+').click()');
+    await wait('!'+visible(scratch+' .context-chip'));
+    await open('a');
+    assert.equal(await run('!!'+visible('.workflow-inspector')),false,'Clearing from chat must not restore the inspector on return');
     if(process.env.EDITOR_GROUP_SCREENSHOT) require('node:fs').writeFileSync(process.env.EDITOR_GROUP_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
     await win.close();console.log('WORKFLOW_SELECTION_SYNC_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
@@ -394,11 +416,15 @@ test('workflow selection syncs to the editable split target, replaces and clears
   const timer = setTimeout(() => child.kill(), 80_000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); if (code !== 0) console.error(output); assert.equal(code, 0, output); assert.match(output, /WORKFLOW_SELECTION_SYNC_OK/)
-  assert.deepEqual(requests.filter(request => request.method !== 'GET'), Array(4).fill({ path: '/projects/a/api/chat/send', method: 'POST' }), 'Only the explicit send submits; editor movement never forks, prepares or submits')
+  assert.deepEqual(requests.filter(request => request.method !== 'GET'), Array(5).fill({ path: '/projects/a/api/chat/send', method: 'POST' }), 'Only the explicit send submits; editor movement never forks, prepares or submits')
   assert.deepEqual(sentBodies[0]!.references, [{ kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a' }, { kind: 'workflow', projectId: 'a', workflowId: 'schedule:a', revision: 1, runId: 'run:a', selector: { kind: 'node', index: 0, nodeKind: 'schedule-action' } }])
   assert.deepEqual(sentBodies[1]!.references, [{ kind: 'connection-sink', projectId: 'a', connectionId: 'conn' }])
   assert.deepEqual(sentBodies[2]!.references, [{ kind: 'connection-sink', projectId: 'a', connectionId: 'conn', receiverId: 'group' }])
   assert.deepEqual(sentBodies[3]!.references, [{ kind: 'bot-deployment', projectId: 'a', botId: 'sales', revision: 'published-sales-1', bindingId: 'one' }])
+  assert.deepEqual(sentBodies[4]!.references, [(sentBodies[0]!.references as unknown[])[1]])
+  assert.equal(sentBodies[4]!.content, 'Discuss selected action in new conversation')
+  assert.match(frozenHistory[4]!, /Host-resolved identity snapshot/)
+  assert.match(frozenHistory[4]!, /schedule-action/)
   assert.match(frozenHistory[3]!, /observations\/deployment\//)
   assert.match(frozenHistory[1]!, /v:connections\/conn\/sink.json/)
   assert.match(frozenHistory[2]!, /v:connections\/conn\/receivers\/group.json/)
