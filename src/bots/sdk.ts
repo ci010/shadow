@@ -106,7 +106,6 @@ export function validateBotInference(bot: BotDefinition, defaults: LlmRuntimeCon
 }
 
 /** Validate generated data. Deployed configuration is declarative YAML/JSON, never executable TS. */
-export function defineBot(definition: BotDefinition): BotDefinition { return BotDefinitionSchema.parse(definition) }
 export interface BotToolContext {
   /** Owner must approve each operation in hostCapabilities. No destinations or local sessions are accepted. */
   wake: { call(input: { action: 'inspect' | 'stop' } | { action: 'set'; intervalMinutes: number }): Promise<unknown> }

@@ -499,11 +499,11 @@ a fresh persisted epoch/segment; old history and memory are not imported.
 
 ## SDK and controlled context
 
-`src/bots/sdk.ts` exports typed `defineBot`, `defineTool`, schemas and `parseBot` for
-configuration tooling. `defineBot` validates a full data definition; when generating
-files, put `id`, `config`, `mode` and Service inference / Personal `agent` in the
-`BOT.md` header, its `prompt` in the body, and serialize only the connection,
-subscriptions, permissions, tools and scope/skill fields to the selected JSON file. Shadow does not execute a deployed `config.ts` to discover configuration.
+Shadow loads and validates the Bot definition from `BOT.md` and the JSON file it
+references. It does not execute a deployed `config.ts`. The `BOT.md` header holds
+`id`, `config`, `mode` and Service inference settings or the Personal `agent`;
+its body is the prompt. The selected JSON file holds the connection,
+subscriptions, permissions, tools and scope/skill fields.
 The guest tool module resolves `@shadow/bot-sdk` to the small built-in `defineTool`
 helper, not an installed package or a platform SDK.
 
