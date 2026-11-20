@@ -1,5 +1,7 @@
 # Offline channel session identity migration
 
+> Historical reference only. The migration CLI was removed from the current checkout. The commands below require a revision that still contains the CLI.
+
 `scripts/migrate-channel-sessions.ts` stages a reviewed migration from the old
 `bot:<project>:<connection>:<platform>:<conversation>` (or legacy
 `<platform>:<conversation>`) identity to the matching fixed `channel-inbox:`
