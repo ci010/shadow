@@ -1,15 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseBot, defineBot, defineTool, BotDefinitionSchema } from './sdk.ts'
+import { parseBot, defineTool, BotDefinitionSchema } from './sdk.ts'
 
 import { botFiles } from './sdk-test-fixture.ts'
 
-test('pure BOT parser, defineBot typed data, defineTool identity', () => {
+test('parses BOT data without executing tool sources', () => {
   const files = botFiles('process.exit(1)')
   const bot = parseBot(files)
   assert.equal(bot.id, 'demo')
   assert.equal(bot.prompt, 'A helpful bot.')
-  assert.deepEqual(defineBot(bot), bot)
+})
+
+test('defineTool preserves the implementation', () => {
   assert.equal(defineTool({ execute: () => 1 }).execute({}, {} as never), 1)
 })
 
