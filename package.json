@@ -15,7 +15,7 @@
     "start": "node --env-file-if-exists=.env --import tsx scripts/start.ts",
     "a2a:bridge": "node --import tsx integrations/a2a/cli.ts",
     "a2a:mcp": "node --import tsx src/a2a/mcp-cli.ts",
-    "build": "node --import tsx build.ts",
+    "build": "node --import tsx scripts/build.ts",
     "build:app": "pnpm --filter @shadow/app build",
     "build:all": "pnpm build && pnpm build:app",
     "test": "node --import tsx --test \"src/**/*_test.ts\" \"scripts/*_test.ts\" \"app/src/*_test.ts\" \"integrations/a2a/*_test.ts\"",
