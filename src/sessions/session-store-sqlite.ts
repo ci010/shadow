@@ -1,3 +1,4 @@
+import { parseAgentPromptDraft } from '../agent/context/sub-override.ts'
 import { isPromptVersion } from '../agent/context/prompt-version.ts'
 import { parseExecutionInference } from '../agent/llm-config.ts'
 import { ConversationArchive } from './conversation-archive.ts'
@@ -81,6 +82,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'originUser',
   'promptVersion',
   'subDraft',
+  'promptDraft',
   'description',
   'children',
   'preloadTools',
@@ -156,6 +158,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (isRecord(value.subDraft) && typeof value.subDraft.revision === 'string' && typeof value.subDraft.markdown === 'string') {
     metadata.subDraft = { revision: value.subDraft.revision, markdown: value.subDraft.markdown }
   }
+  if (value.promptDraft !== undefined) metadata.promptDraft = parseAgentPromptDraft(value.promptDraft)
   if (isSessionParent(value.parent)) metadata.parent = value.parent
   const workdir = parseWorkdirRef(value.workdir)
   if (workdir) metadata.workdir = workdir
@@ -465,6 +468,7 @@ export class SqliteSessionStore implements SessionStore {
         originUser: state.originUser,
         promptVersion: state.promptVersion,
         subDraft: state.subDraft,
+        promptDraft: state.promptDraft,
         description: state.description,
         children: state.children,
         preloadTools: state.preloadTools,

@@ -42,6 +42,15 @@ test('sub task and call explicitly pin a same-Project draft; omission stays buil
   await assert.rejects(tool.execute({ ...request, agent_type: 'verify', sub_revision: revision }, ctx), /built-in sub/)
   await assert.rejects(tool.execute({ ...request, sub_revision: revision }, { ...ctx, projectId: 'other' }), /same Project/)
   assert.equal(fields.length, 3)
+  const verify = types.resolve('verify')!
+  const generic = await store.forAgent(verify).save('Verify draft')
+  const verifyRequest = { ...request, agent_type: 'verify', prompt_revision: generic }
+  assert.equal(JSON.parse(await tool.execute(verifyRequest, ctx)).promptRevision, generic)
+  assert.equal(fields[3]?.promptDraft?.markdown, 'Verify draft')
+  await assert.rejects(tool.execute({ ...verifyRequest, agent_type: 'plan' }, ctx), /not found/)
+  await assert.rejects(tool.execute({ ...verifyRequest, agent_type: 'a2a:outside' }, ctx), /does not support/)
+  await assert.rejects(tool.execute({ ...verifyRequest, sub_revision: revision }, ctx), /not both/)
+  assert.equal(fields.length, 4)
 })
 
 test('subagent only creates temporary work, preserving explicit workdir and ignoring reusable role defaults', async () => {

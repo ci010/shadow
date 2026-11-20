@@ -1,3 +1,4 @@
+import { parseAgentPromptDraft } from '../agent/context/sub-override.ts'
 import { isPromptVersion } from '../agent/context/prompt-version.ts'
 import { parseExecutionInference } from '../agent/llm-config.ts'
 import { ConversationArchive } from './conversation-archive.ts'
@@ -47,6 +48,7 @@ function parseStoredState(raw: string): SessionState {
     validateOwnership(value as Record<string, unknown>),
   )) as unknown as SessionState
   if (!isPromptVersion(state.promptVersion)) delete state.promptVersion
+  if (state.promptDraft !== undefined) state.promptDraft = parseAgentPromptDraft(state.promptDraft)
   if (state.executionInference !== undefined) state.executionInference = parseExecutionInference(state.executionInference)
   if (typeof state.sessionId !== 'string' || !state.sessionId.trim()) throw new SessionIdentityError('Missing session identity')
   if (state.automaticWork !== undefined) state.automaticWork = automaticWorkSessionSchema.parse(state.automaticWork)

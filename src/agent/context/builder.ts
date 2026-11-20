@@ -1,3 +1,4 @@
+import type { AgentPromptDraft } from './sub-override.ts'
 import type { SessionConfig } from '../../sessions/session-store.ts'
 import type { SessionInput } from '../../sessions/input.ts'
 import type { WorkdirRefV2 } from '../../sessions/locality.ts'
@@ -43,6 +44,7 @@ export interface SessionPromptContext {
   /** Personal BOT deployment instructions, separate from the role definition. */
   personalBotPrompt?: string
   promptVersion?: PromptVersion
+  promptDraft?: AgentPromptDraft
   subDraft?: { revision: string; markdown: string }
   /** Stable Work ID for shared work context (from SessionState). */
   initiativeId?: string

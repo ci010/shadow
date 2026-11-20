@@ -56,7 +56,8 @@ export interface PromptIdentity {
   definition: string
   version: 'v1' | 'v2'
   mode: 'session' | 'task' | 'call'
-  behaviorSource: 'builtin' | 'workspace' | 'sub-draft'
+  behaviorSource: 'builtin' | 'workspace' | 'sub-draft' | 'agent-draft'
+  promptRevision?: string
   subRevision?: string
 }
 
@@ -64,16 +65,18 @@ export function parsePromptIdentity(value: unknown): PromptIdentity | undefined 
   if (!record(value) || typeof value.role !== 'string' || typeof value.definition !== 'string'
     || (value.version !== 'v1' && value.version !== 'v2')
     || (value.mode !== 'session' && value.mode !== 'task' && value.mode !== 'call')
-    || (value.behaviorSource !== 'builtin' && value.behaviorSource !== 'workspace' && value.behaviorSource !== 'sub-draft')) return
+    || (value.behaviorSource !== 'builtin' && value.behaviorSource !== 'workspace' && value.behaviorSource !== 'sub-draft' && value.behaviorSource !== 'agent-draft')) return
+  const promptRevision = value.promptRevision
+  if (value.behaviorSource === 'agent-draft' && (typeof promptRevision !== 'string' || !/^[a-f0-9]{64}$/.test(promptRevision))) return
   const revision = value.subRevision
   if (value.behaviorSource === 'sub-draft' && (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision))) return
   return { role: value.role, definition: value.definition, version: value.version, mode: value.mode,
-    behaviorSource: value.behaviorSource, ...(typeof revision === 'string' && value.behaviorSource === 'sub-draft' ? { subRevision: revision } : {}) }
+    behaviorSource: value.behaviorSource, ...(value.behaviorSource === 'agent-draft' && typeof promptRevision === 'string' ? { promptRevision } : {}), ...(typeof revision === 'string' && value.behaviorSource === 'sub-draft' ? { subRevision: revision } : {}) }
 }
 
 export function formatPromptIdentity(prompt: PromptIdentity) {
   const subject = prompt.role === prompt.definition ? prompt.role : `${prompt.role} (${prompt.definition})`
-  const source = prompt.behaviorSource === 'sub-draft' ? `${t('Project draft')} @${prompt.subRevision}`
+  const source = prompt.behaviorSource === 'agent-draft' || prompt.behaviorSource === 'sub-draft' ? `${t('Project draft')} @${prompt.promptRevision ?? prompt.subRevision}`
     : prompt.behaviorSource === 'workspace' ? t('Workspace') : t('Built-in default')
   return `${subject} · ${prompt.version.toUpperCase()} · ${prompt.mode} · ${source}`
 }
