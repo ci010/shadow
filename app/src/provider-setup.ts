@@ -23,7 +23,7 @@ export interface ProviderSetupInput {
   provider: string
   type?: string
   name?: string
-  model: string
+  model?: string
   apiKey?: string
   baseUrl?: string
 }
@@ -46,7 +46,7 @@ export const providerPresets = [
   { id: 'anthropic', name: 'Anthropic', model: 'claude-sonnet-4-6' },
   { id: 'deepseek', name: 'DeepSeek', model: 'deepseek-flash' },
   { id: 'agnes', name: 'Agnes AI', model: 'agnes-3.0-flash' },
-  { id: 'openrouter', name: 'OpenRouter', model: 'anthropic/claude-sonnet-4.6' },
+  { id: 'openrouter', name: 'OpenRouter', model: '' },
   { id: 'gemini', name: 'Google Gemini', model: 'gemini-2.5-pro' },
   { id: 'groq', name: 'Groq', model: 'llama-3.3-70b-versatile' },
 ]

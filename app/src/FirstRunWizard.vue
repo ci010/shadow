@@ -166,6 +166,7 @@ import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ProviderSetup from './ProviderSetup.vue'
+import { createModelDefaultsClient } from './model-defaults.ts'
 import { createProviderSetupClient, providerDisplayName, type ProviderSetupStatus } from './provider-setup.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
 import shadowLogo from './assets/shadow-logo.png'
@@ -450,11 +451,17 @@ async function prepareProvider(): Promise<void> {
 	finally { busy.value = false }
 }
 
-async function providerConfigured(): Promise<void> {
+async function providerConfigured(connection?: ProviderSetupStatus): Promise<void> {
 	if (busy.value) return
 	busy.value = true
 	actionError.value = ''
 	try {
+		if (connection?.type === 'openrouter' && providerContext.value) {
+			// First run needs a usable inherited default; ordinary connection saves leave it alone.
+			await createModelDefaultsClient(providerContext.value.apiBase, 'app').save({
+				model: connection.model || `openrouter/auto@${connection.provider}`,
+			}, lifetime.signal)
+		}
 		await checkProvider()
 		if (!providerStatus.value?.ready) actionError.value = t('Connect a model service before continuing.')
 	} catch { if (!lifetime.signal.aborted) actionError.value = t('The model setup service could not be reached. Check Desktop and retry.') }

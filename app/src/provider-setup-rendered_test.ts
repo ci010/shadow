@@ -228,7 +228,7 @@ test('provider cards show a credit meter, a balance without a meter, and unavail
 
 test('provider edit mapping retains host when Copilot is not the selected provider', () => {
   const source = readFileSync(new URL('./components/ProvidersView.vue', import.meta.url), 'utf8')
-  assert.match(source, /baseUrl: item\.baseUrl, host: item\.host, ready: false/)
+  assert.match(source, /baseUrl: item\.baseUrl, host: item\.host, [^\n]*ready: false/)
 })
 
 
@@ -377,7 +377,7 @@ test('rendered model menu distinguishes same-type accounts and renames without c
   assert.equal(current.value, 'same@account-b')
   assert.equal(options().length, 1)
   assert.match(view.text(), /Office · DeepSeek/)
-  assert.match(view.text(), /account-b/)
+  assert.equal(options()[0].props.title, 'same@account-b')
 })
 
 test('named Copilot title and sign-out identify the instance and preserve same-host accounts', async t => {
@@ -634,4 +634,47 @@ test('composer usage is demand-loaded and follows the exact provider instance', 
   await view.click('Close settings')
   assert.equal(requests[3]!.signal?.aborted, true)
   assert.equal(row(), undefined)
+})
+
+test('rendered OpenRouter setup saves an API key with no model', async t => {
+  const bodies: Record<string, unknown>[] = []
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return Response.json({ provider: 'openrouter', type: 'openrouter', authMode: 'api-key', ready: true, hasApiKey: true, model: '' })
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', status: null, mode: 'setup' })
+  const select = view.nodes().find(node => node.tag === 'select')!
+  const handlers = Array.isArray(select.props.onChange) ? select.props.onChange : [select.props.onChange]
+  for (const handler of handlers) (handler as (value: string) => void)('openrouter')
+  await nextTick()
+  const model = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'Model ID from your provider')!
+  assert.equal(model.value, '')
+  assert.equal(model.props.required, false)
+  const key = view.nodes().find(node => node.tag === 'input' && node.props.type === 'password')!
+  ;(key.props['onUpdate:modelValue'] as (value: string) => void)('fixture-router')
+  const form = view.nodes().find(node => node.tag === 'form')!
+  await (form.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+  assert.deepEqual(bodies, [{ provider: 'openrouter', type: 'openrouter', name: 'OpenRouter', apiKey: 'fixture-router' }])
+})
+
+test('rendered model picker pages large catalogs and searches beyond the first page', async t => {
+  const current = ref('gpt-4.1@openai')
+  const selector = loadComponent(new URL('./components/ModelSelector.vue', import.meta.url))
+  const wrapper = defineComponent({ setup() {
+    provideModelSelection({ current, providers: ref([{ id: 'router', type: 'openrouter', name: 'Routing account' }]),
+      options: ref(Array.from({ length: 155 }, (_, index) => `vendor/model-${index}:free@router`)),
+      disabled: ref(false), loading: ref(false), error: ref(''), async select(value) { current.value = value } })
+    return () => h(selector)
+  } })
+  const view = mount(t, {}, undefined, undefined, wrapper)
+  const options = () => view.nodes().filter(node => node.tag === 'button' && String(node.props.class).includes('model-option'))
+  assert.equal(options().length, 60)
+  await view.click('Next models')
+  assert.match(view.text(), /61–120 of 156 models/)
+  const search = view.nodes().find(node => node.tag === 'input' && node.props.type === 'search')!
+  ;(search.props['onUpdate:modelValue'] as (value: string) => void)('vendor/model-154:free')
+  await nextTick()
+  assert.equal(options().length, 1)
+  await (options()[0].props.onClick as () => Promise<void>)()
+  assert.equal(current.value, 'vendor/model-154:free@router')
 })
