@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import UnoCSS from 'unocss/vite'
 import vue from '@vitejs/plugin-vue'
 import { createServer } from 'vite'
 
@@ -24,12 +25,13 @@ test('glTF outline virtualizes rows, selects objects, and reveals canvas selecti
     root: resolve(root, 'app'), configFile: false, envDir: false,
     cacheDir: resolve(directory, 'cache'), logLevel: 'error',
     optimizeDeps: { noDiscovery: true, include: ['vue'] },
-    plugins: [vue(), {
+    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app/unocss.config.ts') }), {
       name: 'gltf-outline-fixture',
       resolveId: id => id === '/fixture.ts' ? '\0outline' : undefined,
       load(id) {
         if (id !== '\0outline') return
         return `import { createApp, h, ref } from 'vue';
+          import 'virtual:uno.css';
           import Outline from '/src/components/files/GltfOutline.vue';
           import { setLocalePreference } from '/src/i18n.ts'; setLocalePreference('en');
           const group = (key, parentKey = null) => ({ key, parentKey, label: key });
@@ -81,6 +83,7 @@ test('glTF outline virtualizes rows, selects objects, and reveals canvas selecti
       const key = (key, mods = '{}') => run(tree + '.dispatchEvent(new KeyboardEvent("keydown", {bubbles:true,cancelable:true,key:' + JSON.stringify(key) + ',...' + mods + '}))');
       const selected = () => run('window.selection');
       await wait(row('Mesh5'));
+      assert.equal(await run('getComputedStyle(' + tree + '.closest("section")).outlineStyle'), 'none', 'Unfocused hierarchy panel must not pick up a utility outline');
       assert.equal(await run('document.querySelectorAll("[role=treeitem]").length < 40'), true);
       assert.equal(await run(tree + '.getAttribute("aria-multiselectable")'), 'true');
       assert.equal(await run(row('Nested') + '.hasAttribute("aria-selected")'), false);
