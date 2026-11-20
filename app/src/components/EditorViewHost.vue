@@ -5,10 +5,12 @@
   <div v-else-if="!groups" v-show="selected" class="editor-view"><slot /></div>
 </template>
 <script setup lang="ts">
-import { computed, inject, onUnmounted, watch } from 'vue'
+import { computed, inject, onUnmounted, provide, watch } from 'vue'
+import { OutlineEditorKey } from '../model-outline-host.ts'
 import { EditorGroupsKey, type EditorDescriptor, type EditorSide } from '../editor-groups.ts'
 const props = withDefaults(defineProps<{ descriptor: EditorDescriptor; selected?: boolean; active?: boolean; initialSide?: EditorSide }>(), { active: true, initialSide: 'left' })
 const groups = inject(EditorGroupsKey, undefined)
+provide(OutlineEditorKey, computed(() => props.descriptor))
 const token = Symbol('editor-view')
 if (groups) groups.registerView(props.descriptor.id, token)
 const canonical = computed(() => !groups || groups.views.get(props.descriptor.id)?.[0] === token)

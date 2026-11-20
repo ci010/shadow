@@ -4,8 +4,16 @@ import { prepare, type ModelInput } from './input.js';
 
 export const stale = () => new DOMException('Model load superseded, aborted, or viewer disposed', 'AbortError');
 export interface Part { mesh: Mesh; material: Material; slot: number | undefined }
+export interface ModelOutlineRow {
+  readonly key: string;
+  readonly parentKey: string | null;
+  readonly label: string;
+  readonly objectId?: string;
+}
+
 export interface Model {
   root: Object3D;
+  outline: readonly ModelOutlineRow[];
   bounds: Box3;
   objects: Map<string, { parts: Part[]; bounds: Box3; label: string; node: number }>;
   ids: Map<Object3D, string>;
@@ -116,7 +124,30 @@ export async function decode(input: ModelInput, current: () => boolean): Promise
       logical.parts.push({ mesh: object, material: object.material, slot });
       ids.set(object, id);
     });
-    return { root, bounds, objects, ids, close };
+    const outline: ModelOutlineRow[] = [];
+    const playgroundIds = new Map<number, string>();
+    if (input.identity === 'playground') {
+      for (const [id, { node }] of objects) playgroundIds.set(node, id);
+    }
+    function visit(object: Object3D, parentKey: string | null, sibling: number) {
+      const node = parser.associations.get(object)?.nodes;
+      const objectId = node !== undefined && input.identity === 'playground' ? playgroundIds.get(node) : ids.get(object);
+      let key = parentKey;
+      if (node !== undefined) {
+        key = `node:${node}`;
+        const name = json.nodes[node].name;
+        const label = (typeof name === 'string' && name.trim()) ||
+          (input.identity === 'playground' ? objectId : undefined) || `Node ${node}`;
+        outline.push(Object.freeze({ key, parentKey, label, ...(objectId === undefined ? {} : { objectId }) }));
+      } else if (objectId !== undefined && input.identity !== 'playground') {
+        key = `${parentKey}/primitive:${sibling}`;
+        const label = object.name || `Primitive ${sibling + 1}`;
+        outline.push(Object.freeze({ key, parentKey, label, objectId }));
+      }
+      object.children.forEach((child, i) => visit(child, key, i));
+    }
+    root.children.forEach((child, i) => visit(child, null, i));
+    return { root, outline: Object.freeze(outline), bounds, objects, ids, close };
   } catch (error) { close(); throw error; }
   finally { urls.forEach(u => URL.revokeObjectURL(u)); }
 }

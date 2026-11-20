@@ -20,8 +20,9 @@ app.whenReady().then(async () => {
 
   const result = mode === 'ui'
     ? await require('./ui-driver.cjs')(contents, fixtureScene)
+    : mode === 'outline' ? await require('./outline-driver.cjs')(contents)
     : mode === 'product' ? await require('./product-driver.cjs')(contents) : await contents.executeJavaScript(mode === 'worker' ? 'window.runThreeWorkerCheck()' : 'window.runThreeCheck()', true);
-  if (mode !== 'product') {
+  if (!['product', 'outline'].includes(mode)) {
     const deadline = Date.now() + 5000;
     while (!download && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
     if (!download) throw new Error('No browser download observed');

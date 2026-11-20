@@ -115,6 +115,20 @@ module.exports = async function checkUi(contents, fixtureScene) {
     assert.equal(viewerLoads.length, 3, 'broken syntax should never reach the viewer');
     assert.equal(workerStarts.length, 4, 'expected initial, edited, broken and repaired builds');
     const workerToCommittedModelMs = viewerLoads.map((entry, i) => entry.committed - workerStarts[i === 2 ? 3 : i]);
-    return { draftIds: drafts.map(ref => ref.objectId), firstVersion, version, debounceToWorkerMs, workerToCommittedModelMs, capture: { version: carried.version, current: carried.size, front: front.size }, snapshotRequests: await requests() };
+    const selection = () => exec('window.threeUi.selection()');
+    const stableIds = drafts.map(ref => ref.objectId).sort();
+    assert.deepEqual((await selection()).sort(), stableIds, 'successful and failed reloads should retain unchanged selected IDs');
+    const removed = 'stand.pedestal';
+    assert(stableIds.includes(removed), 'box fixture must include the object whose ID is replaced');
+    const repairedSource = await readFile(stand, 'utf8');
+    const pedestal = "box('pedestal'";
+    assert(repairedSource.includes(pedestal));
+    await writeFile(stand, repairedSource.replace(pedestal, "box('pedestal-renamed'"));
+    await until(state, value => value.text.includes(`No longer in this build: ${removed}`), 'missing selection warning after ID change');
+    const afterRename = await capture();
+    assert.notEqual(afterRename.version, recovered.version);
+    const survivors = stableIds.filter(id => id !== removed);
+    assert.deepEqual((await selection()).sort(), survivors, 'replaced ID must be removed without clearing surviving selections');
+    return { draftIds: stableIds, firstVersion, version, debounceToWorkerMs, workerToCommittedModelMs, capture: { version: carried.version, current: carried.size, front: front.size }, selectionReload: { version: afterRename.version, removed, survivors }, snapshotRequests: await requests() };
   } finally { await writeFile(stand, original); }
 };

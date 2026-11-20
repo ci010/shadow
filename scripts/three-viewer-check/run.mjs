@@ -15,7 +15,7 @@ const vite = await import(requireApp.resolve('vite'));
 const viteFile = file => `/@fs/${encodeURI(vite.normalizePath(file))}`;
 const scriptDir = join(repo, 'scripts/three-viewer-check');
 const mode = process.argv[2] ?? 'product';
-if (!['ui', 'product', 'baseline', 'worker'].includes(mode)) throw new Error(`Unknown check mode: ${mode}`);
+if (!['ui', 'product', 'baseline', 'worker', 'outline'].includes(mode)) throw new Error(`Unknown check mode: ${mode}`);
 const fixture = await mkdtemp(join(tmpdir(), 'shadow-three-check-'));
 let server, endpoints;
 try {
@@ -24,7 +24,7 @@ try {
   await cp(join(repo, dirname(marker)), fixtureScene, { recursive: true });
   const requireViewer = createRequire(join(repo, 'packages/three-viewer/package.json'));
   const threeRoot = dirname(dirname(requireViewer.resolve('three')));
-  const uiPlugins = mode === 'ui' ? [
+  const uiPlugins = ['ui', 'outline'].includes(mode) ? [
     (await import(requireApp.resolve('@vitejs/plugin-vue'))).default(),
     (await import(new URL('../../app/pdf-viewer-assets.ts', import.meta.url))).pdfViewerAssets(),
   ] : [];
@@ -43,7 +43,7 @@ try {
       server.middlewares.use(endpoints.handle);
       server.middlewares.use('/__three-check', async (req, res) => {
         try {
-          const html = await server.transformIndexHtml('/__three-check', `<!doctype html><meta charset="utf-8"><div id="app"></div><script>window.cubeStandEntry = ${JSON.stringify(viteFile(join(fixtureScene, 'main.mjs')))}</script><script type="module" src="${viteFile(join(scriptDir, ({ ui: 'ui.mjs', product: 'product.mjs', baseline: 'browser.mjs', worker: 'worker.mjs' })[mode]))}"></script>`);
+          const html = await server.transformIndexHtml('/__three-check', `<!doctype html><meta charset="utf-8"><div id="app"></div><script>window.cubeStandEntry = ${JSON.stringify(viteFile(join(fixtureScene, 'main.mjs')))}</script><script type="module" src="${viteFile(join(scriptDir, ({ ui: 'ui.mjs', outline: 'outline.mjs', product: 'product.mjs', baseline: 'browser.mjs', worker: 'worker.mjs' })[mode]))}"></script>`);
           res.setHeader('content-type', 'text/html'); res.end(html);
         } catch (error) { res.statusCode = 500; res.end(String(error)); }
       });

@@ -5,8 +5,11 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { snapshot, type ModelInput } from './input.js';
-import { decode, stale, type Model } from './model.js';
+import { decode, stale, type Model, type ModelOutlineRow } from './model.js';
 export { limits, type ModelInput, type ShaderBinding } from './input.js';
+export type { ModelOutlineRow } from './model.js';
+
+const emptyOutline: readonly ModelOutlineRow[] = Object.freeze([]);
 
 export type Vec3 = readonly [number, number, number];
 export type PresetView = 'front' | 'back' | 'top';
@@ -45,7 +48,7 @@ export class ThreeViewer {
   private readonly controls: OrbitControls;
   private readonly ground?: GridHelper;
   private readonly marks = new BufferAttribute(new Float32Array(4096 * 24 * 3), 3).setUsage(DynamicDrawUsage);
-  private readonly outline = new LineSegments(new BufferGeometry().setAttribute('position', this.marks),
+  private readonly selectionOutline = new LineSegments(new BufferGeometry().setAttribute('position', this.marks),
     new LineBasicMaterial({ color: 0x69acff, depthTest: false, transparent: true, opacity: 0.9 }));
   private readonly keys = new Set<string>();
   private readonly listeners = new AbortController();
@@ -87,8 +90,8 @@ export class ThreeViewer {
     this.controls.mouseButtons = { LEFT: null, MIDDLE: MOUSE.PAN, RIGHT: MOUSE.ROTATE };
     this.controls.addEventListener('change', () => { this.dirty = true; });
     const light = new DirectionalLight(0xffffff, 2); light.position.set(3, 5, 4);
-    this.outline.visible = false; this.outline.frustumCulled = false; this.outline.renderOrder = 1;
-    this.scene.add(new AmbientLight(0xffffff, 1.3), light, this.outline);
+    this.selectionOutline.visible = false; this.selectionOutline.frustumCulled = false; this.selectionOutline.renderOrder = 1;
+    this.scene.add(new AmbientLight(0xffffff, 1.3), light, this.selectionOutline);
     if (options.ground) {
       this.ground = new GridHelper(1, 16, 0x777777, 0x999999);
       this.ground.material.transparent = true;
@@ -119,6 +122,7 @@ export class ThreeViewer {
     this.frame = requestAnimationFrame(this.tick);
   }
 
+  get outline(): readonly ModelOutlineRow[] { return this.model?.outline ?? emptyOutline; }
   get selection(): readonly string[] { return [...this.selected]; }
   get objectIds(): readonly string[] { return this.model ? [...this.model.objects.keys()] : []; }
   get playerMode(): boolean { return this.player; }
@@ -221,8 +225,8 @@ export class ThreeViewer {
     }
     this.marks.clearUpdateRanges();
     if (vertex) { this.marks.addUpdateRange(0, vertex * 3); this.marks.needsUpdate = true; }
-    this.outline.geometry.setDrawRange(0, vertex);
-    this.outline.visible = vertex > 0; this.dirty = true;
+    this.selectionOutline.geometry.setDrawRange(0, vertex);
+    this.selectionOutline.visible = vertex > 0; this.dirty = true;
   }
 
   /** A directly bound shader is borrowed; caller owns its uniforms, textures and lifecycle. */
@@ -517,7 +521,7 @@ export class ThreeViewer {
     this.model?.close(); this.model = undefined;
     this.shaders.clear(); this.ownedShaders.forEach(s => s.dispose()); this.ownedShaders.clear();
     this.ground?.dispose();
-    this.outline.geometry.dispose(); this.outline.material.dispose(); this.scene.clear(); this.renderer.dispose();
+    this.selectionOutline.geometry.dispose(); this.selectionOutline.material.dispose(); this.scene.clear(); this.renderer.dispose();
     const removed = [...this.selection]; this.selected.clear();
     if (removed.length) this.notify('dispose', removed);
     if (this.player) { this.player = false; this.notifyPlayer(false); }
