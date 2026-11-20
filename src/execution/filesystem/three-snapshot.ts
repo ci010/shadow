@@ -115,7 +115,9 @@ export async function readThreeSnapshot(base: string, input: unknown, ifNoneMatc
     return value
   }
   const modules = list(files, THREE_LIMITS.modules).map(file => pathOf(file, /\.(?:mjs|js)$/, marker))
-  const resources = list(assets, THREE_LIMITS.assets).map(file => pathOf(file, /^assets\/.+\.(?:glb|gltf|bin|png|jpe?g|webp|gif|avif|ktx2|hdr|exr|dds|basis|woff2?|ttf|otf|mp3|wav|ogg)$/i, marker))
+  const resources = list(assets, THREE_LIMITS.assets).map(file => pathOf(file, file === 'scene.json'
+    ? /^scene\.json$/
+    : /^assets\/.+\.(?:json|glb|gltf|bin|png|jpe?g|webp|gif|avif|ktx2|hdr|exr|dds|basis|woff2?|ttf|otf|mp3|wav|ogg)$/i, marker))
   if (!modules.includes('main.mjs') || new Set(modules).size !== modules.length || new Set(resources).size !== resources.length) return invalid()
   const slots = new Set<string>()
   const bindings = list(shaders, THREE_LIMITS.shaders).map(binding => {

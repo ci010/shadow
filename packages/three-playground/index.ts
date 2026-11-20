@@ -17,6 +17,7 @@ const DRIVER = '@driver';
 const BOOT = '@boot';
 const MiB = 1024 * 1024;
 const encoder = new TextEncoder();
+const jsonDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 function pathValid(name: string) {
   return name.length <= 240 && name.split('/').every(part =>
     /^[\p{L}\p{N}_. -]+$/u.test(part) && part !== '.' && part !== '..');
@@ -107,6 +108,12 @@ export async function buildPlayground(snapshot: PlaygroundSnapshot, options: Pla
         return expired() ? limitError() : new PlaygroundError(phase, message, stack || undefined);
       } finally { error.dispose(); }
     };
+    // Decode only pre-copied JSON bytes. Keep invalid UTF-8 as a sentinel so
+    // unused assets and the existing binary read API remain unaffected.
+    const jsonTexts = Object.entries(assets).filter(([name]) => /\.json$/i.test(name)).map(([name, bytes]) => {
+      try { return [name, jsonDecoder.decode(Uint8Array.from(bytes))]; }
+      catch { return [name, null]; }
+    });
     const driver = `import { THREE, exportRoot } from ${JSON.stringify(ENGINE)};
       let state = ${seed};
       const random = () => {
@@ -120,10 +127,20 @@ export async function buildPlayground(snapshot: PlaygroundSnapshot, options: Pla
       const get = entries.get.bind(entries);
       const has = entries.has.bind(entries);
       const Bytes = Uint8Array;
+      const getJson = new Map(${JSON.stringify(jsonTexts)});
+      const jsonText = getJson.get.bind(getJson);
+      const parseJson = JSON.parse;
       const assets = Object.freeze({ has, read(name) {
         const bytes = get(name);
         if (!bytes) throw new Error('Unknown snapshot asset');
         return new Bytes(bytes);
+      }, json(name) {
+        if (!has(name)) throw new Error('Unknown snapshot asset');
+        const text = jsonText(name);
+        if (text === undefined) throw new Error('Expected a .json snapshot asset');
+        if (text === null) throw new Error('Invalid UTF-8 in JSON snapshot asset: ' + name);
+        try { return parseJson(text); }
+        catch { throw new Error('Invalid JSON in snapshot asset: ' + name); }
       } });
       const root = new THREE.Group();
       export async function build() {

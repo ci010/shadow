@@ -1,6 +1,6 @@
 ---
 name: three-playground
-description: "Create or edit a 3D model (三维建模), prototype a product or prop, adjust a selected part, or export GLB using Shadow’s file-based Three.js Playground. Inspect existing glTF/GLB without running source."
+description: "Build editable 3D models and orbitable scenes (三维建模、微缩景观、街角、室内外场景), including stylized materials and ambient motion, in Shadow’s JSON-entry Three.js Playground. Inspect existing glTF/GLB without running source."
 metadata:
   category: tools
 ---
@@ -8,6 +8,14 @@ metadata:
 # Getting started with 3D modeling
 
 For “做一盏台灯”, “raise the rear support”, or another editable polygonal model, use a small file-based Playground unless the user needs a different workflow. Don't substitute GLB for requested CAD/STEP, print-ready solids, rigged animation, or an existing Blender project. If the task is just to inspect a `.gltf` or `.glb`, open the asset directly: it has no implied JS source. An explanation alone does not require creating files.
+
+## Scenes, not webpages
+
+For an orbitable diorama, room, street corner or collectible miniature, deliver a **`playground.three.json` project** by default. “No UI” means no HUD, controls or menus *authored into the artwork*; the viewer's own tools stay outside the model. Orbit/drag/zoom are viewer features. Rain, ripples, flickering lights and other ambient motion are not a reason to silently switch to HTML, a game engine, an image, or a static GLB alone. If a standalone webpage or another format is explicitly required, respect it. If a required effect is unsupported, explain the specific tradeoff instead of changing the deliverable without agreement.
+
+For a multi-part scene **read `v:skills/three-playground/reference/scene.md`** before authoring. Put the actual composition (named groups, parts, placement, palette and repeated details) in an editable `scene.json`, declare it in the marker's `assets`, and build it with `assets.json('scene.json')` from `main.mjs`. The marker alone is not a scene. Use local time-driven shaders for ambient effects; exported GLB is the static base. Do not copy the tiny starter and call it a finished scene.
+
+Respect the working-context destination policy. Without a selected Workspace, build a working copy in the current **Session files** so the marker can be opened there, and save the complete final project at the required durable destination. Link/name the marker, not a lone JSON attachment without its siblings. A remote client is not necessarily a remote file root.
 
 ## First model: a desk lamp
 

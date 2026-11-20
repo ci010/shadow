@@ -44,6 +44,12 @@ Each build gets Three.js **r180**, an empty root, `assets.has(path)` / `assets.r
 
 The app checks the marker, declared modules, resources and shader files with conditional requests (normally once per second). A change invalidates obsolete work immediately and starts a replacement build after a 180 ms debounce. The host checks input identity/size/timestamps around the snapshot read. A fresh, terminable browser Worker runs the source **inside QuickJS WASM**: no DOM, host filesystem, native imports, network, shell or host callbacks. The app allows 8 s guest execution and a 15 s external worker deadline. Server limits include 32 modules / 1 MiB source, 16 assets / 1 MiB bytes and 16 shader bindings / 256 KiB source. See [builder limits and supported geometry/materials](../packages/three-playground/README.md).
 
+## Author a JSON scene with ambient motion
+
+For a diorama, keep editable layout, palette, named objects and repeatable assemblies in `scene.json`. Add that path to the marker's `assets` and read it from `main.mjs` with `assets.json('scene.json')`. The JSON structure is defined by your own builder, not by the viewer. Open `playground.three.json` with the project files together; a lone JSON attachment is not a complete project. See the [working JSON example and shader recipe](../src/skills/builtin/three-playground/reference/scene.md).
+
+For preview-only motion, file-bound vertex and fragment shaders can declare `uniform float playgroundTime;` (seconds). Animate local geometry or shading without running user JS every frame. Keep an identifiable static PBR model underneath: GLB downloads do not contain the preview clock or shader code, and selection bounds are based on the exported model rather than GPU vertex displacement.
+
 ## Agent inspection
 
 A direct owner Web turn submitted from the same client with a unique bound viewer can discover `v:tools/capture_view`. Use the chip's exact `assetId`:

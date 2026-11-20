@@ -93,6 +93,34 @@ test('copies the snapshot before awaiting WASM and gives guest fresh asset bytes
   await assert.rejects(buildPlayground({ files, assets: { 'too-big': new ArrayBuffer(1024 * 1024 + 1) } }), diagnostic('snapshot', /1 MiB binary/));
 });
 
+test('parses declared JSON in the guest with fresh values and strict UTF-8', async () => {
+  const files = { 'main.mjs': `export function build({ THREE, root, assets }) {
+    const scene = assets.json('scene.json');
+    if (Object.getPrototypeOf(scene) !== Object.prototype) throw new Error('not a guest object');
+    scene.name = 'changed';
+    assets.read('scene.json').fill(0);
+    const node = new THREE.Object3D();
+    node.name = assets.json('scene.json').name;
+    root.add(node);
+  }` };
+  const bytes = new TextEncoder().encode('{"name":"中文场景🌏"}');
+  const valid = await buildPlayground({ files, assets: { 'scene.json': bytes.buffer } });
+  assert.equal(json(valid.glb).nodes[0].name, '中文场景🌏');
+  await assert.rejects(buildPlayground({ files }), diagnostic('build', /Unknown snapshot asset/));
+  // Without fatal decoding this would be valid JSON containing a replacement character.
+  const invalid = Uint8Array.of(0x22, 0xff, 0x22);
+  await assert.rejects(buildPlayground({ files, assets: { 'scene.json': invalid.buffer } }), diagnostic('build', /Invalid UTF-8.*scene\.json/));
+  const secret = 'private-json-content';
+  const malformed = new TextEncoder().encode(`{"name":"${secret}",}`);
+  const safeDiagnostic = (pattern: RegExp) => (error: unknown) =>
+    diagnostic('build', pattern)(error) && error instanceof PlaygroundError &&
+    !`${error.message}\n${error.guestStack}`.includes(secret);
+  await assert.rejects(buildPlayground({ files, assets: { 'scene.json': malformed.buffer } }), safeDiagnostic(/Invalid JSON.*scene\.json/));
+  for (const arg of [`'${secret}.json'`, `{ toString() { throw new Error('${secret}') } }`]) {
+    await assert.rejects(run(`export function build({ assets }) { assets.json(${arg}); }`), safeDiagnostic(/Unknown snapshot asset/));
+  }
+});
+
 test('no browser/Node host capabilities, with absolute, remote and private modules denied', async () => {
   assert.equal((await run(`export function build() {
     for (const key of ['fetch','XMLHttpRequest','WebSocket','Worker','document','postMessage','process','require','navigator','Deno','importScripts']) {
