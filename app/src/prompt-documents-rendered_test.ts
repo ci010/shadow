@@ -60,11 +60,15 @@ test('prompt components render revision-bound tabs, source metadata and selectio
           const ownerWeb = new URL(request.url, 'http://fixture').searchParams.get('rolePreview') === 'owner-web'
           const systemPrompt = ownerWeb ? 'Device Inventory / fixture Child' : 'Generic role preview'
           response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ systemPrompt, tools: [],
-            ...(ownerWeb ? { rolePreview: 'owner-web' } : {}), sections: [{ name: 'runtime', content: systemPrompt, characters: systemPrompt.length }] })); return
+            ...(ownerWeb ? { rolePreview: 'owner-web' } : {}),
+            promptIdentity: { role: 'general', definition: 'general', version: 'v2', mode: 'session', behaviorSource: 'builtin' },
+            sections: [{ name: 'runtime', content: systemPrompt, characters: systemPrompt.length }] })); return
         }
         if (request.url === '/api/sessions/web%3Afixture/context') {
           requests.push(request.url); response.setHeader('Content-Type', 'application/json');
-          response.end(JSON.stringify({ systemPrompt: 'Actual runtime prompt', source: 'active-history', sections: [{ name: 'runtime-source', content: 'Actual runtime prompt', characters: 21 }] })); return
+          response.end(JSON.stringify({ systemPrompt: 'Actual runtime prompt', source: 'active-history',
+            promptIdentity: { role: 'sub', definition: 'sub', version: 'v1', mode: 'call', behaviorSource: 'sub-draft', subRevision: 'a'.repeat(64) },
+            sections: [{ name: 'runtime-source', content: 'Actual runtime prompt', characters: 21 }] })); return
         }
         if (request.url?.startsWith('/api/')) { requests.push(request.url); response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({id:'fixture',revision:'rev-1',prompt:'# BOT instructions\n\nFrozen deployment text\n\n<script>window.unsafe = true</script>'})); return }
         next()
@@ -114,6 +118,8 @@ test('prompt components render revision-bound tabs, source metadata and selectio
         [...document.querySelectorAll('.agent-overview button')].find(button=>button.textContent.includes('Read system prompt')).click();
         await wait(()=>[...document.querySelectorAll('.prompt-section')].some(section=>section.textContent.includes('Device Inventory / fixture Child')));
         if(!document.querySelector('.preview-scope')?.textContent.includes('Owner Web preview'))throw Error('missing owner preview boundary');
+        if(!document.querySelector('.agent-browser')?.textContent.includes('general · V2 · session · Built-in default'))throw Error('missing default assembly identity');
+        if(!document.querySelector('.session-diagnosis')?.textContent.includes('sub · V1 · call · Project draft @'+'a'.repeat(64)))throw Error('missing recorded draft identity');
         return 'PROMPT_DOCUMENTS_OK';
       })()\`);
       console.log(result); app.exit(0);

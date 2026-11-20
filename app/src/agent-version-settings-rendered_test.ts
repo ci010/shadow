@@ -8,19 +8,18 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { BUILTIN_AGENT_VERSIONS } from '../../src/agent/types/versions.ts'
 import { withTempWorkspace } from '../../src/testing/workspace.ts'
 
 const appRoot = fileURLToPath(new URL('../', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 
-test('rendered Agent settings show registered versions and save only the changed role', {
+test('rendered Agent settings show one selector, persist a prompt version, and lock an environment override', {
   timeout: 45_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async () => {
   await withTempWorkspace(async directory => {
     const server = await createServer({
-      configFile: false, root: appRoot, logLevel: 'error', server: { host: '127.0.0.1', port: 0 },
+      configFile: false, root: appRoot, cacheDir: join(directory, 'vite-cache'), logLevel: 'error', server: { host: '127.0.0.1', port: 0 },
       optimizeDeps: { entries: [] },
       plugins: [vue(), {
         name: 'agent-version-fixture',
@@ -29,21 +28,22 @@ test('rendered Agent settings show registered versions and save only the changed
           import '/src/styles.css';
           import {createResourceApp} from '/src/stores/app.ts';
           import Form from '/src/components/AgentVersionDefaultsForm.vue';
-          const roles = ${JSON.stringify(BUILTIN_AGENT_VERSIONS.map(role => ({ ...role, selectedVersion: role.defaultVersion })))};
+          let state = { version: 'v2', source: 'builtin' };
+          if (location.search) state = { version: 'v1', source: 'environment' };
           window.patches = [];
           window.fetch = async (url, init) => {
             if (new URL(url, location.href).pathname !== '/api/app/agent-version-defaults') throw Error('Wrong endpoint');
             if (init?.method === 'PATCH') {
               const patch = JSON.parse(init.body); window.patches.push(patch);
-              for (const role of roles) role.selectedVersion = patch[role.role] ?? role.selectedVersion;
+              state = { version: patch.version, source: 'app' };
             }
-            return Response.json({roles});
+            return Response.json(state);
           };
           createResourceApp(Form, {apiBase:location.origin}).mount('#app');
         `,
         configureServer(server) {
           server.middlewares.use((request, response, next) => {
-            if (request.url !== '/__version') return next()
+            if (request.url?.split('?')[0] !== '/__version') return next()
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><div id="app"></div><script type="module" src="/version-fixture.ts"></script>')
           })
@@ -65,7 +65,7 @@ test('rendered Agent settings show registered versions and save only the changed
           await win.loadURL(${JSON.stringify(new URL('/__version', url).href)});
           const result = await win.webContents.executeJavaScript(\`(async () => {
             const waitFor = async (read) => { for (let i=0; i<150; i++) { const value=read(); if(value) return value; await new Promise(resolve=>setTimeout(resolve,20)); } throw Error(document.body.textContent); };
-            const general = await waitFor(() => document.querySelector('[role=combobox][aria-label=General]'));
+            const general = await waitFor(() => document.querySelector('[role=combobox][aria-label="Built-in prompt version"]'));
             const all = [...document.querySelectorAll('[role=combobox]')].map(button => [button.textContent.trim(), button.disabled]);
             general.focus(); general.dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', bubbles:true }));
             const v1 = await waitFor(() => [...document.querySelectorAll('[role=option]')].find(option => option.textContent.trim() === 'V1'));
@@ -74,9 +74,18 @@ test('rendered Agent settings show registered versions and save only the changed
             await waitFor(() => document.body.textContent.includes('Agent defaults saved.'));
             return { all, general: general.textContent.trim(), patches: window.patches };
           })()\`);
-          assert.deepEqual(result.all, [['V2 · Built-in default', false], ...Array(4).fill(['V1 · Built-in default', true])]);
+          assert.deepEqual(result.all, [['V2', false]]);
           assert.equal(result.general, 'V1');
-          assert.deepEqual(result.patches, [{general:'v1'}]);
+          assert.deepEqual(result.patches, [{version:'v1'}]);
+          await win.loadURL(${JSON.stringify(new URL('/__version?managed', url).href)});
+          const locked = await win.webContents.executeJavaScript(\`(async () => {
+            for (let i=0; i<150; i++) {
+              const control = document.querySelector('[role=combobox]');
+              if (control) return [control.textContent.trim(), control.disabled, document.body.textContent.includes('Controlled by SHADOW_BUILTIN_PROMPT_VERSION.')];
+              await new Promise(resolve=>setTimeout(resolve,20));
+            }
+          })()\`);
+          assert.deepEqual(locked, ['V1', true, true]);
           app.exit(0);
         }).catch(error => { console.error(error); app.exit(1); });
       `)

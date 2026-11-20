@@ -24,11 +24,16 @@ test('every built-in Agent version references a shipped definition and each defa
   }
 })
 
-test('app Agent settings validate, persist and resolve across Projects without changing model defaults', async () => {
+test('app prompt default persists independently and respects the deployment override', async t => {
+  const key = 'SHADOW_BUILTIN_PROMPT_VERSION'
+  const previous = process.env[key]
+  t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
+  delete process.env[key]
   await withTempWorkspace(async root => {
     const configPath = join(root, 'app.json')
-    await writeFile(configPath, JSON.stringify({ agent: { model: 'synthetic' } }))
-    let active = ConfigSchema.parse({ agent: { model: 'synthetic' } })
+    const initial = { agent: { model: 'synthetic' }, agentVersionDefaults: { general: 'v1' } }
+    await writeFile(configPath, JSON.stringify(initial))
+    let active = ConfigSchema.parse(initial)
     const store = new AppProviderConfigStore({ configPath, getConfig: () => active, onChanged: changed => { active = changed } })
     const project = new ProjectConfigStore({ configPath: join(root, 'project.json'), home: root, getSharedConfig: () => active })
     await project.init()
@@ -36,25 +41,25 @@ test('app Agent settings validate, persist and resolve across Projects without c
     appAgentVersionDefaultsPlugin(store, () => active)(app)
     const path = '/api/app/agent-version-defaults'
     const patch = (body: unknown) => app.request(path, { method: 'PATCH', body: JSON.stringify(body) })
-    const getSelected = async () => Object.fromEntries((await (await app.request(path)).json()).roles.map(
-      (role: { role: string; selectedVersion: string }) => [role.role, role.selectedVersion],
-    ))
-    assert.deepEqual(await getSelected(), { general: 'v2', explore: 'v1', plan: 'v1', sub: 'v1', verify: 'v1' })
-    for (const body of [[], { malicious: 'v1' }, { general: 'latest' }, { explore: 'v2' }, { general: 1 }, { agent: { model: 'changed' } }]) {
+    const get = async () => (await app.request(path)).json()
+    assert.deepEqual(await get(), { version: 'v2', source: 'builtin' })
+    for (const body of [[], {}, { general: 'v1' }, { version: 'latest' }, { version: 1 }, { version: 'v1', extra: true }]) {
       assert.equal((await patch(body)).status, 400)
     }
-    assert.equal((await patch({ general: 'v1' })).status, 200)
-    assert.equal((await patch({ explore: 'v1' })).status, 200)
-    assert.equal((await getSelected()).general, 'v1')
-    const raw = JSON.parse(await readFile(configPath, 'utf8'))
-    assert.deepEqual(raw.agentVersionDefaults, { general: 'v1', explore: 'v1' })
-    assert.equal(raw.agent.model, 'synthetic')
-    assert.deepEqual(project.current().agentVersionDefaults, raw.agentVersionDefaults)
-    assert.equal(project.current().agent.model, 'synthetic')
-    await assert.rejects(project.update(previous => ({ ...previous, agentVersionDefaults: { general: 'v2' } })), /App settings/)
+    assert.deepEqual(await (await patch({ version: 'v1' })).json(), { version: 'v1', source: 'app' })
+    assert.deepEqual(await get(), { version: 'v1', source: 'app' })
+    assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), { ...initial, builtinPromptVersion: 'v1' })
+    assert.equal(project.current().builtinPromptVersion, 'v1')
+    await assert.rejects(project.update(previous => ({ ...previous, builtinPromptVersion: 'v2' })), /App settings/)
     await project.updateModelDefaults({ model: 'project-model' })
-    const projectRaw = JSON.parse(await readFile(join(root, 'project.json'), 'utf8'))
-    assert.equal(projectRaw.agent.model, 'project-model')
-    assert.equal(projectRaw.agentVersionDefaults, undefined)
+    assert.equal(JSON.parse(await readFile(join(root, 'project.json'), 'utf8')).builtinPromptVersion, undefined)
+    process.env[key] = 'v2'
+    assert.deepEqual(await get(), { version: 'v2', source: 'environment' })
+    assert.equal((await patch({ version: 'v2' })).status, 409)
+    process.env[key] = 'invalid'
+    assert.deepEqual(await get(), { version: null, source: 'environment' })
+    assert.equal((await patch({ version: 'v2' })).status, 409)
+    delete process.env[key]
+    assert.deepEqual(await get(), { version: 'v1', source: 'app' })
   })
 })

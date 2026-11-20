@@ -54,7 +54,7 @@ test('V2 specialist prompts retain role policy and honor actual mode and tool ce
       if (name !== 'sub') assert.doesNotMatch(prompt, /direct `write`|use `write`|Read\/write `v:sessions\/self\.json`|### Delegation|For MCP recovery/)
       if (name === 'sub') {
         assert.match(prompt, /exact replacement/)
-        assert.equal(prompt.includes('The parent owns the task discovery title'), mode === 'task')
+        assert.equal(prompt.includes('Task discovery title and description are parent-owned'), mode === 'task')
         assert.equal(prompt.includes('Delegate only a bounded independent result'), mode !== 'call')
       }
       if (name === 'verify') {

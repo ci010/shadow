@@ -354,6 +354,7 @@ export function sessionsApiPlugin(
         const execution = {
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
+          subRevision: state?.subDraft?.revision,
           sessionKind: state?.sessionKind,
           description: state?.mode === 'task' || state?.mode === 'call' ? state.description : undefined,
           createdBySessionId: state?.createdBySessionId,
@@ -404,6 +405,7 @@ export function sessionsApiPlugin(
           folderId: session.folderId,
           mode: execution.mode,
           agentType: execution.agentType,
+          subRevision: execution.subRevision,
           sessionKind: execution.sessionKind,
           createdBySessionId: execution.createdBySessionId,
           parentSessionId: execution.parentSessionId,
@@ -862,6 +864,7 @@ export function sessionsApiPlugin(
           systemPrompt: result.systemPrompt,
           tools: result.tools,
           ...(result.sections ? { sections: result.sections } : {}),
+          ...(result.promptIdentity ? { promptIdentity: result.promptIdentity } : {}),
           note: result.source === 'preview'
             ? 'Rebuilt from current session configuration; per-input identity and historical provider requests are not reconstructed.'
             : 'Current in-memory system message and tool definitions, not a captured provider request.',

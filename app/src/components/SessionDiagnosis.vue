@@ -159,6 +159,7 @@
 
     <div v-show="section === 'prompt'" :id="domId('diagnosis-prompt')" class="diagnosis-scroll context-view" role="tabpanel" :aria-busy="promptLoading" :aria-labelledby="domId('diagnosis-prompt-tab')" tabindex="0">
       <p class="context-note">{{ inspectedSource === 'active-history' ? t('Current in-memory system message, not a captured provider request.') : inspectedSource === 'preview' ? t('Rebuilt preview, not a historical runtime prompt.') : t('Prompt provenance unavailable.') }}</p>
+      <p v-if="inspectedContext?.promptIdentity" class="context-note">{{ formatPromptIdentity(inspectedContext.promptIdentity) }}</p>
       <button v-if="promptDocuments && projectId && inspectedPrompt" class="btn btn-sm" :disabled="promptLoading" @click="openPrompt">{{ t('Open prompt in workspace') }}</button>
       <p v-if="promptLoading" role="status">{{ t('Loading') }}…</p>
       <p v-if="promptError" role="alert">{{ promptError }}</p>
@@ -176,6 +177,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatPromptIdentity, parsePromptIdentity, type PromptIdentity } from '../agent-types.ts'
 import { PromptDocumentsKey } from '../prompt-documents.ts'
 import { promptSections as validatePromptSections } from '../prompt-sections.ts'
 import { t, formatDateTime } from '../i18n.ts'
@@ -214,7 +216,7 @@ const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
 const promptDocuments = inject(PromptDocumentsKey, undefined)
 // Direct-chat snapshots intentionally keep their fixed metadata protocol. Read
 // provenance only while inspecting the prompt, rather than enlarging every delta.
-const inspectedContext = ref<{ systemPrompt: string; sections?: unknown; source?: string }>()
+const inspectedContext = ref<{ systemPrompt: string; sections?: unknown; source?: string; promptIdentity?: PromptIdentity }>()
 const promptError = ref('')
 const promptLoading = ref(false)
 let promptRequest: AbortController | undefined
@@ -235,7 +237,7 @@ watch(() => [props.apiBase, props.sessionId, props.physicalId, props.active, sec
     if (!data || typeof data.systemPrompt !== 'string' || !['active-history', 'preview'].includes(data.source)) {
       throw new Error(t('Could not load execution context. Reopen it to retry.'))
     }
-    inspectedContext.value = data
+    inspectedContext.value = { ...data, promptIdentity: parsePromptIdentity(data.promptIdentity) }
   } catch (cause) { if (!request.signal.aborted) promptError.value = cause instanceof Error ? cause.message : t('Could not load execution context. Reopen it to retry.') }
   finally { if (promptRequest === request) promptLoading.value = false }
 }, { immediate: true })

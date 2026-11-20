@@ -1,3 +1,4 @@
+import { resolvePrompt, type PromptVersion } from '../agent/context/prompt-version.ts'
 import { builtinAgentVersion, type AgentVersionDefaults, type BuiltinAgentRole } from '../agent/types/versions.ts'
 import { isDisplayDuplicate, markRecordedChannelInput } from '../channels/recorded-input.ts'
 import { stampPersonalOutput } from '../bots/personal-output.ts'
@@ -141,6 +142,7 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  getBuiltinPromptVersion?: () => PromptVersion | undefined
   getAgentVersionDefaults?: () => AgentVersionDefaults
   sessionIdentityAliases?: Readonly<Record<string, string>>
   conversationPolicies?: ConversationPolicies
@@ -245,6 +247,22 @@ interface BlockingCallFrame {
   blockedReason?: string
   cancelled: boolean
   settled: Promise<void>
+}
+
+interface PromptIdentity {
+  role: string
+  definition: string
+  version: PromptVersion
+  mode: ExecutionMode
+  behaviorSource: 'builtin' | 'workspace' | 'sub-draft'
+  subRevision?: string
+}
+
+function promptIdentity(ctx: SessionPromptContext): PromptIdentity {
+  const { role, version } = resolvePrompt(ctx.agent, { pinned: ctx.promptVersion })
+  const subRevision = role === 'sub' && ctx.agent.source === 'builtin' ? ctx.subDraft?.revision : undefined
+  return { role, definition: ctx.agent.name, version, mode: ctx.mode ?? ctx.agent.defaultMode,
+    behaviorSource: subRevision ? 'sub-draft' : ctx.agent.source, ...(subRevision ? { subRevision } : {}) }
 }
 
 export class SessionManager {
@@ -529,6 +547,7 @@ export class SessionManager {
       const status = frame.blockedReason || declaredBlocked ? 'blocked' : declaredFailure ? 'failed' : fact?.status ?? 'cancelled'
       const receipt = {
         sessionId, executionId: sessionId, mode: 'call', status,
+        promptVersion: state.promptVersion, subRevision: state.subDraft?.revision,
         result: fact?.content ?? '',
         ...(blockedReason ? { blockedReason } : {}),
         ...(fact?.error || declaredFailure ? { error: fact?.error ?? declaredFailure } : {}),
@@ -547,6 +566,7 @@ export class SessionManager {
       const status = context.signal.aborted ? 'cancelled' : frame.blockedReason ? 'blocked' : 'failed'
       state.executionStatus = status === 'blocked' ? 'failed' : status
       const receipt = { sessionId, executionId: sessionId, mode: 'call', status,
+        promptVersion: state.promptVersion, subRevision: state.subDraft?.revision,
         result: '', error: errMsg(error), partialWork: '', blockedReason: frame.blockedReason,
         sideEffectsMayHaveOccurred: !!frame.session }
       await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{ call_result: receipt }])
@@ -594,6 +614,7 @@ export class SessionManager {
     return JSON.stringify({
       sessionId, executionId: state.executionId, mode: state.mode,
       status: state.executionStatus,
+      promptVersion: state.promptVersion, subRevision: state.subDraft?.revision,
       message: 'Execution admitted. Its final result is delivered asynchronously.',
     })
   }
@@ -835,13 +856,13 @@ ${JSON.stringify(request)}`,
   }
 
   // Ephemeral provenance only. Never apply regenerated metadata to persisted history.
-  private promptProvenance = new Map<string, { systemPrompt: string; sections: import('../agent/context/builder.ts').SystemPromptSection[]; policyRevision?: string; policyGeneration?: string; personalBotPrompt?: string }>()
+  private promptProvenance = new Map<string, { systemPrompt: string; sections: import('../agent/context/builder.ts').SystemPromptSection[]; policyRevision?: string; policyGeneration?: string; personalBotPrompt?: string; promptIdentity?: PromptIdentity }>()
 
   private async runtimeSystemPrompt(sessionId: string, ctx: SessionPromptContext,
     policy?: ReturnType<NonNullable<SessionManagerDeps['conversationPolicies']>['resolve']>, state?: SessionState): Promise<string> {
     const details = policy ? this.deps.conversationPolicies!.prompt(policy, sessionId, state)
       : await this.deps.context.buildSystemPromptDetails({ ...ctx, runtimePrompt: true })
-    this.promptProvenance.set(sessionId, { ...details, policyRevision: policy?.revision, policyGeneration: policy?.generation, personalBotPrompt: ctx.personalBotPrompt })
+    this.promptProvenance.set(sessionId, { ...details, promptIdentity: policy ? undefined : promptIdentity(ctx), policyRevision: policy?.revision, policyGeneration: policy?.generation, personalBotPrompt: ctx.personalBotPrompt })
     return details.systemPrompt
   }
 
@@ -2059,6 +2080,7 @@ ${JSON.stringify(request)}`,
       initiativeId?: string
       folderId?: string
       reportTo?: string
+      subDraft?: SessionState['subDraft']
       originUser?: string
       name?: string
       description?: string
@@ -2156,6 +2178,7 @@ ${JSON.stringify(request)}`,
       )
     }
     if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
+    const promptVersion = resolvePrompt(agent, { fresh: true, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version
     const mode = stateFields?.mode ?? agent.defaultMode ?? 'session'
     if (mode !== 'session' && (topicFields.topic || topicFields.sessionKind)) throw new Error('Topic metadata requires mode=session')
     if (mode === 'session' && stateFields?.parentSessionId) {
@@ -2247,6 +2270,8 @@ ${JSON.stringify(request)}`,
       folderId: stateFields?.folderId ?? parentState?.folderId,
       reportTo: mode === 'session' ? undefined : stateFields?.reportTo,
       originUser: stateFields?.originUser,
+      promptVersion,
+      subDraft: stateFields?.subDraft,
       name: stateFields?.name === undefined
         ? mode === 'task' && ownerId
           ? parseSessionName((stateFields?.description ?? 'Task').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120) || 'Task')
@@ -3629,6 +3654,7 @@ ${JSON.stringify(request)}`,
     systemPrompt: string
     source: 'active-history' | 'preview'
     rolePreview?: 'owner-web'
+    promptIdentity?: PromptIdentity
     sections?: import('../agent/context/builder.ts').SystemPromptSection[]
     tools: Array<{ name: string; description: string; parameters: unknown }>
   }> {
@@ -3655,13 +3681,11 @@ ${JSON.stringify(request)}`,
     const active = opts.sessionId ? this.getActiveSession(sessionId) : undefined
     const conversationPolicy = opts.sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
     if (active && !opts.preview) {
-      return {
-        source: 'active-history',
-        systemPrompt: extractSystemPrompt(active.history[0]),
-        sections: this.promptProvenance.get(sessionId)?.systemPrompt === extractSystemPrompt(active.history[0])
-          ? this.promptProvenance.get(sessionId)?.sections : undefined,
-        tools: this.getToolDefinitions(sessionId),
-      }
+      const systemPrompt = extractSystemPrompt(active.history[0])
+      const current = this.promptProvenance.get(sessionId)
+      const provenance = current?.systemPrompt === systemPrompt ? current : undefined
+      return { source: 'active-history', systemPrompt, promptIdentity: provenance?.promptIdentity,
+        sections: provenance?.sections, tools: this.getToolDefinitions(sessionId) }
     }
 
     if (conversationPolicy) {
@@ -3695,6 +3719,8 @@ ${JSON.stringify(request)}`,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       execNodeOnly: this.deps.execNodeOnly,
       agent: agentType,
+      promptVersion: resolvePrompt(agentType, { pinned: state?.promptVersion, fresh: !opts.sessionId, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version,
+      subDraft: state?.subDraft,
       personalBotPrompt: personal?.prompt,
       mode: state?.mode ?? agentType.defaultMode,
       taskReviewable: !!state?.task,
@@ -3713,7 +3739,7 @@ ${JSON.stringify(request)}`,
     }, channel, promptCtx.mode)
 
     const decisions = opts.sessionId ? await this.decisionValidityPrompt(sessionId) : ''
-    return { source: 'preview', ...(ownerWebPreview ? { rolePreview: 'owner-web' as const } : {}),
+    return { source: 'preview', promptIdentity: promptIdentity(promptCtx), ...(ownerWebPreview ? { rolePreview: 'owner-web' as const } : {}),
       systemPrompt: decisions ? `${systemPrompt}\n\n${decisions}` : systemPrompt,
       sections: decisions ? [...sections, { name: 'decision-validity', content: decisions, characters: decisions.length }] : sections, tools }
   }
@@ -3865,8 +3891,9 @@ ${JSON.stringify(request)}`,
       timestamp: ts,
     }
 
+    const agentType = this.isOrdinaryWebSession(sessionId) ? this.defaultBuiltinAgentType('general') : undefined
+    const promptVersion = resolvePrompt(this.resolveAgentTypeTools(agentType).agentType, { fresh: true, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version
     await this.store.createSessionLog(physicalSessionId, [startEvent])
-
     const state: SessionState = {
       ownershipVersion: 2,
       physicalIdVersion: 2,
@@ -3874,7 +3901,8 @@ ${JSON.stringify(request)}`,
       sessionId,
       segmentIndex: 0,
       mode: 'session',
-      agentType: this.isOrdinaryWebSession(sessionId) ? this.defaultBuiltinAgentType('general') : undefined,
+      agentType,
+      promptVersion,
       workPolicy: { mode: 'optional' },
       parentSessionId: null,
       executionStatus: 'pending',
@@ -3919,6 +3947,8 @@ ${JSON.stringify(request)}`,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       execNodeOnly: this.deps.execNodeOnly,
       agent: resolvedAgentType,
+      promptVersion: resolvePrompt(resolvedAgentType, { pinned: state.promptVersion }).version,
+      subDraft: state.subDraft,
       personalBotPrompt: personal?.prompt,
       mode: state.mode,
       taskReviewable: !!state.task,

@@ -1,22 +1,24 @@
 <template>
   <form class="agent-version-defaults" @submit.prevent="save">
-    <h2>{{ t('Agent version defaults') }}</h2>
-    <p class="settings-help">{{ t('General sets the version for new Web conversations without an explicit Agent. Existing conversations keep their version. Model settings are separate.') }}</p>
+    <h2>{{ t('Built-in prompt version') }}</h2>
+    <p class="settings-help">{{ t('Applies across projects to new built-in Agent conversations and local delegations. Existing conversations, custom Agents and remote Agents are unchanged.') }}</p>
     <p v-if="loading" role="status">{{ t('Loading Agent versions...') }}</p>
     <p v-if="error" role="alert" class="settings-error">
       {{ error }} <button type="button" class="btn" :disabled="loading || saving" @click="load">{{ t('Reload defaults') }}</button>
     </p>
-    <fieldset v-if="roles.length" :disabled="loading || saving">
-      <label v-for="role in roles" :key="role.role" class="settings-field">
-        {{ roleLabel(role.role) }}
-        <UiSelect v-model="selection[role.role]" :aria-label="roleLabel(role.role)"
-          :disabled="loading || saving || role.versions.length < 2" @update:model-value="notice = ''">
-          <option v-for="version in role.versions" :key="version.version" :value="version.version">
-            {{ version.version.toUpperCase() }}{{ version.version === role.defaultVersion ? ` · ${t('Built-in default')}` : '' }}
-          </option>
+    <p v-if="state?.source === 'environment'" role="status" class="settings-help">
+      {{ state.version ? t('Controlled by SHADOW_BUILTIN_PROMPT_VERSION.') : t('SHADOW_BUILTIN_PROMPT_VERSION must be v1 or v2.') }}
+    </p>
+    <fieldset v-if="state?.version" :disabled="loading || saving || locked">
+      <label class="settings-field">
+        {{ t('Built-in prompt version') }}
+        <UiSelect v-model="selection" :aria-label="t('Built-in prompt version')"
+          :disabled="loading || saving || locked" @update:model-value="notice = ''">
+          <option value="v1">V1</option>
+          <option value="v2">V2</option>
         </UiSelect>
       </label>
-      <button class="btn save-defaults" type="submit" :disabled="!dirty || saving">{{ saving ? t('Saving...') : t('Save Agent defaults') }}</button>
+      <button class="btn save-defaults" type="submit" :disabled="!dirty || saving || locked">{{ saving ? t('Saving...') : t('Save Agent defaults') }}</button>
     </fieldset>
     <p v-if="notice" role="status" class="settings-help">{{ notice }}</p>
   </form>
@@ -29,43 +31,27 @@ import { t } from '../i18n.ts'
 import { projectJson } from '../projects.ts'
 import UiSelect from './UiSelect.vue'
 
-type Role = { role: string; selectedVersion: string; defaultVersion: string; versions: { version: string }[] }
+type Version = 'v1' | 'v2'
+type State = { version: Version | null; source: 'builtin' | 'app' | 'environment' }
 const props = defineProps<{ apiBase: string }>()
-const roles = ref<Role[]>([])
-const selection = ref<Record<string, string>>({})
+const state = ref<State>()
+const selection = ref<Version>('v2')
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const dirty = computed(() => roles.value.some(role => selection.value[role.role] !== role.selectedVersion))
+const locked = computed(() => state.value?.source === 'environment')
+const dirty = computed(() => !!state.value?.version && selection.value !== state.value.version)
 const path = '/api/app/agent-version-defaults'
 let request: AbortController | undefined
 
-function roleLabel(role: string) {
-  switch (role) {
-    case 'general': return t('General')
-    case 'explore': return t('Explore')
-    case 'plan': return t('Plan')
-    case 'sub': return t('Subagent')
-    case 'verify': return t('Verify')
-    default: return role
-  }
-}
-
 function accept(value: unknown) {
-  if (!isRecord(value) || !Array.isArray(value.roles) || !value.roles.length) throw new Error('Invalid role catalog')
-  const parsed = value.roles.map((role: unknown): Role => {
-    if (!isRecord(role) || typeof role.role !== 'string' || typeof role.selectedVersion !== 'string' ||
-      typeof role.defaultVersion !== 'string' || !Array.isArray(role.versions)) throw new Error('Invalid role')
-    const versions = role.versions.map((option: unknown) => {
-      if (!isRecord(option) || typeof option.version !== 'string') throw new Error('Invalid version')
-      return { version: option.version }
-    })
-    if (!versions.some(option => option.version === role.selectedVersion) || !versions.some(option => option.version === role.defaultVersion)) throw new Error('Unknown version')
-    return { role: role.role, selectedVersion: role.selectedVersion, defaultVersion: role.defaultVersion, versions }
-  })
-  roles.value = parsed
-  selection.value = Object.fromEntries(parsed.map(role => [role.role, role.selectedVersion]))
+  if (!isRecord(value) || (value.source !== 'builtin' && value.source !== 'app' && value.source !== 'environment') ||
+    (value.version !== 'v1' && value.version !== 'v2' && !(value.version === null && value.source === 'environment'))) {
+    throw new Error('Invalid built-in prompt version state')
+  }
+  state.value = { version: value.version, source: value.source }
+  if (value.version) selection.value = value.version
 }
 
 async function load() {
@@ -82,12 +68,11 @@ async function load() {
 }
 
 async function save() {
-  if (loading.value || saving.value || !dirty.value) return
+  if (loading.value || saving.value || locked.value || !dirty.value) return
   const active = request = new AbortController()
   saving.value = true
   error.value = notice.value = ''
-  const patch = Object.fromEntries(roles.value.filter(role => selection.value[role.role] !== role.selectedVersion)
-    .map(role => [role.role, selection.value[role.role]]))
+  const patch = { version: selection.value }
   try {
     const value = await projectJson(props.apiBase, path, { method: 'PATCH', body: JSON.stringify(patch), signal: active.signal })
     if (active.signal.aborted) return

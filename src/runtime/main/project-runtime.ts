@@ -139,6 +139,8 @@ import { ProjectMaintenanceSources } from '../../agent/learning/maintenance-sour
 import { DocumentMaintenanceOperation, DocumentMaintenanceRestoration } from '../../agent/learning/maintenance-documents.ts'
 import { MaintenanceGate } from '../../agent/learning/maintenance-gate.ts'
 import { DocumentMaintenanceProtection } from '../../agent/learning/maintenance-protection.ts'
+import { SubOverrideSaveTool } from '../../tools/sub-override-save.ts'
+import { SubOverrideStore } from '../../agent/context/sub-override.ts'
 import { LearningMaintenanceTool, maintenanceOwnerAccess } from '../../tools/learning-maintenance.ts'
 import { LearningMaintenancePreview } from '../../agent/learning/maintenance-preview.ts'
 import { KnowledgeMaintenanceService } from '../../knowledge/maintenance.ts'
@@ -840,6 +842,7 @@ export async function createProjectRuntime(
     backgroundTasks,
     agentTypes,
     events,
+    getBuiltinPromptVersion: () => configStore.current().builtinPromptVersion,
     getAgentVersionDefaults: () => configStore.current().agentVersionDefaults,
     getLlmRuntimeConfig: () => llm,
     getYieldPolicy: () => activeConfig.tools.yield,
@@ -1470,6 +1473,11 @@ export async function createProjectRuntime(
         locations.workdir.available && locations.workdir.locality === 'local')
     })
   importTool.registerBuiltin('learning_maintenance', ownerMaintenance)
+  const subOverrides = new SubOverrideStore(workspace)
+  importTool.registerBuiltin('sub_override_save', new SubOverrideSaveTool(subOverrides, project.id, context => {
+    const state = sessions.getSessionState(context.sessionId)
+    return !!state && canAuthor(context.sessionId) && physicalSessionId(state) === context.physicalSessionId
+  }))
   workflows.bindHost('work-organizer', {
     current: () => organizationController.status().enabled,
     execute: async (observation, signal) => {
@@ -2114,7 +2122,7 @@ export async function createProjectRuntime(
 
   // Register subagent tool (requires ChannelManager for thread creation)
   tools.register(
-    new SubagentTool(bus, sessions, agentTypes, channels, a2a.sessions),
+    new SubagentTool(bus, sessions, agentTypes, channels, a2a.sessions, subOverrides, project.id),
   )
 
   // Fail closed for new/custom tools. These exact built-in objects provide data and

@@ -19,31 +19,27 @@ test('role, personal BOT deployment and shared tool instructions retain distinct
   assert.equal((await builder.buildSystemPromptDetails({ ...ctx, personalBotPrompt: undefined })).sections.length, 2)
 })
 
-// Compare against the pre-provenance formula, not a refreshed prompt snapshot.
-import { readFileSync } from 'node:fs'
 import { AgentTypesManager } from '../types/manager.ts'
-import { capabilityPrompt } from './capability-prompt.ts'
-import { toolsGuideline } from './tools-guideline.ts'
 
-test('provenance preserves legacy assembly bytes and reconstructs intentional general-v2 changes', async () => {
+// V1 must preserve trimming and provider order; V2 must retain exact source provenance.
+test('both assembly paths reconstruct their canonical bytes for all role definitions', async () => {
   const roles = new AgentTypesManager(process.cwd())
   await roles.load()
-  const tools = readFileSync(new URL('./AGENTS.tools.md', import.meta.url), 'utf8')
+  const provider = guidelineProvider()
   for (const agent of roles.all()) for (const personal of [undefined, '', '\n Personal BOT body \r\n']) {
     const ctx: SessionPromptContext = { channel: 'web', chatId: 'fixture', sessionId: 'web:fixture', behavior: {}, agent, personalBotPrompt: personal }
-    const legacyRole = personal === undefined ? agent.prompt : `${agent.prompt}\n\n# Personal BOT instructions\n${personal}`
-    const legacy = [capabilityPrompt(legacyRole, ctx), capabilityPrompt(tools, ctx), toolsGuideline(ctx)].join('\n\n').trim()
     const builder = new ContextBuilder(process.cwd())
     builder.register({ name: 'before', getPromptSection: () => ' \nBefore\r\n' })
-    builder.register(guidelineProvider())
+    builder.register(provider)
     builder.register({ name: 'after', getPromptSection: () => '\nAfter  ' })
-    const built = await builder.buildSystemPromptDetails(ctx)
-    const comparable = agent.name === 'general-v2' && agent.defaultMode === 'session'
-      ? built.systemPrompt.replace(/## Tool discovery and recovery[\s\S]*?(?=### Shared work notes)/,
-        `${capabilityPrompt(tools, ctx)}\n\n`)
-      : built.systemPrompt
-    assert.equal(comparable, `Before\n\n---\n\n${legacy}\n\n---\n\nAfter`, `${agent.name}, personal=${JSON.stringify(personal)}`)
-    assert.equal(built.sections.map(section => (section.separatorBefore ?? '') + section.content).join(''), built.systemPrompt)
+    const v1 = await builder.buildSystemPromptDetails({ ...ctx, promptVersion: 'v1' })
+    const v2 = await builder.buildSystemPromptDetails({ ...ctx, promptVersion: 'v2' })
+    const canonical = provider.getPromptSection({ ...ctx, promptVersion: 'v1' }) as string
+    assert.equal(v1.systemPrompt, `Before\n\n---\n\n${canonical.trim()}\n\n---\n\nAfter`, `${agent.name}, personal=${JSON.stringify(personal)}`)
+    assert.match(v2.systemPrompt, /^# Information/)
+    for (const result of [v1, v2]) {
+      assert.equal(result.sections.map(section => (section.separatorBefore ?? '') + section.content).join(''), result.systemPrompt)
+    }
   }
 })
 
