@@ -364,13 +364,17 @@ app.whenReady().then(async()=>{
   await click('Edit description','.vue-flow__node:nth-child(4) .card');
   assert.equal(await run(()=>document.querySelector('.description-editor textarea').value),'Moonrise <b>wide</b>');
   await fill('Moonrise wide'); await click('Save','.description-editor');
-  const shotPoint=await run(()=>{
-    const r=document.querySelector('.vue-flow__node:nth-child(2) .sample').getBoundingClientRect();
-    return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+35)};
+  const shotPoint=await wait('shot receives pointer hits',()=>{
+    const sample=document.querySelector('.vue-flow__node:nth-child(2) .sample');
+    const r=sample.getBoundingClientRect();
+    const point={x:Math.round(r.left+r.width/2),y:Math.round(r.top+35)};
+    return document.elementFromPoint(point.x,point.y)?.closest('.sample')===sample && point;
   });
-  win.webContents.sendInputEvent({type:'mouseDown',...shotPoint,button:'left',clickCount:1});
-  win.webContents.sendInputEvent({type:'mouseUp',...shotPoint,button:'left',clickCount:1});
-  await wait('real pointer selects shot',()=>document.querySelector('.vue-flow__node:nth-child(2) .sample').getAttribute('aria-current')==='true');
+  win.webContents.debugger.attach('1.3');
+  try {
+    for (const type of ['mousePressed','mouseReleased']) await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type,...shotPoint,button:'left',clickCount:1});
+  } finally { win.webContents.debugger.detach() }
+  await wait('pointer selects shot',()=>document.querySelector('.vue-flow__node:nth-child(2) .sample').getAttribute('aria-current')==='true');
   await run(()=>document.querySelector('.vue-flow__node:nth-child(2) .sample').dispatchEvent(new MouseEvent('dblclick',{bubbles:true})));
   const atUpperShot=()=>document.querySelector('.picture img')?.naturalWidth===180 && document.querySelector('.transport .readout').textContent==='Frame 24';
   await wait('double-click opens monitor at exact selected shot',atUpperShot);
@@ -391,9 +395,17 @@ app.whenReady().then(async()=>{
     const port=document.querySelector('.board-scroll');
     return cards.length===3 && cards[0].x===cards[1].x && cards[1].top>cards[0].bottom && port.scrollWidth<=port.clientWidth+1;
   });
-  const wheelPoint=await run(()=>{const r=document.querySelector('.board-scroll').getBoundingClientRect();return {x:Math.round(r.left+40),y:Math.round(r.top+40)}});
-  win.webContents.sendInputEvent({type:'mouseWheel',...wheelPoint,deltaY:-325,deltaX:0,hasPreciseScrollingDeltas:true});
-  await wait('native wheel scrolls the board over a shot',()=>document.querySelector('.board-scroll').scrollTop>0);
+  assert.equal(await run(()=>{
+    const port=document.querySelector('.board-scroll');
+    const shot=port.querySelector('.sample');
+    port.focus();
+    // Flow must not consume normal wheel input. Use a native PageDown to verify
+    // scrolling separately, without depending on hidden-window wheel momentum.
+    return shot.dispatchEvent(new WheelEvent('wheel',{deltaY:180,bubbles:true,cancelable:true})) && port.scrollHeight>port.clientHeight;
+  }),true);
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'PageDown'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'PageDown'});
+  await wait('native keyboard scrolls the focused board',()=>document.querySelector('.board-scroll').scrollTop>0);
   await run(()=>document.querySelector('.board-scroll').scrollTo(0,0));
   await click('Selection','.compact-tabs');
   await layout('.inspector','.tracks-pane');
