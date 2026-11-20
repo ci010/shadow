@@ -250,7 +250,7 @@ export interface SessionStartEvent {
 
 export interface StoredMessage {
   /** Host provenance, assigned only when admitting direct user input. */
-  direct_input?: { sessionId: string; id: string; text: string; at: string }
+  direct_input?: { sessionId: string; id: string; text: string; at: string; profileSource?: import('../agent/identity.ts').ReflectionProfileSource }
   /** Atomic history-only channel input marker, scoped to this physical context. */
   channel_receipt?: boolean
   channel_input_id?: string

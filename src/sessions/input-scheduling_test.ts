@@ -238,7 +238,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       const steered = rows.find(row => webInputRequestId(row.content) === steer)
       assert(steered, 'the steer input is already persisted')
       assert.deepEqual(steered.direct_input, { sessionId: 'web:owner', id: steer, text: 'Identical text',
-        at: (steered.direct_input as { at: string }).at })
+        at: (steered.direct_input as { at: string }).at, profileSource: { channel: 'web', senderId: 'owner' } })
       assert(!f.calls[0].messages.some(message => 'direct_input' in message), 'admission metadata stays out of model messages')
       dispatchGate.resolve()
       await waitFor(() => f.calls.length === 2)
