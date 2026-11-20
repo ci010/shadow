@@ -25,6 +25,7 @@ import { handleBotInput } from '../../bots/input.ts'
 import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
 import { BotWakes } from '../../bots/wake.ts'
+import { ReflectionDiary } from '../../cron/reflection-diary.ts'
 import { WorkDispatcher } from '../../cron/work-dispatch.ts'
 import { ProjectDispatchFiles } from '../../cron/work-dispatch-files.ts'
 import { WorkDispatchAgent } from '../../cron/work-dispatch-agent.ts'
@@ -117,7 +118,7 @@ import { SessionManager } from '../../sessions/session-manager.ts'
 import { SessionRetirement } from '../../sessions/retirement.ts'
 import { registerRetirementRoutes } from '../../sessions/retirement-routes.ts'
 import { SessionRetirementTool } from '../../tools/session-retirement.ts'
-import { SESSION_CLEANUP_AUTOMATION, SESSION_CLEANUP_DEFAULT_KEY } from '../../cron/defaults.ts'
+import { REFLECTION_DIARY_AUTOMATION, REFLECTION_DIARY_DEFAULT_KEY, REFLECTION_DIARY_ID, SESSION_CLEANUP_AUTOMATION, SESSION_CLEANUP_DEFAULT_KEY } from '../../cron/defaults.ts'
 import { OrganizationController } from '../../projects/organization-controller.ts'
 import { physicalSessionId } from '../../sessions/session-identity.ts'
 import { WorkOrganizer, ORGANIZATION_TOOLS } from '../../projects/work-organizer.ts'
@@ -1695,7 +1696,14 @@ export async function createProjectRuntime(
   tools.register(workDispatchAgent)
   coordinator?.allow(workDispatchAgent)
   workDispatcher.setRunner((job, signal) => workDispatchAgent.run(job, signal))
+  const reflectionDiary = new ReflectionDiary(workspace, project.id, aliasStore, cronDispatcher)
+  tools.register(reflectionDiary)
+  coordinator?.allow(reflectionDiary)
   cronService.setHandler(async (job, signal) => {
+    if (job.id === REFLECTION_DIARY_ID) {
+      const sessionId = await reflectionDiary.run(job, signal)
+      return sessionId ? { sessionId } : undefined
+    }
     if (job.program) { if (workDispatchReady) await workDispatcher.dispatch(job, signal); return }
     if (job.botWake) { await botWakes.dispatch(job, signal); return }
     return { sessionId: await cronDispatcher.dispatch(job, signal) }
@@ -2225,6 +2233,7 @@ export async function createProjectRuntime(
   await ready
   void sessions.listHistoryStates().then(states => stats.backfill(aliasStore, states, project.id))
     .catch(error => console.error('[stats] Historical backfill failed', error))
+  await cronService.ensureDefaultJob(REFLECTION_DIARY_DEFAULT_KEY, REFLECTION_DIARY_AUTOMATION)
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   await cronService.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
   await workDispatcher.recover()

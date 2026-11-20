@@ -46,6 +46,9 @@ export class Watermarks {
       this.core().create(b); return b
     })
   }
+  recover(id: string) {
+    return this.change(() => this.core().recover(id))
+  }
   claim(id: string, attempt: string) {
     key.parse(attempt)
     return this.change(() => { const b = this.core().claim(id, attempt); delete b.error; return b })
