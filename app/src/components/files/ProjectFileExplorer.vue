@@ -4,9 +4,11 @@
     <p v-if="!sessionId && !relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
     <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
+    <div ref="outlineHost" class="outline-host" />
   </aside>
   <EditorViewHost v-for="file in files" :key="fileTabKey(file)" :descriptor="descriptor(file)" :active="active">
-    <ProjectExplorerFile :api-base="apiBase" :file="file" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
+    <ProjectExplorerFile :api-base="apiBase" :file="file" :outline-target="desktopOutlineHost && groups.active(projectId)?.id === editorId(file) ? desktopOutlineHost : undefined"
+      :outline-in-background="!!desktopOutlineHost && groups.active(projectId)?.id !== editorId(file)" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
   </EditorViewHost>
 </template>
 <script setup lang="ts">
@@ -25,6 +27,8 @@ const props = defineProps<{ apiBase: string; projectId: string; active: boolean;
 const emit = defineEmits<{ close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
 const mobile = useMobileChrome()
+const outlineHost = ref<HTMLElement>()
+const desktopOutlineHost = computed(() => props.active && props.open && !mobile?.enabled.value ? outlineHost.value : undefined)
 const conversations = computed(() => {
   const state = groups.state(props.projectId)
   return [...state.left, ...state.right].flatMap(id => {
@@ -123,6 +127,7 @@ function openFile(file: OpenFile) {
 </script>
 <style scoped>
 .project-file-explorer { display: flex; flex-direction: column; width: 240px; flex: 0 0 240px; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--c-border); background: var(--c-bg-soft); }
+.outline-host { display: contents; }
 .catalog-error { padding: 8px; color: var(--c-error); font-size: 12px; }
 .catalog-empty { padding: 16px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
 @media (max-width: 700px) { .project-file-explorer { width: min(240px, 60vw); flex-basis: min(240px, 60vw); } }

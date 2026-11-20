@@ -2,6 +2,8 @@
 
 The document workbench starts with its file explorer collapsed, including on wide screens. Opening a conversation or switching tabs or Projects leaves the file explorer's open or closed state unchanged. Knowledge navigation opens independently and does not change file explorer visibility.
 
+When an OpenTimelineIO file is the active document, the open desktop file explorer shows its collapsible Outline below the file roots. The same outline drives selection in both Monitor and Storyboard. With the explorer closed, on mobile, or in a standalone preview, the Outline remains available in Monitor (under the Outline panel on narrow layouts).
+
 The explorer distinguishes two sources:
 
 - **Project files**: the selected registered Folder, using its registry-backed API and owning device. Drafts use their selected Folder; existing conversations use the persisted `folderId` from the scoped session graph, including after reload. Without a selected Folder this root is omitted. Folder identity is never inferred from a local or remote workdir display path. Project Home is not a file resource and is never substituted here.

@@ -1,10 +1,13 @@
 <template>
   <section class="otio" :aria-label="t('OpenTimelineIO viewer')">
     <div v-if="!review" class="compact-tabs" role="group" :aria-label="t('Review panels')">
-      <button v-for="panel in panels.filter(item => !board || item.id !== 'outline')" :key="panel.id" type="button" :aria-pressed="compact === panel.id" @click="pause(); compact = panel.id">{{ t(board && panel.id === 'monitor' ? 'Storyboard' : panel.label) }}</button>
+      <button v-for="panel in panels.filter(item => inlineOutline || item.id !== 'outline')" :key="panel.id" type="button" :aria-pressed="activePanel === panel.id" @click="pause(); compact = panel.id">{{ t(board && panel.id === 'monitor' ? 'Storyboard' : panel.label) }}</button>
     </div>
-    <div class="bench" :class="{ reviewing: review }" :data-panel="compact">
-      <OtioOutline v-if="!review && !board" class="outline-pane" :model="model" :selected-id="selected.id" @select="select" />
+    <div class="bench" :class="{ reviewing: review, 'with-inline-outline': inlineOutline }" :data-panel="activePanel">
+      <Teleport :to="outlineTarget ?? 'body'" :disabled="!outlineTarget">
+        <OtioOutline v-show="outlineTarget || inlineOutline" :class="{ 'outline-pane': inlineOutline }" :explorer="!!outlineTarget"
+          :model="model" :selected-id="selected.id" @select="select" />
+      </Teleport>
       <section ref="monitorPane" class="monitor-pane" :class="{ 'storyboard-pane': board && !review }" :aria-label="t(board ? 'Storyboard' : 'Picture monitor')">
         <header v-if="!board" class="panel-bar">
           <h3 v-if="review?.capture">{{ t('Frozen frame') }}</h3>
@@ -86,6 +89,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef
 import { formatNumber, t } from '../../i18n.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { createOtioAudio, otioAudioPosition, otioAudioTracks } from '../../otio-audio.ts'
+import { OtioOutlineHostKey } from '../../otio-outline-host.ts'
 import { OtioDraftKey } from '../../otio-draft.ts'
 import { otioPictureAt, type OtioModel, type OtioNode, type OtioTime } from '../../otio-model.ts'
 import { lastOtioFrame } from '../../otio-navigation.ts'
@@ -159,6 +163,10 @@ interface Review { id: string; target: string | null; anchor: OtioAnchor; captur
 const review = shallowRef<Review>(), markedFile = shallowRef<File>()
 const staging = ref(false)
 let stageRequest: AbortController | undefined
+const outlineHost = inject(OtioOutlineHostKey, null)
+const outlineTarget = computed(() => props.active ? outlineHost?.target() : undefined)
+const inlineOutline = computed(() => !review.value && !board.value && !outlineTarget.value && !outlineHost?.background())
+const activePanel = computed(() => compact.value === 'outline' && !inlineOutline.value ? 'monitor' : compact.value)
 const locked = computed(() => !!review.value || capturing.value || staging.value || !props.active)
 const reviewAvailable = computed(() => !!review.value && (review.value.target === null ? canStart.value : review.value.target === destination.value?.key))
 const canAdd = computed(() => reviewAvailable.value && !staging.value && !exporting.value && !!markedFile.value)
@@ -302,8 +310,8 @@ onBeforeUnmount(() => { pause(); generation++; stageRequest?.abort(); document.r
 
 <style scoped>
 .otio { container: otio / inline-size; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; color: var(--c-text); font-size: 13px; }
-.bench { display: grid; flex: 1 0 0; min-height: 330px; grid-template-columns: minmax(150px, 20%) minmax(0, 1fr) minmax(176px, 22%); grid-template-rows: minmax(0, 1fr) minmax(118px, 30%); grid-template-areas: 'outline monitor selection' 'tracks tracks tracks'; }
-.bench > .storyboard-pane { grid-area: outline-start / outline-start / monitor-end / monitor-end; }
+.bench { display: grid; flex: 1 0 0; min-height: 330px; grid-template-columns: minmax(0, 1fr) minmax(176px, 22%); grid-template-rows: minmax(0, 1fr) minmax(118px, 30%); grid-template-areas: 'monitor selection' 'tracks tracks'; }
+.with-inline-outline { grid-template-columns: minmax(150px, 20%) minmax(0, 1fr) minmax(176px, 22%); grid-template-areas: 'outline monitor selection' 'tracks tracks tracks'; }
 .storyboard-content { flex: 1; }
 .viewer-modes { margin-inline-end: auto; }
 .storyboard-pane .viewer-modes button { min-height: 32px; padding-inline: 10px; }
@@ -356,7 +364,7 @@ onBeforeUnmount(() => { pause(); generation++; stageRequest?.abort(); document.r
 @container otio (max-width: 740px) {
   .compact-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--c-border); }
   .compact-tabs button { padding: 4px 12px; min-height: 38px; }
-  .bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'panel' 'tracks'; grid-template-rows: minmax(160px, 1fr) minmax(116px, 30%); }
+  .bench, .with-inline-outline { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'panel' 'tracks'; grid-template-rows: minmax(160px, 1fr) minmax(116px, 30%); }
   .bench:not(.reviewing) > :is(.outline-pane, .monitor-pane, .inspector) { display: none; grid-area: panel; border-inline: 0; }
   .bench:not(.reviewing)[data-panel='outline'] > .outline-pane, .bench:not(.reviewing)[data-panel='monitor'] > .monitor-pane { display: flex; }
   .bench:not(.reviewing)[data-panel='selection'] > .inspector { display: block; }
