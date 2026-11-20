@@ -1,3 +1,4 @@
+import { hasResourceGrants, intersectResources, resourceFolders, resourceSubset, unambiguousResourceFolders } from '../bots/read-scope.ts'
 import type { SourceResources } from './source-resources.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { isDeepStrictEqual } from 'node:util'
@@ -36,7 +37,7 @@ type State = z.infer<typeof stateSchema>
 const targetKey = (binding: DiscordBinding) => JSON.stringify([binding.botInstanceId, binding.target])
 const narrowBinding = (binding: DiscordBinding, agent: IntegrationAgent): DiscordBinding => {
   const narrowed: DiscordBinding = {
-  ...binding, tools: binding.tools.filter(tool => agent.tools.includes(tool)),
+  ...binding, ...(binding.readResources ? { readResources: intersectResources(binding.readResources, agent.readResources) } : {}), tools: binding.tools.filter(tool => agent.tools.includes(tool)),
   readDomains: binding.readDomains.filter(domain => agent.readDomains.includes(domain)),
   ...(binding.sourceFolders ? {sourceFolders:binding.sourceFolders.filter(id => agent.sourceFolders?.includes(id))} : {}),
   ...(binding.discordHistory ? {discordHistory: agent.discordHistory && binding.discordHistory.guildId === agent.discordHistory.guildId ? {
@@ -144,9 +145,13 @@ export class IntegrationStore {
   }
 
   definition(agent: IntegrationAgent): AgentTypeDefinition {
-    if (agent.sourceFolders?.length) {
+    // The common BOT ceiling may include resources used only by QQ/Feishu.
+    // Validate new folders against the Discord backend only on selection by a binding.
+    const ids = agent.sourceFolders ?? []
+    if (!unambiguousResourceFolders(agent.readResources, agent.sourceFolders)) throw new IntegrationError('permission_ceiling', 'Do not mix legacy and new folder scopes.')
+    if (ids.length) {
       if (!this.options.sources) throw new IntegrationError('source_unavailable', 'Registered source resources unavailable.')
-      this.options.sources.validate(agent.sourceFolders)
+      this.options.sources.validate(ids)
     }
     const parsed = parseAgentFile(agent.markdown, agent.name, this.agentDirectory(agent.name))
     return { ...parsed, name: agent.name, runtimeOrigin: { kind: 'channel-integration', id: agent.id, revision: agent.version }, allowedTools: [...agent.tools], blockedTools: undefined,
@@ -200,9 +205,13 @@ export class IntegrationStore {
   }
 
   private validateAgent(agent: z.infer<typeof IntegrationAgentSchema> | Extract<IntegrationChange, { kind: 'agent.save' }>['agent']): void {
-    if (agent.sourceFolders?.length) {
+    // The common BOT ceiling may include resources used only by QQ/Feishu.
+    // Validate new folders against the Discord backend only on selection by a binding.
+    const ids = agent.sourceFolders ?? []
+    if (!unambiguousResourceFolders(agent.readResources, agent.sourceFolders)) throw new IntegrationError('permission_ceiling', 'Do not mix legacy and new folder scopes.')
+    if (ids.length) {
       if (!this.options.sources) throw new IntegrationError('source_unavailable', 'Registered source resources unavailable.')
-      this.options.sources.validate(agent.sourceFolders)
+      this.options.sources.validate(ids)
     }
     const parsed = parseAgentFile(agent.markdown, agent.name, this.agentDirectory(agent.name))
     if (parsed.name !== agent.name || parsed.root || parsed.defaultMode !== 'session' || !parsed.prompt.trim()) {
@@ -228,6 +237,8 @@ export class IntegrationStore {
     if (!agent) throw new IntegrationError('agent_missing', 'Choose a published Agent before assigning a channel.')
     const bot = this.options.bots.get(binding.botInstanceId)
     if (bot.platform !== 'discord') throw new IntegrationError('wrong_platform', 'The binding requires a Discord Bot.')
+    if (!resourceSubset(binding.readResources, agent.readResources) || !unambiguousResourceFolders(binding.readResources, binding.sourceFolders))
+      throw new IntegrationError('permission_ceiling', 'Read resources must narrow Agent permissions; do not mix legacy and new folder scopes.')
     if ((binding.sourceFolders ?? []).some(id => !agent.sourceFolders?.includes(id)) ||
       binding.discordHistory && (!agent.discordHistory || binding.discordHistory.guildId !== agent.discordHistory.guildId ||
         binding.discordHistory.channelIds.some(id => !agent.discordHistory!.channelIds.includes(id)) ||
@@ -240,9 +251,10 @@ export class IntegrationStore {
       binding.readDomains.some(domain => !agent.readDomains.includes(domain))) {
       throw new IntegrationError('permission_ceiling', 'Channel permissions cannot exceed the Agent permissions.')
     }
-    if (binding.sourceFolders?.length) {
+    const ids = resourceFolders(binding.readResources, binding.sourceFolders)
+    if (ids.length) {
       if (!this.options.sources) throw new IntegrationError('source_unavailable','Source resources unavailable.')
-      this.options.sources.validate(binding.sourceFolders)
+      this.options.sources.validate(ids)
     }
     if (binding.enabled) for (const id of binding.readDomains) this.options.memory.domain(id)
     if (!binding.observation && !binding.participants.everyone && !binding.participants.userIds.length && !binding.participants.roleIds.length) {
@@ -252,7 +264,7 @@ export class IntegrationStore {
     if (binding.observation) {
       const scope = binding.observation
       if (bot.purpose !== 'service' || binding.target.kind !== 'channel' || binding.target.guildId !== scope.guildId || binding.target.channelId !== scope.audienceChannelId ||
-        binding.sourceFolders?.length || binding.discordHistory || agent.sourceFolders?.length || agent.discordHistory || binding.manage || binding.inheritThreads || binding.processor || agent.execution !== 'restricted' || agent.tools.length || agent.readDomains.length ||
+        ids.length || hasResourceGrants(binding.readResources) || binding.discordHistory || agent.sourceFolders?.length || agent.discordHistory || binding.manage || binding.inheritThreads || binding.processor || agent.execution !== 'restricted' || agent.tools.length || agent.readDomains.length ||
         binding.tools.length || binding.readDomains.length || binding.participants.everyone || binding.participants.userIds.length || binding.participants.roleIds.length) {
         throw new IntegrationError('observation_scope', 'Observation requires a dedicated same-guild output channel binding, restricted tool/domain-free Agent, no participants, management, threads or ordinary processor.')
       }
@@ -403,7 +415,7 @@ export class IntegrationStore {
       change.kind === 'agent.save' && before.bindings.some(binding => binding.observation && binding.agentId === change.agent.id))) {
       throw new IntegrationError('observation_owner_review','Observation scopes and their Agents require owner review.')
     }
-    if (actor.kind !== 'owner' && (change.kind === 'agent.save' && (change.agent.sourceFolders?.length || change.agent.discordHistory) || change.kind === 'bindings.save' && change.bindings.some(binding => binding.sourceFolders?.length || binding.discordHistory))) throw new IntegrationError('owner_required','Source and history grants require owner review.',403)
+    if (actor.kind !== 'owner' && (change.kind === 'agent.save' && (change.agent.readResources || change.agent.sourceFolders?.length || change.agent.discordHistory) || change.kind === 'bindings.save' && change.bindings.some(binding => binding.readResources || binding.sourceFolders?.length || binding.discordHistory))) throw new IntegrationError('owner_required','Read-resource, source and history grants require owner review.',403)
     if (before.drafts.some(draft => draft.status === 'applying')) throw new IntegrationError('recovery_required', 'An approved change needs recovery. Retry or resolve it in Reviews before proposing another change.', 409)
     if (this.committing || before.revision !== baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed. Refresh and review your changes again.', 409)
     const validation = await this.validate(change, signal)
@@ -414,19 +426,22 @@ export class IntegrationStore {
     const pending = state.drafts.filter(draft => draft.status === 'applying' || draft.status === 'pending' && Date.parse(draft.expiresAt) > Date.now())
     if (pending.length >= 40) throw new IntegrationError('too_many_drafts', 'Resolve outstanding configuration reviews before creating more.', 409)
     const id = randomUUID()
+    const resourceWarning = change.kind === 'agent.save' && hasResourceGrants(change.agent.readResources) ||
+      change.kind === 'bindings.save' && change.bindings.some(binding => hasResourceGrants(binding.readResources))
+      ? ' Review shared Project Knowledge/Wiki views and exact folders against the intended channel audience. View grants cover current and future eligible content; they are not fixed-copy publications. Only the binding grants access.' : ''
     const draft = IntegrationDraftSchema.parse({
       id, actor, baseRevision, change, validationHash, hash: hash({ id, actor, baseRevision, change, validationHash }),
       ...(change.kind === 'agent.save' ? { agentFileHash: validation.fileRevision } : {}),
       createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       status: 'pending', affectedBindings: this.affected(change, state),
-      warning: change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
+      warning: (change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
         ? 'Owner-only observation review: selected source channels permit observation of nonparticipants but grant them no commands/tools. Evidence enters only a dedicated restricted service context and can be reported to the exact binding output audience, whose readers may differ from participants. Review source guild/channels, output privacy, frozen program, enable flag and model before approving. Metadata signatures are not visual hashes.'
         : change.kind === 'knowledge.publish'
         ? 'This approves a fixed copy for the selected domain audience. Source permissions will not automatically revoke this approved copy; revoke its publication explicitly.'
         : change.kind === 'agent.save' && change.agent.execution === 'trusted'
         ? 'Trusted host execution is not a sandbox. Removed Agent permissions are also removed from every assignment. Agent or access changes start a fresh context; previous history remains available to the owner.'
         : change.kind === 'agent.save' ? 'Removed Agent permissions are also removed from every assignment. Changed instructions or access start a fresh context; previous history remains available to the owner.'
-        : 'Agent and access changes start a fresh context. Unassigned channels and DMs remain disabled. Same-Agent conversations do not share memory.',
+        : 'Agent and access changes start a fresh context. Unassigned channels and DMs remain disabled. Same-Agent conversations do not share memory.') + resourceWarning,
     })
     this.writeState({ ...state, drafts: [...state.drafts.filter(item => !pending.includes(item)).slice(-59), ...pending, draft].slice(-100) })
     for (const listener of this.listeners) listener([])

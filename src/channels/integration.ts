@@ -1,3 +1,5 @@
+import { serviceReadGuide, serviceReadTools, type ServiceReadBackend } from '../bots/service-read.ts'
+import { resourceFolders } from '../bots/read-scope.ts'
 import { memoryLogView } from '../memory/log-view.ts'
 import type { SourceResources } from './source-resources.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -27,7 +29,6 @@ import { discordHistoryArguments, discordMessageArguments } from './operations.t
 type Resolution = { binding: DiscordBinding; profile: IntegrationAgent; location: DiscordLocation }
 type Admission = DiscordIngress & { connectionId: string; revision: string; inspection: DiscordInspection; at: number }
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-const safeToolArgs = z.object({ path: z.string().min(1).max(2048) }).strict()
 
 /** Platform identity, role verification and memory leases stay on Main, outside model arguments. */
 export class DiscordIntegration implements ConversationPolicies {
@@ -134,6 +135,7 @@ export class DiscordIntegration implements ConversationPolicies {
   constructor(readonly options: {
     store: IntegrationStore; memory: MemoryDomains; bots: BotInstanceStore; workspace: string; projectId: string
     sources?: SourceResources
+    knowledge?: ServiceReadBackend['knowledge']
     classifier?:import('../events/input-classifier.ts').InputClassifier
     baseTools: Tools
     directoryBots?: import('../bots/runtime.ts').DirectoryBots
@@ -510,13 +512,14 @@ export class DiscordIntegration implements ConversationPolicies {
           'Use only the provided tools. Do not infer Project-private memory, SOUL, identities or other conversations.',
           'Ask clarification questions in your normal chat response and end the turn; continue when the user replies. The ask tool is unavailable. Chat replies never replace the dedicated owner approval flow.',
           'Memory is isolated to this conversation context plus explicitly shared domains. Reusing an Agent does not share customer conversations.',
-          'Read v:memory to discover permitted records, then read v:memory/<domainId>/<resourceId>. Write notes only with memory_save.',
+          serviceReadGuide,
+          'Discord legacy records are separate: use pathless search with an empty query to list them and read their exact v:memory/<domainId>/<resourceId> paths. Without a Wiki grant, v:memory also lists those records. Write notes only with memory_save.',
           'Read v:sessions/current for this context history. No other histories, raw paths or configuration files are available.',
           'When available, learned_skill stores reusable instruction notes in this context only, with all source restrictions. It does not modify global skills or SOUL.',
           ...(binding.manage ? ['Use channel_config to propose changes. Only a verified human can approve the exact review; a model response is not approval.'] : []),
           'Location and effective configuration (data):',
           JSON.stringify({ location, agent: profile.displayName, execution: profile.execution,
-            tools: binding.tools, readDomains: binding.readDomains, sourceFolders:binding.sourceFolders ?? [], discordHistory:binding.discordHistory ?? null, revision: policy.revision }),
+            tools: binding.tools, readDomains: binding.readDomains, discordHistory:binding.discordHistory ?? null, revision: policy.revision }),
         ].join('\n') },
         { name: 'memory', content: this.options.memory.context(access) },
       ]
@@ -612,46 +615,47 @@ export class DiscordIntegration implements ConversationPolicies {
       check(context)
       return result
     } })
-    register({
-      name: 'read', readonly: true,
-      description: 'Read authorized memory, v:sessions/current, or approved source files: v:source/<Folder UUID>/<relative file>. v:source lists approved IDs. No writes or execution.',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, offset: {type:'integer'}, limit:{type:'integer'} }, required: ['path'], additionalProperties: false },
-      execute: async (raw, context) => {
-        const { path, offset, limit } = safeToolArgs.extend({offset:z.number().int().min(1).max(1_000_000).optional(),limit:z.number().int().min(1).max(500).optional()}).parse(raw)
-        if (path === 'v:source') return JSON.stringify({folderIds:binding.sourceFolders ?? [], path:'v:source/<Folder UUID>/<relative file>',search:'Use search with folderId, query and mode names or content.'})
-        if (path.startsWith('v:source/')) {
-          const match = /^v:source\/([a-f0-9-]{36})\/(.+)$/.exec(path)
-          if (!match || !this.options.sources) throw new IntegrationError('source_scope','Source resource unavailable.',403)
-          return JSON.stringify(await this.options.sources.run(binding.sourceFolders ?? [], match[1]!, {path:match[2]!,offset,limit}, AbortSignal.any([context.signal,controller.signal])))
-        }
+    const ids = resourceFolders(binding.readResources, binding.sourceFolders)
+    const source = this.options.sources
+    const signal = (context: ExecutionContext) => AbortSignal.any([context.signal, controller.signal])
+    for (const tool of serviceReadTools({
+      projectId: this.options.projectId, views: binding.readResources, knowledge: this.options.knowledge,
+      folders: () => source?.routes(ids, this.options.projectId) ?? new Map(),
+      folderRead: async (id, { path, offset, limit }, context) => {
+        if (!source) throw new IntegrationError('source_scope', 'Source resource unavailable.', 403)
+        const result = await source.run(ids, id, { path, offset, limit }, signal(context))
+        if ('matches' in result) throw new Error('Unexpected source read result.')
+        const { folderId: _, ...text } = result
+        return text
+      },
+      folderSearch: async (id, { path, query, handler, limit }, context) => {
+        if (!source) throw new IntegrationError('source_scope', 'Source resource unavailable.', 403)
+        const result = await source.run(ids, id, { path: path === '.' ? '' : path, query, mode: handler === 'glob' ? 'glob' : 'content', limit }, signal(context))
+        if (!('matches' in result)) throw new Error('Unexpected source search result.')
+        return { matches: result.matches, truncated: result.truncated }
+      },
+      legacyRead: async ({ path }) => {
         if (path === 'v:sessions/current') {
           if (!state?.channelBoundary || !this.sessions) throw new IntegrationError('history_unavailable', 'Conversation history is unavailable.', 503)
-          return JSON.stringify(await this.sessions.getHistory(sessionId, { shallow: true }))
+          return await this.sessions.getHistory(sessionId, { shallow: true })
         }
-        if (path === 'v:memory' || path === 'v:memory/') return JSON.stringify(this.options.memory.list(access).map(item => ({
+        if (path === 'v:memory' || path === 'v:memory/') return this.options.memory.list(access).map(item => ({
           id: item.id, title: item.title, version: item.version, path: `v:memory/${item.domainId}/${item.id}`,
-        })))
+        }))
         const match = /^v:memory\/([a-f0-9-]{36})\/([a-f0-9-]{36})$/.exec(path)
-        if (!match) throw new IntegrationError('read_scope', 'Read only the resource paths returned by v:memory or v:sessions/current.', 403)
+        if (!match) throw new IntegrationError('read_scope', 'Resource is unavailable.', 403)
         const result = this.options.memory.read(access, match[2])
         if (result.resource.domainId !== match[1]) throw new IntegrationError('read_scope', 'Resource is unavailable.', 403)
-        return JSON.stringify({ ...result, resource: memoryLogView(result.resource) })
+        return { ...result, resource: memoryLogView(result.resource) }
       },
-    })
-    register({
-      name: 'search', readonly: true, description: 'Literal search in authorized memory, or approved source with folderId and mode names/content. One bounded page, excluded files never searched.',
-      parameters: { type: 'object', properties: { query: { type: 'string' }, folderId:{type:'string'}, path:{type:'string'}, mode:{type:'string',enum:['names','content']}, limit:{type:'integer'} }, required: ['query'], additionalProperties: false },
-      execute: async (raw, context) => {
-        const input = z.object({query:z.string().min(1).max(1000),folderId:z.string().uuid().optional(),path:z.string().max(1024).optional(),mode:z.enum(['names','content']).optional(),limit:z.number().int().min(1).max(100).optional()}).strict().parse(raw)
-        if (!input.folderId) {
-          if (input.path || input.mode || input.limit) throw new IntegrationError('search_scope','Source parameters require folderId.',403)
-          return JSON.stringify(this.options.memory.search(access,input.query))
-        }
-        if (!this.options.sources) throw new IntegrationError('source_scope','Source resource unavailable.',403)
-        const { folderId, ...operation } = input
-        return JSON.stringify(await this.options.sources.run(binding.sourceFolders ?? [], folderId, operation, AbortSignal.any([context.signal,controller.signal])))
+      legacySearch: ({ query }) => {
+        if (!query) return { matches: this.options.memory.list(access).map(item => ({
+          id: item.id, title: item.title, version: item.version, path: `v:memory/${item.domainId}/${item.id}`,
+        })), hasMore: false }
+        const { matches, hasMore } = this.options.memory.search(access, query)
+        return { hasMore, matches: matches.map(item => ({ ...item, path: `v:memory/${item.domainId}/${item.id}` })) }
       },
-    })
+    })) register(tool)
     register({
       name: 'memory_save', description: 'Save a private note or lesson for this conversation context. Shared knowledge requires a separate human-reviewed publication. Use the last read version, or empty string for a new record.',
       parameters: { type: 'object', properties: {
@@ -837,7 +841,7 @@ export class DiscordIntegration implements ConversationPolicies {
   }
 
   private assertChatChange(binding: DiscordBinding, change: z.infer<typeof IntegrationChangeSchema>): void {
-    if (change.kind === 'bindings.save' && change.bindings.some(item => item.sourceFolders?.length || item.discordHistory) || change.kind === 'agent.save' && (change.agent.sourceFolders?.length || change.agent.discordHistory)) throw new IntegrationError('owner_review_required','Source/history grants require owner review.',403)
+    if (change.kind === 'bindings.save' && change.bindings.some(item => item.readResources || item.sourceFolders?.length || item.discordHistory) || change.kind === 'agent.save' && (change.agent.readResources || change.agent.sourceFolders?.length || change.agent.discordHistory)) throw new IntegrationError('owner_review_required','Source/history grants require owner review.',403)
     if (change.kind === 'bindings.save' && change.bindings.every(item => item.botInstanceId === binding.botInstanceId &&
       !item.manage && this.manageableAgent(binding, item.agentId) && item.tools.every(tool => binding.tools.includes(tool)) &&
       item.readDomains.every(domain => this.manageableDomain(binding, domain)))) return
@@ -901,9 +905,10 @@ export class DiscordIntegration implements ConversationPolicies {
   }
 
   private async inspectResourceScopes(binding: DiscordBinding, audienceId: string, senderId: string, state: SessionState | undefined, signal: AbortSignal) {
-    if (binding.sourceFolders?.length) {
+    const ids = resourceFolders(binding.readResources, binding.sourceFolders)
+    if (ids.length) {
       if (!this.options.sources) throw new IntegrationError('source_scope','Source resources unavailable.',403)
-      this.options.sources.validate(binding.sourceFolders)
+      this.options.sources.validate(ids)
     }
     if (binding.discordHistory) {
       if (!senderId || !this.transport?.assertHistory) throw new IntegrationError('history_scope','History verification unavailable.',403)

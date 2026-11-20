@@ -38,7 +38,7 @@ test('duplicate values and partially split formats fail closed, never use preced
   const legacy = botFiles()
   for (const line of ['model: chosen', 'agent: general', 'temperature: 0'])
     assert.throws(() => parseBot({ ...legacy, 'BOT.md': legacy['BOT.md']!.replace('config: bot.json', `config: bot.json\n${line}`) }))
-  for (const fields of ['connection: 11111111-1111-4111-8111-111111111111', 'tools: []', 'subscriptions: []', 'bindings: []', 'skills: []', 'allowedModules: []', 'sourceFolders: []', 'readDomains: []', 'discordHistory: {}']) {
+  for (const fields of ['connection: 11111111-1111-4111-8111-111111111111', 'tools: []', 'subscriptions: []', 'bindings: []', 'skills: []', 'allowedModules: []', 'sourceFolders: []', 'readResources: {wiki: true}', 'readDomains: []', 'discordHistory: {}']) {
     const files = modern()
     assert.throws(() => parseBot({ ...files, 'BOT.md': files['BOT.md']!.replace('mode: service', `mode: service\n${fields}`) }))
   }

@@ -224,8 +224,9 @@ export async function startProjectHost(
     configPath: options.configPath,
     getConfig: () => activeConfig,
     onChanged: async changed => {
-      if (!isDeepStrictEqual(changed.agentVersionDefaults, activeConfig.agentVersionDefaults) &&
-        isDeepStrictEqual({ ...changed, agentVersionDefaults: activeConfig.agentVersionDefaults }, activeConfig)) {
+      const { builtinPromptVersion: nextVersion, ...nextRest } = changed
+      const { builtinPromptVersion: previousVersion, ...previousRest } = activeConfig
+      if (nextVersion !== previousVersion && isDeepStrictEqual(nextRest, previousRest)) {
         // Project defaults read this shared snapshot on new execution. No provider or MCP reload is needed.
         activeConfig = changed
         return

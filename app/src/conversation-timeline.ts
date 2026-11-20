@@ -40,13 +40,14 @@ interface TimelineMessageIdentity {
   event?: string
   timestamp?: string
   toolCallId?: string
+  requestId?: string
   responseContext?: { responseId?: string }
   timelineKey?: string
 }
 
 /** Match persisted identities, not flattened indices, including snapshots with leading rows. */
 export function reconcileTimelineKeys<M extends TimelineMessageIdentity>(items: M[], previous: M[]): M[] {
-  const identity = (message: M) => JSON.stringify([message.role, message.event, message.toolCallId,
+  const identity = (message: M) => message.requestId ? `web-input:${message.requestId}` : JSON.stringify([message.role, message.event, message.toolCallId,
     message.responseContext?.responseId, message.timestamp,
     message.toolCallId || message.responseContext?.responseId ? undefined : message.content])
   const keys = new Map<string, (string | undefined)[]>()

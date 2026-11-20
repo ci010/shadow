@@ -28,7 +28,7 @@ import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore } from './session-store.ts'
 import { WorkAlignment } from './work-alignment.ts'
 
-async function fixture(workspace: string, store: SessionStore, execute = false) {
+async function fixture(workspace: string, store: SessionStore, execute = false, getBuiltinPromptVersion?: () => 'v1' | 'v2' | undefined) {
   const requests: ChatMessage[][] = []
   const bus = new Bus()
   const provider: LLMProvider = {
@@ -75,6 +75,7 @@ async function fixture(workspace: string, store: SessionStore, execute = false) 
   const policyLookups: string[] = []
   const sessions = new SessionManager({
     projectId: 'preview-project', workspace, store, bus, provider, events, backgroundTasks,
+    getBuiltinPromptVersion,
     getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128_000, temperature: 0 }),
     handoffManager, agentTypes, context, tools, identity: new IdentityManager(workspace),
     conversationPolicies: {
@@ -331,8 +332,22 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
       await store.saveState('web:legacy-assembly', { sessionId: 'web:legacy-assembly', segmentIndex: 0, agentType: 'sub', mode: 'session' })
-      const f = await fixture(workspace, store, true)
+      let savedVersion: 'v1' | 'v2' = 'v1'
+      const f = await fixture(workspace, store, true, () => savedVersion)
       try {
+        delete process.env[key]
+        const root = 'web:app-default-root'
+        await f.sessions.buildSession(root)
+        const initial = await f.sessions.getContext({ sessionId: root, preview: true })
+        assert.equal(initial.promptIdentity?.definition, 'general-v2')
+        assert.equal(initial.promptIdentity?.version, 'v1')
+        savedVersion = 'v2'
+        for (const mode of ['call', 'task'] as const) {
+          const child = `web:app-default-${mode}`
+          await f.sessions.buildSession(child, undefined, { parentSessionId: root, agentType: 'sub', mode })
+          assert.equal((await store.getState(child))?.promptVersion, 'v2')
+        }
+        assert.equal((await f.sessions.getContext({ sessionId: root, preview: true })).promptIdentity?.version, 'v1')
         const vfs = new VirtualFs()
         const preview = createAgentsHandler(f.agentTypes, undefined, { types: f.agentTypes, sessions: f.sessions, canRead: () => true })
         vfs.mount('v:agents', 'role preview', preview.read, preview.list)

@@ -142,6 +142,7 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  getBuiltinPromptVersion?: () => PromptVersion | undefined
   getAgentVersionDefaults?: () => AgentVersionDefaults
   sessionIdentityAliases?: Readonly<Record<string, string>>
   conversationPolicies?: ConversationPolicies
@@ -2177,7 +2178,7 @@ ${JSON.stringify(request)}`,
       )
     }
     if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
-    const promptVersion = resolvePrompt(agent, { fresh: true }).version
+    const promptVersion = resolvePrompt(agent, { fresh: true, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version
     const mode = stateFields?.mode ?? agent.defaultMode ?? 'session'
     if (mode !== 'session' && (topicFields.topic || topicFields.sessionKind)) throw new Error('Topic metadata requires mode=session')
     if (mode === 'session' && stateFields?.parentSessionId) {
@@ -3718,7 +3719,7 @@ ${JSON.stringify(request)}`,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       execNodeOnly: this.deps.execNodeOnly,
       agent: agentType,
-      promptVersion: resolvePrompt(agentType, { pinned: state?.promptVersion, fresh: !opts.sessionId }).version,
+      promptVersion: resolvePrompt(agentType, { pinned: state?.promptVersion, fresh: !opts.sessionId, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version,
       subDraft: state?.subDraft,
       personalBotPrompt: personal?.prompt,
       mode: state?.mode ?? agentType.defaultMode,
@@ -3891,7 +3892,7 @@ ${JSON.stringify(request)}`,
     }
 
     const agentType = this.isOrdinaryWebSession(sessionId) ? this.defaultBuiltinAgentType('general') : undefined
-    const promptVersion = resolvePrompt(this.resolveAgentTypeTools(agentType).agentType, { fresh: true }).version
+    const promptVersion = resolvePrompt(this.resolveAgentTypeTools(agentType).agentType, { fresh: true, defaultVersion: this.deps.getBuiltinPromptVersion?.() }).version
     await this.store.createSessionLog(physicalSessionId, [startEvent])
     const state: SessionState = {
       ownershipVersion: 2,
