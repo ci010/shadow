@@ -1,7 +1,7 @@
 const { app, BrowserWindow } = require('electron');
 const { join } = require('node:path');
 const { readFile, writeFile } = require('node:fs/promises');
-const [fixture, mode, fixtureScene, url, expectedShaders, screenshot] = process.argv.slice(2);
+const [fixture, mode, fixtureScene, expectedShaders, screenshot, url] = process.argv.slice(2);
 app.setPath('userData', join(fixture, 'electron-profile'));
 app.setPath('sessionData', join(fixture, 'electron-session'));
 app.setPath('downloads', fixture);

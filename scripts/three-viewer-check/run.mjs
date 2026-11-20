@@ -66,7 +66,7 @@ try {
   });
   await server.listen();
   const address = server.httpServer.address();
-  const child = spawn(requireDesktop('electron'), [join(scriptDir, 'electron.cjs'), fixture, mode, fixtureScene, `http://127.0.0.1:${address.port}/__three-check${markerFile ? `?marker=${encodeURIComponent(basename(markerFile))}` : ''}`, ...(markerFile ? [String(expectedShaders), screenshot ? resolve(screenshot) : ''] : [])], { stdio: 'inherit' });
+  const child = spawn(requireDesktop('electron'), [join(scriptDir, 'electron.cjs'), fixture, mode, fixtureScene, String(expectedShaders ?? 0), screenshot ? resolve(screenshot) : '', `http://127.0.0.1:${address.port}/__three-check${markerFile ? `?marker=${encodeURIComponent(basename(markerFile))}` : ''}`], { stdio: 'inherit' });
   const code = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => child.kill('SIGKILL'), 120_000);
     child.once('error', error => { clearTimeout(timer); reject(error); });
