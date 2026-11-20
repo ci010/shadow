@@ -562,14 +562,15 @@ app.whenReady().then(async()=>{
   const cdp=win.webContents.debugger;
   cdp.attach('1.3');
   await cdp.sendCommand('DOM.enable'); await cdp.sendCommand('CSS.enable');
-  const {root:dom} = await cdp.sendCommand('DOM.getDocument');
-  const actionNodes = await cdp.sendCommand('DOM.querySelectorAll',{nodeId:dom.nodeId,selector:'.reference-actions button'});
-  for(const nodeId of actionNodes.nodeIds) await cdp.sendCommand('CSS.forcePseudoState',{nodeId,forcedPseudoClasses:['focus-visible']});
   for(const [width,dark] of [[1380,false],[1380,true],[550,true],[550,false]]){
     win.setSize(width,900);
     await run(dark=>document.documentElement.classList.toggle('dark',dark),dark);
     await new Promise(r=>setTimeout(r,80));
     await selectPanel();
+    // Responsive panel changes can replace the action elements. Inspect the live nodes.
+    const {root:dom} = await cdp.sendCommand('DOM.getDocument');
+    const actionNodes = await cdp.sendCommand('DOM.querySelectorAll',{nodeId:dom.nodeId,selector:'.reference-actions button'});
+    for(const nodeId of actionNodes.nodeIds) await cdp.sendCommand('CSS.forcePseudoState',{nodeId,forcedPseudoClasses:['focus-visible']});
     const layout=await run(()=>{
       const a=document.querySelector('.reference-action'),b=document.querySelector('.mark-action'),r=a.getBoundingClientRect(),s=b.getBoundingClientRect();
       const c=getComputedStyle(a), d=getComputedStyle(b);
