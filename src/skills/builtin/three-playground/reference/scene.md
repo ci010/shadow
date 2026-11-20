@@ -2,7 +2,9 @@
 
 The viewer supplies orbit, pan, zoom and inspection. Author the world, not a page or a renderer. Design the silhouette first, then the interior and close-up details. Keep all geometry within the intended base. No characters, HUD or labels floating outside the scene unless requested.
 
-## A JSON-driven starting point
+Prefer direct Three.js modeling in `main.mjs`: create named `THREE.Group` assemblies and generate their parts with functions and loops. Only the marker is mandatory JSON; scene geometry does not need a JSON schema or a second file of data.
+
+## Optional: a JSON-driven starting point
 
 These three files are a complete, deliberately small scene. `scene.json` is **your** scene vocabulary consumed by **your** builder, not a universal object format. Scale up with named groups, reusable factories and compact procedural descriptions in the data. Use literal IDs that survive reordering. Keep the final GLB useful without shaders.
 
