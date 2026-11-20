@@ -26,7 +26,19 @@ const timeline = JSON.stringify(schema('Timeline', { name: 'Assembly', global_st
     clip('External', 12, 48, 'https://blocked.invalid/sentinel.png'), clip('Moonrise', 12, 96, 'moonrise.mp4'),
     schema('Gap', { source_range: range(0, 48) })]),
   track('Upper', [schema('Gap', { source_range: range(0, 24) }), clip('Repeated', 96, 24, 'upper.png')]),
+  schema('Track', { name: 'Dialogue', kind: 'Audio', children: [clip('Tone', 24, 96, 'tone.wav')] }),
 ] }) }))
+const audioPath = 'cuts/tone.wav'
+function waveFixture() {
+  const rate = 8000, frames = 6 * rate
+  const bytes = Buffer.alloc(44 + frames * 2)
+  bytes.write('RIFF', 0); bytes.writeUInt32LE(bytes.length - 8, 4); bytes.write('WAVEfmt ', 8)
+  bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(1, 22)
+  bytes.writeUInt32LE(rate, 24); bytes.writeUInt32LE(rate * 2, 28); bytes.writeUInt16LE(2, 32); bytes.writeUInt16LE(16, 34)
+  bytes.write('data', 36); bytes.writeUInt32LE(frames * 2, 40)
+  for (let i = 0; i < frames; i++) bytes.writeInt16LE(Math.round(1800 * Math.sin(i * 2 * Math.PI * 440 / rate)), 44 + i * 2)
+  return bytes
+}
 const documentPath = 'cuts/assembly.OTIO'
 const modified = '2026-01-01T00:00:00Z'
 const images = { 'cuts/lower.png': pngFixture(240, 100), 'cuts/upper.png': pngFixture(180, 90) }
@@ -58,6 +70,7 @@ test('OTIO file preview renders storyboards and stages reviews without writing t
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const videoPath = 'cuts/moonrise.mp4'
   const video = await readFile(resolve(root, 'examples/otio-first-cut/media/moonrise.mp4'))
+  const wave = waveFixture()
   const requests: { method?: string; route: string; path: string | null }[] = []
   const server = await createServer({
     configFile: false, envDir: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
@@ -85,15 +98,16 @@ test('OTIO file preview renders storyboards and stages reviews without writing t
           requests.push({ method: req.method, route: url.pathname, path })
           if (req.method === 'GET' && url.pathname === '/api/sessions/fixture/raw') {
             if (path === documentPath) { res.setHeader('Content-Type', 'application/json'); res.end(timeline); return }
-            if (path === videoPath) {
-              res.setHeader('Content-Type', 'video/mp4')
+            if (path === videoPath || path === audioPath) {
+              const media = path === videoPath ? video : wave
+              res.setHeader('Content-Type', path === videoPath ? 'video/mp4' : 'audio/wav')
               res.setHeader('Accept-Ranges', 'bytes')
               const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '')
               if (range) {
-                const start = Number(range[1]), end = Math.min(range[2] ? Number(range[2]) : video.length - 1, video.length - 1)
-                res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${video.length}`, 'Content-Length': end + 1 - start })
-                res.end(video.subarray(start, end + 1))
-              } else { res.setHeader('Content-Length', video.length); res.end(video) }
+                const start = Number(range[1]), end = Math.min(range[2] ? Number(range[2]) : media.length - 1, media.length - 1)
+                res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${media.length}`, 'Content-Length': end + 1 - start })
+                res.end(media.subarray(start, end + 1))
+              } else { res.setHeader('Content-Length', media.length); res.end(media) }
               return
             }
             if (path && Object.hasOwn(images, path)) { res.setHeader('Content-Type', 'image/png'); res.end(images[path as keyof typeof images]); return }
@@ -114,6 +128,7 @@ test('OTIO file preview renders storyboards and stages reviews without writing t
 const {app,BrowserWindow,Menu}=require('electron');
 const assert=require('node:assert/strict');
 const {writeFileSync}=require('node:fs');
+app.commandLine.appendSwitch('autoplay-policy','no-user-gesture-required');
 app.setPath('userData',${JSON.stringify(directory)});
 app.whenReady().then(async()=>{
   Menu.setApplicationMenu(null);
@@ -159,6 +174,29 @@ app.whenReady().then(async()=>{
   };
   await win.loadURL(${JSON.stringify(url.href)});
   await wait('timeline and lower still',()=>document.querySelector('.mark-action:enabled') && document.querySelector('.picture img')?.naturalWidth===240);
+  // Observe native HTMLAudioElements without replacing any media methods or clocks.
+  await run(()=>{
+    const NativeAudio=window.Audio;
+    window.fixtureVoices=[];
+    window.Audio=function(){const voice=new NativeAudio();window.fixtureVoices.push(voice);return voice};
+  });
+  await click('Play preview');
+  const first=await wait('real WAV plays from trimmed offset',()=>{
+    const v=window.fixtureVoices[0];return v?.duration===6 && !v.paused && v.currentTime>=0.5 && v.currentTime<1.6 && v.currentTime;
+  });
+  await wait('native audio clock advances', first=>window.fixtureVoices[0].currentTime>first+0.12, first);
+  await click('Mute audio track: Dialogue');
+  await wait('muted track releases media',()=>window.fixtureVoices[0].paused && !window.fixtureVoices[0].hasAttribute('src'));
+  await click('Mute audio track: Dialogue');
+  await wait('unmuted track resumes',()=>window.fixtureVoices[1]?.readyState>=2 && !window.fixtureVoices[1].paused);
+  for(const key of ['Home','PageUp','PageUp']) await run(key=>{document.querySelector('.ruler').dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true}));},key);
+  await wait('seek pauses and releases prior media',()=>window.fixtureVoices[1].paused && !window.fixtureVoices[1].hasAttribute('src') && document.querySelector('.transport .readout').textContent==='Frame 48');
+  await click('Play preview');
+  await wait('seek restarts WAV at source offset',()=>{const v=window.fixtureVoices[2];return v?.readyState>=2 && !v.paused && v.currentTime>=2.5 && v.currentTime<3.6});
+  await click('Pause playback');
+  await wait('pause releases media',()=>window.fixtureVoices[2].paused && !window.fixtureVoices[2].hasAttribute('src'));
+  await win.reload();
+  await wait('restored initial monitor',()=>document.querySelector('.picture img')?.naturalWidth===240);
   assert.equal(await run(()=>document.querySelector('.compact-tabs').getClientRects().length),0);
   assert.equal(await run(()=>document.querySelector('.file-modal').getAttribute('role')),'region');
   const [monitor,tracks,inspector]=await layout('.monitor-pane','.tracks-pane','.inspector');
@@ -245,7 +283,7 @@ app.whenReady().then(async()=>{
   }
   await click('Clip: External','.tracks');
   assert.ok(await run(()=>document.querySelector('.mark-action:disabled')&&!document.querySelector('.picture img,.picture video')));
-  await click('Clip: Repeated','.tracks .lane-row:last-child');
+  await click('Clip: Repeated','.tracks .lane-row[data-kind=Video]:nth-child(3)');
   await wait('upper still',()=>document.querySelector('.picture img')?.naturalWidth===180);
   await click('Clip: Repeated','.tracks .lane-row:nth-child(2)');
   await wait('lower solo',()=>document.querySelector('.picture img')?.naturalWidth===240);
@@ -359,8 +397,8 @@ app.whenReady().then(async()=>{
   const [code] = await once(child, 'close')
   assert.equal(code, 0, output)
   assert.match(output, /OTIO_VIEWER_OK/)
-  assert.ok(requests.every(({ method, route, path }) => method === 'GET' && route === '/api/sessions/fixture/raw' && path && [documentPath, videoPath, ...Object.keys(images)].includes(path)), JSON.stringify(requests))
-  assert.deepEqual(new Set(requests.map(({ path }) => path)), new Set([documentPath, videoPath, ...Object.keys(images)]))
+  assert.ok(requests.every(({ method, route, path }) => method === 'GET' && route === '/api/sessions/fixture/raw' && path && [documentPath, videoPath, audioPath, ...Object.keys(images)].includes(path)), JSON.stringify(requests))
+  assert.deepEqual(new Set(requests.map(({ path }) => path)), new Set([documentPath, videoPath, audioPath, ...Object.keys(images)]))
   if (desktopScreenshot) t.diagnostic(`Desktop overview screenshot: ${desktopScreenshot}`)
   if (screenshot) t.diagnostic(`Narrow review screenshot: ${screenshot}`)
 })
