@@ -4,8 +4,8 @@ import type { OtioDocument } from './otio-review.ts'
 export const STORYBOARD_PAGE = 48
 export const DESCRIPTION_LIMIT = 2000
 export function storyboardOrder(model: OtioModel, track: OtioNode | undefined, interval: boolean,
-  missing?: (node: OtioNode) => boolean) {
-  const spans = otioPictureSpans(model, track)
+  missing?: (node: OtioNode) => boolean, hidden?: ReadonlySet<string>) {
+  const spans = otioPictureSpans(model, track, hidden)
   const eligible = spans.filter(({ node }) => !missing || (node && missing(node)))
   const runs = eligible.flatMap(({ start, end, node }) => {
     if (!interval) return node ? [{ start, node, count: 1 }] : []

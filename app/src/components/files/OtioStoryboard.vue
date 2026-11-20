@@ -55,7 +55,7 @@ import { mediaPosition, type OtioDocument, type OtioMedium } from '../../otio-re
 import { DESCRIPTION_LIMIT, STORYBOARD_PAGE, readStoryboardDescriptions, storyboardKey, storyboardOrder } from '../../otio-storyboard.ts'
 import OtioStoryboardPicture from './OtioStoryboardPicture.vue'
 
-const props = defineProps<{ model: OtioModel; source: OtioDocument; apiBase: string; active: boolean; track?: OtioNode;
+const props = defineProps<{ model: OtioModel; source: OtioDocument; apiBase: string; active: boolean; track?: OtioNode; hidden?: ReadonlySet<string>;
   mediaFor: (node: OtioNode) => (OtioMedium & { url: string }) | null; unlinked: string; current: number; selectedId: string }>()
 const emit = defineEmits<{ position: [seconds: number, node: OtioNode | null, solo: boolean, monitor: boolean] }>()
 const interval = ref(false), missing = ref(false), solo = ref(false), page = ref(0), scroll = ref<HTMLElement>()
@@ -88,19 +88,20 @@ function save() {
   } catch { saveFailed.value = true }
 }
 const order = computed(() => storyboardOrder(props.model, solo.value ? props.track : undefined, interval.value,
-  missing.value ? node => !descriptions.value.has(node.id) : undefined))
+  missing.value ? node => !descriptions.value.has(node.id) : undefined, props.hidden))
 const maxPage = computed(() => Math.max(0, Math.ceil(order.value.count / STORYBOARD_PAGE) - 1))
 const rows = computed(() => {
   const seen = new Set<string>()
   return order.value.page(page.value * STORYBOARD_PAGE).map(row => {
     const caption = !!row.node && !seen.has(row.node.id)
     if (row.node) seen.add(row.node.id)
-    return { ...row, caption, medium: row.node?.sourceStart ? props.mediaFor(row.node) : null,
+    const medium = row.node?.sourceStart ? props.mediaFor(row.node) : null
+    return { ...row, caption, medium: medium?.kind === 'audio' ? null : medium,
       position: row.node ? mediaPosition(row.node, row.seconds) : null }
   })
 })
 watch(() => props.track, track => { if (!track) solo.value = false })
-watch([interval, missing, solo, () => solo.value ? props.track?.id : undefined], () => { page.value = 0; if (scroll.value) scroll.value.scrollTop = 0 })
+watch([interval, missing, solo, () => props.hidden, () => solo.value ? props.track?.id : undefined], () => { page.value = 0; if (scroll.value) scroll.value.scrollTop = 0 })
 watch(maxPage, max => { page.value = Math.min(max, page.value) })
 watch(page, () => { if (scroll.value) scroll.value.scrollTop = 0 })
 function choose(row: { seconds: number; node: OtioNode | null }, monitor: boolean) {

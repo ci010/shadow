@@ -9,7 +9,7 @@ export interface OtioDocument {
   sha256?: string
   modified?: string
 }
-export interface OtioMedium { path: string; kind: 'video' | 'image' }
+export interface OtioMedium { path: string; kind: 'video' | 'image' | 'audio' }
 
 /** A target_url is authored data, never a browser src. Convert only proved, root-relative paths;
  * the owning file endpoint still authorizes each request (including its symlink checks). */
@@ -46,6 +46,7 @@ export function resolveOtioMedia(documentPath: string, target: string, localRoot
   const result = base.join('/')
   if (!result || base.some(part => !part || part === '..' || part === '.')) return null
   if (/\.(mp4|m4v|mov|webm)$/i.test(result)) return { path: result, kind: 'video' }
+  if (/\.(wav|mp3|ogg)$/i.test(result)) return { path: result, kind: 'audio' }
   if (/\.(png|jpe?g|webp|avif|bmp|gif)$/i.test(result)) return { path: result, kind: 'image' }
   return null
 }
