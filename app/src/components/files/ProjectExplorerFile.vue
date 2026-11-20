@@ -3,7 +3,10 @@
   <FilePreviewModal v-else inline :remote="source.remote" :api-base="apiBase" :session-id="source.sessionId ?? ''" :folder-id="source.folderId" :session-workspace="source.sessionWorkspace" :context-key="fileTabKey(file)" :active="active" :selection-active="active" :can-quote="canQuote" @quote="emit('quote', $event)" :entry="file.entry" :dir="file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''" @close="emit('close')" />
 </template>
 <script setup lang="ts">
-import { computed, provide } from 'vue'
+import { computed, inject, provide } from 'vue'
+import { EditorGroupsKey } from '../../editor-groups.ts'
+import { createExplorerGltfReferenceDraftBridge, GltfReferenceDraftKey } from '../../gltf-reference.ts'
+import { liveProjectId } from '../../composables/useLiveClient.ts'
 import { OtioOutlineHostKey } from '../../otio-outline-host.ts'
 import { fileTabKey, type OpenFile } from '../../file-workbench.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
@@ -13,6 +16,10 @@ const props = defineProps<{ apiBase: string; file: OpenFile; active: boolean; ca
 // This context belongs to a single editor view, including its teleported preview.
 provide(OtioOutlineHostKey, { target: () => props.outlineTarget, background: () => !!props.outlineInBackground })
 const emit = defineEmits<{ open: [file: OpenFile]; close: []; quote: [text: string] }>()
+const groups = inject(EditorGroupsKey)
+if (groups) provide(GltfReferenceDraftKey, createExplorerGltfReferenceDraftBridge(groups, () => props.active
+  ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase) }
+  : null))
 // Central explorer always supplies a concrete source; never infer another conversation.
 const source = computed(() => props.file.source!)
 const { revision } = useWorkdirGit(() => ({ apiBase: props.apiBase, sessionId: source.value.sessionId ?? '', folderId: source.value.folderId, sessionWorkspace: source.value.sessionWorkspace }), computed(() => props.active && props.file.view === 'diff'))

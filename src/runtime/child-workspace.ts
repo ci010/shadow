@@ -39,7 +39,7 @@ export function childWorkspacePlugin(options: {
       const endpoint = new URL(options.endpoint)
       endpoint.pathname = endpoint.pathname.replace(/\/+$/, '') + DEVICE_UI_REQUEST
       endpoint.search = ''; endpoint.hash = ''
-      const headers = deviceUiHeaders(c.req.raw.headers)
+      const headers = deviceUiHeaders(c.req.raw.headers, path, c.req.method)
       headers.set('X-Shadow-Device-Proof', proof)
       headers.set('X-Shadow-Ui-Path', path)
       headers.set('X-Shadow-Ui-Method', c.req.method)

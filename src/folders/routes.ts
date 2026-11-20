@@ -1,3 +1,4 @@
+import { serveThreeSnapshot } from '../gateway/three-snapshot.ts'
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
 import { pickFolder, type FolderPickerOptions } from './picker-service.ts'
@@ -166,6 +167,19 @@ export class FolderService {
         }
       })
     }
+    app.get('/api/folders/:id/three-snapshot', c => serveThreeSnapshot(c, async () => {
+      try {
+        this.#assertOpen()
+        const folder = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+        if (folder.kind === 'remote' || folder.kind === 'layerfs') {
+          return { error: `${folder.kind}_unsupported`, status: 501, message: 'Three.js snapshots require a local file root; no Main fallback.' }
+        }
+        return { path: folder.path }
+      } catch (error) {
+        if (error instanceof FolderError) return { error: error.code, status: error.status }
+        throw error
+      }
+    }))
     app.post('/api/folders/:id/html-preview', c => {
       const id = c.req.param('id')
       return createHtmlPreview(c, async () => {
