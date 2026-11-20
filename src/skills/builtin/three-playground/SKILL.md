@@ -17,6 +17,10 @@ For a multi-part scene **read `v:skills/three-playground/reference/scene.md`** b
 
 Respect the working-context destination policy. Without a selected Workspace, build a working copy in the current **Session files** so the marker can be opened there, and save the complete final project at the required durable destination. Link/name the marker, not a lone JSON attachment without its siblings. A remote client is not necessarily a remote file root.
 
+## Inspect the artwork before delivery
+
+For an art-directed scene, do not stop at syntax, mesh counts, ID checks, a successful export or two different frame hashes. Render the actual marker in the Shadow viewer and **look at the images yourself**: inspect a three-quarter overall view and a close view of the focal subject. Do this early enough to change the model. Compare against the brief (silhouette, focal lighting, material and prop readability); fix visible shortcomings in the source, then render and inspect the revised version before delivery. Use `capture_view` when bound. Without a bound viewer, use the authorized Electron marker check in a Shadow checkout when available (see the scene reference). Never run project modules in host Node as a substitute. If neither route is available, say what is still visually unverified and request a viewer or screenshot; do not claim the artwork passed.
+
 ## First model: a desk lamp
 
 Use the requested destination in a supported Main-local file root. Don't overwrite an existing project. Playground cannot build from remote workdirs or LayerFS; don't silently write to Main instead. In a new model directory create these two sibling files with the normal file tools. No npm install, browser page or dev server is needed.

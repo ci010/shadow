@@ -4,6 +4,10 @@ The viewer supplies orbit, pan, zoom and inspection. Author the world, not a pag
 
 Prefer direct Three.js modeling in `main.mjs`: create named `THREE.Group` assemblies and generate their parts with functions and loops. Only the marker is mandatory JSON; scene geometry does not need a JSON schema or a second file of data.
 
+Model in object-local space, not just a flat list of world-coordinate primitives. For example, return a bicycle group with its own wheel, frame and handlebar assemblies; use a curve and `TubeGeometry` for a bent handlebar, then place and rotate the complete bicycle at the storefront. Use shelf-local slots and product silhouettes (a triangular rice ball, a rimmed bento tray, a bottle with a neck), not dozens of recolored cubes. Boxes are appropriate for the shelf itself. Geometry, material and the relationship between objects must carry the design.
+
+For an unbound preview in a permitted Shadow checkout, `pnpm exec node --import tsx scripts/three-viewer-check/run.mjs marker "$MARKER" "$BINDING_COUNT" "$NEW_PNG"` builds the actual project and captures a fixed front view; **read the PNG**, not just the command output. It does not produce an art-directed overall or detail view by itself. Use additional viewer angles; do not mistake zooming a tiny screenshot for inspecting the model up close.
+
 ## Optional: a JSON-driven starting point
 
 These three files are a complete, deliberately small scene. `scene.json` is **your** scene vocabulary consumed by **your** builder, not a universal object format. Scale up with named groups, reusable factories and compact procedural descriptions in the data. Use literal IDs that survive reordering. Keep the final GLB useful without shaders.
