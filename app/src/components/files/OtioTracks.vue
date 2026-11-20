@@ -14,12 +14,21 @@
           <span class="playhead marker" aria-hidden="true" />
         </div>
       </div>
-      <div v-for="lane in lanes" :key="lane.node.id" v-memo="[lane, selectedId, ticks, locale]" class="lane-row">
+      <div v-for="lane in lanes" :key="lane.node.id" class="lane-row" :data-kind="lane.node.trackKind" :class="{ excluded: excluded(lane.node) }">
+        <div class="lane-header">
         <button type="button" class="lane-label" :aria-current="lane.node.id === selectedId ? 'true' : undefined"
           @click="emit('select', lane.node.id)">
-          <span class="lane-icon" :class="lane.node.trackKind === 'Audio' ? 'i-lucide-audio-lines' : 'i-lucide-layers'" aria-hidden="true" />
-          <span>{{ lane.node.name || itemKind(lane.node) }}</span>
+          <span class="lane-icon" :class="lane.node.trackKind === 'Audio' ? 'i-lucide-audio-lines' : 'i-lucide-film'" aria-hidden="true" />
+          <span>{{ lane.node.name || itemKind(lane.node) }}<small v-if="lane.node.name">{{ itemKind(lane.node) }}</small></span>
         </button>
+          <HoverInfo v-if="lane.node.trackKind === 'Video' || lane.node.trackKind === 'Audio'" :text="toggleLabel(lane.node)">
+            <template #default="{ triggerProps }">
+              <button v-bind="triggerProps" type="button" class="lane-toggle" :aria-label="toggleLabel(lane.node)" :aria-pressed="excluded(lane.node)" @click="emit('toggle', lane.node)">
+                <span :class="toggleIcon(lane.node)" aria-hidden="true" />
+              </button>
+            </template>
+          </HoverInfo>
+        </div>
         <div class="lane">
           <span v-for="tick in ticks.slice(1, -1)" :key="tick.left" class="grid-line" :style="{ left: `${tick.left}%` }" aria-hidden="true" />
           <button v-for="item in lane.items" :key="item.id" type="button" class="block"
@@ -37,13 +46,25 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { i18n, t } from '../../i18n.ts'
+import { t } from '../../i18n.ts'
 import type { OtioModel, OtioNode } from '../../otio-model.ts'
 import { lastOtioFrame, otioLanes, otioPercent, scrubOtioFrame } from '../../otio-navigation.ts'
 
-const props = defineProps<{ model: OtioModel; selectedId: string; frame: number }>()
-const emit = defineEmits<{ select: [id: string]; seek: [frame: number] }>()
-const locale = i18n.global.locale
+import HoverInfo from '../HoverInfo.vue'
+
+const props = defineProps<{ model: OtioModel; selectedId: string; frame: number; hidden?: ReadonlySet<string>; muted?: ReadonlySet<string> }>()
+const emit = defineEmits<{ select: [id: string]; seek: [frame: number]; toggle: [node: OtioNode] }>()
+function excluded(node: OtioNode) {
+  return (node.trackKind === 'Audio' ? props.muted : props.hidden)?.has(node.id) ?? false
+}
+function toggleLabel(node: OtioNode) {
+  const name = node.name || itemKind(node)
+  return node.trackKind === 'Audio' ? t('Mute audio track: {name}', { name }) : t('Hide video track: {name}', { name })
+}
+function toggleIcon(node: OtioNode) {
+  return node.trackKind === 'Audio' ? (excluded(node) ? 'i-lucide-volume-x' : 'i-lucide-volume-2')
+    : (excluded(node) ? 'i-lucide-eye-off' : 'i-lucide-eye')
+}
 const duration = computed(() => props.model.duration)
 const rate = computed(() => props.model.rate)
 const maxFrame = computed(() => lastOtioFrame(duration.value, rate.value))
@@ -63,7 +84,7 @@ function formatSeconds(value: number) {
 }
 function itemKind(node: OtioNode) {
   switch (node.kind) {
-    case 'Track': return node.trackKind || t('Track')
+    case 'Track': return node.trackKind === 'Audio' ? t('Audio') : node.trackKind === 'Video' ? t('Video') : node.trackKind || t('Track')
     case 'Clip': return t('Clip')
     case 'Gap': return t('Gap')
     case 'Transition': return t('Transition')
@@ -143,7 +164,15 @@ h3 { margin: 0; font-size: 12px; font-weight: 650; }
 .playhead { inset-block: 0; left: var(--playhead); z-index: 3; border-left: 1px solid var(--c-primary); }
 .marker::after { content: ''; position: absolute; bottom: 0; left: -4px; border-inline: 3px solid transparent; border-bottom: 5px solid var(--c-primary); }
 .lane-row { min-height: 37px; content-visibility: auto; }
-.lane-label { display: flex; align-items: center; gap: 4px; padding: 4px 5px; text-align: start; }
+.lane-header { display: flex; min-width: 0; }
+.lane-toggle { flex: 0 0 28px; display: grid; place-items: center; }
+.lane-toggle[aria-pressed="true"] { background: var(--c-bg-muted); }
+.lane-row[data-kind="Video"] { background: color-mix(in srgb, var(--c-info) 7%, var(--c-bg-card)); }
+.lane-row[data-kind="Audio"] { background: color-mix(in srgb, var(--c-success) 8%, var(--c-bg-card)); }
+.lane-row .lane { background: transparent; }
+.excluded .block:not([aria-current="true"]) { opacity: .60; }
+.lane-label small { display: block; color: var(--c-text-secondary); }
+.lane-label { flex: 1; display: flex; align-items: center; gap: 4px; padding: 4px 5px; text-align: start; }
 .lane-label span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .lane-icon { flex: 0 0 12px; }
 .lane { overflow: hidden; border-left: 1px solid var(--c-border); background: var(--c-bg-soft); }

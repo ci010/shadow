@@ -20,19 +20,19 @@
           </div>
         </header>
         <OtioStoryboard v-if="boardOpened" v-show="board" class="storyboard-content" :model="model" :source="source" :api-base="apiBase" :active="active && board"
-          :track="videoTrack" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition" />
+          :track="videoTrack" :hidden="hiddenVideoTracks" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition" />
         <template v-if="!board">
           <ImageAnnotationPreview v-if="review?.capture" class="frame-editor" staged src="" :local-file="review.capture.file" :name="review.capture.file.name"
             :source-key="review.id" :context-key="review.target" :editable="!!destination && destination.key === review.target" :active="active"
             @image-context="marked" @image-busy="busy" />
           <OtioMonitor v-else ref="monitor" class="picture" :picture-key="picture?.id ?? ''" :url="medium?.url ?? null" :media-kind="medium?.kind ?? null"
-            :source-seconds="position" :playing="playing" :muted="muted" :active="active" :label="picture?.name || t('Picture monitor')" :unavailable="unavailable" @capture-ready="captureReady = $event" />
+            :source-seconds="position" :playing="playing" :muted="embeddedSuppressed || muted" :active="active" :label="picture?.name || t('Picture monitor')" :unavailable="unavailable" @capture-ready="captureReady = $event" />
           <div v-if="!review?.capture" class="transport">
             <div class="transport-buttons">
               <HoverInfo v-for="control in transport" :key="control.key" :text="control.label" v-slot="{ triggerProps }">
                 <button v-bind="triggerProps" type="button" :aria-label="control.label" :disabled="locked || control.disabled" @click="control.run"><span :class="control.icon" aria-hidden="true" /></button>
               </HoverInfo>
-              <HoverInfo v-if="medium?.kind === 'video'" :text="muted ? t('Unmute clip audio') : t('Mute clip audio')" v-slot="{ triggerProps }">
+              <HoverInfo v-if="medium?.kind === 'video' && !embeddedSuppressed" :text="muted ? t('Unmute clip audio') : t('Mute clip audio')" v-slot="{ triggerProps }">
                 <button v-bind="triggerProps" type="button" :aria-label="t('Clip audio')" :aria-pressed="!muted" :disabled="locked" @click="muted = !muted"><span :class="muted ? 'i-lucide-volume-x' : 'i-lucide-volume-2'" aria-hidden="true" /></button>
               </HoverInfo>
             </div>
@@ -69,7 +69,7 @@
           </template>
         </div>
       </section>
-      <OtioTracks v-if="!review" class="tracks-pane" :model="model" :selected-id="selected.id" :frame="frame" @select="select" @seek="seek" />
+      <OtioTracks v-if="!review" class="tracks-pane" :model="model" :selected-id="selected.id" :frame="frame" :hidden="hiddenVideoTracks" :muted="mutedAudioTracks" @toggle="toggleTrack" @select="select" @seek="seek" />
     </div>
     <p v-if="error" class="review-error" role="alert">{{ error }}</p>
   </section>
@@ -79,6 +79,7 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { formatNumber, t } from '../../i18n.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
+import { createOtioAudio, otioAudioPosition, otioAudioTracks } from '../../otio-audio.ts'
 import { OtioDraftKey } from '../../otio-draft.ts'
 import { otioPictureAt, type OtioModel, type OtioNode, type OtioTime } from '../../otio-model.ts'
 import { lastOtioFrame } from '../../otio-navigation.ts'
@@ -109,8 +110,32 @@ const firstSelected = computed(() => firstOtioFrame(selected.value.start, props.
 const afterSelected = computed(() => firstOtioFrame(selected.value.end, props.model.rate))
 const canSolo = computed(() => selected.value.kind === 'Clip' && selected.value.trackKind !== 'Audio' && afterSelected.value > firstSelected.value)
 const seconds = computed(() => frame.value / props.model.rate)
-const picture = computed(() => mode.value === 'clip' ? selected.value : otioPictureAt(props.model, seconds.value, mode.value === 'track' ? videoTrack.value : undefined))
-const medium = computed(() => picture.value?.sourceStart ? props.mediaFor(picture.value) : null)
+const picture = computed(() => mode.value === 'clip' ? selected.value : otioPictureAt(props.model, seconds.value, mode.value === 'track' ? videoTrack.value : undefined, hiddenVideoTracks.value))
+const medium = computed(() => {
+  const media = picture.value?.sourceStart ? props.mediaFor(picture.value) : null
+  return media?.kind === 'video' || media?.kind === 'image' ? { ...media, kind: media.kind } : null
+})
+const audioTracks = computed(() => otioAudioTracks(props.model))
+const hiddenVideoTracks = shallowRef<ReadonlySet<string>>(new Set())
+const mutedAudioTracks = shallowRef<ReadonlySet<string>>(new Set())
+function toggleTrack(node: OtioNode) {
+  const state = node.trackKind === 'Audio' ? mutedAudioTracks : hiddenVideoTracks
+  const next = new Set(state.value)
+  if (!next.delete(node.id)) next.add(node.id)
+  state.value = next
+}
+const embeddedSuppressed = computed(() => mode.value === 'timeline' && audioTracks.value.explicit)
+const audio = createOtioAudio()
+function syncAudio(time: number) {
+  if (!props.active || board.value || !embeddedSuppressed.value) return audio.stop()
+  audio.sync(audioTracks.value.clips.flatMap(({ node, track }) => {
+    if (mutedAudioTracks.value.has(track)) return []
+    const seconds = otioAudioPosition(node, time)
+    if (seconds === null) return []
+    const media = props.mediaFor(node)
+    return media && media.kind !== 'image' ? [{ id: node.id, url: media.url, seconds }] : []
+  }))
+}
 const position = computed(() => picture.value ? mediaPosition(picture.value, seconds.value) : null)
 const unavailable = computed(() => !props.model.duration ? t('This timeline is empty.') : props.unlinked || (!picture.value ? t('No picture at this position.')
   : !picture.value.sourceStart ? t('Source timing is unavailable for this element.') : t('No supported media in this workspace for this clip.')))
@@ -127,7 +152,7 @@ const review = shallowRef<Review>(), markedFile = shallowRef<File>()
 const locked = computed(() => !!review.value || capturing.value || !props.active)
 const canAdd = computed(() => !!review.value && review.value.target === destination.value?.key && !exporting.value && !!markedFile.value)
 let raf = 0, generation = 0
-function pause() { playing.value = false; cancelAnimationFrame(raf) }
+function pause() { audio.stop(); playing.value = false; cancelAnimationFrame(raf) }
 function setMode(next: typeof mode.value) {
   if (locked.value) return
   pause(); mode.value = next
@@ -171,13 +196,17 @@ function play() {
   if (locked.value || !props.model.duration) return
   if (playing.value) { pause(); return }
   if (frame.value >= lastPlayable.value) frame.value = firstPlayable.value
-  const from = Math.floor(frame.value), start = performance.now()
+  const from = frame.value, start = performance.now()
   playing.value = true
+  syncAudio(from / props.model.rate)
   function tick(now: number) {
     if (!playing.value) return
-    const next = from + Math.floor((now - start) * props.model.rate / 1000)
+    const elapsed = Math.max(0, now - start) / 1000
+    const next = Math.floor(from + elapsed * props.model.rate)
     frame.value = Math.min(next, lastPlayable.value)
-    if (next > lastPlayable.value) pause(); else raf = requestAnimationFrame(tick)
+    const time = from / props.model.rate + elapsed
+    if (mode.value === 'clip' ? next > lastPlayable.value : time >= props.model.duration) pause()
+    else { syncAudio(time); raf = requestAnimationFrame(tick) }
   }
   raf = requestAnimationFrame(tick)
 }

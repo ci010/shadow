@@ -290,14 +290,20 @@ function contains(query: number, start: number, end: number): boolean {
     query < end && !atBoundary(query, end, span)
 }
 
-export function otioPictureAt(model: OtioModel, seconds: number, track?: OtioNode): OtioNode | null {
+function excludedPicture(node: OtioNode, track?: OtioNode, hidden?: ReadonlySet<string>) {
+  if (track && !node.id.startsWith(`${track.id}/children/`)) return true
+  for (const id of hidden ?? []) if (node.id.startsWith(`${id}/children/`)) return true
+  return false
+}
+
+export function otioPictureAt(model: OtioModel, seconds: number, track?: OtioNode, hidden?: ReadonlySet<string>): OtioNode | null {
   if (!Number.isFinite(seconds) || !contains(seconds, 0, model.duration)) return null
   // Reversed preorder visits the highest stack layer first. Transitions do
   // not participate in lookup: the adjacent clips meet at the hard cut.
   const pictures = pictureIndex.get(model) ?? indexPictures(model)
   for (let i = pictures.length - 1; i >= 0; i--) {
     const { node, blocked } = pictures[i]!
-    if (track && !node.id.startsWith(`${track.id}/children/`)) continue
+    if (excludedPicture(node, track, hidden)) continue
     if (contains(seconds, node.start, node.end)) return blocked ? null : node
   }
   return null
@@ -312,11 +318,11 @@ export function otioSourceTime(node: OtioNode, seconds: number): OtioTime | null
 }
 
 /** Flatten the same hard-cut picture stack as the monitor, highest preorder index wins. */
-export function otioPictureSpans(model: OtioModel, track?: OtioNode) {
+export function otioPictureSpans(model: OtioModel, track?: OtioNode, hidden?: ReadonlySet<string>) {
   const pictures = pictureIndex.get(model) ?? indexPictures(model)
   const events: { time: number; index: number; start: boolean }[] = []
   pictures.forEach(({ node }, index) => {
-    if (track && !node.id.startsWith(`${track.id}/children/`)) return
+    if (excludedPicture(node, track, hidden)) return
     events.push({ time: node.start, index, start: true }, { time: node.end, index, start: false })
   })
   events.sort((a, b) => a.time - b.time)
