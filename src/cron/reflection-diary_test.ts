@@ -190,6 +190,23 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await diary.run(job, signal)
       assert.equal(cursor(), '6')
       assert.equal(await readFile(path, 'utf8'), explicit, 'same preference is not written again')
+      await store.appendRawEvents(physical, [
+        input('verification', 'I prefer a verification summary with every delivery.'),
+        input('format', 'I prefer bullet points in replies.'),
+        input('workflow-first', 'Please show me the plan before implementation.'),
+        input('workflow-second', 'Please share a plan before implementation.', '2026-01-03T03:04:05.000Z'),
+        input('quoted', 'They said: I prefer prose in replies.'),
+        input('unsupported', 'I prefer to skip all validation.'),
+      ])
+      await diary.run(job, signal)
+      const expanded = await readFile(path, 'utf8')
+      assert(expanded.startsWith(explicit))
+      assert.match(expanded, /Explicit preference: prefers a verification summary.*verification/)
+      assert.match(expanded, /Explicit preference: prefers bulleted replies.*format/)
+      assert.match(expanded, /Tentative pattern.*plan before implementation.*workflow-second.*workflow-first/)
+      assert.doesNotMatch(expanded, /quoted|unsupported|skip all validation|Speculative label/)
+      assert.equal(cursor(), '12')
+      assert.equal((expanded.match(/<!-- reflection-diary:/g) ?? []).length, 3, 'multiple categories share one profile receipt per batch')
     } finally { if (store instanceof SqliteSessionStore) store.close(); await rm(root, { recursive: true, force: true }) }
   })
 }
