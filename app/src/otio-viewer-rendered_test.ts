@@ -98,7 +98,7 @@ test('OTIO viewer renders reviews; the real shell stages into existing and fresh
   let failNextFolderRead = false
   const server = await createServer({
     configFile: false, envDir: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
-    optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'vue-i18n', 'dompurify', 'zod', 'markdown-exit', '@mdit/plugin-tasklist', '@mdit/plugin-katex', 'katex'] },
+    optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'vue-i18n', '@vue-flow/core', 'dompurify', 'zod', 'markdown-exit', '@mdit/plugin-tasklist', '@mdit/plugin-katex', 'katex'] },
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app/unocss.config.ts') }), {
       name: 'otio-viewer-fixture', enforce: 'pre',
       resolveId(id) {
@@ -166,6 +166,7 @@ test('OTIO viewer renders reviews; the real shell stages into existing and fresh
   const main = resolve(directory, 'main.cjs')
   // Optional diagnostic, never a baseline or a prerequisite for the test.
   const screenshot = process.env.OTIO_VIEWER_TEST_SCREENSHOT
+  const storyboardScreenshot = process.env.OTIO_VIEWER_TEST_STORYBOARD_SCREENSHOT
   const desktopScreenshot = process.env.OTIO_VIEWER_TEST_DESKTOP_SCREENSHOT
   await writeFile(main, `
 const {app,BrowserWindow,Menu}=require('electron');
@@ -295,19 +296,42 @@ app.whenReady().then(async()=>{
     const pixels=card=>card?.querySelector('[data-state=ready] canvas')?.getContext('2d').getImageData(160,90,1,1).data;
     return cards.length===4 && pixels(cards[0])?.[3]===255 && pixels(cards[3])?.[3]===255;
   });
+  const geometry=()=>run(()=>[...document.querySelectorAll('.board-flow .card')].map(e=>{
+    const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];
+  }));
+  const cards=await geometry();
+  assert.ok(cards[1][0]>cards[0][0]+cards[0][2] && cards[1][1]===cards[0][1]);
+  assert.deepEqual(await run(()=>[...document.querySelectorAll('.board-flow .shot-index')].map(e=>e.textContent)),['01','02','03','04']);
+  assert.equal(await run(()=>document.querySelectorAll('.board-flow .vue-flow__node.draggable,.board-flow .vue-flow__handle,.board-flow .vue-flow__edge').length),0);
+  await click('Zoom in','.board-zoom');
+  await wait('scaled actual Vue Flow viewport',()=>document.querySelector('.board-flow .vue-flow__transformationpane').style.transform.includes('scale(1.25)'));
+  await click('Fit width','.board-zoom');
+  await wait('fit resets Flow scale',()=>document.querySelector('.board-flow .vue-flow__transformationpane').style.transform.includes('scale(1)'));
+  assert.deepEqual(await geometry(),cards);
+  assert.deepEqual(await run(()=>{
+    const root=document.documentElement, dark=root.classList.contains('dark');
+    const colors=[false,true].map(value=>{
+      root.classList.toggle('dark',value);
+      const card=getComputedStyle(document.querySelector('.board-flow .card'));
+      return [card.color,card.backgroundColor];
+    });
+    root.classList.toggle('dark',dark);return colors;
+  }),[['rgb(36, 36, 36)','rgb(255, 255, 255)'],['rgb(231, 231, 231)','rgb(32, 32, 32)']]);
+  if(${JSON.stringify(storyboardScreenshot || '')}) writeFileSync(${JSON.stringify(storyboardScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
   const setSampling=interval=>run(interval=>{
     const select=document.querySelectorAll('.storyboard select')[1];select.selectedIndex=interval?1:0;select.dispatchEvent(new Event('change'));
   },interval);
   await setSampling(true);
   await wait('interval ordering and labeled gap',()=>{
     const board=document.querySelector('.storyboard');
-    return [...board.querySelectorAll('time')].map(e=>e.textContent).join(',')==='0 s,2 s,4 s,6 s,8 s' && board.querySelector('.card:last-child').textContent.includes('No picture / gap');
+    return [...board.querySelectorAll('time')].map(e=>e.textContent).join(',')==='0 s,2 s,4 s,6 s,8 s' && board.querySelector('.vue-flow__node:last-child .card').textContent.includes('No picture / gap');
   });
   assert.equal(await run(()=>[...document.querySelectorAll('.card')].filter(e=>e.textContent.includes('Moonrise')).reduce((n,e)=>n+e.querySelectorAll('.caption-action').length,0)),1);
   const fill=async text=>run(text=>{
     const field=document.querySelector('.description-editor textarea'); field.value=text; field.dispatchEvent(new Event('input'));
   },text);
-  await click('Add description','.card:nth-child(3)');
+  await click('Add description','.vue-flow__node:nth-child(3) .card');
+  assert.equal(await run(()=>document.activeElement===document.querySelector('.description-editor textarea')),true);
   await fill('Moonrise <b>wide</b>');
   await run(()=>{const save=Storage.prototype.setItem; Storage.prototype.setItem=function(key,value){if(key.startsWith('shadow:otio-description:'))throw new DOMException('Full','QuotaExceededError');return save.call(this,key,value)};window.restoreStorage=()=>{Storage.prototype.setItem=save}});
   await click('Save','.description-editor');
@@ -317,18 +341,42 @@ app.whenReady().then(async()=>{
   assert.deepEqual(await run(()=>[...document.querySelectorAll('.caption')].map(e=>[e.textContent,e.children.length])),[['Moonrise <b>wide</b>',0]]);
   await run(()=>document.querySelector('.storyboard input[type=checkbox]').click());
   assert.deepEqual(await run(()=>[...document.querySelectorAll('.storyboard time')].map(e=>e.textContent)),['0 s','2 s']);
+  await run(()=>{
+    const key=Object.keys(localStorage).find(key=>key.startsWith('shadow:otio-description:'));
+    const saved=localStorage.getItem(key), captions=JSON.parse(saved);
+    // The two visible lower-track clips share the serialized IDs used by the inspector.
+    for (const id of ['/tracks/children/0/children/0','/tracks/children/0/children/2']) captions[id]='Reviewed';
+    localStorage.setItem(key,JSON.stringify(captions));
+    window.restoreCaptions=()=>{localStorage.setItem(key,saved);window.dispatchEvent(new StorageEvent('storage',{key}))};
+    window.dispatchEvent(new StorageEvent('storage',{key}));
+  });
+  await wait('caption filter has an accessible empty state',()=>!document.querySelector('.board-flow') && document.querySelector('.empty-board[role=status]')?.textContent==='No shots with missing descriptions.');
+  await run(()=>window.restoreCaptions());
+  await wait('board remounts after the empty result',()=>document.querySelectorAll('.board-flow .vue-flow__node').length===2);
+
   assert.equal((await state()).records.length,0);
   await win.reload();
   await wait('reloaded monitor',()=>document.querySelector('.picture img')?.naturalWidth===240);
   await click('Storyboard','.viewer-modes');
   assert.equal(await run(()=>document.querySelector('.caption').textContent),'Moonrise <b>wide</b>');
-  await click('Edit description','.card:nth-child(4)');
+  await click('Edit description','.vue-flow__node:nth-child(4) .card');
   assert.equal(await run(()=>document.querySelector('.description-editor textarea').value),'Moonrise <b>wide</b>');
   await fill('Moonrise wide'); await click('Save','.description-editor');
-  await run(()=>document.querySelector('.card:nth-child(2) .sample').click());
-  assert.equal(await run(()=>document.querySelector('.card:nth-child(2) .sample').getAttribute('aria-current')),'true');
-  await run(()=>document.querySelector('.card:nth-child(2) .sample').dispatchEvent(new MouseEvent('dblclick',{bubbles:true})));
-  await wait('card opens monitor at exact selected shot',()=>document.querySelector('.picture img')?.naturalWidth===180 && document.querySelector('.transport .readout').textContent==='Frame 24');
+  const shotPoint=await run(()=>{
+    const r=document.querySelector('.vue-flow__node:nth-child(2) .sample').getBoundingClientRect();
+    return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+35)};
+  });
+  win.webContents.sendInputEvent({type:'mouseDown',...shotPoint,button:'left',clickCount:1});
+  win.webContents.sendInputEvent({type:'mouseUp',...shotPoint,button:'left',clickCount:1});
+  await wait('real pointer selects shot',()=>document.querySelector('.vue-flow__node:nth-child(2) .sample').getAttribute('aria-current')==='true');
+  await run(()=>document.querySelector('.vue-flow__node:nth-child(2) .sample').dispatchEvent(new MouseEvent('dblclick',{bubbles:true})));
+  const atUpperShot=()=>document.querySelector('.picture img')?.naturalWidth===180 && document.querySelector('.transport .readout').textContent==='Frame 24';
+  await wait('double-click opens monitor at exact selected shot',atUpperShot);
+  await click('Storyboard','.viewer-modes');
+  await run(()=>document.querySelector('.vue-flow__node:nth-child(2) .sample').focus());
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+  await wait('Enter opens monitor at exact selected shot',atUpperShot);
   await run(()=>document.querySelectorAll('.outline .row')[2].click());
   await click('Storyboard','.viewer-modes');
   await run(()=>{const source=document.querySelector('.storyboard select');source.selectedIndex=1;source.dispatchEvent(new Event('change'))});
@@ -336,6 +384,15 @@ app.whenReady().then(async()=>{
   win.setSize(420,820);
   await wait('narrow storyboard tabs',()=>!!document.querySelector('.compact-tabs').getClientRects().length);
   await layout('.storyboard-pane','.tracks-pane');
+  await wait('narrow Flow wraps without clipping horizontally',()=>{
+    const cards=[...document.querySelectorAll('.board-flow .card')].map(e=>e.getBoundingClientRect());
+    const port=document.querySelector('.board-scroll');
+    return cards.length===3 && cards[0].x===cards[1].x && cards[1].top>cards[0].bottom && port.scrollWidth<=port.clientWidth+1;
+  });
+  const wheelPoint=await run(()=>{const r=document.querySelector('.board-scroll').getBoundingClientRect();return {x:Math.round(r.left+40),y:Math.round(r.top+40)}});
+  win.webContents.sendInputEvent({type:'mouseWheel',...wheelPoint,deltaY:-325,deltaX:0,hasPreciseScrollingDeltas:true});
+  await wait('native wheel scrolls the board over a shot',()=>document.querySelector('.board-scroll').scrollTop>0);
+  await run(()=>document.querySelector('.board-scroll').scrollTo(0,0));
   await click('Selection','.compact-tabs');
   await layout('.inspector','.tracks-pane');
   await click('Storyboard','.compact-tabs');
@@ -604,6 +661,7 @@ app.whenReady().then(async()=>{
   const isolated = requests.filter(({ route }) => route === '/api/sessions/fixture/raw')
   assert.deepEqual(new Set(isolated.map(({ path }) => path)), new Set([documentPath, videoPath, audioPath, ...Object.keys(images)]))
   assert.ok(requests.some(({ route, path }) => route === '/projects/review/api/folders/edit/raw' && path === 'assembly.OTIO'))
+  if (storyboardScreenshot) t.diagnostic(`Storyboard screenshot: ${storyboardScreenshot}`)
   if (desktopScreenshot) t.diagnostic(`Desktop overview screenshot: ${desktopScreenshot}`)
   if (screenshot) t.diagnostic(`Narrow review screenshot: ${screenshot}`)
 })
