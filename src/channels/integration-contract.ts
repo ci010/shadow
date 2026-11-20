@@ -1,3 +1,4 @@
+import { ReadResourcesSchema, RegisteredReadFoldersSchema } from '../bots/read-scope.ts'
 import { InputProcessorSchema } from '../events/input-processor-contract.ts'
 import { z } from 'zod'
 import { CapabilityGrantSchema } from '../execution/grant-contract.ts'
@@ -10,7 +11,7 @@ export const integrationToolNames = [
   'channel_config', 'subagent', 'learned_skill', 'exec',
 ] as const
 /** Owner-reviewed registered local source folders; no path, write or execution grants. */
-export const SourceFoldersSchema = z.array(z.string().uuid()).max(16).refine(ids => new Set(ids).size === ids.length, 'Unique source folders required')
+export const SourceFoldersSchema = RegisteredReadFoldersSchema
 export const DiscordHistoryScopeSchema = z.object({
   guildId: snowflake,
   channelIds: z.array(snowflake).min(1).max(20).refine(ids => new Set(ids).size === ids.length, 'Unique history channels required'),
@@ -26,6 +27,7 @@ export const IntegrationAgentInputSchema = z.object({
   execution: z.enum(['restricted', 'trusted']),
   tools: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,127}$/)).max(64),
   readDomains: z.array(z.string().uuid()).max(32),
+  readResources: ReadResourcesSchema.optional(),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
   skills: z.array(z.object({ name: z.string().trim().min(1).max(100), content: z.string().min(1).max(64_000) }).strict()).max(16),
@@ -67,6 +69,7 @@ export const DiscordBindingSchema = z.object({
   }).strict(),
   tools: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,127}$/)).max(64),
   readDomains: z.array(z.string().uuid()).max(32),
+  readResources: ReadResourcesSchema.optional(),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
   inheritThreads: z.boolean(),
@@ -109,8 +112,8 @@ export const integrationConfigurationGuide = {
     'domain.revoke': 'Owner only: {kind:"domain.revoke",domainId}. Revokes future access and dependent executions.',
   },
   resources: {
-    ownerReview: 'sourceFolders?:[<registered local Folder UUID>] and discordHistory?:{guildId,channelIds:[<exact channel IDs>],threads:"none"|"public-active"|"public-archived",preEpoch:boolean} on Agent and binding. Bindings may only narrow the Agent ceiling. Omitted means no new source/cross-channel/pre-epoch authority. Owner-only exact review; never arbitrary paths, private threads, writes or terminal access.',
-    source: 'read v:source lists IDs; read v:source/<Folder UUID>/<relative file> with optional offset/limit. search {folderId,query,mode:"names"|"content",path?,limit?}. Source-only bounded literal search excludes hidden/dependency/build/credential paths, binary/oversized files and symlinks/hardlinks. Registered local POSIX folders only.',
+    ownerReview: 'Use readResources?:{folders?:[<registered Folder UUID>],knowledge?:boolean,wiki?:boolean} on BOT/Agent and binding, with the binding narrowing the BOT/Agent ceiling. Legacy sourceFolders and Discord-only discordHistory?:{guildId,channelIds:[<exact channel IDs>],threads:"none"|"public-active"|"public-archived",preEpoch:boolean} on Agent and binding. Bindings may only narrow the Agent ceiling. Omitted means no new source/cross-channel/pre-epoch authority. Owner-only exact review; never arbitrary paths, private threads, writes or terminal access.',
+    source: 'Read . for authorized folder names. Read relative folder paths, with spaces, or explicitly granted v:knowledge/catalog and v:memory/. Use search {handler:"grep"|"glob",path,query,limit?}. Grep is literal; glob matches bounded names. Discord source filtering and registered local POSIX-only support are unchanged.',
     history: 'discord_history {channelId?,limit?,before?,query?} scans one page (query is literal within that page, not server-wide search). discord_message_get {channelId?,messageId}. Discover public threads: discord_history {channelId,threads:"active",limit?,threadAfter?} or {channelId,threads:"archived",limit?,archiveBefore?}. preEpoch explicitly permits platform history before the current authorization, never older internal memory. Live caller/Bot visibility+history and equivalent output audiences are required on reads and delivery.',
   },
   observation: {
@@ -134,7 +137,7 @@ export const integrationConfigurationGuide = {
     'Forum channels (type 15) are assignment containers, not message destinations. Enable inheritThreads to cover their public posts; each post has its own conversation and live participant/permission checks. Forum directory canSend means Send Messages in Threads. Private threads, automatic post creation and archived-thread scanning remain unsupported.',
     'Agent tools/domains are ceilings; bindings may only narrow them. A chat manager cannot widen its own scope, manage another Bot or self-approve.',
     'Participants control who invokes the Agent, not who can read its Discord replies. Confidential work belongs in a private channel.',
-    'Project-private memory, global SOUL and other conversation epochs are not inherited. Shared knowledge requires explicit fixed-copy human publication and binding grants.',
+    'Project-private memory, global SOUL and other conversation epochs are not inherited. A reviewed readResources grant can expose the shared Project Wiki/Knowledge view. Legacy Discord memory domains still require separate fixed-copy publication and binding grants.',
     'Trusted exec is host execution, not an OS sandbox. Privileged Agents require selected people or roles, not everyone.',
     'Owner proposals require Project Bots > Discord access > Review. A Discord manager proposal may also be confirmed by the same currently authorized human with /shadow-approve <draft-id> <hash>. Never execute or infer approval for that human.',
     'Never request or include credentials in chat. Create/connect Bot identities in Project Bots; Discord installation and privileged intents require platform-side setup.',

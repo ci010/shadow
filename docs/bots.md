@@ -118,7 +118,7 @@ falls back to Main's filesystem.
   `agent`; followed by the Agent prompt.
 - `bot.json` (or the JSON path in `config`): data-only `connection`,
   `subscriptions`, `bindings`, `tools`, `allowedModules`, `skills`, and read scopes
-  (`readDomains`, `sourceFolders`, `discordHistory`). Scope restrictions by mode
+  (`readResources` and Discord’s `readDomains`, legacy `sourceFolders`, and `discordHistory`). Scope restrictions by mode
   still apply. Credentials never belong in either file.
 - JS/TS tool modules and their relative JS/TS helpers.
 - No executable configuration imports, initialization hooks, package installation,
@@ -411,17 +411,72 @@ block it. A source folder is not a live deployment. Nothing starts or restarts
 merely because files are prepared. Service runtime and controlled custom tool
 execution remain restricted as described below.
 
-Feishu uses the same service binding shape with `platform: "feishu"` and its own
-connection/conversation IDs. Omitted `allowFrom` inherits channel admission; `[]`
-admits nobody. `readFolders` contains exact registered Folder IDs, never arbitrary
-paths or display-name aliases. The service agent's conversation context maps only
-these authorized IDs to registered display names and `folder:<id>/` path prefixes;
-it does not expose host paths. Built-in `read` returns JSON with `source`
-(`folderId`, `folderName`, `relativePath`) and `content` (text or directory listing).
-Built-in `search` returns the same `source` alongside `matches` and `hasMore`;
-match line numbers refer to content, not the provenance metadata. Display names
-are untrusted labels, not instructions or authorization. Unavailable resources
-still fail rather than falling back to another folder.
+Feishu uses the same service binding shape as QQ, with `platform: "feishu"` and
+its own connection/conversation IDs. Omitted `allowFrom` inherits channel
+admission; `[]` admits nobody. Discord keeps its separate participant, role,
+thread, and live platform checks.
+
+### Built-in read/search for Service BOTs
+
+QQ, Feishu, and Discord use the same `readResources` config in the BOT companion
+JSON. Put the **maximum** scope on the BOT and only the subset actually needed
+on each binding. Example value at either level:
+
+```json
+{"readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
+```
+
+A top-level ceiling does not grant anything by itself. Each binding must
+explicitly select the resources and enable the built-in `read` and/or `search`
+tools it needs. Omission grants neither view and no new folders. An owner should
+review the exact registered folders and intended channel audience before
+publishing: view grants expose **current and future** eligible content, not a
+frozen copy. Owner authoring and the publication summary show both the ceiling
+and effective binding grants.
+
+- `read({path:"."})` lists only authorized folder route names. A unique local
+  folder uses its real basename, including spaces, e.g.
+  `read({path:"Public Docs/guide.md"})`. For colliding basenames, a distinct
+  registered name or parent directory name prefixes the basename. Unresolved
+  collisions are not listed or accessible. Paths never fall back to the session
+  workspace. Folder IDs stay in owner config, not model routes.
+- `search({handler:"grep",path:"Public Docs",query:"setup"})` uses bounded,
+  case-insensitive literal matching, not regular expressions. `handler:"glob"`
+  matches names using a bounded `*`, `?`, `**` grammar, e.g.
+  `search({handler:"glob",path:".",query:"* Docs"})`. Use returned file paths
+  for `read`. Supported local macOS/Linux backends return typed folder entries
+  (`name`, `kind`) for directory reads and apply the same path policy to file
+  reads and name discovery. QQ/Feishu `glob` lists immediate eligible entries;
+  their `grep` reads one file, not folder names or a recursive scan. Discord
+  keeps bounded recursive source grep/glob and source file restrictions. On
+  remote or other local QQ/Feishu backends, file-only reads and grep use the
+  existing `filesystem.read` capability with `kind: "file"`; directory reads
+  and folder glob fail closed because no filtered typed enumeration is available.
+  Remote file confinement and device capability support remain device-enforced;
+  no Main fallback is used.
+- `knowledge: true` enables the shared metadata catalog at
+  `v:knowledge/catalog`, canonical `entry/<encoded ID>` and `relations/<encoded ID>`.
+  Relations include only links between visible entries. Knowledge alone does
+  not expose document bodies or advertise a usable `v:memory` link. `wiki: true` separately
+  enables `v:memory/` and its Markdown pages under `topics`, `decisions`,
+  `concepts`, `identities`, and `tools`. Built-in read/list/search share these
+  restrictions. No session memory, raw logs or log projections, internal state,
+  or other virtual namespaces are included. Project-internal text must not be
+  stored in a shared Wiki category if it is not intended for the granted audience.
+- Existing QQ/Feishu `readFolders` and Discord `sourceFolders` retain their
+  existing grants and backends. Do not mix a legacy folder list and
+  `readResources.folders` at the same scope. Existing model paths
+  `folder:<id>/…` and `v:source/…` are replaced by `read({path:"."})` discovery;
+  update any BOT prompts that hardcode old paths before publishing. No existing
+  folder grant is automatically converted to a Project view grant.
+- Existing Discord-only `v:sessions/current` and scoped memory domain/record
+  routes remain active under their original permissions. A pathless legacy
+  `search({query:"…"})` returns scoped record paths, not Wiki results; use an
+  empty query to list the allowed legacy records. Without a
+  Wiki grant `v:memory` still lists those records; with a Wiki grant `v:memory/`
+  lists Wiki pages only. Exact legacy `v:memory/<domainId>/<resourceId>` reads
+  remain distinct from Wiki paths. This legacy access does not extend to QQ or
+  Feishu. Personal BOT sessions are unchanged.
 
 ## Author and confirm
 

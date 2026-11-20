@@ -787,14 +787,15 @@ export async function createProjectRuntime(
   const botDeployments = new BotDeployments({directory:resolve(workspace,'bots'),projectId:project.id,validate:files => {parseBot({...files})}})
   const directoryBots = new DirectoryBots(botDeployments)
   const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
-  const sourceResources = new SourceResources(folderRegistry)
+  const knowledgeService = new KnowledgeService(workspace, skills)
+  const sourceResources = new SourceResources(folderRegistry, project.id)
   const channelIntegrations = new IntegrationStore({
     sources: sourceResources,deployedBots:()=>directoryBots.discord(),
     projectId: project.id, workspace, directory: integrationDirectory, bots: botStore, agents: agentTypes, memory: memoryDomains,
   })
   const classifier = new InputClassifier(() => provider, resolve(integrationDirectory, 'classifier-ledger.json'))
   const discordIntegration = new DiscordIntegration({
-    classifier, sources: sourceResources,
+    classifier, sources: sourceResources, knowledge: knowledgeService,
     store: channelIntegrations, memory: memoryDomains, bots: botStore, workspace, projectId: project.id, baseTools: tools, directoryBots,
   })
   cleanup.push(channelIntegrations.onChange(() => realtime.invalidateIntegrations?.()))
@@ -815,7 +816,7 @@ export async function createProjectRuntime(
   directoryBots.setBroker(capabilityBroker)
   const botPolicies = new DirectoryBotService({
     projectId: project.id, workspace,
-    folders: folderRegistry, remoteExecutor,
+    folders: folderRegistry, remoteExecutor, knowledge: knowledgeService,
 
   }, directoryBots)
   const sessions: SessionManager = new SessionManager({
@@ -1381,7 +1382,7 @@ export async function createProjectRuntime(
   })
   vfs.mount('v:config', 'Project MCP configuration: mcp.json', mcpConfigVfs.read, undefined, mcpConfigVfs.write)
 
-  const knowledgeVfs = createKnowledgeHandler(new KnowledgeService(workspace, skills), project.id,
+  const knowledgeVfs = createKnowledgeHandler(knowledgeService, project.id,
     context => topics.assertActor(context.projectId, context.sessionId))
   vfs.mount('v:knowledge', 'read-only knowledge/log navigation; read v:knowledge/overview', knowledgeVfs.read, knowledgeVfs.list)
 

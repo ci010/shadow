@@ -1,3 +1,4 @@
+import type { ReadResources } from './read-scope.ts'
 import { stringify } from 'yaml'
 import { writePrivateFile } from '../utils/private-file.ts'
 import { assignChannelSource } from './channel-assignment.ts'
@@ -35,6 +36,14 @@ const assignment = proposal.extend({action:z.literal('assign'),scope:z.enum(['co
 function location(binding: ReturnType<typeof parseBot>['bindings'][number]): string {
   return binding.platform === 'discord' ? `Discord ${binding.target.kind === 'dm' ? 'DM '+binding.target.userId : binding.target.guildId+'/'+binding.target.channelId}` : `${binding.platform} ${binding.botInstanceId}/${binding.conversationId}`
 }
+function resourceFacts(prefix: string, scope?: ReadResources): string[] {
+  return [
+    ...(scope?.knowledge ? [`${prefix} Project Knowledge metadata and scoped relations (v:knowledge)`] : []),
+    ...(scope?.wiki ? [`${prefix} shared Project Wiki content (v:memory)`] : []),
+    ...(scope?.folders ?? []).map(id => `${prefix} registered folder ${id}`),
+  ]
+}
+
 function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> {
   if(!bot)return new Set()
   const facts:string[]=[`mode ${bot.mode}`, ...(bot.mode === 'personal' ? [`personal connection ${bot.connection}; role ${bot.agent}; ordinary verified-owner tools/context`] : [])]
@@ -42,6 +51,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
   facts.push(...bot.tools.flatMap(tool=>tool.imports.map(name=>`tool ${tool.name}: service module ${name}`)))
   for(const operation of bot.hostCapabilities ?? [])facts.push(`BOT host capability ${operation} (invoking binding only)`)
   for(const name of bot.allowedModules)facts.push(`BOT module ceiling ${name}`)
+  facts.push(...resourceFacts('BOT read ceiling:', bot.readResources))
   for(const id of bot.sourceFolders ?? [])facts.push(`BOT source-folder ceiling ${id}`)
   for(const id of bot.readDomains ?? [])facts.push(`BOT memory-domain ceiling ${id}`)
   if(bot.discordHistory)facts.push(`BOT history ceiling ${bot.discordHistory.guildId}/${bot.discordHistory.channelIds.join(',')} threads=${bot.discordHistory.threads} preEpoch=${bot.discordHistory.preEpoch}`)
@@ -49,6 +59,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
     const target=location(binding)
     facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
     facts.push(`${target}: trigger ${binding.trigger}`)
+    facts.push(...resourceFacts(`${target}:`, binding.readResources))
     for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
     for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+grant.sessionId+' (raw content)'}`)
     if(binding.platform==='discord'){
@@ -80,7 +91,7 @@ function disclosedBindings(bot: BotDefinition): unknown[] {
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Direct thread/DM assignment is forbidden. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. QQ/Feishu policy: {enabled,trigger,allowFrom,tools,readFolders?}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel. Exact thread and DM assignment is forbidden; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
+    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Direct thread/DM assignment is forbidden. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. All platform policies may include readResources:{folders?,knowledge?,wiki?} within the explicit BOT ceiling in the companion JSON. QQ/Feishu policy: {enabled,trigger,allowFrom,tools,readResources?,readFolders?}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readResources?,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel. Exact thread and DM assignment is forbidden; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
     parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','link','assign','propose']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},sourceRevision:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()
@@ -152,6 +163,7 @@ export function botPackageTool(options: Options): Tool {
           } else {
           return JSON.stringify({ status: 'assignment-prepared', scope: input.scope, source: { folderId: input.folderId, directory: input.directory }, channelSessionId: input.channelSessionId,
             sourceRevision: frozen.revision, candidateRevision: options.deployments.freeze(updated.files).revision,
+            projectReadGrants: resourceFacts('Binding:', updated.binding.readResources),
             edit: { path: [...parts, updated.configPath].join('/'), match: frozen.files[updated.configPath], content: updated.content },
             next: 'Use the ordinary authorized write tool for this registered source folder and exact match/content; then bot_package propose with sourceRevision=candidateRevision, the same expectedRevision and summary. Preparation is not a write, deployment, permission or history-replay grant.' })
         }
@@ -182,7 +194,7 @@ export function botPackageTool(options: Options): Tool {
         affected,addedPermissions:added,removedPermissions:removed,candidatePermissions:[...newAuthority],
         credentialDisclosure:'Credential configuration is represented only by its presence; private references and header values are withheld. Origins, routes and body restrictions remain visible.',
         mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:disclosedBindings(bot),subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
-        hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
+        hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],readResources:bot.readResources ?? null,sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
         storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
         execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
       // Direct authenticated authoring is the authorization. Exact revision,

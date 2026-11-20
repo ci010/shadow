@@ -35,6 +35,8 @@ test('registered source resources enforce scope, traversal, sensitive files, sym
   assert('matches' in found); assert.equal(found.matches.length,1); assert.equal(found.truncated,true)
   const names = await resources.run([folder.id],folder.id,{query:'main',mode:'names'},signal)
   assert('matches' in names); assert.deepEqual(names.matches,[{path:'src/main.ts'}])
+  const glob = await resources.run([folder.id],folder.id,{query:'**/*.ts',mode:'glob'},signal)
+  assert('matches' in glob); assert.deepEqual(glob.matches,[{path:'src/main.ts'}])
   const secrets = await resources.run([folder.id],folder.id,{query:'CANARY',mode:'content'},signal)
   assert('matches' in secrets); assert.deepEqual(secrets.matches,[])
   const controller=new AbortController()

@@ -1,3 +1,4 @@
+import { resourceFolders } from './read-scope.ts'
 import type { BotInstanceStore } from '../channels/bot-store.ts'
 import type { BotDefinition } from './sdk.ts'
 
@@ -16,6 +17,6 @@ export async function validateServiceAssignments(projectId: string, bots: BotIns
     const key = JSON.stringify([binding.botInstanceId, binding.platform, binding.conversationId])
     if (keys.has(key)) throw new Error('Conversation already belongs to another BOT.')
     keys.add(key)
-    for (const id of binding.readFolders) await requireFolder(id)
+    for (const id of resourceFolders(binding.readResources, binding.readFolders)) await requireFolder(id)
   }
 }

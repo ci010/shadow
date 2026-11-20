@@ -99,6 +99,16 @@ function memoryKind(id: string): 'memory' | 'wiki' {
     || /(?:^|[/.])conventions\.md$/.test(id) ? 'memory' : 'wiki'
 }
 
+const sharedRoots = new Set(['topics', 'decisions', 'concepts', 'identities', 'tools'])
+export function isSharedWikiScope(path: string): boolean {
+  const scope = path.endsWith('/') ? path.slice(0, -1) : path
+  return !path || validPath(scope) && !scope.includes('%') && sharedRoots.has(scope.split('/')[0]!)
+}
+export function isSharedWikiId(id: string): boolean {
+  const [root, category, ...rest] = id.split('/')
+  return root === 'memory' && rest.length > 0 && isSharedWikiScope([category, ...rest].join('/')) && id.endsWith('.md') && memoryKind(id) === 'wiki'
+}
+
 interface Record {
   detail: KnowledgeDetail
   file: string
@@ -117,9 +127,21 @@ export class KnowledgeService {
     return this.records().map(record => record.detail).sort((a, b) => a.entry.id.localeCompare(b.entry.id))
   }
 
+  sharedWiki(): KnowledgeDetail[] {
+    return this.records(undefined, false, true).map(record => record.detail).sort((a, b) => a.entry.id.localeCompare(b.entry.id))
+  }
+
+  sharedCatalog(): KnowledgeCatalog {
+    return this.catalogFor(this.records(undefined, false, true), true)
+  }
+
   catalog(): KnowledgeCatalog {
     // Working-set indexes remain readable by exact ID, not knowledge nodes.
-    const records = this.records(undefined, false)
+    return this.catalogFor(this.records(undefined, false))
+  }
+
+  private catalogFor(records: Record[], shared = false): KnowledgeCatalog {
+    const ids = shared ? new Set(records.map(record => record.detail.entry.id)) : undefined
     const skillIds = new Map(records.filter(record => record.detail.entry.kind === 'skill')
       .map(record => [record.detail.entry.title, record.detail.entry.id]))
     const links = new Map<string, KnowledgeCatalog['links'][number]>()
@@ -133,7 +155,8 @@ export class KnowledgeService {
         throw error
       }
       for (const link of extracted) {
-        if (isFileHistory(link.target)) continue
+        if (isFileHistory(link.target) || ids && (!ids.has(link.source) || !ids.has(link.target))) continue
+        if (shared) delete link.href
         links.set(JSON.stringify(link), link)
         if (links.size > KNOWLEDGE_LIMITS.links) throw new KnowledgeError('knowledge_limit', 'Knowledge graph exceeds 100,000 links', 413)
       }
@@ -181,11 +204,12 @@ export class KnowledgeService {
     return record
   }
 
-  private records(only?: string, includeFileHistory = true): Record[] {
+  private records(only?: string, includeFileHistory = true, shared = false): Record[] {
     const gate = new MaintenanceGate(this.workspace), visibility = gate.visibilityRevision()
     const records: Record[] = []
     let bytes = 0
     const add = (file: string, entry: Omit<KnowledgeEntry, 'revision'>, related?: string) => {
+      if (shared && !isSharedWikiId(entry.id)) return
       if (new MaintenanceGate(this.workspace).isHidden(entry.id)) return
       if (only && only !== entry.id) return
       if (!includeFileHistory && isFileHistory(entry.id)) return
@@ -219,7 +243,9 @@ export class KnowledgeService {
             const file = join(directory, item.name)
             const id = posixPath(relative(this.workspace, file))
             if (!validPath(id)) continue
-            if (item.isDirectory()) walk(file, depth + 1)
+            if (item.isDirectory()) {
+              if (!shared || depth !== 0 || sharedRoots.has(item.name)) walk(file, depth + 1)
+            }
             else if (item.isFile() && memoryFile(id)) {
               add(file, { id, path: id, title: '', kind: memoryKind(id), source: 'project', deletable: true })
             }
@@ -234,7 +260,7 @@ export class KnowledgeService {
         if (exists) walk(root, 0)
       }
     }
-    if (!only || !only.startsWith('memory/')) {
+    if (!shared && (!only || !only.startsWith('memory/'))) {
       for (const { skill, source, shadowsBuiltin } of this.skills.availableSkillSources(true)) {
         const file = resolve(skill.dirPath, 'SKILL.md')
         const within = relative(workspacePath(this.workspace, 'skills'), file)
