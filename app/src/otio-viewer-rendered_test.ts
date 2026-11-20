@@ -574,7 +574,9 @@ app.whenReady().then(async()=>{
     const layout=await run(()=>{
       const a=document.querySelector('.reference-action'),b=document.querySelector('.mark-action'),r=a.getBoundingClientRect(),s=b.getBoundingClientRect();
       const c=getComputedStyle(a), d=getComputedStyle(b);
-      return {stacked:r.bottom<s.top && Math.abs(r.x-s.x)<1 && Math.abs(r.width-s.width)<1,distinct:c.backgroundColor!==d.backgroundColor&&c.backgroundColor!=='rgba(0, 0, 0, 0)'&&d.backgroundColor!=='rgba(0, 0, 0, 0)',focus:[c,d].every(style=>style.outlineStyle==='solid'&&style.outlineOffset==='2px'),size:Math.min(r.height,s.height)};
+      // Chromium snaps outlines to device pixels (e.g. 2 CSS px reports 1.6 at 125%).
+      const nearTwo=value=>Math.abs(parseFloat(value)-2)<=1/devicePixelRatio;
+      return {stacked:r.bottom<s.top && Math.abs(r.x-s.x)<1 && Math.abs(r.width-s.width)<1,distinct:c.backgroundColor!==d.backgroundColor&&c.backgroundColor!=='rgba(0, 0, 0, 0)'&&d.backgroundColor!=='rgba(0, 0, 0, 0)',focus:[c,d].every(style=>style.outlineStyle==='solid'&&nearTwo(style.outlineWidth)&&nearTwo(style.outlineOffset)),size:Math.min(r.height,s.height)};
     });
     assert.ok(layout.stacked&&layout.distinct&&layout.size>=40,JSON.stringify(layout));
     assert.ok(layout.focus,'focus-visible outline is styled on both actions: '+JSON.stringify(layout));
