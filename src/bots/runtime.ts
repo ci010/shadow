@@ -6,8 +6,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdir
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { assertPrivateFileBoundary } from '../utils/private-document.ts'
-import { BotDeployments } from './deployments.ts'
-import { bindingSubscribed, botInferenceSettings, parseBot, parseBotPackage, type BotDefinition } from './sdk.ts'
+import { BotDeployments, type BotDeployment } from './deployments.ts'
+import { bindingSubscribed, botInferenceSettings, botReadResources, legacyReadMigrationGuidance, parseBot, parseBotPackage, type BotDefinition } from './sdk.ts'
 import { botInputListeners } from './input.ts'
 import { executeBotTool } from './tool-runtime.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
@@ -56,7 +56,11 @@ export class DirectoryBots {
    * bookkeeping nor logs, and a bad sibling cannot abort an object's inspection.
    * It grants no policy: live routing still performs its normal strict reads.
    */
-  inspect(id: string) {
+  inspect(id: string): {
+    id: string; state: 'valid' | 'quarantined' | 'unavailable'; loaded: boolean
+    deployment?: BotDeployment; bot?: BotDefinition; format?: ReturnType<typeof parseBotPackage>['format']
+    error?: string; guidance?: string; listeners?: ReturnType<typeof botInputListeners>
+  } | undefined {
     const current = this.deployments.inspect(id)
     if (current.error) return { id, state: 'unavailable' as const, loaded: false, error: current.error }
     if (!current.value) return undefined
@@ -64,7 +68,8 @@ export class DirectoryBots {
     try {
       const { bot, format } = parseBotPackage(files)
       if (bot.id !== id) return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'identity-mismatch' as const }
-      return { id, deployment, bot, format, state: 'valid' as const, loaded: true, listeners: this.execution(bot.id).enabled ? botInputListeners(bot) : [] }
+      const guidance = legacyReadMigrationGuidance(bot)
+      return { id, deployment, bot, format, state: 'valid' as const, error: undefined, loaded: true, ...(guidance ? { guidance } : {}), listeners: this.execution(bot.id).enabled ? botInputListeners(bot) : [] }
     } catch {
       return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'invalid-package' as const }
     }
@@ -132,7 +137,7 @@ export class DirectoryBots {
       const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
       const data = { ...rawData, ...(upper ? { allowFrom: binding.allowFrom ? binding.allowFrom.filter(id => upper.includes(id)) : upper } : {}) }
       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ runtimeOrigin: { kind: 'bot' as const, id: bot.id, revision: deployment.revision }, generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
+      return [{ runtimeOrigin: { kind: 'bot' as const, id: bot.id, revision: deployment.revision }, generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`, revision: deployment.revision, binding: { ...data, readFolders: data.readFolders ?? [], readResources: bot.readResourcesModel === 'bot-wide' ? botReadResources(bot) : data.readResources, enabled: data.enabled && bindingSubscribed(bot, binding) && this.execution(bot.id).enabled, skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
@@ -146,6 +151,7 @@ export class DirectoryBots {
       const selected = bot.bindings.filter(binding => binding.platform === 'discord')
       if (!selected.length) continue
       const id = publishedBotIntegrationId(bot.id)
+      const botWide = bot.readResourcesModel === 'bot-wide'
       const tools = [...new Set(selected.flatMap(binding => binding.tools))]
       agents.push({ id,name:agentName(bot.id),displayName:bot.id,markdown:`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id),defaultMode:'session',allowedTools:tools})}---\n${bot.prompt}`,
         execution:'restricted',tools,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders,readResources:bot.readResources,discordHistory:bot.discordHistory,skills:bot.skills ?? [],
@@ -153,7 +159,7 @@ export class DirectoryBots {
       for (const binding of selected) {
         const {platform: _platform,...data} = binding
         const upper = bot.connectionPolicies?.[binding.botInstanceId]?.allowFrom
-        bindings.push({...data,...(upper ? { allowFrom: data.allowFrom ? data.allowFrom.filter(id => upper.includes(id)) : upper } : {}),enabled:data.enabled && bindingSubscribed(bot,binding) && this.execution(bot.id).enabled,agentId:id,epochRevision:parseInt((deployment.generation ? digest([deployment.generation, this.execution(bot.id).generation]) : digest([deployment.revision, this.execution(bot.id).generation])).slice(0,12),16)})
+        bindings.push({...data,...(botWide ? { readResources: botReadResources(bot) } : {}),...(upper ? { allowFrom: data.allowFrom ? data.allowFrom.filter(id => upper.includes(id)) : upper } : {}),enabled:data.enabled && bindingSubscribed(bot,binding) && this.execution(bot.id).enabled,agentId:id,epochRevision:parseInt((deployment.generation ? digest([deployment.generation, this.execution(bot.id).generation]) : digest([deployment.revision, this.execution(bot.id).generation])).slice(0,12),16)})
       }
     }
     if (new Set(bindings.map(binding => binding.id)).size !== bindings.length || new Set(bindings.map(binding => JSON.stringify([binding.botInstanceId,binding.target]))).size !== bindings.length) throw new Error('Discord conversation is owned by multiple BOT deployments.')
