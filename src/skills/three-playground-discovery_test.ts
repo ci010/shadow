@@ -21,7 +21,7 @@ async function buildExample(files: Record<string, string>, jsonAssets: Record<st
       root: fileURLToPath(new URL('../../', import.meta.url)),
       configFile: false, envDir: false, cacheDir: join(dir, 'vite'),
       optimizeDeps: { noDiscovery: true },
-      server: { host: '127.0.0.1', port: 0, hmr: false },
+      server: { host: '127.0.0.1', port: 0, hmr: false, watch: null },
       plugins: [{ name: 'playground-example-fixture', configureServer(server) {
         server.middlewares.use('/__example-snapshot', (_req, res) => {
           res.setHeader('content-type', 'application/json')
