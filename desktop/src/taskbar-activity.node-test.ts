@@ -15,6 +15,8 @@ class FakeWindow extends EventEmitter {
 
 const authorization = { apiBase: 'http://127.0.0.1:3123', launchToken: 'synthetic-taskbar-token' }
 const settle = () => new Promise(resolve => setImmediate(resolve))
+const snapshot = (stage = 'inactive') =>
+  Response.json({ activity: stage === 'inactive' ? {} : { task: { stage } } })
 
 function fixture(t: TestContext) {
   const window = new FakeWindow()
@@ -22,8 +24,8 @@ function fixture(t: TestContext) {
   const calls: { url: URL; init: RequestInit }[] = []
   let projects = ['default', 'second-project']
   const responses = new Map<string, () => Response>([
-    ['default', () => Response.json({ stages: { sameSession: 'idle' } })],
-    ['second-project', () => Response.json({ stages: { sameSession: 'inactive' } })],
+    ['default', () => snapshot('idle')],
+    ['second-project', () => snapshot()],
   ])
   const activity = new TaskbarActivity(window, {
     onError: message => { errors.push(message) },
@@ -48,21 +50,21 @@ function fixture(t: TestContext) {
 test('native progress aggregates every project, survives partial completion and clears at the last idle turn', async t => {
   const f = fixture(t)
   assert.equal(f.calls.length, 0, 'No requests before Main authorization')
-  f.responses.set('second-project', () => Response.json({ stages: { sameSession: 'llm' } }))
+  f.responses.set('second-project', () => snapshot('llm'))
   f.activity.setAuthorization(authorization)
   await settle()
   assert.deepEqual(f.window.progress, [[-1], [2, { mode: 'indeterminate' }]])
   assert.equal(f.calls.length, 3)
-  for (const phase of ['tool', 'waiting']) {
-    f.responses.set('second-project', () => Response.json({ stages: { sameSession: phase } }))
+  for (const phase of ['tool', 'waiting', 'rate-limit'] as const) {
+    f.responses.set('second-project', () => snapshot(phase))
     await f.activity.refresh()
     assert.equal(f.window.progress.length, 2, 'Do not reset the native animation on each snapshot')
   }
-  f.responses.set('default', () => Response.json({ stages: { sameSession: 'tool' } }))
-  f.responses.set('second-project', () => Response.json({ stages: { sameSession: 'idle' } }))
+  f.responses.set('default', () => snapshot('tool'))
+  f.responses.set('second-project', () => snapshot('idle'))
   await f.activity.refresh()
   assert.equal(f.window.progress.length, 2)
-  f.responses.set('default', () => Response.json({ stages: { sameSession: 'inactive' } }))
+  f.responses.set('default', () => snapshot())
   await f.activity.refresh()
   assert.deepEqual(f.window.progress.at(-1), [-1])
   assert.deepEqual(f.errors, [])
@@ -73,7 +75,7 @@ test('catalog refresh includes new projects and drops deleted ones without readi
   f.setProjects(['default'])
   f.activity.setAuthorization(authorization)
   await settle()
-  f.responses.set('second-project', () => Response.json({ stages: { task: 'tool' } }))
+  f.responses.set('second-project', () => snapshot('tool'))
   f.setProjects(['default', 'second-project'])
   await f.activity.refresh()
   assert.deepEqual(f.window.progress.at(-1), [2, { mode: 'indeterminate' }])
@@ -87,20 +89,20 @@ test('catalog refresh includes new projects and drops deleted ones without readi
 test('malformed or failed snapshots are reported without hiding another project still working', async t => {
   const f = fixture(t)
   f.responses.set('default', () => Response.json({ error: 'unavailable' }, { status: 503 }))
-  f.responses.set('second-project', () => Response.json({ stages: { task: 'llm' } }))
+  f.responses.set('second-project', () => snapshot('llm'))
   f.activity.setAuthorization(authorization)
   await settle()
   assert.deepEqual(f.window.progress.at(-1), [2, { mode: 'indeterminate' }])
   assert.match(f.errors[0]!, /HTTP 503/)
   await f.activity.refresh()
   assert.equal(f.errors.length, 1, 'Deduplicate persistent failures, not every poll')
-  for (const invalid of [null, { stages: [] }, { stages: { task: ['llm'] } }, { stages: { task: 'unknown' } }]) {
+  for (const invalid of [null, { stages: {} }, { activity: [] }, { activity: { task: { stage: 'unknown' } } }]) {
     f.responses.set('default', () => Response.json(invalid))
     await f.activity.refresh()
     assert.deepEqual(f.window.progress.at(-1), [2, { mode: 'indeterminate' }])
     assert.match(f.errors.at(-1)!, /Invalid session activity/)
   }
-  f.responses.set('second-project', () => Response.json({ stages: {} }))
+  f.responses.set('second-project', () => snapshot())
   await f.activity.refresh()
   assert.deepEqual(f.window.progress.at(-1), [-1], 'Unknown activity must not leave a stale endless spinner')
 })
@@ -130,7 +132,7 @@ test('revoked or replaced authorization aborts reads and stale results cannot re
   await settle()
   activity.setAuthorization(null)
   assert.equal(requests[1]!.init.signal!.aborted, true)
-  requests[1]!.resolve(Response.json({ stages: { task: 'llm' } }))
+  requests[1]!.resolve(snapshot('llm'))
   await settle()
   assert.deepEqual(window.progress, [[-1]])
   activity.setAuthorization({ ...authorization, apiBase: 'http://127.0.0.1:3133', launchToken: 'new-synthetic-token' })
@@ -147,7 +149,7 @@ test('native polling does not depend on renderer visibility and closes with its 
   const f = fixture(t)
   f.activity.setAuthorization(authorization)
   await settle()
-  f.responses.set('default', () => Response.json({ stages: { task: 'tool' } }))
+  f.responses.set('default', () => snapshot('tool'))
   t.mock.timers.tick(1500)
   await settle()
   assert.deepEqual(f.window.progress.at(-1), [2, { mode: 'indeterminate' }])
@@ -223,7 +225,7 @@ test('project reads have a four-request concurrency ceiling and expose working s
   await settle()
   assert.equal(pending.length, 4)
   for (let index = 0; index < 10; index++) {
-    pending[index]!(Response.json({ stages: { task: index === 0 ? 'llm' : 'idle' } }))
+    pending[index]!(snapshot(index === 0 ? 'llm' : 'idle'))
     await settle()
     assert.deepEqual(window.progress.at(-1), [2, { mode: 'indeterminate' }])
   }
