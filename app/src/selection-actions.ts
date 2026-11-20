@@ -4,10 +4,9 @@ export function selectionAction(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | '
   if (event.key === 'c') return 'copy'
 }
 
-export function insertQuote(draft: string, quote: string, start: number, end: number): { text: string; caret: number } {
-  const before = draft.slice(0, start)
-  const after = draft.slice(end)
+export function insertQuote(draft: string, quote: string): { text: string; caret: number } {
   const block = quote.split(/\r?\n/).map(line => `> ${line}`).join('\n')
-  const insertion = `${before && !before.endsWith('\n\n') ? '\n\n' : ''}${block}\n\n`
-  return { text: before + insertion + after, caret: before.length + insertion.length }
+  const separator = !draft || draft.endsWith('\n\n') ? '' : draft.endsWith('\n') ? '\n' : '\n\n'
+  const text = `${draft}${separator}${block}\n\n`
+  return { text, caret: text.length }
 }
