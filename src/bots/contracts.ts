@@ -1,3 +1,4 @@
+import { ReadResourcesSchema } from './read-scope-contract.ts'
 import { z } from 'zod'
 import type { AgentTypeDefinition } from '../agent/types/types.ts'
 import type { ChannelAddress } from '../bus/events.ts'
@@ -10,6 +11,7 @@ export const ConversationBindingSchema = z.object({
   conversationId: identifier, enabled: z.boolean().default(true),
   agent: ResourceName, skills: z.array(ResourceName).max(32).default([]),
   allowFrom: z.array(identifier).max(1000).optional(),
+  readResources: ReadResourcesSchema.optional(),
   readFolders: z.array(identifier).max(32).default([]),
   parameters: z.record(z.unknown()).default({}),
   grants: z.array(CapabilityGrantSchema).max(32).default([]),

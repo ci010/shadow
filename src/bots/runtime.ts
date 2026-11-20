@@ -148,7 +148,7 @@ export class DirectoryBots {
       const id = publishedBotIntegrationId(bot.id)
       const tools = [...new Set(selected.flatMap(binding => binding.tools))]
       agents.push({ id,name:agentName(bot.id),displayName:bot.id,markdown:`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id),defaultMode:'session',allowedTools:tools})}---\n${bot.prompt}`,
-        execution:'restricted',tools,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders,discordHistory:bot.discordHistory,skills:bot.skills ?? [],
+        execution:'restricted',tools,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders,readResources:bot.readResources,discordHistory:bot.discordHistory,skills:bot.skills ?? [],
         version:deployment.revision,publishedAt:new Date(0).toISOString() })
       for (const binding of selected) {
         const {platform: _platform,...data} = binding

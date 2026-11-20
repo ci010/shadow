@@ -187,3 +187,24 @@ test('Knowledge runtime endpoint is owner-only, revision-bound and derives scope
   assert.deepEqual(result.runtime, { source: 'preview', systemPrompt: 'Assembled runtime', sections: [], tools: [{ name: 'scoped_tool', description: 'Actual tool definition', parameters: { type: 'object', properties: {} } }] })
   assert.equal((selected[0] as typeof binding).conversationId, 'group:one')
 })
+
+test('owner assignment and deployment receipts explicitly surface shared Knowledge and Wiki grants', async t => {
+  const f = fixture(t)
+  const { passiveChannelId } = await import('../channels/passive-contract.ts')
+  const source = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
+  const tool = botPackageTool({ ...f.options, channelSource: () => source })
+  const config = JSON.parse(files()['bot.json'])
+  config.readResources = { knowledge: true, wiki: true }
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  const base = { action: 'assign', folderId: 'folder', summary: 'Review binding resources', channelSessionId: passiveChannelId(source), sourceRevision: f.deployments.freezeDirectory(f.source).revision }
+  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'], readResources: { wiki: true } }
+  const prepared = JSON.parse(await tool.execute({ ...base, bindingJson: JSON.stringify(binding) }, f.context) as string)
+  assert.deepEqual(prepared.projectReadGrants, ['Binding: shared Project Wiki content (v:memory)'])
+  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /read resources.*ceiling/i)
+  assert.equal(f.deployments.list().length, 0)
+  writeFileSync(join(f.source, prepared.edit.path), prepared.edit.content)
+  const receipt = JSON.parse(await f.propose() as string)
+  assert.deepEqual(receipt.changes.readResources, { knowledge: true, wiki: true })
+  assert(receipt.changes.addedPermissions.includes('BOT read ceiling: Project Knowledge metadata and scoped relations (v:knowledge)'))
+  assert(receipt.changes.addedPermissions.some((line: string) => !line.startsWith('BOT read ceiling:') && line.includes('shared Project Wiki content (v:memory)')))
+})

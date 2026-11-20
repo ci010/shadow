@@ -1,3 +1,4 @@
+import { webInputRequestId, type ChatInputDelivery } from '../shared/chat-input-delivery.ts'
 import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { cleanupTempFiles } from '../utils/paths.ts'
@@ -110,6 +111,57 @@ export class Session extends BaseSession {
 
   // ── Public API ──────────────────────────────────────────────────────────
 
+  // Runtime-only: pending until included in the context handed to the provider.
+  private readonly webInputs = new Map<string, ChatInputDelivery>()
+  private readonly savedWebInputs = new Set<string>()
+
+  get webInputDelivery(): ChatInputDelivery[] { return [...this.webInputs.values()] }
+
+  private trackWebInput(input: SessionInput, status: ChatInputDelivery['status']): void {
+    if (!this.id.startsWith('web:') || input.kind !== 'message' || input.source.kind !== 'user'
+      || input.source.sender.channel !== 'web') return
+    const requestId = input.replyTo?.platformMessageId
+    if (!requestId || !/^[a-f0-9-]{36}$/.test(requestId)) return
+    const previous = this.webInputs.get(requestId)
+    if (previous?.status === status || status === 'failed' && (!previous || this.savedWebInputs.has(requestId))) return
+    this.setWebInputDelivery({ requestId, status, content: input.content, timestamp: input.timestamp, media: input.media })
+  }
+
+  private setWebInputDelivery(entry: ChatInputDelivery): void {
+    this.webInputs.set(entry.requestId, entry)
+    if (entry.status === 'failed') {
+      const failures = this.webInputDelivery.filter(entry => entry.status === 'failed')
+      if (failures.length > 16) this.webInputs.delete(failures[0]!.requestId)
+    }
+    this.bus.emit('session.web-input.changed', { sessionId: this.id })
+  }
+
+  protected override onUserMessageWrite(message: ChatMessage, saved: boolean): void {
+    const requestId = webInputRequestId(message.content)
+    const entry = requestId && this.webInputs.get(requestId)
+    if (!entry) return
+    if (saved) this.savedWebInputs.add(entry.requestId)
+    else this.setWebInputDelivery({ ...entry, status: 'failed' })
+  }
+
+  protected override onInferenceDispatched(messages: readonly ChatMessage[]): void {
+    if (!this.webInputs.size) return
+    let changed = false
+    for (const message of messages) {
+      if (message.role !== 'user') continue
+      const requestId = webInputRequestId(message.content)
+      if (!requestId) continue
+      this.savedWebInputs.delete(requestId)
+      if (this.webInputs.delete(requestId)) changed = true
+    }
+    if (changed) this.bus.emit('session.web-input.changed', { sessionId: this.id })
+  }
+
+  private steerInput(turn: SessionTurn, input: SessionMessageInput): void {
+    turn.steerQueue.push(input)
+    this.trackWebInput(input, 'steer')
+  }
+
   /** Current turn phase: idle (no turn), llm (waiting on LLM), or tool (executing tools). */
   get phase(): 'idle' | 'llm' | 'tool' {
     if (!this.turn) return 'idle'
@@ -167,7 +219,7 @@ export class Session extends BaseSession {
     }
 
     if (msg.policy === 'next-step') {
-      this.turn.steerQueue.push(msg)
+      this.steerInput(this.turn, msg)
       return
     }
 
@@ -186,7 +238,7 @@ export class Session extends BaseSession {
       console.log(
         `[session-loop] Steering ${this.id} declared-urgent event into active turn`,
       )
-      this.turn.steerQueue.push(msg)
+      this.steerInput(this.turn, msg)
       return
     }
 
@@ -195,7 +247,7 @@ export class Session extends BaseSession {
       console.log(
         `[session-loop] Steering ${this.id} message into active turn during tool phase (elapsed ${elapsed}ms)`,
       )
-      this.turn.steerQueue.push(msg)
+      this.steerInput(this.turn, msg)
       return
     }
 
@@ -204,6 +256,7 @@ export class Session extends BaseSession {
     if (this.turn.classifyAbortController) {
       this.turn.classifyAbortController.abort()
     }
+    this.trackWebInput(msg, 'sending')
     const controller = new AbortController()
     this.turn.classifyAbortController = controller
     const capturedTurn = this.turn
@@ -248,7 +301,7 @@ export class Session extends BaseSession {
               session: this.id,
             },
           )
-          capturedTurn.steerQueue.push(msg)
+          this.steerInput(capturedTurn, msg)
         }
       })
       .catch((err) => {
@@ -258,7 +311,7 @@ export class Session extends BaseSession {
           errMsg(err),
         )
         if (this.turn === capturedTurn) {
-          capturedTurn.steerQueue.push(msg)
+          this.steerInput(capturedTurn, msg)
         } else {
           this.pushEvent({ type: 'message', msg, llm })
         }
@@ -379,6 +432,7 @@ export class Session extends BaseSession {
           const prepared = await this.prepareQueuedInput(event.msg)
           if (!prepared) { this.scheduleSleepCheck(event.llm); continue }
           event.msg = prepared
+          this.trackWebInput(event.msg, 'sending')
           this.turn = new SessionTurn(event.msg)
           this.activityChanged()
           await this.processInput(
@@ -388,9 +442,11 @@ export class Session extends BaseSession {
           ).finally(() => {
             const turn = this.turn
             turn?.finish()
+            this.trackWebInput(event.msg, 'failed')
             // Steering admitted while a provider/tool was aborting still needs
             // its own turn if it was never consumed by the active one.
             if (this.accepting && turn) {
+              for (const msg of turn.steerQueue) this.trackWebInput(msg, 'queue')
               this.inbox.unshift(...turn.steerQueue.map((msg): LoopEvent => ({
                 type: 'message', msg, llm: event.llm,
               })))
@@ -501,16 +557,15 @@ export class Session extends BaseSession {
       const queued = this.turn.steerQueue
       this.turn.steerQueue = []
       const steerQueue: SessionMessageInput[] = []
-      for (const input of queued) {
-        const prepared = await this.prepareQueuedInput(input)
-        if (prepared?.kind === 'message') steerQueue.push(prepared)
+      try {
+        for (const input of queued) {
+          const prepared = await this.prepareQueuedInput(input)
+          if (prepared?.kind === 'message') steerQueue.push(prepared)
+        }
+        await this.appendMessages(llm, ...await Promise.all(steerQueue.map(input => this.buildInputMessage(input, cwd))))
+      } finally {
+        for (const input of queued) this.trackWebInput(input, 'failed')
       }
-      await this.appendMessages(
-        llm,
-        ...await Promise.all(
-          steerQueue.map((m) => buildUserChatMessage(m, this.workspace, cwd)),
-        ),
-      )
       if (!this.messagePersistenceFailed) for (const input of steerQueue) this.inputPersisted?.(input)
       if (this.responseContext && steerQueue.some(input => input.source.kind === 'user')) {
         this.responseContext = { ...this.responseContext, userInvolved: true }
@@ -568,6 +623,7 @@ export class Session extends BaseSession {
 
   private pushEvent(event: LoopEvent): void {
     if (!this.accepting) return
+    if (event.type === 'message') this.trackWebInput(event.msg, this.inboxWaiter ? 'sending' : 'queue')
     if (this.inboxWaiter) {
       const waiter = this.inboxWaiter
       this.inboxWaiter = null
@@ -764,7 +820,9 @@ export class Session extends BaseSession {
    * (compacts if over threshold; session memory is retained).
    */
   private scheduleSleepCheck(llm: LlmRuntimeConfig): void {
-    if (!this.sleepInactivityMs || !this.accepting || this.turn || this.inbox.length) return
+    // Do not discard runtime dispatch state for saved inputs that a resumed
+    // turn can still include (for example after cancellation before dispatch).
+    if (!this.sleepInactivityMs || !this.accepting || this.turn || this.inbox.length || this.savedWebInputs.size) return
     if (this.sleepTimer) clearTimeout(this.sleepTimer)
 
     const lastActive = this.state.lastActivityAt

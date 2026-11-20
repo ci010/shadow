@@ -1,3 +1,5 @@
+import { physicalSessionId } from './session-identity.ts'
+import { webInputRequestId } from '../shared/chat-input-delivery.ts'
 import { withProviderRetry, type RateLimitWait } from '../providers/retry.ts'
 import { ProviderHttpError } from '../providers/provider.ts'
 import assert from 'node:assert/strict'
@@ -187,6 +189,98 @@ test('queued web messages neither interrupt nor steer the current turn and run F
     f.calls[2].resolve(done('Second queued result'))
     await waitFor(() => f.facts.length === 3)
     assert.deepEqual(f.facts.map(fact => fact.inputId), ['initial', 'queued-first', 'queued-second'])
+  } finally { await f.close() }
+})
+
+for (const storage of ['jsonl', 'sqlite'] as const) {
+  test(`${storage}: web delivery snapshot keeps a persisted steer pending until provider dispatch`, async () => {
+    const f = await fixture({ storage, state: { sessionId: 'web:owner' } })
+    const tool = Promise.withResolvers<string>()
+    const started = Promise.withResolvers<void>()
+    f.tools.register({ name: 'fixture_delivery', description: '', parameters: { type: 'object', properties: {} },
+      execute: async () => { started.resolve(); return tool.promise } })
+    const send = (requestId: string, queue: boolean) => f.session.dispatch(channelMessageInput({ channel: 'web', chatId: 'owner',
+      senderId: 'owner', messageId: requestId, platformMessageId: requestId, timestamp: new Date().toISOString(),
+      content: 'Identical text', ...(queue ? { delivery: 'queue' } : {}) }), llm)
+    const initial = crypto.randomUUID(), queued = crypto.randomUUID(), steer = crypto.randomUUID()
+    const dispatchGate = Promise.withResolvers<void>()
+    const blocked = Promise.withResolvers<void>()
+    const internals = f.session as unknown as { recordContextEvent(kind: string, text: string): Promise<void> }
+    const record = internals.recordContextEvent.bind(f.session)
+    internals.recordContextEvent = async (kind, text) => {
+      await record(kind, text)
+      if (kind === 'work' && f.session.history.some(message => webInputRequestId(message.content) === steer)) {
+        blocked.resolve()
+        await dispatchGate.promise
+      }
+    }
+    const app = new Hono()
+    sessionsApiPlugin({ assertHistoricalFolderAccess: async () => {}, getActiveSession: () => f.session } as unknown as SessionManager,
+      { authorizeContext: () => true })(app)
+    const view = () => Object.fromEntries(f.session.webInputDelivery.map(({ requestId, status }) => [requestId, status]))
+    try {
+      send(initial, true)
+      assert.deepEqual(view(), { [initial]: 'sending' }, 'the queue shortcut does not imply a wait on an idle mailbox')
+      await waitFor(() => f.calls.length === 1)
+      assert.deepEqual(view(), {})
+      f.calls[0].resolve({ content: '', toolCalls: [{ id: 'tool', name: 'fixture_delivery', arguments: {} }] })
+      await started.promise
+      send(queued, true)
+      send(steer, false)
+      assert.deepEqual(view(), { [queued]: 'queue', [steer]: 'steer' })
+      tool.resolve('done')
+      await blocked.promise
+      assert.equal(f.calls.length, 1, 'the next model request has not been dispatched')
+      const refreshed = await app.request('/api/sessions/web%3Aowner/input-delivery')
+      const snapshot = await refreshed.json() as { requestId: string; status: string }[]
+      assert.deepEqual(Object.fromEntries(snapshot.map(entry => [entry.requestId, entry.status])), { [queued]: 'queue', [steer]: 'steer' })
+      const rows = await Array.fromAsync(f.store.readSessionLog(physicalSessionId(f.state)))
+      assert(rows.some(row => webInputRequestId(row.content) === steer), 'the steer input is already persisted')
+      dispatchGate.resolve()
+      await waitFor(() => f.calls.length === 2)
+      assert.deepEqual(view(), { [queued]: 'queue' })
+      assert(f.calls[1].messages.some(message => webInputRequestId(message.content) === steer))
+      f.calls[1].resolve(done())
+      await waitFor(() => f.calls.length === 3)
+      assert.deepEqual(view(), {})
+      const persisted: string[] = []
+      for await (const row of f.store.readSessionLog(physicalSessionId(f.state))) {
+        const id = webInputRequestId(row.content)
+        if (id) persisted.push(id)
+      }
+      assert.deepEqual(persisted, [initial, steer, queued])
+      f.calls[2].resolve(done())
+      await waitFor(() => f.facts.length === 2)
+    } finally { dispatchGate.resolve(); tool.resolve('cleanup'); await f.close() }
+  })
+}
+
+test('web delivery read is authorized and exposes a history write failure before the assistant finishes', async () => {
+  const f = await fixture({ state: { sessionId: 'web:owner' } })
+  const requestId = crypto.randomUUID()
+  const append = f.store.appendMessages.bind(f.store)
+  f.store.appendMessages = async (id, messages) => {
+    if (messages.some(message => webInputRequestId(message.content) === requestId)) throw new Error('fixture history write failed')
+    await append(id, messages)
+  }
+  const app = new Hono()
+  sessionsApiPlugin({
+    assertHistoricalFolderAccess: async () => {},
+    getActiveSession: (id: string) => id === f.state.sessionId ? f.session : undefined,
+  } as unknown as SessionManager, { authorizeContext: request => request.headers.get('x-fixture-authorized') === 'yes' })(app)
+  const path = `/api/sessions/${encodeURIComponent(f.state.sessionId)}/input-delivery`
+  const read = () => app.request(path, { headers: { 'x-fixture-authorized': 'yes' } })
+  try {
+    assert.equal((await app.request(path)).status, 401)
+    f.session.dispatch(channelMessageInput({ channel: 'web', chatId: 'owner', senderId: 'owner', messageId: requestId,
+      platformMessageId: requestId, timestamp: new Date().toISOString(), content: 'Unwritten input' }), llm)
+    ;(f.session as unknown as { tools: SessionTools }).tools.assertSnapshot = () => { throw new Error('fixture dispatch blocked') }
+    await waitFor(() => f.session.webInputDelivery.some(entry => entry.status === 'failed'))
+    const response = await read()
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('Cache-Control'), 'no-store')
+    const [entry] = await response.json() as { requestId: string; status: string; content: string }[]
+    assert.deepEqual([entry.requestId, entry.status, entry.content], [requestId, 'failed', 'Unwritten input'])
   } finally { await f.close() }
 })
 

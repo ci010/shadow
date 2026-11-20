@@ -1,3 +1,6 @@
+import { KnowledgeService } from '../knowledge/service.ts'
+import { SkillsManager } from '../skills/loader.ts'
+import type { FolderRecord } from '../folders/contracts.ts'
 import { isRuntimeContextEvent } from '../sessions/runtime-context-contract.ts'
 import { botPackageTool } from '../bots/management.ts'
 import { FolderRegistry } from '../folders/registry.ts'
@@ -9,7 +12,7 @@ import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -98,14 +101,17 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
   const botIdentities = new Map([[bot.id, '900']])
   const botUser = (id: string) => { const user = botIdentities.get(id); assert(user, 'Unknown fixture Bot'); return user }
   const memory = new MemoryDomains(projectId, join(root, 'domains'))
-  const config = new IntegrationStore({ projectId, workspace: home, directory: join(root, 'config'), bots, agents, memory })
+  const folders = new Map<string, FolderRecord>()
+  const sources = new SourceResources({ get: id => folders.get(id), acquireAccess: () => () => {} })
+  const knowledge = new KnowledgeService(home, new SkillsManager(home))
+  const config = new IntegrationStore({ projectId, workspace: home, directory: join(root, 'config'), bots, agents, memory, sources })
   const tools = new Tools(home)
   let escaped = false
   for (const name of ['exec', 'write', 'invoke_tool']) tools.register({
     name, description: name, parameters: { type: 'object', properties: {} },
     execute: async () => { escaped = true; return 'PRIVATE_TOOL_CANARY' },
   })
-  const integration = new DiscordIntegration({ projectId, workspace: home, store: config, bots, memory, baseTools: tools })
+  const integration = new DiscordIntegration({ projectId, workspace: home, store: config, bots, memory, baseTools: tools, sources, knowledge })
   const requests: Array<{ messages: ChatMessage[]; tools: string[]; inference: import('../agent/llm-config.ts').InferenceSettings }> = []
   const responses: LLMResponse[] = []
   let respond: ((messages: ChatMessage[], tools: string[]) => LLMResponse) | undefined
@@ -220,7 +226,7 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
     await sessions.stop(); integration.stop(); await handoff.stop(); await tasks.stop(); await events.stop()
     bus.stopAll(); await agents.stopWatching(); storage.close?.(); await rm(root, { recursive: true, force: true })
   })
-  return { root, home, projectId, agents, bots, bot, memory, config, integration, sessions, storage, requests,
+  return { root, home, projectId, agents, bots, bot, memory, config, integration, sessions, storage, requests, folders,
     responses, outbound, inspections, profile, a, b, approve, id, input, send, deliver, app, address, learning, handoff, transport, tools,
     respondWith: (handler: typeof respond) => { respond = handler },
     addBot: (userId: string) => {
@@ -1387,9 +1393,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   const f = await fixture(t, Store)
   const deployments = new BotDeployments({ directory: join(f.root, 'parent-rule-deployments'), projectId: f.projectId, runGit: async () => { throw new Error('No git') } })
   const runtime = new DirectoryBots(deployments)
-  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }
+  await mkdir(join(f.home, 'memory', 'topics'), { recursive: true })
+  await writeFile(join(f.home, 'memory', 'topics', 'Shared.md'), 'DEPLOYED_WIKI_CANARY')
+  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResources: { wiki: true, folders: [randomUUID()] } }) }
   const source = { version: 1, projectId: f.projectId, connectionId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
-  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: [], readDomains: [], inheritThreads: true, manage: false }
+  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: ['read'], readResources: { wiki: true }, readDomains: [], inheritThreads: true, manage: false }
   let files = assignChannelSource(base, source, permission, 'parent').files
   const publish = async () => {
     const frozen = deployments.freeze(files)
@@ -1402,7 +1410,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   const location = (id: string, parentId: string, type = 11) => ({ id, parentId, type, name: `Post ${id}`, parentName: 'Forum parent', guildId: '100', guildName: 'Server', recipientId: null })
   f.inspections.set('406', { location: location('406', '405') }); f.inspections.set('407', { location: location('407', '405') })
   f.inspections.set('408', { location: location('408', '999') }); f.inspections.set('409', { location: location('409', '405', 12) })
+  f.responses.push({ content: '', toolCalls: [{ id: 'deployed-wiki', name: 'read', arguments: { path: 'v:memory/topics/Shared.md' } }] })
   await f.send('406', 'POST_A_PRIVATE_CONTEXT')
+  assert.match(JSON.stringify(f.requests), /DEPLOYED_WIKI_CANARY/, 'New grants are projected from the real directory package')
   f.requests.length = 0
   await f.send('407', 'POST_B_ONLY')
   assert.doesNotMatch(JSON.stringify(f.requests), /POST_A_PRIVATE_CONTEXT/)
@@ -1422,4 +1432,91 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   await f.send('407', 'POST_B_NEW_GENERATION')
   assert.notEqual(f.sessions.getSessionState(f.id('407'))?.channelBoundary?.epoch, oldEpoch)
   assert.doesNotMatch(JSON.stringify(f.requests), /POST_B_ONLY|POST_A_PRIVATE_CONTEXT/)
+})
+
+test('Discord verified service turn uses common read/search, keeps legacy records separate and cannot reach private Project paths', async t => {
+  const f = await fixture(t)
+  const posixSource = ['darwin', 'linux'].includes(process.platform)
+  const folderId = randomUUID(), folderPath = join(f.root, 'Public Docs')
+  if (posixSource) {
+    await mkdir(folderPath)
+    await writeFile(join(folderPath, 'guide.md'), 'APPROVED_FOLDER_CANARY')
+    await writeFile(join(f.root, 'outside.md'), 'OUTSIDE_FOLDER_CANARY')
+    await symlink(join(f.root, 'outside.md'), join(folderPath, 'escape.md'))
+    await mkdir(join(folderPath, '.git'))
+    await mkdir(join(folderPath, 'Sub Docs'))
+    await writeFile(join(folderPath, 'Sub Docs', 'nested.md'), 'APPROVED_NESTED')
+    for (const name of ['.env', '.env.local', '.envrc', 'bot.config.json']) await writeFile(join(folderPath, name), 'PRIVATE_FOLDER_CANARY')
+    await writeFile(join(folderPath, 'bad-utf8.md'), Buffer.from([255]))
+    await writeFile(join(folderPath, 'injected\nname.md'), 'PRIVATE_FOLDER_CANARY')
+    f.folders.set(folderId, { id: folderId, projectId: f.projectId, name: 'Documentation', path: folderPath, createdAt: new Date().toISOString() })
+  }
+  for (const category of ['topics', 'sessions', 'events', 'working-sets']) await mkdir(join(f.home, 'memory', category), { recursive: true })
+  await writeFile(join(f.home, 'memory', 'topics', 'Welcome.md'), '# Shared catalog title\nAPPROVED_WIKI_CANARY\n[Private edge](../sessions/another.md)')
+  await writeFile(join(f.home, 'memory', 'sessions', 'another.md'), '# PRIVATE_SESSION_CANARY')
+  await writeFile(join(f.home, 'memory', 'events', '2026-01-01.jsonl'), '{"what":"PRIVATE_RAW_LOG_CANARY"}\n')
+  await writeFile(join(f.home, 'memory', 'working-sets', 'index.md'), '# PRIVATE_INDEX_CANARY')
+  const domain = f.memory.createDomain('Reviewed legacy domain', 'shared')
+  const record = f.memory.publish({ domainId: domain.id, title: 'Reviewed legacy note', content: 'LEGACY_RECORD_CANARY', actor: 'owner', requestId: randomUUID(), sources: [] })
+  const readResources = { folders: posixSource ? [folderId] : [], knowledge: true, wiki: true }
+  await f.approve({ kind: 'agent.save', agent: { ...f.profile, readResources, readDomains: [domain.id] } })
+  await f.approve({ kind: 'bindings.save', bindings: [{ ...f.a, readResources, readDomains: [domain.id] }, f.b] })
+  const calls: Array<readonly [string, string, Record<string, unknown>]> = [
+    ['folders', 'read', { path: '.' }],
+    ['catalog', 'read', { path: 'v:knowledge/catalog' }],
+    ['links', 'read', { path: 'v:knowledge/relations/memory%2Ftopics%2FWelcome.md' }],
+    ['wiki-list', 'read', { path: 'v:memory/' }],
+    ['wiki-search', 'search', { handler: 'grep', path: 'v:memory/', query: 'APPROVED_WIKI' }],
+    ['wiki-glob', 'search', { handler: 'glob', path: 'v:memory/', query: '**/*.md' }],
+    ['legacy-list', 'search', { query: '' }],
+    ['legacy-search', 'search', { query: 'LEGACY_RECORD' }],
+    ['legacy-read', 'read', { path: `v:memory/${domain.id}/${record.id}` }],
+    ['blocked-log', 'read', { path: 'v:knowledge/logs/date/2026-01-01' }],
+    ['blocked-log-search', 'search', { handler: 'grep', path: 'v:knowledge/logs', query: 'CANARY' }],
+    ['blocked-private', 'read', { path: 'v:knowledge/entry/memory%2Fsessions%2Fanother.md' }],
+    ['blocked-escaped', 'search', { handler: 'grep', path: 'v:memory/%73essions/', query: 'CANARY' }],
+    ['blocked-old-source', 'read', { path: `v:source/${folderId}/guide.md` }],
+    ...(posixSource ? [
+      ['folder-list', 'read', { path: 'Public Docs' }],
+      ['folder-glob', 'search', { handler: 'glob', path: 'Public Docs', query: '**' }],
+      ['folder-read', 'read', { path: 'Public Docs/guide.md' }],
+      ['folder-search', 'search', { handler: 'grep', path: 'Public Docs', query: 'APPROVED_FOLDER' }],
+      ['blocked-link', 'read', { path: 'Public Docs/escape.md' }],
+    ] as const : []),
+  ]
+  f.responses.push({ content: '', toolCalls: calls.map(([id, name, args]) => ({ id, name, arguments: args })) })
+  await f.send()
+  const messages = f.requests.flatMap(item => item.messages).filter(message => message.role === 'tool')
+  const result = (id: string) => String(messages.find(message => message.tool_call_id === id)?.content)
+  for (const [id] of calls) assert.notEqual(result(id), 'undefined', id)
+  assert.match(result('catalog'), /Shared catalog title/)
+  assert.doesNotMatch(result('links'), /another|Private edge|outside-catalog/)
+  assert.match(result('wiki-list'), /v:memory\/topics\/Welcome.md/)
+  assert.doesNotMatch(result('wiki-list'), /Reviewed legacy note/)
+  assert.match(result('wiki-search'), /APPROVED_WIKI_CANARY/)
+  assert.match(result('wiki-glob'), /v:memory\/topics\/Welcome.md/)
+  assert.match(result('legacy-list'), /Reviewed legacy note/)
+  assert.match(result('legacy-search'), /LEGACY_RECORD_CANARY/)
+  assert.match(result('legacy-read'), /LEGACY_RECORD_CANARY/)
+  if (posixSource) {
+    assert.match(result('folders'), /Public Docs/)
+    assert.deepEqual(JSON.parse(result('folder-list')), { path: 'Public Docs', offset: 1, totalEntries: 2, entries: [
+      { name: 'Sub Docs', kind: 'directory' }, { name: 'guide.md', kind: 'file' },
+    ] })
+    assert.deepEqual(JSON.parse(result('folder-glob')).matches.map((item: { path: string }) => item.path).sort(), ['Public Docs/Sub Docs/nested.md', 'Public Docs/guide.md'])
+    assert.match(result('folder-read'), /APPROVED_FOLDER_CANARY/)
+    assert.match(result('folder-search'), /Public Docs\/guide.md/)
+    assert(!result('folder-search').includes(folderId))
+  }
+  assert.doesNotMatch(JSON.stringify(messages), /PRIVATE_(SESSION|RAW_LOG|INDEX)_CANARY|OUTSIDE_FOLDER_CANARY/)
+  f.requests.length = 0
+  f.responses.push({ content: '', toolCalls: [
+    { id: 'ungranted-wiki', name: 'read', arguments: { path: 'v:memory/topics/Welcome.md' } },
+    { id: 'ungranted-knowledge', name: 'search', arguments: { handler: 'grep', path: 'v:knowledge/', query: 'Shared catalog title' } },
+    { id: 'ungranted-folder', name: 'read', arguments: { path: 'Public Docs/guide.md' } },
+  ] })
+  await f.send('202')
+  const denied = f.requests.flatMap(item => item.messages).filter(message => message.role === 'tool')
+  for (const id of ['ungranted-wiki', 'ungranted-knowledge', 'ungranted-folder']) assert(denied.some(message => message.tool_call_id === id))
+  assert.doesNotMatch(JSON.stringify(denied), /APPROVED_|Shared catalog title/)
 })

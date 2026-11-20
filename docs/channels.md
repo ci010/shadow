@@ -151,8 +151,10 @@ the current session; it does not run tools or approve side effects. For a servic
 Bot, select and review the required Skills in its published configuration. Skill
 selection is not blanket authorization: Agent tool/module ceilings, readable
 resources and applicable capability grants must also allow the operation. Prefer
-scoped read-only capabilities for FAQ/status roles. Raw native filesystem/network
-modules have host authority and are not sandboxed by `readFolders` or grants.
+scoped read-only capabilities for FAQ/status roles. See [built-in Service BOT read/search](bots.md#built-in-readsearch-for-service-bots)
+for explicit Project view and registered-folder grants. Raw native
+filesystem/network modules have host authority and are not sandboxed by
+`readResources`, legacy `readFolders`, or grants.
 
 ### Owner setup API
 

@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { AgentVersionDefaultsSchema, ConfigSchema, type Config } from '../config/schema.ts'
+import { ConfigSchema, type Config } from '../config/schema.ts'
 import { ConfigStore, redactConfig, writePrivateFile } from '../config/store.ts'
 import { parseModelSpec } from '../providers/aggregated.ts'
 import { detectProvider } from '../providers/factory.ts'
@@ -57,9 +57,8 @@ export class AppProviderConfigStore extends ConfigStore {
     }, signal)
   }
 
-  updateAgentVersionDefaults(defaults: Config['agentVersionDefaults'], signal?: AbortSignal): Promise<Config> {
-    const parsed = AgentVersionDefaultsSchema.parse(defaults)
-    return super.update(raw => ({ ...raw, agentVersionDefaults: { ...(record(raw.agentVersionDefaults) ? raw.agentVersionDefaults : {}), ...parsed } }), signal)
+  updateBuiltinPromptVersion(version: NonNullable<Config['builtinPromptVersion']>, signal?: AbortSignal): Promise<Config> {
+    return super.update(raw => ({ ...raw, builtinPromptVersion: version }), signal)
   }
 
   async modelDefaults() {
@@ -130,7 +129,7 @@ export class ProjectConfigStore extends ConfigStore {
     const tools = ConfigSchema.shape.tools.parse({
       ...withoutWebSearchConfig(config.tools), ...sharedWebSearchConfig(shared.tools),
     })
-    return { ...config, channels, agent, agentVersionDefaults: shared.agentVersionDefaults, providers: shared.providers, tools, network: shared.network }
+    return { ...config, channels, agent, agentVersionDefaults: shared.agentVersionDefaults, builtinPromptVersion: shared.builtinPromptVersion, providers: shared.providers, tools, network: shared.network }
   }
 
   async init(legacy?: Config, serializedLegacy?: Raw): Promise<Config> {
@@ -141,7 +140,7 @@ export class ProjectConfigStore extends ConfigStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       const initial = legacy ?? ConfigSchema.parse({ channels: {}, mcp: {} })
-      const { providers: _providers, network: _network, agentVersionDefaults: _versions, ...raw } = serializedLegacy ?? rawConfig(initial)
+      const { providers: _providers, network: _network, agentVersionDefaults: _versions, builtinPromptVersion: _prompt, ...raw } = serializedLegacy ?? rawConfig(initial)
       if (legacy && !serializedLegacy) raw.channels = {}
       raw.mcp = rawConfig(initial).mcp
       if (record(raw.tools)) raw.tools = withoutWebSearchConfig(raw.tools)
@@ -202,6 +201,9 @@ export class ProjectConfigStore extends ConfigStore {
         !isDeepStrictEqual(next.providers, redactConfig(previous.providers))) {
         throw new TypeError('Shared providers must be changed through App provider settings')
       }
+      if ('builtinPromptVersion' in next && next.builtinPromptVersion !== previous.builtinPromptVersion) {
+        throw new TypeError('Shared built-in prompt version must be changed through App settings')
+      }
       if ('agentVersionDefaults' in next && !isDeepStrictEqual(next.agentVersionDefaults, previous.agentVersionDefaults)) {
         throw new TypeError('Shared Agent versions must be changed through App settings')
       }
@@ -211,7 +213,7 @@ export class ProjectConfigStore extends ConfigStore {
       if (record(next.agent) && next.agent.workspace !== undefined && next.agent.workspace !== this.scope.home) {
         throw new TypeError('Project Home cannot be changed through configuration')
       }
-      const { providers: _providers, network: _network, agentVersionDefaults: _versions, ...owned } = next
+      const { providers: _providers, network: _network, agentVersionDefaults: _versions, builtinPromptVersion: _prompt, ...owned } = next
       if (record(owned.tools)) {
         const previousTools = record(previous.tools) ? previous.tools : {}
         const redactedTools = redactConfig(previousTools) as Raw

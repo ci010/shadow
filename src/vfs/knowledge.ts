@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { KnowledgeService } from '../knowledge/service.ts'
+import { isSharedWikiId, type KnowledgeService } from '../knowledge/service.ts'
 import { visibleKnowledgeCatalog } from '../knowledge/visibility.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
@@ -34,8 +34,20 @@ export function navigationPage(path: string) {
   return { route, offset, limit }
 }
 
-export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog' | 'detail'>, projectId: string,
-  assertActor: (context: ExecutionContext) => void) {
+type AssertKnowledgeActor = (context: ExecutionContext) => void
+
+export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog' | 'detail'>, projectId: string, assertActor: AssertKnowledgeActor) {
+  return createKnowledgeNavigation(service, projectId, assertActor, false)
+}
+
+/** Internal projection; does not mount a VFS or accept an unrestricted catalog. */
+export function createSharedKnowledgeHandler(service: Pick<KnowledgeService, 'sharedCatalog'>, projectId: string, assertActor: AssertKnowledgeActor, wiki: boolean) {
+  return createKnowledgeNavigation({ catalog: () => service.sharedCatalog() }, projectId, assertActor, true, wiki)
+}
+
+function createKnowledgeNavigation(service: Pick<KnowledgeService, 'catalog'> & Partial<Pick<KnowledgeService, 'detail'>>, projectId: string,
+  assertActor: AssertKnowledgeActor, shared: boolean, wiki = true) {
+  const guide = shared ? 'Project Knowledge metadata navigation (not document text): v:knowledge/catalog, entry/<encoded canonical ID>, relations/<encoded canonical ID>. Only relations between visible documents are included.' : overview
   const guard = (context: ExecutionContext) => {
     context.signal.throwIfAborted()
     if (context.projectId !== projectId) throw new Error('Knowledge belongs to a different Project.')
@@ -45,10 +57,11 @@ export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog'
     const value = visibleKnowledgeCatalog(service.catalog())
     return { ...value, entries: value.entries.filter(entry => entry.kind !== 'skill') }
   }
-  const metadata = (entry: ReturnType<typeof catalog>['entries'][number]) => ({ ...entry,
-    canonical: `v:${entry.path}`, read: `v:knowledge/entry/${encodeURIComponent(entry.id)}`,
+  const metadata = (entry: ReturnType<typeof catalog>['entries'][number]) => ({ ...entry, ...(shared ? { deletable: false } : {}),
+    ...(wiki ? { canonical: `v:${entry.path}` } : { bodyAccess: 'Wiki grant required' }), read: `v:knowledge/entry/${encodeURIComponent(entry.id)}`,
     relations: `v:knowledge/relations/${encodeURIComponent(entry.id)}` })
   const logs = (context: ExecutionContext) => {
+    if (!service.detail) throw new Error('Logs are unavailable in this Knowledge view.')
     const output: Array<{ name: string; value: Record<string, unknown> }> = []
     for (const entry of catalog().entries) {
       const date = /^memory\/events\/(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(entry.id)?.[1]
@@ -72,12 +85,20 @@ export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog'
     }
     return output
   }
+  const checkShared = (route: string, listing: boolean) => {
+    if (!shared || !route || route === 'overview' || route === 'catalog' || listing && (route === 'entry' || route === 'relations')) return
+    const match = /^(entry|relations)\/(.+)$/.exec(route)
+    const encoded = match?.[2]
+    const id = encoded && decodeURIComponent(encoded)
+    if (!id || !isSharedWikiId(id) || encodeURIComponent(id) !== encoded) throw new Error('Unknown shared knowledge navigation path.')
+  }
   const read: VirtualFsHandler = (path, context) => {
     guard(context)
     const { route, offset, limit } = navigationPage(path)
-    if (!route || route === 'overview') return overview
+    checkShared(route, false)
+    if (!route || route === 'overview') return guide
     const page = (items: unknown[]) => JSON.stringify({ offset, limit, total: items.length, items: items.slice(offset, offset + limit),
-      next: offset + limit < items.length ? `v:knowledge/${route}?offset=${offset + limit}&limit=${limit}` : null }, null, 2)
+      next: offset + limit < items.length ? `v:knowledge/${route}?offset=${offset + limit}&limit=${limit}` : null }, null, shared ? undefined : 2)
     if (route === 'catalog') return page(catalog().entries.map(metadata))
     if (route.startsWith('entry/') || route.startsWith('catalog/') || route.startsWith('relations/')) {
       const id = decodeURIComponent(route.slice(route.indexOf('/') + 1))
@@ -90,6 +111,7 @@ export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog'
         direction: link.source === id ? 'reference' : 'backlink',
         targetStatus: ids.has(link.target) ? 'in-catalog' : 'outside-catalog', sourceStatus: ids.has(link.source) ? 'in-catalog' : 'outside-catalog' })))
     }
+    if (shared) throw new Error('Unknown shared knowledge navigation path.')
     if (route === 'logs') return page([...new Set(logs(context).map(item => item.value.date))].sort().map(date => `v:knowledge/logs/date/${date}`))
     if (route.startsWith('logs/')) {
       const items = logs(context)
@@ -106,14 +128,19 @@ export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog'
   const list: VirtualFsListHandler = (context, options) => {
     guard(context)
     const scope = options?.subpath ?? ''
-    navigationPage(scope)
-    if (scope.includes('?')) return [{ name: scope, content: options?.content === false ? '' : String(read(scope, context)) }]
-    if (scope.startsWith('logs/date/') || scope.startsWith('logs/session/')) {
+    const page = scope.includes('?')
+    checkShared(navigationPage(scope).route, !page)
+    if (page) {
+      const content = options?.content !== false || shared ? String(read(scope, context)) : ''
+      return [{ name: scope, content: options?.content === false ? '' : content }]
+    }
+    if (!shared && (scope.startsWith('logs/date/') || scope.startsWith('logs/session/'))) {
       const session = scope.startsWith('logs/session/') ? decodeURIComponent(scope.slice(13)) : undefined
       const records = logs(context).filter(item => session !== undefined ? item.value.origin === session : item.value.date === scope.slice(10))
       return [{ name: scope, content: options?.content === false ? '' : records.map(item => JSON.stringify(item.value)).join('\n') }]
     }
-    const output = [{ name: 'overview', content: overview }, { name: 'catalog', content: 'Paged knowledge catalog' }, { name: 'logs', content: 'Semantic log dates' }]
+    const output = [{ name: 'overview', content: guide }, { name: 'catalog', content: 'Paged knowledge catalog' }]
+    if (!shared) output.push({ name: 'logs', content: 'Semantic log dates' })
     const value = catalog()
     const relations = new Map<string, typeof value.links>()
     for (const link of value.links) for (const id of new Set([link.source, link.target])) {
@@ -124,17 +151,17 @@ export function createKnowledgeHandler(service: Pick<KnowledgeService, 'catalog'
       const id = encodeURIComponent(entry.id)
       // Individual readable aliases keep catalog searches scoped without aggregating
       // the entire catalog into a single unbounded search document.
-      output.push({ name: `catalog/${id}`, content: JSON.stringify(metadata(entry)) })
+      if (!shared) output.push({ name: `catalog/${id}`, content: JSON.stringify(metadata(entry)) })
       output.push({ name: `entry/${id}`, content: JSON.stringify(metadata(entry)) })
       output.push({ name: `relations/${id}`, content: (relations.get(entry.id) ?? []).map(link => JSON.stringify(link)).join('\n') })
     }
-    if (!scope || scope.startsWith('logs')) {
+    if (!shared && (!scope || scope.startsWith('logs'))) {
       const records = logs(context)
       for (const name of new Set(records.map(item => `logs/date/${item.value.date}`))) output.push({ name, content: 'Read this date for paged logs.' })
       for (const name of new Set(records.filter(item => typeof item.value.origin === 'string').map(item => `logs/session/${encodeURIComponent(String(item.value.origin))}`))) output.push({ name, content: 'Read this session for paged logs.' })
       output.push(...records.map(item => ({ name: item.name, content: JSON.stringify(item.value) })))
     }
-    return output.filter(item => !scope || item.name === scope || item.name.startsWith(`${scope}/`))
+    return output.filter(item => !scope || item.name === scope || item.name.startsWith(`${scope}/`) || shared && scope === 'catalog' && item.name.startsWith('entry/'))
       .map(item => ({ ...item, content: options?.content === false ? '' : item.content }))
   }
   return { read, list }
