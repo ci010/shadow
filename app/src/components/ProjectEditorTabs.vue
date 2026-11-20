@@ -27,7 +27,11 @@ function middleClose(event: MouseEvent, id: string, closable: boolean) {
 </script>
 
 <style scoped>
-.project-editor-tabs { display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.project-editor-tabs { display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+/* Match the local editor tabs; scrollbar-width: thin overrides this in Chromium. */
+.project-editor-tabs::-webkit-scrollbar { height: 3px; }
+.project-editor-tabs::-webkit-scrollbar-thumb { background: var(--c-scrollbar-thumb); border-radius: 0; }
+.project-editor-tabs::-webkit-scrollbar-thumb:hover { background: var(--c-scrollbar-thumb-hover); }
 .project-editor-tab-group, .project-editor-tab { display: flex; flex: none; align-items: stretch; }
 .project-editor-tab { height: 36px; box-sizing: border-box; border-top: 2px solid transparent; border-inline-end: 1px solid var(--c-border); }
 .project-editor-tab button { display: flex; align-items: center; gap: 5px; padding: 0 6px; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
