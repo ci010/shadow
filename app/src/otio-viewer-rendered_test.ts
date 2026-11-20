@@ -309,15 +309,6 @@ app.whenReady().then(async()=>{
   });
   await run(()=>document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
   await wait('Escape closes storage explanation',()=>document.activeElement.getAttribute('aria-expanded')==='false');
-  await run(()=>{
-    const read=Storage.prototype.getItem;
-    Storage.prototype.getItem=function(key){if(key.startsWith('shadow:otio-description:'))throw new DOMException('Denied','SecurityError');return read.call(this,key)};
-    window.fixture.restoreRead=()=>{Storage.prototype.getItem=read;window.dispatchEvent(new StorageEvent('storage'))};
-    window.dispatchEvent(new StorageEvent('storage'));
-  });
-  assert.ok(await run(()=>document.querySelector('.description-warning[role=status]').textContent.includes('unavailable') && document.querySelector('.description-filter input').disabled));
-  await run(()=>window.fixture.restoreRead());
-  await wait('storage controls restored',()=>!document.querySelector('.description-warning') && !document.querySelector('.description-filter input').disabled);
   const [board,boardTracks,boardInspector]=await layout('.storyboard-pane','.tracks-pane','.inspector');
   assert.ok(board.left<=monitor.left && board.right<=boardInspector.left+1 && board.bottom<=boardTracks.top+1);
   await wait('decoded storyboard still and video pixels',()=>{
@@ -347,6 +338,15 @@ app.whenReady().then(async()=>{
     root.classList.toggle('dark',dark);return colors;
   }),[['rgb(36, 36, 36)','rgb(255, 255, 255)'],['rgb(231, 231, 231)','rgb(32, 32, 32)']]);
   if(${JSON.stringify(storyboardScreenshot || '')}) writeFileSync(${JSON.stringify(storyboardScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
+  await run(()=>{
+    const read=Storage.prototype.getItem;
+    Storage.prototype.getItem=function(key){if(key.startsWith('shadow:otio-description:'))throw new DOMException('Denied','SecurityError');return read.call(this,key)};
+    window.fixture.restoreRead=()=>{Storage.prototype.getItem=read;window.dispatchEvent(new StorageEvent('storage'))};
+    window.dispatchEvent(new StorageEvent('storage'));
+  });
+  assert.ok(await run(()=>document.querySelector('.description-warning[role=status]').textContent.includes('unavailable') && document.querySelector('.description-filter input').disabled));
+  await run(()=>window.fixture.restoreRead());
+  await wait('storage controls restored',()=>!document.querySelector('.description-warning') && !document.querySelector('.description-filter input').disabled);
   const setSampling=interval=>run(interval=>{
     const select=document.querySelectorAll('.storyboard select')[1];select.selectedIndex=interval?1:0;select.dispatchEvent(new Event('change'));
   },interval);
