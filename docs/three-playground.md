@@ -2,6 +2,8 @@
 
 Open a `.gltf` or `.glb` in Shadow's Files pane to inspect the asset. It is not a modeling project: the viewer does not run JS, infer a source file, or decompile the asset. For a `.gltf` with sidecars, keep its relative `.bin`, `.png` and `.jpg` files under the model directory. Attachments and archive entries must be self-contained. Unsupported encodings or extensions produce a diagnostic rather than a network request. See the [viewer import profile](../packages/three-viewer/README.md).
 
+For a first model without a Shadow source checkout, ask the agent to make an editable desk lamp. The built-in `v:skills/three-playground` guide includes a complete two-file starter and explains when to inspect an imported asset instead.
+
 ## Try the cube and stand
 
 1. Open a conversation with access to the project folder. In Files, open [`examples/three-playground/cube-stand/playground.three.json`](../examples/three-playground/cube-stand/playground.three.json). Opening `main.mjs` as text does **not** execute it.
