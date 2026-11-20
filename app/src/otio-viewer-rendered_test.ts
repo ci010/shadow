@@ -411,7 +411,7 @@ app.whenReady().then(async()=>{
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
   win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
   await wait('Enter opens monitor at exact selected shot',atUpperShot);
-  await run(()=>document.querySelectorAll('.outline .row')[2].click());
+  await run(()=>document.querySelectorAll('.otio-structure .row')[2].click());
   await click('Storyboard','.viewer-modes');
   await run(()=>{const source=document.querySelector('.storyboard select');source.selectedIndex=1;source.dispatchEvent(new Event('change'))});
   assert.equal(await run(()=>document.querySelectorAll('.storyboard .card').length),3);
@@ -453,7 +453,7 @@ app.whenReady().then(async()=>{
   const baseDocument={path:${JSON.stringify(documentPath)},owner:{session:'fixture',space:'workdir'},modified:${JSON.stringify(modified)},sha256:${JSON.stringify(createHash('sha256').update(timeline).digest('hex'))}};
   const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[4,'Transition.1','/tracks/children/0/children/1'],[9,'Gap.1','/tracks/children/1/children/0']];
   for(const [index,[row,schema,pointer]] of elements.entries()){
-    await run(row=>document.querySelectorAll('.outline .row')[row].click(),row);
+    await run(row=>document.querySelectorAll('.otio-structure .row')[row].click(),row);
     assert.equal(await run(()=>document.querySelector('.inspector .schema')?.textContent),schema);
     await click('Reference selection');
     const staged=await state();
@@ -487,7 +487,7 @@ app.whenReady().then(async()=>{
       const [inspector,selectionTracks]=await layout('.inspector','.tracks-pane');
       assert.ok(inspector.bottom<=selectionTracks.top+1);
       await click('Outline','.compact-tabs');
-      assert.ok(await run(()=>document.querySelector('.outline').getClientRects().length&&!document.querySelector('.monitor-pane').getClientRects().length));
+      assert.ok(await run(()=>document.querySelector('.otio-structure').getClientRects().length&&!document.querySelector('.monitor-pane').getClientRects().length));
       await click('Picture monitor','.compact-tabs');
       await click('Clip source','.modes');
       await click('Selection','.compact-tabs');
