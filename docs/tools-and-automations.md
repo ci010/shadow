@@ -1584,3 +1584,23 @@ Current Work defaults to the unique unfinished assignee record, not management o
 
 Workspace parent hierarchy, archive lookup, and the explicit boundary between lifecycle
 assessment and physical cleanup are documented in [Workspace lineage](workspace-lineage.md).
+
+## Reflection diary
+
+**Reflection diary** is a built-in Workflow automation, scheduled daily at 04:00
+in the scheduler's time zone. Enable it in Workflows when you want newly
+admitted direct user messages sent to the configured model for reflection. It is
+off by default. It does not consult the user's read receipts. Messages newly
+admitted to an existing conversation are eligible; forwarded and internal inputs,
+assistant replies, and historical records without direct-admission provenance are not.
+
+Each run handles up to eight batches of up to twelve messages, one batch per
+conversation segment, starting with segments that have waited longest. Each batch
+starts with timestamped previews. Its dedicated continuation can read only truncated text
+from those batch references, not arbitrary conversation history. The host appends
+an entry to the Project's `memory/reflection-diary.json` only after a successful
+run with an explicit submission. An empty submission records that the batch had
+no durable observations. Evidence and tentative inference are separate; the run
+does not update the user's profile, Wiki pages, or existing diary entries. A failed
+run leaves the same batch pending, and a retry after a diary commit acknowledges
+that entry without appending it again.

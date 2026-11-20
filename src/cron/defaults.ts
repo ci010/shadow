@@ -31,3 +31,11 @@ export const WORK_DISPATCH_AUTOMATION: CronJobDef = {
   schedule: 'every 60s', enabled: false,
   program: { kind: 'work-dispatch', maxConcurrent: 4, maxConcurrentPerDevice: 2, inferenceRequests: 100, toolCalls: 200, argumentBytes: 1000000 },
 }
+
+export const REFLECTION_DIARY_DEFAULT_KEY = 'reflection-diary-v1'
+export const REFLECTION_DIARY_ID = `default:${REFLECTION_DIARY_DEFAULT_KEY}`
+export const REFLECTION_DIARY_AUTOMATION: CronJobDef = {
+  name: 'Reflection diary', source: 'cron', session: 'fresh', agentType: 'general',
+  schedule: '0 4 * * *', enabled: false,
+  task: 'Reflect on newly admitted direct user messages. Append sourced observations to the Project reflection diary only.',
+}

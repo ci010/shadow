@@ -150,6 +150,9 @@ export abstract class BaseSession {
 
   protected async buildInputMessage(input: SessionMessageInput, cwd: string): Promise<ChatMessage> {
     const message = await buildUserChatMessage(input, this.workspace, cwd)
+    if (input.source.kind === 'user' && input.content.trim()) {
+      this.directInputs.set(message, { sessionId: this.id, id: input.id, text: input.content, at: input.timestamp })
+    }
     const requestId = input.source.kind === 'user' && input.source.sender.channel === 'web' ? input.replyTo?.platformMessageId : undefined
     const sender = Array.isArray(message.content) ? message.content[0] : undefined
     if (sender?.type === 'text' && requestId && /^[a-f0-9-]{36}$/.test(requestId)) {
@@ -158,6 +161,7 @@ export abstract class BaseSession {
     return message
   }
 
+  private directInputs = new WeakMap<ChatMessage, NonNullable<StoredMessage['direct_input']>>()
   private recordedChannelMessages = new WeakMap<ChatMessage, string>()
 
   private async persistMessages(
@@ -176,7 +180,8 @@ export abstract class BaseSession {
     this.messages.push(...stampedMessages)
     let savedCount = 0
     try {
-      const stored: StoredMessage[] = stampedMessages.map((e) => ({
+      const stored: StoredMessage[] = stampedMessages.map((e, index) => ({
+        direct_input: this.directInputs.get(messages[index]!),
         role: e.role,
         content: e.content,
         reasoning_content: e.role === 'assistant'
@@ -203,7 +208,7 @@ export abstract class BaseSession {
       }
       if (recorded.some(Boolean)) {
         for (let index = 0; index < stored.length; index++) {
-          if (recorded[index]) await this.store.appendRawEvents(this.physicalSessionId, [{ channel_input_admitted: { id: recorded[index], message: stampedMessages[index] } }])
+          if (recorded[index]) await this.store.appendRawEvents(this.physicalSessionId, [{ channel_input_admitted: { id: recorded[index], message: stampedMessages[index], direct_input: stored[index]!.direct_input } }])
           else await this.store.appendMessages(this.physicalSessionId, [stored[index]!])
           publishSaved(index)
         }
