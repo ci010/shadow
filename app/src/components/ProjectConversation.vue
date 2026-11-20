@@ -3,7 +3,7 @@
     <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       @project-navigation="(tab, documentKey) => $emit('project-navigation', tab, documentKey)"
-      :inspection="inspection" :keyboard-active="keyboardActive" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
+      :inspection="inspection" :keyboard-active="keyboardActive" :session-id="sessionId" :initial-folder="initialFolder" :take-otio-reference="takeOtioReference" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
       @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)">
       <template #notice>
         <div v-if="error" class="project-model-error" role="alert">
@@ -33,7 +33,7 @@ import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 const livePool = useLiveClientPool()
 const props = defineProps<{
   resourceKey?: string; apiBase: string; projectId: string; projectName: string; sessionId: string
-  initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
+  initialFolder?: FolderRecord; takeOtioReference?: () => import('../otio-draft.ts').OtioDraftReference | undefined; openRemote?: boolean; visible: boolean; childSessionId?: string
   knowledgeRequest?: KnowledgeTabRequest
   automationRun?: boolean; inspection?: boolean; keyboardActive?: boolean
 }>()

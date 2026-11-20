@@ -39,7 +39,7 @@
         </div>
         <OtioFilePreview v-else-if="isOtio && !sourceView" :key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, remote, path, entry.archive, entry.mtime, attachmentUrl])" :api-base="apiBase" :session-id="sessionId"
           :folder-id="folderId" :session-workspace="sessionWorkspace" :path="path" :mtime="entry.mtime" :active="active"
-          :remote="remote" :source-blob="archiveBlob" :attachment-url="attachmentUrl" :can-review="!entry.archive && (canQuote || !!attachmentUrl)"
+          :remote="remote" :source-blob="archiveBlob" :attachment-url="attachmentUrl" :can-review="!entry.archive && !remote && (inline || canQuote || !!attachmentUrl)"
           @added="!inline && emit('close')" />
         <FileViewerPreview v-else-if="viewerFormat && (!attachmentUrl || loaded)" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace"
           :path="path" :name="entry.name" :active="active" :source-blob="archiveBlob" />

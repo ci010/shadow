@@ -81,7 +81,7 @@
           :visible="visible && !appTab && selectedProjectId === resource.projectId && !dashboardProject"
           :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
           :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
-          :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
+          :session-id="resource.sessionId" :initial-folder="resource.folder" :take-otio-reference="resource.takeOtioReference" :open-remote="resource.openRemote"
           :automation-run="!!automation && selected?.key === resource.key"
           :knowledge-request="resource.knowledgeRequest"
           @project-navigation="(tab, documentKey) => projectNavigation(resource, tab, documentKey)"
@@ -139,11 +139,14 @@ import HoverInfo from './HoverInfo.vue'
 import SessionQuickOpen from './SessionQuickOpen.vue'
 import { isSessionQuickOpenShortcut } from '../session-quick-open.ts'
 import AutomationDetail from './AutomationDetail.vue'
-import { projectBase } from '../api-url.ts'
+import { apiUrl, projectBase } from '../api-url.ts'
+import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
+import { parseSessionDetails } from '../session-details.ts'
+import { createSessionSummaryLoader } from '../session-summary-snapshot.ts'
+import { OtioStartDraftKey, prepareOtioReference, type OtioFileScope } from '../otio-draft.ts'
 import { createProjectsClient, projectChatLocation, type ProjectRecord } from '../projects.ts'
 import { createConversationResources, type ConversationResource } from '../project-workspaces.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { type FolderRecord } from '../folders-client.ts'
 import { createNewConversationShortcut, hasVisibleNewConversationOverlay } from '../new-conversation-shortcut.ts'
 import { projectNavigationShortcut } from '../project-navigation-shortcut.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
@@ -608,6 +611,63 @@ function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
   publish(resource)
   return router.push(projectChatLocation(resource))
 }
+function canStartOtioDraft(source: OtioFileScope) {
+  return props.visible && !appTab.value && !dashboardProject.value && source.projectId === selectedProjectId.value
+    && source.apiBase === projectBase(props.apiBase, source.projectId) && !!(source.folderId || source.sessionId)
+}
+provide(OtioStartDraftKey, {
+  available: canStartOtioDraft,
+  async start(source, review, signal) {
+    if (!canStartOtioDraft(source) || signal.aborted) return false
+    const origin = route.fullPath
+    const request = new AbortController()
+    const stop = watch(() => [route.fullPath, canStartOtioDraft(source)], ([path, active]) => {
+      if (path !== origin || !active) request.abort()
+    }, { flush: 'sync' })
+    const readSignal = AbortSignal.any([signal, request.signal, AbortSignal.timeout(15_000)])
+    try {
+      let folderId = source.folderId
+      if (!folderId && source.sessionId) {
+        // Session files are stored locally even for remote sessions. Verify the
+        // actual execution owner before choosing a new conversation location.
+        const [response, sessions] = await Promise.all([
+          fetch(apiUrl(source.apiBase, `/api/sessions/${encodeURIComponent(source.sessionId)}/details`), { signal: readSignal }),
+          createSessionSummaryLoader(source.apiBase, source.projectId).load(readSignal),
+        ])
+        if (!response.ok) return false
+        const workdir = parseSessionDetails(await response.json(), source.sessionId).workdir
+        const owner = sessions.find(item => item.sessionId === source.sessionId)
+        if (!owner || workdir.kind !== 'local' || workdir.available === false) return false
+        folderId = owner.folderId ?? undefined
+      }
+      const folder = folderId ? (await createFoldersClient(source.apiBase).list(readSignal)).find(item => item.id === folderId) : undefined
+      if (folderId && (!folder || folder.kind === 'remote')) return false
+      if (readSignal.aborted || !canStartOtioDraft(source) || route.fullPath !== origin) return false
+      let reference = prepareOtioReference(review, typeof FormData === 'function')
+      if (!reference) return false
+      // Publish only after validating the source and preparing the entire chip.
+      // Its unique resource takes ownership before navigation; route failure
+      // cannot redirect the chip to a different composer or discard it.
+      const resource = registry.freshOtioDraft(source.projectId, folder, () => {
+        const item = reference
+        reference = undefined
+        return item
+      })
+      automation.value = undefined
+      publish(resource)
+      void nextTick(async () => {
+        const id = `${resource.key}:`
+        if (selected.value !== resource || !canStartOtioDraft(source) || !editorGroups.side(id)) return
+        editorGroups.activate(id)
+        await nextTick()
+        if (selected.value === resource && canStartOtioDraft(source) && editorGroups.focused(id)) {
+          instances.get(resource.key)?.focusConversation()
+        }
+      })
+      return true
+    } finally { stop(); request.abort() }
+  },
+})
 const keyboardActive = ref(true)
 function projectNavigationKeydown(event: KeyboardEvent) {
   const destination = projectNavigationShortcut(event)
