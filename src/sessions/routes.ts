@@ -1,3 +1,4 @@
+import { Session } from './session.ts'
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
@@ -244,6 +245,20 @@ export function sessionsApiPlugin(
         }
       }
       return next()
+    })
+    app.get('/api/sessions/:key/input-delivery', async c => {
+      c.header('Cache-Control', 'no-store')
+      if (!await options.authorizeContext?.(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      const key = c.req.param('key')
+      if (sessions) {
+        try { await sessions.assertHistoricalFolderAccess(key) }
+        catch (error) {
+          if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code }, error.status)
+          throw error
+        }
+      }
+      const session = key.startsWith('web:') ? sessions?.getActiveSession(key) : undefined
+      return c.json(session instanceof Session ? session.webInputDelivery : [])
     })
     for (const operation of ['status', 'diff'] as const) {
       for (const fileRoute of [`/api/sessions/:key/git/${operation}`, `/api/sessions/:key/workspace/git/${operation}`]) app.get(fileRoute, async c => {

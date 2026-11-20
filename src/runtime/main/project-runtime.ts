@@ -357,6 +357,10 @@ export async function createProjectRuntime(
   cleanup.push(dependencies.catalog.observeFolders(project.id, () => realtime.invalidateResource?.('folders')))
   cleanup.push(mainCluster.observeInventory(() => realtime.invalidateResource?.('nodes')))
   cleanup.push(observeSessionInvalidations(bus, realtime))
+  const deliverySubscription = bus.on('session.web-input.changed', ({ sessionId }) => {
+    realtime.chat(sessionId, { event: 'input_delivery_changed' })
+  })
+  cleanup.push(() => bus.off(deliverySubscription))
   let activitySource: SessionManager | undefined
   const activityInvalidator = createActivityInvalidator(id => {
     if (!activitySource) throw new Error('Session activity source is initializing')

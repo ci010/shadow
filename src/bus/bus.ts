@@ -38,6 +38,7 @@ export interface BusTopics {
   'session.renamed': { sessionId: string }
   'session.input.accepted': AcceptedSessionInput
   'session.message.appended': { sessionId: string; physicalSessionId: string; message: ChatMessage }
+  'session.web-input.changed': { sessionId: string }
   'session.turn.finished': SessionTurnFact
   'session.turn.started': Pick<SessionTurnFact, 'sessionId' | 'turnId' | 'inputId' | 'source'>
   'session.provider.waiting': { sessionId: string; wait: import('../providers/retry.ts').RateLimitWait | undefined }
