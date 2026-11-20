@@ -128,6 +128,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
         window.invalidateWork = async () => { await loadOverview(); for (const observer of observers) observer.event({ payload:{event:'invalidate'} }); };
         const router = createRouter({ history:createMemoryHistory(), routes:[
           { name:'chat', path:'/projects/:projectId/chat/:sessionId?', component:{render:() => null} },
+          { name:'project-board', path:'/projects/:projectId/board', component:{render:() => null} },
           { name:'project-settings', path:'/projects/:projectId/settings/:section?', component:{render:() => null} },
           { name:'agents', path:'/projects/:projectId/agents', component:{render:() => null} },
           { name:'settings', path:'/settings/:section?', component:{render:() => null} },
@@ -135,7 +136,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
         window.navigateTab = tab => router.push(tab === 'settings'
           ? {name:'project-settings',params:{projectId:'p',section:'general'}}
           : {name:'chat',params:{projectId:'p',sessionId:'web:chat-admin'}});
-        window.navigateWork = key => router.replace({query:{work:key}});
+        window.navigateWork = key => router.replace({name:'project-board',params:{projectId:'p'},query:{work:key}});
         await router.push({name:'chat',params:{projectId:'p',sessionId:'web:chat-admin'}}); await router.isReady();
         const app = createApp({ render:() => [
           state.error ? h('p', {class:'fixture-refresh-error',role:'alert'},state.error) : null,
@@ -146,7 +147,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
             onDiscuss:key=>{state.draft+='\\nDiscuss the premise of '+key;},
           })]),
           state.mode === 'workbench' ? h(ProjectWorkbench, {
-            apiBase:location.origin + '/projects/p', projectId:'p', projectName:'Release evidence', visible:state.visible, style:'height:800px',
+            apiBase:location.origin + '/projects/p', projectId:'p', visible:state.visible, style:'height:800px',
             onNavigate:id => { state.navigated = id; }, onCompose:text => { state.draft += '\\n\\n' + text; },
           }) : null,
           !state.canWrite ? h(WorkAlignment, {apiBase:location.origin+'/projects/p',sessionId:'web:fixture',project:true,workKey:window.fixtureKeys.note,embedded:true,expanded:true,
@@ -211,6 +212,8 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
               { request: { ...question, id: 'history-timeout' }, answer: { requestId: 'history-timeout', option: question.defaultOption, answeredBy: 'timeout', answeredAt: at } },
               { request: { ...question, id: 'history-pending' } },
             ], errors: [], truncated: false })
+          } else if (path === '/projects/p/api/work/completions') {
+            json({ items: [] })
           } else if (path === '/projects/p/api/work/organize') {
             await body(); organizationAttempts++
             if (organizationAttempts === 1) { response.statusCode = 502; json({ error: 'model_json_invalid', message: 'private provider text must not be displayed' }) }

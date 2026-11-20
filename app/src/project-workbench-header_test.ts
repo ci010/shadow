@@ -12,18 +12,14 @@ test('workbench has one integrated header and no persistent toolbar or tagline',
   const compiled = compileTemplate({ source: template, filename: 'ProjectWorkbench.vue', id: 'header-test' })
   assert.deepEqual(compiled.errors, [])
   const header = template.slice(template.indexOf('<header'), template.indexOf('</header>'))
-  for (const control of ['projectName', 'Work view', "t('Dashboard')", "t('Board')", 'organizeTopics', 'diagnosticsOpen', 'filtered.length', 'refresh', 'toggleApps', "panel === 'github'"]) {
+  for (const control of ["t('Board')", 'diagnosticsOpen', 'filtered.length', 'refresh', 'toggleApps', "panel === 'github'"]) {
     assert.ok(header.includes(control), `Header retains ${control}`)
   }
   assert.ok(!template.includes('workbench-toolbar'))
   assert.ok(!template.includes('Goals, current work and decisions in context'))
   assert.match(header, /v-show="!appsVisible" class="workbench-controls"/)
-  assert.match(header, /:disabled="organizationBusy \|\| organizationDisabled"/)
   assert.match(header, /:disabled="loading"/)
-  assert.match(header, /v-if="mode !== 'board'" class="work-view-switch"/)
   assert.ok(!header.includes(':aria-pressed="view === \'board\'"'))
-  assert.match(header, /:aria-describedby="modelCallNoticeId"/)
-  assert.match(header, /v-if="!appsVisible && view === 'history' && organizationMessage"[^>]+role="status" aria-live="polite"/)
 })
 
 test('header groups wrap on small screens without hiding controls or board counts', () => {

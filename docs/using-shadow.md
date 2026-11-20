@@ -126,7 +126,7 @@ background Web Push for closed or suspended pages.
 Open an existing chat and use **Actions** beside Search to create reusable
 command buttons or import selected npm scripts. Each action saves an explicit
 local Folder target; it does not inherit whichever chat is open. Pin the same
-action to the Project Dashboard for quick access. Runs expose status, logs, and
+action to the Project Board for quick access. Runs expose status, logs, and
 Stop, and execute directly rather than starting a model conversation.
 
 Search opens as an overlay without pushing the message view down. Escape or
@@ -160,8 +160,8 @@ session storage and its ancestors cannot be selected as Project folders.
 **Clone repository** still clones on Main; its parent directory is chosen through
 the same in-app browser (Main only), and existing destinations are never replaced.
 A folder's **+** starts a conversation in that folder. A new draft does not create a session until its first message is
-sent. Selecting the Project name opens its independent **Dashboard** at
-`/projects/:projectId/dashboard`. Knowledge and project settings remain available
+sent. Selecting the Project name expands or collapses its sidebar group without leaving the current view.
+Knowledge and project settings remain available
 from the sidebar. Opening another conversation from the sidebar (or session quick-open)
 closes only the previously selected Conversation tab when its live state is positively
 idle and its composer is empty. Working conversations, input/call waits, unknown
@@ -191,28 +191,11 @@ conversation creation. Selection persists after sending while the Workflow stays
 selected and visible. Selection and moving tabs never send messages or execute a
 Workflow.
 
-The Dashboard groups
-recent focus by inferred shared purpose, then shows separate topics with their latest
-reports and expandable evidence/decision history. Model interpretations are not
-confirmed user intent; legacy topics without inference remain unclassified.
-When topic organization is enabled, relevant saved session changes are coalesced
-before a bounded automatic delta run. Existing topic versions determine what needs
-updating; no new metadata log is required. Opening the page itself does not call
-the model. **Organize recent topics** remains an explicit full run over bounded
-recent topics, including existing ones. Results show their time and source
-versions; failed organization keeps previously committed results. Errors distinguish busy/changed notes, invalid model JSON or citations,
-model availability and a failed overview refresh; the latter may follow a successful save.
-The main work views are **Dashboard** and an issue-style **Board**. Expanded topics
-show saved goal/approach/task/finding roles, parent links, supports/requires/assumption
-relations and dependencies (including cross-topic links). Missing roles or causal
-relations are shown honestly, not inferred from model topic categories. The causal
-map and relation graph are expandable local sections within the Dashboard, not
-separate view entries. Native questions and decision history retain their navigation.
-The Dashboard, its graphs and Usage are Project views, not conversations: opening
-them does not create a session or send a message. Removing dedicated coordinator
-sessions does not remove these observation views. Folder and conversation rows
-open their own views. Discuss opens an ordinary conversation with an editable
-draft; there is no separate management session. **Automations** lists scheduled tasks
+The issue-style **Board** is the Project's Work view. It also hosts pinned Quick
+Actions, Apps, and GitHub integration. Old Dashboard links redirect to the Board,
+including links to a specific Work item. **Discuss** opens an ordinary conversation
+with an editable draft. The dedicated topic organization page is no longer available;
+removing the page does not change the topic organization automation. **Automations** lists scheduled tasks
 that start fresh conversations, with their run histories. Selecting an automation
 opens its latest run directly in the ordinary conversation workbench, with the
 same Conversation and document tabs and file-explorer behavior as other chats.
@@ -852,8 +835,8 @@ with **All projects** selected and shows combined totals and trends. **Usage by
 project** breaks down the selected summary period, sorted by known tokens. Select
 a project from that table or the **Project** filter to inspect its trends and
 paginated daily history without leaving Usage. There is no separate Usage page
-in the Project Dashboard. Project Spans and Logs are still available under
-**Project Dashboard → Agent diagnostics**.
+in the Project Board. Project Spans and Logs are still available under
+**Project Board → Agent diagnostics**.
 
 Projects that fail to load are marked unavailable and excluded from totals.
 Daily project history includes the recent 31 calendar days and older active

@@ -451,7 +451,7 @@ Knowledge and Workflows sidebar entries follow the BOT group without an extra se
 
 The Go to session entry opens a top-centered quick-open dialog, also available within the Project workbench with Ctrl+Shift+R (Command+Shift+R on macOS). It searches regular root conversation titles across Projects, independently of sidebar truncation; child sessions, spawned agents, task/call executions and automation runs are excluded. Results name their Project and navigate directly. Project groups follow the sidebar catalog order, with recent sessions first within each Project for blank queries; matching title prefixes take priority within each Project when searching. The shortcut hint uses the same bordered keycap styling as the Ctrl+N new-conversation hint. The dialog includes an All projects / single-Project button filter in sidebar order; it combines with title search and scopes loading/error feedback to the selected Project. Arrow keys in the search field select, Enter opens, and Escape dismisses with focus restored. Clicking the backdrop also dismisses; pressing inside the dialog and releasing outside must not dismiss it. Keep the dialog's neutral square surface and readable empty/loading/partial-error states; this is navigation, not a sidebar filter.
 
-Tree rows use neutral ink and muted hover; selected rows use selection background and primary ink. Project coordination is a heading-level entry: use primary ink and a one-pixel title underline (4px offset), not a filled selection block. Its hover stays neutral and keyboard focus retains the blue outline. Maintain the icon/text/disclosure columns rather than distributing extra space between siblings. Tree icons are normally (16px); labels truncate within the row. Focus remains a visible blue outline, including the tree row's focus-within treatment.
+Tree rows use neutral ink and muted hover; selected rows use selection background and primary ink. The project name and chevron share one neutral disclosure button that expands or collapses the sidebar group without navigating. Its hover stays neutral and keyboard focus retains the blue outline. Maintain the icon/text/disclosure columns rather than distributing extra space between siblings. Tree icons are normally (16px); labels truncate within the row. Focus remains a visible blue outline, including the tree row's focus-within treatment.
 
 Selected automation rows and model options use the same primary-ink/selection-background pair. The history rail distinguishes peer and event types through size and pattern rather than identity color; current, hovered, previewed, and keyboard-focused markers use interaction blue.
 
@@ -477,20 +477,19 @@ appropriate state; the toolbar does not grant backend access.
 
 Board has its own Project sidebar entry alongside Knowledge and Workflows. It
 opens or reuses a Project-scoped document in the shared editor groups, including
-before any conversation exists, rather than replacing the workbench with the
-Dashboard. The document retains its filters and details across tab switches;
-closing it releases that instance. Dashboard no longer contains a duplicate
-Board switch. Existing Dashboard Work-detail links remain supported.
+before any conversation exists. The document retains its filters and details
+across tab switches; closing it releases that instance. Legacy Dashboard links
+redirect to Board and preserve Work-detail links.
 
-Dashboard and Board canvases are transparent over the existing application dot
-background; do not add another graph dot layer. Keep cards, fields, toolbars and
+The Board canvas is transparent over the existing application dot background;
+do not add another dot layer. Keep cards, fields, toolbars and
 detail overlays on their readable theme surfaces. Top-level navigation has no
 View completed tab: Done cards remain on the Board, while Newly completed opens
 the unread result list with its existing read controls.
 
 The board includes Done alongside Pending, In progress, Blocked and Cancelled;
 completed parents and their descendants remain discoverable with the same Work,
-search and assignee filters. Dashboard's active projection remains separate.
+search and assignee filters.
 One bounded lane per status owns vertical scrolling, with Work group headings
 inside each lane rather than a separate unbounded board per parent. Wide panes
 allow horizontal lane overflow. Below 900px of available board width, a shared

@@ -496,16 +496,16 @@ test('global project and model views change independently without changing their
 })
 
 
-test('Dashboard and app documents exclude the mounted conversation workspace from their height allocation', () => {
+test('Project Board and app documents keep workspace hosts mounted', () => {
   const source = readFileSync(new URL('./components/ProjectsWorkspace.vue', import.meta.url), 'utf8')
   const { descriptor, errors } = parse(source)
   assert.deepEqual(errors, [])
   const automation = descriptor.template!.content.match(/<AutomationDetail\b[^>]*>/)?.[0]
   assert.ok(automation)
-  assert.match(automation, /v-show="!appTab && !dashboardProject"/)
-  // Keep the editor hosts mounted when switching between chat and the dashboard.
+  assert.match(automation, /v-show="!appTab"/)
+  // Keep the editor hosts mounted when switching between chat and project documents.
   assert.doesNotMatch(automation, /v-if=/)
-  assert.match(descriptor.template!.content, /<ProjectWorkbench v-if="dashboardProject"/)
+  assert.match(descriptor.template!.content, /<ProjectWorkbench v-else-if="tab === 'board'"/)
 })
 
 test('global Usage starts with all projects, reports partial totals and filters within the same view', async t => {

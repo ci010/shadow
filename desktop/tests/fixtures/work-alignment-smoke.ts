@@ -139,7 +139,7 @@ async function main() {
     assert.equal(await execute('!!document.querySelector(".note-editor")'), false)
     assert.equal(await execute('[...document.querySelectorAll(".work-alignment button")].some(button=>button.textContent.trim()==="Edit note")'), false)
     await click('Discuss in a new chat', '.coordination-panel-heading')
-    assert.match(await execute('document.querySelector("#fixture-composer").value'), /Keep my unsent draft[\s\S]*\/projects\/p\/dashboard\?work=topic%3Aweb%3Afixture/)
+    assert.match(await execute('document.querySelector("#fixture-composer").value'), /Keep my unsent draft[\s\S]*\/projects\/p\/board\?work=topic%3Aweb%3Afixture/)
     assert.match(await execute('document.querySelector("#fixture-composer").value'), /Work reference only; no assignment or notification/)
     assert.equal(await execute('window.fixture.navigated'), '', 'Discussion must not open the assignee conversation')
     assert.equal(await execute('document.querySelectorAll(".project-work-detail .person-row").length'), 2)

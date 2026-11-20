@@ -139,7 +139,7 @@ test('Work discussion reuses the new-chat draft route without assignment or auto
   assert.ok(!workbench.includes('<DecisionOwner'))
   assert.match(workbench, /class="discuss-work" @click="discussSelected"/)
   assert.match(workbench, /emit\('compose', workReference\(props\.projectId, selected\.value, selectedItem\.value\?\.title\)/)
-  const compose = projects.slice(projects.indexOf('async function composeFromDashboard'), projects.indexOf('const keyboardActive'))
+  const compose = projects.slice(projects.indexOf('async function composeFromWorkbench'), projects.indexOf('const keyboardActive'))
   assert.match(compose, /await startDraft\(projectId\)/)
   assert.match(compose, /registry\.draft\(projectId, folder, remote\)/)
   assert.match(compose, /router\.push\(projectChatLocation\(resource\)\)/)

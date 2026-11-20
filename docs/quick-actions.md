@@ -15,8 +15,8 @@ Imported scripts run through npm so the package's script environment and hooks
 remain available. Unusual script names that cannot safely be used in the command
 are reported as unsupported. No package installation is performed automatically.
 
-Pin an action to show the same definition on the Project Dashboard. Editing or
-unpinning it changes the shared definition, not a separate dashboard copy.
+Pin an action to show the same definition on the Project Board. Editing or
+unpinning it changes the shared definition, not a separate Board copy.
 Actions can be edited and deleted from the conversation entry point.
 
 ## Agent management

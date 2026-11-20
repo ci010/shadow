@@ -64,7 +64,7 @@ test('native Apps use a branded isolated window and Windows tasks launch warm an
         import {microAppNavigation} from '/src/microapp-navigation.ts';
         const router=createRouter({history:createMemoryHistory(),routes:[
           {path:'/projects/:projectId/chat/:sessionId',name:'chat',component:{render:()=>null}},
-          {path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}}
+          {path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}}
         ]});router.beforeEach(microAppNavigation);
         import {conversationMicroAppLink} from '/src/project-coordination.ts';
         import ProjectMicroApps from '/src/components/ProjectMicroApps.vue';
@@ -75,7 +75,7 @@ test('native Apps use a branded isolated window and Windows tasks launch warm an
           h('a',{id:'message-app-link',href,target:'_blank',onClick:async e=>{
             e.preventDefault();await router.push(path);await router.push(conversationMicroAppLink(href,'p'));
           }},'Open published app'),
-          router.currentRoute.value.name==='project-dashboard' ? h(ProjectMicroApps,{apiBase:location.origin+'/projects/p',active:true,canWrite:true,style:'height:100vh'}) : null
+          router.currentRoute.value.name==='project-board' ? h(ProjectMicroApps,{apiBase:location.origin+'/projects/p',active:true,canWrite:true,style:'height:100vh'}) : null
         ])}).use(router).mount('#app');`,
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {

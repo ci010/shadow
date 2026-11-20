@@ -6,12 +6,12 @@ export function referenceRoutePart(value: string): string {
   return encodeURIComponent(value).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
 }
 export function workReference(projectId: string, key: string, title = key): string {
-  return `[${referenceLabel(title)}](/projects/${referenceRoutePart(projectId)}/dashboard?work=${referenceRoutePart(key)} "${referenceLabel(key)}; Work reference only; no assignment or notification.")`
+  return `[${referenceLabel(title)}](/projects/${referenceRoutePart(projectId)}/board?work=${referenceRoutePart(key)} "${referenceLabel(key)}; Work reference only; no assignment or notification.")`
 }
 export type ContentReference = { kind: 'session' | 'work'; projectId: string; id: string; href: string }
 /** Explicit app routes only, never absolute URLs, filesystem paths or arbitrary queries. */
 export function contentReference(href: string): ContentReference | undefined {
-  const match = /^#?(\/projects\/([^/?#]+)\/(?:chat\/([^/?#]+)|dashboard\?work=([^&#]+)))$/.exec(href)
+  const match = /^#?(\/projects\/([^/?#]+)\/(?:chat\/([^/?#]+)|(?:board|dashboard)\?work=([^&#]+)))$/.exec(href)
   if (!match) return undefined
   try {
     const projectId = decodeURIComponent(match[2]!)

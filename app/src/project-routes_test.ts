@@ -45,7 +45,7 @@ for (const protocol of ['http:', 'file:'] as const) {
     const router = applicationRouter(protocol)
     for (const path of [
       '/projects',
-      '/projects/owner%20one/dashboard',
+      '/projects/owner%20one/board',
       '/projects/owner%20one/workflows?workflow=external%3Aissues&run=run-not-session',
       '/projects/owner%20one/chat/web%3Achat-same?automation=daily&child=task%3Aone#message-2',
       '/projects/other/chat/web%3Achat-same',
@@ -63,6 +63,15 @@ for (const protocol of ['http:', 'file:'] as const) {
       assert.equal(router.currentRoute.value.hash, expected.hash)
       assert.equal(router.currentRoute.value.redirectedFrom, undefined)
     }
+  })
+  test(`${protocol} the legacy Dashboard URL redirects to Board with Work and hash intact`, async () => {
+    const router = applicationRouter(protocol)
+    await router.push('/projects/owner%20one/dashboard?work=topic%3Alegacy#details')
+    const current = router.currentRoute.value
+    assert.equal(current.name, 'project-board')
+    assert.equal(current.params.projectId, 'owner one')
+    assert.equal(current.query.work, 'topic:legacy')
+    assert.equal(current.hash, '#details')
   })
   test(`${protocol} legacy Agents navigation retains project, agent, channel and hash`, async () => {
     const router = applicationRouter(protocol)

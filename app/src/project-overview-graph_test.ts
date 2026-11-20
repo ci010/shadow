@@ -35,15 +35,9 @@ test('organization HTTP 404, including non-JSON HTML, is distinct from model fai
   assert.match(organizationErrorMessage('model_json_invalid', 502), /invalid JSON/)
   assert.equal(organizationDiagnostic('<html>SECRET</html>', 404), ' [HTTP 404]')
 })
-test('overview integrates a single native graph, not legacy transplanted folds', async () => {
+test('Board no longer mounts the topic graph or dispatches topic organization', async () => {
   const source = await readFile(new URL('./components/ProjectWorkbench.vue', import.meta.url), 'utf8')
-  assert.equal((source.match(/<ProjectOverviewGraph /g) ?? []).length, 1)
-  assert(!source.includes('<WorkGraph')); assert(!source.includes('<ProjectContextCanvas')); assert(!source.includes('<ProjectTopicHistory'))
-  assert(!source.includes('organizing || data?.observer?.running'))
-  assert(source.includes('projectWorkOverviewSchema.safeParse(await response.json())'))
-  assert(source.includes("fetch(apiUrl(apiBase, '/api/work/organize')"))
-  assert(!source.includes('`${apiBase}/api/work/organize`'))
-  assert(source.includes('organizationErrorMessage(body?.error, response.status)'))
+  assert.doesNotMatch(source, /ProjectOverviewGraph|organizeTopics|work\/organize/)
 })
 
 test('ownership disclosure starts at horizontal roots and independently expands downward', () => {

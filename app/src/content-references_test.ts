@@ -5,12 +5,12 @@ import { composerReferences } from './composer-references.ts'
 import { messageAttachments } from './message-attachments.ts'
 import { serializeAttachmentReferences, parseAttachmentReferences } from '../../src/utils/attachment-references.ts'
 
-test('Work links use the real dashboard route and escaped titles; session links share parsing', () => {
+test('Work links use the Board route and escaped titles; session links share parsing', () => {
   const link = workReference('project a', 'work:one', 'A [task] "title"')
   const [chip] = composerReferences(link)
   assert.equal(chip?.kind, 'work')
   assert.equal(chip?.label, 'A [task] "title"')
-  assert.deepEqual(contentReference(chip!.href!), { kind: 'work', projectId: 'project a', id: 'work:one', href: '/projects/project%20a/dashboard?work=work%3Aone' })
+  assert.deepEqual(contentReference(chip!.href!), { kind: 'work', projectId: 'project a', id: 'work:one', href: '/projects/project%20a/board?work=work%3Aone' })
   assert.equal(contentReference('/projects/p/chat/web%3Aone')?.kind, 'session')
   for (const href of ['javascript:alert(1)', '//evil/projects/p/chat/s', '/projects/p/dashboard?work=x&launch=y', '/projects/p/chat/%2Fetc', '/projects/p/chat/%ZZ']) assert.equal(contentReference(href), undefined)
   assert.deepEqual(composerReferences('```md\n' + link + '\n```'), [])

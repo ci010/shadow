@@ -30,7 +30,7 @@ test('Board is a project-isolated document in the shared workbench', {
     load(id) {
       if (id !== '\0workflow-workbench-fixture') return
       return `import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router'; import Workspace from '/src/components/ProjectsWorkspace.vue'; import {setLocalePreference} from '/src/i18n.ts'; import '/src/styles.css'; import 'virtual:uno.css'; setLocalePreference('en');
-        const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}},{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>null}},{path:'/projects/:projectId/workflows',name:'project-workflows',component:{render:()=>null}},{path:'/projects/:projectId/settings/:section?',name:'project-settings',component:{render:()=>null}},{path:'/projects/:projectId/agents',name:'agents',component:{render:()=>null}},{path:'/settings/:section?',name:'settings',component:{render:()=>null}}]});
+        const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},{path:'/projects/:projectId/chat/:sessionId?',name:'chat',component:{render:()=>null}},{path:'/projects/:projectId/workflows',name:'project-workflows',component:{render:()=>null}},{path:'/projects/:projectId/settings/:section?',name:'project-settings',component:{render:()=>null}},{path:'/projects/:projectId/agents',name:'agents',component:{render:()=>null}},{path:'/settings/:section?',name:'settings',component:{render:()=>null}}]});
         window.fixture={router};
         const app=createApp({render:()=>h(Workspace,{apiBase:location.origin,visible:true})});const {useLiveTransportStore}=await import('/src/stores/live.ts');useLiveTransportStore(app.config.globalProperties.$pinia).pool={onDispose:()=>()=>{},observeHost:(_base,callback)=>{callback({phase:'live'});return()=>{}},client:()=>({subscribe:()=>({close(){},ready:async()=>{}})})};app.use(router);router.push(new URLSearchParams(location.search).get('fixtureRoute') || {name:'project-workflows',params:{projectId:'a'},query:{workflow:'schedule:a',run:'run:a'}});router.isReady().then(()=>app.mount('#app'));`
     },
@@ -73,6 +73,16 @@ const tab=label=>'[...document.querySelectorAll(".editor-tab button[role=tab]")]
 const clickTab=async label=>{await wait(tab(label));await run(tab(label)+'.click()')};
 const openBoard=async id=>{await run('document.querySelector('+JSON.stringify('[data-project-id="'+id+'"] [aria-label="Board"]')+').click()');await wait('window.fixture.router.currentRoute.value.name==="project-board" && window.fixture.router.currentRoute.value.params.projectId==='+JSON.stringify(id));await wait(visible('.work-search input'));await wait(visible('.workbench-empty h2'))};
 await win.loadURL(${JSON.stringify(url)});await wait(visible('.workflow-manager'));
+const disclosure='document.querySelector('+JSON.stringify('[data-project-id="a"] .project-toggle')+')';
+await wait(disclosure);
+const beforeToggle=await run('window.fixture.router.currentRoute.value.fullPath');
+for(const expanded of ['false','true']){
+  await run(disclosure+'.querySelector(".project-toggle-name").click()');
+  await wait(disclosure+'.getAttribute("aria-expanded")==='+JSON.stringify(expanded));
+  assert.equal(await run('getComputedStyle(document.getElementById('+disclosure+'.getAttribute("aria-controls"))).display!=="none"'),expanded==='true');
+  assert.equal(await run('window.fixture.router.currentRoute.value.fullPath'),beforeToggle);
+  assert.equal(await run('!!'+visible('.workflow-manager')),true);
+}
 await openBoard('a');await wait(tab('Board'));assert.equal(await run('!!'+tab('Board')),true);assert.equal(await run('!!'+visible('.reference-composer')),false);assert.equal(await run('!!'+visible('.work-view-switch')),false);
 assert.equal(await run('('+tab('Board')+').closest(".editor-tabs")===('+tab('Workflows')+').closest(".editor-tabs")'),true);
 await run('window.fixture.boardElement=('+visible('.project-workbench')+');('+visible('.work-search input')+').value="retained filter";('+visible('.work-search input')+').dispatchEvent(new Event("input",{bubbles:true}))');
@@ -81,8 +91,13 @@ assert.equal(await run('('+visible('.work-search input')+').value'),'retained fi
 await openBoard('b');assert.equal(await run('('+visible('.work-search input')+').value'),'');await openBoard('a');assert.equal(await run('('+visible('.work-search input')+').value'),'retained filter');
 win.setSize(390,844);await delay(200);assert.equal(await run('document.documentElement.scrollWidth<=window.innerWidth'),true);
 await run('('+visible('.editor-tab.selected button[aria-label="Close Board"]')+').click()');await wait('window.fixture.router.currentRoute.value.name!=="project-board"');
-await run('window.fixture.router.push({name:"project-dashboard",params:{projectId:"a"},query:{work:"topic:legacy"}})');await wait(visible('.coordination-panel'));assert.equal(await run('!!'+visible('.work-view-switch')),true);assert.equal(await run('('+visible('.work-view-switch')+').textContent.includes("Board")'),false);
+await run('window.fixture.router.push({name:"project-board",params:{projectId:"a"},query:{work:"topic:legacy"}})');await wait(visible('.coordination-panel'));assert.equal(await run('!!'+visible('.work-view-switch')),false);
 await win.loadURL(${JSON.stringify(url)}+'?fixtureRoute='+encodeURIComponent('/projects/a/board'));await wait(visible('.work-search input'));await wait(tab('Board'));assert.equal(await run('window.fixture.router.currentRoute.value.params.sessionId'),undefined);
+await run('window.fixture.router.push({name:"project-board",params:{projectId:"a"},query:{microApp:"fixture-app"}})');
+await wait(visible('.micro-apps'));assert.equal(await run('!!'+visible('.work-search input')),false);
+await run('('+visible('.workbench-integrations button[aria-pressed="true"]')+').click()');
+await wait(visible('.work-search input'));assert.equal(await run('window.fixture.router.currentRoute.value.query.microApp'),undefined);
+await run('('+visible('.workbench-integrations button[aria-expanded]')+').click()');await wait(visible('.coordination-panel'));assert.equal(await run('('+visible('.coordination-panel')+').querySelector("h2").textContent'),'GitHub');
 await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
   await build({ stdin: { contents: script, resolveDir: directory, sourcefile: 'fixture-run.cjs' }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
