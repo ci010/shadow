@@ -9,7 +9,7 @@
               <option v-for="option in textEncodings" :key="option.value" :value="option.value">{{ option.label }}</option>
             </UiSelect>
           </label>
-          <button v-if="isOtio || isMarkdown || isMemoryLogs || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
+          <button v-if="isOtio || modelHasSource || isMarkdown || isMemoryLogs || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
           <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" :text="t('Reload preview')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Reload preview')" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
           <HoverInfo v-if="!inline" :text="fullscreen ? t('Exit fullscreen') : t('Fullscreen')" v-slot="{ triggerProps }">
           <button
@@ -29,7 +29,7 @@
         </div>
       </div>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
-      <div class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat || (isOtio && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
+      <div class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat || ((isOtio || isModel) && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="loadText" />
         <div v-else-if="entry.archive && (!loaded || error)" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || t('Reading archive entry...') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
@@ -37,6 +37,9 @@
         <div v-else-if="archiveContainer" class="file-modal-note">
           {{ t('Expand this archive in the file tree to browse its contents, or use Download to save it.') }}
         </div>
+        <GltfFilePreview v-else-if="isModel && !sourceView" :key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, remote, path, entry.archive, attachmentUrl])"
+          :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace" :path="path" :active="active" :remote="remote"
+          :source-blob="archiveBlob" :archive="entry.archive" :attachment-url="attachmentUrl" :can-review="canQuote || !!attachmentUrl" />
         <OtioFilePreview v-else-if="isOtio && !sourceView" :key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, remote, path, entry.archive, entry.mtime, attachmentUrl])" :api-base="apiBase" :session-id="sessionId"
           :folder-id="folderId" :session-workspace="sessionWorkspace" :path="path" :mtime="entry.mtime" :active="active"
           :remote="remote" :source-blob="archiveBlob" :attachment-url="attachmentUrl" :can-review="!entry.archive && (canQuote || !!attachmentUrl)"
@@ -99,6 +102,8 @@ import { readAttachmentBytes } from '../../attachment-preview.ts'
 import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
 import { computed, defineAsyncComponent, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { isGltfFile, isPlaygroundFile } from '../../gltf-file-source.ts'
+const GltfFilePreview = defineAsyncComponent(() => import('./GltfFilePreview.vue'))
 import { isOtioFile } from '../../otio-review.ts'
 const OtioFilePreview = defineAsyncComponent(() => import('./OtioFilePreview.vue'))
 import { useFileDownload } from '../../composables/useFileDownload.ts'
@@ -160,9 +165,11 @@ function releaseArchive() {
 }
 const isMarkdown = computed(() => !props.entry.archive && ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
 const isMemoryLogs = computed(() => !props.entry.archive && isMemoryLogFile(path.value))
+const isModel = computed(() => isGltfFile(props.entry.name) || (!props.attachmentUrl && !props.entry.archive && isPlaygroundFile(props.entry.name)))
+const modelHasSource = computed(() => isModel.value && props.entry.ext.toLowerCase() !== '.glb')
 const isOtio = computed(() => isOtioFile(props.entry.name))
 const sourceView = ref(false)
-const textMode = computed(() => (!isOtio.value || sourceView.value) && !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive || !!props.attachmentUrl))))
+const textMode = computed(() => ((!isOtio.value && !isModel.value) || sourceView.value) && !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive || !!props.attachmentUrl))))
 const rawSource = computed(() => props.attachmentUrl ?? (props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value)))
 const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
@@ -249,7 +256,7 @@ async function loadText(): Promise<void> {
   loaded.value = false
   highlightError.value = ''
   if (!props.active || !(props.folderId || props.sessionId)) return
-  if (isOtio.value && !sourceView.value && !props.entry.archive) return // OTIO owns its bounded read and status.
+  if ((isOtio.value || isModel.value) && !sourceView.value && !props.entry.archive) return // The specialized viewer owns its bounded read and status.
   if (!props.attachmentUrl && !props.entry.archive && (archiveContainer.value || viewerFormat.value || (!textMode.value && !props.remote))) return
   const controller = new AbortController()
   request = controller
@@ -341,7 +348,7 @@ watch(() => props.active, active => {
   }
 })
 watch(sourceView, () => {
-  if (isOtio.value || kind.value === 'html') void loadText()
+  if (isOtio.value || isModel.value || kind.value === 'html') void loadText()
 })
 const previewUrl = ref('')
 const previewError = ref('')

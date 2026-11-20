@@ -48,6 +48,8 @@ import { BotMessages } from '../../bots/messages.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService, publishedBotIntegrationId } from '../../bots/runtime.ts'
 import { isDirectOwnerTurn, isOwnerSession } from '../../sessions/owner-policy.ts'
+import { GltfCaptureBridge } from '../../gateway/gltf-capture.ts'
+import { CaptureViewTool } from '../../tools/capture-view.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
 import { discordReadMessage } from '../../channels/discord-operations.ts'
 import { collectDiscordHistory } from '../../channels/discord-stream.ts'
@@ -1847,8 +1849,26 @@ export async function createProjectRuntime(
     deliver: (target, input) => target.kind === 'session'
       ? handleSessionInput(target.id, input, inputHandlers) : handleBotInput(target.id, input, inputHandlers),
   })
+  const captureSession = (id: string, allowDraft: boolean) => {
+    const state = sessions.getSessionState(id)
+    if ((!state && !(allowDraft && id.startsWith('web:') && id.length > 4)) ||
+      (state && (state.sessionId !== id || !isOwnerSession(state, project.id) || sessions.isManagedConversation(id)))) return false
+    try { if (state) sessions.assertFolderAccess(id); return true } catch { return false }
+  }
+  const viewerCapture = dependencies.authorizeViewerCapture && new GltfCaptureBridge(project.id,
+    dependencies.authorizeViewerCapture, id => captureSession(id, true), id => captureSession(id, false))
+  if (viewerCapture) {
+    viewerCapture.mount(app)
+    bus.on('session.turn.finished', fact => viewerCapture.finishTurn(fact.inputId))
+    cleanup.push(() => viewerCapture.close())
+    const capture = new CaptureViewTool(project.id, viewerCapture)
+    importTool.registerBuiltin(capture.name, capture, ctx => capture.available(ctx))
+  }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions,
-    async message => requireChannelReceipt(await inputs.route(channelMessageEnvelope(botStore, message))), {
+    async message => {
+      await viewerCapture?.admitWebInput(message)
+      return requireChannelReceipt(await inputs.route(channelMessageEnvelope(botStore, message)))
+    }, {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
     authorizeWebRequest: dependencies.authorize,
     webClientDeviceName: dependencies.webClientDeviceName,
@@ -2201,6 +2221,7 @@ export async function createProjectRuntime(
       () => channels.stopAll(),
       () => events.stop(),
       () => bus.stopAll(),
+      () => viewerCapture?.close(),
       () => evalBridge.shutdown(),
       () => { conventions.close(); initiatives.close() },
       () => skillRecall.close(),

@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import type { EventEmitter } from 'node:events'
@@ -114,12 +115,19 @@ export default defineConfig({
   // Component tests that use configFile:false may rebuild Vite's default cache.
   // Keep the running app's optimized modules out of that shared directory.
   cacheDir: 'node_modules/.vite-shadow-app',
-  plugins: [routing.plugin, pdfViewerAssets(), archiveLicenses(), vue(), UnoCSS({
+  plugins: [routing.plugin, {
+    // pnpm can skip workspace lifecycle scripts on a no-op install after a git pull.
+    // Bundle only our trusted driver here; never run modeling project files in Node.
+    name: 'shadow-playground-engine', buildStart() {
+      execFileSync(process.execPath, [fileURLToPath(new URL('../packages/three-playground/generate.mjs', import.meta.url))])
+    },
+  }, pdfViewerAssets(), archiveLicenses(), vue(), UnoCSS({
     configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
   })],
   // Lazy Shiki entrypoints must be in the initial optimizer batch, not discovered
   // while a file preview is opening (which invalidates already served import URLs).
   optimizeDeps: { include: highlightingDeps, exclude: ['emf-converter'] },
+  worker: { format: 'es' }, // QuickJS loads its pinned, bundled WASM in a module worker.
   build: { rollupOptions: { external: ['@napi-rs/canvas'] } },
   server: {
     host: process.env.VITE_DEV_HOST ?? '127.0.0.1',
