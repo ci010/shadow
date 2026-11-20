@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { createWebPairing, loadPairConnection, parsePairArguments, runWebPair } from './web-pair.ts'
+import { createWebPairing, loadPairConnection, parsePairArguments, runWebPair } from '../src/runtime/web-pairing-cli.ts'
 import { DesktopConnectionStore } from '../desktop/src/control/publication.ts'
 import {
   assertProtectedWindowsFile, dpapi, parseConnectionDescriptor, readBoundedLocalFile,

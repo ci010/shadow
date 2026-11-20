@@ -93,7 +93,6 @@ export async function runWebPair(args: readonly string[], output: (text: string)
       '  web pair --connection <absolute connection descriptor>',
       '  web pair --url http://127.0.0.1:<port> --credential-file <absolute protected credential file>',
       '',
-      'Source checkout: pnpm web:pair <options>',
       'Only literal loopback HTTP origins are accepted. Never pass a credential as an argument.',
       'The command prints the browser URL and a short-lived one-use pairing code, not the launch credential.',
     ].join('\n'))
