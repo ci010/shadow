@@ -19,12 +19,16 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function isWorking(value: unknown): boolean {
-  if (!record(value) || !record(value.stages)) throw new Error('Invalid session activity snapshot')
-  const stages = Object.values(value.stages)
-  if (stages.some(stage => typeof stage !== 'string' || !['idle', 'inactive', 'llm', 'tool', 'waiting'].includes(stage))) {
-    throw new Error('Invalid session activity stage')
+  if (!record(value) || !record(value.activity)) throw new Error('Invalid session activity snapshot')
+  let working = false
+  for (const entry of Object.values(value.activity)) {
+    if (!record(entry)) throw new Error('Invalid session activity entry')
+    if (!Object.hasOwn(entry, 'stage')) continue // The snapshot omits inactive stages.
+    const stage = entry.stage
+    if (stage === 'llm' || stage === 'tool' || stage === 'waiting' || stage === 'rate-limit') working = true
+    else if (stage !== 'idle' && stage !== 'inactive') throw new Error('Invalid session activity stage')
   }
-  return stages.some(stage => stage === 'llm' || stage === 'tool' || stage === 'waiting')
+  return working
 }
 
 /** Native-only observation of Main's existing project/session snapshots. */
