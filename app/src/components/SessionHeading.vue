@@ -13,7 +13,7 @@
             <h3>{{ t('Current focus') }}</h3>
             <p class="details-topic-title">{{ currentFocus }}</p>
           </section>
-          <p v-if="loading" class="details-note" role="status">{{ t('Loading session details...') }}</p>
+
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
           <dl class="details-identity">
             <template v-if="details?.workdir.kind === 'remote'">
@@ -46,7 +46,13 @@
             <dt>{{ t('Session ID') }}</dt><dd class="detail-id"><CopyableId class="detail-copy" :value="sessionId" :label="t('Session ID')" wrap /></dd>
           </dl>
           <div class="details-usage">
-            <h3 class="token-heading">{{ t('Tokens') }}</h3>
+            <div class="token-header">
+              <h3 class="token-heading">{{ t('Tokens') }}</h3>
+              <span class="details-loading" role="status">
+                <span v-if="loading" class="i-lucide-loader-circle" aria-hidden="true" />
+                <span class="sr-only">{{ loading ? t('Loading session details...') : '' }}</span>
+              </span>
+            </div>
             <dl class="token-columns">
               <div v-for="column in tokenColumns" :key="column.label" class="token-column">
                 <dt>{{ column.label }}</dt>
@@ -58,6 +64,9 @@
                   <span v-for="cost in column.usage.costs" :key="cost.currency" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')"><span class="i-lucide-coins" aria-hidden="true" />{{ formatNumber(cost.amount, { maximumSignificantDigits: 6 }) }} <small>{{ cost.currency === 'AI_CREDITS' ? t('AI credits') : cost.currency }}</small></span>
                 </dd>
                 <dd v-else>{{ t('Not reported') }}</dd>
+                <dd v-if="!column.usage?.costs?.length" class="token-counts">
+                  <span><span class="i-lucide-coins" aria-hidden="true" /><small>{{ t('Estimated cost') }} · {{ t('Not reported') }}</small></span>
+                </dd>
               </div>
             </dl>
             <div class="context-heading"><span>{{ t('Context') }}</span><span v-if="percent !== null">{{ percent }}%</span></div>
@@ -266,7 +275,14 @@ onUnmounted(() => { cancel(); stopRename() })
 .details-topic dd { white-space: pre-wrap; }
 .detail-id { font-size: 12px; }
 .details-usage { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--c-border); }
-.token-heading { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
+.token-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.token-heading { margin: 0; font-size: 13px; font-weight: 600; }
+.details-loading, .details-loading > [aria-hidden] { width: 14px; height: 14px; }
+.details-loading { display: inline-flex; color: var(--c-text-secondary); }
+@media (prefers-reduced-motion: no-preference) {
+  .details-loading > [aria-hidden] { animation: details-spin 1s linear infinite; }
+}
+@keyframes details-spin { to { transform: rotate(360deg); } }
 .session-details .token-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .token-column { min-width: 0; }
 .token-column dt { margin-bottom: 6px; }
