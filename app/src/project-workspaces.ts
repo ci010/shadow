@@ -4,10 +4,12 @@ import { createUuid } from './uuid.ts'
 import type { FolderRecord } from './folders-client.ts'
 import type { SessionRef } from './api-url.ts'
 import type { KnowledgeTabRequest } from './file-workbench.ts'
+import type { OtioDraftReference } from './otio-draft.ts'
 
 export interface ConversationResource extends SessionRef {
   key: string
   folder?: FolderRecord
+  takeOtioReference?: () => OtioDraftReference | undefined
   openRemote?: boolean
   inspection?: boolean
   childSessionId?: string
@@ -44,6 +46,12 @@ export function createConversationResources() {
       // Previously sent drafts stay mounted; the next draft receives another stable key.
       const item = { key: resources.some(item => item.key === key) ? `${key}:${createUuid()}` : key,
         projectId, sessionId: '', folder, openRemote }
+      resources.push(item)
+      return item
+    },
+    freshOtioDraft(projectId: string, folder: FolderRecord | undefined, takeOtioReference: () => OtioDraftReference | undefined): ConversationResource {
+      const item = { key: `${projectResourceKey(projectId, 'draft', folder?.id ?? 'scratch')}:${createUuid()}`,
+        projectId, sessionId: '', folder, takeOtioReference }
       resources.push(item)
       return item
     },

@@ -9,9 +9,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, provide, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n.ts'
 import { apiUrl } from '../../api-url.ts'
+import { EditorGroupsKey } from '../../editor-groups.ts'
+import { liveProjectId } from '../../composables/useLiveClient.ts'
+import { createExplorerOtioDraftBridge, OtioDraftKey, OtioStartDraftKey } from '../../otio-draft.ts'
 import { useSessionFiles } from '../../composables/useSessionFiles.ts'
 import { readAttachmentBytes } from '../../attachment-preview.ts'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
@@ -24,6 +27,12 @@ import OtioViewer from './OtioViewer.vue'
 const props = defineProps<{ apiBase: string; folderId?: string; sessionId: string; sessionWorkspace?: boolean;
   path: string; mtime: string | null; active: boolean; canReview: boolean; remote: boolean; sourceBlob?: Blob; attachmentUrl?: string }>()
 const emit = defineEmits<{ added: [] }>()
+const groups = inject(EditorGroupsKey, undefined)
+const opener = inject(OtioStartDraftKey, undefined)
+if (groups && !props.attachmentUrl) provide(OtioDraftKey, createExplorerOtioDraftBridge(groups, () =>
+  props.active && props.canReview && !props.remote && !props.sourceBlob && (props.folderId || props.sessionId)
+    ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase), folderId: props.folderId, sessionId: props.sessionId }
+    : null, opener))
 const files = computed(() => useSessionFiles(props.apiBase, props.folderId, props.sessionWorkspace))
 const snapshot = shallowRef<{ model: OtioModel; source: OtioDocument; localRoot?: string }>()
 const unlinked = computed(() => props.attachmentUrl || props.sourceBlob ? t('Linked media is not loaded from a standalone attachment or archive.')
