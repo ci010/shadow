@@ -3674,27 +3674,18 @@ field. Both file-loading paths discard it in memory with a warning before
 validation, so old settings do not prevent startup. Loading does not rewrite the
 file; the next successful configuration save removes that field. New writes still
 reject `voice`, and all remaining settings are validated normally. This does not
-restore automatic STT; transcription is available through the `audio_cpp` tool.
+restore automatic STT. Composer and the host-only `project-audio` CLI retain
+the Project Audio service and its configuration. No C++ inference or audio
+setup agent tool is registered.
 
-Optional image/video inference uses the local-only `diffusion_cpp` tool and
-`diffusion-cpp` Skill. No `sd-cli` binary or weights ship with Shadow, and no
-downloads happen on startup. Qwen Image 2.1 is the default image preset;
-legacy Qwen-Image-Edit is a separate optional editing preset that checks
-Diffusers shard indexes in an existing cache, and Anima is an optional
-text-to-image preset with its own encoder, VAE and non-commercial license.
-Z-Image-Turbo is an explicit lower-resource text-to-image alternative;
-MOSS-Image SFT is an opt-in text-to-image preset requiring its diffusion
-model, Qwen3.5 encoder, FLUX.2 VAE and external tokenizer JSON (MOSS-Image
-Base is CLI-only). MiniMax-H3 is the video/audio preset. Project-local `.diffusion-cpp.json`
-stores references to existing model files, including other applications'
-caches, rather than copying weights into the Project. Bounded discovery
-reports filename/size candidates (or indexed-shard/header presence for the
-legacy Qwen cache), not proven compatibility. The Skill covers
-hardware, component pairing, licensing and consent before optional downloads.
-Outputs use the owning session's private `media` directory, including WebM
-with muxed audio for H3; existing media routing serves completed files,
-not progressive inference streams. Remote workdirs cannot use Main-local
-weights or `sd-cli`.
+The `audio-cpp` and `diffusion-cpp` skills use ordinary `read`, `write`, and
+OS `exec` for local inference. Their `v:cpp-installations` inventory lives in
+Project Home and is scoped to the selected Main or Child device and runtime.
+It records versioned absolute file paths, source, expected SHA-256 (when known),
+and observed SHA-256; it neither installs nor opens those files. Child paths
+are never resolved on Main; LayerFS is not an installation device. The Skills
+cover reuse, model-specific flags, license checks and approved output paths.
+No runtimes or weights ship with these Skills.
 
 The desktop release pipeline is configured to bundle a separate, pinned
 aria2 CLI for approved, resumable HTTPS transfers. Native Windows x64, macOS
@@ -3797,7 +3788,8 @@ run the Node backend directly; keep development services on trusted networks.
 | `src/mcp` | MCP client/transports/adapters and serialized catalog updates |
 | `src/bus`, `src/events`, `src/cron` | In-process messaging, subscriptions, scheduling |
 | `src/slash-commands`, `src/tools/shell-commands` | User slash-command adapters and separate tool-side shell-command handlers |
-| `src/channels`, `src/audio-cpp`, `src/diffusion-cpp` | Platform adapters, web chat/media, optional local audio.cpp ASR/TTS and sd.cpp image/video; no binary or model is bundled |
+| `src/channels`, `src/audio-cpp` | Platform adapters, web chat/media and Project Audio (local or OpenAI-compatible ASR/TTS) |
+| `src/vfs/cpp-installations.ts` | Device-scoped audio.cpp and stable-diffusion.cpp installation inventory; no binaries or weights bundled |
 | `src/gateway` | Hono policy/serving, plugin contract, UI proxy/static serving |
 | `src/otel` | Tracing, project telemetry-context integration, storage/query/streaming and distributed-job audit helpers |
 | `src/browser` | Explicit browser bindings, page routing contract and MCP disconnect lifecycle |
