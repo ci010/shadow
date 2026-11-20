@@ -38,8 +38,8 @@
         <div class="description-filter">
           <label><input v-model="missing" type="checkbox" :disabled="!available"> {{ t('Missing descriptions only') }}</label>
           <HoverInfo v-if="available" interactive :label="t('Description storage')"
-            :text="t('Descriptions are saved in this browser profile for this timeline revision. The OTIO file is unchanged.')" v-slot="{ triggerProps, open }">
-            <button type="button" class="board-action icon-action" v-bind="triggerProps" :aria-label="t('Description storage')" @keydown.esc="open && $event.stopPropagation()">
+            :text="t('Descriptions are saved in this browser profile for this timeline revision. The OTIO file is unchanged.')" v-slot="{ triggerProps }">
+            <button type="button" class="board-action icon-action" v-bind="triggerProps" :aria-label="t('Description storage')" @keydown.esc="triggerProps['aria-expanded'] && $event.stopPropagation()">
               <span class="i-lucide-info" aria-hidden="true" />
             </button>
           </HoverInfo>

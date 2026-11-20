@@ -636,8 +636,10 @@ drawing happens in the Monitor.
 Use **Add description** or **Edit description** on a card to add a caption; all
 samples of that clip share it, with one caption per clip on each page. Save a blank
 description to remove it. **Missing descriptions only** excludes gaps and clips
-that already have a caption. Descriptions are plain text stored in this browser
-profile, scoped to the connected project, file owner and path, and exact file
+that already have a caption. Focus or click **Description storage**, the info
+button next to that filter, for a reminder about where captions are saved.
+Descriptions are plain text stored in this browser profile, scoped to the
+connected project, file owner and path, and exact file
 contents. They are not written to the OTIO, shared across devices, or sent to chat.
 Moving or editing the file can start a new description set. Local descriptions are
 unavailable on attachment/archive and remote preview routes or when the browser
