@@ -86,23 +86,7 @@ operator-managed rate limits, updates and operational review.
 ## Pair, disconnect and revoke
 
 Use **Create phone pairing code** and **Disconnect phone** in Nodes → Phone access.
-The following CLI is an optional alternative for operators on Main:
-For LAN HTTP only, the CLI process additionally requires
-`SHADOW_MOBILE_ALLOW_LAN_HTTP=1`; the desktop UI does not.
-
-```powershell
-pnpm mobile:pair --connection C:\absolute\path\connection.json
-```
-
-Or specify its loopback URL and an existing owner-protected credential file:
-
-```powershell
-pnpm mobile:pair --url http://127.0.0.1:3123 --credential-file C:\absolute\path\launch-credential
-```
-
-Never supply the launch credential as an argument or put it in a mobile build.
-The CLI prints the configured phone address and a five-minute, single-use pairing code.
-Enter them in the app. **Pairing grants owner access to application data and
+Enter the address and pairing code shown in the UI in the phone app. **Pairing grants owner access to application data and
 actions**, including projects, chat, configuration and provider setup; it is not
 a multi-user or read-only authorization model. Do not share codes with others.
 Runtime control, device pairing/network administration and cluster endpoints
@@ -134,12 +118,7 @@ The native encrypted-storage container and device-only protection are unchanged.
 
 Disconnecting revokes the authorization. If a phone disconnects while offline,
 only its local credential can be cleared; remove its session on Main to confirm
-remote revocation. A lost phone can also be revoked from Main:
-
-```powershell
-pnpm mobile:pair --list --connection C:\absolute\path\connection.json
-pnpm mobile:pair --revoke <session-id> --connection C:\absolute\path\connection.json
-```
+remote revocation. Use **Disconnect phone** next to the relevant session in Nodes → Phone access.
 
 Revocation and shutdown abort associated live streams and invalidate resource
 tickets; shutdown does not expire the paired authorization. File access tickets

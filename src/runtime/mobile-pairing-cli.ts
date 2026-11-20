@@ -70,8 +70,8 @@ function validExpiry(value: string, ttl: number): boolean {
 export async function runMobilePair(args: readonly string[], output: (text: string) => void = console.log): Promise<void> {
   if (args.length === 1 && ['--help', '-h'].includes(args[0]!)) {
     output([
-      'pnpm mobile:pair [--list | --revoke <session-id>] --connection <absolute protected descriptor>',
-      'pnpm mobile:pair [--list | --revoke <session-id>] --url http://127.0.0.1:<port> --credential-file <absolute protected file>',
+      'Options: [--list | --revoke <session-id>] --connection <absolute protected descriptor>',
+      'Options: [--list | --revoke <session-id>] --url http://127.0.0.1:<port> --credential-file <absolute protected file>',
       'Configure SHADOW_MOBILE_ORIGIN and a TLS reverse proxy before pairing.',
       'Credentials are read from protected files, never command-line values.',
     ].join('\n'))

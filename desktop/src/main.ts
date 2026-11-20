@@ -326,7 +326,7 @@ async function start(): Promise<void> {
       if (app.isPackaged) {
         console.info('[desktop] Web access: with ELECTRON_RUN_AS_NODE=1, run:')
         console.info(`& ${quote(process.execPath)} ${quote(join(process.resourcesPath, 'backend', 'dist', 'src', 'index.js'))} web pair --connection ${quote(path)}`)
-      } else console.info(`[desktop] Web access: pnpm web:pair --connection ${quote(path)}`)
+      }
     },
     onError: () => console.error('[desktop] Web pairing connection publication failed; desktop runtime status is unchanged.'),
     onUnavailable: () => sendRuntimeEndpoint({ type: 'shadow:runtime-stopped' }),
