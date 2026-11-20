@@ -21,7 +21,8 @@ export function pdfViewerAssets(): Plugin {
       references.clear()
       for (const directory of ['cmaps', 'standard_fonts', 'wasm']) {
         for (const entry of await readdir(join(root, directory), { withFileTypes: true })) {
-          if (!entry.isFile()) continue
+          // The file viewer uses PDF image decoders, not the optional PDF scripting sandbox.
+          if (!entry.isFile() || directory === 'wasm' && entry.name.startsWith('quickjs-eval.')) continue
           const name = `${directory}/${entry.name}`
           const source = await readFile(join(root, directory, entry.name))
           assets.set(name, source)

@@ -67,7 +67,7 @@ module.exports = async function checkUi(contents, fixtureScene) {
   }
   const polled = await until(requests, rows => rows.some(row => row.unchanged), 'conditional poll returns 304');
   assert.equal(polled.find(row => row.unchanged).etag, polled[0].etag);
-  assert.equal((await exec('window.threeUi.workerStarts()')).length, 1, '304 initiated an unnecessary rebuild');
+  assert.equal((await exec('window.threeUi.buildStarts()')).length, 1, '304 initiated an unnecessary rebuild');
   const beforeEdit = await toolFrame('current', back.version);
   assert.equal(beforeEdit.version, back.version);
   assert.match((await toolFrame('current', undefined, back.version)).error, /previous asset version/);
@@ -79,10 +79,10 @@ module.exports = async function checkUi(contents, fixtureScene) {
     const current = await until(capture, value => value.version?.startsWith(`${version}:`), 'new build committed to viewer');
     assert.deepEqual(current.camera, back.camera, 'refresh changed the live camera');
     assert.notEqual(current.imageHash, beforeEdit.imageHash, 'rear-claw edit did not change capture');
-    const starts = await exec('window.threeUi.workerStarts()');
-    assert.equal(starts.length, 2, 'one changed snapshot should trigger one worker');
-    const debounceToWorkerMs = starts[1] - changed.find(row => row.version === version).time;
-    assert(debounceToWorkerMs >= 150, `hot reload bypassed debounce: ${debounceToWorkerMs}ms`);
+    const starts = await exec('window.threeUi.buildStarts()');
+    assert.equal(starts.length, 2, 'one changed snapshot should trigger one build');
+    const debounceToBuildMs = starts[1] - changed.find(row => row.version === version).time;
+    assert(debounceToBuildMs >= 150, `hot reload bypassed debounce: ${debounceToBuildMs}ms`);
     const carried = await until(() => toolFrame('current', undefined, back.version), frame => frame.version === current.version, 'real capture_view tool following updated version');
     assert.deepEqual(carried.camera, current.camera);
     assert(carried.objectIds.includes('stand.rear.left') && carried.objectIds.includes('stand.rear.right'));
@@ -111,10 +111,10 @@ module.exports = async function checkUi(contents, fixtureScene) {
     await exec('window.threeUi.activate()');
     await click('Download GLB');
     const viewerLoads = await exec('window.threeUi.viewerLoads()');
-    const workerStarts = await exec('window.threeUi.workerStarts()');
+    const buildStarts = await exec('window.threeUi.buildStarts()');
     assert.equal(viewerLoads.length, 3, 'broken syntax should never reach the viewer');
-    assert.equal(workerStarts.length, 4, 'expected initial, edited, broken and repaired builds');
-    const workerToCommittedModelMs = viewerLoads.map((entry, i) => entry.committed - workerStarts[i === 2 ? 3 : i]);
+    assert.equal(buildStarts.length, 4, 'expected initial, edited, broken and repaired builds');
+    const buildToCommittedModelMs = viewerLoads.map((entry, i) => entry.committed - buildStarts[i === 2 ? 3 : i]);
     const selection = () => exec('window.threeUi.selection()');
     const stableIds = drafts.map(ref => ref.objectId).sort();
     assert.deepEqual((await selection()).sort(), stableIds, 'successful and failed reloads should retain unchanged selected IDs');
@@ -129,6 +129,6 @@ module.exports = async function checkUi(contents, fixtureScene) {
     assert.notEqual(afterRename.version, recovered.version);
     const survivors = stableIds.filter(id => id !== removed);
     assert.deepEqual((await selection()).sort(), survivors, 'replaced ID must be removed without clearing surviving selections');
-    return { draftIds: stableIds, firstVersion, version, debounceToWorkerMs, workerToCommittedModelMs, capture: { version: carried.version, current: carried.size, front: front.size }, selectionReload: { version: afterRename.version, removed, survivors }, snapshotRequests: await requests() };
+    return { draftIds: stableIds, firstVersion, version, debounceToBuildMs, buildToCommittedModelMs, capture: { version: carried.version, current: carried.size, front: front.size }, selectionReload: { version: afterRename.version, removed, survivors }, snapshotRequests: await requests() };
   } finally { await writeFile(stand, original); }
 };

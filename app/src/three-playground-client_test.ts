@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
 import { collectModelResources, isGltfFile, isPlaygroundFile, modelVersion } from './gltf-file-source.ts'
-import { fetchPlaygroundSnapshot, watchPlayground, type SnapshotRead } from './three-playground-client.ts'
+import { exportSnapshot, fetchPlaygroundSnapshot, watchPlayground, type SnapshotRead } from './three-playground-client.ts'
 
 const pack = (value: object) => new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0' }, ...value }))
 const signal = () => new AbortController().signal
@@ -98,4 +98,9 @@ test('client forwards declared JSON as bytes and rebuilds on a JSON-only snapsho
   await tick(10)
   assert.deepEqual(errors, [])
   assert.deepEqual(built, scenes.map(scene => Buffer.from(scene)))
+})
+
+test('export does not start a build after cancellation', async () => {
+  const reason = new Error('superseded')
+  await assert.rejects(exportSnapshot(change('a').snapshot, AbortSignal.abort(reason)), error => error === reason)
 })

@@ -99,22 +99,10 @@ export function watchPlayground(callbacks: {
   return { rebuild: () => { void check(true) }, dispose: () => { disposed = true; clearTimeout(poll); reader?.abort(); invalidate() } }
 }
 
-export function exportSnapshot(snapshot: FileSnapshot, signal: AbortSignal): Promise<ArrayBuffer> {
+export async function exportSnapshot(snapshot: FileSnapshot, signal: AbortSignal): Promise<ArrayBuffer> {
   signal.throwIfAborted()
-  const worker = new Worker(new URL('./three-playground.worker.ts', import.meta.url), { type: 'module', name: 'shadow-three-build' })
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => end(new Error('Playground worker exceeded the 15 s wall-clock limit')), 15_000)
-    const abort = () => end(signal.reason ?? new DOMException('Aborted', 'AbortError'))
-    function end(error?: Error, glb?: ArrayBuffer) {
-      clearTimeout(timeout); signal.removeEventListener('abort', abort); worker.terminate()
-      if (error || !glb) reject(error || new Error('Missing GLB')); else resolve(glb)
-    }
-    worker.onerror = event => end(new Error(event.message || 'Playground worker unavailable'))
-    worker.onmessageerror = () => end(new Error('Unreadable Playground result'))
-    worker.onmessage = ({ data }) => data?.glb instanceof ArrayBuffer && data.glb.byteLength <= 16 * MiB
-      ? end(undefined, data.glb) : end(new Error(typeof data?.error === 'string' ? data.error : 'Invalid Playground result'))
-    signal.addEventListener('abort', abort, { once: true })
-    try { worker.postMessage({ files: snapshot.files, assets: snapshot.assets }, Object.values(snapshot.assets)) }
-    catch (error) { end(error instanceof Error ? error : new Error('Could not send file snapshot')) }
-  })
+  const { buildPlayground } = await import('@shadow/three-playground')
+  signal.throwIfAborted()
+  const { glb } = await buildPlayground(snapshot, { signal, timeoutMs: 10_000 })
+  return glb
 }

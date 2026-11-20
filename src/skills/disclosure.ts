@@ -110,7 +110,7 @@ export class SkillDisclosure {
   summary(visibleSkills: Skill[], sessionId?: string): string {
     const visible = new Map(visibleSkills.map(skill => [skill.meta.name, skill]))
     const guidance = visible.has('three-playground')
-      ? `${GUIDANCE}\n- For 3D modeling, orbitable dioramas and animated miniature scenes (微缩景观), read("v:skills/three-playground"). Default to its editable JSON project; no UI or subtle motion alone does not mean HTML. Respect explicit formats.`
+      ? `${GUIDANCE}\n- For 3D modeling, orbitable dioramas and animated miniature scenes (微缩景观), read("v:skills/three-playground"). Default to its file-based Three.js project with a JSON marker; no UI or subtle motion alone does not mean HTML. Respect explicit formats.`
       : GUIDANCE
     const sorted = [...visibleSkills].sort((a, b) =>
       a.meta.name < b.meta.name ? -1 : a.meta.name > b.meta.name ? 1 : 0)

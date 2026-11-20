@@ -1,3 +1,4 @@
+import { serveThreeSnapshot } from '../../src/gateway/three-snapshot.ts';
 import { Hono } from 'hono';
 import { sessionsApiPlugin } from '../../src/sessions/routes.ts';
 import { apiBase, marker, sessionId } from './constants.mjs';
@@ -52,4 +53,19 @@ export async function fixtureEndpoints(workspace, fixtureScene, withTools) {
     } catch (error) { res.statusCode = 500; res.end(JSON.stringify({ error: String(error) })); }
   };
   return { handle, close };
+}
+
+// Only the selected marker can be read. Its directory is not a Vite static root.
+export function markerEndpoint(path, markerName) {
+  const app = new Hono();
+  app.get('/__three-marker', c => c.req.query('path') === markerName
+    ? serveThreeSnapshot(c, async () => ({ path })) : c.notFound());
+  return { close: async () => {}, async handle(req, res, next) {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname !== '/__three-marker') return next();
+    const response = await app.request(url, { method: req.method, headers: req.headers });
+    res.statusCode = response.status;
+    for (const [key, value] of response.headers) res.setHeader(key, value);
+    res.end(await response.text());
+  } };
 }

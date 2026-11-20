@@ -32,7 +32,7 @@ The benchmark mounts production `ThreeViewer` and uses Chromium input dispatch i
 
 `baseline` is a separate stock-Three diagnostic: 2,048 meshes each, with either one geometry or 2,048 unique geometries. It performs real WebGL draws, raycasts and projected-center queries, and downloads the unchanged fixture for a stock `GLTFLoader` round trip. It is not a test of Shadow's pointer, worker or reload pipeline.
 
-`worker` passed independently of Vue: the real app Worker received a snapshot from the production session HTTP route, handled a conditional 304, built through QuickJS/WASM, and downloaded a 76,340-byte GLB that stock `GLTFLoader` decoded with 33 stable IDs.
+Historical baseline (before the native browser builder): the `worker` check received a snapshot from the production session HTTP route, handled a conditional 304, and downloaded a 76,340-byte GLB that stock `GLTFLoader` decoded with 33 stable IDs. These timings and byte counts are not measurements of the current builder.
 
 ## UI integration boundary
 
