@@ -1395,10 +1395,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   const runtime = new DirectoryBots(deployments)
   await mkdir(join(f.home, 'memory', 'topics'), { recursive: true })
   await writeFile(join(f.home, 'memory', 'topics', 'Shared.md'), 'DEPLOYED_WIKI_CANARY')
-  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResources: { wiki: true, folders: [randomUUID()] } }) }
+  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResourcesModel: 'bot-wide', readResources: { wiki: true } }) }
   const source = { version: 1, projectId: f.projectId, connectionId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
-  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: ['read'], readResources: { wiki: true }, readDomains: [], inheritThreads: true, manage: false }
+  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: ['read'], readDomains: [], inheritThreads: true, manage: false }
   let files = assignChannelSource(base, source, permission, 'parent').files
+  const { parseBot } = await import('../bots/sdk.ts')
+  const incompatible = { ...files, 'bot.json': JSON.stringify({ ...JSON.parse(files['bot.json']), readResources: { folders: [randomUUID()] } }) }
+  const draft = runtime.discord([{ bot: parseBot(incompatible), files: incompatible, deployment: {
+    id: 'parent-support', revision: deployments.freeze(incompatible).revision, source: { folderId: 'fixture', directory: 'parent-support' }, mode: 'bounded',
+  } }])
+  await assert.rejects(() => f.config.validateBotDeployment(draft.agents, draft.bindings, signal()), /source folder unavailable|source reads are unsupported/)
   const publish = async () => {
     const frozen = deployments.freeze(files)
     await deployments.deploy({ id: 'parent-support', source: { folderId: 'fixture', directory: 'parent-support' }, ...frozen, expectedRevision: deployments.read('parent-support')?.deployment.revision })
@@ -1428,8 +1434,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   files = assignChannelSource(files, source, { ...permission, enabled: false }, 'parent').files
   await publish(); await assert.rejects(f.input('407'), /disabled|not assigned/)
   files = assignChannelSource(files, source, permission, 'parent').files
+  const companion = JSON.parse(files['bot.json'])
+  delete companion.readResources
+  files = { ...files, 'bot.json': JSON.stringify(companion) }
   await publish(); f.requests.length = 0
+  f.responses.push({ content: '', toolCalls: [{ id: 'revoked-wiki', name: 'read', arguments: { path: 'v:memory/topics/Shared.md' } }] })
   await f.send('407', 'POST_B_NEW_GENERATION')
+  assert.doesNotMatch(JSON.stringify(f.requests), /DEPLOYED_WIKI_CANARY/)
   assert.notEqual(f.sessions.getSessionState(f.id('407'))?.channelBoundary?.epoch, oldEpoch)
   assert.doesNotMatch(JSON.stringify(f.requests), /POST_B_ONLY|POST_A_PRIVATE_CONTEXT/)
 })

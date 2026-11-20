@@ -145,8 +145,8 @@ export class IntegrationStore {
   }
 
   definition(agent: IntegrationAgent): AgentTypeDefinition {
-    // The common BOT ceiling may include resources used only by QQ/Feishu.
-    // Validate new folders against the Discord backend only on selection by a binding.
+    // Validate projected Service BOT grants and standalone Integration Agent
+    // resource scopes against the Discord backend on each binding.
     const ids = agent.sourceFolders ?? []
     if (!unambiguousResourceFolders(agent.readResources, agent.sourceFolders)) throw new IntegrationError('permission_ceiling', 'Do not mix legacy and new folder scopes.')
     if (ids.length) {
@@ -205,8 +205,8 @@ export class IntegrationStore {
   }
 
   private validateAgent(agent: z.infer<typeof IntegrationAgentSchema> | Extract<IntegrationChange, { kind: 'agent.save' }>['agent']): void {
-    // The common BOT ceiling may include resources used only by QQ/Feishu.
-    // Validate new folders against the Discord backend only on selection by a binding.
+    // Validate projected Service BOT grants and standalone Integration Agent
+    // resource scopes against the Discord backend on each binding.
     const ids = agent.sourceFolders ?? []
     if (!unambiguousResourceFolders(agent.readResources, agent.sourceFolders)) throw new IntegrationError('permission_ceiling', 'Do not mix legacy and new folder scopes.')
     if (ids.length) {

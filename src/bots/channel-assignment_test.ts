@@ -106,6 +106,12 @@ test('shared production assignment validation rejects another Project, personal 
     const candidate = parseBot(assignChannelSource(files, origin, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
     const folder = async () => { throw new Error('No read grants expected') }
     await validateServiceAssignments('p', bots, candidate, [], folder)
+    const id = '10000000-0000-4000-8000-000000000001'
+    const withGrant = { ...candidate, readResources: { folders: [id] } }
+    const checked: string[] = []
+    await validateServiceAssignments('p', bots, withGrant, [], async folderId => { checked.push(folderId) })
+    assert.deepEqual(checked, [id])
+    await assert.rejects(() => validateServiceAssignments('p', bots, withGrant, [], folder), /No read grants expected/)
     await assert.rejects(() => validateServiceAssignments('other', bots, candidate, [], folder), /Project mismatch/)
     await assert.rejects(() => validateServiceAssignments('p', bots, candidate, [{ ...candidate, id: 'other' }], folder), /another BOT/)
     const personal = bots.create('qq', 'Personal', { enabled: false }, undefined, 'personal')

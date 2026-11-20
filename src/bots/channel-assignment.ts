@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BotBindingSchema, bindingSubscription, botSubscriptionKey, parseBotPackage } from './sdk.ts'
+import { BotBindingSchema, migratableReadResources, withoutBindingReadScope, bindingSubscription, botSubscriptionKey, parseBotPackage } from './sdk.ts'
 import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
 
 /** Target identity comes exclusively from a host-recorded inbox, never the model's policy JSON. */
@@ -10,6 +10,7 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
   if (bot.mode !== 'service') throw new Error('Personal BOTs cannot receive service channel assignments')
   if (!policy || typeof policy !== 'object' || Array.isArray(policy)) throw new Error('Explicit binding policy object required')
   for (const key of ['id', 'platform', 'botInstanceId', 'botUserId', 'target', 'conversationId']) if (Object.hasOwn(policy, key)) throw new Error('Binding targets must come from the referenced channel session')
+  for (const key of ['readResources', 'readFolders', 'sourceFolders']) if (Object.hasOwn(policy, key)) throw new Error('Read scope is inherited from the BOT; configure top-level readResources instead')
   const permissions = policy as Record<string, unknown>
   if (scope === 'parent' && (source.platform !== 'discord' || source.kind !== 'thread' || !source.parentId || !source.guildId || permissions.inheritThreads !== true)) throw new Error('Parent rules require a verified public Discord thread and explicit inheritThreads:true')
   if (source.platform === 'discord' && source.kind === 'thread' && scope === 'conversation' && permissions.inheritThreads !== false) throw new Error('Exact thread assignment requires inheritThreads:false; choose scope:parent explicitly for a parent rule')
@@ -30,7 +31,11 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
   }
   const binding = BotBindingSchema.parse({ ...permissions, ...target })
   const config = JSON.parse(files[configPath]!)
-  config.bindings = [...bot.bindings.filter(item => item !== existing), binding]
+  const readResources = migratableReadResources(bot)
+  config.readResourcesModel = 'bot-wide'
+  config.readResources = readResources
+  delete config.sourceFolders
+  config.bindings = [...bot.bindings.filter(item => item !== existing), binding].map(withoutBindingReadScope)
   if (bot.subscriptions !== undefined) {
     const ref = bindingSubscription(binding), key = botSubscriptionKey(ref)
     config.subscriptions = [...bot.subscriptions.filter(item => botSubscriptionKey(item) !== key), ...(binding.enabled ? [ref] : [])]
@@ -39,6 +44,6 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
   const content = (JSON.stringify(config, null, 2) + '\n').replace(/\n/g, eol)
   const updated = { ...files, [configPath]: content }
   parseBotPackage(updated)
-  return { files: updated, configPath, content, binding }
+  return { files: updated, configPath, content, binding, readResources }
 }
 
