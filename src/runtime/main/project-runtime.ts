@@ -277,7 +277,6 @@ import { microAppsPlugin } from '../../microapps/routes.ts'
 import { MicroAppTool } from '../../tools/micro-app.ts'
 import { AudioCppService } from '../../audio-cpp/service.ts'
 import { registerAudioRoutes } from '../../audio-cpp/routes.ts'
-import { AudioCppTool } from '../../tools/audio-cpp.ts'
 import { mountCppInstallations } from '../../vfs/cpp-installations.ts'
 import { Aria2Downloader } from '../../downloader/aria2.ts'
 import { DownloadTool } from '../../tools/download.ts'
@@ -1008,8 +1007,6 @@ export async function createProjectRuntime(
     },
   })
   cleanup.push(() => audioRoutes.close())
-  // Legacy Audio setup entry point; local agent inference uses the CPP inventory and exec.
-  importTool.registerBuiltin('audio', new AudioCppTool(audioService, project.id, workspace, 'audio'))
   importTool.registerBuiltin('download', new DownloadTool(new Aria2Downloader(), project.id, backgroundTasks))
 
   const initiatives = new InitiativeStore(workspace, {

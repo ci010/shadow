@@ -9,9 +9,6 @@ import { AudioCppService } from './service.ts'
 import { AudioCppInstaller, extractZip, type SetupRequest } from './install.ts'
 import { RemoteAudio } from './remote.ts'
 import { assessCandidate, type Hardware } from './assessment.ts'
-import { AudioCppTool } from '../tools/audio-cpp.ts'
-import { SessionTools, Tools } from '../tools/registry.ts'
-import type { ExecutionContext } from '../tools/context.ts'
 
 function zip(name: string, data: Buffer): Buffer {
   const local = Buffer.alloc(30), central = Buffer.alloc(46), end = Buffer.alloc(22), nameBytes = Buffer.from(name)
@@ -27,11 +24,7 @@ const model = Buffer.from('GGUFfixture weights, not a real model')
 function request(): SetupRequest {
   return { approved: true, task: 'asr', binary: { url: 'https://example.com/pinned.zip', sha256: sha(binary), bytes: binary.length, entry, platform: process.platform as 'win32', arch: process.arch as 'x64' }, model: { url: 'https://example.com/pinned.gguf', sha256: sha(model), bytes: model.length, family: 'sense_asr' } }
 }
-function context(workspace: string): ExecutionContext {
-  return { channel: 'system', messageId: 'test', senderId: 'test', chatId: 'test', sessionId: 'session', physicalSessionId: 'session', cwd: workspace, projectId: 'p', signal: new AbortController().signal, tools: new SessionTools(new Tools(workspace), workspace) }
-}
-
-test('Agent tool setup verifies artifacts, probes, registers and routes inference; rerun uses the same managed paths', async () => {
+test('Project audio setup verifies artifacts, probes, registers and routes inference; rerun uses the same managed paths', async () => {
   await withTempWorkspace(async workspace => {
     let inference = 0, probes = 0, transfers = 0
     const service = new AudioCppService(workspace, async (path, args) => {
@@ -46,25 +39,23 @@ test('Agent tool setup verifies artifacts, probes, registers and routes inferenc
       if (!reused) { transfers++; await writeFile(path, input.url.endsWith('.zip') ? binary : model) }
       return { path, sha256: input.sha256, bytes: input.bytes!, reused }
     } }, undefined, join(workspace, 'tool-store'))
-    const tool = new AudioCppTool(service, 'p', workspace, 'audio'), ctx = context(workspace)
-    const assessment = JSON.parse(await tool.execute({ action: 'assess', candidate: { family: 'sense_asr', downloadBytes: model.length + binary.length, platform: process.platform, arch: process.arch } }, ctx))
+    const assessment = await service.assess({ family: 'sense_asr', downloadBytes: model.length + binary.length, platform: process.platform as 'win32', arch: process.arch as 'x64' })
     assert.equal(assessment.hardware.platform, process.platform)
     assert.ok(assessment.hardware.totalMemoryBytes > 0)
     assert.ok(assessment.hardware.freeDiskBytes > 0)
     assert.equal(assessment.suitability, 'unknown')
-    await tool.execute({ action: 'setup', setup: request() }, ctx)
+    await service.setup(request())
     const first = await service.read()
     assert.equal(first.routes?.asr, 'local')
     assert.equal(first.asr?.family, 'sense_asr')
     assert.ok(first.binary?.startsWith(join(workspace, 'tool-store', 'versions')))
     assert.ok(first.asr?.path.startsWith(join(workspace, 'tool-store', 'models')))
     await writeFile(join(workspace, 'input.wav'), 'RIFFfixture')
-    assert.deepEqual(JSON.parse(await tool.execute({ action: 'transcribe', input: 'input.wav' }, ctx)), { text: 'fixture transcript' })
-    await tool.execute({ action: 'setup', setup: request() }, ctx)
+    assert.equal(await service.transcribe(join(workspace, 'input.wav')), 'fixture transcript')
+    await service.setup(request())
     assert.deepEqual(await service.read(), first)
     assert.equal(inference, 1); assert.ok(probes >= 4); assert.equal(transfers, 2)
     assert.equal((await service.status()).inferenceVerified, false)
-    await assert.rejects(() => tool.execute({ action: 'setup', setup: request() }, { ...ctx, remoteWorkdir: {} as ExecutionContext['remoteWorkdir'] }), /local owning Project/)
   })
 })
 
@@ -95,11 +86,10 @@ test('remote API configuration selects explicit unified routes, redacts errors a
       return new Response(JSON.stringify({ text: 'remote fixture' }), { headers: { 'Content-Type': 'application/json' } })
     }, { AUDIO_TEST_KEY: 'fixture-secret' })
     const service = new AudioCppService(workspace, async () => { local++; throw new Error('should not run') }, undefined, remote)
-    const tool = new AudioCppTool(service, 'p', workspace), ctx = context(workspace)
-    await tool.execute({ action: 'configure_remote', task: 'asr', remote: { baseUrl: 'https://audio.example/v1', model: 'whisper-1', apiKeyEnv: 'AUDIO_TEST_KEY' } }, ctx)
+    await service.configureRemote('asr', { baseUrl: 'https://audio.example/v1', model: 'whisper-1', apiKeyEnv: 'AUDIO_TEST_KEY' })
     assert.equal(requests, 0)
     await writeFile(join(workspace, 'input.wav'), 'fixture')
-    assert.deepEqual(JSON.parse(await tool.execute({ action: 'transcribe', input: 'input.wav' }, ctx)), { text: 'remote fixture' })
+    assert.equal(await service.transcribe(join(workspace, 'input.wav')), 'remote fixture')
     assert.equal(local, 0)
     assert.ok(!JSON.stringify(await service.status()).includes('fixture-secret'))
     const failed = new RemoteAudio(async () => { throw new Error('fixture-secret https://credential-url') })

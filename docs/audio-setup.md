@@ -70,42 +70,51 @@ The Project endpoint accepts at most 10 MiB, never caller-supplied paths, and de
 its private temporary WAV after inference. There is no silent remote fallback.
 
 TTS-only configuration still offers ASR setup. A configured remote ASR route is
-reported accurately but composer recording currently supports local ASR only;
-remote transcription remains available through the unified audio tool. **Change
-audio setup** is available in the microphone popup after a 200 ms hover or keyboard
-focus. It explicitly opens local/remote choices, whose selection submits a setup
-request to the ordinary session Agent. **Refresh audio status** rechecks setup;
-status errors show retry instead of pretending audio is unconfigured. Configuration
-readiness does not claim inference verification. This is conventional input, not
-an IME or duplex interface. Capture remains available while the assistant is thinking
-and can append to an existing draft; it does not interrupt that turn or auto-send.
-Only setup submission keeps request-busy, draft and attachment restrictions. Capture
-is disabled for remote workdirs, pending questions and read-only conversations, and
-capture/transcription are mutually exclusive. Existing send behavior is unchanged.
-Capture/inference failures remain visible and do not send a message.
+reported accurately, but Composer recording supports local ASR only. **Change
+audio setup** opens the local/remote setup guidance without sending a chat message
+or requesting microphone permission. Use the host command below, then select
+**Refresh audio status**. Status errors show retry instead of pretending audio is
+unconfigured. Configuration readiness does not claim inference verification.
+Recording can append to the current draft while the assistant is thinking, but
+never interrupts that turn or sends the draft. Capture is disabled for remote
+workdirs, pending questions and read-only conversations.
 
 Implementation checks use synthetic PCM, mocked capture lifecycle, rendered state
 transitions, and authenticated endpoint fixtures. They do not exercise a real
 microphone or establish browser/OS capture readiness on a specific installation.
 
-## Legacy Audio UI setup workflow
+## Project audio settings on the host
 
-The Audio setup UI uses the legacy `audio` entry point, backed by the same
-Project service and per-task routes as before. For agent-local inference, use
-`v:skills/audio-cpp`, `v:cpp-installations/audio-cpp` and OS `exec`.
-The inventory does not configure or migrate Audio UI/API settings.
+Run `node dist/src/index.js project-audio <command> "<absolute Project Home>" [args]`
+on the Shadow backend host as its OS user (source checkout: replace
+`node dist/src/index.js` with `node --import tsx src/index.ts`). Project Home is
+`<backend data directory>/projects/<project-id>`, not the conversation's
+working directory. If no backend data directory is set, the configured Agent
+workspace is the base directory. Run configuration commands for a Project one
+at a time. This is a local operator command, not an agent tool or a Web
+API. Use it only with trusted local inputs; configuration can select an executable.
+It uses the same Project Audio settings as Composer and does not change the CPP
+inventory. For standalone local inference use the `audio-cpp` Skill and inventory.
+
+To register already installed files, run `configure` with one JSON file, e.g.:
+
+```json
+{"binary":"/absolute/path/to/audiocpp_cli","task":"asr","family":"sense_asr","path":"/absolute/path/to/model.gguf","backend":"cpu"}
+```
+
+For managed installation:
 
 1. `status`: inspect existing CLI/models and selected task routes.
-2. `assess` with `candidate`: family, backend, platform, arch, downloadBytes; optional
+2. `assess` with a JSON file containing: family, backend, platform, arch, downloadBytes; optional
    minimumMemoryBytes only with a published memoryEvidence URL. Shadow measures
    available/total RAM, free disk, CPU count, OS and architecture. Suitable means
    basic evidenced CPU capacity, **not** tested inference. GPU/driver support or
    missing model-specific RAM metadata produce unknown. Unsuitable recommends remote;
-   the Agent must ask before switching, never automatically upload or fall back.
+   remote routing always requires an explicit selection.
    Do not invent universal RAM thresholds or treat model download size as RAM usage.
 3. Obtain approval for source, license and disk use. Resolve trusted published
    SHA-256, sizes and pinned URLs; never fabricate a digest.
-4. `setup` with a `setup` object:
+4. `install` with a JSON file containing:
    - approved: true (only following approval)
    - binary: {url, sha256, bytes, entry, platform, arch}
    - model: {url, sha256, bytes, family}
@@ -126,7 +135,8 @@ The inventory does not configure or migrate Audio UI/API settings.
    the install lock, without re-extracting or deleting the existing installation.
    Missing manifests, incomplete files or integrity mismatches fail explicitly for
    manual inspection, never automatic repair. Help/catalog is not an inference probe.
-6. Test a consented sample using `transcribe`/`speak` before claiming working inference.
+6. Test a consented sample with `transcribe <Project Home> <input.wav>` or
+   `speak <Project Home> <text-file> <new-output.wav>` before claiming working inference.
    `status.inferenceVerified` is deliberately false: configuration is not acceptance.
 
 ZIP only, maximum compressed archive 512 MiB, single extracted entry 512 MiB and
@@ -153,10 +163,11 @@ from a short unchunked inference test.
 
 ## Remote API
 
-`configure_remote` takes task and remote={baseUrl, model, apiKeyEnv?}. Explicitly
+`configure-remote` takes a JSON file with `task` (ASR: `asr`, TTS: `tts`) and
+`remote` (`baseUrl`, `model`, optional `apiKeyEnv` and `voice`). Explicitly
 select an OpenAI-compatible `/v1` base URL; HTTPS required except loopback HTTP.
 `apiKeyEnv` references an existing host secret environment variable; never place
-keys in chat/tool arguments. New credential provisioning remains host-side; this
+keys in chat or settings files. New credential provisioning remains host-side; this
 iteration does not introduce a secure credential input form. A localhost API may
 need no key. Configuration makes no network request and proves no remote readiness.
 
@@ -171,11 +182,10 @@ configure selects remote. Existing `.audio-cpp.json` v1 configs remain readable.
 ## Verification boundaries
 
 Focused setup tests use synthetic ZIP/GGUF data, a mock downloader/CLI and mocked
-HTTP responses. They prove Agent tool execution, verification/extraction, registration,
+HTTP responses. They exercise verification/extraction, registration,
 route selection, idempotent config and failure behavior, **not** real model inference.
-UI tests prove chooser wiring/request semantics plus Vue typechecking, not browser
-acceptance. Actual first-use Agent interaction, approved live downloads, host backend
-compatibility and a real inference sample remain user end-to-end acceptance checks.
+UI fixtures check the Composer setup guidance and capture behavior, not browser
+acceptance on a specific machine.
 
 ### Live source-service acceptance (2026-10-12)
 
@@ -204,12 +214,9 @@ The first inference with default options failed explicitly because the Silero VA
 model path was absent. Repeating setup with the short-sample options above resolved
 that failure without downloading another model or hiding the error.
 
-This validates real source-service setup/inference, not a reloaded production tool
-or UI. The already-running runtime still exposed the older `audio_cpp` contract;
-its `status` rejected the new persisted `routes` key. Restart/reload with the current
-backend and repeat ordinary Agent tool calls before claiming production-session
-acceptance. `status.inferenceVerified` remains false by design. TTS, automatic VAD,
-long recordings, microphone capture and browser chooser acceptance were not tested.
+This validates real source-service setup/inference, not microphone capture or
+browser chooser acceptance. `status.inferenceVerified` remains false by design.
+TTS, automatic VAD and long recordings were not tested in this live check.
 
 ## Device-local shared runtime and model storage
 
@@ -232,7 +239,7 @@ paths take priority, then the host CLI environment override, then PATH, then
 bounded shared-directory discovery (direct/bin or one unambiguous versions entry).
 Multiple versions require explicit configuration; discovery never probes them.
 Do not guess usernames, resolve remote paths on Main, or fall back from a remote
-executor to Main. These tools still require their implemented local execution route.
+executor to Main. Project audio uses the backend host; do not use it as a remote workspace fallback.
 
 Runtime binaries and reusable model weights are dependencies, **not finished
 Documents/workspace deliverables**. Do not put new dependencies under Documents,

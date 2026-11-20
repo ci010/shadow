@@ -3674,8 +3674,9 @@ field. Both file-loading paths discard it in memory with a warning before
 validation, so old settings do not prevent startup. Loading does not rewrite the
 file; the next successful configuration save removes that field. New writes still
 reject `voice`, and all remaining settings are validated normally. This does not
-restore automatic STT. The existing Audio UI/API and legacy `audio` setup
-entry point retain the Project Audio service and its configuration.
+restore automatic STT. Composer and the host-only `project-audio` CLI retain
+the Project Audio service and its configuration. No C++ inference or audio
+setup agent tool is registered.
 
 The `audio-cpp` and `diffusion-cpp` skills use ordinary `read`, `write`, and
 OS `exec` for local inference. Their `v:cpp-installations` inventory lives in
@@ -3787,7 +3788,8 @@ run the Node backend directly; keep development services on trusted networks.
 | `src/mcp` | MCP client/transports/adapters and serialized catalog updates |
 | `src/bus`, `src/events`, `src/cron` | In-process messaging, subscriptions, scheduling |
 | `src/slash-commands`, `src/tools/shell-commands` | User slash-command adapters and separate tool-side shell-command handlers |
-| `src/channels`, `src/audio-cpp`, `src/diffusion-cpp` | Platform adapters, web chat/media, optional local audio.cpp ASR/TTS and sd.cpp image/video; no binary or model is bundled |
+| `src/channels`, `src/audio-cpp` | Platform adapters, web chat/media and Project Audio (local or OpenAI-compatible ASR/TTS) |
+| `src/vfs/cpp-installations.ts` | Device-scoped audio.cpp and stable-diffusion.cpp installation inventory; no binaries or weights bundled |
 | `src/gateway` | Hono policy/serving, plugin contract, UI proxy/static serving |
 | `src/otel` | Tracing, project telemetry-context integration, storage/query/streaming and distributed-job audit helpers |
 | `src/browser` | Explicit browser bindings, page routing contract and MCP disconnect lifecycle |

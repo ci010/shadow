@@ -80,8 +80,8 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>,
   }
   return { state, nodes, unmount: () => app.unmount(),
     text: () => nodes().filter(node => node.tag !== '#comment').map(node => node.text).join(' '),
-    button: () => {
-      const button = nodes().find(node => node.tag === 'button')!
+    button: (label?: string) => {
+      const button = nodes().find(node => node.tag === 'button' && (!label || node.text === label || node.props['aria-label'] === label))!
       return { props: button.props, click: () => (button.props.onClick as () => Promise<void>)() }
     },
   }
@@ -104,7 +104,7 @@ function environment(t: TestContext) {
   }
 
   const actual = createRequire(import.meta.url)('./audio-input.ts') as typeof import('./audio-input.ts')
-  const view = mount(t, 'AudioSetupButton.vue', { disabled: false, setupDisabled: false, apiBase: 'http://localhost/a/', draftKey: 'a', onTranscript: (v: string) => { transcripts++; draft = v }, onRequest: () => { requests++ } }, {
+  const view = mount(t, 'AudioSetupButton.vue', { disabled: false, apiBase: 'http://localhost/a/', draftKey: 'a', onTranscript: (v: string) => { transcripts++; draft = v }, onRequest: () => { requests++ } }, {
     '../audio-input': { ...actual, prepareMicrophone: () => { reservations++; return { cancel() { releasedReservations++ } } }, recordMicrophone: (_signal: unknown, _options: unknown, prepared: unknown) => { if (prepared) claimedReservations++; starts++; return pending ? new Promise(resolve => { resolveCapture = resolve }) : Promise.resolve(recording()) } },
   })
   t.after(() => Object.assign(globalThis, { window: originalWindow, document: originalDocument, fetch: originalFetch }))
@@ -121,7 +121,7 @@ test('direct clicks, inline phases, empty text, setup and change configuration',
   e.text('  '); await e.view.button().click(); await settle(); await e.view.button().click(); await settle()
   assert.match(e.view.text(), /No speech recognized/)
   const change = e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!
-  ;(change.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · assess/)
+  ;(change.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · configure/)
   e.ready(false); e.view.state.draftKey = 'b'; await settle();
   ;(e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!.props.onClick as () => void)(); await settle()
   assert.match(e.view.text(), /transcription still needs setup/)
@@ -154,13 +154,28 @@ test('Esc, blur, visibility, navigation, disabled and unmount clean up without u
   e.view.state.disabled = false; await settle(); await e.view.button().click(); await settle(); e.view.unmount()
   assert.equal(e.stats().cancels, 6)
 })
-test('model busy blocks setup requests but permits capture and draft insertion', async t => {
-  const e = environment(t); await settle(); e.view.state.setupDisabled = true
+test('local and remote setup show host commands without recording or sending', async t => {
+  const e = environment(t); await settle()
+  await e.view.button('Change audio setup').click(); await settle()
+  for (const [label, command] of [
+    ['Local · configure on this computer', 'project-audio configure'],
+    ['Remote · configure an API', 'project-audio configure-remote'],
+  ] as const) {
+    await e.view.button(label).click(); await settle()
+    assert.ok(e.view.text().includes(command))
+  }
+  assert.equal(e.stats().starts, 0)
+  assert.equal(e.stats().uploads, 0)
+  assert.equal(e.stats().requests, 0)
+})
+
+test('Composer audio does not depend on message submission state', async t => {
+  const e = environment(t); await settle()
   await e.view.button().click(); await settle(); await e.view.button().click(); await settle()
   assert.equal(e.stats().draft, 'recognized'); assert.equal(e.stats().uploads, 1)
   const source = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
   const binding = source.split('\n').find(line => line.includes('<AudioSetupButton'))!
-  assert.match(binding, /:setup-disabled="submissionBusy \|\| requestBusy/)
+  assert.doesNotMatch(binding, /setup-disabled|@request=/)
   assert.doesNotMatch(binding.match(/:disabled="[^"]+/)![0], /requestBusy|submissionBusy|inputText/)
 })
 
@@ -181,7 +196,7 @@ test('short pointer click, keyboard ownership, processing exclusion and status f
   globalThis.fetch = async () => new Response('{}', { status: 503 })
   e.view.state.draftKey = 'failed'; await settle();
   ;(e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!.props.onClick as () => void)(); await settle()
-  assert.match(e.view.text(), /Unable to read Project audio status/); assert.doesNotMatch(e.view.text(), /Local · assess/)
+  assert.match(e.view.text(), /Unable to read Project audio status/); assert.doesNotMatch(e.view.text(), /Local · configure/)
 })
 
 test('inactive panes and unfocused window never arm; losing pane visibility cancels', async t => {
@@ -254,7 +269,7 @@ test('hover popup waits 200ms, cancels on exit and stays across popup travel wit
   enter(); await e.wait(); assert.ok(popup()); assert.equal(e.stats().starts, 0); assert.equal(e.stats().requests, 0)
   leave(); enter(); await e.wait(); assert.ok(popup(), 'returning into popup cancels closing')
   const change = e.view.nodes().find(n => n.tag === 'button' && n.text === 'Change audio setup')!
-  ;(change.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · assess/)
+  ;(change.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · configure/)
   leave(); await e.wait(); assert.equal(popup(), undefined)
   enter(); e.view.state.draftKey = 'new'; await e.wait(); assert.equal(popup(), undefined)
 })
@@ -267,7 +282,7 @@ test('focus, Escape, touch settings and arming/recording suppression preserve di
   ;(root().props.onKeydown as (v: unknown) => void)({ key: 'Escape', stopPropagation() {} }); await settle(); assert.equal(popup(), undefined)
   ;(root().props.onPointerenter as (v: unknown) => void)({ pointerType: 'touch' }); await e.wait(); assert.equal(popup(), undefined)
   const settings = e.view.nodes().find(n => n.props.class === 'audio-touch-settings')!
-  ;(settings.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · assess/)
+  ;(settings.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · configure/)
   ;(root().props.onFocusout as (v: unknown) => void)({ relatedTarget: null }); await settle(); assert.equal(popup(), undefined)
   ;(root().props.onPointerenter as (v: unknown) => void)({ pointerType: 'mouse' })
   e.key('keydown', 'Shift'); await new Promise(r => setTimeout(r, 220)); await settle(); assert.equal(popup(), undefined)
@@ -279,9 +294,8 @@ test('focus, Escape, touch settings and arming/recording suppression preserve di
 test('microphone is immediately before Send and shares the composer theme breathing', () => {
   const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
   const submit = chat.slice(chat.indexOf('<div class="composer-submit">'), chat.indexOf('</div>', chat.indexOf('<div class="composer-submit">')))
-  assert.match(submit, /<AudioSetupButton[\s\S]*@request="sendMessage\(\$event\)" \/>\s*<button\s+v-if="showComposerSend"/)
+  assert.match(submit, /<AudioSetupButton[\s\S]*@transcript="[^"]+"[^>]*\/>\s*<button\s+v-if="showComposerSend"/)
   assert.doesNotMatch(chat.slice(chat.indexOf('<div class="composer-controls">'), chat.indexOf('<div class="composer-submit">')), /AudioSetupButton/)
-  assert.match(chat, /animation: input-breathe 9s/)
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
   assert.match(css, /@keyframes input-breathe/); assert.match(css, /var\(--c-blue\)/); assert.match(css, /var\(--c-purple\)/)
 })

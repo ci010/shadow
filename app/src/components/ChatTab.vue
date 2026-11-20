@@ -492,8 +492,7 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0 || inputReferences.length > 0 || otioReferences.length > 0 || !!selectedWorkflowReference" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
-                @request="sendMessage($event)" />
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote" />
             <button
               v-if="showComposerSend"
               class="composer-send"
