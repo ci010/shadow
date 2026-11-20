@@ -52,97 +52,6 @@ are reused offline; incomplete or invalid inputs fail explicitly.
 This local dogfood path can use the upstream Windows binary; CI distribution
 continues to compile aria2 natively with `scripts/build-aria2-native.sh`.
 
-## Internal Mac dogfood releases
-
-`pnpm release` means **build the current working source and deploy it to your
-Mac**, not publish a GitHub Release. It does not need a tag, commit, push, Actions
-run, or public distribution. Uncommitted and untracked source files are included
-in an isolated, fingerprinted snapshot; local configurations, credentials,
-runtime workspaces, dependencies and previous build outputs are excluded.
-
-Copy `.shadow-release.example.json` to the ignored `.shadow-release.json` and
-set the SSH target, an unused release directory below that user's home, and
-absolute native Node/pnpm/PATH locations. An optional `identityFile` selects an
-existing private key by its **local path**; never copy the key into the project.
-Otherwise the command uses normal SSH configuration/agent authentication.
-Configuration inside the repository must be Git-ignored, untracked, and outside
-the copied source directories; the command rejects unsafe configuration locations
-before reading them. A configuration file outside the repository is also supported.
-The target's SSH host key must already be trusted; the command does not bypass
-host-key checking or prompt for a password.
-
-```sh
-pnpm release
-pnpm release --config <path-to-local-config>
-```
-
-The first implementation targets Apple Silicon macOS. The Mac needs the pinned
-Node/pnpm toolchain, Git, Xcode command-line tools, Homebrew's `autoconf`,
-`automake`, `libtool`, `pkg-config`, and `gettext` (including gettext's bin
-directory on the configured PATH). Log into its graphical desktop as the SSH
-user. It installs the snapshot's frozen npm dependencies and builds the pinned
-aria2 source in a private cache; it does not install OS packages, services or
-login items. Only source/build files cross SSH, never a local provider config.
-
-**Quit Shadow on the Mac before releasing.** The command refuses a running
-managed app, including its remaining helpers/backend, both before the build and
-before deployment. It never force-quits a process or interrupts running tasks.
-Builds execute natively on the Mac with explicit typecheck, release-test, build
-and packaged-test commands plus
-the execution/session-recovery regressions. Windows is only the initiating host;
-GitHub is not the deployment controller.
-
-Each successful build lives at `<remoteRoot>/releases/<release-id>/Shadow.app`.
-A `current` symlink and `~/Applications/Shadow.app` provide a stable entry.
-An existing unmanaged application at that entry is never overwritten. This
-dogfood target is a **Main**, with a dedicated `<remoteRoot>/profile-main` desktop
-profile. Its owner-only `desktop-deployment.v1.json` lives beside each signed
-bundle, not inside it, so opening the stable app from Finder also selects the
-same profile. An explicit desktop profile override still takes precedence.
-The existing default profile (including any Child test configuration), data
-directories, credentials and pairings are neither copied nor reset. The first
-launch preselects Main and opens its normal setup; later releases preserve its
-configuration. An unexpected Child role in the dedicated Main profile fails
-explicitly rather than being silently changed.
-
-Before promotion, the freshly launched application's private parent IPC must
-report its exact PID, executable, build ID, source fingerprint, loaded renderer
-and runtime readiness. First launch reports `setup-required`, not a connected
-node. Main's local runtime readiness does **not** certify external providers,
-Child connections or an end-to-end tool invocation.
-
-Build failures leave the current app untouched. Failed startup is an explicit
-failure: earlier versions are retained, but the command does **not** restart an
-older binary against potentially migrated data, restore user data, or kill the
-failed app. Quit that app and inspect its `application.log` before recovery.
-Applications can migrate data on startup, so retaining old binaries is not a
-data rollback guarantee. An interrupted release lock is not automatically
-removed; verify the recorded process is gone before manually clearing it.
-
-Build logs and source snapshots are retained under `<remoteRoot>/builds/`;
-deployment identity/status under `releases/<release-id>/release.json`; startup
-failure evidence under `failure.json`. The initiating machine retains its
-source archive and receipt under `.tmp/mac-release/`. There is no automatic
-pruning yet. Packages remain ad-hoc signed and unnotarized; this is an internal
-deployment path, not a public installer or a Gatekeeper bypass.
-
-The release pipeline builds natively for the following targets. Each package
-contains Electron, the Vue assets, the backend and its production dependencies.
-Only Windows includes the pinned WinSW service host.
-
-| Platform | Architecture | Download | GitHub runner |
-| --- | --- | --- | --- |
-| Windows | x64 | NSIS `.exe` | `windows-latest` |
-| macOS | Apple Silicon arm64 | `.zip` containing `Shadow.app` | `macos-15` |
-| macOS | Intel x64 | `.zip` containing `Shadow.app` | `macos-15-intel` |
-| Linux | x64 | `.tar.gz` | `ubuntu-22.04` |
-
-Archives are named `Shadow-<version>-<os>-<arch>.<extension>`. The build output
-directories (`win-unpacked`, `mac`, `mac-arm64`, `linux-unpacked`) are staging
-locations, not additional distribution formats. macOS architectures are separate
-downloads, not a universal application. Cross-compiling and Linux arm64 are not
-part of this pipeline.
-
 ## Build gate
 
 ### Desktop startup diagnostics
@@ -285,7 +194,6 @@ desktop user, keeping the adjacent resources/libraries intact. The archive needs
 no FUSE or distribution package installer, but still requires compatible system
 GTK/NSS/ALSA/GBM libraries, a graphical session and working Chromium sandbox
 support. It does not register desktop shortcuts, autostart or a system service.
-macOS/Linux use the ordinary owned backend utility process, not WinSW.
 
 Native CI smoke tests are not broad clean-machine certification, an OS-install
 test, or proof that every platform-specific tool is available. The macOS/Linux
@@ -299,43 +207,25 @@ against `desktop/package.json`, avoiding a second Electron download. Set
 `SHADOW_ELECTRON_DIST` to the root of an existing matching native Electron
 distribution to override it. Its `version` plus `electron.exe` (Windows),
 `Electron.app/Contents/MacOS/Electron` (macOS), or `electron` (Linux) must exist.
-Portable builds do not download or include WinSW.
-
-WinSW is fixed at **2.12.0 x64**, with SHA-256:
-
-```text
-05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da
-```
-
-Its original source is the `WinSW-x64.exe` asset in the official
-`winsw/winsw` GitHub release `v2.12.0`. The checksum pins those release bytes;
-it is not a claim that upstream publishes a separately signed checksum.
-The MIT license ships beside it.
-
 For restricted/offline environments:
 
-- `SHADOW_WINSW_BINARY`: a pre-provisioned binary; the same hash is always required.
-- `SHADOW_WINSW_URL`: an HTTPS mirror of the exact pinned binary.
 - `ELECTRON_BUILDER_BINARIES_MIRROR`: electron-builder's HTTPS mirror for its own
   packaging helpers. This is distinct from the npm package registry.
 - `ELECTRON_BUILDER_CACHE`: electron-builder's cache location.
 - `electron_config_cache`: the Electron npm installer's download cache location.
 
-Mirror URLs must not embed credentials. Download errors and hash mismatches fail
-the build rather than falling back to an unverified binary. The generated
-`desktop/service/ShadowService.exe` is a local cache/output and is not committed.
+Mirror URLs must not embed credentials.
 
 ## Artifact identity and acceptance boundaries
 
 The package carries `resources/release-manifest.v1.json`. It records the release
-and Electron versions, a build ID, hashes of packaged backend/frontend/service
+and Electron versions, a build ID, hashes of packaged backend/frontend
 files and Electron ASAR code/assets, and a fingerprint of the current build
 sources, including uncommitted changes. This does not require a clean Git tree.
 Source edits during release validation require a new build.
 The filename is retained for compatibility; new manifests use schema v2 and
 record the platform/architecture. Legacy v1 manifests are treated as Windows
-x64. macOS stores resources under `Shadow.app/Contents/Resources`. Service files
-are required on Windows and forbidden in macOS/Linux package inventories.
+x64. macOS stores resources under `Shadow.app/Contents/Resources`. New builds do not ship the Windows service wrapper.
 
 `pnpm test:packaged` first compares that manifest to the current source and
 the actual packaged files, including ASAR contents. Missing, extra, modified or
@@ -373,112 +263,3 @@ Neither fixture uses real provider credentials or user history.
 Do not treat a successful smoke as proof of NSIS installation, upgrade,
 uninstallation, Windows SCM behavior, or interactive capabilities in Session 0.
 Those require a disposable Windows VM and explicit operator approval.
-
-For service resource measurements, distinguish the empty Electron Node runtime
-from the fully initialized backend, and working set from private memory. A
-headless process still consumes memory; a Node-mode baseline is not a budget
-for sessions, providers, tools or the WinSW supervisor.
-
-## Opt-in headless Windows service
-
-The normal desktop owns an Electron backend utility process and remains in the
-tray after its main window closes. Explicit Quit stops that backend.
-Independent service mode is explicit:
-WinSW supervises `Shadow.exe` with `ELECTRON_RUN_AS_NODE=1` and the backend JS
-entrypoint, not Electron's application entrypoint. Access this independent
-backend through its paired browser UI. Desktop attachment to an independent
-service is no longer supported; desktop Main and Child own their local runtime.
-
-Service mode rejects an Electron browser/renderer process, missing credentials,
-an invalid control port, or a non-loopback `GATEWAY_HOST`. It supports an
-ACL-protected `WINDOWS_USE_LAUNCH_TOKEN_FILE`; file and inline credentials cannot
-be combined. Credentials are not put in the WinSW XML, renderer or command line.
-The installer uses LocalService and protected Windows DACLs, not LocalSystem
-or Unix permission bits as a substitute for Windows ACLs.
-
-Choose **All users** in the assisted installer to use a service. The supported
-service installation lives under native Program Files; a current-user
-installation remains available for ordinary sidecar mode, but cannot register
-this service. Registration checks this prerequisite before creating service
-state, rather than granting a service broad access to a private user profile.
-
-The management script requires **explicit administrator invocation** in Windows
-PowerShell 5.1. Review paths and the selected local desktop user before running
-it. These commands change the machine's service configuration; the build and
-tests do not run them:
-
-```powershell
-$manager = 'C:\Program Files\Shadow\resources\service\manage.ps1'
-powershell.exe -NoProfile -File $manager -Action Install `
-  -DataDirectory 'C:\ProgramData\ShadowService' `
-  -DesktopUser 'COMPUTER\username' -Port 18800
-powershell.exe -NoProfile -File $manager -Action Start `
-  -DataDirectory 'C:\ProgramData\ShadowService'
-```
-
-Use the actual installation path rather than assuming the example is correct.
-The unsigned management script must be permitted by your organization's
-PowerShell policy (for example, reviewed/signed by an administrator). It does
-not silently change that policy. Runtime stop uses Node `stop.cjs`, so it does
-not depend on the installing administrator's PowerShell script policy.
-Install requires a **new** data directory, does not migrate an existing Home,
-and does not start the service automatically. State lives outside the
-application installation:
-
-```text
-<DataDirectory>\
-  control\connection.v1.json
-  control\runtime-config.v1.json
-  control\launch-token
-  control\installation.v1.json
-  control\ShadowService.exe and its configuration/helpers
-  data\
-  logs\
-```
-
-The former desktop `--service-connection` argument and
-`SHADOW_SERVICE_CONNECTION` environment variable are rejected explicitly.
-Remove them from desktop shortcuts/environment before using Main or Child setup.
-The service connection descriptor remains available to service management and
-browser-pairing commands; do not delete its credentials or existing service data.
-
-The desktop UI is not required for browser access to this service. An installed
-application can use its bundled Node runtime to issue a browser code:
-
-```powershell
-$previousNodeMode = $env:ELECTRON_RUN_AS_NODE
-try {
-  $env:ELECTRON_RUN_AS_NODE = '1'
-  & 'C:\Program Files\Shadow\Shadow.exe' `
-    'C:\Program Files\Shadow\resources\backend\dist\src\index.js' `
-    web pair --connection 'C:\ProgramData\ShadowService\control\connection.v1.json'
-} finally {
-  $env:ELECTRON_RUN_AS_NODE = $previousNodeMode
-}
-```
-
-Use the actual installation paths. `web pair` runs before backend configuration
-startup, so this command issues a code from the existing service rather than
-starting a second backend.
-
-Open the printed loopback URL and enter the one-time code, not the service
-credential. The code expires in five minutes; the resulting browser session
-expires in twelve hours and is revoked on logout or service restart. Browser
-logout does not stop the service, and browser cookies cannot call service
-readiness/shutdown or issue more pairing codes. The normal browser has no
-Electron minimize/maximize/close controls. This access path is loopback-only;
-it does not establish an authenticated remote or multi-user deployment.
-
-The manager also supports `Status`, `Stop`, `Reinstall` and `Uninstall`, always
-with the explicit `-DataDirectory`. Install/Reinstall also require
-`-DesktopUser`. Stop first attempts authenticated backend shutdown, with a
-bounded, ownership-checked process-tree fallback. Uninstall preserves data.
-
-For a manual application upgrade, **stop the service and close desktop clients
-before replacing installed files**, then run Reinstall against the new
-installation's manager and Start. This is not an automatic transactional updater;
-exercise upgrade/rollback and uninstall on a disposable Windows VM before release.
-
-Windows services run in Session 0. Desktop capture, microphones and interactive
-browsers need a separate user-session execution path; this service implementation
-does not establish that capability or claim an OS sandbox for backend tools.
