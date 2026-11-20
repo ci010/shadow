@@ -208,7 +208,7 @@ export class DirectoryBots {
       return this.broker.execute(grant,input,{sessionId:context.sessionId,inputId:context.messageId,toolCallId:context.toolCallId ?? context.messageId,bindingKey:binding.platform === 'discord' ? binding.id : conversationBindingKey(binding),revision,signal,assertCurrent:check})
     }
     const result = await executeBotTool({files:current.files,tool:name,args,signal:context.signal,allowedTools,
-      authorize:async(_request,signal) => {check();await authorize?.(signal);check()},callModule:services,services,storage,
+      authorize:async(_request,signal) => {check();await authorize?.(signal);check()},services,storage,
       host: async (operation, input, signal) => {
         check()
         const address = context.channelAddress
