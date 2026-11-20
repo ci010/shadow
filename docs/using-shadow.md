@@ -719,6 +719,15 @@ to cancel the targeted request. On desktop, **Enter** sends immediately,
 interrupting or steering it, and **Shift+Enter** inserts a new line.
 Holding **Ctrl** changes the send button to a distinct queue icon; clicking
 it also queues the message. Queued messages remain after stopping a request.
+A dashed message bubble means the input is still waiting to be included in a model request.
+**Queue** waits for the current turn to finish; **Steer** waits for its next
+step. The bubble becomes solid when Main passes a request containing that
+input to the provider adapter. This does not mean the upstream service has
+acknowledged it or that a reply has finished. Failed delivery is marked
+separately. If delivery could not be confirmed, check the conversation before
+resending. Refreshing restores pending status while Main is running, even if
+the message is already saved in history. Dispatch status and the pending queue
+are not preserved across a Main restart.
 On mobile, Enter keeps its native newline behavior; use the send button or
 Ctrl/Cmd+Enter with a hardware keyboard.
 Cancellation cannot undo completed side

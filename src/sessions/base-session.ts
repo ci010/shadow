@@ -21,6 +21,7 @@ import {
   retryMessage,
   type SessionInput,
   type SessionTurnFact,
+  type SessionMessageInput,
 } from './input.ts'
 import {
   type ChatMessage,
@@ -141,6 +142,19 @@ export abstract class BaseSession {
     await this.persistMessages(llm, ...messages)
   }
 
+  protected onUserMessageWrite(_message: ChatMessage, _saved: boolean): void {}
+  protected onInferenceDispatched(_messages: readonly ChatMessage[]): void {}
+
+  protected async buildInputMessage(input: SessionMessageInput, cwd: string): Promise<ChatMessage> {
+    const message = await buildUserChatMessage(input, this.workspace, cwd)
+    const requestId = input.source.kind === 'user' && input.source.sender.channel === 'web' ? input.replyTo?.platformMessageId : undefined
+    const sender = Array.isArray(message.content) ? message.content[0] : undefined
+    if (sender?.type === 'text' && requestId && /^[a-f0-9-]{36}$/.test(requestId)) {
+      sender.text = sender.text.replace(/ \/>$/, ` web-request-id="${requestId}" />`)
+    }
+    return message
+  }
+
   private recordedChannelMessages = new WeakMap<ChatMessage, string>()
 
   private async persistMessages(
@@ -157,6 +171,7 @@ export abstract class BaseSession {
     const now = new Date().toISOString()
     const stampedMessages = prepared.map(message => ({ ...message, timestamp: now }))
     this.messages.push(...stampedMessages)
+    let savedCount = 0
     try {
       const stored: StoredMessage[] = stampedMessages.map((e) => ({
         role: e.role,
@@ -174,19 +189,28 @@ export abstract class BaseSession {
         usage: e.role === 'assistant' ? e.usage ?? this.usage : undefined,
       }))
       const recorded = messages.map(message => this.recordedChannelMessages.get(message))
+      const publishSaved = (index: number) => {
+        const message = stampedMessages[index]!
+        savedCount++
+        if (message.role !== 'user') return
+        this.onUserMessageWrite(message, true)
+        if (!recorded[index]) this.bus.emit('session.message.appended', {
+          sessionId: this.id, physicalSessionId: this.physicalSessionId, message,
+        })
+      }
       if (recorded.some(Boolean)) {
         for (let index = 0; index < stored.length; index++) {
           if (recorded[index]) await this.store.appendRawEvents(this.physicalSessionId, [{ channel_input_admitted: { id: recorded[index], message: stampedMessages[index] } }])
           else await this.store.appendMessages(this.physicalSessionId, [stored[index]!])
+          publishSaved(index)
         }
-      } else await this.store.appendMessages(this.physicalSessionId, stored)
-      for (const [index, message] of stampedMessages.entries()) {
-        if (!recorded[index] && message.role === 'user') this.bus.emit('session.message.appended', {
-          sessionId: this.id, physicalSessionId: this.physicalSessionId, message,
-        })
+      } else {
+        await this.store.appendMessages(this.physicalSessionId, stored)
+        for (let index = 0; index < stored.length; index++) publishSaved(index)
       }
     } catch (err) {
       this.messagePersistenceFailed = true
+      for (const message of stampedMessages.slice(savedCount)) if (message.role === 'user') this.onUserMessageWrite(message, false)
       console.error(
         `[session] Failed to persist messages for ${this.id}:`,
         errMsg(err),
@@ -420,14 +444,18 @@ export abstract class BaseSession {
           }, () => {
             this.tools.assertSnapshot?.()
             signal.throwIfAborted()
-            return this.provider.chat(inferenceMessages, toolDefs, {
-            model,
-            maxTokens,
-            temperature,
-            signal,
-            thinking,
-            reasoningEffort,
-          })
+            const request = this.provider.chat(inferenceMessages, toolDefs, {
+              model,
+              maxTokens,
+              temperature,
+              signal,
+              thinking,
+              reasoningEffort,
+            })
+            // Main handed this exact context to the provider adapter. This is
+            // dispatch, not acceptance by the upstream service.
+            this.onInferenceDispatched(inferenceMessages)
+            return request
           }).catch(error => {
             this.providerFailure = providerFailureKind(error)
             throw error
@@ -897,9 +925,7 @@ export abstract class BaseSession {
           name: call.function.name,
         })))
         await this.ensureWorkingContext(msg.admin === true)
-        const message = await buildUserChatMessage(
-          input, this.workspace, messageWorkdir,
-        )
+        const message = await this.buildInputMessage(input, messageWorkdir)
         if (isRecordedChannelInput(input)) {
           // Normal append/compaction/image preparation, but persist admission
           // as an event: the platform message already has one durable receipt.

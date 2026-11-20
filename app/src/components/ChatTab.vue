@@ -193,7 +193,9 @@
               :data-msg-idx="idx"
               :class="[
                 msg.sessionSource ? 'chat-session' : msg.role === 'user' ? 'chat-bubble chat-user' : 'chat-bubble chat-assistant',
+                msg.delivery && `chat-delivery-${msg.delivery}`,
               ]"
+              :data-reveal-disabled="msg.delivery ? '' : undefined"
               @inspect="inspectExecution" @interact="clearSelection"
               :role="msg.sessionSource ? undefined : 'article'"
               :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: sessionMessageSourceLabel(msg.sessionSource, allSessions) }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
@@ -208,6 +210,7 @@
               </div>
               <MessageAttachments :paths="msg.attachmentBody.paths"               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
               <div class="chat-footer">
+              <span v-if="msg.delivery" class="chat-delivery-label" role="status">{{ deliveryLabel(msg.delivery) }}</span>
               <div v-if="msg.usage" class="usage-info">
                 <span class="usage-badge">{{ formatNumber(msg.usage.promptTokens) }} {{ t('prompt') }}</span>
                 <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} {{ t('completion') }}</span>
@@ -534,6 +537,8 @@ import { createInitialLiveSnapshot } from '../initial-live-snapshot'
 import { createMarkdown } from '../markdown.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
+import { mergeInputDelivery } from '../chat-input-delivery.ts'
+import { isChatInputDelivery, webInputRequestId, type ChatInputDelivery } from '../../../src/shared/chat-input-delivery.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUpdated, onUnmounted, useId, watch } from 'vue'
 import { captureHistoryScroll, historyPresentationRows, historyRevealRow, useProgressiveHistory } from '../progressive-history'
 import { createCommitBottomScroll, firstSessionIndex } from '../chat-render-hotspots'
@@ -1111,11 +1116,6 @@ function applySessionActivity(
   activeRequestIds.value = { ...identities }
   sessionRecoveries.value = { ...recoveries }
   stageError.value = ''
-  if (deferActiveHistory && !sendRequest
-    && (stages[activeSessionId.value] === 'idle' || stages[activeSessionId.value] === 'inactive')) {
-    deferActiveHistory = false
-    refreshDirectHistory()
-  }
   if (observedActive && observedRequest === currentRequest.value && observedSessionId === activeSessionId.value
     && (stages[observedSessionId] === 'idle' || stages[observedSessionId] === 'inactive')
     && !sendRequest) {
@@ -1151,7 +1151,6 @@ let bgStreamState: StreamState = { accumulated: '' }
 let streamRequestId: string | undefined
 const finishedRequests = new Set<string>()
 let directRefreshPending = false
-let deferActiveHistory = false
 let directRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
 function wantsLiveChat(): boolean {
@@ -1161,11 +1160,11 @@ function wantsLiveChat(): boolean {
 function refreshDirectHistory(): void {
   directRefreshPending = true
   if (disposed || !paneActive.value || !activeSessionId.value || viewingPhysicalId.value
-    || sendRequest || historyRequest || directRefreshTimer !== undefined || deferActiveHistory && requestBusy.value) return
+    || sendRequest || historyRequest || directRefreshTimer !== undefined) return
   directRefreshTimer = setTimeout(() => {
     directRefreshTimer = undefined
     if (disposed || !paneActive.value || !activeSessionId.value || viewingPhysicalId.value
-      || sendRequest || historyRequest || !directRefreshPending || deferActiveHistory && requestBusy.value) return
+      || sendRequest || historyRequest || !directRefreshPending) return
     directRefreshPending = false
     void loadDirectChat(true)
   }, 50)
@@ -1204,6 +1203,10 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
     event(envelope) {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
       const payload = envelope.payload
+      if (isRecord(payload) && payload.event === 'input_delivery_changed') {
+        snapshot.invalidate()
+        return
+      }
       if (!isStreamPayload(payload)) throw new Error(t('Invalid live conversation payload'))
       if (envelope.requestId && payload.event !== 'session_message' && finishedRequests.has(envelope.requestId)) return
       if (payload.event === 'command_result' && payload.receipt) {
@@ -1256,7 +1259,7 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
         void refreshSessionActivity()
         return
       }
-      if (!paneActive.value || historyRequest || directRefreshPending && !deferActiveHistory) {
+      if (!paneActive.value || historyRequest || directRefreshPending) {
         if (paneActive.value && (payload.event === 'response' || payload.event === undefined)) {
           streaming.value = true
           if (applyStreamPayload(payload, bgStreamState)) streaming.value = false
@@ -1355,7 +1358,21 @@ function diagnosisVisibilityChanged(visible: boolean) {
     if (activePanel.value === panel && !knowledgeDocumentVisible.value) diagnosisNavigation.selectPanel(visible, conversationDocumentVisible.value)
   })
 }
+type BubbleDelivery = ChatInputDelivery['status'] | 'unconfirmed'
+
+function deliveryLabel(status: BubbleDelivery): string {
+  switch (status) {
+    case 'sending': return t('Sending...')
+    case 'queue': return t('Queue · Waiting for the current turn')
+    case 'steer': return t('Steer · Waiting for the next step')
+    case 'failed': return t('Message not delivered')
+    case 'unconfirmed': return t('Delivery not confirmed')
+  }
+}
+
 interface ChatMsg {
+  requestId?: string
+  delivery?: BubbleDelivery
   role: string
   content: string
   responseContext?: ResponseContext
@@ -1414,7 +1431,7 @@ function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], 
   const prefixLength = olderSegments.value.reduce((count, segment) => count + segment.messages.length, 0)
   const current = messages.value.slice(prefixLength)
   // A changed previous ID identifies a closed physical segment, not its transition reason.
-  if (!viewingPhysicalId.value) olderSegments.value = retainTimelineRollover(olderSegments.value, tagTimelineMessages(current), currentTimelineDecisions, currentTimelinePrevious, previousId, currentTimelinePhysicalId ?? previousId)
+  if (!viewingPhysicalId.value) olderSegments.value = retainTimelineRollover(olderSegments.value, tagTimelineMessages(current.filter(message => !message.delivery)), currentTimelineDecisions, currentTimelinePrevious, previousId, currentTimelinePhysicalId ?? previousId)
   if (viewingPhysicalId.value) resetTimeline()
   const tagged = currentTimelinePrevious === previousId ? reconcileTimelineKeys(items, current) : items
   messages.value = [...olderSegments.value.flatMap(segment => segment.messages), ...tagTimelineMessages(tagged)]
@@ -1765,7 +1782,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
         })
       } else {
         const entry: ChatMsg = { role: 'user', content, senderName: senderNames[i], timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : undefined,
-          ...parseSessionMessage(msg) }
+          requestId: webInputRequestId(msg.content), ...parseSessionMessage(msg) }
         if (media.length > 0) entry.media = media
         out.push(entry)
       }
@@ -2228,7 +2245,6 @@ async function sessionsDeleted(ids: string[]): Promise<void> {
 function resetConversation(): void {
   deletion.value = undefined
   activeAsk.value = null
-  deferActiveHistory = false
   modelOverride.value = undefined
   currentWorkdir.value = undefined
   sessionSelectionGeneration++
@@ -2360,7 +2376,6 @@ async function loadCurrentSession(): Promise<void> {
 }
 
 async function loadDirectChat(background = false): Promise<void> {
-  if (deferActiveHistory && requestBusy.value && messages.value.length && !viewingPhysicalId.value) return
   historyRequest?.abort()
   const controller = new AbortController()
   historyRequest = controller
@@ -2388,6 +2403,15 @@ async function loadDirectChat(background = false): Promise<void> {
       return
     }
     if (!res.ok) throw new Error(t('Could not load conversation. Refresh to retry.'))
+    // Read scheduling after history so a saved row cannot race ahead of
+    // its pending state. Overlapping rows reconcile by request ID.
+    const delivery = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
+    }).then(async response => {
+      const entries: unknown = response.ok ? await response.json() : undefined
+      return Array.isArray(entries) && entries.every(isChatInputDelivery) ? entries : undefined
+    }).catch(() => undefined)
+    if (controller.signal.aborted) return
     // Snapshot transport is already parsed; presentation parsers retain their
     // existing field validation independently of the snapshot envelope checks.
     const data = res.data as {
@@ -2399,7 +2423,14 @@ async function loadDirectChat(background = false): Promise<void> {
     const initialTimeline = currentTimelinePrevious === undefined
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
-    applyCurrentTimeline(mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults), parseDecisionRecords(data.decisionRecords ?? []), data.previousPhysicalId ?? null, data.currentPhysicalId)
+    const pending = delivery?.map(({ status, ...entry }): ChatMsg => ({ role: 'user', ...entry, delivery: status }))
+    const history = mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults)
+    const previousDelivery = new Set(messages.value.filter(message => message.delivery).map(message => message.requestId))
+    const timeline = mergeInputDelivery<ChatMsg>(history.map((message): ChatMsg => {
+      if (delivery !== undefined || !('requestId' in message) || !message.requestId || previousDelivery.has(message.requestId)) return message
+      return { ...message, delivery: 'unconfirmed' }
+    }), pending, messages.value)
+    applyCurrentTimeline(timeline, parseDecisionRecords(data.decisionRecords ?? []), data.previousPhysicalId ?? null, data.currentPhysicalId)
     decisionRecordError.value = ''
     if (!sendRequest && !streaming.value) {
       streaming.value = false
@@ -3003,6 +3034,8 @@ async function sendMessage(overrideContent?: string, opts?: {
   let rejected = false
   let messageAdded = retry
   let optimisticMessage: ChatMsg | undefined
+  const visibleOptimistic = () => optimisticMessage
+    && (messages.value.find(message => message.timelineKey === optimisticMessage?.timelineKey) ?? optimisticMessage)
   const clearedComposer = !retry && overrideContent === undefined
   if (clearedComposer) {
     composerDraft.clearSubmitting()
@@ -3066,7 +3099,8 @@ async function sendMessage(overrideContent?: string, opts?: {
       if (references.length) payload.references = references
       if (uploadedMedia.length > 0) payload.media = uploadedMedia
       if (!isCommand) {
-        const msg: ChatMsg = { role: 'user', content: messageContent, timestamp: new Date().toISOString() }
+        const msg = reactive<ChatMsg>({ role: 'user', content: messageContent, timestamp: new Date().toISOString(),
+          timelineKey: `timeline-${++timelineKeySequence}`, delivery: 'sending' })
         if (uploadedMedia.length > 0) msg.media = uploadedMedia
         optimisticMessage = msg
         messages.value.push(msg)
@@ -3097,12 +3131,12 @@ async function sendMessage(overrideContent?: string, opts?: {
       throw new Error(t('Main returned an invalid command result. Refresh the conversation before retrying.'))
     }
     accepted = true
+    const admittedMessage = visibleOptimistic()
+    if (admittedMessage) admittedMessage.requestId = admission.requestId
     if (!retry) referenceDraft.admitted(referenceDraftKey, references)
     if (sentOtioReferences.length) otioReferenceDraft.remove(referenceDraftKey, new Set(sentOtioReferences.map(item => item.key)))
     // The visible text was cleared at submission, not after Main's admission.
     // Do not clear again here: the user may already be composing the next message.
-    // Steered inputs are admitted before the tool boundary writes them to history.
-    if (followUp && !isCommand && generation === sessionSelectionGeneration) deferActiveHistory = true
     if (!retry && generation === sessionSelectionGeneration) {
       clearPendingAttachments()
       contextItems.value = []
@@ -3131,11 +3165,9 @@ async function sendMessage(overrideContent?: string, opts?: {
     void loadSessionList()
   } catch (err) {
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
-    if (rejected && optimisticMessage) {
-      const index = messages.value.indexOf(optimisticMessage)
-      if (index >= 0) messages.value.splice(index, 1)
-    }
-    if (isCommand || followUp || !activeSessionId.value || !messageAdded || rejected) {
+    const failedMessage = visibleOptimistic()
+    if (failedMessage && !accepted) failedMessage.delivery = rejected ? 'failed' : 'unconfirmed'
+    if (isCommand || followUp || !activeSessionId.value || !messageAdded || rejected || optimisticMessage) {
       composerError.value = err instanceof Error ? err.message : t('Could not start the conversation. Retry.')
     } else {
       messages.value.push({ role: 'assistant', content: t('Error: {err}', { err: err }), isError: true, timestamp: new Date().toISOString() })
@@ -3159,7 +3191,7 @@ async function sendMessage(overrideContent?: string, opts?: {
         streamingToolCallData.value = null
       }
       scrollToBottom()
-      if (directRefreshPending || accepted && !systemPrompt.value) refreshDirectHistory()
+      if (directRefreshPending || accepted && (!!optimisticMessage || !systemPrompt.value)) refreshDirectHistory()
       if (followUp) void refreshSessionActivity()
     }
   }
@@ -3814,6 +3846,16 @@ function resendLastMessage() {
   color: var(--c-text);
   border-color: var(--c-selection-border);
 }
+
+.chat-user:is(.chat-delivery-sending, .chat-delivery-queue, .chat-delivery-steer) {
+  border-style: dashed;
+  border-color: var(--c-info);
+}
+.chat-user.chat-delivery-failed { border-color: var(--c-error); background: var(--c-error-bg); }
+.chat-user.chat-delivery-unconfirmed { border-style: dashed; border-color: var(--c-warn); background: var(--c-warn-bg); }
+.chat-delivery-label { color: var(--c-text-secondary); font-size: 12px; }
+.chat-delivery-failed .chat-delivery-label { color: var(--c-error); }
+.chat-delivery-unconfirmed .chat-delivery-label { color: var(--c-warn); }
 
 .chat-assistant {
   box-sizing: border-box;
