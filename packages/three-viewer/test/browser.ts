@@ -141,6 +141,58 @@ async function run() {
     equal((await viewer.captureFrame()).version, 'multi');
     equal((await viewer.load({ ...unannotated, shaders: undefined })).objectIds, ['two-materials']);
     equal(viewer.outline, [{ key: 'node:0', parentKey: null, label: 'two-materials', objectId: 'two-materials' }]);
+    const { json: rain, data: rainMesh } = fixture(['rain']);
+    const rainModel: ModelInput = {
+      ...model('rain'), resources: new Map([['mesh.bin', rainMesh]]),
+      bytes: new TextEncoder().encode(JSON.stringify({ ...rain,
+        meshes: [{ primitives: [{ ...rain.meshes[0].primitives[0], material: 0 }] }],
+        materials: [{ doubleSided: true, alphaMode: 'BLEND',
+          pbrMetallicRoughness: { baseColorFactor: [0, 0, 1, 0.5], metallicFactor: 0, roughnessFactor: 1 } }],
+      })),
+    };
+    const animated = { ...rainModel, shaders: [{ objectId: 'rain', slot: 0,
+      vertex: `uniform float playgroundTime;
+        void main() {
+          vec3 p = position;
+          p.x += 0.05 * sin(playgroundTime);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }`,
+      fragment: `uniform float playgroundTime;
+        uniform float playgroundOpacity;
+        void main() {
+          float moved = float(playgroundTime > 0.0);
+          gl_FragColor = vec4(1.0 - moved, moved, 0.0, playgroundOpacity);
+        }`,
+    }] };
+    // View the back face: only the authored double-sided, blended state shows the shader here.
+    const fixed = { position: [0, 0, -4], target: [0, 0, 0] } as const;
+    const center = async (blob: Blob) => {
+      const image = await createImageBitmap(blob);
+      shaderCtx.drawImage(image, 0, 0); image.close();
+      return [...shaderCtx.getImageData(shaderProbe.width / 2, shaderProbe.height / 2, 1, 1).data];
+    };
+    const twoFrames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    await viewer.load(rainModel);
+    const staticPixel = await center(await viewer.capture(fixed));
+    await viewer.load(animated);
+    const first = await viewer.captureFrame(fixed);
+    const before = await center(first.image);
+    await twoFrames();
+    const later = await viewer.captureFrame(fixed);
+    const after = await center(later.image);
+    equal(later.camera, first.camera);
+    if (!(before[0] > before[1] && before[0] < 250 && after[1] > after[0] && after[1] < 250)) {
+      throw new Error(`expected blended back-face animation: ${before} -> ${after}`);
+    }
+    await rejects(viewer.load({ ...animated, shaders: [{ ...animated.shaders[0], fragment: 'invalid shader' }] }), /Shader rain/);
+    equal(await center(await viewer.capture(fixed)), after);
+    await viewer.load(animated);
+    equal(await center(await viewer.capture(fixed)), before);
+    viewer.bindShader('rain', 0, null);
+    await twoFrames();
+    equal(await center(await viewer.capture(fixed)), staticPixel);
+    await viewer.load(rainModel);
+    equal(await center(await viewer.capture(fixed)), staticPixel);
     const { json: tree, data: treeMesh } = fixture([undefined, undefined]);
     const treeResult = await viewer.load({ version: 'tree', resources: new Map([['mesh.bin', treeMesh]]),
       bytes: new TextEncoder().encode(JSON.stringify({ ...tree, scenes: [{ nodes: [2] }, { nodes: [3] }],

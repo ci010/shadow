@@ -68,3 +68,34 @@ test('conditional snapshot wire rejects malformed versions and reports the serve
   request.mock.mockImplementation(async () => Response.json({ file: 'stand.mjs', message: 'File unavailable', id: 'attempt-1' }, { status: 404 }))
   await assert.rejects(fetchPlaygroundSnapshot(url, '', signal()), /stand\.mjs: File unavailable: attempt-1/)
 })
+
+test('client forwards declared JSON as bytes and rebuilds on a JSON-only snapshot change', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const url = new URL('http://fixture.invalid/api/folders/id/three-snapshot?path=playground.three.json')
+  const scenes = ['{"name":"魔方"}', '{"name":"新版"}']
+  let revision = 0
+  t.mock.method(globalThis, 'fetch', async (_: URL, init: RequestInit) => {
+    const etag = `"${revision}"`
+    const headers = { ETag: etag }
+    if (new Headers(init.headers).get('if-none-match') === etag) return new Response(null, { status: 304, headers })
+    return Response.json({ ...change(String(revision).repeat(64)).snapshot,
+      assets: { 'scene.json': Buffer.from(scenes[revision]).toString('base64') } }, { headers })
+  })
+  const built: Buffer[] = []
+  const errors: unknown[] = []
+  const watcher = watchPlayground({
+    read: (tag, signal) => fetchPlaygroundSnapshot(url, tag, signal),
+    async build(snapshot) { built.push(Buffer.from(snapshot.assets['scene.json'])) },
+    failed(error) { errors.push(error) },
+  }, 20, 10)
+  t.after(() => watcher.dispose())
+  const tick = async (ms: number) => { t.mock.timers.tick(ms); await setImmediate() }
+  await tick(0)
+  await tick(20)
+  assert.deepEqual(built, [Buffer.from(scenes[0])])
+  revision++
+  await tick(20)
+  await tick(10)
+  assert.deepEqual(errors, [])
+  assert.deepEqual(built, scenes.map(scene => Buffer.from(scene)))
+})
