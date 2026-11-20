@@ -1,7 +1,7 @@
 const { app, BrowserWindow } = require('electron');
 const { join } = require('node:path');
-const { readFile } = require('node:fs/promises');
-const [fixture, mode, fixtureScene, url] = process.argv.slice(2);
+const { readFile, writeFile } = require('node:fs/promises');
+const [fixture, mode, fixtureScene, expectedShaders, screenshot, url] = process.argv.slice(2);
 app.setPath('userData', join(fixture, 'electron-profile'));
 app.setPath('sessionData', join(fixture, 'electron-session'));
 app.setPath('downloads', fixture);
@@ -18,11 +18,17 @@ app.whenReady().then(async () => {
   await window.loadURL(url);
   window.show(); window.focus(); contents.focus();
 
-  const result = mode === 'ui'
+  const result = mode === 'marker' ? await contents.executeJavaScript(`window.runThreeMarkerCheck(${Number(expectedShaders)})`, true)
+    : mode === 'ui'
     ? await require('./ui-driver.cjs')(contents, fixtureScene)
     : mode === 'outline' ? await require('./outline-driver.cjs')(contents)
     : mode === 'product' ? await require('./product-driver.cjs')(contents) : await contents.executeJavaScript(mode === 'worker' ? 'window.runThreeWorkerCheck()' : 'window.runThreeCheck()', true);
-  if (!['product', 'outline'].includes(mode)) {
+  if (mode === 'marker') {
+    if (screenshot) await writeFile(screenshot, Buffer.from(result.png, 'base64'), { flag: 'wx' });
+    delete result.png;
+    if (screenshot) result.screenshot = screenshot;
+  }
+  if (!['product', 'outline', 'marker'].includes(mode)) {
     const deadline = Date.now() + 5000;
     while (!download && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
     if (!download) throw new Error('No browser download observed');

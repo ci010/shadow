@@ -2,7 +2,7 @@ import { apiBase, marker, sessionId } from './constants.mjs';
 import { fetchPlaygroundSnapshot, exportSnapshot } from '../../app/src/three-playground-client.ts';
 import './browser.mjs';
 
-// Standalone diagnostic for the real app Worker and WASM, without Vue.
+// Standalone diagnostic for the real isolated browser builder, without Vue.
 window.runThreeWorkerCheck = async () => {
   const url = new URL(`${apiBase}/api/sessions/${encodeURIComponent(sessionId)}/workspace/three-snapshot`, location.href);
   url.searchParams.set('path', marker);

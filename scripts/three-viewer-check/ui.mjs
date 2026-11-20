@@ -11,11 +11,14 @@ import './browser.mjs';
 // production hooks. mounted in Electron; no mocked canvas or renderer.
 let viewer;
 const load = ThreeViewer.prototype.load;
-const workerStarts = [], viewerLoads = [];
-window.Worker = new Proxy(window.Worker, { construct(target, args, newTarget) {
-  if (args[1]?.name === 'shadow-three-build') workerStarts.push(Date.now());
-  return Reflect.construct(target, args, newTarget);
-} });
+const buildStarts = [], viewerLoads = [];
+new MutationObserver(records => {
+  for (const { addedNodes } of records) {
+    for (const node of addedNodes) {
+      if (node instanceof HTMLIFrameElement && node.getAttribute('sandbox') === 'allow-scripts') buildStarts.push(Date.now());
+    }
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
 ThreeViewer.prototype.load = function (...args) {
   viewer = this;
   const row = { version: args[0].version, started: Date.now() };
@@ -55,7 +58,7 @@ window.threeUi = {
     return { canvas: canvas ? { x, y, width, height } : null, active: active.value, alert: document.querySelector('[role=alert]')?.innerText, text: document.body.innerText, drafts: references.value.map(item => item.object) };
   },
   requests: () => fetch(`${apiBase}/requests`).then(response => response.json()),
-  workerStarts: () => workerStarts,
+  buildStarts: () => buildStarts,
   viewerLoads: () => viewerLoads,
   bindingReady: () => Object.keys(gltfCaptureChatHeaders(location.origin + apiBase, projectId, sessionId)).length > 0,
   admit: content => post('/api/chat/send', { chatId: sessionId.slice(4), content: composeGltfReferenceMessage(content, references.value) }, gltfCaptureChatHeaders(location.origin + apiBase, projectId, sessionId)),

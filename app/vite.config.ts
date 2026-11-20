@@ -116,9 +116,8 @@ export default defineConfig({
   // Keep the running app's optimized modules out of that shared directory.
   cacheDir: 'node_modules/.vite-shadow-app',
   plugins: [routing.plugin, {
-    // pnpm can skip workspace lifecycle scripts on a no-op install after a git pull.
-    // Bundle only our trusted driver here; never run modeling project files in Node.
-    name: 'shadow-playground-engine', buildStart() {
+    // Bundle only the trusted browser worker, even when pnpm skipped postinstall.
+    name: 'shadow-playground-worker-source', buildStart() {
       execFileSync(process.execPath, [fileURLToPath(new URL('../packages/three-playground/generate.mjs', import.meta.url))])
     },
   }, pdfViewerAssets(), archiveLicenses(), vue(), UnoCSS({
@@ -127,7 +126,7 @@ export default defineConfig({
   // Lazy Shiki entrypoints must be in the initial optimizer batch, not discovered
   // while a file preview is opening (which invalidates already served import URLs).
   optimizeDeps: { include: highlightingDeps, exclude: ['emf-converter'] },
-  worker: { format: 'es' }, // QuickJS loads its pinned, bundled WASM in a module worker.
+  worker: { format: 'es' },
   build: { rollupOptions: { external: ['@napi-rs/canvas'] } },
   server: {
     host: process.env.VITE_DEV_HOST ?? '127.0.0.1',

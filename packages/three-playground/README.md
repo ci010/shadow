@@ -1,10 +1,11 @@
 # `@shadow/three-playground`
 
-Builds a binary glTF (GLB 2.0) from an in-memory project snapshot. Call this from a **dedicated browser Worker**, not the UI thread.
+Builds a binary glTF (GLB 2.0) from an in-memory project snapshot. Call `buildPlayground` from a **trusted browser document**. The package owns the isolated iframe and worker.
 
 ## Snapshot and guest contract
 
 ```ts
+const controller = new AbortController();
 const { glb, objectCount } = await buildPlayground({
   files: { 'main.mjs': `
     export async function build({ THREE, root, assets, random }) {
@@ -18,12 +19,12 @@ const { glb, objectCount } = await buildPlayground({
     }
   ` },
   assets: {}, // Optional: Record<string, ArrayBuffer>
-}, { seed: 1, timeoutMs: 3000 });
+}, { signal: controller.signal, seed: 1, timeoutMs: 3000 }); // All options are optional.
 ```
 
-- The fixed entry `main.mjs` must export `build`. Its return value is ignored; the exporter takes only the children of the fresh `root`. `build` can return a Promise, and guest-only work such as Promise jobs and dynamic relative imports can settle it. Run all changes before `build` resolves. There are no timers or external asynchronous events.
+- The fixed entry `main.mjs` must export `build`. Its return value is ignored; the exporter takes only the children of the fresh `root`. `build` can return a Promise, and worker tasks such as Promise jobs, timers and dynamic relative imports can settle it. Finish all model changes before `build` resolves.
 - `THREE` is Three.js r180. Use `random()` for reproducible random numbers; the build does not replace `Math.random()` or promise determinism for code using clocks or other nondeterministic APIs.
-- Static/dynamic ESM imports resolve to explicit relative `.mjs` or `.js` paths in the same snapshot. No package imports, suffix inference, URLs, absolute paths or imports outside the project. Module state is fresh per build. Paths use `/`, and may contain Unicode letters/numbers, spaces, `.`, `_` and `-`.
+- Static imports, re-exports and literal dynamic imports resolve to explicit relative `.mjs` or `.js` files in the snapshot. No computed import paths, package imports, suffix inference, URLs, absolute paths or imports outside the project. Native static import cycles are rejected with a build error naming the cycle; use a literal dynamic import for a back edge and avoid awaiting a module that is still evaluating. Top-level `await` is supported. Module state is fresh per build. Paths use `/`, and may contain Unicode letters/numbers, spaces, `.`, `_` and `-`.
 - `assets.has(path)` and `assets.read(path)` use exact project-relative paths. `read` throws on missing input and returns a fresh `Uint8Array`; modifications do not change the snapshot. There is no file lookup, URL loader or image decoder.
 - To use scene data, list `"scene.json"` in `playground.three.json`'s `assets` array (not `files`), then call `const scene = assets.json('scene.json')` from `build`. The gateway accepts only the exact root-relative `scene.json` or explicitly listed `.json` files under `assets/` (relative to the marker's directory), subject to the existing asset path checks and byte limits. The lookup must match the declared path exactly. Direct callers supply raw bytes in `snapshot.assets`. The method throws for missing assets, non-JSON extensions, invalid UTF-8, or invalid JSON (including a leading BOM). Each call parses a fresh value inside the guest, independently of `assets.read` or earlier calls. Editing declared JSON bytes triggers the same preview rebuild as editing other snapshot inputs.
 - Untextured standard/physical PBR and custom `BufferGeometry` are supported. Images, textures, skinned meshes, instancing and animation export are outside this profile. IDs are stored on exported nodes as `extras.objectId`. Every renderable node (Mesh, Line, or Points) must supply an explicit, unique `userData.objectId` (a non-blank string of at most 256 characters). Pure groups may omit it. Keep an ID attached to the same logical object across edits, and do not reuse it for a replacement object. The exporter never derives IDs from names, positions, or sibling order. The result `objectCount` counts exported nodes, not just meshes.
@@ -32,12 +33,14 @@ For a material array, `node.extras.shadowMaterialSlots[i]` records the authored 
 
 ## Isolation and limits
 
-Snapshot modules run only in a fresh QuickJS WASM instance with no injected host functions or browser/Node globals. Three.js and `GLTFExporter` are bundled from pinned local dependencies at build time and evaluated in that same sandbox. The binary output is copied out and checked on the host for GLB framing, embedded-only resources, accessor bounds, scene links and ID integrity. This is a restricted export profile check, not a complete Khronos glTF conformance validator.
+Each build uses a hidden `iframe` with `sandbox="allow-scripts"` (no `allow-same-origin`). The fixed broker alone runs in the frame and starts a dedicated classic Worker from a blob created inside the opaque document. The worker loads snapshot modules as native ESM from self-contained blob URLs. It rewrites imports with the pure-JavaScript version of `es-module-lexer`. No authored source is interpolated into HTML, evaluated in the UI realm, or sent to a same-origin worker.
 
-Limits: 128 modules / 1 MiB UTF-8 source, 64 assets / 1 MiB total binary bytes, 96 MiB guest heap, 64 KiB guest stack, bounded VM jobs and wall-clock execution, 4096 scene nodes / 64 levels, 16 MiB GLB. The guest deadline is 3000 ms by default (configurable from 1 to 10000 ms). The Worker owner must also set its own watchdog and `terminate()` overdue/superseded workers; the in-VM interrupt is not a hard deadline for WASM startup or host-side work.
+The frame and its blob Worker inherit a deny-by-default Content Security Policy (`default-src 'none'`, `connect-src 'none'`, scripts restricted to the broker nonce and blob URLs, workers restricted to blob URLs). The worker bootstrap also hides nested-worker creation, `importScripts`, the blob URL factory and the public `postMessage` function from authored code. Worker globals like timers remain available; the security boundary relies on browser origin and CSP enforcement, not a pure-JavaScript API allowlist. Only a fixed response over private message ports crosses back. The host checks GLB framing, embedded-only resources, accessor bounds, scene links and ID integrity. This is a restricted export profile check, not a complete Khronos glTF conformance validator.
 
-## Worker and build integration
+Limits: 128 modules / 1 MiB UTF-8 source, 64 assets / 1 MiB total binary bytes, 4096 scene nodes / 64 levels, 16 MiB GLB. The watchdog is 3000 ms by default (configurable from 1 to 10000 ms). Cancelling from `AbortSignal` rejects with the signal's reason; exceeding the deadline rejects with a `PlaygroundError` of phase `limit`. Both discard the broker document and worker. The browser does not provide a per-build JavaScript heap, stack or instruction limit. A worker can consume substantial memory or trigger browser resource exhaustion before the deadline.
 
-- Vite: use `worker: { format: 'es' }` and `new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })`. The production build serves the QuickJS WASM from bundled same-origin assets; no CDN or custom WASM resolver. With a restrictive CSP, allow same-origin Worker/WASM loads and WASM compilation (`'wasm-unsafe-eval'` in `script-src`); ordinary JS `'unsafe-eval'` is not required.
-- Return the GLB with `postMessage({ glb, objectCount }, [glb])`. For failures send explicit fields rather than cloning the `Error`: `PlaygroundError.phase`, `.message`, and optional `.guestStack` (QuickJS source paths and line numbers when available). Export and validation failures have their own phases.
-- `pnpm install` runs this package's `postinstall` source generation. When lifecycle scripts are skipped, run `pnpm --filter @shadow/three-playground generate` before building the app. Regenerate after changing the trusted export source. Run `pnpm --filter @shadow/three-playground test` for the focused Node tests after generation.
+## Build and verification
+
+- Call `buildPlayground(snapshot, { signal?, timeoutMs?, seed? })` directly from the trusted renderer. It resolves to `{ glb, objectCount }`. Failed builds report `PlaygroundError.phase`, `.message` and an optional `.guestStack`. The embedding page's CSP must permit this broker document and its script/blob loads; any inherited policy can further restrict them. No `unsafe-eval`, WebAssembly loading or Vite worker configuration is required.
+- `pnpm install` runs this package's `postinstall` source generation. When lifecycle scripts are skipped, run `pnpm --filter @shadow/three-playground generate` before building the app. Regenerate after changing the trusted export source.
+- `pnpm --filter @shadow/three-playground test` runs the host-side tests. Set `PLAYGROUND_CHROMIUM` to the path to a Chromium-compatible executable to run the browser isolation and export tests as well.
