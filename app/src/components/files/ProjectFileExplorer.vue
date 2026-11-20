@@ -4,12 +4,14 @@
     <p v-if="!sessionId && !relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
     <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
+    <GltfOutlineDock v-if="active && open" :project-id="projectId" />
   </aside>
   <EditorViewHost v-for="file in files" :key="fileTabKey(file)" :descriptor="descriptor(file)" :active="active">
     <ProjectExplorerFile :api-base="apiBase" :file="file" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
   </EditorViewHost>
 </template>
 <script setup lang="ts">
+import GltfOutlineDock from './GltfOutlineDock.vue'
 import { computed, inject, onUnmounted, ref, watch } from 'vue'
 import { useMobileChrome } from '../../composables/useMobileChrome.ts'
 import { EditorGroupsKey, type EditorDescriptor } from '../../editor-groups.ts'

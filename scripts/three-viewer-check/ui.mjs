@@ -72,6 +72,7 @@ window.threeUi = {
     return { ...JSON.parse(info.text), size, bytes: bytes.length, imageHash: [...new Uint8Array(sha)].join(',') };
   },
   camera: () => viewer.getCamera(),
+  selection: () => viewer.selection,
   async capture(view) {
     const { image, ...frame } = await viewer.captureFrame(view);
     const bytes = typeof image === 'string' ? new TextEncoder().encode(image) : new Uint8Array(await image.arrayBuffer());

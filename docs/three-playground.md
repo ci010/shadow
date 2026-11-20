@@ -12,6 +12,10 @@ For a first model without a Shadow source checkout, ask the agent to make an edi
 4. The preview loads the **exported GLB**, retaining the camera and surviving selected IDs. Missing IDs are reported, even when a different mesh has the same name. The chip still describes the version you originally referenced. **Save view** saves the visible model frame. **Download GLB** saves the last successful, independently viewable model, not the marker or a screenshot.
 5. Try a syntax error in a copy of `stand.mjs`. The bad file stays on disk; the diagnostic shows the attempted snapshot and the viewer keeps the previous good build. Correct the file or choose **Rebuild** to retry. An earlier build cannot replace a newer request.
 
+## Find a part in the model hierarchy
+
+With a `.gltf`, `.glb` or Playground file tab focused, open **Files** (or click **Outline** in the model toolbar). The file sidebar shows the current model's hierarchy alongside the file roots. Picking or box-selecting in the canvas highlights the same objects in the tree. Selecting renderable parts in the tree updates the viewer and **Add to chat** without moving the camera. Groups can be expanded to reach their parts. The sidebar follows the focused split, not the last model to finish loading. Standalone previews without a file sidebar open the outline next to the canvas instead.
+
 ## Author a project
 
 `playground.three.json` is the project marker and input allowlist. Paths are relative to its directory; include all local JS dependencies, even when using dynamic relative imports. Only declared assets are supplied to the VM. The shader entries read files as text, not JS modules.

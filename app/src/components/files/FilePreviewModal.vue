@@ -39,7 +39,7 @@
         </div>
         <GltfFilePreview v-else-if="isModel && !sourceView" :key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, remote, path, entry.archive, attachmentUrl])"
           :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace" :path="path" :active="active" :remote="remote"
-          :source-blob="archiveBlob" :archive="entry.archive" :attachment-url="attachmentUrl" :can-review="canQuote || !!attachmentUrl" />
+          :source-blob="archiveBlob" :archive="entry.archive" :attachment-url="attachmentUrl" :can-review="canQuote || !!attachmentUrl" :file-editor="inline" />
         <OtioFilePreview v-else-if="isOtio && !sourceView" :key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, remote, path, entry.archive, entry.mtime, attachmentUrl])" :api-base="apiBase" :session-id="sessionId"
           :folder-id="folderId" :session-workspace="sessionWorkspace" :path="path" :mtime="entry.mtime" :active="active"
           :remote="remote" :source-blob="archiveBlob" :attachment-url="attachmentUrl" :can-review="!entry.archive && (canQuote || !!attachmentUrl)"
