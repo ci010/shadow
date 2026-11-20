@@ -4,6 +4,8 @@ The document workbench starts with its file explorer collapsed, including on wid
 
 On desktop, drag the right edge of the file explorer to resize it. You can also focus the divider and use Left/Right or Home/End. The toolbar icon still opens and closes the explorer, and reopening keeps the adjusted width. On phones the explorer remains a drawer.
 
+When an OpenTimelineIO file is the active document, the open desktop file explorer shows its collapsible Outline below the file roots. The same outline drives selection in both Monitor and Storyboard. With the explorer closed, on mobile, or in a standalone preview, the Outline remains available in Monitor (under the Outline panel on narrow layouts).
+
 The explorer distinguishes two sources:
 
 - **Project files**: the selected registered Folder, using its registry-backed API and owning device. Drafts use their selected Folder; existing conversations use the persisted `folderId` from the scoped session graph, including after reload. Without a selected Folder this root is omitted. Folder identity is never inferred from a local or remote workdir display path. Project Home is not a file resource and is never substituted here.
