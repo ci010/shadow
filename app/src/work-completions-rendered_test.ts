@@ -47,9 +47,9 @@ test('isolated Work board keeps read receipts explicit and completed history acc
           return new Response(JSON.stringify({records:[record],effects:[]}));
         };
         const router=createRouter({history:createMemoryHistory(),routes:[{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}},{path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}}]});
-        await router.push('/projects/test/dashboard');await router.isReady();
-        window.fixture=reactive({mode:'dashboard',visible:true});window.router=router;
-        const app=createApp({render:()=>h(ProjectWorkbench,{key:window.fixture.mode,mode:window.fixture.mode,apiBase:location.origin,projectId:'test',projectName:'Completion fixture',visible:window.fixture.visible})});
+        await router.push('/projects/test/board');await router.isReady();
+        window.fixture=reactive({visible:true});window.router=router;
+        const app=createApp({render:()=>h(ProjectWorkbench,{apiBase:location.origin,projectId:'test',visible:window.fixture.visible})});
         app.use(router);useProjectResourceStore(app.config.globalProperties.$pinia).owner.acquireProject=()=>({work:{state,refresh:async()=>{}},release(){}});
         app.provide(Symbol.for('shadow.live-client-pool'),{client:()=>({subscribe:()=>({ready:async()=>{},close(){}})})});app.mount('#app');`,
       configureServer(server) { server.middlewares.use((request,response,next)=>{
@@ -69,18 +69,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
       const wait=async fn=>{for(let i=0;i<200;i++){if(await run(fn))return;await new Promise(r=>setTimeout(r,50));}throw new Error('Timed out: '+fn.toString()+' BODY '+await run(()=>document.body.innerText.slice(0,2000)));};
       await wait(()=>!!document.querySelector('.completion-entry'));
       assert.deepEqual(await run(()=>window.writes),[]);
-      assert.deepEqual(await run(()=>[...document.querySelectorAll('.work-view-switch button')].map(el=>el.textContent)),['Dashboard']);
       const transparentCanvas=selector=>win.webContents.executeJavaScript('('+((selector)=>{let el=document.querySelector(selector);if(!el)return false;while(el&&el!==document.body){const style=getComputedStyle(el);if(style.backgroundColor!=='rgba(0, 0, 0, 0)'||style.backgroundImage!=='none')return false;el=el.parentElement}return getComputedStyle(document.body).backgroundImage.includes('radial-gradient')}).toString()+')('+JSON.stringify(selector)+')');
-      await wait(()=>!!document.querySelector('.graph-canvas .vue-flow'));
-      for(const dark of [false,true]){
-        await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+')');
-        assert.equal(await transparentCanvas('.graph-canvas .vue-flow'),true,'Overview exposes the existing body dots through every canvas ancestor');
-        assert.equal(await run(()=>!!document.querySelector('.vue-flow__background')),false,'No duplicate dot layer');
-        assert.notEqual(await run(()=>getComputedStyle(document.querySelector('.canvas-toolbar')).backgroundColor),'rgba(0, 0, 0, 0)');
-        await capture('overview-1250-'+(dark?'dark':'light'));
-      }
-      await run(()=>document.documentElement.classList.remove('dark'));
-      await run(async()=>{await window.router.push('/projects/test/board');window.fixture.mode='board'});
       await wait(()=>!!document.querySelector('.work-board'));
       await wait(()=>document.querySelector('.work-board').textContent.includes('Finished outcome'));
       assert.equal(await run(()=>[...document.querySelectorAll('.work-column h3')].some(el=>el.textContent.includes('Done'))),true);

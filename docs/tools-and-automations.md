@@ -1295,10 +1295,10 @@ the `log` tool writes learning logs, not runtime diagnostics.
 
 Every ordinary user-visible session is itself a lightweight topic, including normal
 questions with no Work. There is no extra topic entity or registration step. The
-Project dashboard/Work overview reads these conversations directly and provides
+Project Work overview data reads these conversations directly and provides
 stable topic, optional current-step focus, explicit completion, derived activity and conversation
 navigation. Internal task executions are folded under their owner/Work; calls and
-organizer/observer archives never become independent dashboard topics.
+organizer/observer archives never become independent overview topics.
 
 `write` of `v:sessions/self.json` accepts only topic, focus and completed for a
 durable session. Tasks may change focus and non-reviewable completion; self topic adapts the parent-owned task title and must remain unchanged. Reviewable completion requires review. Calls cannot mutate self metadata. The tool no longer accepts a

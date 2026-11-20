@@ -614,14 +614,6 @@ for (const feature of ['system:work-organizer']) {
     })
   }
 }
-test('disabled topic organization prevents dashboard dispatch and offers stable feature settings', () => {
-  const source = readFileSync(new URL('./components/ProjectWorkbench.vue', import.meta.url), 'utf8')
-  assert.match(source, /if \(organizationDisabled.value \|\| organizationBusy.value \|\| !canWrite.value\) return/)
-  assert.equal((source.match(/:disabled="organizationBusy \|\| organizationDisabled"/g) ?? []).length, 2)
-  assert.match(source, /automationChatLocation\(projectId, 'system:work-organizer'\)/)
-})
-
-
 test('enable failures preserve bounded known validation reasons instead of claiming inventory failed', async () => {
   const request: typeof fetch = async (input, init) => {
     assert.equal(new URL(String(input)).pathname, '/projects/a/api/automations/default%3Awork-dispatch-v1')

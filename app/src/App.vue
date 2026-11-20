@@ -110,9 +110,9 @@ import { useAppNotificationSounds } from './composables/useAppNotificationSounds
 
 const route = useRoute()
 const projectsToggleTarget = ref<HTMLElement>()
-const workspaceRoutes: readonly string[] = ['chat', 'project-board', 'projects', 'project-dashboard', 'project-workflows', 'project-settings', 'usage', 'settings']
+const workspaceRoutes: readonly string[] = ['chat', 'project-board', 'projects', 'project-workflows', 'project-settings', 'usage', 'settings']
 const mobile = provideMobileChrome()
-const mobilePageTitles: Record<string, string> = { get 'project-board'() { return t('Board') }, get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get usage() { return t('Usage') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
+const mobilePageTitles: Record<string, string> = { get 'project-board'() { return t('Board') }, get 'project-workflows'() { return t('Workflows') }, get chat() { return t('Chat') }, get projects() { return t('Projects') }, get nodes() { return t('Nodes') }, get usage() { return t('Usage') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
 watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()

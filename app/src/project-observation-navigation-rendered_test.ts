@@ -59,58 +59,51 @@ test('project settings and Knowledge click through history and observed groups w
     (async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:1280,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.webContents.on('console-message',d=>console.error('Renderer:',d.message));const run=s=>win.webContents.executeJavaScript(s);const wait=async s=>{for(let i=0;i<240;i++){if(await run('Boolean('+s+')'))return;await delay(50)}throw new Error('Timeout '+s+' '+await run('document.body.innerText'))};
     const visible=s=>'[...document.querySelectorAll('+JSON.stringify(s)+')].find(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height)';
     const clickLabel=async label=>{const s='document.querySelector('+JSON.stringify('[aria-label="'+label+'"]')+')';await wait(s);await run(s+'.click()')};
+    const knowledge=async project=>{const s='document.querySelector('+JSON.stringify('[data-project-id="'+project+'"] [aria-label="Knowledge"]')+')';await wait(s);await run(s+'.click()')};
     const route=()=>run('JSON.parse(JSON.stringify(window.fixture.router.currentRoute.value))');
-    const primary=async()=>{const s=visible('.conversation-tab button');await wait(s);await run(s+'.click()')};
+    const primary=async id=>{const s='[...document.querySelectorAll(".editor-tab button[role=tab]")].find(e=>e.getBoundingClientRect().width && e.textContent.trim()==='+JSON.stringify(id.startsWith('observed-group:')?'Received messages':'Existing history fixture')+' )';await wait(s);await run(s+'.click()')};
     await win.loadURL(${JSON.stringify(url)});await wait('document.querySelector(".projects-sidebar") && window.fixture');
     for(const observed of [false,true]){
       await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:'+(observed?'window.fixture.observedId':'"bot:history"')+'}})');
       const id=await run(observed?'window.fixture.observedId':'"bot:history"');
-      await wait(visible(observed?'.observed-message':'.chat-workspace'));
+      await wait(visible(observed?'.observed-message':'.chat-messages'));
       if(!observed) await wait('document.body.innerText.includes("Existing history fixture")');
       await clickLabel('Project A settings');await wait(visible('.project-settings-view'));
       await wait('('+visible('.project-settings-view')+').querySelector("h1").textContent==="Project A settings"');
       assert.equal((await route()).name,'project-settings');assert.equal((await route()).params.projectId,'a');
-      await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,id);
+      await primary(id);await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,id);
       // The settings document tab must restore its section, rather than General.
       await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a",section:"learning"}})');
       await wait('window.fixture.router.currentRoute.value.params.section==="learning"');
-      await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');
-      await run('[...document.querySelectorAll(".document-tab button[role=tab]")].find(e=>e.textContent.trim()==="Project settings" && e.getBoundingClientRect().width).click()');
+      await primary(id);await wait('window.fixture.router.currentRoute.value.name==="chat"');
+      await run('[...document.querySelectorAll(".editor-tab button[role=tab]")].find(e=>e.textContent.trim()==="Project settings" && e.getBoundingClientRect().width).click()');
       await wait('window.fixture.router.currentRoute.value.name==="project-settings"');
       assert.equal((await route()).params.section,'learning');
-      await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');
-      await clickLabel('Project A knowledge');await wait(visible('.knowledge-document'));
-      assert.equal((await route()).query.panel,'knowledge');assert.equal((await route()).params.sessionId,id);
-      await primary();await wait('!window.fixture.router.currentRoute.value.query.panel');
+      await primary(id);await wait('window.fixture.router.currentRoute.value.name==="chat"');
+      await knowledge('a');await wait(visible('.knowledge-document'));
+      assert.equal((await route()).query.panel,'knowledge');assert.equal((await route()).params.sessionId,observed?'bot:history':id);
+      await primary(id);await wait('!window.fixture.router.currentRoute.value.query.panel');
       if(observed){assert.equal(await run('!!'+visible('.message-input')),false);await wait(visible('.observed-message'))}
       // Inactive cached A must never send navigation events into B.
       await clickLabel('Project B settings');await wait('window.fixture.router.currentRoute.value.params.projectId==="b"');await wait(visible('.project-settings-view'));
       await wait('('+visible('.project-settings-view')+').querySelector("h1").textContent==="Project B settings"');
-      await clickLabel('Project B knowledge');await wait('window.fixture.router.currentRoute.value.params.projectId==="b" && window.fixture.router.currentRoute.value.query.panel==="knowledge"');await wait(visible('.knowledge-document'));
+      await knowledge('b');await wait('window.fixture.router.currentRoute.value.params.projectId==="b" && window.fixture.router.currentRoute.value.query.panel==="knowledge"');await wait(visible('.knowledge-document'));
       await delay(150);assert.equal((await route()).params.projectId,'b');
-      await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:'+JSON.stringify(id)+'}})');await wait(visible(observed?'.observed-message':'.chat-workspace'));
+      await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:'+JSON.stringify(id)+'}})');await wait(visible(observed?'.observed-message':'.chat-messages'));
       assert.equal((await route()).params.sessionId,id);
     }
-    // Project identity opens observation-only dashboard, never a coordinator session.
-    for (const project of ['A','B']) {
-      await clickLabel('Project '+project+' knowledge');await wait(visible('.knowledge-document'));
-      await run('[...document.querySelectorAll(".project-entry")].find(e=>e.textContent==="Project '+project+'").click()');
-      await wait('window.fixture.router.currentRoute.value.name==="project-dashboard"');
-      await wait(visible('.project-workbench'));await wait(visible('[data-overview-canvas]'));
-      await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Board").click()');await wait(visible('.work-filters'));
-      assert.equal((await route()).params.sessionId,undefined);
-    }
-    assert.equal(await run('!!document.querySelector(".new-work")'),false);
-    await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Board").click()');
-    await run('[...document.querySelectorAll(".workbench-empty button")].find(e=>e.textContent==="Start a conversation").click()');
+    await run('window.fixture.router.push({name:"project-board",params:{projectId:"b"}})');
+    await wait(visible('.work-filters'));
+    const startWork='[...document.querySelectorAll(".workbench-empty button")].find(e=>e.textContent==="Start a conversation")';
+    await wait(startWork);await run(startWork+'.click()');
     await wait('window.fixture.router.currentRoute.value.name==="chat"');
     await wait(visible('.reference-composer'));
     await wait('('+visible('.reference-composer')+').textContent.includes("Help me organize a new work item:")');
     assert.equal((await route()).params.projectId,'b');
-    await run('window.fixture.router.push({name:"project-dashboard",params:{projectId:"a"}})');
-    await wait(visible('[data-overview-canvas]'));
+    await run('window.fixture.router.push({name:"project-board",params:{projectId:"a"}})');
+    await wait(visible('.work-filters'));
     win.setSize(390,844);await delay(200);
-    await wait(visible('.work-view-switch'));
+    await wait(visible('.work-filters'));
     assert.equal(await run('document.documentElement.scrollWidth <= window.innerWidth'),true);
     await win.close();console.log('OBSERVATION_NAVIGATION_OK');app.exit(0)})().catch(e=>{console.error(e);app.exit(1)});`
   await build({ stdin: { contents: script, resolveDir: root, sourcefile: 'observation-navigation.cjs', loader: 'js' }, outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
@@ -120,9 +113,9 @@ test('project settings and Knowledge click through history and observed groups w
   const timer = setTimeout(() => child.kill(), 75_000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close'); assert.equal(code, 0, log); assert.match(log, /OBSERVATION_NAVIGATION_OK/)
-  assert.equal(requests.some(request => /coordinator|orchestrator/.test(request.path)), false, 'Dashboard navigation never accesses a dedicated session')
-  for (const id of ['a', 'b']) assert.ok(requests.some(request => request.path === `/projects/${id}/api/work`), `Dashboard reads ${id} work`)
-  assert.ok(requests.every(request => !request.path.includes('/api/project/usage')), 'Dashboard does not request usage')
+  assert.equal(requests.some(request => /coordinator|orchestrator/.test(request.path)), false, 'Project navigation never accesses a dedicated session')
+  for (const id of ['a', 'b']) assert.ok(requests.some(request => request.path === `/projects/${id}/api/work`), `Board reads ${id} work`)
+  assert.ok(requests.every(request => !request.path.includes('/api/project/usage')), 'Board does not request usage')
   assert.deepEqual(requests.filter(request => request.method !== 'GET'), [], 'Navigation must never prepare/send/run or create an execution')
   assert.equal(requests.some(request => /\/sessions\/.*observed-group/.test(decodeURIComponent(request.path))), false, 'Observed group IDs are never local sessions')
   for (const projectId of ['a', 'b']) assert.ok(requests.some(request => request.path === `/projects/${projectId}/api/knowledge`), `Knowledge uses ${projectId}'s project scope`)

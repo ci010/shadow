@@ -6,9 +6,10 @@
       <button v-if="grouped" type="button" class="project-toggle"
         :aria-label="t('{value1} project {projectName}', { value1: groupExpanded ? t('Collapse') : t('Expand'), projectName: projectName })"
         :aria-expanded="groupExpanded" :aria-controls="domId('folders-navigation')" @click="groupExpanded = !groupExpanded">
-        <span class="w-3.5 h-3.5" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : ['i-lucide-chevron-right', { 'org-expanded': groupExpanded }]" aria-hidden="true" />
+        <span class="w-3.5 h-3.5 shrink-0" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : ['i-lucide-chevron-right', { 'org-expanded': groupExpanded }]" aria-hidden="true" />
+        <span class="project-toggle-name">{{ projectName }}</span>
       </button>
-      <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />{{ t('Folders') }}</template></h2>
+      <h2 v-else-if="!isRail"><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />{{ t('Folders') }}</h2>
       <div class="folders-header-actions">
         <slot name="project-actions" />
         <button type="button" class="folder-action-button" :aria-label="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :title="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :aria-pressed="folderGrouped" @click="folderGrouped = !folderGrouped"><span :class="folderGrouped ? 'i-lucide-list' : 'i-lucide-folders'" class="w-4 h-4" aria-hidden="true" /></button>
@@ -449,8 +450,8 @@ onUnmounted(() => { window.removeEventListener('storage', refreshDraftActivity);
 .folders-sidebar.is-grouped { width: 100%; flex: 0 0 auto; border-right: 0; }
 .is-grouped .folders-scroll { overflow: visible; scrollbar-gutter: auto; flex: none; padding-bottom: 0; }
 .is-grouped .folders-header { min-height: var(--sidebar-project-height); padding: 0 calc(var(--sidebar-gutter) + var(--sidebar-row-inset)); gap: var(--sidebar-heading-gap); }
-.is-grouped .folders-header h2 { flex: 1; min-width: 0; }
-.project-toggle { display: grid; place-items: center; flex-shrink: 0; width: var(--sidebar-disclosure); height: var(--sidebar-row-height); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.project-toggle-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 15px; font-weight: 600; }
+.project-toggle { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; text-align: left; height: var(--sidebar-row-height); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .project-toggle:hover { background: var(--c-bg-muted); }
 .project-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .org-expanded { transform: rotate(90deg); }

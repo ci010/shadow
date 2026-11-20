@@ -52,7 +52,7 @@
         </details>
         <p v-if="githubTarget" class="workflow-explanation">
           <RouterLink :to="{ name: 'chat', params: { projectId, sessionId: githubTarget.sessionId } }">{{ t('Target session') }}: {{ githubTarget.sessionId }}</RouterLink>
-          · <RouterLink :to="{ name: 'project-dashboard', params: { projectId }, query: { work: githubTarget.workKey } }">{{ t('Open Work') }}: {{ githubTarget.workKey }}</RouterLink>
+          · <RouterLink :to="{ name: 'project-board', params: { projectId }, query: { work: githubTarget.workKey } }">{{ t('Open Work') }}: {{ githubTarget.workKey }}</RouterLink>
           · {{ t('Inbox acceptance is not user visibility or completed Work.') }}
         </p>
         <p v-if="displayed.gate" class="workflow-explanation">{{ displayed.gate.first === 'baseline' ? t('First successful collection establishes a baseline without actions.') : t('First successful collection acts on observations not seen before.') }}</p>
@@ -70,7 +70,7 @@
           <p v-if="selectedRun.output?.stale">{{ t('An older observation was ignored; the stored data is retained.') }}</p>
           <div class="workflow-actions">
             <RouterLink v-if="selectedRun.output?.sessionId" class="btn btn-sm" :to="{ name: 'chat', params: { projectId, sessionId: selectedRun.output.sessionId } }">{{ t('Open model session') }}</RouterLink>
-            <RouterLink v-if="selectedRun.output?.workKey" class="btn btn-sm" :to="{ name: 'project-dashboard', params: { projectId }, query: { work: selectedRun.output.workKey } }">{{ t('Open Work') }}</RouterLink>
+            <RouterLink v-if="selectedRun.output?.workKey" class="btn btn-sm" :to="{ name: 'project-board', params: { projectId }, query: { work: selectedRun.output.workKey } }">{{ t('Open Work') }}</RouterLink>
             <button v-if="['blocked', 'retry'].includes(selectedRun.status)" class="btn btn-sm" :disabled="busy || !!error" @click="requestRetry(selectedRun)">{{ t('Retry run') }}</button>
             <button v-if="['queued', 'retry', 'blocked'].includes(selectedRun.status)" class="btn btn-sm" :disabled="busy || !!error" @click="operate('cancel', selectedRun.id)">{{ t('Cancel run') }}</button>
           </div>

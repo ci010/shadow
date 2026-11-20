@@ -7,7 +7,7 @@ import { conversationMicroAppLink } from './project-coordination.ts'
 test('published message query routes to app review even from the same chat and across Projects', async () => {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects/:projectId/chat/:sessionId', name: 'chat', component: {} },
-    { path: '/projects/:projectId/dashboard', name: 'project-dashboard', component: {} },
+    { path: '/projects/:projectId/board', name: 'project-board', component: {} },
   ] })
   router.beforeEach(microAppNavigation)
   const project = '7a3482b8-596c-47d6-b6b1-40f2261156bc'
@@ -16,12 +16,12 @@ test('published message query routes to app review even from the same chat and a
   await router.push(path)
   const link = conversationMicroAppLink(`${path}?microApp=${app}`, project)!
   await router.push(link)
-  assert.equal(router.currentRoute.value.name, 'project-dashboard')
+  assert.equal(router.currentRoute.value.name, 'project-board')
   assert.equal(router.currentRoute.value.params.projectId, project)
   assert.equal(router.currentRoute.value.query.microApp, app)
   await router.push('/projects/other/chat/web:chat-other')
   await router.push(`${path}?microApp=${app}`)
-  assert.equal(router.currentRoute.value.name, 'project-dashboard')
+  assert.equal(router.currentRoute.value.name, 'project-board')
   for (const suffix of ['', '?microApp=', '?microApp=a&microApp=b', '?microApp=%2Fetc']) {
     await router.push(path + suffix)
     assert.equal(router.currentRoute.value.name, 'chat')

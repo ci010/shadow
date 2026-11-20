@@ -80,7 +80,7 @@ test('new references render and navigate through real Markdown and attachment pr
     window.fixtureStage='imports-ready';
     const router = createRouter({history:createMemoryHistory(),routes:[
       {path:'/projects/:projectId/chat/:sessionId',name:'chat',component:{render:()=>null}},
-      {path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},{path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}},
+      {path:'/projects/:projectId/board',name:'project-board',component:{render:()=>null}},
     ]});
     await router.push('/projects/fixture/chat/web%3Achat-fixture');
     createApp({setup(){
@@ -109,7 +109,7 @@ test('new references render and navigate through real Markdown and attachment pr
         h(MarkdownContent,{text:body.text,renderContent:renderMarkdown}),
         h(MessageAttachments,{paths:body.paths,apiBase:props.apiBase,sessionId:activeSessionId.value,onPreview:openImagePreview})]);
       return ()=>h('main',[
-        h('output',{id:'destination'},route.name==='project-dashboard'?'Work details: '+route.query.work:'Conversation: '+route.params.sessionId),
+        h('output',{id:'destination'},route.name==='project-board'?'Work details: '+route.query.work:'Conversation: '+route.params.sessionId),
         h('section',{id:'links',onClick:openConversationLink},[h(MarkdownContent,{text:links,renderContent:renderMarkdown})]),
         section('optimistic',optimistic),section('persisted',persisted),section('fenced',fenced),section('forged',forged),
         preview.value?h(ImageViewer,{image:preview.value,onClose:()=>preview.value=undefined}):null,

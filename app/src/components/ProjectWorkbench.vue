@@ -1,34 +1,25 @@
 <template>
-  <section ref="rootElement" class="project-workbench" :class="{ compact: !wide, 'has-panel': !!panel, 'dashboard-panel': view === 'history' }"
+  <section ref="rootElement" class="project-workbench" :class="{ compact: !wide, 'has-panel': !!panel }"
     :style="{ '--coordination-panel-width': `${panelWidth}px` }" :aria-label="t('Project workbench')">
     <header class="workbench-heading">
-      <h1 class="project-identity" :title="projectName">{{ mode === 'board' ? t('Board') : projectName }}</h1>
+      <h1 class="project-identity">{{ t('Board') }}</h1>
       <div v-show="!appsVisible" class="workbench-controls">
-        <div v-if="mode !== 'board'" class="work-view-switch" role="group" :aria-label="t('Work view')">
-          <button type="button" :aria-pressed="view === 'history'" @click="view = 'history'">{{ t('Dashboard') }}</button>
-        </div>
-        <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :title="t('Uses multiple bounded model requests and saves valid patches progressively; no calls on opening.')" :aria-describedby="modelCallNoticeId" @click="organizeTopics('full')">{{ organizing ? t('Organizing…') : t('Reorganize recent topics') }}</button>
-        <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :aria-describedby="modelCallNoticeId" @click="organizeTopics('delta')">{{ t('Update changed topics') }}</button>
-        <span :id="modelCallNoticeId" class="model-call-description">{{ t('Up to 8 model requests, 24 tool calls and 120 seconds. Valid patches are saved immediately.') }}</span>
         <button type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
-        <button v-if="mode === 'board' && view === 'completed'" type="button" @click="view = 'board'">{{ t('Back') }}</button>
+        <button v-if="view === 'completed'" type="button" @click="view = 'board'">{{ t('Back') }}</button>
         <button v-if="completionUnread.length" type="button" class="completion-entry" @click="view = 'completed'; unreadOnly = true; panel = ''">{{ t('Newly completed: {count}', { count: completionUnread.length }) }}</button>
         <span v-if="view === 'board'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
         <button type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
       </div>
-      <div v-if="mode !== 'board'" class="workbench-integrations">
+      <div class="workbench-integrations">
         <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
-        <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
+        <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="toggleGitHub">GitHub</button>
       </div>
-      <div v-if="!appsVisible && view === 'history' && organizationDisabled" class="organization-status" role="status">{{ t('Topic organization is disabled. Enable it in Automations to organize topics.') }} <RouterLink :to="automationChatLocation(projectId, 'system:work-organizer')">{{ t('Automation details') }}</RouterLink></div>
-      <div v-if="!appsVisible && view === 'history' && organizationProgress" class="organization-status" role="status" aria-live="polite">{{ organizationProgress }}</div>
-      <div v-if="!appsVisible && view === 'history' && organizationMessage" class="organization-status" role="status" aria-live="polite">{{ organizationMessage }}</div>
     </header>
-    <QuickActions v-if="mode !== 'board'" :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="true" pinned-only />
+    <QuickActions :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="true" pinned-only />
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="true" @compose="discussApp" />
     <div v-show="!appsVisible" class="workbench-body">
-      <main v-show="wide || !panel || view === 'history'" class="workbench-main">
-        <form v-if="view === 'board' || view === 'completed'" class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
+      <main v-show="wide || !panel" class="workbench-main">
+        <form class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
           <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
           <label>{{ t('Work') }}<UiSelect v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></UiSelect></label>
           <label>{{ t('Assigned to') }}<UiSelect v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
@@ -59,10 +50,7 @@
               <span>{{ t('Outcome unknown') }}</span><strong>{{ effect.tool }} · {{ sessionTitle(effect.sessionId) }}</strong><span>{{ t('Inspect note →') }}</span>
             </button>
           </details>
-          <div v-if="view === 'history'" class="overview-content">
-            <ProjectOverviewGraph :data="activeOverview" :api-base="apiBase" v-model:query="filter.query" @select="selectWork" @session="openSession" />
-          </div>
-          <WorkCompletionList v-else-if="view === 'completed'" :items="completedMatches" :completions="completionItems" v-model:unread-only="unreadOnly"
+          <WorkCompletionList v-if="view === 'completed'" :items="completedMatches" :completions="completionItems" v-model:unread-only="unreadOnly"
             :unread-count="completionUnread.length" :busy="completionBusy" :api-base="apiBase" @select="selectWork" @read-all="markCompletionsRead(completionUnread)" />
           <div v-else-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
@@ -104,44 +92,39 @@
   </section>
 </template>
 <script setup lang="ts">
-import { organizationErrorMessage, organizationDiagnostic } from '../organization-error.ts'
-import { apiUrl } from '../api-url.ts'
 import UiSelect from './UiSelect.vue'
 import HoverInfo from './HoverInfo.vue'
 import QuickActions from './QuickActions.vue'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { automationChatLocation } from '../automations.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import WorkCompletionList from './WorkCompletionList.vue'
 import { useWorkCompletions } from '../composables/useWorkCompletions.ts'
-import { activeWorkOverview, filterWork, workAttention, workRoots } from '../project-work.ts'
+import { filterWork, workAttention, workRoots } from '../project-work.ts'
 import WorkBoard from './WorkBoard.vue'
-import ProjectOverviewGraph from './ProjectOverviewGraph.vue'
 
 
-import { projectWorkOverviewSchema, type ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
+import type { ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
 import WorkAlignment from './WorkAlignment.vue'
 import ProjectGitHub from './ProjectGitHub.vue'
 import ProjectMicroApps from './ProjectMicroApps.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean; mode?: 'dashboard' | 'board' }>(), { mode: 'dashboard' })
+const props = defineProps<{ apiBase: string; projectId: string; visible: boolean }>()
 const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string] }>()
 const live = useProjectLiveState(), route = useRoute(), router = useRouter()
 const livePool = useLiveClientPool()
 const lease = shallowRef<ProjectLiveLease>()
 const lastSnapshot = shallowRef<ProjectWorkOverview>()
-const organizationSnapshot = shallowRef<ProjectWorkOverview>()
-const data = computed(() => organizationSnapshot.value ?? lease.value?.work.state.value ?? lastSnapshot.value)
+const data = computed(() => lease.value?.work.state.value ?? lastSnapshot.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
-const view = ref<'history' | 'board' | 'completed'>(props.mode === 'board' ? 'board' : 'history'), panel = ref<'work' | 'github' | ''>('')
+const view = ref<'board' | 'completed'>('board'), panel = ref<'work' | 'github' | ''>('')
 
 const selected = ref(''), wide = ref(false), appsVisible = ref(false)
 const unreadOnly = ref(false)
@@ -162,48 +145,6 @@ watch([viewedDetail, completionItems, completionBusy], () => {
 watch(() => [props.apiBase, props.projectId, props.visible, selected.value, panel.value, appsVisible.value],  () => { viewedDetail.value = undefined })
 
 const diagnosticsOpen = ref(false)
-const organizing = ref(false), organizationMessage = ref('')
-const liveOrganization = computed(() => data.value?.organization?.organization ?? data.value?.focus?.organization)
-const organizationDisabled = computed(() => data.value?.organization?.enabled === false)
-const organizationBusy = computed(() => organizing.value || liveOrganization.value?.status === 'running')
-const organizationProgress = computed(() => {
-  const status = liveOrganization.value
-  if (!status) return ''
-  return `${t(status.mode === 'delta' ? 'Incremental organization' : 'Full organization')} · ${t(status.status === 'running' ? 'Organizing…' : status.status === 'partial' ? 'Partial results saved' : 'Organization complete')} · ${status.coveredCount}/${status.manifestCount} ${t('topics covered')} · ${status.patches} ${t('patches saved')}`
-})
-let organizationController: AbortController | undefined
-async function organizeTopics(mode: 'full' | 'delta' = 'full') {
-  if (organizationDisabled.value || organizationBusy.value) return
-  const apiBase = props.apiBase, projectId = props.projectId
-  const controller = new AbortController()
-  organizationController = controller
-  organizing.value = true; organizationMessage.value = t('Valid patches appear live and remain saved if organization stops.')
-  let failureMessage = organizationErrorMessage('organization_network_failed'), diagnostic = ''
-  try {
-    const response = await fetch(apiUrl(apiBase, '/api/work/organize'), { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }), signal: controller.signal })
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}))
-      failureMessage = organizationErrorMessage(body?.error, response.status)
-      diagnostic = organizationDiagnostic(body, response.status)
-      throw new Error('Organization HTTP failure')
-    }
-    if (apiBase !== props.apiBase || projectId !== props.projectId || controller.signal.aborted) return
-    const result = projectWorkOverviewSchema.safeParse(await response.json())
-    if (!result.success) { failureMessage = organizationErrorMessage('organization_response_invalid'); throw new Error('Invalid organization response') }
-    organizationSnapshot.value = result.data
-    void lease.value?.work.refresh()
-    if (apiBase !== props.apiBase || projectId !== props.projectId || controller.signal.aborted) return
-    organizationMessage.value = t('Recent topics organized. Interpretations are not confirmed user intent.')
-  } catch {
-    void lease.value?.work.refresh()
-    if (!controller.signal.aborted && apiBase === props.apiBase && projectId === props.projectId)
-      organizationMessage.value = t(failureMessage) + ' ' + t('Any valid partial patches remain saved. Refresh to see the latest results.') + diagnostic
-  } finally {
-    if (organizationController === controller) { organizing.value = false; organizationController = undefined }
-  }
-}
-watch(() => lease.value?.work.state.revision, () => { organizationSnapshot.value = undefined })
 function toggleApps() {
   appsVisible.value = !appsVisible.value
   if (!appsVisible.value && route.query.microApp) {
@@ -211,15 +152,20 @@ function toggleApps() {
     void router.replace({ query })
   }
 }
+function toggleGitHub() {
+  if (appsVisible.value) toggleApps()
+  panel.value = panel.value === 'github' ? '' : 'github'
+}
 async function discussApp(text: string) { appsVisible.value = false; await discussGitHub(text) }
-watch(() => route.query.microApp, id => { if (props.mode !== 'board' && props.visible && route.params.projectId === props.projectId && typeof id === 'string') appsVisible.value = true }, { immediate: true })
+watch(() => [route.fullPath, props.visible] as const, ([, visible]) => {
+  if (visible && route.name === 'project-board' && route.params.projectId === props.projectId)
+    appsVisible.value = typeof route.query.microApp === 'string'
+}, { immediate: true })
 const panelId = `coordination-${useId()}`
-const modelCallNoticeId = `model-call-${useId()}`
 const containerWidth = ref(0), preferredPanelWidth = ref(400)
 const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 320, containerWidth.value))
 const panelWidth = computed(() => clampSidebarWidth(preferredPanelWidth.value, resizeBounds.value))
 const filter = reactive({ query: '', root: '', assignee: '', terminal: false })
-const activeOverview = computed(() => activeWorkOverview(data.value ?? { items: [], sessions: [], requests: [], effects: [] }))
 const completedMatches = computed(() => filterWork(data.value?.items ?? [], { ...filter, terminal: true }).filter(item => item.status === 'done'))
 const filtered = computed(() => filterWork(data.value?.items ?? [], { ...filter, terminal: true }))
 const selectedItem = computed(() => data.value?.items.find(item => item.key === selected.value))
@@ -244,7 +190,7 @@ const sessionExists = (id: string | null) => !!id && !!data.value?.sessions.some
 function refresh() { if (props.visible) { void lease.value?.work.refresh(); void refreshCompletions() } }
 function clearFilters() { Object.assign(filter, { query: '', root: '', assignee: '', terminal: false }) }
 async function selectWork(key: string) {
-  await router.replace({ name: props.mode === 'board' ? 'project-board' : 'project-dashboard',
+  await router.replace({ name: 'project-board',
     params: { projectId: props.projectId }, query: { ...(route.params.projectId === props.projectId ? route.query : {}), work: key } })
   if (route.query.work !== key) return
   panel.value = 'work'
@@ -267,14 +213,8 @@ async function discussSelected() {
   await nextTick()
   emit('compose', workReference(props.projectId, selected.value, selectedItem.value?.title) + '\n')
 }
-async function discussNode(key: string) {
-  const item = data.value?.items.find(item => item.key === key)
-  await nextTick()
-  emit('compose', t('Discuss the premise of {title} ({key}):', { title: workReference(props.projectId, key, item?.title), key }) + '\n')
-}
 async function focusRequest(request: ProjectWorkOverview['requests'][number]) {
-  view.value = props.mode === 'board' ? 'board' : 'history'
-
+  view.value = 'board'
   clearFilters()
   panel.value = ''
   openSession(request.sessionId)
@@ -294,15 +234,12 @@ watch(() => [props.apiBase, props.projectId, props.visible] as const, ([base, pr
   onCleanup(() => resource.dispose())
 }, { immediate: true })
 watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase, projectId, visible], previous) => {
-  if (apiBase !== previous?.[0] || projectId !== previous?.[1]) {
-    organizationSnapshot.value = undefined; organizationController?.abort(); organizationController = undefined; organizing.value = false; organizationMessage.value = ''
-  }
   lastSnapshot.value = apiBase === previous?.[0] && projectId === previous?.[1] ? data.value : undefined
   lease.value?.release(); lease.value = undefined
   if (visible) lease.value = live.acquireProject(apiBase, projectId, undefined, true)
 }, { immediate: true })
 watch(() => [route.query.work, props.visible] as const, ([key]) => {
-  if (route.params.projectId === props.projectId && route.name === (props.mode === 'board' ? 'project-board' : 'project-dashboard') && props.visible && typeof key === 'string' && key !== selected.value) {
+  if (route.params.projectId === props.projectId && route.name === 'project-board' && props.visible && typeof key === 'string' && key !== selected.value) {
     selected.value = key; panel.value = 'work'
   }
 }, { immediate: true })
@@ -315,20 +252,15 @@ onMounted(() => {
   })
   if (rootElement.value) observer.observe(rootElement.value)
 })
-onUnmounted(() => { organizationController?.abort(); lease.value?.release(); observer?.disconnect() })
+onUnmounted(() => { lease.value?.release(); observer?.disconnect() })
 </script>
 <style scoped>
-.model-call-description { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.overview-content { display:flex; flex:1; overflow:hidden; min-height:0; }
-.overview-structure, .overview-graph { margin: 16px; border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; }
-.overview-structure summary, .overview-graph summary { cursor: pointer; }
 .project-workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--c-text); }
 .project-diagnostic-links { display: flex; flex-wrap: wrap; gap: 12px; }
 .workbench-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-bottom: 1px solid var(--c-border); flex-shrink: 0; }
 .project-identity { margin: 0; min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; line-height: 34px; }
 .workbench-controls { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .workbench-integrations { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.organization-status { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.4; color: var(--c-text-secondary); }
 button:where(:not(.ui-select)), input, .ui-select { font: inherit; font-size: 12px; }
 button:where(:not(.ui-select)) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 5px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-card); cursor: pointer; }
 button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
@@ -338,17 +270,8 @@ button:where(:not(.ui-select)) > span[class^=i-], h2 > span[class^=i-] { width: 
 .workbench-body { position:relative; display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
 .has-panel:not(.compact) .workbench-body { grid-template-columns: minmax(0, 1fr) var(--coordination-panel-width); }
 .workbench-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.work-view-switch { display: inline-flex; align-items: center; flex-shrink: 0; gap: 0; }
-.work-view-switch button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.work-view-switch button:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; }
-.advanced-views { font-size: 12px; }
-.advanced-views summary { cursor: pointer; padding: 6px; }
-.advanced-views[open] { display: flex; }
-.advanced-views button { margin: 2px; }
-.work-view-switch button:where(:not(.ui-select)) + button:where(:not(.ui-select)) { margin-left: -1px; }
 [aria-pressed=true] { background: var(--c-selection-bg); border-color: var(--c-selection-border); color: var(--c-primary); }
 .work-count { white-space: nowrap; font-size: 12px; color: var(--c-text-secondary); }
-.new-work { color: var(--c-primary); }
 .work-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 4px 16px 14px; border-bottom: 1px solid var(--c-border-soft); }
 .work-filters label { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 100px; font-size: 12px; color: var(--c-text-secondary); }
 .work-filters input:not([type=checkbox]), .work-filters .ui-select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 7px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); }
@@ -367,8 +290,6 @@ button:where(:not(.ui-select)) > span[class^=i-], h2 > span[class^=i-] { width: 
 .workbench-empty p { max-width: 48ch; margin: 0; font-size: 13px; line-height: 1.6; color: var(--c-text-secondary); }
 .empty-work-icon { width: 28px; height: 28px; color: var(--c-text-muted); }
 .coordination-panel { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--c-border); background: var(--c-bg); }
-.dashboard-panel.has-panel .workbench-body { grid-template-columns:minmax(0,1fr); }
-.dashboard-panel .coordination-panel { position:absolute;z-index:10;right:0;top:0;bottom:0;width:min(var(--coordination-panel-width),100%);box-shadow:-8px 0 24px #00000018; }
 .coordination-panel-heading { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--c-border-soft); }
 .coordination-panel-heading .discuss-work { color: var(--c-text-on-primary); background: var(--c-primary-bg); border-color: var(--c-primary-bg); }
 .coordination-panel-heading .discuss-work:hover { background: var(--c-primary-bg-hover); }
@@ -379,11 +300,9 @@ button:where(:not(.ui-select)) > span[class^=i-], h2 > span[class^=i-] { width: 
 .compact .workbench-heading { padding: 12px; }
 .compact .workbench-heading h1 { font-size: 16px; }
 .compact .coordination-panel { border-left: 0; }
-.compact.dashboard-panel .coordination-panel { width: 100%; }
 @media (max-width: 700px) {
   .workbench-heading { flex-wrap: wrap; }
   .workbench-controls { order: 3; flex-basis: 100%; }
-  .organization-status { order: 4; }
   .project-identity { flex: 1; max-width: none; }
 }
 @media (pointer: coarse), (max-width: 700px) { button:where(:not(.ui-select)), .work-filters input:not([type=checkbox]), .work-filters .ui-select { min-height: 44px; } }

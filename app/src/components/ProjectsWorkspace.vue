@@ -44,10 +44,9 @@
           :data-project-id="project.id" :folder-revision="folderRevision"
           :navigation-key="`${route.fullPath}:${visible}`"
           :selected-project-id="appTab ? '' : selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
-          :dashboard-selected="!!dashboardProject"
           :draft-folder-id="selected?.folder?.id" :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
-          @project-document="openProjectDocument(project.id, $event)" @knowledge="openKnowledge(project.id)" @dashboard="openDashboard(project.id)"
+          @project-document="openProjectDocument(project.id, $event)" @knowledge="openKnowledge(project.id)"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
           @automation="showAutomation(project.id, $event)" @session-automation="(session, job) => identifyAutomation(project.id, session, job)" />
       </div>
@@ -63,13 +62,9 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <div v-if="!appTab && (dashboardProject || !selectedProjectId) && !mobile?.enabled.value && openProjectTabGroups.length" class="dashboard-editor-tabs">
+      <div v-if="!appTab && !selectedProjectId && !mobile?.enabled.value && openProjectTabGroups.length" class="workspace-editor-tabs">
         <ProjectEditorTabs :groups="openProjectTabGroups" @activate="activateTopTab" @close="editorGroups.close" />
       </div>
-      <ProjectWorkbench v-if="dashboardProject" :key="dashboardProject.id"
-        :api-base="projectBase(apiBase, dashboardProject.id)" :project-id="dashboardProject.id"
-        :project-name="dashboardProject.name" :visible="visible"
-        @navigate="navigate(dashboardProject.id, $event)" @compose="composeFromDashboard(dashboardProject.id, $event)" />
       <section v-if="!appTab && !selectedProjectId && !loading" class="project-empty">
         <h1>{{ t('Where would you like to work?') }}</h1>
         <p>{{ t('Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.') }}</p>
@@ -79,15 +74,15 @@
       <EditorGroupHost v-if="appDocuments.length" v-show="appEditorActive" :project-id="APP_EDITOR_SCOPE"
         project-name="Shadow" :active="appEditorActive" :other-project-tabs="projectOnlyTabGroups"
         @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" />
-      <AutomationDetail v-show="!appTab && !dashboardProject" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible && !appTab" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
-      <EditorGroupHost :project-name="project.name" :other-project-tabs="otherProjectTabGroups" @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && !appTab && selectedProjectId === project.id && !dashboardProject" :key="project.id" :project-id="project.id" :active="visible && !appTab && selectedProjectId === project.id && !dashboardProject" />
+      <AutomationDetail v-show="!appTab" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible && !appTab" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
+      <EditorGroupHost :project-name="project.name" :other-project-tabs="otherProjectTabGroups" @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && !appTab && selectedProjectId === project.id" :key="project.id" :project-id="project.id" :active="visible && !appTab && selectedProjectId === project.id" />
       </AutomationDetail>
       <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
       <div v-show="false" class="editor-resource-owners">
         <ProjectConversation v-for="resource in resources" :key="resource.key" :resource-key="resource.key"
           :ref="component => setConversation(resource.key, component)"
           :inspection="!!resource.inspection" :keyboard-active="ownerFocused(resource.key)"
-          :visible="visible && !appTab && selectedProjectId === resource.projectId && !dashboardProject"
+          :visible="visible && !appTab && selectedProjectId === resource.projectId"
           :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
           :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
           :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
@@ -109,10 +104,9 @@
       <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && !appTab && selectedProjectId === projectId">
         <div class="project-document-host">
           <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" @clear-selection="workflowQueries.delete(projectId)" />
-          <ProjectWorkbench v-else-if="tab === 'board'" mode="board" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
-            :project-name="projects.find(project => project.id === projectId)?.name ?? projectId"
-            :visible="visible && !appTab && selectedProjectId === projectId && !dashboardProject && editorGroups.visible(projectEditorId(projectId, tab))"
-            @navigate="navigate(projectId, $event)" @compose="composeFromDashboard(projectId, $event)" />
+          <ProjectWorkbench v-else-if="tab === 'board'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
+            :visible="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))"
+            @navigate="navigate(projectId, $event)" @compose="composeFromWorkbench(projectId, $event)" />
           <ProjectSettings v-else :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
         </div>
       </EditorViewHost>
@@ -244,7 +238,7 @@ function syncAppDocument() {
   if (!props.visible) return
   const tab = appTab.value
   if (!tab) {
-    if (['chat', 'projects', 'project-dashboard', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) previousWorkspacePath = route.fullPath
+    if (['chat', 'projects', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) previousWorkspacePath = route.fullPath
     return
   }
   appPaths[tab] = route.fullPath
@@ -287,7 +281,7 @@ provide(WorkflowInputReferencesKey, {
   selection(projectId, owner, sessionId) {
     const item = workflowSelections.value.get(projectId)?.item
     const editor = editorGroups.referenceTarget(projectId)
-    if (!props.visible || appTab.value || dashboardProject.value || selectedProjectId.value !== projectId || item?.reference.projectId !== projectId
+    if (!props.visible || appTab.value || selectedProjectId.value !== projectId || item?.reference.projectId !== projectId
       || editor?.owner !== owner || editor.conversation?.sessionId !== sessionId) return
     return item
   },
@@ -307,8 +301,7 @@ const { automation, syncAutomationRoute, showAutomation, openAutomationRun, iden
   closeSidebar,
 })
 const workflowProjectId = computed(() => route.name === 'project-workflows' && typeof route.params.projectId === 'string' ? route.params.projectId : '')
-const dashboardProject = computed(() => route.name === 'project-dashboard' ? projects.value.find(project => project.id === route.params.projectId) : undefined)
-const selectedProjectId = computed(() => workflowProjectId.value || (dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? ''))
+const selectedProjectId = computed(() => workflowProjectId.value || (automation.value?.projectId ?? selected.value?.projectId ?? ''))
 const selectedProjectName = computed(() => appTab.value ? '' : projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
 
@@ -518,7 +511,7 @@ function publish(resource: ConversationResource) {
 }
 const consumedInspectionLinks = new Set<string>()
 function syncRoute() {
-  if (!props.visible || !['chat', 'project-board', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
+  if (!props.visible || !['chat', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
@@ -534,7 +527,6 @@ function syncRoute() {
   }
   documentRoute = nextDocumentRoute
   const tab = route.name === 'project-board' ? 'board' : route.name === 'project-workflows' ? 'workflows' : route.name === 'project-settings' ? 'settings' : undefined
-  if (route.name === 'project-dashboard') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
   let resource: ConversationResource
@@ -605,10 +597,7 @@ async function createProject() {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not create project. Retry.')
   } finally { saving.value = false }
 }
-function openDashboard(projectId: string) {
-  void router.push({ name: 'project-dashboard', params: { projectId } })
-}
-async function composeFromDashboard(projectId: string, text: string) {
+async function composeFromWorkbench(projectId: string, text: string) {
   await startDraft(projectId)
   await nextTick()
   if (selected.value?.projectId === projectId) instances.get(selected.value.key)?.appendDraft(text)
@@ -624,7 +613,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
   const destination = projectNavigationShortcut(event)
   if (!destination || !keyboardActive.value || !props.visible || creating.value
     || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-    || !['chat', 'project-board', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
+    || !['chat', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
   if (!projects.value.some(project => project.id === projectId)) return
   event.preventDefault()
@@ -635,7 +624,7 @@ function projectNavigationKeydown(event: KeyboardEvent) {
 const newConversationShortcut = createNewConversationShortcut({
   context() {
     if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-      || !['chat', 'project-board', 'project-dashboard', 'project-workflows', 'project-settings'].includes(String(route.name))) return
+      || !['chat', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
     // Ctrl+N matches the sidebar's explicit Start from scratch action, never inherits a workdir.
@@ -683,7 +672,7 @@ function selectSession(projectId: string, sessionId: string) {
 // Group activation (including close fallback and cross-group focus) is the
 // navigation authority; hidden source workbenches must not publish their tabs.
 watch(() => editorGroups.active(selectedProjectId.value), descriptor => {
-  if (!props.visible || route.name === 'project-dashboard' || !descriptor) return
+  if (!props.visible || !descriptor) return
   // Project documents, including close fallback, share the same route authority
   // as conversation/explorer tabs. Hidden owners must not publish navigation.
   if (incomingDocument || documentRoute !== `${String(route.name)}:${String(route.params.projectId)}`) return
@@ -851,7 +840,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.dashboard-editor-tabs { display: flex; flex: 0 0 40px; min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); }
+.workspace-editor-tabs { display: flex; flex: 0 0 40px; min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); }
 .session-search-trigger { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .session-search-trigger:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .session-search-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

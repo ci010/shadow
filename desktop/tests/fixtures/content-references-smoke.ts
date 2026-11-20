@@ -60,7 +60,7 @@ async function main() {
     assert.equal(await run(`!!window.injected`), false)
     // The production Markdown/sanitizer creates real anchors; the production
     // click handler drives the real memory router and its destination readout.
-    await run(`document.querySelector('#links a[href*="dashboard?work="]').click()`)
+    await run(`document.querySelector('#links a[href*="board?work="]').click()`)
     await wait(`document.querySelector('#destination').textContent === 'Work details: work:one'`)
     await run(`document.querySelector('#links a[href*="chat/web%3Achat-other"]').click()`)
     await wait(`document.querySelector('#destination').textContent === 'Conversation: web:chat-other'`)
