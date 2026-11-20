@@ -1,18 +1,8 @@
 import { basename, dirname, posix } from 'node:path'
 import type { FolderRecord } from '../folders/contracts.ts'
 import { z } from 'zod'
-
-export const RegisteredReadFoldersSchema = z.array(z.string().uuid()).max(16)
-  .refine(ids => new Set(ids).size === ids.length, 'Unique source folders required')
-
-/** Owner-authored whole views; absent fields grant nothing. Legacy folder fields
- * describe existing platform capabilities and keep their original backends. */
-export const ReadResourcesSchema = z.object({
-  folders: RegisteredReadFoldersSchema.optional(),
-  knowledge: z.boolean().optional(),
-  wiki: z.boolean().optional(),
-}).strict()
-export type ReadResources = z.infer<typeof ReadResourcesSchema>
+import type { ReadResources } from './read-scope-contract.ts'
+export { ReadResourcesSchema, RegisteredReadFoldersSchema, type ReadResources } from './read-scope-contract.ts'
 
 export function resourceSubset(scope?: ReadResources, ceiling?: ReadResources): boolean {
   return (!scope?.wiki || !!ceiling?.wiki) && (!scope?.knowledge || !!ceiling?.knowledge) &&

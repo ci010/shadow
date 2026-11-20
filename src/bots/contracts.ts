@@ -1,4 +1,4 @@
-import { ReadResourcesSchema } from './read-scope.ts'
+import { ReadResourcesSchema } from './read-scope-contract.ts'
 import { z } from 'zod'
 import type { AgentTypeDefinition } from '../agent/types/types.ts'
 import type { ChannelAddress } from '../bus/events.ts'

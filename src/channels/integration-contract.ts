@@ -1,4 +1,4 @@
-import { ReadResourcesSchema, RegisteredReadFoldersSchema } from '../bots/read-scope.ts'
+import { ReadResourcesSchema, RegisteredReadFoldersSchema } from '../bots/read-scope-contract.ts'
 import { InputProcessorSchema } from '../events/input-processor-contract.ts'
 import { z } from 'zod'
 import { CapabilityGrantSchema } from '../execution/grant-contract.ts'
