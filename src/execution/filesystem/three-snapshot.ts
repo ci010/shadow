@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
+import { isThreePreviewSettings } from '../../shared/three-preview.ts'
 
 export const THREE_LIMITS = { marker: 32 * 1024, source: 256 * 1024, asset: 1024 * 1024, modulesTotal: 1024 * 1024, assetsTotal: 1024 * 1024, shadersTotal: 256 * 1024, shaderText: 32_768, modules: 32, assets: 16, shaders: 16 } as const
 export class ThreeSnapshotError extends Error {
@@ -108,7 +109,8 @@ export async function readThreeSnapshot(base: string, input: unknown, ifNoneMatc
   const invalid = () => fail('invalid_snapshot_marker', 400, marker)
   const manifest: unknown = (() => { try { return JSON.parse(markerText) } catch { return invalid() } })()
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return invalid()
-  const { files, assets = [], shaders = [] } = manifest as Record<string, unknown>
+  const { files, assets = [], shaders = [], preview } = manifest as Record<string, unknown>
+  if (preview !== undefined && !isThreePreviewSettings(preview)) fail('invalid_snapshot_preview', 400, marker)
   const list = (value: unknown, max: number): unknown[] => {
     if (!Array.isArray(value)) return invalid()
     if (value.length > max) fail('snapshot_count_limit', 413, marker)
@@ -168,7 +170,9 @@ export async function readThreeSnapshot(base: string, input: unknown, ifNoneMatc
     return text
   }
   return { etag, snapshot: {
+    // The marker bytes (including preview) already participate in the content hash.
     version: content.digest('hex'),
+    ...(preview === undefined ? {} : { preview }),
     files: Object.fromEntries(modules.map(file => [file, source(file)])),
     assets: Object.fromEntries(resources.map(file => [file, bytes.get(full(file))!.toString('base64')])),
     shaders: bindings.map(({ objectId, slot, vertex, fragment }) => ({ objectId, slot, vertex: shaderSource(vertex), fragment: shaderSource(fragment) })),

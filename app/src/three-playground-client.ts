@@ -1,3 +1,4 @@
+import { isThreePreviewSettings, type ThreePreviewSettings } from '../../src/shared/three-preview.ts'
 import { decodeBase64 } from './gltf-file-source.ts'
 
 export interface ShaderSource { objectId: string; slot: number; vertex: string; fragment: string }
@@ -6,6 +7,7 @@ export interface FileSnapshot {
   files: Record<string, string>
   assets: Record<string, ArrayBuffer>
   shaders: ShaderSource[]
+  preview?: ThreePreviewSettings
 }
 export interface SnapshotRead { snapshot: FileSnapshot; tag: string }
 const MiB = 1024 * 1024
@@ -43,6 +45,8 @@ export async function fetchPlaygroundSnapshot(url: URL, tag: string, signal: Abo
     || !value.shaders.every(s => object(s) && typeof s.objectId === 'string' && Number.isSafeInteger(s.slot) && typeof s.vertex === 'string' && typeof s.fragment === 'string')) {
     throw new Error('Invalid Playground snapshot response')
   }
+  const { preview } = value
+  if (preview !== undefined && !isThreePreviewSettings(preview)) throw new Error('Invalid Playground snapshot preview settings')
   let budget = MiB
   const assets: Record<string, ArrayBuffer> = Object.create(null)
   for (const [path, data] of Object.entries(value.assets)) {
@@ -51,7 +55,7 @@ export async function fetchPlaygroundSnapshot(url: URL, tag: string, signal: Abo
     budget -= bytes.length
     assets[path] = bytes.buffer
   }
-  return { snapshot: { version: value.version, files: value.files as Record<string, string>, assets, shaders: value.shaders as ShaderSource[] }, tag: res.headers.get('ETag') ?? '' }
+  return { snapshot: { version: value.version, files: value.files as Record<string, string>, assets, shaders: value.shaders as ShaderSource[], ...(preview === undefined ? {} : { preview }) }, tag: res.headers.get('ETag') ?? '' }
 }
 
 /** A poll observes an immutable snapshot. A newer observation invalidates the worker
@@ -103,6 +107,6 @@ export async function exportSnapshot(snapshot: FileSnapshot, signal: AbortSignal
   signal.throwIfAborted()
   const { buildPlayground } = await import('@shadow/three-playground')
   signal.throwIfAborted()
-  const { glb } = await buildPlayground(snapshot, { signal, timeoutMs: 10_000 })
+  const { glb } = await buildPlayground({ files: snapshot.files, assets: snapshot.assets }, { signal, timeoutMs: 10_000 })
   return glb
 }

@@ -15,7 +15,7 @@ window.runThreeMarkerCheck = async expectedShaders => {
   const viewer = new ThreeViewer(canvas);
   try {
     // load() links every shader override on the real WebGL renderer before committing.
-    await viewer.load({ bytes, shaders: snapshot.shaders, version: snapshot.version, identity: 'playground' });
+    await viewer.load({ bytes, shaders: snapshot.shaders, preview: snapshot.preview, version: snapshot.version, identity: 'playground' });
     if (!viewer.objectIds.length) throw new Error('No exported objects');
     const camera = viewer.getCamera('front');
     const frames = [];

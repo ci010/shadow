@@ -1,5 +1,10 @@
 export interface ShaderBinding { objectId: string; slot: number; vertex: string; fragment: string }
+export interface ModelPreview {
+  toneMapping?: 'none' | 'aces';
+  exposure?: number;
+}
 export interface ModelInput {
+  preview?: ModelPreview;
   version: string;
   signal?: AbortSignal;
   shaders?: readonly ShaderBinding[];
@@ -10,6 +15,29 @@ export interface ModelInput {
 }
 
 const MiB = 1024 * 1024;
+const punctual = 'KHR_lights_punctual';
+const lightLimit = 16;
+export interface PunctualLight {
+  type: 'directional' | 'point' | 'spot';
+  color: [number, number, number];
+  intensity: number;
+  range: number;
+  inner: number;
+  outer: number;
+}
+
+function lightDefinition(def: Json): PunctualLight {
+  const { type, color = [1, 1, 1], intensity = 1, range, spot } = def;
+  check(type === 'point' || type === 'spot' || type === 'directional', 'punctual light type');
+  check(def.name === undefined || typeof def.name === 'string', 'punctual light name');
+  check(Array.isArray(color) && color.length === 3 && color.every(c => Number.isFinite(c) && c >= 0 && c <= 1), 'punctual light RGB');
+  check(Number.isFinite(intensity) && intensity >= 0, 'punctual light intensity');
+  check(range === undefined || (type !== 'directional' && Number.isFinite(range) && range > 0), 'punctual light range');
+  check(type === 'spot' ? spot && typeof spot === 'object' && !Array.isArray(spot) : spot === undefined, 'punctual light spot');
+  const { innerConeAngle: inner = 0, outerConeAngle: outer = Math.PI / 4 } = spot ?? {};
+  check(Number.isFinite(inner) && Number.isFinite(outer) && inner >= 0 && inner < outer && outer <= Math.PI / 2, 'punctual light cone angles');
+  return { type, color: color as PunctualLight['color'], intensity, range: range ?? 0, inner, outer };
+}
 export const limits = Object.freeze({ document: 32 * MiB, json: 2 * MiB, total: 64 * MiB,
   resources: 128, imagePixels: 4096 * 4096, totalPixels: 24 * 1024 * 1024,
   nodes: 4096, primitives: 1024, scenePrimitives: 4096, drawElements: 3_000_000 });
@@ -49,6 +77,11 @@ export function snapshot(input: ModelInput): ModelInput {
   }
   check(typeof input.version === 'string' && input.version.length > 0 && input.version.length <= 256, 'snapshot version');
   check(input.identityScope === undefined || (typeof input.identityScope === 'string' && input.identityScope.length > 0 && input.identityScope.length <= 512), 'identity scope');
+  const { preview } = input;
+  check(preview === undefined || (preview && typeof preview === 'object' && !Array.isArray(preview)), 'preview settings');
+  const { toneMapping, exposure } = preview ?? {};
+  check(toneMapping === undefined || toneMapping === 'none' || toneMapping === 'aces', 'preview tone mapping');
+  check(exposure === undefined || (Number.isFinite(exposure) && exposure >= 0.1 && exposure <= 4), 'preview exposure');
   let shaderSize = 0;
   check(!input.shaders || input.shaders.length <= 32, 'shader count');
   const shaders = input.shaders?.map(({ objectId, slot, vertex, fragment }) => {
@@ -59,6 +92,7 @@ export function snapshot(input: ModelInput): ModelInput {
     return { objectId, slot, vertex, fragment };
   });
   return { version: input.version, signal: input.signal, shaders, identityScope: input.identityScope,
+    preview: { toneMapping: toneMapping ?? 'none', exposure: exposure ?? 1 },
     bytes: new Uint8Array(source), resources, identity: input.identity ?? 'gltf' };
 }
 
@@ -146,7 +180,10 @@ export function prepare(input: ModelInput) {
   check(json?.asset?.version === '2.0' && (!json.asset.minVersion || json.asset.minVersion === '2.0'), 'asset version');
   const buffers = list(json.buffers, limits.resources), images = list(json.images, limits.resources);
   const materials = list(json.materials), materialOwners = new Set(materials);
+  const nodes = list(json.nodes, limits.nodes), nodeOwners = new Set(nodes), scenes = list(json.scenes, 16);
+  const activeScene = at(scenes, json.scene === undefined ? 0 : json.scene);
   const extensions = new Set([
+    punctual,
     'KHR_materials_unlit', 'KHR_materials_clearcoat', 'KHR_materials_dispersion', 'KHR_materials_ior',
     'KHR_materials_sheen', 'KHR_materials_specular', 'KHR_materials_transmission', 'KHR_materials_iridescence',
     'KHR_materials_anisotropy', 'KHR_materials_volume', 'KHR_materials_emissive_strength', 'KHR_texture_transform',
@@ -182,7 +219,8 @@ export function prepare(input: ModelInput) {
         check(v && typeof v === 'object' && !Array.isArray(v), 'extension dictionary');
         for (const [name, params] of Object.entries(v)) {
           check(extensions.has(name) && declared.includes(name) && params && typeof params === 'object' && !Array.isArray(params), 'unsupported extension');
-          check(name === 'KHR_texture_transform' ? textureInfos.has(value as Json) : materialOwners.has(value as Json), 'extension location');
+          check(name === punctual ? value === json || nodeOwners.has(value as Json)
+            : name === 'KHR_texture_transform' ? textureInfos.has(value as Json) : materialOwners.has(value as Json), 'extension location');
           if (name === 'KHR_texture_transform') {
             const transform = params as Json;
             check(transform.texCoord === undefined || integer(transform.texCoord, 3), 'texture transform channel');
@@ -276,11 +314,24 @@ export function prepare(input: ModelInput) {
     }
     return { elements, primitives: ps.length };
   });
-  const nodes = list(json.nodes, limits.nodes), scenes = list(json.scenes, 16);
-  at(scenes, json.scene ?? 0);
+  const rootLights = json.extensions?.[punctual];
+  const definitions = list(rootLights?.lights, lightLimit).map(lightDefinition);
+  check(rootLights === undefined || (definitions.length > 0 && rootLights.light === undefined), 'punctual light definitions');
+  const lights = new Map<number, PunctualLight>();
   const parents = new Set<number>();
-  for (const n of nodes) {
+  for (const [i, n] of nodes.entries()) {
+    const ref = n.extensions?.[punctual];
+    if (ref !== undefined) {
+      check(ref.lights === undefined && integer(ref.light, definitions.length - 1), 'punctual light reference');
+      lights.set(i, definitions[ref.light]);
+    }
     check(n.skin === undefined && n.weights === undefined, 'unsupported node');
+    const trs = [n.translation, n.rotation, n.scale];
+    check(n.matrix === undefined || trs.every(value => value === undefined), 'matrix and TRS cannot be combined');
+    for (const [j, value] of [...trs, n.matrix].entries()) {
+      check(value === undefined || (Array.isArray(value) && value.length === [3, 4, 3, 16][j]
+        && value.every(Number.isFinite)), 'node transform');
+    }
     if (n.mesh !== undefined) {
       const cost = at(meshCost, n.mesh);
       const slots = n.extras?.shadowMaterialSlots;
@@ -308,6 +359,10 @@ export function prepare(input: ModelInput) {
     check(s.nodes === undefined || Array.isArray(s.nodes), 'scene nodes');
     const seen = new Set<number>();
     for (const i of s.nodes ?? []) { check(!parents.has(i), 'scene root has a parent'); visit(i, seen, 0); }
+    if (s === activeScene) {
+      for (const i of lights.keys()) if (!seen.has(i)) lights.delete(i);
+      check(lights.size <= lightLimit, 'active punctual light instance budget');
+    }
   }
   // Reject unreachable nodes (including cycles) rather than letting loader dependency resolution see them.
   check(visited.size === nodes.length, 'unreachable nodes');
@@ -344,6 +399,13 @@ export function prepare(input: ModelInput) {
   }
   // Only instantiate the default scene. Other scenes can legally share roots;
   // loading them all would reparent those roots in Three's Object3D tree.
-  json.scenes = [at(scenes, json.scene ?? 0)]; json.scene = 0;
-  return { json, buffers: bufferBytes, images: imageData };
+  json.scenes = [activeScene]; json.scene = 0;
+  // Attach lights ourselves: GLTFLoader can replace a mesh node with a group
+  // and cloned directional/spot lights can lose their in-tree target.
+  if (rootLights !== undefined) delete json.extensions[punctual];
+  for (const n of nodes) if (n.extensions) delete n.extensions[punctual];
+  for (const key of ['extensionsUsed', 'extensionsRequired']) {
+    if (json[key]) json[key] = json[key].filter((name: string) => name !== punctual);
+  }
+  return { json, buffers: bufferBytes, images: imageData, lights };
 }

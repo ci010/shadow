@@ -5,6 +5,10 @@ type Dict = Record<string, unknown>;
 const record = (v: unknown): v is Dict => !!v && typeof v === 'object' && !Array.isArray(v);
 const uint = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const invalid = (message: string): never => { throw new PlaygroundError('validation', `GLB: ${message}`); };
+const PUNCTUAL = 'KHR_lights_punctual';
+const MAX_LIGHTS = 16;
+const inRange = (v: unknown, min: number, max = Number.MAX_VALUE): v is number =>
+  typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
 const pbrExtensions = new Set([
   'KHR_materials_unlit', 'KHR_materials_clearcoat', 'KHR_materials_transmission',
   'KHR_materials_volume', 'KHR_materials_ior', 'KHR_materials_specular', 'KHR_materials_iridescence',
@@ -29,6 +33,8 @@ export function validateGlb(glb: ArrayBuffer): number {
     catch { return invalid('invalid UTF-8 or JSON'); }
   })();
   if (!record(json) || !record(json.asset) || json.asset.version !== '2.0') return invalid('missing glTF 2.0 asset metadata');
+  if (Array.isArray(json.nodes) && json.nodes.length > 4096) invalid('scene limit exceeded');
+  const nodeOwners = new Set(Array.isArray(json.nodes) ? json.nodes : []);
   const check = (v: unknown, depth: number) => {
     if (depth > 96) invalid('JSON nesting limit exceeded');
     if (Array.isArray(v)) for (const item of v) check(item, depth + 1);
@@ -36,7 +42,7 @@ export function validateGlb(glb: ArrayBuffer): number {
       if (['uri', 'url', '__proto__', 'constructor', 'prototype'].includes(k)) invalid(`unsupported JSON key: ${k}`);
       if (k === 'extensions') {
         const ext = v[k];
-        if (!record(ext) || Object.keys(ext).some(name => !pbrExtensions.has(name))) invalid('unsupported extension');
+        if (!record(ext) || Object.keys(ext).some(name => !(pbrExtensions.has(name) || (name === PUNCTUAL && (v === json || nodeOwners.has(v)))))) invalid('unsupported extension');
       }
       check(v[k], depth + 1);
     } else if (typeof v === 'number' && !Number.isFinite(v)) invalid('non-finite JSON number');
@@ -44,7 +50,7 @@ export function validateGlb(glb: ArrayBuffer): number {
   check(json, 0);
   for (const key of ['extensionsUsed', 'extensionsRequired']) {
     const list = json[key];
-    if (list !== undefined && (!Array.isArray(list) || list.some(x => !pbrExtensions.has(x)))) invalid('unsupported extension declaration');
+    if (list !== undefined && (!Array.isArray(list) || list.some(x => x !== PUNCTUAL && !pbrExtensions.has(x)))) invalid('unsupported extension declaration');
   }
   const list = (key: string): Dict[] => {
     const value = json[key];
@@ -56,6 +62,33 @@ export function validateGlb(glb: ArrayBuffer): number {
     if (!uint(index) || index >= length) return invalid(`invalid ${label} reference`);
     return index;
   };
+  const extension = (owner: Dict) => record(owner.extensions) ? owner.extensions[PUNCTUAL] : undefined;
+  const punctual = extension(json);
+  const declaredUsed = Array.isArray(json.extensionsUsed) && json.extensionsUsed.includes(PUNCTUAL);
+  const declaredRequired = Array.isArray(json.extensionsRequired) && json.extensionsRequired.includes(PUNCTUAL);
+  if (declaredUsed !== (punctual !== undefined) || (declaredRequired && !declaredUsed)) invalid('inconsistent punctual light declaration');
+  let lightCount = 0;
+  if (punctual !== undefined) {
+    if (!record(punctual) || !Array.isArray(punctual.lights) || !punctual.lights.length || punctual.lights.length > MAX_LIGHTS) {
+      return invalid('invalid punctual light definitions (limit 16)');
+    }
+    lightCount = punctual.lights.length;
+    for (const light of punctual.lights) {
+      if (!record(light) || !['point', 'spot', 'directional'].includes(light.type as string)) return invalid('unsupported punctual light type');
+      if (light.color !== undefined && (!Array.isArray(light.color) || light.color.length !== 3 || !light.color.every(v => inRange(v, 0, 1)))) {
+        invalid('invalid punctual light color');
+      }
+      if (light.intensity !== undefined && !inRange(light.intensity, 0)) invalid('invalid punctual light intensity');
+      if (light.range !== undefined && (light.type === 'directional' || !inRange(light.range, Number.MIN_VALUE))) invalid('invalid punctual light range');
+      if (light.type === 'spot') {
+        if (light.spot !== undefined && !record(light.spot)) return invalid('invalid spotlight definition');
+        const inner = light.spot?.innerConeAngle === undefined ? 0 : light.spot.innerConeAngle;
+        const outer = light.spot?.outerConeAngle === undefined ? Math.PI / 4 : light.spot.outerConeAngle;
+        if (!inRange(inner, 0, Math.PI / 2) || !inRange(outer, 0, Math.PI / 2) || inner >= outer) invalid('invalid spotlight cone angles');
+      } else if (light.spot !== undefined) invalid('spot parameters require a spotlight');
+    }
+  }
+  if (list('cameras').length) invalid('cameras are not model output');
   if (list('images').length || list('textures').length || list('skins').length || list('animations').length) {
     invalid('images, textures, skins and animations are unsupported');
   }
@@ -102,6 +135,7 @@ export function validateGlb(glb: ArrayBuffer): number {
   if (nodes.length > 4096 || scenes.length !== 1) invalid('scene limit exceeded');
   const ids = new Set<string>();
   const seen = new Set<number>();
+  let lightInstances = 0;
   const visit = (links: unknown, depth: number) => {
     if (links === undefined) return;
     if (!Array.isArray(links) || depth > 64) return invalid('invalid scene links');
@@ -110,6 +144,12 @@ export function validateGlb(glb: ArrayBuffer): number {
       if (seen.has(index)) invalid('cyclic or multiply parented scene');
       seen.add(index);
       const node = nodes[index];
+      const attachment = extension(node);
+      if (attachment !== undefined) {
+        if (!record(attachment)) return invalid(`node ${index}: invalid punctual light attachment`);
+        ref(attachment.light, lightCount, 'punctual light');
+        if (++lightInstances > MAX_LIGHTS) invalid('active punctual light limit exceeded (16)');
+      }
       const id = record(node.extras) ? node.extras.objectId : undefined;
       if (node.mesh !== undefined && id === undefined) invalid(`node ${index}: missing objectId for mesh`);
       if (id !== undefined) {

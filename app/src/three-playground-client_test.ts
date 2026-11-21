@@ -69,6 +69,22 @@ test('conditional snapshot wire rejects malformed versions and reports the serve
   await assert.rejects(fetchPlaygroundSnapshot(url, '', signal()), /stand\.mjs: File unavailable: attempt-1/)
 })
 
+test('client validates optional preview settings before admitting a snapshot', async t => {
+  const url = new URL('http://fixture.invalid/three-snapshot')
+  const wire = change('a'.repeat(64)).snapshot
+  let suffix = ''
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(wire).slice(0, -1) + suffix + '}'))
+  assert.equal((await fetchPlaygroundSnapshot(url, '', signal()))?.snapshot.preview, undefined)
+  for (const preview of [{}, { toneMapping: 'none' }, { exposure: 0.1 }, { toneMapping: 'aces', exposure: 4 }]) {
+    suffix = `,"preview":${JSON.stringify(preview)}`
+    assert.deepEqual((await fetchPlaygroundSnapshot(url, '', signal()))?.snapshot.preview, preview)
+  }
+  for (const bad of ['null', '[]', '{"toneMapping":"linear"}', '{"exposure":1e999}', '{"exposure":-1}', '{"exposure":5}', '{"exposure":"1"}', '{"extra":true}']) {
+    suffix = `,"preview":${bad}`
+    await assert.rejects(fetchPlaygroundSnapshot(url, '', signal()), /Invalid Playground snapshot preview/)
+  }
+})
+
 test('client forwards declared JSON as bytes and rebuilds on a JSON-only snapshot change', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const url = new URL('http://fixture.invalid/api/folders/id/three-snapshot?path=playground.three.json')
