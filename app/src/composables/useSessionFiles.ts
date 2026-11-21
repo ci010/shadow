@@ -96,10 +96,10 @@ function buildUrl(apiBase: string, path: string, params: Record<string, string>)
 
 /** A folder ID selects registry-backed routes, never a renderer-supplied path. */
 export function useSessionFiles(apiBase: string, folderId?: string, sessionWorkspace = false) {
-  async function requestFile(url: string, signal?: AbortSignal): Promise<Response> {
+  async function requestFile(url: string, signal?: AbortSignal, cache?: RequestCache): Promise<Response> {
     const deadline = AbortSignal.timeout(30_000)
     try {
-      return await fetch(url, { signal: signal ? AbortSignal.any([signal, deadline]) : deadline })
+      return await fetch(url, { signal: signal ? AbortSignal.any([signal, deadline]) : deadline, cache })
     } catch (error) {
       if (deadline.aborted && !signal?.aborted) {
         throw new Error(t('File request timed out. Check the device connection and retry.'))
@@ -218,7 +218,7 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
       maxBytes: String(maxBytes),
       ...(encoding !== 'auto' ? { encoding } : {}),
     })
-    const res = await requestFile(url, signal)
+    const res = await requestFile(url, signal, 'no-store')
     if (!res.ok) throw await fileRequestError(res)
     const data: unknown = await res.json()
     if (!isRecord(data) || typeof data.binary !== 'boolean' || typeof data.size !== 'number' || !Number.isFinite(data.size) || data.size < 0
