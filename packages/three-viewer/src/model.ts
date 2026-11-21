@@ -1,4 +1,5 @@
-import { Box3, LoadingManager, Mesh, Sphere, Texture, Vector3, type Material, type Object3D } from 'three';
+import { Box3, Color, DirectionalLight, LinearSRGBColorSpace, LoadingManager, Mesh, PointLight,
+  Sphere, SpotLight, Texture, Vector3, type Material, type Object3D } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { prepare, type ModelInput } from './input.js';
 
@@ -13,6 +14,7 @@ export interface ModelOutlineRow {
 
 export interface Model {
   root: Object3D;
+  hasPunctualLights: boolean;
   outline: readonly ModelOutlineRow[];
   bounds: Box3;
   objects: Map<string, { parts: Part[]; bounds: Box3; label: string; node: number }>;
@@ -21,7 +23,7 @@ export interface Model {
 }
 
 export async function decode(input: ModelInput, current: () => boolean): Promise<Model> {
-  const { json, buffers, images } = prepare(input);
+  const { json, buffers, images, lights } = prepare(input);
   const manager = new LoadingManager();
   const urls = new Set<string>();
   const bitmaps = new Map<string, ImageBitmap>();
@@ -145,9 +147,23 @@ export async function decode(input: ModelInput, current: () => boolean): Promise
         outline.push(Object.freeze({ key, parentKey, label, objectId }));
       }
       object.children.forEach((child, i) => visit(child, key, i));
+      const def = node === undefined ? undefined : lights.get(node);
+      if (def) {
+        if (!object.matrixWorld.elements.every(Number.isFinite)) throw new Error('Nonfinite punctual light transform');
+        const color = new Color().setRGB(...def.color, LinearSRGBColorSpace);
+        const light = def.type === 'directional' ? new DirectionalLight(color, def.intensity)
+          : def.type === 'point' ? new PointLight(color, def.intensity, def.range)
+          : new SpotLight(color, def.intensity, def.range, def.outer, 1 - def.inner / def.outer);
+        light.position.set(0, 0, 0);
+        if (light instanceof DirectionalLight || light instanceof SpotLight) {
+          light.target.position.set(0, 0, -1);
+          light.add(light.target);
+        }
+        object.add(light);
+      }
     }
     root.children.forEach((child, i) => visit(child, null, i));
-    return { root, outline: Object.freeze(outline), bounds, objects, ids, close };
+    return { root, hasPunctualLights: lights.size > 0, outline: Object.freeze(outline), bounds, objects, ids, close };
   } catch (error) { close(); throw error; }
   finally { urls.forEach(u => URL.revokeObjectURL(u)); }
 }

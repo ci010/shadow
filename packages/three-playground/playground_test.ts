@@ -273,9 +273,122 @@ test('exports authored material slots in primitive order, dropping empty groups 
   assert.throws(() => validateGlb(glb), diagnostic('validation', /one non-negative integer per primitive/));
 });
 
-test('rejects authored lights and cameras as non-model nodes', async () => {
-  for (const kind of ['DirectionalLight', 'PerspectiveCamera']) {
-    await assert.rejects(run(`export function build({ THREE, root }) { root.add(new THREE.${kind}()); }`),
-      diagnostic('export', /root\/0: lights and cameras are not model output/));
+const LIGHTS = 'KHR_lights_punctual';
+
+// Rebuild the envelope around mutations of a real browser-produced GLB.
+function rewriteGlb(glb: ArrayBuffer, value: unknown): ArrayBuffer {
+  const old = new DataView(glb);
+  const bin = new Uint8Array(glb, 20 + old.getUint32(12, true));
+  const json = new TextEncoder().encode(JSON.stringify(value));
+  const padded = Math.ceil(json.length / 4) * 4;
+  const bytes = new Uint8Array(20 + padded + bin.length);
+  bytes.set(new Uint8Array(glb, 0, 20));
+  bytes.fill(32, 20, 20 + padded);
+  bytes.set(json, 20);
+  bytes.set(bin, 20 + padded);
+  const header = new DataView(bytes.buffer);
+  header.setUint32(8, bytes.length, true);
+  header.setUint32(12, padded, true);
+  return bytes.buffer;
+}
+
+interface LightNode extends JsonNode { children?: number[]; extensions?: Record<string, { light: number }> }
+interface LightScene extends SceneJson {
+  nodes: LightNode[];
+  extensions: Record<string, { lights: Record<string, unknown>[] }>;
+  scenes: { nodes: number[] }[];
+  extras?: unknown;
+}
+
+test('exports light photometry and targeted local -Z without changing child transforms or mesh IDs', async () => {
+  const { glb, objectCount } = await run(`export function build({ THREE, root }) {
+    root.position.set(1, 2, 3);
+    const group = new THREE.Group(); group.scale.set(2, 3, 4); group.rotation.z = Math.PI / 2;
+    root.add(group);
+    const spot = new THREE.SpotLight(new THREE.Color().setRGB(.2, .4, .6), 7, 9, .8, .25);
+    spot.name = 'spot'; spot.position.set(1, 0, 0); spot.rotation.y = Math.PI / 3;
+    spot.userData.objectId = 'spot-id'; group.add(spot);
+    spot.target.position.set(4, 5, 6); root.add(spot.target);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial({metalness:.6}));
+    mesh.position.x = 2; mesh.userData.objectId = 'child-mesh'; spot.add(mesh);
+    const point = new THREE.PointLight(0xffffff, 3, 0); point.name = 'point'; point.position.x = 2; group.add(point);
+    const sun = new THREE.DirectionalLight(); sun.name = 'sun'; sun.position.set(0, 0, 1);
+    sun.target.position.set(1, 2, 6); root.add(sun);
+  }`);
+  const model = json(glb) as LightScene;
+  assert.equal(validateGlb(glb), objectCount);
+  assert.ok(model.extensionsUsed.includes(LIGHTS));
+  const defs = model.extensions[LIGHTS].lights;
+  const spot = model.nodes.find(node => node.name === 'spot')!;
+  const sun = model.nodes.find(node => node.name === 'sun')!;
+  const point = model.nodes.find(node => node.name === 'point')!;
+  const emission = (node: LightNode) => node.children!.map(index => model.nodes[index]).find(child => child.extensions?.[LIGHTS])!;
+  const definition = (node: LightNode) => defs[node.extensions![LIGHTS].light];
+  assert.deepEqual(definition(emission(spot)), { name: 'spot', type: 'spot', color: [.2,.4,.6], intensity: 7, range: 9,
+    spot: { innerConeAngle: .75 * .8, outerConeAngle: .8 } });
+  assert.deepEqual(definition(point), { name: 'point', type: 'point', color: [1,1,1], intensity: 3 });
+  assert.equal(point.matrix![12], 2);
+  assert.equal(definition(emission(sun)).type, 'directional');
+  assert.equal(spot.extras?.objectId, 'spot-id');
+  const mesh = model.nodes[spot.children![0]];
+  assert.equal(mesh.extras?.objectId, 'child-mesh');
+  assert.equal(mesh.matrix![12], 2);
+  assert.equal(model.materials[0].pbrMetallicRoughness.metallicFactor, .6);
+  const group = model.nodes.find(node => node.children?.some(i => model.nodes[i] === spot))!;
+  const rotate = (m: number[], v: number[]) => [0,1,2].map(i => m[i]*v[0] + m[i+4]*v[1] + m[i+8]*v[2]);
+  const normal = (v: number[]) => v.map(x => x / Math.hypot(...v));
+  const near = (a: number[], b: number[]) => assert.ok(a.every((v, i) => Math.abs(v - b[i]) < 1e-10), `${a} != ${b}`);
+
+  near(normal(rotate(group.matrix!, rotate(spot.matrix!, rotate(emission(spot).matrix!, [0,0,-1])))), normal([4,3,6]));
+  near(normal(rotate(emission(sun).matrix!, [0,0,-1])), [0,0,1]);
+});
+
+test('exports a default Three.js spotlight with a narrowly softened hard edge', async () => {
+  const { glb, objectCount } = await run(`export function build({ THREE, root }) {
+    root.add(new THREE.SpotLight());
+  }`);
+  const doc = json(glb) as LightScene;
+  assert.equal(validateGlb(glb), objectCount);
+  const light = doc.extensions[LIGHTS].lights[0];
+  assert.equal(light.type, 'spot');
+  const outer = Math.PI / 3; // Three.js default spotlight half-angle.
+  assert.deepEqual(light.spot, { innerConeAngle: outer * (1 - 1e-4), outerConeAngle: outer });
+});
+
+test('rejects unsupported lights, cameras and unrepresentable light input', async () => {
+  for (const [source, reason] of [
+    ['root.add(new THREE.AmbientLight());', /unsupported light/],
+    ['root.add(new THREE.PerspectiveCamera());', /cameras are not model output/],
+    ['root.add(new THREE.PointLight(0xffffff, Infinity));', /invalid light color or intensity/],
+    ['root.add(new THREE.PointLight(0xffffff, 1, -1));', /finite non-negative distance/],
+    ['const l = new THREE.SpotLight(); l.angle = 0; root.add(l);', /invalid spotlight angle/],
+    ['const l = new THREE.DirectionalLight(); l.position.set(0,0,0); root.add(l);', /nonzero direction/],
+    ['for (let i=0;i<17;i++) root.add(new THREE.PointLight());', /punctual light limit exceeded/],
+  ] as const) await assert.rejects(run(`export function build({ THREE, root }) { ${source} }`), diagnostic('export', reason));
+});
+
+test('validates punctual extension shape, declarations, bounds and instance counts on a browser GLB', async () => {
+  const { glb } = await run(`export function build({ THREE, root }) {
+    for (let i=0;i<16;i++) root.add(new THREE.PointLight());
+  }`);
+  assert.equal(validateGlb(glb), 16);
+  for (const [mutate, reason] of [
+    [(doc: LightScene) => { doc.extensionsUsed = []; }, /inconsistent punctual light declaration/],
+    [(doc: LightScene) => { doc.extras = { extensions: { [LIGHTS]: {} } }; }, /unsupported extension/],
+    [(doc: LightScene) => { doc.extensions[LIGHTS].lights.push({ type: 'point' }); }, /invalid punctual light definitions/],
+    [(doc: LightScene) => { doc.extensions[LIGHTS].lights[0].color = [1, 0, 2]; }, /invalid punctual light color/],
+    [(doc: LightScene) => { doc.extensions[LIGHTS].lights[0].range = 0; }, /invalid punctual light range/],
+    [(doc: LightScene) => { doc.extensions[LIGHTS].lights[0] = { type: 'spot', spot: { innerConeAngle: 1 } }; }, /invalid spotlight cone angles/],
+    [(doc: LightScene) => { doc.nodes[0].extensions![LIGHTS].light = 16; }, /invalid punctual light reference/],
+    [(doc: LightScene) => {
+      doc.extensions[LIGHTS].lights.length = 1;
+      for (const node of doc.nodes) node.extensions![LIGHTS].light = 0;
+      assert.equal(validateGlb(rewriteGlb(glb, doc)), 16);
+      doc.scenes[0].nodes.push(doc.nodes.push(structuredClone(doc.nodes[0])) - 1);
+    }, /active punctual light limit exceeded/],
+  ] as const) {
+    const doc = json(glb) as LightScene;
+    mutate(doc);
+    assert.throws(() => validateGlb(rewriteGlb(glb, doc)), diagnostic('validation', reason));
   }
 });

@@ -55,11 +55,11 @@ export async function fixtureEndpoints(workspace, fixtureScene, withTools) {
   return { handle, close };
 }
 
-// Only the selected marker can be read. Its directory is not a Vite static root.
-export function markerEndpoint(path, markerName) {
+// Only the selected marker can be read (optionally in a second disposable fixture).
+export function markerEndpoint(path, markerName, comparisonPath) {
   const app = new Hono();
   app.get('/__three-marker', c => c.req.query('path') === markerName
-    ? serveThreeSnapshot(c, async () => ({ path })) : c.notFound());
+    ? serveThreeSnapshot(c, async () => ({ path: c.req.query('comparison') === '1' ? comparisonPath ?? path : path })) : c.notFound());
   return { close: async () => {}, async handle(req, res, next) {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname !== '/__three-marker') return next();

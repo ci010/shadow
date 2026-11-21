@@ -15,6 +15,7 @@ const messages: Record<string, string> = {
   invalid_utf8: 'Expected valid UTF-8 source text.',
   snapshot_root_unavailable: 'The authorized snapshot root is unavailable.',
   snapshot_cancelled: 'The snapshot request was cancelled.',
+  invalid_snapshot_preview: 'Expected preview settings with optional toneMapping (none or aces) and exposure (a finite number from 0.1 to 4).',
   invalid_snapshot_marker: 'Invalid manifest. List main.mjs and explicit inputs, with unique module paths, asset paths, and shader slots.',
 }
 

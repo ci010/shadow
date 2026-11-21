@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { prepare, snapshot } from '../src/input.js';
+import { prepare, snapshot, type ModelInput } from '../src/input.js';
 import { fixture, glb } from './fixture.js';
 
 const encode = (json: unknown) => new TextEncoder().encode(JSON.stringify(json));
@@ -38,4 +38,72 @@ test('rejects oversized or animated PNG before decode', () => {
   assert.throws(read, /decode budget/);
   d.setUint32(37, 0x6163544c);
   assert.throws(read, /animated PNG/);
+});
+
+const punctual = 'KHR_lights_punctual';
+const lightRef = (light: unknown) => ({ extensions: { [punctual]: { light } } });
+
+function lightDoc(definitions: unknown[] = [{ type: 'point' }], count = 1) {
+  return {
+    asset: { version: '2.0' }, extensionsUsed: [punctual], extensionsRequired: [punctual],
+    extensions: { [punctual]: { lights: definitions } },
+    nodes: Array.from({ length: count }, () => lightRef(0)),
+    scenes: [{ nodes: [0] }, { nodes: Array.from({ length: count }, (_, i) => i) }],
+    scene: 1,
+  };
+}
+const prepareLights = (json: unknown) => prepare({ version: 'lights', bytes: encode(json) });
+
+test('validates punctual definitions and the active instance budget independently', () => {
+  const max = lightDoc(Array.from({ length: 16 }, () => ({ type: 'spot', spot: {} })), 16);
+  assert.equal(prepareLights(max).lights.size, 16);
+  assert.deepEqual(prepareLights(max).lights.get(0), {
+    type: 'spot', color: [1, 1, 1], intensity: 1, range: 0, inner: 0, outer: Math.PI / 4,
+  });
+  assert.throws(() => prepareLights(lightDoc(Array(17).fill({ type: 'point' }))), /table/);
+  const many = lightDoc(undefined, 17);
+  assert.throws(() => prepareLights(many), /instance budget/);
+  assert.equal(prepareLights({ ...many, scene: 0 }).lights.size, 1);
+  many.nodes[16] = lightRef(1);
+  assert.throws(() => prepareLights({ ...many, scene: 0 }), /reference/);
+});
+
+test('rejects malformed or misplaced punctual data before rendering', () => {
+  const valid = lightDoc();
+  for (const def of [
+    {}, { type: 'area' }, { type: 'point', color: [0, 0] }, { type: 'point', color: [0, -1, 1] },
+    { type: 'point', color: [0, '0', 2] }, { type: 'point', intensity: -1 }, { type: 'point', intensity: null },
+    { type: 'point', range: 0 }, { type: 'directional', range: 10 }, { type: 'point', spot: {} },
+    { type: 'spot' }, { type: 'spot', spot: [] }, { type: 'spot', spot: { innerConeAngle: -0.1 } },
+    { type: 'spot', spot: { outerConeAngle: 0 } }, { type: 'spot', spot: { outerConeAngle: 2 } },
+    { type: 'spot', spot: { innerConeAngle: 0.3, outerConeAngle: 0.3 } },
+  ]) assert.throws(() => prepareLights(lightDoc([def])), /punctual/);
+  assert.throws(() => prepareLights(lightDoc([])), /definitions/);
+  for (const index of [null, undefined, '0', -1, 0.5, 1]) {
+    assert.throws(() => prepareLights({ ...valid, nodes: [lightRef(index)] }), /reference/);
+  }
+  assert.throws(() => prepareLights({ ...valid, extensions: undefined }), /reference/);
+  assert.throws(() => prepareLights({ ...valid, extensions: lightRef(0).extensions }), /definitions/);
+  assert.throws(() => prepareLights({ ...valid, nodes: [{ extensions: valid.extensions }] }), /reference/);
+  assert.throws(() => prepareLights({ ...valid, extensionsUsed: [] }), /extension/);
+  for (const bad of [
+    { materials: [lightRef(0)] }, { scenes: [{ nodes: [0], ...lightRef(0) }], scene: 0 },
+    { extras: lightRef(0) }, { asset: { ...valid.asset, ...lightRef(0) } },
+  ]) assert.throws(() => prepareLights({ ...valid, ...bad }), /location/);
+  const nonfinite = JSON.stringify(lightDoc([{ type: 'point', intensity: 12345 }])).replace('12345', '1e999');
+  assert.throws(() => prepare({ version: 'lights', bytes: new TextEncoder().encode(nonfinite) }), /nonfinite/);
+});
+
+test('snapshots only valid preview settings, with independent defaults', () => {
+  const input = { version: 'preview', bytes: glb() };
+  assert.deepEqual(snapshot(input).preview, { toneMapping: 'none', exposure: 1 });
+  for (const exposure of [0.1, 4]) {
+    const preview = { toneMapping: 'aces' as const, exposure };
+    const copy = snapshot({ ...input, preview });
+    preview.exposure = 1;
+    assert.deepEqual(copy.preview, { toneMapping: 'aces', exposure });
+  }
+  for (const preview of [null, [], { toneMapping: 'linear' }, ...[0, 4.1, NaN, Infinity, '1', null].map(exposure => ({ exposure }))]) {
+    assert.throws(() => snapshot({ ...input, preview: preview as ModelInput['preview'] }), /preview/);
+  }
 });
