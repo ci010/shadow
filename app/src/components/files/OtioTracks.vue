@@ -14,7 +14,7 @@
           <span class="playhead marker" aria-hidden="true" />
         </div>
       </div>
-      <div v-for="lane in lanes" :key="lane.node.id" class="lane-row" :data-kind="lane.node.trackKind" :class="{ excluded: excluded(lane.node) }">
+      <div v-for="lane in lanes" :key="lane.node.id" class="lane-row" :data-kind="lane.node.trackKind" :style="{ '--lane-hue': lane.hue }" :class="{ excluded: excluded(lane.node) }">
         <div class="lane-header">
         <button type="button" class="lane-label" :aria-current="lane.node.id === selectedId ? 'true' : undefined"
           @click="emit('select', lane.node.id)">
@@ -32,10 +32,15 @@
         <div class="lane">
           <span v-for="tick in ticks.slice(1, -1)" :key="tick.left" class="grid-line" :style="{ left: `${tick.left}%` }" aria-hidden="true" />
           <button v-for="item in lane.items" :key="item.id" type="button" class="block"
-            :class="{ gap: item.kind === 'Gap', transition: item.kind === 'Transition', muted: !item.enabled }"
+            :class="{ clip: item.kind === 'Clip', 'audio-clip': item.kind === 'Clip' && item.trackKind === 'Audio', gap: item.kind === 'Gap', transition: item.kind === 'Transition', muted: !item.enabled }"
             :style="blockStyle(item)" :aria-current="item.id === selectedId ? 'true' : undefined"
             :aria-label="item.name ? `${itemKind(item)}: ${item.name}` : itemKind(item)"
-            @click="emit('select', item.id)"><span>{{ item.name || itemKind(item) }}</span></button>
+            @click="emit('select', item.id)"><span>{{ item.name || itemKind(item) }}</span>
+            <svg v-if="waves.get(item.id)?.path" class="waveform" aria-hidden="true" focusable="false"
+              :viewBox="`0 0 ${waves.get(item.id)?.bins} ${WAVE_HEIGHT}`" preserveAspectRatio="none">
+              <path :d="waves.get(item.id)?.path" />
+            </svg>
+          </button>
           <span class="playhead" aria-hidden="true" />
         </div>
       </div>
@@ -45,14 +50,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, shallowReactive, watch } from 'vue'
 import { t } from '../../i18n.ts'
 import type { OtioModel, OtioNode } from '../../otio-model.ts'
 import { lastOtioFrame, otioLanes, otioPercent, scrubOtioFrame } from '../../otio-navigation.ts'
 
+import { otioAudioTracks } from '../../otio-audio.ts'
+import { mediaPosition, type OtioMedium } from '../../otio-review.ts'
+import { otioWavePath, readOtioWave, WAVE_HEIGHT } from '../../otio-waveform.ts'
+
 import HoverInfo from '../HoverInfo.vue'
 
-const props = defineProps<{ model: OtioModel; selectedId: string; frame: number; hidden?: ReadonlySet<string>; muted?: ReadonlySet<string> }>()
+const props = defineProps<{ model: OtioModel; selectedId: string; frame: number; hidden?: ReadonlySet<string>; muted?: ReadonlySet<string>; waveMedia?: (node: OtioNode) => (OtioMedium & { url: string }) | null }>()
 const emit = defineEmits<{ select: [id: string]; seek: [frame: number]; toggle: [node: OtioNode] }>()
 function excluded(node: OtioNode) {
   return (node.trackKind === 'Audio' ? props.muted : props.hidden)?.has(node.id) ?? false
@@ -72,10 +81,55 @@ const currentFrame = computed(() => Math.max(0, Math.min(maxFrame.value, Math.ro
 const seconds = computed(() => rate.value > 0 ? props.frame / rate.value : 0)
 const playhead = computed(() => `${otioPercent(seconds.value, duration.value)}%`)
 const positionLabel = computed(() => t('Frame {frame} · {seconds}s', { frame: currentFrame.value, seconds: formatSeconds(seconds.value) }))
-const lanes = computed(() => otioLanes(props.model).map(lane => ({
-  ...lane,
-  items: lane.items.filter(node => otioPercent(node.end, duration.value) > otioPercent(node.start, duration.value)),
-})))
+const lanes = computed(() => {
+  let video = 0, audio = 0
+  const videoHues = [250, 305, 55, 215], audioHues = [155, 190, 85, 125]
+  return otioLanes(props.model).map(lane => ({
+    ...lane,
+    hue: lane.node.trackKind === 'Video' ? videoHues[video++ % videoHues.length]
+      : lane.node.trackKind === 'Audio' ? audioHues[audio++ % audioHues.length] : undefined,
+    items: lane.items.filter(node => otioPercent(node.end, duration.value) > otioPercent(node.start, duration.value)),
+  }))
+})
+const waveSources = computed(() => {
+  const groups = new Map<string, OtioNode[]>()
+  if (!props.waveMedia) return groups
+  for (const { node } of otioAudioTracks(props.model).clips) {
+    if (node.end <= node.start) continue
+    const media = props.waveMedia(node)
+    if (media?.kind !== 'audio' || !/\.wav$/i.test(media.path)) continue
+    const group = groups.get(media.url)
+    if (group) group.push(node)
+    else groups.set(media.url, [node])
+  }
+  return groups
+})
+const waves = shallowReactive(new Map<string, { bins: number; path: string; url: string }>())
+type Wave = Awaited<ReturnType<typeof readOtioWave>>
+const waveCache = new Map<string, Wave>()
+watch(() => props.model, () => { waveCache.clear(); waves.clear() }, { flush: 'sync' })
+watch(waveSources, async (groups, _, cleanup) => {
+  if (!groups.size) return
+  const abort = new AbortController()
+  cleanup(() => abort.abort())
+  // One bounded request at a time; clips sharing a URL share its decoded index.
+  for (const [url, clips] of groups) {
+    if (abort.signal.aborted) break
+    if (clips.every(node => waves.get(node.id)?.url === url)) continue
+    const wave = waveCache.has(url) ? waveCache.get(url) ?? null
+      : await readOtioWave(url, abort.signal).catch(() => null)
+    if (abort.signal.aborted) break
+    waveCache.delete(url)
+    waveCache.set(url, wave)
+    if (waveCache.size > 4) waveCache.delete(waveCache.keys().next().value!)
+    for (const node of clips) {
+      const start = mediaPosition(node, node.start), span = node.end - node.start
+      const bins = Math.max(8, Math.min(256, Math.ceil(640 * span / duration.value)))
+      const path = wave && start !== null && Number.isFinite(start) ? otioWavePath(wave.peaks(start, span, bins)) : ''
+      waves.set(node.id, { bins, path, url })
+    }
+  }
+}, { immediate: true })
 const ticks = computed(() => Array.from({ length: duration.value > 0 ? 5 : 1 }, (_, i) => ({
   left: i * 25, text: formatSeconds(duration.value * i / 4),
 })))
@@ -167,10 +221,12 @@ h3 { margin: 0; font-size: 12px; font-weight: 650; }
 .lane-header { display: flex; min-width: 0; }
 .lane-toggle { flex: 0 0 28px; display: grid; place-items: center; }
 .lane-toggle[aria-pressed="true"] { background: var(--c-bg-muted); }
-.lane-row[data-kind="Video"] { background: color-mix(in srgb, var(--c-info) 7%, var(--c-bg-card)); }
-.lane-row[data-kind="Audio"] { background: color-mix(in srgb, var(--c-success) 8%, var(--c-bg-card)); }
+.lane-row:is([data-kind="Video"], [data-kind="Audio"]) {
+  --track-accent: oklch(from var(--c-primary) l .14 var(--lane-hue));
+  background: color-mix(in srgb, var(--track-accent) 20%, var(--c-bg-card));
+}
 .lane-row .lane { background: transparent; }
-.excluded .block:not([aria-current="true"]) { opacity: .60; }
+
 .lane-label small { display: block; color: var(--c-text-secondary); }
 .lane-label { flex: 1; display: flex; align-items: center; gap: 4px; padding: 4px 5px; text-align: start; }
 .lane-label span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -180,12 +236,24 @@ button { min-width: 0; border: 0; border-radius: 0; color: inherit; background: 
 button:hover { background-color: var(--c-bg-muted); }
 button:focus-visible, .ruler:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -2px; }
 .block { position: absolute; top: 4px; height: 22px; overflow: hidden; padding: 0; text-align: start; background: var(--c-bg-muted); box-shadow: inset 0 0 0 1px var(--c-control-border); }
-.block span { display: block; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block span { display: block; max-width: 100%; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block.clip { background: color-mix(in srgb, var(--track-accent, var(--c-control-border)) 40%, var(--c-bg-card)); }
+.block.audio-clip { height: 31px; display: flex; flex-direction: column; }
+.block.audio-clip > span { flex: 0 0 14px; line-height: 14px; }
+.waveform { display: block; width: 100%; height: 14px; flex: none; pointer-events: none; }
+.waveform path { stroke: currentColor; stroke-width: 1; fill: none; }
+.excluded .block.clip, .block.clip.muted { border: 1px dashed var(--c-control-border); box-shadow: none; }
+.excluded .waveform, .muted .waveform { opacity: .55; }
 .block:hover { box-shadow: inset 0 0 0 1px var(--c-text); }
 .block.gap { background: transparent; box-shadow: none; outline: 1px dashed var(--c-control-border); outline-offset: -1px; color: var(--c-text-secondary); }
 .block.transition { z-index: 1; top: auto; bottom: 3px; height: 12px; line-height: 12px; font-size: 9px; background: repeating-linear-gradient(135deg, var(--c-bg-muted) 0 3px, var(--c-bg-card) 3px 6px); }
-.block.muted:not([aria-current="true"]) { opacity: .64; }
+
 .block[aria-current="true"], .lane-label[aria-current="true"] { background: var(--c-selection-bg); color: var(--c-primary); box-shadow: inset 0 0 0 1px var(--c-selection-border); }
+.block.clip[aria-current="true"] {
+  background: color-mix(in srgb, var(--track-accent, var(--c-primary)) 42%, var(--c-bg-card));
+  color: var(--c-text);
+  box-shadow: inset 0 0 0 2px var(--c-primary);
+}
 .block.gap[aria-current="true"] { outline-color: var(--c-primary); }
 .block.transition[aria-current="true"] { background: repeating-linear-gradient(135deg, var(--c-selection-bg) 0 3px, var(--c-bg-card) 3px 6px); }
 .block:focus-visible { z-index: 2; outline: 2px solid var(--c-primary); outline-offset: -2px; }

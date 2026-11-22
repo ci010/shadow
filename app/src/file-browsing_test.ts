@@ -243,13 +243,18 @@ test('archive entry previews use bounded inert source and release bytes and URLs
   state().encoding = 'utf-8'
   await state().loadText()
   assert.equal(reads.length, 1, 'Changing encoding reuses only the current entry')
+  await state().reloadPreview()
+  assert.equal(reads.length, 2, 'Manual refresh rereads the archived source')
+  assert.equal(state().encoding, 'utf-8')
+  assert(revoked.includes(url))
+  const refreshedUrl = state().archiveUrl
   props.active = false
   await settle()
-  assert(revoked.includes(url))
+  assert(revoked.includes(refreshedUrl))
   assert.equal(state().archiveBlob, undefined)
   props.active = true
   await settle()
-  assert.equal(reads.length, 2)
+  assert.equal(reads.length, 3)
 })
 
 test('archive member SDK previews use supplied bytes without a workspace member request', async t => {
@@ -638,6 +643,54 @@ test('changing a text preview encoding cancels stale responses and resets for a 
   await nextTick()
   assert.equal(state().encoding, 'auto')
   assert.equal(pending[2]?.url.searchParams.has('encoding'), false)
+})
+
+test('manual Markdown reload preserves mode and encoding and ignores a late response from the previous file', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FilePreviewModal', { ...base, dir: '', entry: { ...entry, name: 'notes.md', ext: '.md' } })
+  assert.equal(state().canReloadPreview, true)
+  pending[0]!.finish({ binary: false, size: 5, content: '# Old' })
+  await settle()
+  const renderedRefresh = state().reloadPreview()
+  void state().reloadPreview()
+  assert.equal(pending.length, 2, 'repeated clicks while reading do not start another read')
+  pending[1]!.finish({ binary: false, size: 5, content: '# New' })
+  await renderedRefresh
+  assert.equal(state().textContent, '# New')
+  assert.equal(state().sourceView, false)
+
+  state().sourceView = true
+  state().encoding = 'shift_jis'
+  const refresh = state().reloadPreview()
+  assert.equal(pending[2]!.url.searchParams.get('encoding'), 'shift_jis')
+  pending[2]!.finish({ binary: false, size: 8, content: '# Source', encoding: 'shift_jis' })
+  await refresh
+  assert.equal(state().sourceView, true)
+  assert.equal(state().encoding, 'shift_jis')
+  assert.equal(state().textContent, '# Source')
+
+  const stale = state().reloadPreview()
+  props.entry = { ...entry, name: 'other.md', ext: '.md' }
+  await nextTick()
+  assert.equal(pending[3]!.signal.aborted, true)
+  pending[4]!.finish({ binary: false, size: 7, content: '# Other' })
+  await settle()
+  pending[3]!.finish({ binary: false, size: 7, content: '# Stale' })
+  await stale
+  assert.equal(state().textContent, '# Other')
+  assert.equal(state().loading, false)
+})
+
+test('manual reload does not remount viewers that can own unsaved work', async t => {
+  const pending = requests(t)
+  for (const [name, ext] of [['drawing.png', '.png'], ['scene.gltf', '.gltf'], ['edit.otio', '.otio'], ['report.pdf', '.pdf']]) {
+    const { state } = mount(t, 'FilePreviewModal', { ...base, inline: true, dir: '', entry: { ...entry, name, ext } })
+    assert.equal(state().canReloadPreview, false, name)
+    const nonce = state().frameNonce
+    await state().reloadPreview()
+    assert.equal(state().frameNonce, nonce, name)
+  }
+  assert.equal(pending.length, 0)
 })
 
 test('scratch workbenches hide the explorer and Git without losing the expansion preference', async () => {
@@ -1319,10 +1372,20 @@ test('HTML preview leases discard and revoke stale source responses, release on 
   creates[1]!.finish('b'.repeat(43))
   await settle()
   assert.equal(state().previewUrl, 'http://localhost/api/html-preview/' + 'b'.repeat(43) + '/page.html')
+  await state().reloadPreview()
+  await nextTick()
+  assert.equal(creates.length, 3)
+  assert.equal(revoked.at(-1), '/api/html-preview-leases/' + 'b'.repeat(43))
   state().sourceView = true
   await settle()
+  creates[2]!.finish('c'.repeat(43))
+  await settle()
   assert.equal(state().previewUrl, '')
-  assert.equal(revoked.at(-1), '/api/html-preview-leases/' + 'b'.repeat(43))
+  assert.equal(revoked.at(-1), '/api/html-preview-leases/' + 'c'.repeat(43))
+  await state().reloadPreview()
+  assert.equal(creates.length, 3, 'Reloading HTML source does not open a new iframe lease')
+  assert.equal(state().sourceView, true)
+  assert.equal(state().textContent, 'source')
   props.active = false
   await nextTick()
 })

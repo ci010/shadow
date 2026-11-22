@@ -6,7 +6,7 @@ const registeredWorkspace = { type: 'string' as const, description: 'Registered 
 
 export const registeredWorkspaceParameters = { workspace: registeredWorkspace }
 export const executionTargetParameters = {
-  workspace: { ...registeredWorkspace, description: `${registeredWorkspace.description} For read/search or OS-shell exec, a direct owner Web turn can also target an opted-in Child with device:<nodeId>; use ~ for its home.` },
+  workspace: { ...registeredWorkspace, description: `${registeredWorkspace.description} In a direct owner Web turn, device:<nodeId> runs OS-shell exec from the Child's home by default. Direct read/search access to Child home requires opt-in.` },
 }
 
 /** Hidden compatibility for saved calls; never normalize third-party tool arguments. */

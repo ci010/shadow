@@ -589,6 +589,13 @@ to seek; focus it and use the arrow keys to step one timeline frame. Selecting a
 visual clip opens its **Clip source**; choose **Timeline** to see the top visible
 picture at the same position. This is a read-only viewer, not a timeline editor.
 
+Tracks use distinct colors; the track header identifies its type and provides local
+hide or mute controls. Audio clips show measured peaks from linked, uncompressed
+PCM or 32-bit float WAV files up to 8 MiB. The waveform follows the source trim
+and leaves gaps and silent portions quiet. Other formats, oversized or unavailable
+files retain their labeled clip blocks without a waveform. This display does not
+start playback or grant access to additional files.
+
 Use **Storyboard** in the existing viewer toolbar to scan representative pictures.
 **Final timeline** follows the monitor's top visible picture and hard cuts; select a
 video track or a clip on it to make that track available as a solo source. **Per
@@ -598,13 +605,18 @@ strictly before the timeline end and labels samples with no picture. Without val
 local media, cards show an unavailable-picture state rather than a substitute.
 Click a card to select its position, or double-click it (or press Enter on the
 focused card) to open the Monitor there. The tracks and selection inspector are
-still available. Frame drawing happens in the Monitor.
+still available. Scroll or swipe to pan the board; use **−** and **+** to change
+the picture scale, and **Fit width** to restore the responsive layout. Shots are
+numbered in timeline order; panning and zooming do not move any clips. Frame
+drawing happens in the Monitor.
 
 Use **Add description** or **Edit description** on a card to add a caption; all
 samples of that clip share it, with one caption per clip on each page. Save a blank
 description to remove it. **Missing descriptions only** excludes gaps and clips
-that already have a caption. Descriptions are plain text stored in this browser
-profile, scoped to the connected project, file owner and path, and exact file
+that already have a caption. Focus or click **Description storage**, the info
+button next to that filter, for a reminder about where captions are saved.
+Descriptions are plain text stored in this browser profile, scoped to the
+connected project, file owner and path, and exact file
 contents. They are not written to the OTIO, shared across devices, or sent to chat.
 Moving or editing the file can start a new description set. Local descriptions are
 unavailable on attachment/archive and remote preview routes or when the browser
@@ -626,19 +638,25 @@ sibling files. Remote workdirs with text-only file access can inspect complete
 timelines within that route's 64 KiB limit; they never stream from a local substitute.
 The local document limit is 8 MiB.
 
-Use the two reference actions together in the viewer. To discuss the selected
-element, add its reference directly to the chat draft. The reference keeps the
+Use **Reference selection** in the selection inspector to add the selected
+element directly to a chat draft. The reference keeps the
 element's identity and the timeline frame and rate. If the playhead is outside
 the selection, it records the playhead separately and uses the first timeline
 frame in the element's range when there is one.
 
-To discuss what you **see**, pause on the frame and use the drawing action.
+To discuss what you **see**, pause on the frame and choose **Draw on frame**.
 Mark the monitor image with the freehand or straight-line tool, then add it to
 chat. The reference includes the marked PNG and identifies the displayed clip,
 which can differ from the selected element. For video, the reference separates
 the calculated source position from the presented timestamp reported by the
 browser, when available. Both actions add a chip without sending a message.
-Write your comment in the chat input, or remove the chip if you don't need it.
+If an eligible local conversation already owns the source or uses its registered
+workspace, the viewer opens that composer. Otherwise, a local workspace file
+opens a fresh draft in the same project and workspace when you click **Reference
+selection** or confirm **Add reference**. Starting or cancelling a drawing does
+not open a draft. Session-file references keep the original session identity;
+a new draft does not copy or inherit its private files. Write your comment in
+the chat input, or remove the chip if you don't need it.
 Neither action writes to the edit or its media. To annotate an archive member, open an extracted copy in
 its own workspace instead. In narrow panes switch between monitor, structure
 and selection while keeping the tracks available.

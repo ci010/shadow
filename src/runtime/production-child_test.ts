@@ -171,12 +171,16 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].connection, 'offline')
   assertEquals(body.nodes[0].supportsManagedSessions, false)
   assertEquals(body.nodes[0].executionProtocol, 'unknown')
-  assertEquals(body.nodes[0].workdirs.map((w: { workdirId: string; online: boolean }) => ({ workdirId: w.workdirId, online: w.online })), [{ workdirId: 'folder-root', online: false }])
+  assertEquals(body.nodes[0].workdirs.map((w: { workdirId: string; online: boolean }) => ({ workdirId: w.workdirId, online: w.online })), [
+    { workdirId: 'folder-root', online: false }, { workdirId: 'device-home-v1', online: false },
+  ])
+  assertEquals(body.nodes[0].workdirs[1].displayPath, undefined)
+  assertEquals(body.nodes[0].workdirs[1].support.operations, ['workdir.process.execute-once', 'workdir.process.reconcile'])
   assertEquals(body.nodes[0].workdirs[0].displayPath, folders)
   assertEquals(new Set(body.nodes[0].workdirs[0].support.operations), new Set(['filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', 'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile', 'workdir.git.derive']))
   assertEquals(body.nodes[0].workdirs[0].support.shell.maxInputBytes, 32768)
   assertEquals(body.nodes[0].workdirs[0].support.shell.maxDeadlineMs, 120000)
-  assertEquals(body.nodes[0].workdirs[0].support.shell.shells.includes('sh'), true)
+  assertEquals(body.nodes[0].workdirs[0].support.shell.shells.includes(process.platform === 'win32' ? 'cmd' : 'sh'), true)
   assertEquals(body.nodes[0].support, { operations: [] })
   assertEquals('capabilities' in body.nodes[0], false)
   assertEquals(JSON.stringify(body).includes('credential'), false)

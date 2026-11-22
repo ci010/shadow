@@ -2,7 +2,8 @@ import { isExecutionIdentifier } from './workdir-contracts.ts'
 
 /** Reserved Child-side binding, never a Project folder or a persisted session cwd. */
 export const DEVICE_HOME_WORKDIR = 'device-home-v1'
-export const DEVICE_HOME_OPERATIONS = ['filesystem.read', 'workdir.process.execute-once', 'workdir.process.reconcile']
+export const DEVICE_HOME_SHELL_OPERATIONS = ['workdir.process.execute-once', 'workdir.process.reconcile']
+export const DEVICE_HOME_OPERATIONS = ['filesystem.read', ...DEVICE_HOME_SHELL_OPERATIONS]
 
 export function deviceHomeNode(selector: string): string {
   const nodeId = selector.slice('device:'.length)

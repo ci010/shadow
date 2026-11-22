@@ -20,6 +20,8 @@ export function composeOtioReferenceMessage(text: string, references: readonly O
 export interface OtioDraftBridge {
   target(apiBase: string): { key: string; label: string } | null
   add(apiBase: string, key: string, review: OtioReview): boolean
+  canStart?(apiBase: string): boolean
+  start?(apiBase: string, review: OtioReview, signal: AbortSignal): Promise<boolean>
 }
 export const OtioDraftKey: InjectionKey<OtioDraftBridge> = Symbol('OtioDraft')
 
@@ -41,24 +43,39 @@ export function createOtioDraftBridge(
     },
     add(apiBase, key, review) {
       const draft = resolve(apiBase)
-      if (!draft || draft.key !== key || typeof review.text !== 'string' || !review.text.trim()
-        || typeof review.label !== 'string' || !review.label.trim()) return false
-      const file = review.file
-      if (file !== undefined && (!draft.canAttachFiles || typeof File !== 'function' || !(file instanceof File)
-        || file.type !== 'image/png' || !/\.png$/i.test(file.name) || !file.size)) return false
-
-      const reference: OtioDraftReference = { key: createUuid(), label: review.label.trim(), text: review.text }
-      try {
-        // Each Add is a separate review, even if PNG metadata matches another frame.
-        if (file) reference.attachment = appendChatAttachments([], [file])[0]!
-      } catch {
-        return false
-      }
+      if (!draft || draft.key !== key) return false
+      const reference = prepareOtioReference(review, draft.canAttachFiles)
+      if (!reference) return false
       commit(reference)
       return true
     },
   }
 }
+
+export function prepareOtioReference(review: OtioReview, canAttachFiles: boolean): OtioDraftReference | undefined {
+  if (typeof review.text !== 'string' || !review.text.trim() || typeof review.label !== 'string' || !review.label.trim()) return
+  const file = review.file
+  if (file !== undefined && (!canAttachFiles || typeof File !== 'function' || !(file instanceof File)
+    || file.type !== 'image/png' || !/\.png$/i.test(file.name) || !file.size)) return
+  const reference: OtioDraftReference = { key: createUuid(), label: review.label.trim(), text: review.text }
+  try {
+    // Each intentional Add is a separate review, even if PNG metadata matches.
+    if (file) reference.attachment = appendChatAttachments([], [file])[0]!
+    return reference
+  } catch { return }
+}
+
+export interface OtioFileScope {
+  apiBase: string
+  projectId: string
+  folderId?: string
+  sessionId?: string
+}
+export interface OtioDraftOpener {
+  available(scope: OtioFileScope): boolean
+  start(scope: OtioFileScope, review: OtioReview, signal: AbortSignal): Promise<boolean>
+}
+export const OtioStartDraftKey: InjectionKey<OtioDraftOpener> = Symbol('OtioStartDraft')
 
 /** Like other context chips, references are kept per composer for the life of its controller. */
 export function useOtioReferenceDraft(key: Readonly<Ref<string>>) {
@@ -104,7 +121,7 @@ export function useOtioReferenceDraft(key: Readonly<Ref<string>>) {
 
 // Registration follows the conversation controller, not the file view or its
 // Teleport destination. A separate workbench can never resolve this map.
-type ResolveEditorDraft = (sessionId: string) => OtioDraftBridge | undefined
+type ResolveEditorDraft = (sessionId: string, source?: OtioFileScope) => OtioDraftBridge | undefined
 const editorDrafts = new WeakMap<EditorGroups, Map<string, ResolveEditorDraft>>()
 
 export function registerOtioDraft(groups: EditorGroups, editorId: string, resolve: ResolveEditorDraft): () => void {
@@ -116,18 +133,34 @@ export function registerOtioDraft(groups: EditorGroups, editorId: string, resolv
 
 export function createExplorerOtioDraftBridge(
   groups: EditorGroups,
-  scope: () => { apiBase: string; projectId: string } | null,
+  scope: () => OtioFileScope | null,
+  opener?: OtioDraftOpener,
 ): OtioDraftBridge {
   function resolve(apiBase: string) {
     const source = scope()
     if (!source || apiBase !== source.apiBase) return
-    const editor = groups.referenceTarget(source.projectId)
-    if (editor?.projectId !== source.projectId || !editor.conversation?.editable) return
-    return editorDrafts.get(groups)?.get(editor.id)?.(editor.conversation.sessionId)
+    const state = groups.state(source.projectId)
+    const candidates = new Set([state.selected[state.active], state.selected[state.active === 'left' ? 'right' : 'left'], groups.referenceTarget(source.projectId)?.id])
+    for (const id of candidates) {
+      const editor = id ? groups.descriptors.get(id) : undefined
+      if (editor?.projectId !== source.projectId || !editor.conversation?.editable) continue
+      if (source.folderId ? editor.conversation.folderId !== source.folderId
+        : source.sessionId && editor.conversation.sessionId !== source.sessionId) continue
+      const bridge = editorDrafts.get(groups)?.get(editor.id)?.(editor.conversation.sessionId, source)
+      if (bridge?.target(apiBase)) return bridge
+    }
+  }
+  function localScope(apiBase: string) {
+    const source = scope()
+    return source?.apiBase === apiBase && opener?.available(source) ? source : undefined
   }
   return {
     target: apiBase => resolve(apiBase)?.target(apiBase) ?? null,
-    // The owning bridge checks the key and reveals its conversation only after a successful commit.
     add: (apiBase, key, review) => resolve(apiBase)?.add(apiBase, key, review) ?? false,
+    canStart: apiBase => !!localScope(apiBase),
+    async start(apiBase, review, signal) {
+      const source = localScope(apiBase)
+      return source && !signal.aborted ? await opener!.start(source, review, signal) : false
+    },
   }
 }

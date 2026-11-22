@@ -10,6 +10,10 @@ import { ExecTool } from './shell.ts'
 import { CommandHandlerManager } from './shell-commands/command-handler.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { executeRemoteShell } from '../execution/remote-shell-client.ts'
+import { withTempWorkspace } from '../testing/workspace.ts'
+import { ReadTool } from './read.ts'
+import { readFile } from 'node:fs/promises'
+import { projectStoragePath } from '../utils/data-paths.ts'
 
 function fixture(nodeOnly = false) {
   const requests: ExecutionRequestV2[] = []
@@ -157,19 +161,33 @@ test('only correlated normal remote process failures carry completion evidence',
   }
 })
 
-test('registered remote exec keeps bounded output intact instead of spilling to a Main-only path', async () => {
-  const { tool, context } = fixture()
-  const output = 'remote output '.repeat(1100)
-  const original = context.remoteWorkdir!.executor.execute
-  context.remoteWorkdir!.executor.execute = async function* (request, signal) {
+test('remote exec spills exact large output; the same session can read it without a Child filesystem request', async () => withTempWorkspace(async home => {
+  const { tool, context, requests } = fixture()
+  const output = 'x'.repeat(11_999) + '😀' + 'y'.repeat(7000)
+  const executor = context.remoteWorkdir!.executor
+  const original = executor.execute
+  executor.execute = async function* (request, signal) {
     yield { version: 1, jobId: request.jobId, sequence: 0, timestamp: new Date().toISOString(), type: 'stdout', chunk: output }
     yield* original(request, signal)
   }
-  const registry = new Tools(process.cwd())
+  const registry = new Tools(home)
   registry.register(tool)
-  assert.equal(await registry.execute('exec', { script: 'produce output' },
-    { ...context, tools: new SessionTools(registry, process.cwd()) }), output)
-})
+  registry.register(new ReadTool(home))
+  const tools = new SessionTools(registry, home)
+  const ctx = { ...context, tools }
+  const preview = requireToolText(await tools.execute('exec', { script: 'produce output' }, ctx))
+  assert(preview.length < 12_500)
+  assert.match(preview, /\[truncated: 7002 chars remaining\]/)
+  const path = /Full output saved to: (\.tmp\/[^\n]+)/.exec(preview)?.[1]
+  assert(path)
+  assert.equal(await readFile(projectStoragePath(home, path), 'utf8'), output)
+  const page = requireToolText(await tools.execute('read', { path, flag: 'c' }, ctx))
+  assert.match(page, /offset=12000 to continue/)
+  assert.equal(page.slice(0, 11_999), output.slice(0, 11_999))
+  assert.equal(await tools.execute('read', { path, flag: 'c', offset: 12_000 }, ctx), output.slice(11_999))
+  assert.match(requireToolText(await tools.execute('read', { path: '.tmp/not-an-output.txt', flag: 'c' }, ctx)), /only for generated tool-output/)
+  assert.equal(requests.length, 1)
+}))
 
 test('explicit Child selection routes exec independently of committed session cwd and rejects the removed Node entry', async () => {
   const { tool, context, requests } = fixture()

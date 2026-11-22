@@ -1,13 +1,18 @@
 <template>
-  <aside v-show="open" :id="explorerId" class="project-file-explorer" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
+  <aside v-show="open" :id="explorerId" class="project-file-explorer" :style="{ '--file-explorer-width': `${explorerWidth}px` }" :aria-label="t('File explorer')" @keydown.esc.stop.prevent="emit('close')">
+    <SidebarResizer v-if="active && open && !mobile?.enabled.value && resizeBounds.max > resizeBounds.min"
+      class="file-explorer-resizer" :model-value="explorerWidth" :bounds="resizeBounds"
+      :label="t('Resize files')" :controls="explorerId" @update:model-value="preferredWidth = $event" />
     <ProjectExplorerRoot v-if="sessionId" :key="`session:${sessionId}`" :root-id="`session:${sessionId}`" :api-base="apiBase" :session-id="sessionId" :label="t('Session files')" :hint="`${t('Session files')}: ${sessionEditor?.label}`" :reveal="active && open" :active="active && open" @open="openFile" />
     <p v-if="!sessionId && !relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
     <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
     <GltfOutlineDock v-if="active && open" :project-id="projectId" />
+    <div ref="outlineHost" class="outline-host" />
   </aside>
   <EditorViewHost v-for="file in files" :key="fileTabKey(file)" :descriptor="descriptor(file)" :active="active">
-    <ProjectExplorerFile :api-base="apiBase" :file="file" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
+    <ProjectExplorerFile :api-base="apiBase" :file="file" :outline-target="desktopOutlineHost && groups.active(projectId)?.id === editorId(file) ? desktopOutlineHost : undefined"
+      :outline-in-background="!!desktopOutlineHost && groups.active(projectId)?.id !== editorId(file)" :can-quote="canQuote" @quote="emit('quote', $event)" :active="active && groups.visible(editorId(file))" @open="openFile" @close="close(file)" />
   </EditorViewHost>
 </template>
 <script setup lang="ts">
@@ -21,12 +26,19 @@ import { t } from '../../i18n.ts'
 import { useLiveClientPool } from '../../composables/useLiveClient.ts'
 import { createLiveResourceRefresh } from '../../live-resource-refresh.ts'
 import EditorViewHost from '../EditorViewHost.vue'
+import SidebarResizer from '../SidebarResizer.vue'
+import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
 import ProjectExplorerRoot from './ProjectExplorerRoot.vue'
 import ProjectExplorerFile from './ProjectExplorerFile.vue'
-const props = defineProps<{ apiBase: string; projectId: string; active: boolean; open: boolean; explorerId: string; folderRevision?: number; canQuote?: boolean }>()
+const props = defineProps<{ apiBase: string; projectId: string; active: boolean; open: boolean; explorerId: string; containerWidth: number; folderRevision?: number; canQuote?: boolean }>()
 const emit = defineEmits<{ close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)!
 const mobile = useMobileChrome()
+const preferredWidth = ref(240)
+const resizeBounds = computed(() => sidebarWidthBounds(props.containerWidth, 180, 400))
+const explorerWidth = computed(() => clampSidebarWidth(preferredWidth.value, resizeBounds.value))
+const outlineHost = ref<HTMLElement>()
+const desktopOutlineHost = computed(() => props.active && props.open && !mobile?.enabled.value ? outlineHost.value : undefined)
 const conversations = computed(() => {
   const state = groups.state(props.projectId)
   return [...state.left, ...state.right].flatMap(id => {
@@ -124,8 +136,12 @@ function openFile(file: OpenFile) {
 }
 </script>
 <style scoped>
-.project-file-explorer { display: flex; flex-direction: column; width: 240px; flex: 0 0 240px; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--c-border); background: var(--c-bg-soft); }
+.project-file-explorer { position: relative; display: flex; flex-direction: column; width: var(--file-explorer-width); flex: 0 0 var(--file-explorer-width); box-sizing: border-box; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--c-border); background: var(--c-bg-soft); }
+/* Keep the entire hit target inside the clipped file tree. */
+.project-file-explorer > .file-explorer-resizer { right: 0; }
+.project-file-explorer > .file-explorer-resizer::after { left: auto; right: 0; }
+.outline-host { display: contents; }
 .catalog-error { padding: 8px; color: var(--c-error); font-size: 12px; }
 .catalog-empty { padding: 16px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
-@media (max-width: 700px) { .project-file-explorer { width: min(240px, 60vw); flex-basis: min(240px, 60vw); } }
+@media (max-width: 700px) { .project-file-explorer { width: min(240px, 60vw); flex-basis: min(240px, 60vw); } .project-file-explorer > .file-explorer-resizer { display: none; } }
 </style>

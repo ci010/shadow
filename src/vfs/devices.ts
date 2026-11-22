@@ -9,6 +9,7 @@ export function createDevicesHandler(options: {
   assertSession: (context: Parameters<VirtualFsHandler>[1]) => void
   inventory: () => NodeInventoryResponse | undefined
   homeAvailable?: (nodeId: string) => boolean
+  execAvailable?: (nodeId: string) => boolean
 }): { read: VirtualFsHandler; list: VirtualFsListHandler } {
   const snapshot = (context: Parameters<VirtualFsHandler>[1]) => {
     context.signal.throwIfAborted()
@@ -27,6 +28,9 @@ export function createDevicesHandler(options: {
           && node.support.operations.includes(FOLDER_BROWSE_OPERATION) && node.support.operations.includes(FOLDER_SELECT_OPERATION),
         ...(node.role === 'child' && node.connection === 'connected' && node.executionProtocol === 'compatible' && options.homeAvailable?.(node.nodeId)
           ? { deviceHomeWorkspace: `device:${node.nodeId}` } : {}),
+        ...(node.role === 'child' && node.connection === 'connected'
+          && node.executionProtocol === 'compatible' && options.execAvailable?.(node.nodeId)
+          ? { deviceExecWorkspace: `device:${node.nodeId}` } : {}),
         projectDirectoryCount: node.workdirs.length,
         path: `v:devices/${encodeURIComponent(node.nodeId)}`,
       },
