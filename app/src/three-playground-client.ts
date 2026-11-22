@@ -1,5 +1,5 @@
 import { isThreePreviewSettings, type ThreePreviewSettings } from '../../src/shared/three-preview.ts'
-import { decodeBase64 } from './gltf-file-source.ts'
+import { decodeBase64, modelVersion } from './gltf-file-source.ts'
 
 export interface ShaderSource { objectId: string; slot: number; vertex: string; fragment: string }
 export interface FileSnapshot {
@@ -107,7 +107,13 @@ export async function buildPreviewSnapshot(snapshot: FileSnapshot, signal: Abort
   signal.throwIfAborted()
   const { buildPlayground } = await import('@shadow/three-playground')
   signal.throwIfAborted()
-  return buildPlayground({ files: snapshot.files, assets: snapshot.assets }, { signal, timeoutMs: 10_000 })
+  const built = await buildPlayground({ files: snapshot.files, assets: snapshot.assets }, { signal, timeoutMs: 10_000 })
+  // A build may produce different geometry or preview-only lights from the same source.
+  const inputs = new Map<string, Uint8Array>()
+  if (built.previewLights.length) inputs.set('previewLights', new TextEncoder().encode(JSON.stringify(built.previewLights)))
+  const version = `${snapshot.version}:${await modelVersion(new Uint8Array(built.glb), inputs)}`
+  signal.throwIfAborted()
+  return { ...built, version }
 }
 
 /** Export just the portable GLB. Preview consumers should use buildPreviewSnapshot. */
