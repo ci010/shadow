@@ -50,9 +50,15 @@ function check(ok: unknown, detail: string): asserts ok {
 function integer(x: unknown, max: number, min = 0): x is number {
   return typeof x === 'number' && Number.isSafeInteger(x) && x >= min && x <= max;
 }
-function list(x: unknown, max = 4096): Json[] {
+function list(x: unknown, path: string, max = 4096): Json[] {
   if (x === undefined) return [];
-  check(Array.isArray(x) && x.length <= max && x.every(y => y && typeof y === 'object' && !Array.isArray(y)), 'table');
+  check(Array.isArray(x), `${path}: expected an array (limit ${max} entries)`);
+  check(x.length <= max, `${path}: ${x.length} entries exceeds limit ${max}`);
+  x.forEach((entry, i) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      check(false, `${path}[${i}]: expected an object (${x.length} entries, limit ${max})`);
+    }
+  });
   return x;
 }
 function at<T>(xs: T[], i: unknown): T {
@@ -178,9 +184,9 @@ export function prepare(input: ModelInput) {
   check(jsonBytes.length <= limits.json, 'JSON byte budget');
   const json: Json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(jsonBytes));
   check(json?.asset?.version === '2.0' && (!json.asset.minVersion || json.asset.minVersion === '2.0'), 'asset version');
-  const buffers = list(json.buffers, limits.resources), images = list(json.images, limits.resources);
-  const materials = list(json.materials), materialOwners = new Set(materials);
-  const nodes = list(json.nodes, limits.nodes), nodeOwners = new Set(nodes), scenes = list(json.scenes, 16);
+  const buffers = list(json.buffers, 'buffers', limits.resources), images = list(json.images, 'images', limits.resources);
+  const materials = list(json.materials, 'materials'), materialOwners = new Set(materials);
+  const nodes = list(json.nodes, 'nodes', limits.nodes), nodeOwners = new Set(nodes), scenes = list(json.scenes, 'scenes', 16);
   const activeScene = at(scenes, json.scene === undefined ? 0 : json.scene);
   const extensions = new Set([
     punctual,
@@ -233,7 +239,7 @@ export function prepare(input: ModelInput) {
     }
   }
   scan(json, 0);
-  check(!list(json.animations).length && !list(json.skins).length, 'animation and skinning are not supported');
+  check(!list(json.animations, 'animations').length && !list(json.skins, 'skins').length, 'animation and skinning are not supported');
   function resource(uri: string) {
     const data = input.resources?.get(uri);
     if (data) return data;
@@ -255,7 +261,7 @@ export function prepare(input: ModelInput) {
     check(bufferBudget <= limits.total, 'expanded buffer budget');
     return data.subarray(0, b.byteLength);
   });
-  const bufferViews = list(json.bufferViews);
+  const bufferViews = list(json.bufferViews, 'bufferViews');
   let sliceBudget = 0;
   const slices = bufferViews.map(b => {
     const data = at(bufferBytes, b.buffer), offset = b.byteOffset ?? 0;
@@ -265,7 +271,7 @@ export function prepare(input: ModelInput) {
     check(sliceBudget <= limits.total, 'expanded bufferView budget');
     return data.subarray(offset, offset + b.byteLength);
   });
-  const accessors = list(json.accessors);
+  const accessors = list(json.accessors, 'accessors');
   const widths: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
   const componentWidths: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
   const uploads = new Set<string>();
@@ -285,9 +291,9 @@ export function prepare(input: ModelInput) {
     }
   }
   let primitives = 0, meshElements = 0;
-  const meshes = list(json.meshes);
-  const meshCost = meshes.map(mesh => {
-    const ps = list(mesh.primitives, limits.primitives);
+  const meshes = list(json.meshes, 'meshes');
+  const meshCost = meshes.map((mesh, i) => {
+    const ps = list(mesh.primitives, `meshes[${i}].primitives`, limits.primitives);
     check(ps.length > 0 && mesh.weights === undefined && (primitives += ps.length) <= limits.primitives, 'primitive budget');
     let elements = 0;
     for (const p of ps) {
@@ -315,7 +321,7 @@ export function prepare(input: ModelInput) {
     return { elements, primitives: ps.length };
   });
   const rootLights = json.extensions?.[punctual];
-  const definitions = list(rootLights?.lights, lightLimit).map(lightDefinition);
+  const definitions = list(rootLights?.lights, `extensions.${punctual}.lights`, lightLimit).map(lightDefinition);
   check(rootLights === undefined || (definitions.length > 0 && rootLights.light === undefined), 'punctual light definitions');
   const lights = new Map<number, PunctualLight>();
   const parents = new Set<number>();
@@ -376,7 +382,7 @@ export function prepare(input: ModelInput) {
     check(img.mimeType === undefined || img.mimeType === info.type, 'image MIME mismatch');
     return info;
   });
-  const textures = list(json.textures, limits.resources), samplers = list(json.samplers, limits.resources);
+  const textures = list(json.textures, 'textures', limits.resources), samplers = list(json.samplers, 'samplers', limits.resources);
   for (const s of samplers) {
     check(s.magFilter === undefined || [9728, 9729].includes(s.magFilter), 'texture mag filter');
     check(s.minFilter === undefined || [9728, 9729, 9984, 9985, 9986, 9987].includes(s.minFilter), 'texture min filter');
