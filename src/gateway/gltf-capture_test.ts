@@ -64,7 +64,7 @@ async function fixture(t: TestContext) {
     physicalSessionId: 'fixture', workUserInput: 'Observe the asset', senderId: 'web-user', inputSource: 'user', admin: true, tools, signal: new AbortController().signal,
   })
   const invoke = (messageId: string, args: Record<string, unknown> = {}, ctx = context(messageId)) => tools.execute('invoke_tool', {
-    name: tool.name, args: { assetId: scope.assetId, mode: 'current', ...args },
+    name: tool.name, args: { assetId: scope.assetId, ...args },
   }, ctx)
   const poll = async (binding: string) => (await post('poll', binding)).json()
   return { post, register, send, owner, bridge, invoke, context, importer, sessions, poll }
@@ -84,7 +84,10 @@ test('capture_view is dynamically scoped to the real Web input and returns a tra
   assert.match(String(await f.invoke(id, {}, { ...f.context(id), inputSource: 'session' })), /requires an active binding/)
   assert.match(String(await f.invoke(id, { assetId: 'elsewhere' })), /No unique, live Viewer/)
   assert.equal((await f.post('poll', binding, undefined, 'b')).status, 409)
-  const pending = f.invoke(id, { mode: 'custom', position: [1, 2, 3], target: [0, 0, 0], version: 'v1' })
+  for (const bad of [{ position: [1, 2, 3] }, { position: [0, 1, 0], target: [0, 1, 0] }]) {
+    assert.match(String(await f.invoke(id, bad)), /distinct finite xyz/)
+  }
+  const pending = f.invoke(id, { position: [1, 2, 3], target: [0, 0, 0], version: 'v1' })
   const job = await f.poll(binding)
   assert.deepEqual(job.scope, scope)
   assert.deepEqual(job.view, { mode: 'custom', position: [1, 2, 3], target: [0, 0, 0] })

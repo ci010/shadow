@@ -6,7 +6,7 @@ import { transientToolResult, type Tool, type ToolParameters, type ToolResult } 
 
 export class CaptureViewTool implements Tool<ToolResult> {
   readonly name = 'capture_view'
-  readonly description = 'Capture the glTF Viewer explicitly bound to this owner Web turn. Use the exact assetId. Omit version to use the current loaded asset version, or specify the expected version to reject a mismatch. After editing a file, use afterVersion with the previously observed version to prevent capturing the old render before reload. current reads its canvas; front/back/top/custom capture an independent camera without changing the Viewer. No file or arbitrary tab capture.'
+  readonly description = 'Capture the glTF Viewer explicitly bound to this owner Web turn. Use the exact assetId. Omit version to use the current loaded asset version, or specify the expected version to reject a mismatch. After editing a file, use afterVersion with the previously observed version to prevent capturing the old render before reload. Supply position and target in scene coordinates to compose any independent view without moving the user’s camera. Omit both to read the current canvas. No file or arbitrary tab capture.'
   readonly parameters: ToolParameters = {
     type: 'object', additionalProperties: false,
     properties: {
@@ -15,7 +15,7 @@ export class CaptureViewTool implements Tool<ToolResult> {
       mode: { type: 'string', enum: ['current', 'front', 'back', 'top', 'custom'] },
       position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Custom camera position [x,y,z].' },
       target: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Custom camera target [x,y,z].' },
-    }, required: ['assetId', 'mode'],
+    }, required: ['assetId'],
   }
   readonly supportsLayerFSWorkdir = true
 
@@ -30,7 +30,7 @@ export class CaptureViewTool implements Tool<ToolResult> {
     if (!this.available(ctx)) return 'Error: capture_view requires a live Viewer binding from this direct owner Web turn.'
     const { assetId, version, afterVersion } = args
     const view = parseCaptureView(args)
-    if (!view || !captureId(assetId) || (version !== undefined && !captureId(version)) || (afterVersion !== undefined && !captureId(afterVersion))) return 'Error: provide the exact assetId, a valid camera mode, and optionally an expected version.'
+    if (!view || !captureId(assetId) || (version !== undefined && !captureId(version)) || (afterVersion !== undefined && !captureId(afterVersion))) return 'Error: provide the exact assetId and a valid capture request. For an independent camera supply both position and target as distinct finite xyz vectors; omit both to capture the current view.'
     try {
       const { mimeType, data, camera, objectIds, version: capturedVersion } = await this.bridge.capture({ projectId: this.projectId,
         sessionId: ctx.sessionId, assetId, version, afterVersion }, ctx.messageId, view, ctx.signal)
