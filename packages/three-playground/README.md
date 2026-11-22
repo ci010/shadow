@@ -33,7 +33,18 @@ For a material array, `node.extras.shadowMaterialSlots[i]` records the authored 
 
 Static `PointLight`, `SpotLight`, and `DirectionalLight` export as `KHR_lights_punctual`. Up to 16 lights can be authored; validation independently limits both light definitions and scene attachments to 16, including repeated uses of one definition. Intensity is passed through (candela for point/spot, lux for directional), and color must be finite linear RGB in `[0, 1]`. Point and spot lights use inverse-square decay (`decay = 2`); a positive `distance` becomes the glTF range, and zero omits it. Spot lights require a finite half-angle in `(0, π/2]` and a penumbra in `[0, 1]`. The inner cone is `(1 - penumbra) * angle`. When that equals the outer angle (including the default `penumbra = 0`), the exporter keeps the outer angle and approximates the hard edge with an angular transition of 0.01% of the outer angle (at most about 0.009° at ordinary precision). If the approximation still rounds to the same subnormal angle, the inner angle is zero. This keeps the cone angles strictly ordered as required by glTF.
 
-Spot and directional aim is sampled from the authored target at build time (including detached targets). An extra child carries the local `-Z` emission axis, preserving the authored light node's transform, optional ID, and other children. The extra child counts toward the scene limits and `objectCount`. Directional and spot lights need distinct world-space source and target positions and an invertible source transform. Shadow settings, visibility/live target updates and spot maps are not represented (spot maps are rejected); all exported light attachments count toward the cap. Other light types and cameras are rejected. Camera choice and support for rendering the punctual-light extension depend on the consuming viewer.
+Spot and directional aim is sampled from the authored target at build time (including detached targets). An extra child carries the local `-Z` emission axis, preserving the authored light node's transform, optional ID, and other children. The extra child counts toward the scene limits and `objectCount`. Directional and spot lights need distinct world-space source and target positions and an invertible source transform. Shadow settings, visibility/live target updates and spot maps are not represented (spot maps are rejected); all exported light attachments count toward the cap. Other light types beyond those below, and cameras, are rejected. Camera choice and support for rendering the punctual-light extension depend on the consuming viewer.
+
+Author `THREE.HemisphereLight` and `THREE.AmbientLight` directly in `build` as usual; no marker change is necessary. For example:
+
+```js
+const sky = new THREE.HemisphereLight(0xffead1, 0x5c7090, 1.5);
+sky.position.set(1, 3, 0);
+root.add(sky, new THREE.AmbientLight(0xffeca8, 0.1));
+```
+
+The builder returns validated `previewLights` beside `glb` and `objectCount`. Up to 16 ambient and hemisphere lights are allowed in total, independently of the 16 punctual lights. Their colors must be finite linear RGB in `[0, 1]`, and their intensity finite in `[0, 1000000]`. For hemisphere lights, the normalized world-space position (relative to the exported scene origin) is the light direction and must be finite and nonzero. These are static build-time values, like the punctual lights; visibility, layers, and live changes are not represented. Pass `previewLights` into the same ThreeViewer load as the bytes. These lights render in preview and captures and replace the studio fill, but do **not** export to GLB. The GLB preserves the plain light transform nodes and children, and retains any standard punctual lights.
+
 
 ## Isolation and limits
 

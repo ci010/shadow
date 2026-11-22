@@ -9,6 +9,7 @@
   "Fly camera": "Fly camera",
   "Model actions": "Model actions",
   "Rebuild": "Rebuild",
+  "GLB download excludes hemisphere and ambient lights": "GLB download excludes hemisphere and ambient lights",
   "Download GLB": "Download GLB",
   "Save view": "Save view",
   "glTF asset": "glTF asset",

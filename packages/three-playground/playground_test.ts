@@ -21,7 +21,7 @@ async function buildPlayground(snapshot: PlaygroundSnapshot, options: Playground
     if (phase) throw new PlaygroundError(phase, message.slice(phase.length + 3), guestStack);
     throw new DOMException(message, name);
   }
-  return { glb: Uint8Array.from(result.bytes).buffer, objectCount: result.objectCount };
+  return { glb: Uint8Array.from(result.bytes).buffer, objectCount: result.objectCount, previewLights: result.previewLights };
 }
 
 nodeTest('requires a browser document and honors pre-cancellation', async () => {
@@ -355,9 +355,34 @@ test('exports a default Three.js spotlight with a narrowly softened hard edge', 
   assert.deepEqual(light.spot, { innerConeAngle: outer * (1 - 1e-4), outerConeAngle: outer });
 });
 
+test('extracts preview lights from authored Three objects without changing the portable GLB', async () => {
+  const source = (intensity: number) => `export function build({ THREE, root }) {
+    root.position.z = 3;
+    const group = new THREE.Group(); group.scale.y = 4; root.add(group);
+    const hemi = new THREE.HemisphereLight(0xff0000, 0x0000ff, ${intensity});
+    hemi.name = 'Sky'; hemi.position.y = 1; group.add(hemi);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+    mesh.userData.objectId = 'box'; hemi.add(mesh);
+    root.add(new THREE.AmbientLight(0x00ff00, 0.5));
+  }`;
+  const result = await run(source(2));
+  assert.deepEqual(result.previewLights, [
+    { type: 'hemisphere', color: [1, 0, 0], intensity: 2, groundColor: [0, 0, 1], direction: [0, 0.8, 0.6] },
+    { type: 'ambient', color: [0, 1, 0], intensity: 0.5 },
+  ]);
+  assert.deepEqual(result.glb, (await run(source(3))).glb);
+  const doc = json(result.glb) as LightScene;
+  assert.equal(doc.extensions?.[LIGHTS], undefined);
+  assert.equal(doc.nodes[doc.nodes.find(node => node.name === 'Sky')!.children![0]].extras?.objectId, 'box');
+});
+
 test('rejects unsupported lights, cameras and unrepresentable light input', async () => {
   for (const [source, reason] of [
-    ['root.add(new THREE.AmbientLight());', /unsupported light/],
+    ['root.add(new THREE.RectAreaLight());', /unsupported light/],
+    ['root.add(new THREE.AmbientLight(0xffffff, -1));', /preview lights: intensity/],
+    ['const l = new THREE.HemisphereLight(); l.groundColor.b = NaN; root.add(l);', /linear ground RGB/],
+    ['const l = new THREE.HemisphereLight(); l.position.set(0,0,0); root.add(l);', /nonzero world direction/],
+    ['for (let i=0;i<17;i++) root.add(new THREE.AmbientLight());', /preview light limit exceeded/],
     ['root.add(new THREE.PerspectiveCamera());', /cameras are not model output/],
     ['root.add(new THREE.PointLight(0xffffff, Infinity));', /invalid light color or intensity/],
     ['root.add(new THREE.PointLight(0xffffff, 1, -1));', /finite non-negative distance/],
