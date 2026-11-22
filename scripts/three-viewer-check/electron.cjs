@@ -1,12 +1,12 @@
 const { app, BrowserWindow } = require('electron');
 const { join } = require('node:path');
 const { readFile, writeFile } = require('node:fs/promises');
-const [fixture, mode, fixtureScene, expectedShaders, screenshot, url] = process.argv.slice(2);
+const [fixture, mode, fixtureScene, expectedShaders, screenshot, url, cameraJson] = process.argv.slice(2);
 app.setPath('userData', join(fixture, 'electron-profile'));
 app.setPath('sessionData', join(fixture, 'electron-session'));
 app.setPath('downloads', fixture);
 app.whenReady().then(async () => {
-  const window = new BrowserWindow({ width: 1100, height: 800, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, backgroundThrottling: false } });
+  const window = new BrowserWindow({ width: 1100, height: 800, show: mode !== 'capture', webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, backgroundThrottling: false } });
   const contents = window.webContents;
   contents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
   let download;
@@ -16,20 +16,21 @@ app.whenReady().then(async () => {
     download = new Promise((resolve, reject) => item.once('done', (_event, state) => state === 'completed' ? resolve(readFile(output)) : reject(new Error(`Download ${state}`))));
   });
   await window.loadURL(url);
-  window.show(); window.focus(); contents.focus();
+  if (mode !== 'capture') { window.show(); window.focus(); contents.focus(); }
 
-  const result = mode === 'marker' ? await contents.executeJavaScript(`window.runThreeMarkerCheck(${Number(expectedShaders)})`, true)
+  const result = mode === 'capture' ? await contents.executeJavaScript(`window.runThreeCapture(${JSON.stringify(JSON.parse(cameraJson))})`)
+    : mode === 'marker' ? await contents.executeJavaScript(`window.runThreeMarkerCheck(${Number(expectedShaders)})`, true)
     : mode === 'lighting' ? await contents.executeJavaScript('window.runThreeLightingCheck()', true)
     : mode === 'ui'
     ? await require('./ui-driver.cjs')(contents, fixtureScene)
     : mode === 'outline' ? await require('./outline-driver.cjs')(contents)
     : mode === 'product' ? await require('./product-driver.cjs')(contents) : await contents.executeJavaScript(mode === 'worker' ? 'window.runThreeWorkerCheck()' : 'window.runThreeCheck()', true);
-  if (mode === 'marker') {
+  if (mode === 'marker' || mode === 'capture') {
     if (screenshot) await writeFile(screenshot, Buffer.from(result.png, 'base64'), { flag: 'wx' });
     delete result.png;
     if (screenshot) result.screenshot = screenshot;
   }
-  if (!['product', 'outline', 'marker', 'lighting'].includes(mode)) {
+  if (!['product', 'outline', 'marker', 'lighting', 'capture'].includes(mode)) {
     const deadline = Date.now() + 5000;
     while (!download && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
     if (!download) throw new Error('No browser download observed');

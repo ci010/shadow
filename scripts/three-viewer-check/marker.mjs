@@ -1,21 +1,32 @@
 import { ThreeViewer } from '@shadow/three-viewer';
-import { fetchPlaygroundSnapshot, exportSnapshot } from '../../app/src/three-playground-client.ts';
+import { buildPreviewSnapshot, fetchPlaygroundSnapshot } from '../../app/src/three-playground-client.ts';
 
-window.runThreeMarkerCheck = async expectedShaders => {
+window.runThreeMarkerCheck = expectedShaders => renderMarker({ expectedShaders });
+window.runThreeCapture = camera => renderMarker({ camera });
+
+async function renderMarker({ expectedShaders, camera: requestedCamera }) {
   const url = new URL('/__three-marker', location.href);
   url.searchParams.set('path', new URL(location.href).searchParams.get('marker'));
   const signal = AbortSignal.timeout(20_000);
   const { snapshot, tag } = await fetchPlaygroundSnapshot(url, '', signal);
-  if (await fetchPlaygroundSnapshot(url, tag, signal) !== null) throw new Error('Expected HTTP 304');
-  if (snapshot.shaders.length !== expectedShaders) throw new Error(`Expected ${expectedShaders} shaders, got ${snapshot.shaders.length}`);
-  const bytes = await exportSnapshot(snapshot, signal);
+  if (!requestedCamera) {
+    if (await fetchPlaygroundSnapshot(url, tag, signal) !== null) throw new Error('Expected HTTP 304');
+    if (snapshot.shaders.length !== expectedShaders) throw new Error(`Expected ${expectedShaders} shaders, got ${snapshot.shaders.length}`);
+  }
+  const { glb: bytes, previewLights } = await buildPreviewSnapshot(snapshot, signal);
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'display:block;width:960px;height:680px';
   document.querySelector('#app').append(canvas);
   const viewer = new ThreeViewer(canvas);
   try {
     // load() links every shader override on the real WebGL renderer before committing.
-    await viewer.load({ bytes, shaders: snapshot.shaders, preview: snapshot.preview, version: snapshot.version, identity: 'playground' });
+    await viewer.load({ bytes, previewLights, shaders: snapshot.shaders, preview: snapshot.preview, version: snapshot.version, identity: 'playground' });
+    if (requestedCamera) {
+      const frame = await viewer.captureFrame(requestedCamera);
+      if (frame.version !== snapshot.version) throw new Error('Capture version drift');
+      const png = new Uint8Array(await frame.image.arrayBuffer());
+      return { version: frame.version, camera: frame.camera, pngBytes: png.byteLength, png: png.toBase64() };
+    }
     if (!viewer.objectIds.length) throw new Error('No exported objects');
     const camera = viewer.getCamera('front');
     const frames = [];
@@ -32,4 +43,4 @@ window.runThreeMarkerCheck = async expectedShaders => {
     if (expectedShaders && frames[0].hash === frames[1].hash) throw new Error('Animated frames did not change');
     return { version: snapshot.version, assets: Object.keys(snapshot.assets), shaders: expectedShaders, objects: viewer.objectIds.length, glbBytes: bytes.byteLength, camera, frames, png };
   } finally { viewer.dispose(); }
-};
+}
