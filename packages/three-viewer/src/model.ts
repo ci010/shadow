@@ -1,7 +1,8 @@
-import { Box3, Color, DirectionalLight, LinearSRGBColorSpace, LoadingManager, Mesh, PointLight,
+import { AmbientLight, Box3, Color, DirectionalLight, HemisphereLight, LinearSRGBColorSpace, LoadingManager, Mesh, PointLight,
   Sphere, SpotLight, Texture, Vector3, type Material, type Object3D } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { prepare, type ModelInput } from './input.js';
+import type { PreviewLight } from './preview-lights.js';
 
 export const stale = () => new DOMException('Model load superseded, aborted, or viewer disposed', 'AbortError');
 export interface Part { mesh: Mesh; material: Material; slot: number | undefined }
@@ -14,7 +15,7 @@ export interface ModelOutlineRow {
 
 export interface Model {
   root: Object3D;
-  hasPunctualLights: boolean;
+  hasAuthoredLights: boolean;
   outline: readonly ModelOutlineRow[];
   bounds: Box3;
   objects: Map<string, { parts: Part[]; bounds: Box3; label: string; node: number }>;
@@ -22,7 +23,7 @@ export interface Model {
   close(): void;
 }
 
-export async function decode(input: ModelInput, current: () => boolean): Promise<Model> {
+export async function decode(input: ModelInput, current: () => boolean, previewLights?: readonly PreviewLight[]): Promise<Model> {
   const { json, buffers, images, lights } = prepare(input);
   const manager = new LoadingManager();
   const urls = new Set<string>();
@@ -163,7 +164,18 @@ export async function decode(input: ModelInput, current: () => boolean): Promise
       }
     }
     root.children.forEach((child, i) => visit(child, null, i));
-    return { root, hasPunctualLights: lights.size > 0, outline: Object.freeze(outline), bounds, objects, ids, close };
+    for (const def of previewLights ?? []) {
+      const color = new Color().setRGB(...def.color, LinearSRGBColorSpace);
+      if (def.type === 'ambient') root.add(new AmbientLight(color, def.intensity));
+      else {
+        const ground = new Color().setRGB(...def.groundColor, LinearSRGBColorSpace);
+        const light = new HemisphereLight(color, ground, def.intensity);
+        light.position.set(...def.direction);
+        root.add(light);
+      }
+    }
+    return { root, hasAuthoredLights: lights.size > 0 || !!previewLights?.length,
+      outline: Object.freeze(outline), bounds, objects, ids, close };
   } catch (error) { close(); throw error; }
   finally { urls.forEach(u => URL.revokeObjectURL(u)); }
 }

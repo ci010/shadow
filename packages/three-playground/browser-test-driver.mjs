@@ -24,8 +24,8 @@ export async function launchBrowser(executable) {
             files['main.mjs'] = 'throw new Error("newer edit")';
             for (const data of Object.values(snapshot.assets)) new Uint8Array(data).fill(4);
           }
-          const { glb, objectCount } = await pending;
-          output = { bytes: Array.from(new Uint8Array(glb)), objectCount };
+          const { glb, objectCount, previewLights } = await pending;
+          output = { bytes: Array.from(new Uint8Array(glb)), objectCount, previewLights };
         } catch (e) { output = { error: { name: e.name, message: e.message, phase: e.phase, guestStack: e.guestStack } }; }
         finally { clearTimeout(timer); }
         return { ...output, frameCount: document.querySelectorAll('iframe').length };

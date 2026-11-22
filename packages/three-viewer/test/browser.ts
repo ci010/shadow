@@ -1,3 +1,4 @@
+import { buildPlayground } from '../../three-playground/index.ts';
 import { ThreeViewer, type ModelInput } from '../src/index.js';
 import { fixture, glb, packGlb } from './fixture.js';
 import { BufferGeometry, Float32BufferAttribute, Mesh, MeshBasicMaterial, Scene } from 'three';
@@ -100,6 +101,42 @@ async function lighting(viewer: ThreeViewer, center: (blob: Blob) => Promise<num
   equal(await get(), [0, 0, 0, 255]);
   await viewer.load(input('inactive-lights', variants[0], { scene: 1, meshLight: false }));
   equal(await get(), studio);
+
+  const hemi = { type: 'hemisphere', color: [1, 0, 0], groundColor: [0, 0, 1], intensity: 4, direction: [0, 0, 1] } as const;
+  const ambient = { type: 'ambient', color: [0, 1, 0], intensity: 2 } as const;
+  for (const [light, channel] of [[hemi, 0], [{ ...hemi, direction: [0, 0, -1] as const }, 2], [ambient, 1]] as const) {
+    await viewer.load({ ...fallback, version: `preview-light-${channel}`, previewLights: [light] });
+    const pixel = await get();
+    if (!(pixel[channel] > 100 && pixel.every((v, c) => c === 3 || c === channel || v < 3))) {
+      throw new Error(`expected authored preview light without studio fill: ${pixel}`);
+    }
+    equal(await center(await viewer.capture()), pixel);
+    await rejects(viewer.load({ ...fallback, previewLights: [{ ...hemi, direction: [0, 0, 0] }] }), /unit direction/);
+    equal(await get(), pixel);
+  }
+  await rejects(viewer.load({ ...fallback, identity: 'gltf', previewLights: [hemi] }), /playground identity/);
+  await viewer.load({ ...fallback, previewLights: [{ ...ambient, intensity: 0 }] });
+  equal(await get(), [0, 0, 0, 255]);
+  await viewer.load(fallback);
+  equal(await get(), studio);
+
+  const built = await buildPlayground({ files: { 'main.mjs': `export function build({ THREE, root }) {
+    const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshStandardMaterial());
+    surface.userData.objectId = 'surface';
+    const sky = new THREE.HemisphereLight(0xff0000, 0x0000ff, 2);
+    sky.position.set(0, 0, 1);
+    root.add(surface, sky, new THREE.AmbientLight(0xff0000, 2));
+  }` } });
+  await viewer.load({ bytes: built.glb, previewLights: built.previewLights, version: 'author-end-to-end', identity: 'playground' });
+  viewer.setView('front');
+  const authored = await get();
+  if (!(authored[0] > 100 && authored[1] < 3 && authored[2] < 3)) throw new Error(`expected authored preview-only lighting: ${authored}`);
+  equal(await center(await viewer.capture()), authored);
+  await viewer.load({ bytes: built.glb, version: 'portable-glb-only' });
+  const portable = await get();
+  if (!(portable[0] > 80 && portable[0] === portable[1] && portable[1] === portable[2])) throw new Error(`expected portable GLB fallback: ${portable}`);
+  await viewer.load(fallback);
+  viewer.setView('front');
 
   const original = new Uint8Array(fallback.bytes as Uint8Array);
   await viewer.load({ ...fallback, preview: { toneMapping: 'aces', exposure: 0.1 } });

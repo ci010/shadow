@@ -12,6 +12,7 @@
       <div class="model-tools" role="group" :aria-label="t('Model actions')">
         <button v-if="playground" type="button" class="btn btn-sm" @click="reload">{{ t('Rebuild') }}</button>
         <button v-if="playground" type="button" class="btn btn-sm" :disabled="!shown?.glb" @click="downloadGlb">{{ t('Download GLB') }}</button>
+        <span v-if="shown?.hasPreviewLights">{{ t('GLB download excludes hemisphere and ambient lights') }}</span>
         <button type="button" class="btn btn-sm" :disabled="!shown" @click="saveView">{{ t('Save view') }}</button>
       </div>
     </header>
@@ -61,7 +62,7 @@ import { isPlaygroundFile, collectModelResources, modelVersion, MODEL_MAX_BYTES 
 import { GltfReferenceDraftKey, type GltfFileOwner, type GltfReferenceSource, type GltfPrepareCapture } from '../../gltf-reference.ts'
 import { createUuid } from '../../uuid.ts'
 import { useModelCapture } from '../../composables/useModelCapture.ts'
-import { exportSnapshot, fetchPlaygroundSnapshot, watchPlayground } from '../../three-playground-client.ts'
+import { buildPreviewSnapshot, fetchPlaygroundSnapshot, watchPlayground } from '../../three-playground-client.ts'
 
 // FilePreviewModal keys this editor by its source owner and path, never by mtime.
 const props = defineProps<{ apiBase: string; path: string; sessionId: string; folderId?: string; sessionWorkspace?: boolean;
@@ -83,7 +84,7 @@ const attachmentKey = props.attachmentUrl ? createUuid() : undefined
 const assetId = computed(() => { const { apiBase: _, ...owner } = source.value; return JSON.stringify([owner, path.value, ...(attachmentKey ? [attachmentKey] : [])]) })
 const playground = computed(() => !props.archive && !props.attachmentUrl && isPlaygroundFile(props.path.split('/').at(-1)!))
 const target = computed(() => props.canReview ? draft?.target(source.value) : null)
-const shown = shallowRef<{ version: string; glb?: ArrayBuffer; rows: ThreeViewer['outline'] }>()
+const shown = shallowRef<{ version: string; glb?: ArrayBuffer; hasPreviewLights?: boolean; rows: ThreeViewer['outline'] }>()
 const groups = inject(EditorGroupsKey, undefined), editor = inject(OutlineEditorKey, undefined)
 const docked = computed(() => !!(props.fileEditor && groups && editor && !editor.value.conversation))
 const dock = computed(() => docked.value && props.active && groups!.focused(editor!.value.id)
@@ -128,7 +129,7 @@ async function display(input: ModelInput, glb?: ArrayBuffer) {
   missing.value = []
   await view.load(input)
   input.signal?.throwIfAborted()
-  shown.value = { version: input.version, glb, rows: view.outline }; selected.value = view.selection; busy.value = false; error.value = ''
+  shown.value = { version: input.version, glb, hasPreviewLights: !!input.previewLights?.length, rows: view.outline }; selected.value = view.selection; busy.value = false; error.value = ''
 }
 async function loadAsset() {
   assetRead?.abort()
@@ -161,9 +162,12 @@ function start() {
   filesWatch = watchPlayground({ read: (tag, signal) => fetchPlaygroundSnapshot(url, tag, signal), failed: failure,
     async build(snapshot, signal) {
       busy.value = true; error.value = ''
-      const glb = await exportSnapshot(snapshot, signal)
-      const version = `${snapshot.version}:${await modelVersion(new Uint8Array(glb), new Map())}`
-      await display({ bytes: glb, version, identity: 'playground', shaders: snapshot.shaders, preview: snapshot.preview, signal }, glb)
+      const { glb, previewLights } = await buildPreviewSnapshot(snapshot, signal)
+      // Authored code can vary its lighting without changing the GLB bytes.
+      const revisionInputs = new Map<string, Uint8Array>()
+      if (previewLights.length) revisionInputs.set('previewLights', new TextEncoder().encode(JSON.stringify(previewLights)))
+      const version = `${snapshot.version}:${await modelVersion(new Uint8Array(glb), revisionInputs)}`
+      await display({ bytes: glb, version, identity: 'playground', previewLights, shaders: snapshot.shaders, preview: snapshot.preview, signal }, glb)
     },
   })
 }
