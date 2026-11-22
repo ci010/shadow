@@ -107,3 +107,29 @@ test('explorer refuses drift, cross-project and invalid files without partial mu
   assert.equal(explorer.add(apiBase, key, review), false)
   assert.deepEqual([first!, second!].map(({ draft }) => [draft.text, draft.references]), [['Original 1', []], ['Original 2', []]])
 })
+
+test('scoped OTIO review prefers an eligible side and never falls into an unrelated composer', async () => {
+  const { groups, drafts: [matching, unrelated] } = fixture()
+  const editor = groups.descriptors.get(matching!.id)!
+  editor.conversation!.folderId = 'edit'
+  groups.move(matching!.id, 'right')
+  groups.activate(unrelated!.id)
+  const source = { apiBase, projectId: 'review', folderId: 'edit' }
+  let visible = true, started = 0
+  const bridge = createExplorerOtioDraftBridge(groups, () => visible ? source : null, {
+    available: scope => scope === source,
+    async start(scope) { assert.equal(scope, source); started++; return true },
+  })
+  assert.equal(bridge.target(apiBase)?.key, matching!.draft.key)
+  matching!.lock()
+  assert.equal(bridge.target(apiBase), null)
+  assert.equal(bridge.canStart!(apiBase), true)
+  assert.equal(bridge.canStart!('http://other'), false)
+  const review = { label: 'Selection', text: 'Anchor' }
+  assert.equal(await bridge.start!(apiBase, review, AbortSignal.abort()), false)
+  assert.equal(await bridge.start!(apiBase, review, new AbortController().signal), true)
+  visible = false
+  assert.equal(await bridge.start!(apiBase, review, new AbortController().signal), false)
+  assert.equal(started, 1)
+  assert.deepEqual(unrelated!.draft.references, [])
+})

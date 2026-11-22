@@ -1,7 +1,11 @@
 <template>
-  <section class="outline" :aria-label="t('Outline')">
-    <h3>{{ t('Outline') }}</h3>
-    <div ref="viewport" class="viewport">
+  <section class="otio-structure" :class="{ 'explorer-outline': explorer, 'explorer-expanded': explorer && expanded }" :aria-label="t('Outline')">
+    <button v-if="explorer" type="button" class="outline-toggle" :aria-expanded="expanded" :aria-controls="treeId" @click="expanded = !expanded">
+      <span :class="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
+      <span class="i-lucide-list-tree" aria-hidden="true" />{{ t('Outline') }}
+    </button>
+    <h3 v-else>{{ t('Outline') }}</h3>
+    <div v-show="!explorer || expanded" :id="treeId" ref="viewport" class="viewport">
       <ul>
         <li v-for="node in rows" :key="node.id" :data-selected="node.id === selectedId"
           :style="{ '--indent': Math.min(node.depth, 6) }">
@@ -22,7 +26,7 @@
         </li>
       </ul>
     </div>
-    <footer v-if="visible.length > pageSize">
+    <footer v-if="(!explorer || expanded) && visible.length > pageSize">
       <HoverInfo :text="t('Previous page')" :disabled="page === 0">
         <template #default="{ triggerProps, close }">
           <button type="button" class="square" v-bind="triggerProps" :aria-label="t('Previous page')" :disabled="page === 0" @click="changePage(page - 1); close()"><span class="i-lucide-chevron-left" aria-hidden="true" /></button>
@@ -39,13 +43,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, useId, watch } from 'vue'
 import { t, type MessageKey } from '../../i18n.ts'
 import type { OtioModel, OtioNode } from '../../otio-model.ts'
 import { visibleOtioNodes } from '../../otio-navigation.ts'
 import HoverInfo from '../HoverInfo.vue'
 
-const props = defineProps<{ model: OtioModel; selectedId: string }>()
+const props = defineProps<{ model: OtioModel; selectedId: string; explorer?: boolean }>()
+const expanded = ref(true)
+const treeId = `otio-outline-${useId()}`
 const emit = defineEmits<{ select: [id: string] }>()
 const icons: Record<string, string> = {
   Timeline: 'i-lucide-timer', Stack: 'i-lucide-layers', Track: 'i-lucide-align-start-horizontal',
@@ -120,7 +126,19 @@ watch([() => props.model, () => props.selectedId], async () => {
 </script>
 
 <style scoped>
-.outline { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; container-type: inline-size; color: var(--c-text); background: var(--c-bg-card); }
+.otio-structure { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; container-type: inline-size; color: var(--c-text); background: var(--c-bg-card); }
+.explorer-outline { flex: 0 0 auto; border-block-start: 1px solid var(--c-border); background: transparent; }
+.explorer-expanded { flex: 1 1 0; }
+.outline-toggle { flex-shrink: 0; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 6px 8px; text-align: start; font-size: 12px; }
+.outline-toggle > span { flex: 0 0 14px; height: 14px; }
+.outline-toggle > span:nth-child(2) { color: var(--c-text-muted); }
+.outline-toggle:hover { background: var(--c-bg-muted); }
+.outline-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.explorer-outline li { border-block-end: 0; padding-inline-start: calc(var(--indent) * 10px); }
+.explorer-outline .square, .explorer-outline .spacer { flex-basis: var(--sidebar-disclosure, 20px); width: var(--sidebar-disclosure, 20px); }
+.explorer-outline .row { min-height: var(--sidebar-row-height, 32px); }
+.explorer-outline .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-outline .kind { flex-shrink: 0; }
 h3 { margin: 0; padding: 8px 10px; font-size: 12px; font-weight: 650; background: var(--c-bg-soft); border-block-end: 1px solid var(--c-border); }
 .viewport { overflow: auto; min-height: 0; }
 ul { list-style: none; padding: 0; margin: 0; }

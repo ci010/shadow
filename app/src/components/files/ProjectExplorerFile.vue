@@ -5,19 +5,18 @@
 <script setup lang="ts">
 import { computed, inject, provide } from 'vue'
 import { EditorGroupsKey } from '../../editor-groups.ts'
-import { createExplorerOtioDraftBridge, OtioDraftKey } from '../../otio-draft.ts'
 import { createExplorerGltfReferenceDraftBridge, GltfReferenceDraftKey } from '../../gltf-reference.ts'
 import { liveProjectId } from '../../composables/useLiveClient.ts'
+import { OtioOutlineHostKey } from '../../otio-outline-host.ts'
 import { fileTabKey, type OpenFile } from '../../file-workbench.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import FileDiffPreview from './FileDiffPreview.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
-const props = defineProps<{ apiBase: string; file: OpenFile; active: boolean; canQuote: boolean }>()
+const props = defineProps<{ apiBase: string; file: OpenFile; active: boolean; canQuote: boolean; outlineTarget?: HTMLElement; outlineInBackground?: boolean }>()
+// This context belongs to a single editor view, including its teleported preview.
+provide(OtioOutlineHostKey, { target: () => props.outlineTarget, background: () => !!props.outlineInBackground })
 const emit = defineEmits<{ open: [file: OpenFile]; close: []; quote: [text: string] }>()
 const groups = inject(EditorGroupsKey)
-if (groups) provide(OtioDraftKey, createExplorerOtioDraftBridge(groups, () => props.active
-  ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase) }
-  : null))
 if (groups) provide(GltfReferenceDraftKey, createExplorerGltfReferenceDraftBridge(groups, () => props.active
   ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase) }
   : null))

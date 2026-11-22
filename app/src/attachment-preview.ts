@@ -1,6 +1,6 @@
 /** Read attachment text without buffering an unbounded download. Authorization stays on /api/media. */
 export async function readAttachmentBytes(url: string, signal: AbortSignal, limit = 65536): Promise<{ bytes: Uint8Array; truncated: boolean }> {
-  const response = await fetch(url, { signal })
+  const response = await fetch(url, { signal, cache: 'no-store' })
   if (!response.ok) throw new Error(`Attachment unavailable (${response.status})`)
   const reader = response.body?.getReader()
   if (!reader) throw new Error('Attachment unavailable')

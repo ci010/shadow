@@ -1553,9 +1553,24 @@ specialized adapter consumes all of them.
 
 `Tool` supplies a name, description, JSON parameter schema, execution method,
 and optional read-only/opt-in/remote-workdir metadata. `Tools` owns base
-registration, execution hooks, error conversion, tracing, and large-output
-truncation to a Home-local scratch file. Hook failures are logged rather than
-treated as authorization failures.
+registration, execution hooks, error conversion, and tracing. Hook failures are
+logged rather than treated as authorization failures.
+
+Ordinary tool results (including Child `exec`) and background completion text
+share a 12,000-character preview budget. Oversized results keep their captured
+text in a Project Home `.tmp/` file. The result includes a preview and a `read`
+reference with `flag: "c"` for character paging, including single-line output.
+This explicit artifact read works from local, Child, and LayerFS sessions; it
+does not resolve a path on the selected execution device. The saved text is what
+Shadow captured, not output already discarded by an execution-side limit. A
+spill failure still produces a bounded preview and an explicit unsaved notice.
+
+Before inference, the session applies the same file-backed preview to tool text
+above a 64,000-character ceiling, including old history and results that keep
+native pagination or receipt formatting below this ceiling. The limit counts
+UTF-16 code units, not tokens or request bytes. History and image parts are not
+rewritten. Observations explicitly marked transient are bounded without a spill
+to preserve their no-disk contract.
 
 `SessionTools` filters base tools by agent type and owns a session-only dynamic
 layer. **Dynamic tool schemas are not added to the base definitions sent to

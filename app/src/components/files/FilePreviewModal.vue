@@ -10,7 +10,12 @@
             </UiSelect>
           </label>
           <button v-if="isOtio || modelHasSource || isMarkdown || isMemoryLogs || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
-          <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" :text="t('Reload preview')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Reload preview')" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
+          <HoverInfo v-if="canReloadPreview" :text="t('Reload preview')" v-slot="{ triggerProps }">
+            <button type="button" v-bind="triggerProps" class="file-modal-btn file-reload-btn" :aria-label="t('Reload preview')"
+              :aria-disabled="!active || loading" @click="reloadPreview">
+              <span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" />
+            </button>
+          </HoverInfo>
           <HoverInfo v-if="!inline" :text="fullscreen ? t('Exit fullscreen') : t('Fullscreen')" v-slot="{ triggerProps }">
           <button
             class="file-modal-btn"
@@ -42,7 +47,7 @@
           :source-blob="archiveBlob" :archive="entry.archive" :attachment-url="attachmentUrl" :can-review="canQuote || !!attachmentUrl" :file-editor="inline" />
         <OtioFilePreview v-else-if="isOtio && !sourceView" :key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, remote, path, entry.archive, entry.mtime, attachmentUrl])" :api-base="apiBase" :session-id="sessionId"
           :folder-id="folderId" :session-workspace="sessionWorkspace" :path="path" :mtime="entry.mtime" :active="active"
-          :remote="remote" :source-blob="archiveBlob" :attachment-url="attachmentUrl" :can-review="!entry.archive && (canQuote || !!attachmentUrl)"
+          :remote="remote" :source-blob="archiveBlob" :attachment-url="attachmentUrl" :can-review="!entry.archive && !remote && (inline || canQuote || !!attachmentUrl)"
           @added="!inline && emit('close')" />
         <FileViewerPreview v-else-if="viewerFormat && (!attachmentUrl || loaded)" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace"
           :path="path" :name="entry.name" :active="active" :source-blob="archiveBlob" />
@@ -73,7 +78,7 @@
           <p v-if="kind === 'html' && resources.native" class="file-modal-note">{{ t('HTML source is shown on mobile. Interactive HTML previews and their linked assets require the browser app.') }}</p>
           <p v-if="entry.archive" class="file-modal-note">{{ t('Read-only archive entry. Linked assets are not loaded from the workspace.') }}</p>
           <p v-if="loaded && encodingWarning" class="file-encoding-warning" role="status">{{ encodingWarning }}</p>
-          <div v-if="loading" class="file-modal-note">{{ t('Loading…') }}</div>
+          <div v-if="loading" class="file-modal-note" role="status">{{ t('Loading…') }}</div>
           <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button></div>
           <div v-else-if="binary" class="file-modal-note">{{ t('This file contains binary data. Use Download to save it.') }}</div>
           <div v-else-if="isMemoryLogs && !sourceView" ref="selectionRoot" class="file-memory-logs" role="list" :aria-label="t('Memory logs')">
@@ -170,6 +175,19 @@ const modelHasSource = computed(() => isModel.value && props.entry.ext.toLowerCa
 const isOtio = computed(() => isOtioFile(props.entry.name))
 const sourceView = ref(false)
 const textMode = computed(() => ((!isOtio.value && !isModel.value) || sourceView.value) && !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive || !!props.attachmentUrl))))
+// Refresh read-only content in place. Do not remount specialized viewers,
+// which can own unsaved annotations or editor drafts.
+const canReloadPreview = computed(() => textMode.value || (kind.value === 'html' && !props.entry.archive))
+async function reloadPreview(): Promise<void> {
+  if (!canReloadPreview.value || !props.active || loading.value) return
+  if (!textMode.value) {
+    if (props.remote) void loadText()
+    reloadFrame()
+    return
+  }
+  if (props.entry.archive) releaseArchive()
+  await loadText()
+}
 const rawSource = computed(() => props.attachmentUrl ?? (props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value)))
 const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
@@ -501,6 +519,7 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
 .file-modal-btn:hover {
   border-color: var(--c-primary, #6366f1);
 }
+.file-reload-btn[aria-disabled='true'] { opacity: 0.55; cursor: default; }
 .file-modal-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .file-download-error { margin: 0; padding: 8px 16px; color: var(--c-error); font-size: 13px; overflow-wrap: anywhere; }
 

@@ -29,6 +29,7 @@ import { ReflectionDiary } from '../../cron/reflection-diary.ts'
 import { WorkDispatcher } from '../../cron/work-dispatch.ts'
 import { ProjectDispatchFiles } from '../../cron/work-dispatch-files.ts'
 import { WorkDispatchAgent } from '../../cron/work-dispatch-agent.ts'
+import { WorkDispatchRoundState } from '../../cron/work-dispatch-round-state.ts'
 import { WorkBootstrapTool } from '../../cron/work-bootstrap.ts'
 import { DerivedWorkspaces } from '../../folders/derived-workspace.ts'
 import { RemoteDerivedWorkspaceBackend } from '../../folders/remote-derived-workspace.ts'
@@ -447,6 +448,13 @@ export async function createProjectRuntime(
     if (!directoryAccess(ref) || operation && !DIRECTORY_OPERATIONS.includes(operation)) return { node: 'online' }
     return folderRegistry.lookupWorkdir(ref) ?? mainCluster.workdirLookup(ref, operation)
   }
+  const deviceHomeSupports = (nodeId: string, operation: string): boolean => mainCluster.registry.listWorkdirs(nodeId)
+    .some(workdir => workdir.workdirId === DEVICE_HOME_WORKDIR && workdir.support.operations.includes(operation))
+  const deviceHomeAvailable = (nodeId: string, operation: string): boolean => {
+    if (coordinator) return false
+    const target = mainCluster.workdirLookup({ version: 2, nodeId, workdirId: DEVICE_HOME_WORKDIR }, operation)
+    return target.node === 'online' && !target.incompatible && target.workdir?.online === true && deviceHomeSupports(nodeId, operation)
+  }
   const recordRemoteJob = (jobId: string, pending: boolean) => dependencies.catalog.recordRemoteJob(project.id, jobId, pending)
   const remoteExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, async (request, signal) => {
     if (request.workdirId === undefined || !DIRECTORY_OPERATIONS.includes(request.operation)) return denyAccess()
@@ -456,8 +464,13 @@ export async function createProjectRuntime(
         || sessions.isManagedConversation(request.sessionId) || !DEVICE_HOME_OPERATIONS.includes(request.operation)) return denyAccess()
       sessions.assertFolderAccess(request.sessionId)
       const target = mainCluster.workdirLookup({ version: 2, nodeId: request.nodeId, workdirId: DEVICE_HOME_WORKDIR }, request.operation)
-      if (target.node !== 'online' || target.incompatible || !target.workdir?.online) {
-        throw new ExecutionAdmissionError('device-home-unavailable', 'Child is offline, incompatible, or has not enabled device home access. No Main fallback.')
+      if (target.node !== 'online' || target.incompatible) {
+        throw new ExecutionAdmissionError('device-home-unavailable', 'The selected Child is not connected with a compatible execution protocol. No Main fallback.')
+      }
+      if (!target.workdir?.online || !deviceHomeSupports(request.nodeId, request.operation)) {
+        throw new ExecutionAdmissionError('device-home-unavailable', request.operation === 'filesystem.read'
+          ? 'Direct home reads or searches are unavailable on this Child. Check the Child home opt-in. No Main fallback.'
+          : 'Home-directory shell execution is unavailable on this Child. Check the Child version and connection. No Main fallback.')
       }
       return
     }
@@ -1269,7 +1282,8 @@ export async function createProjectRuntime(
       sessions.assertFolderAccess(context.sessionId)
     },
     inventory: () => sessions.getNodeInventory(),
-    homeAvailable: nodeId => !coordinator && mainCluster.workdirLookup({ version: 2, nodeId, workdirId: DEVICE_HOME_WORKDIR }, 'filesystem.read').workdir?.online === true,
+    homeAvailable: nodeId => deviceHomeAvailable(nodeId, 'filesystem.read'),
+    execAvailable: nodeId => deviceHomeAvailable(nodeId, 'workdir.process.execute-once'),
   })
   vfs.mount('v:devices', 'read-only live device inventory for owner Web turns; connection, protocol and directory-picker support, no filesystem browsing or latency probes', devicesVfs.read, devicesVfs.list)
 
@@ -1580,6 +1594,7 @@ export async function createProjectRuntime(
     }
   }
   const workDispatcher = new WorkDispatcher({ projectId: project.id, store: initiatives, sessions,
+    workerInstructions: () => dispatchFiles.instructions(),
     validateProgram: validateWorkProgram,
     validateTarget: validateWorkTarget,
     capacityPolicy: () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID)?.program,
@@ -1699,7 +1714,7 @@ export async function createProjectRuntime(
     })
   }, sessionId => realtime.invalidateSessions(sessionId))
   const workDispatchAgent = new WorkDispatchAgent(workDispatcher, sessions, cronDispatcher,
-    dispatchFiles, () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID))
+    dispatchFiles, () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID), new WorkDispatchRoundState(workspace))
   tools.register(workDispatchAgent)
   coordinator?.allow(workDispatchAgent)
   workDispatcher.setRunner((job, signal) => workDispatchAgent.run(job, signal))

@@ -70,6 +70,16 @@ the backend starts, within a single 15-second timeout. The app stays gated until
 the session is verified; a longer outage displays an error with a manual retry.
 Pairing submissions and sign-out requests are not automatically replayed.
 
+A ready host does not guarantee that each Project started successfully. If the
+sidebar reports a failed Project, check its authenticated
+`GET /api/projects/<id>/status` response and confirm that startup diagnostics
+include that Project's own `ready` phase before changing registries or resetting
+data. Project folders, conversations, Micro Apps and audio endpoints all return
+503 while their owning Project is unavailable. Legacy version-2 Connection
+documents require the explicit `scripts/migrate-connections.ts` offline
+plan/apply workflow with all owning runtimes stopped; startup does not migrate
+them automatically. Keep its private recovery journal for rollback.
+
 `pnpm start` runs the backend without Electron or a development watcher; an
 optional argument selects another bot config: `pnpm start path-to-bot-config.json`.
 

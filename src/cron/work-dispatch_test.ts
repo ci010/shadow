@@ -502,3 +502,139 @@ test('bootstrap rechecks and reserves exact-device capacity before binding; fail
     assert.equal(f.states.get(id)?.automaticWork?.prepared?.folderId, preparedId)
   } finally { f.store.close() }
 }))
+
+
+test('manual/tracking-only Work stays idle; stopped blocked owners can request review without capacity or reassignment', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const mirror = f.create()
+    f.store.saveWork({ ...mirror, sequence: 2, notes: workNotesSchema.parse({ kind: 'finding', html: 'large source mirror' }) }, 1, 'user', 'mirror')
+    let rounds = 0
+    f.dispatcher.setRunner(async () => { rounds++ })
+    await f.dispatcher.dispatch(job, abort())
+    assert.equal(rounds, 0)
+    assert.equal(f.dispatcher.snapshot(config).records[0].eligible, false)
+    assert.equal('html' in f.dispatcher.snapshot(config).records[0].notes, false)
+    f.states.set('manager', { sessionId: 'manager', projectId: 'a', mode: 'session', segmentIndex: 0 })
+    f.states.set('owner', { sessionId: 'owner', projectId: 'a', mode: 'session', segmentIndex: 0, executionStatus: 'completed' })
+    const blocked = f.create({ manager: 'manager', assignee: 'owner', status: 'blocked', blockedReason: 'Needs route proof' })
+    await f.dispatcher.dispatch(job, abort())
+    assert.equal(rounds, 1)
+    assert.equal(f.dispatcher.reviewTarget(blocked.key, blocked.sequence).recipient, 'manager')
+    assert.equal(f.get(blocked).workflow?.assignee, 'owner')
+    assert.equal(f.counts().creates, 0)
+    f.waiting.set('owner', {})
+    await f.dispatcher.dispatch(job, abort())
+    assert.equal(rounds, 1, 'normal waits must not prompt stopped-owner supervision')
+    await assert.rejects(async () => f.dispatcher.reviewTarget(blocked.key, blocked.sequence), /not eligible/)
+  } finally { f.store.close() }
+}))
+
+test('review target rejects missing/cross-Project coordinators, stale versions and manual or paused ancestors', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const root = f.create(), work = f.create({ manager: 'manager', parentKey: root.key })
+    assert.throws(() => f.dispatcher.reviewTarget(work.key, 1), /coordinator/)
+    f.states.set('manager', { sessionId: 'manager', projectId: 'other', mode: 'session', segmentIndex: 0 })
+    assert.throws(() => f.dispatcher.reviewTarget(work.key, 1), /coordinator/)
+    f.states.get('manager')!.projectId = 'a'
+    assert.equal(f.dispatcher.reviewTarget(work.key, 1).recipient, 'manager')
+    assert.throws(() => f.dispatcher.reviewTarget(work.key, 2), /changed/)
+    f.store.saveWork({ ...root, sequence: 2, paused: true }, 1, 'user', 'pause')
+    assert.throws(() => f.dispatcher.reviewTarget(work.key, 1), /not eligible/)
+    f.store.saveWork({ ...root, sequence: 3, workflow: { ...root.workflow!, automaticDispatch: 'manual' } }, 2, 'human', 'manual')
+    assert.throws(() => f.dispatcher.reviewTarget(work.key, 1), /not eligible/)
+    f.states.set('owner', { sessionId: 'owner', projectId: 'a', mode: 'session', segmentIndex: 0, executionStatus: 'completed' })
+    const blocked = f.create({ manager: 'manager', parentKey: root.key, assignee: 'owner', status: 'blocked', blockedReason: 'Stopped' })
+    assert.throws(() => f.dispatcher.reviewTarget(blocked.key, 1), /not eligible/)
+  } finally { f.store.close() }
+}))
+
+test('first worker and explicit recovery deliveries carry current supplementary requirements without implying authority', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    f.deps.workerInstructions = async () => 'Deliver a draft PR and comment meaningful findings on the original item. Use the shared mutex before live testing.'
+    const work = f.create()
+    await f.dispatcher.dispatch(job, abort())
+    const input = f.delivered[0].input
+    assert.equal(input.kind, 'message')
+    if (input.kind !== 'message') throw new Error('Expected worker assignment')
+    assert.match(input.content, /draft PR and comment/)
+    assert.match(input.content, /not new authority/)
+    assert.equal(f.get(work).automaticExecution?.stage, 'running')
+    f.active.clear()
+    await f.dispatcher.block(work.key, 'Synthetic stopped worker')
+    f.deps.workerInstructions = async () => 'Updated requirement: retain draft status and report remaining verification limits.'
+    await f.dispatcher.resume(work.key, f.get(work).sequence, abort())
+    const resumed = f.delivered.at(-1)!.input
+    assert.equal(resumed.kind, 'message')
+    if (resumed.kind !== 'message') throw new Error('Expected recovery assignment')
+    assert.match(resumed.content, /Updated requirement/)
+    assert.match(resumed.content, /not new authority/)
+  } finally { f.store.close() }
+}))
+
+
+test('tracking-only assigned blocked findings do not wake stopped-owner review without explicit readiness', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    f.states.set('manager', { sessionId: 'manager', projectId: 'a', mode: 'session', segmentIndex: 0 })
+    f.states.set('owner', { sessionId: 'owner', projectId: 'a', mode: 'session', segmentIndex: 0, executionStatus: 'completed' })
+    const work = f.create({ manager: 'manager', assignee: 'owner', status: 'blocked', blockedReason: 'Tracking only' })
+    f.store.saveWork({ ...work, sequence: 2, notes: workNotesSchema.parse({ kind: 'finding' }) }, 1, 'human', 'finding')
+    let rounds = 0
+    f.dispatcher.setRunner(async () => { rounds++ })
+    await f.dispatcher.dispatch(job, abort())
+    assert.equal(rounds, 0)
+    const snapshot = f.dispatcher.snapshot(config).records[0]
+    assert.equal(snapshot.eligible, false)
+    assert.equal(snapshot.needsReview, false)
+    assert.throws(() => f.dispatcher.reviewTarget(work.key, 2), /not eligible/)
+    const finding = f.get(work)
+    f.store.saveWork({ ...finding, sequence: 3, workflow: { ...finding.workflow!, automaticDispatch: 'ready' } }, 2, 'human', 'ready')
+    await f.dispatcher.dispatch(job, abort())
+    assert.equal(rounds, 1)
+  } finally { f.store.close() }
+}))
+
+for (const phase of ['after-claim', 'final-admission'] as const) {
+  for (const ancestor of [false, true]) {
+    test(`readiness changed to manual ${phase} on ${ancestor ? 'ancestor' : 'candidate'} prevents first admission but retains claimed ownership`, async () => withTempWorkspace(async home => {
+      const f = fixture(home)
+      try {
+        const root = ancestor ? f.create() : undefined
+        const work = f.create(root ? { parentKey: root.key } : {})
+        // The root is not itself a dispatch candidate; only its scheduling intent is checked.
+        if (root) f.store.saveWork({ ...root, sequence: 2, workflow: { ...root.workflow!, assignee: 'root-owner' } }, 1, 'human', 'assign')
+        const revoke = () => {
+          const target = f.get(root ?? work)
+          f.store.saveWork({ ...target, sequence: target.sequence + 1, workflow: { ...target.workflow!, automaticDispatch: 'manual' } }, target.sequence, 'human', 'manual')
+        }
+        let gate: Parameters<WorkDispatcherDeps['sessions']['setAutomaticWorkAdmission']>[0] | undefined
+        f.deps.sessions.setAutomaticWorkAdmission = value => { gate = value }
+        const originalDeliver = f.deps.sessions.deliver.bind(f.deps.sessions)
+        f.deps.sessions.deliver = async (id, input) => gate!(id, input, async before => {
+          if (phase === 'final-admission') revoke()
+          before?.()
+          return originalDeliver(id, input)
+        })
+        const changed = f.deps.changed
+        f.deps.changed = async (record, previous) => {
+          await changed(record, previous)
+          if (phase === 'after-claim' && record.key === work.key && record.automaticExecution?.stage === 'claimed') revoke()
+        }
+        const dispatcher = new WorkDispatcher(f.deps)
+        const claimed = await dispatcher.dispatchWork(job, work.key, work.sequence, {}, abort())
+        assert.equal(f.delivered.length, 0)
+        assert.ok(claimed.workflow?.assignee)
+        assert.equal(claimed.workflow.status, 'blocked')
+        assert.equal(claimed.automaticExecution?.stage, 'blocked')
+        assert.match(claimed.workflow.blockedReason!, /readiness changed/)
+        // Explicit human recovery is a separate control, not an automatic first kickoff.
+        await dispatcher.resume(work.key, f.get(work).sequence, abort())
+        assert.equal(f.delivered.length, 1)
+        assert.equal(f.get(work).workflow?.assignee, claimed.workflow.assignee)
+      } finally { f.store.close() }
+    }))
+  }
+}

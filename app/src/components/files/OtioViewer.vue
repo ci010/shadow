@@ -1,29 +1,37 @@
 <template>
   <section class="otio" :aria-label="t('OpenTimelineIO viewer')">
     <div v-if="!review" class="compact-tabs" role="group" :aria-label="t('Review panels')">
-      <button v-for="panel in panels.filter(item => !board || item.id !== 'outline')" :key="panel.id" type="button" :aria-pressed="compact === panel.id" @click="pause(); compact = panel.id">{{ t(board && panel.id === 'monitor' ? 'Storyboard' : panel.label) }}</button>
+      <button v-for="panel in panels.filter(item => inlineOutline || item.id !== 'outline')" :key="panel.id" type="button" :aria-pressed="activePanel === panel.id" @click="pause(); compact = panel.id">{{ t(board && panel.id === 'monitor' ? 'Storyboard' : panel.label) }}</button>
     </div>
-    <div class="bench" :class="{ reviewing: review }" :data-panel="compact">
-      <OtioOutline v-if="!review && !board" class="outline-pane" :model="model" :selected-id="selected.id" @select="select" />
-      <section class="monitor-pane" :class="{ 'storyboard-pane': board && !review }" :aria-label="t(board ? 'Storyboard' : 'Picture monitor')">
-        <header class="panel-bar">
+    <div class="bench" :class="{ reviewing: review, 'with-inline-outline': inlineOutline }" :data-panel="activePanel">
+      <Teleport :to="outlineTarget ?? 'body'" :disabled="!outlineTarget">
+        <OtioOutline v-show="outlineTarget || inlineOutline" :class="{ 'outline-pane': inlineOutline }" :explorer="!!outlineTarget"
+          :model="model" :selected-id="selected.id" @select="select" />
+      </Teleport>
+      <section ref="monitorPane" class="monitor-pane" :class="{ 'storyboard-pane': board && !review }" :aria-label="t(board ? 'Storyboard' : 'Picture monitor')">
+        <header v-if="!board" class="panel-bar">
           <h3 v-if="review?.capture">{{ t('Frozen frame') }}</h3>
           <div v-else class="modes viewer-modes" role="group" :aria-label="t('Picture view')">
-            <button type="button" :aria-pressed="!board" :disabled="locked" @click="showBoard(false)">{{ t('Monitor') }}</button>
-            <button type="button" :aria-pressed="board" :disabled="locked" @click="showBoard(true)">{{ t('Storyboard') }}</button>
+            <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
           </div>
           <span v-if="review?.capture" class="readout">{{ t('Frame {frame}', { frame: format(frame) }) }} · {{ t('{rate} fps', { rate: format(model.rate) }) }}</span>
-          <div v-if="(canSolo || videoTrack) && !review && !board" class="modes" role="group" :aria-label="t('Monitor source')">
+          <div v-if="(canSolo || videoTrack) && !review" class="modes" role="group" :aria-label="t('Monitor source')">
             <button type="button" :aria-pressed="mode === 'timeline'" @click="setMode('timeline')">{{ t('Timeline') }}</button>
             <button v-if="videoTrack" type="button" :aria-pressed="mode === 'track'" @click="setMode('track')">{{ t('Solo video track') }}</button>
             <button v-if="canSolo" type="button" :aria-pressed="mode === 'clip'" @click="setMode('clip')">{{ t('Clip source') }}</button>
           </div>
         </header>
         <OtioStoryboard v-if="boardOpened" v-show="board" class="storyboard-content" :model="model" :source="source" :api-base="apiBase" :active="active && board"
-          :track="videoTrack" :hidden="hiddenVideoTracks" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition" />
+          :track="videoTrack" :hidden="hiddenVideoTracks" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition">
+          <template #mode>
+            <div v-if="board" class="modes viewer-modes" role="group" :aria-label="t('Picture view')">
+              <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
+            </div>
+          </template>
+        </OtioStoryboard>
         <template v-if="!board">
           <ImageAnnotationPreview v-if="review?.capture" class="frame-editor" staged src="" :local-file="review.capture.file" :name="review.capture.file.name"
-            :source-key="review.id" :context-key="review.target" :editable="!!destination && destination.key === review.target" :active="active"
+            :source-key="review.id" :context-key="review.id" :editable="reviewAvailable && !staging" :active="active"
             @image-context="marked" @image-busy="busy" />
           <OtioMonitor v-else ref="monitor" class="picture" :picture-key="picture?.id ?? ''" :url="medium?.url ?? null" :media-kind="medium?.kind ?? null"
             :source-seconds="position" :playing="playing" :muted="embeddedSuppressed || muted" :active="active" :label="picture?.name || t('Picture monitor')" :unavailable="unavailable" @capture-ready="captureReady = $event" />
@@ -52,34 +60,36 @@
           </dl>
           <p v-if="selected.kind === 'Transition'" class="destination cut-notice">{{ t('Transitions are shown as cuts, not rendered blends.') }}</p>
           <template v-if="review">
-            <p v-if="!destination || destination.key !== review.target" class="warning" role="status">{{ t('The original conversation is not available. This review has not been added elsewhere.') }}</p>
-            <p v-else class="destination">{{ t('Draft: {name}', { name: destination.label }) }}</p>
-            <div class="review-actions"><button class="btn btn-sm btn-primary" type="button" :disabled="!canAdd" @click="add">{{ t('Add reference') }}</button>
-              <button class="btn btn-sm" type="button" @click="cancelReview">{{ t('Cancel') }}</button></div>
+            <p v-if="!reviewAvailable" class="warning" role="status">{{ t('The original conversation is not available. This review has not been added elsewhere.') }}</p>
+            <p v-else-if="review.target && destination" class="destination">{{ t('Draft: {name}', { name: destination.label }) }}</p>
+            <p v-else class="destination">{{ t('A new conversation will open when you add this reference.') }}</p>
+            <div class="review-actions"><button class="btn btn-sm btn-primary" type="button" :disabled="!canAdd" @click="add($event)">{{ t('Add reference') }}</button>
+              <button class="btn btn-sm" type="button" :disabled="staging" @click="cancelReview">{{ t('Cancel') }}</button></div>
           </template>
           <template v-else>
-            <p v-if="!destination" class="destination">{{ t('Open an editable conversation to add a review.') }}</p>
-            <details v-if="model.warnings.length" class="limits"><summary>{{ t('Preview limits') }}</summary><ul><li v-for="warning in model.warnings" :key="warning">{{ t(warnings[warning]) }}</li></ul></details>
             <div class="reference-actions" role="group" :aria-label="t('Reference actions')">
-              <button type="button" class="reference-action" :disabled="!destination || locked" @click="begin(false)"><span class="i-lucide-message-square-plus" aria-hidden="true" />{{ t('Reference selection') }}</button>
+              <button type="button" class="reference-action" :disabled="!canReference || locked" @click="begin(false, $event)"><span class="i-lucide-message-square-plus" aria-hidden="true" />{{ t('Reference selection') }}</button>
               <HoverInfo :text="captureHint" v-slot="{ triggerProps }">
-                <button v-bind="triggerProps" type="button" class="mark-action" :disabled="board || !destination || !captureReady || locked || playing" @click="begin(true)"><span class="i-lucide-pencil" aria-hidden="true" />{{ t('Draw on frame') }}</button>
+                <button v-bind="triggerProps" type="button" class="mark-action" :disabled="board || !canReference || !captureReady || locked || playing" @click="begin(true, $event)"><span class="i-lucide-pencil" aria-hidden="true" />{{ t('Draw on frame') }}</button>
               </HoverInfo>
             </div>
+            <p v-if="!canReference && active" class="destination">{{ t('This source cannot add a review to a local conversation.') }}</p>
+            <details v-if="model.warnings.length" class="limits"><summary>{{ t('Preview limits') }}</summary><ul><li v-for="warning in model.warnings" :key="warning">{{ t(warnings[warning]) }}</li></ul></details>
           </template>
         </div>
       </section>
-      <OtioTracks v-if="!review" class="tracks-pane" :model="model" :selected-id="selected.id" :frame="frame" :hidden="hiddenVideoTracks" :muted="mutedAudioTracks" @toggle="toggleTrack" @select="select" @seek="seek" />
+      <OtioTracks v-if="!review" class="tracks-pane" :model="model" :selected-id="selected.id" :frame="frame" :hidden="hiddenVideoTracks" :muted="mutedAudioTracks" :wave-media="active ? mediaFor : undefined" @toggle="toggleTrack" @select="select" @seek="seek" />
     </div>
     <p v-if="error" class="review-error" role="alert">{{ error }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { formatNumber, t } from '../../i18n.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { createOtioAudio, otioAudioPosition, otioAudioTracks } from '../../otio-audio.ts'
+import { OtioOutlineHostKey } from '../../otio-outline-host.ts'
 import { OtioDraftKey } from '../../otio-draft.ts'
 import { otioPictureAt, type OtioModel, type OtioNode, type OtioTime } from '../../otio-model.ts'
 import { lastOtioFrame } from '../../otio-navigation.ts'
@@ -100,6 +110,8 @@ const panels = [{ id: 'monitor', label: 'Picture monitor' }, { id: 'outline', la
 const compact = ref<typeof panels[number]['id']>('monitor')
 const draft = inject(OtioDraftKey, null)
 const destination = computed(() => props.active && props.canReview ? draft?.target(props.apiBase) : null)
+const canStart = computed(() => !!(props.active && props.canReview && draft?.canStart?.(props.apiBase)))
+const canReference = computed(() => !!destination.value || canStart.value)
 const byId = computed(() => new Map(props.model.nodes.map(node => [node.id, node])))
 const selection = ref(props.model.root.id), frame = ref(0), mode = ref<'timeline' | 'clip' | 'track'>('timeline')
 const board = ref(false), boardOpened = ref(false), trackId = ref<string>()
@@ -145,12 +157,19 @@ const rangeLabel = computed(() => t('{start} – {end} s (end exclusive)', { sta
 const monitor = ref<InstanceType<typeof OtioMonitor>>()
 const muted = ref(true)
 const playing = ref(false), captureReady = ref(false), capturing = ref(false), exporting = ref(false), error = ref('')
-const captureHint = computed(() => !destination.value ? t('Open an editable conversation to add a review.')
+const captureHint = computed(() => !canReference.value ? t('This source cannot add a review to a local conversation.')
   : playing.value ? t('Pause playback to mark the displayed frame.') : board.value ? t('Open the Monitor to draw on a frame.') : !captureReady.value ? t('No picture is ready to capture.') : t('Freeze this picture and draw on a copy.'))
-interface Review { id: string; target: string; anchor: OtioAnchor; capture: { file: File; mediaSeconds: number | null } }
+interface Review { id: string; target: string | null; anchor: OtioAnchor; capture: { file: File; mediaSeconds: number | null } }
 const review = shallowRef<Review>(), markedFile = shallowRef<File>()
-const locked = computed(() => !!review.value || capturing.value || !props.active)
-const canAdd = computed(() => !!review.value && review.value.target === destination.value?.key && !exporting.value && !!markedFile.value)
+const staging = ref(false)
+let stageRequest: AbortController | undefined
+const outlineHost = inject(OtioOutlineHostKey, null)
+const outlineTarget = computed(() => props.active ? outlineHost?.target() : undefined)
+const inlineOutline = computed(() => !review.value && !board.value && !outlineTarget.value && !outlineHost?.background())
+const activePanel = computed(() => compact.value === 'outline' && !inlineOutline.value ? 'monitor' : compact.value)
+const locked = computed(() => !!review.value || capturing.value || staging.value || !props.active)
+const reviewAvailable = computed(() => !!review.value && (review.value.target === null ? canStart.value : review.value.target === destination.value?.key))
+const canAdd = computed(() => reviewAvailable.value && !staging.value && !exporting.value && !!markedFile.value)
 let raf = 0, generation = 0
 function pause() { audio.stop(); playing.value = false; cancelAnimationFrame(raf) }
 function setMode(next: typeof mode.value) {
@@ -175,6 +194,14 @@ function select(id: string) {
   if ((frame.value < firstSelected.value || frame.value >= afterSelected.value) && firstSelected.value < afterSelected.value) frame.value = firstSelected.value
   mode.value = canSolo.value ? 'clip' : 'timeline'
   if (compact.value === 'outline') compact.value = 'selection'
+}
+const monitorPane = ref<HTMLElement>()
+const pictureViews = [{ label: 'Monitor', board: false }, { label: 'Storyboard', board: true }] as const
+function switchPictureView(next: boolean) {
+  if (locked.value || board.value === next) return
+  showBoard(next)
+  // The switch moves between the monitor header and the board toolbar.
+  void nextTick(() => monitorPane.value?.querySelector<HTMLElement>('.viewer-modes [aria-pressed="true"]')?.focus({ preventScroll: true }))
 }
 function showBoard(next: boolean) {
   if (locked.value) return
@@ -215,9 +242,9 @@ const transport = computed(() => [
   { key: 'play', icon: playing.value ? 'i-lucide-pause' : 'i-lucide-play', label: playing.value ? t('Pause playback') : t('Play preview'), disabled: !props.model.duration, run: play },
   { key: 'next', icon: 'i-lucide-step-forward', label: t('Next frame'), disabled: frame.value >= lastPlayable.value, run: () => seek(frame.value + 1) },
 ])
-async function begin(withFrame: boolean) {
-  const target = destination.value?.key
-  if (!target || locked.value || (withFrame && (playing.value || !captureReady.value || !monitor.value))) return
+async function begin(withFrame: boolean, event: MouseEvent) {
+  const target = destination.value?.key ?? null
+  if (event.detail > 1 || !canReference.value || locked.value || (withFrame && (board.value || playing.value || !captureReady.value || !monitor.value))) return
   pause(); error.value = ''; markedFile.value = undefined; exporting.value = false
   const anchor = otioReviewAnchor(props.source, props.model, selected.value, frame.value, picture.value, mode.value, medium.value, mode.value === 'track' ? videoTrack.value : undefined)
   if (!withFrame) {
@@ -231,7 +258,11 @@ async function begin(withFrame: boolean) {
   capturing.value = true
   try {
     const capture = await monitor.value!.capture()
-    if (version !== generation || target !== destination.value?.key) return
+    if (version !== generation) return
+    if (!(target === null ? canStart.value : target === destination.value?.key)) {
+      error.value = t('The original conversation is not available. This review has not been added elsewhere.')
+      return
+    }
     const stem = props.source.path.split(/[\\/]/).at(-1)?.replace(/\.otio(?:\.json)?$/i, '') || 'otio'
     const file = new File([capture.file], `${stem}-f${anchor.playhead.relative.value}.png`, { type: 'image/png' })
     review.value = { id, target, anchor, capture: { file, mediaSeconds: capture.mediaSeconds } }
@@ -240,37 +271,50 @@ async function begin(withFrame: boolean) {
   finally { if (version === generation) capturing.value = false }
 }
 function marked(update: ImageContextUpdate) {
-  if (update.sourceKey === review.value?.id && update.contextKey === review.value.target) markedFile.value = update.file ?? undefined
+  if (update.sourceKey === review.value?.id && update.contextKey === review.value.id) markedFile.value = update.file ?? undefined
 }
 function busy(update: ImageContextBusy) {
-  if (update.sourceKey === review.value?.id && update.contextKey === review.value.target) exporting.value = update.busy
+  if (update.sourceKey === review.value?.id && update.contextKey === review.value.id) exporting.value = update.busy
 }
 function cancelReview() {
   generation++; review.value = undefined; markedFile.value = undefined; capturing.value = false; exporting.value = false; error.value = ''
 }
-function add() {
+function add(event: MouseEvent) {
   const r = review.value
-  if (!r || !canAdd.value || !markedFile.value) return
+  if (event.detail > 1 || !r || !canAdd.value || !markedFile.value) return
   const name = r.anchor.monitor.clip?.name || r.anchor.monitor.clip?.pointer || t('Picture monitor')
   const label = t('OTIO marked picture: {name} · Frame {frame}', { name, frame: r.anchor.playhead.relative.value })
   stage(r.target, label, otioReviewText(r.anchor, { presentedMediaSeconds: r.capture.mediaSeconds }), markedFile.value)
 }
-function stage(target: string, label: string, text: string, file?: File) {
-  if (draft?.add(props.apiBase, target, { label, text, file })) { cancelReview(); emit('added') }
-  else error.value = t('This review could not be added. Check the target conversation and try again.')
+async function stage(target: string | null, label: string, text: string, file?: File) {
+  if (staging.value || !draft) return
+  const request = stageRequest = new AbortController()
+  staging.value = true
+  error.value = ''
+  try {
+    const item = { label, text, file }
+    const added = await (target === null ? draft.start?.(props.apiBase, item, request.signal) : draft.add(props.apiBase, target, item))
+    if (added) { cancelReview(); emit('added'); return }
+  } catch {
+    // Leave the selection/marked copy intact on a failed workspace read or staging error.
+  } finally { if (stageRequest === request) { stageRequest = undefined; staging.value = false } }
+  if (!request.signal.aborted) error.value = t('This review could not be added. Check that the local workspace is available and try again.')
 }
-watch(() => props.active, active => { if (!active) { pause(); ++generation; capturing.value = false } })
+watch(() => props.active, active => {
+  if (!active) { pause(); ++generation; capturing.value = false; stageRequest?.abort() }
+}, { flush: 'sync' })
 function visibility() { if (document.hidden) pause() }
 onMounted(() => document.addEventListener('visibilitychange', visibility))
-onBeforeUnmount(() => { pause(); generation++; document.removeEventListener('visibilitychange', visibility) })
+onBeforeUnmount(() => { pause(); generation++; stageRequest?.abort(); document.removeEventListener('visibilitychange', visibility) })
 </script>
 
 <style scoped>
 .otio { container: otio / inline-size; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; color: var(--c-text); font-size: 13px; }
-.bench { display: grid; flex: 1 0 0; min-height: 330px; grid-template-columns: minmax(150px, 20%) minmax(0, 1fr) minmax(176px, 22%); grid-template-rows: minmax(0, 1fr) minmax(118px, 30%); grid-template-areas: 'outline monitor selection' 'tracks tracks tracks'; }
-.bench > .storyboard-pane { grid-area: outline-start / outline-start / monitor-end / monitor-end; }
+.bench { display: grid; flex: 1 0 0; min-height: 330px; grid-template-columns: minmax(0, 1fr) minmax(176px, 22%); grid-template-rows: minmax(0, 1fr) minmax(118px, 30%); grid-template-areas: 'monitor selection' 'tracks tracks'; }
+.with-inline-outline { grid-template-columns: minmax(150px, 20%) minmax(0, 1fr) minmax(176px, 22%); grid-template-areas: 'outline monitor selection' 'tracks tracks tracks'; }
 .storyboard-content { flex: 1; }
 .viewer-modes { margin-inline-end: auto; }
+.storyboard-pane .viewer-modes button { min-height: 32px; padding-inline: 10px; }
 .otio .viewer-modes button[aria-pressed='true'] { background: var(--c-selection-bg); color: var(--c-text); }
 .outline-pane { grid-area: outline; border-right: 1px solid var(--c-border); }
 .monitor-pane { grid-area: monitor; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
@@ -289,8 +333,13 @@ onBeforeUnmount(() => { pause(); generation++; document.removeEventListener('vis
 .transport { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 3px 8px; border-top: 1px solid var(--c-border); }
 .transport-buttons button, .reference-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; }
 .transport button span, .reference-actions button span { width: 16px; height: 16px; }
-.reference-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 10px; }
-.reference-actions button { gap: 6px; min-width: 0; max-width: 100%; padding-inline: 8px; text-align: start; }
+.reference-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 14px; }
+.otio .reference-actions button { width: 100%; min-width: 0; min-height: 40px; justify-content: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid; text-align: start; font-weight: 600; line-height: 1.35; }
+.reference-actions button.reference-action { background: var(--c-primary-bg); color: var(--c-text-on-primary); border-color: var(--c-primary-bg); }
+.reference-actions button.reference-action:hover:not(:disabled) { color: var(--c-text-on-primary); background: var(--c-primary-bg-hover); border-color: var(--c-primary-bg-hover); }
+.reference-actions button.mark-action { background: var(--c-selection-bg); color: var(--c-primary); border-color: var(--c-selection-border); }
+.reference-actions button.mark-action:hover:not(:disabled) { color: var(--c-primary); border-color: var(--c-primary); }
+.reference-actions button:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; }
 .reference-actions button span { flex: 0 0 16px; }
 .readout, .numeric, .pointer, .schema, .rate { font-family: var(--font-mono, 'IBM Plex Mono', ui-monospace, monospace); font-variant-numeric: tabular-nums; }
 .rate, .picture-caption, .schema, .destination, .limits { color: var(--c-text-muted); font-size: 12px; }
@@ -315,7 +364,7 @@ onBeforeUnmount(() => { pause(); generation++; document.removeEventListener('vis
 @container otio (max-width: 740px) {
   .compact-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--c-border); }
   .compact-tabs button { padding: 4px 12px; min-height: 38px; }
-  .bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'panel' 'tracks'; grid-template-rows: minmax(160px, 1fr) minmax(116px, 30%); }
+  .bench, .with-inline-outline { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'panel' 'tracks'; grid-template-rows: minmax(160px, 1fr) minmax(116px, 30%); }
   .bench:not(.reviewing) > :is(.outline-pane, .monitor-pane, .inspector) { display: none; grid-area: panel; border-inline: 0; }
   .bench:not(.reviewing)[data-panel='outline'] > .outline-pane, .bench:not(.reviewing)[data-panel='monitor'] > .monitor-pane { display: flex; }
   .bench:not(.reviewing)[data-panel='selection'] > .inspector { display: block; }

@@ -47,6 +47,8 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
   await git(source, ['init', '-b', 'main'], signal)
   await git(source, ['config', 'user.name', 'Synthetic fixture'], signal)
   await git(source, ['config', 'user.email', 'fixture@example.invalid'], signal)
+  // Fixture content comparisons must not depend on the host's global checkout policy.
+  await git(source, ['config', 'core.autocrlf', 'false'], signal)
   await writeFile(join(source, 'tracked.txt'), 'committed source\n')
   await git(source, ['add', '.'], signal)
   // This commit belongs only to the disposable source fixture, not this repository.

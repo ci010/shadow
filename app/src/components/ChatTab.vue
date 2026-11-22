@@ -632,7 +632,7 @@ import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
 import { gltfCaptureChatHeaders } from '../gltf-capture-bridge.ts'
 import { composeGltfReferenceMessage, createGltfReferenceDraftBridge, GltfReferenceDraftKey, gltfReferenceChips, prepareGltfDraftCapture, registerGltfReferenceDraft, useGltfReferenceDraft } from '../gltf-reference.ts'
-import { composeOtioReferenceMessage, createOtioDraftBridge, OtioDraftKey, registerOtioDraft, useOtioReferenceDraft } from '../otio-draft.ts'
+import { composeOtioReferenceMessage, createOtioDraftBridge, OtioDraftKey, registerOtioDraft, useOtioReferenceDraft, type OtioDraftReference } from '../otio-draft.ts'
 import { createUuid } from '../uuid.ts'
 import { automationChatLocation } from '../automations.ts'
 import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
@@ -747,6 +747,7 @@ const props = withDefaults(defineProps<{
   projectId?: string
   projectName?: string
   managed?: boolean
+  takeOtioReference?: () => OtioDraftReference | undefined
   initialFolder?: FolderRecord
   openRemote?: boolean
   inspection?: boolean
@@ -897,7 +898,10 @@ const streamTimestamp = ref<string>()
 const streamResponseContext = shallowRef<ResponseContext>()
 const streamMedia = ref<string[]>([])
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
-const composerKey = computed(() => composerDraftKey(props.apiBase, props.projectId ?? '', activeSessionId.value))
+// A review-created draft must not load or overwrite another scratch composer's text.
+const scratchComposerKey = computed(() => composerDraftKey(props.apiBase, props.projectId ?? '', props.takeOtioReference ? `draft:${editorOwner}` : ''))
+const composerKey = computed(() => activeSessionId.value
+  ? composerDraftKey(props.apiBase, props.projectId ?? '', activeSessionId.value) : scratchComposerKey.value)
 const composerDraft = useComposerDraft(composerKey, () => window.localStorage)
 const referenceDraft = useInputReferenceDraft(composerKey)
 const inputReferences = referenceDraft.items
@@ -906,6 +910,8 @@ const otioReferences = otioReferenceDraft.items
 const gltfReferenceDraft = useGltfReferenceDraft(composerKey)
 const gltfReferences = gltfReferenceDraft.items
 const gltfChips = computed(() => gltfReferenceChips(gltfReferences.value))
+const initialOtioReference = props.takeOtioReference?.()
+if (initialOtioReference) otioReferenceDraft.append(initialOtioReference)
 const workflowReferenceHub = inject(WorkflowInputReferencesKey, undefined)
 // Dynamic selection is never stored in the per-conversation attachment draft.
 // Resolving against the current editor lease prevents stale targets and child injection.
@@ -1992,8 +1998,8 @@ async function chooseRemoteExecution() {
 
 function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePicker = false): void {
   resetConversation()
-  otioReferenceDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', ''))
-  gltfReferenceDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', ''))
+  otioReferenceDraft.remove(scratchComposerKey.value)
+  gltfReferenceDraft.remove(scratchComposerKey.value)
   draftFolder.value = folder
   draft.value = createFolderChatDraft(foldersClient, folder)
   activeSessionId.value = ''
@@ -2333,7 +2339,7 @@ const otioDraft = createOtioDraftBridge(apiBase => {
     || !canQuoteSelection.value || loadingHistory.value
     || (sessionStage.value === 'waiting' && activeAsk.value?.sessionId === activeSessionId.value)
     || answeringQuestion.value || awaitingCall.value || composerComposing.value || props.inspection
-    || (activeSessionId.value && !activeSession.value)
+    || remoteConversation.value || (activeSessionId.value && !activeSession.value)
     || (editorGroups && !editorGroups.side(`${editorOwner}:`))) return null
   return {
     key: otioDraftKey.value,
@@ -2350,8 +2356,8 @@ const otioDraft = createOtioDraftBridge(apiBase => {
 })
 provide(OtioDraftKey, otioDraft)
 if (editorGroups && editorOwner) {
-  const unregister = registerOtioDraft(editorGroups, `${editorOwner}:`, sessionId =>
-    sessionId === activeSessionId.value ? otioDraft : undefined)
+  const unregister = registerOtioDraft(editorGroups, `${editorOwner}:`, (sessionId, source) =>
+    sessionId === activeSessionId.value && (!source || !sessionId || currentWorkdir.value?.kind === 'local') ? otioDraft : undefined)
   onUnmounted(unregister)
 }
 const gltfDraftKey = ref(createUuid())
