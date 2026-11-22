@@ -12,7 +12,7 @@ pnpm exec node --import tsx scripts/three-viewer-check/run.mjs capture \
 
 `--position` is the camera's world-space location and `--target` is the point it looks at. Supply both as comma-separated decimal triples (negative coordinates and scientific notation are accepted). Coordinates must be finite, have magnitude at most `1e15`, and the two points must differ. Relative paths resolve from your current directory. The output must be a new `.png` in an existing directory; the command never overwrites an existing file.
 
-This runs the real Playground snapshot/build/ThreeViewer pipeline in a hidden Electron window. No running Shadow UI or shader count is needed. It captures one frame, including for static scenes, and prints JSON with the snapshot `version`, actual `camera` position/target, PNG byte count, and absolute `screenshot` path. Repeat with another camera and a different output filename to compare viewpoints; the version remains the same if the scene inputs have not changed.
+This runs the real Playground snapshot/build/ThreeViewer pipeline in a hidden Electron window. No running Shadow UI or shader count is needed. It captures one frame, including for static scenes, and prints JSON with the rendered `version` (the same source + built-scene fingerprint used by the app), actual `camera` position/target, PNG byte count, and absolute `screenshot` path. Repeat with another camera and a different output filename to compare viewpoints; matching versions identify the same build, not merely the same source files.
 
 ## Marker regression check
 
