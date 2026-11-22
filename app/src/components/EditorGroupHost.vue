@@ -14,7 +14,7 @@
             </div>
             <span v-if="dragging && !state[side].length" class="editor-drop-label">{{ t(side === 'left' ? 'Move to main area' : 'Move to right') }}</span>
           </div>
-          <ProjectEditorTabs v-if="active && side === (state.right.length ? 'right' : 'left') && otherProjectTabs?.length" class="other-project-tabs" :groups="otherProjectTabs" :has-adjacent-project="hasLocalTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
+          <ProjectEditorTabs v-if="active && side === 'left' && otherProjectTabs?.length" class="other-project-tabs" :groups="otherProjectTabs" :has-adjacent-project="hasLocalTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
         </div>
       </div>
     </header>
@@ -193,7 +193,7 @@ function shortcut(event: KeyboardEvent) {
 .editor-tabs::-webkit-scrollbar { height: 3px; }
 .editor-tabs::-webkit-scrollbar-thumb { background: var(--c-scrollbar-thumb); border-radius: 0; }
 .editor-tabs::-webkit-scrollbar-thumb:hover { background: var(--c-scrollbar-thumb-hover); }
-.editor-header-group.empty-group { flex: 0 0 120px !important; }
+.editor-header-group.empty-group:not(:has(.other-project-tabs)) { flex: 0 0 120px !important; }
 .editor-drop-label { align-self: center; padding: 0 12px; color: var(--c-text-secondary); font-size: 12px; pointer-events: none; }
 .drag-target .editor-tabs { outline: 1px dashed var(--c-border-hover); outline-offset: -2px; min-width: 90px; }
 .drag-over .editor-tabs { background: var(--c-selection-bg); outline: 2px solid var(--c-primary); outline-offset: -2px; }
