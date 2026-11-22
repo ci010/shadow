@@ -103,10 +103,14 @@ export function watchPlayground(callbacks: {
   return { rebuild: () => { void check(true) }, dispose: () => { disposed = true; clearTimeout(poll); reader?.abort(); invalidate() } }
 }
 
-export async function exportSnapshot(snapshot: FileSnapshot, signal: AbortSignal): Promise<ArrayBuffer> {
+export async function buildPreviewSnapshot(snapshot: FileSnapshot, signal: AbortSignal) {
   signal.throwIfAborted()
   const { buildPlayground } = await import('@shadow/three-playground')
   signal.throwIfAborted()
-  const { glb } = await buildPlayground({ files: snapshot.files, assets: snapshot.assets }, { signal, timeoutMs: 10_000 })
-  return glb
+  return buildPlayground({ files: snapshot.files, assets: snapshot.assets }, { signal, timeoutMs: 10_000 })
+}
+
+/** Export just the portable GLB. Preview consumers should use buildPreviewSnapshot. */
+export async function exportSnapshot(snapshot: FileSnapshot, signal: AbortSignal): Promise<ArrayBuffer> {
+  return (await buildPreviewSnapshot(snapshot, signal)).glb
 }

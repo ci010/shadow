@@ -1,3 +1,4 @@
+import { MAX_PREVIEW_LIGHTS, snapshotPreviewLights } from '../three-viewer/src/preview-lights.ts';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
@@ -27,7 +28,7 @@ function worldMatrix(node, root, fail) {
 function prepareLight(node, root, location) {
   const fail = message => { throw new Error(`${location}: ${message}`); };
   const type = node instanceof THREE.PointLight ? 'point' : node instanceof THREE.SpotLight ? 'spot' :
-    node instanceof THREE.DirectionalLight ? 'directional' : fail('unsupported light; use PointLight, SpotLight or DirectionalLight');
+    node instanceof THREE.DirectionalLight ? 'directional' : fail('unsupported light; use PointLight, SpotLight, DirectionalLight, HemisphereLight or AmbientLight');
   const color = [node.color?.r, node.color?.g, node.color?.b];
   if (!color.every(v => inRange(v, 0, 1)) || !inRange(node.intensity, 0)) fail('invalid light color or intensity');
   const definition = { type, color, intensity: node.intensity };
@@ -68,6 +69,23 @@ function prepareLight(node, root, location) {
   return { node, definition, emission };
 }
 
+const rgb = color => [color?.r, color?.g, color?.b];
+function preparePreviewLight(node, root, location) {
+  const fail = message => { throw new Error(`${location}: ${message}`); };
+  const base = { color: rgb(node.color), intensity: node.intensity };
+  const light = { ...base, type: 'ambient' };
+  if (node instanceof THREE.HemisphereLight) {
+    const { x, y, z } = new THREE.Vector3().setFromMatrixPosition(worldMatrix(node, root, fail));
+    const length = Math.hypot(x, y, z);
+    if (!Number.isFinite(length) || length === 0) fail('hemisphere light needs a finite nonzero world direction');
+    light.type = 'hemisphere';
+    light.direction = [x / length, y / length, z / length];
+    light.groundColor = rgb(node.groundColor);
+  }
+  try { return snapshotPreviewLights([light])[0]; }
+  catch (error) { fail(error.message); }
+}
+
 export async function exportRoot(root) {
   const scene = new THREE.Scene();
   const seen = new Set([root]);
@@ -77,6 +95,7 @@ export async function exportRoot(root) {
   const nodes = [...root.children].reverse().map((node, i, list) => [node, String(list.length - 1 - i), 1, root]);
   let count = 0;
   const lights = [];
+  const previewLights = [];
   let extraNodes = 0;
   while (nodes.length) {
     const [node, path, depth, parent] = nodes.pop();
@@ -87,7 +106,12 @@ export async function exportRoot(root) {
     seen.add(node);
     const location = `root/${path}${node.name ? ` (${JSON.stringify(node.name.slice(0, 120))})` : ''}`;
     if (node.isCamera || node instanceof THREE.Camera) throw new Error(`${location}: cameras are not model output; remove this node`);
-    if (node.isLight || node instanceof THREE.Light) {
+    if (node instanceof THREE.HemisphereLight || node instanceof THREE.AmbientLight) {
+      if (previewLights.length >= MAX_PREVIEW_LIGHTS) throw new Error(`${location}: preview light limit exceeded (16)`);
+      previewLights.push(preparePreviewLight(node, root, location));
+      // Preserve the plain transform node (and any children), not the light.
+      node.isLight = false;
+    } else if (node.isLight || node instanceof THREE.Light) {
       if (lights.length >= MAX_LIGHTS) throw new Error(`${location}: punctual light limit exceeded (16)`);
       const light = prepareLight(node, root, location);
       lights.push(light);
@@ -166,5 +190,6 @@ export async function exportRoot(root) {
     child.matrixAutoUpdate = false;
     scene.add(child);
   }
-  return exporter.parseAsync(scene, { binary: true, onlyVisible: false });
+  const glb = await exporter.parseAsync(scene, { binary: true, onlyVisible: false });
+  return { glb, previewLights };
 }

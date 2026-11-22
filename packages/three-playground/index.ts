@@ -1,3 +1,4 @@
+import { snapshotPreviewLights, type PreviewLight } from '../three-viewer/src/preview-lights.ts';
 import { brokerDocument } from './broker.ts';
 import workerSource from './generated/worker-source.js';
 import { validateGlb, MAX_GLB_BYTES } from './validate.ts';
@@ -9,7 +10,7 @@ export interface PlaygroundSnapshot {
   readonly assets?: Readonly<Record<string, ArrayBuffer>>;
 }
 export interface PlaygroundOptions { readonly signal?: AbortSignal; readonly seed?: number; readonly timeoutMs?: number }
-export interface PlaygroundResult { readonly glb: ArrayBuffer; readonly objectCount: number }
+export interface PlaygroundResult { readonly glb: ArrayBuffer; readonly objectCount: number; readonly previewLights: readonly PreviewLight[] }
 
 const ENTRY = 'main.mjs';
 const MiB = 1024 * 1024;
@@ -93,8 +94,11 @@ export async function buildPlayground(snapshot: PlaygroundSnapshot, options: Pla
         }
         if (glb.byteLength > MAX_GLB_BYTES) throw new PlaygroundError('limit', 'GLB exceeds 16 MiB');
         const objectCount = validateGlb(glb);
+        let previewLights: readonly PreviewLight[];
+        try { previewLights = snapshotPreviewLights(data[2]); }
+        catch (error) { throw new PlaygroundError('validation', (error as Error).message); }
         if (expired()) throw deadline();
-        resolve({ glb, objectCount });
+        resolve({ glb, objectCount, previewLights });
       } catch (error) { reject(error); }
     };
     frame.setAttribute('sandbox', 'allow-scripts');
