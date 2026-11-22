@@ -27,6 +27,16 @@ test('rejects unsolicited URIs, decoder extensions, oversized accessors and malf
   assert.throws(() => read({ ...json, accessors: [{ ...json.accessors[0], count: 30000 }] }), /accessor range/);
   assert.throws(() => read({ ...json, nodes: [{ ...json.nodes[0], children: [0] }, json.nodes[1]] }), /root|cyclic/);
 });
+test('identifies malformed and oversized glTF tables by path', () => {
+  const { json, data } = fixture();
+  const read = (input: unknown) => prepare({ version: 'a', bytes: encode(input), resources: new Map([['mesh.bin', data]]) });
+  assert.throws(() => read({ ...json, buffers: {} }), /buffers: expected an array \(limit 128 entries\)/);
+  assert.throws(() => read({ ...json, scenes: Array(17).fill({}) }), /scenes: 17 entries exceeds limit 16/);
+  for (const invalid of [null, 1, 'primitive', []]) {
+    assert.throws(() => read({ ...json, meshes: [...json.meshes, { primitives: [{}, invalid] }] }),
+      /meshes\[1\]\.primitives\[1\]: expected an object \(2 entries, limit 1024\)/);
+  }
+});
 test('rejects oversized or animated PNG before decode', () => {
   const { json, data } = fixture();
   const png = new Uint8Array(45);
@@ -60,7 +70,8 @@ test('validates punctual definitions and the active instance budget independentl
   assert.deepEqual(prepareLights(max).lights.get(0), {
     type: 'spot', color: [1, 1, 1], intensity: 1, range: 0, inner: 0, outer: Math.PI / 4,
   });
-  assert.throws(() => prepareLights(lightDoc(Array(17).fill({ type: 'point' }))), /table/);
+  assert.throws(() => prepareLights(lightDoc(Array(17).fill({ type: 'point' }))),
+    /extensions\.KHR_lights_punctual\.lights: 17 entries exceeds limit 16/);
   const many = lightDoc(undefined, 17);
   assert.throws(() => prepareLights(many), /instance budget/);
   assert.equal(prepareLights({ ...many, scene: 0 }).lights.size, 1);
