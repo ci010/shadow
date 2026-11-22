@@ -51,6 +51,16 @@ test('native middle clicks close only their closable tab across split and standa
       assert.deepEqual(await run('Array.from(document.querySelectorAll("#'+header+' .editor-project-marker"),e=>[e.textContent,getComputedStyle(e).borderRadius])'),[['Alpha','0px'],['Beta','0px']]);
     }
     assert.deepEqual(await run('(()=>{const nav=document.querySelector("#dashboard .project-editor-tabs");nav.style.width="100px";const marker=nav.querySelector(".editor-project-marker"),tab=nav.querySelector(".project-editor-tab");const before=marker.getBoundingClientRect().left, tabBefore=tab.getBoundingClientRect().left;nav.scrollLeft=20;const result=[nav.scrollLeft,marker.getBoundingClientRect().left-before,tab.getBoundingClientRect().left-tabBefore];nav.scrollLeft=0;nav.style.width="";return result})()'),[20,0,-20],'the project name stays pinned while its tabs scroll');
+    // Start unsplit, then use the real tab menu to create the right split.
+    await run('window.groups.move("R1","left");window.groups.move("R2","left");window.betaStrip=document.querySelector("#groups .other-project-tabs")');
+    const betaStaysLeft = 'window.betaStrip?.closest("[data-editor-header-group]")?.dataset.editorHeaderGroup==="left"&&window.betaStrip.isConnected';
+    assert.equal(await run(betaStaysLeft),true);
+    await run('[...document.querySelectorAll("#groups [role=tab]")].find(tab=>tab.textContent.trim()==="R1").dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true}))');
+    await run('document.querySelector(".editor-menu [role=menuitem]").click()');
+    await wait('window.groups.side("R1")==="right"');
+    assert.deepEqual(await run('Array.from(window.groups.state("p").right)'),['R1']);
+    assert.equal(await run(betaStaysLeft),true,'splitting a local tab leaves the same other-Project strip on the left');
+    await run('window.groups.move("R2","right")');
     await run('window.groups.close("B1")');await wait('!document.querySelector(".editor-project-marker")');
     await run('window.groups.activate("L1")');
     const tab=id=>'[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.textContent.trim()==='+JSON.stringify(id)+')';
