@@ -33,7 +33,8 @@ export function captureVector(value: unknown): value is GltfVector {
 export function parseCaptureView(value: unknown): GltfCaptureView | undefined {
   const view = captureRecord(value)
   if (!view) return
-  const { mode, position, target } = view
+  const { position, target } = view
+  const mode = view.mode === undefined ? (position === undefined && target === undefined ? 'current' : 'custom') : view.mode
   if (mode === 'custom' && captureVector(position) && captureVector(target) && position.some((n, i) => n !== target[i])) return { mode, position, target }
   if ((mode === 'current' || mode === 'front' || mode === 'back' || mode === 'top') && position === undefined && target === undefined) return { mode }
 }
