@@ -100,7 +100,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
               return json({request:fixture.question});
             }
             if (url.pathname.endsWith('/upload')) {
-              const file=init.body.get('file'); fixture.uploads.push(file.name);
+              const file=init.body.get('file'); fixture.uploads.push(file.name); fixture.uploadedText=await file.text();
               return json({path:'C:\\\\fixture\\\\uploads\\\\' + file.name});
             }
             if (url.pathname.endsWith('/send')) {

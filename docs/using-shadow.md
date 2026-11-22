@@ -800,8 +800,13 @@ are labeled incomplete, as are calls whose provider did not report tokens.
 The message box accepts pasted files as attachments, not just images. In the
 Electron desktop app on Windows, copy one or more files in File Explorer and
 paste into the message box. They appear in the attachment tray and are uploaded
-only when you send. Plain text and text paths remain text; folders are not
-attached. Native clipboard reads are limited to 100 files and 100 MiB in total.
+only when you send. Folders are not attached. A text-only paste of at least
+4,000 characters (excluding leading and trailing whitespace) becomes a `.txt`
+attachment when the conversation supports non-image uploads. The full paste is
+saved unchanged, and any existing draft text stays in the message box. The
+model initially receives the file reference, not the file contents. Shorter
+pastes and text pasted into a remote conversation stay inline. Native clipboard
+reads are limited to 100 files and 100 MiB in total.
 Other desktop platforms support native file-URL clipboard lists when supplied
 by their file manager; browser support depends on the files exposed by the paste
 event. Local attachments are still unavailable for remote working directories.

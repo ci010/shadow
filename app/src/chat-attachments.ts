@@ -90,6 +90,14 @@ export function namePastedChatImages(files: readonly File[], createId: () => str
     : file)
 }
 
+const PASTED_TEXT_MIN_LENGTH = 4_000
+
+/** Keep short paste inline and preserve the original text verbatim in the file. */
+export function longPastedTextFile(text: string | undefined, createId: () => string = createUuid): File | undefined {
+  if (!text || text.trim().length < PASTED_TEXT_MIN_LENGTH) return
+  return new File([text], `${t('Pasted text')} ${createId().slice(0, 8)}.txt`, { type: 'text/plain' })
+}
+
 /** Future sends remain raw text; media admission and ordering are unchanged. */
 export function composeImageReferenceMessage(content: string, attachments: readonly UploadedChatAttachment[]): string {
   const block = serializeAttachmentReferences(attachments.map(attachment => ({
