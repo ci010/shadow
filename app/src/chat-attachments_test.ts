@@ -5,6 +5,7 @@ import {
   imageAttachmentReference,
   insertAttachmentReference,
   namePastedChatImages,
+  longPastedTextFile,
   appendChatAttachments,
   canSendChatMessage,
   clipboardChatFiles,
@@ -17,6 +18,16 @@ import {
   replaceDraftImageAttachment,
   uploadChatAttachments,
 } from './chat-attachments.ts'
+
+test('long text paste becomes a uniquely named plain-text file without altering the contents', async () => {
+  assert.equal(longPastedTextFile(undefined), undefined)
+  assert.equal(longPastedTextFile(` ${'文'.repeat(3999)}\n`), undefined)
+  const text = ` \r\n${'文'.repeat(4000)}\n`
+  const file = longPastedTextFile(text, () => '12345678-fixture')!
+  assert.match(file.name, /12345678\.txt$/)
+  assert.equal(file.type, 'text/plain')
+  assert.equal(await file.text(), text)
+})
 
 test('image detection recognizes supported image files by mime or extension', () => {
   assert.equal(isImageAttachment(new File(['a'], 'photo.png', { type: 'application/octet-stream' })), true)

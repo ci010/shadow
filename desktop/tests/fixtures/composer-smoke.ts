@@ -103,13 +103,30 @@ async function main() {
       console.log('COMPOSER_SMOKE_OK')
       return
     }
+    const pastedText = 'long clipboard text\n'.repeat(250)
+    const paste = (text: string) => execute(`{
+      const clipboardData=new DataTransfer(); clipboardData.setData('text/plain',${JSON.stringify(text)});
+      document.querySelector('.composer-input .reference-composer').dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));
+    }`)
+    await paste('Short paste stays inline')
+    await wait(`document.querySelector('.reference-composer').textContent === 'Short paste stays inline'`)
     await type('Queue this exact text')
+    await paste(pastedText)
+    await wait(`!!document.querySelector('.composer-attachments .attachment-chip')`)
+    assert.equal(await execute(`document.querySelector('.reference-composer').textContent`), 'Queue this exact text')
+    assert.equal(await execute(`window.__composerFixture.uploads.length`), 0, 'pasting does not upload before send')
     await execute(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Control',ctrlKey:true,bubbles:true}))`)
     await wait(`!!document.querySelector('button[aria-label="Add to queue"] .i-lucide-list-plus')`)
     assert.match(await execute(`document.querySelector('.composer-hint').textContent`), /Ctrl\+Enter.*queue/)
     await key('ctrlKey:true')
     await wait(`window.__composerFixture.sent.length === 1`)
     assert.equal(await execute(`window.__composerFixture.sent[0].delivery`), 'queue')
+    const sent = await execute(`window.__composerFixture.sent[0]`) as { content: string; media: string[] }
+    assert.match(sent.content, /^Queue this exact text\n\n<attachment-references/)
+    assert.ok(!sent.content.includes('long clipboard text'), 'the message contains the reference, not the pasted body')
+    assert.equal(sent.media.length, 1)
+    assert.match(sent.media[0]!, /\.txt$/)
+    assert.equal(await execute(`window.__composerFixture.uploadedText`), pastedText)
     await execute(`document.dispatchEvent(new KeyboardEvent('keyup',{key:'Control',bubbles:true}));window.__composerFixture.reset()`)
     await type('Click to queue')
     await execute(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Control',ctrlKey:true,bubbles:true}))`)

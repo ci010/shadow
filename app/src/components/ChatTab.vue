@@ -656,7 +656,7 @@ import { createExecutionLocationDraft, type ExecutionLocation } from '../executi
 import AutomationPayload from './AutomationPayload.vue'
 import { dedicatedRunTitle, isDedicatedRun } from '../conversation-title.ts'
 import type { SessionDetails } from '../session-details.ts'
-import { imageAttachmentReference, insertAttachmentReference, namePastedChatImages, assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { imageAttachmentReference, insertAttachmentReference, namePastedChatImages, longPastedTextFile, assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -2194,6 +2194,15 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
     catch (error) {
       if (!native || text) throw error
       files = []
+    }
+    if (!files.length && canAttachFiles.value && !remoteConversation.value) {
+      const pastedText = longPastedTextFile(text)
+      if (pastedText) {
+        pendingAttachments.value = appendChatAttachments(pendingAttachments.value, [pastedText])
+        event.preventDefault()
+        composerError.value = ''
+        return
+      }
     }
     if (!files.length && (text || !native || pastingFiles.value)) return
     // Keep native text paste/undo when the clipboard also contains plain text.
