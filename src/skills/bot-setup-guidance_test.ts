@@ -24,7 +24,7 @@ test('Bot setup guidance distinguishes verified personal entry points and restri
     /does not execute the tools or authorize unrelated side effects/,
     /Agent allowed\/blocked tools, module ceilings/,
     /Selecting instructions can change behavior even when a tool is\s+not allowed/,
-    /readFolders.*named grants do\s+not sandbox/s,
+    /readResources.*named grants do\s+not sandbox/s,
     /restart persistence, revoked owner/,
     /workflows below configure service Bots, not personal Project entry points/,
   ]) assert.match(skill.body, rule)

@@ -142,7 +142,7 @@ export class DirectoryBotService implements ConversationPolicies {
       context.signal.throwIfAborted()
       this.assertCurrent(policy, sessionId)
     }
-    const ids = resourceFolders(policy.binding.readResources, policy.binding.readFolders)
+    const ids = resourceFolders(policy.binding.readResources)
     for (const tool of serviceReadTools({
       projectId: this.options.projectId, views: policy.binding.readResources, knowledge: this.options.knowledge,
       folders: () => folderRoutes(ids, id => {
@@ -211,12 +211,12 @@ export class DirectoryBotService implements ConversationPolicies {
     return new SourceResources(this.options.folders, this.options.projectId, 'workspace', async signal => {
       const available = await this.options.folders.requireAvailable(id, signal)
       if (available.projectId !== this.options.projectId || available.path !== folder.path || available.kind !== folder.kind ||
-        !resourceFolders(policy.binding.readResources, policy.binding.readFolders).includes(id)) throw new Error('Source folder changed or is outside the approved scope.')
+        !resourceFolders(policy.binding.readResources).includes(id)) throw new Error('Source folder changed or is outside the approved scope.')
     })
   }
 
   private async read(policy: ResolvedConversationPolicy, sessionId: string, id: string, relative: string, context: ExecutionContext): Promise<string> {
-    if (!resourceFolders(policy.binding.readResources, policy.binding.readFolders).includes(id)) throw new Error('Read requires an explicitly authorized folder.')
+    if (!resourceFolders(policy.binding.readResources).includes(id)) throw new Error('Read requires an explicitly authorized folder.')
     if (relative !== '.' && !relative.split('/').every(allowedWorkspaceReadSegment)) throw new Error('This resource path is not permitted.')
     const release = this.options.folders.acquireAccess()
     try {

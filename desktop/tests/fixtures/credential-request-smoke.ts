@@ -44,7 +44,7 @@ function createPublication(): PublicationRequest {
     files: [{ path: 'agents/support/AGENT.md', before: 'Read documentation.', after: 'Collect issues.\n<img src=x onerror="window.approvalHtmlExecuted=true">' }],
     previousBindings: [], bindings: [{
       botInstanceId: 'support-bot', platform: 'qq', conversationId: 'group:synthetic-room',
-      enabled: true, agent: 'support', skills: [], readFolders: ['documentation'], parameters: {},
+      enabled: true, agent: 'support', skills: [], parameters: {},
       grants: [{ id: 'issue-read', kind: 'http', origin: 'https://example.com', routes: [{ method: 'GET', path: '/issues' }] }],
     }],
   }

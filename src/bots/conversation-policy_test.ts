@@ -38,7 +38,7 @@ for (const platform of ['qq', 'feishu'] as const) test(`${platform}: directory p
     const address = { projectId, botInstanceId: 'connection', platform, conversationId: 'group:one' }
     const deploy = async (enabled: boolean, grants = true) => {
       const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nPublic BOT prompt',
-        'bot.json': JSON.stringify({ mode: 'service', tools: [], readResourcesModel: 'bot-wide', readResources: grants ? { wiki: platform === 'qq', knowledge: platform === 'feishu', folders: [folderId] } : undefined, allowedModules: ['@shadow/private_lookup'], bindings: [{ ...address, projectId: undefined, enabled, tools: ['read', 'search'], allowFrom: ['member'], grants: [{ id: 'private_lookup', kind: 'http', origin: 'https://private-api.example.com', routes: [{ method: 'GET', path: '/internal-route' }] }] }] }) })
+        'bot.json': JSON.stringify({ mode: 'service', tools: [], readResources: grants ? { wiki: platform === 'qq', knowledge: platform === 'feishu', folders: [folderId] } : undefined, allowedModules: ['@shadow/private_lookup'], bindings: [{ ...address, projectId: undefined, enabled, tools: ['read', 'search'], allowFrom: ['member'], grants: [{ id: 'private_lookup', kind: 'http', origin: 'https://private-api.example.com', routes: [{ method: 'GET', path: '/internal-route' }] }] }] }) })
       await deployments.deploy({ id: 'support', source: { folderId, directory: '' }, ...frozen, expectedRevision: deployments.read('support')?.deployment.revision })
     }
     await deploy(true)
@@ -119,7 +119,15 @@ for (const platform of ['qq', 'feishu'] as const) test(`${platform}: directory p
     folderAvailable = true
     await deploy(true, false)
     await assert.rejects(tools.get('read')!.execute({ path }, context), /changed/)
-    assert.equal(service.resolve(id)?.binding.readResources, undefined)
+    const noGrant = service.resolve(id)!
+    assert.equal(noGrant.binding.readResources, undefined)
+    const noGrantTools = service.tools(noGrant, id)
+    const noGrantContext = { ...context, tools: noGrantTools }
+    assert.deepEqual(JSON.parse(String(await noGrantTools.get('read')!.execute({ path: '.' }, noGrantContext))), { path: '.', entries: [] })
+    for (const denied of [path, 'v:memory/', 'v:knowledge/catalog']) {
+      await assert.rejects(noGrantTools.get('read')!.execute({ path: denied }, noGrantContext))
+      await assert.rejects(noGrantTools.get('search')!.execute({ handler: 'grep', path: denied, query: 'Hello' }, noGrantContext))
+    }
     await deploy(false)
     await assert.rejects(tools.get('read')!.execute({ path }, context), /disabled|changed/)
     assert.throws(() => service.resolve(id), /disabled/)
@@ -139,7 +147,7 @@ test('remote Service folder only requests existing file-only reads, never remote
     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'bots'), runGit: async () => { throw new Error('No git') } })
     const address = { projectId, botInstanceId: 'connection', platform: 'qq', conversationId: 'group:child' }
     const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nPublic BOT prompt',
-      'bot.json': JSON.stringify({ mode: 'service', readResourcesModel: 'bot-wide', readResources: { folders: [folderId] }, allowedModules: [], tools: [], bindings: [{ ...address, projectId: undefined, tools: ['read', 'search'] }] }) })
+      'bot.json': JSON.stringify({ mode: 'service', readResources: { folders: [folderId] }, allowedModules: [], tools: [], bindings: [{ ...address, projectId: undefined, tools: ['read', 'search'] }] }) })
     await deployments.deploy({ id: 'support', source: { folderId, directory: '' }, ...frozen })
     const filesystem = new CapabilityFilesystem([{ workdirId: folder.workdir.workdirId, rootPath: remoteRoot }])
     const requests: unknown[] = []

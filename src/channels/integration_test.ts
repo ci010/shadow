@@ -1395,7 +1395,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   const runtime = new DirectoryBots(deployments)
   await mkdir(join(f.home, 'memory', 'topics'), { recursive: true })
   await writeFile(join(f.home, 'memory', 'topics', 'Shared.md'), 'DEPLOYED_WIKI_CANARY')
-  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResourcesModel: 'bot-wide', readResources: { wiki: true } }) }
+  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [], readResources: { wiki: true } }) }
   const source = { version: 1, projectId: f.projectId, connectionId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
   const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: ['read'], readDomains: [], inheritThreads: true, manage: false }
   let files = assignChannelSource(base, source, permission, 'parent').files

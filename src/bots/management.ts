@@ -1,4 +1,4 @@
-import { equalResourceScopes, type ReadResources } from './read-scope.ts'
+import { type ReadResources } from './read-scope.ts'
 import { stringify } from 'yaml'
 import { writePrivateFile } from '../utils/private-file.ts'
 import { assignChannelSource } from './channel-assignment.ts'
@@ -10,7 +10,7 @@ import type { Hono } from 'hono'
 import type { Tool, ToolResult } from '../tools/tool.ts'
 import type { FolderRegistry } from '../folders/registry.ts'
 import { BotDeployments } from './deployments.ts'
-import { parseBotPackage, botReadResources, withoutBindingReadScope, legacyReadMigrationGuidance, migratableReadResources, bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
+import { parseBotPackage, botReadResources, bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
 import { DirectoryBots } from './runtime.ts'
 import { snapshotBotDirectory, sourceUsesGit } from './directory.ts'
 import { botProposalBaseline } from './format.ts'
@@ -52,18 +52,14 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
   facts.push(...bot.tools.flatMap(tool=>tool.imports.map(name=>`tool ${tool.name}: service module ${name}`)))
   for(const operation of bot.hostCapabilities ?? [])facts.push(`BOT host capability ${operation} (invoking binding only)`)
   for(const name of bot.allowedModules)facts.push(`BOT module ceiling ${name}`)
-  if (bot.mode === 'service' && bot.readResourcesModel === 'bot-wide') facts.push(...resourceFacts('BOT-wide read grant:', botReadResources(bot)))
+  if (bot.mode === 'service') facts.push(...resourceFacts('BOT-wide read grant:', botReadResources(bot)))
   for(const id of bot.readDomains ?? [])facts.push(`BOT memory-domain ceiling ${id}`)
   if(bot.discordHistory)facts.push(`BOT history ceiling ${bot.discordHistory.guildId}/${bot.discordHistory.channelIds.join(',')} threads=${bot.discordHistory.threads} preEpoch=${bot.discordHistory.preEpoch}`)
   for(const binding of bot.bindings){
     const target=location(binding)
     facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
     facts.push(`${target}: trigger ${binding.trigger}`)
-    if (bot.readResourcesModel === 'bot-wide') facts.push(...resourceFacts(`${target}: inherits BOT-wide read grant:`, botReadResources(bot)))
-    else {
-      facts.push(...resourceFacts(`${target}: legacy binding read grant:`, binding.readResources))
-      for (const id of (binding.platform === 'discord' ? binding.sourceFolders : binding.readFolders) ?? []) facts.push(`${target}: legacy folder ${id}`)
-    }
+    facts.push(...resourceFacts(`${target}: inherits BOT-wide read grant:`, botReadResources(bot)))
     for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
     for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+grant.sessionId+' (raw content)'}`)
     if(binding.platform==='discord'){
@@ -81,16 +77,9 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
   return new Set(facts)
 }
 
-function assertReadTransition(active: BotDefinition | undefined, candidate: BotDefinition): void {
-  if (active?.mode !== 'service' || active.readResourcesModel === 'bot-wide' || candidate.mode !== 'service' || candidate.readResourcesModel !== 'bot-wide') return
-  const shared = migratableReadResources(active)
-  if (!equalResourceScopes(shared, botReadResources(candidate))) throw new Error('Non-lossless legacy read migration blocked. Keep the existing deployment, or publish the same effective scope without copying the ceiling. Changing the scope as part of conversion requires host-enforced owner approval of the exact revisions; this tool does not support it.')
-}
-
 function disclosedBindings(bot: BotDefinition): unknown[] {
   return bot.bindings.map(binding => {
-    const data = bot.readResourcesModel === 'bot-wide' ? withoutBindingReadScope(binding) : binding
-    return { ...data, ...(bot.readResourcesModel === 'bot-wide' ? { inheritedReadResources: botReadResources(bot) ?? null } : {}), grants: binding.grants?.map(grant => {
+    return { ...binding, inheritedReadResources: botReadResources(bot) ?? null, grants: binding.grants?.map(grant => {
       if (grant.kind !== 'http') return grant
       const { credential, ...scope } = grant
       // Review destination/route authority, not secret refs or header values.
@@ -101,7 +90,7 @@ function disclosedBindings(bot: BotDefinition): unknown[] {
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Direct thread/DM assignment is forbidden. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. Non-lossless legacy read migrations are blocked; keep the existing deployment if the effective scope or backend cannot be preserved. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. All bindings inherit the BOT-wide read grant (companion JSON readResourcesModel:"bot-wide" and optional top-level readResources:{folders?,knowledge?,wiki?}); do not put read scope in bindingJson. QQ/Feishu policy: {enabled,trigger,allowFrom,tools}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel. Exact thread and DM assignment is forbidden; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
+    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Direct thread/DM assignment is forbidden. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. All bindings inherit the BOT-wide read grant (companion JSON optional top-level readResources:{folders?,knowledge?,wiki?}); do not put read scope in bindingJson. QQ/Feishu policy: {enabled,trigger,allowFrom,tools}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel. Exact thread and DM assignment is forbidden; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
     parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','link','assign','propose']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},sourceRevision:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()
@@ -115,7 +104,7 @@ export function botPackageTool(options: Options): Tool {
         if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT directory without traversal.')
         if (options.deployments.read(input.id)) throw new Error('BOT already exists; use link or propose with its exact revision')
         const files = { 'BOT.md': `---\n${stringify({ id: input.id, config: 'bot.json', mode: 'service' })}---\n${input.prompt}\n`,
-          'bot.json': JSON.stringify({ readResourcesModel: 'bot-wide', allowedModules: [], tools: [], bindings: [], subscriptions: [] }, null, 2) + '\n' }
+          'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }, null, 2) + '\n' }
         parseBot(files); await options.validate(files, context.signal)
         const release = options.folders.acquireAccess()
         try {
@@ -152,7 +141,7 @@ export function botPackageTool(options: Options): Tool {
         frozen = options.deployments.freeze(snapshotBotDirectory(path))
         if (input.action === 'source') {
           const parsed = parseBotPackage(frozen.files)
-          return JSON.stringify({ sourceRevision: frozen.revision, bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, migrationGuidance: legacyReadMigrationGuidance(parsed.bot), projectReadGrants: parsed.bot.mode === 'service' && !legacyReadMigrationGuidance(parsed.bot) ? resourceFacts('Inherited BOT-wide read grant:', migratableReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. Source edits and publication retain optimistic revision and live authority checks; no extra approval is required.' })
+          return JSON.stringify({ sourceRevision: frozen.revision, bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, projectReadGrants: parsed.bot.mode === 'service' ? resourceFacts('Inherited BOT-wide read grant:', botReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. Source edits and publication retain optimistic revision and live authority checks; no extra approval is required.' })
         }
         if (input.action === 'assign') {
           if (frozen.revision !== input.sourceRevision) throw new Error('BOT source changed; inspect it again before assignment')
@@ -165,7 +154,6 @@ export function botPackageTool(options: Options): Tool {
           if (linking) {
             const active = options.deployments.read(activeId)
             if (active?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before assigning.')
-            assertReadTransition(active && botProposalBaseline(active.files).bot, parseBot(updated.files))
             // Edit only the existing BOT companion; no Workflow/Connection copy of
             // its address, filter or binding is made. Revision guards stay exact.
             if (options.deployments.freeze(snapshotBotDirectory(path)).revision !== frozen.revision) throw new Error('BOT source changed before link')
@@ -193,7 +181,6 @@ export function botPackageTool(options: Options): Tool {
       const baseline = active ? botProposalBaseline(active.files) : undefined
       const before = baseline?.bot
       if (before && before.id !== bot.id) throw new Error('BOT active identity mismatch.')
-      assertReadTransition(before, bot)
       const oldAuthority=authorities(before),newAuthority=authorities(bot)
       if (baseline?.removedProposalGrants?.length) for (const operation of before?.hostCapabilities ?? []) oldAuthority.delete(`BOT host capability ${operation} (invoking binding only)`)
       for (const grant of baseline?.removedProposalGrants ?? []) oldAuthority.add(`Retired proposal-inbox grant ${grant.id}: ${grant.repository}/${grant.inbox} (inactive; no Work authority)`)

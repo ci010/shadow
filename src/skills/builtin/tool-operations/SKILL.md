@@ -192,7 +192,7 @@ Agent allowed/blocked tools, module ceilings, resource access and applicable
 binding grants. Selecting instructions can change behavior even when a tool is
 not allowed. Changing selections or grants requires the existing exact-version
 owner review, not a Skill read or chat acknowledgment. Raw native filesystem or
-network modules execute with host authority; `readFolders` and named grants do
+network modules execute with host authority; `readResources` and named grants do
 not sandbox them. Prefer scoped capability interfaces.
 
 Validate setup against owner and non-owner DMs, group rejection for personal
