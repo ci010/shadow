@@ -9,6 +9,7 @@
   "Fly camera": "飞行模式",
   "Model actions": "模型操作",
   "Rebuild": "重新构建",
+  "GLB download excludes hemisphere and ambient lights": "下载的 GLB 不包含半球光和环境光",
   "Download GLB": "下载 GLB",
   "Save view": "保存截图",
   "glTF asset": "glTF 资产",

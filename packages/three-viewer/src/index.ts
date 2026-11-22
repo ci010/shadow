@@ -4,9 +4,12 @@ import {
   WebGLRenderer, WebGLRenderTarget, MOUSE,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { snapshot, type ModelInput } from './input.js';
+import { snapshot, type ModelInput as GlbInput } from './input.js';
+import { snapshotPreviewLights, type PreviewLight } from './preview-lights.js';
 import { decode, stale, type Model, type ModelOutlineRow, type Part } from './model.js';
-export { limits, type ModelInput, type ModelPreview, type ShaderBinding } from './input.js';
+export type { PreviewLight } from './preview-lights.js';
+export interface ModelInput extends GlbInput { previewLights?: readonly PreviewLight[] }
+export { limits, type ModelPreview, type ShaderBinding } from './input.js';
 export type { ModelOutlineRow } from './model.js';
 
 const emptyOutline: readonly ModelOutlineRow[] = Object.freeze([]);
@@ -139,7 +142,9 @@ export class ThreeViewer {
     this.latest = gen;
     this.abort(this.active); this.abort(this.queued);
     this.queued = undefined;
-    const copy = snapshot(input);
+    const previewLights = input.previewLights === undefined ? undefined : snapshotPreviewLights(input.previewLights);
+    if (previewLights?.length && input.identity !== 'playground') throw new Error('Preview lights require playground identity');
+    const copy: ModelInput = { ...snapshot(input), previewLights };
     return new Promise((resolve, reject) => {
       const cancel = () => {
         if (this.queued === job) this.queued = undefined;
@@ -162,14 +167,14 @@ export class ThreeViewer {
     const previewTime = { value: 0 };
     let deleted: string[] = [];
     try {
-      next = await decode(job.input, current);
+      next = await decode(job.input, current, job.input.previewLights);
       if (!current()) throw stale();
       const toneMapping = job.input.preview?.toneMapping === 'aces' ? ACESFilmicToneMapping : NoToneMapping;
       const exposure = job.input.preview?.exposure ?? 1;
       if (job.input.shaders?.length) {
         const pendingScene = new Scene();
         pendingScene.add(next.root);
-        if (!next.hasPunctualLights) {
+        if (!next.hasAuthoredLights) {
           const studio = this.studio.clone(); studio.visible = true;
           pendingScene.add(studio);
         }
@@ -207,7 +212,7 @@ export class ThreeViewer {
       this.model = next; this.scope = scope; this.version = job.input.version;
       this.renderer.toneMapping = toneMapping;
       this.renderer.toneMappingExposure = exposure;
-      this.studio.visible = !next.hasPunctualLights;
+      this.studio.visible = !next.hasAuthoredLights;
       this.scene.add(next.root); next = undefined;
       if (this.ground) {
         const { bounds } = this.model;

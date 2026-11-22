@@ -72,9 +72,9 @@ addEventListener('message', async ({ data: { files, assets: input, seed }, ports
     if (typeof main.build !== 'function') throw new Error('main.mjs must export build({ THREE, root, assets, random })');
     await main.build({ THREE, root, assets, random });
     phase = 'export';
-    const glb = await exportRoot(root);
+    const { glb, previewLights } = await exportRoot(root);
     if (call(byteLength, glb, []) > MAX_GLB_BYTES) reply(['error', 'limit', 'GLB exceeds 16 MiB']);
-    else reply(['ok', glb], [glb]);
+    else reply(['ok', glb, previewLights], [glb]);
   } catch (error) {
     let message = 'Guest threw a non-Error value';
     let stack;
