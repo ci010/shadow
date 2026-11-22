@@ -170,9 +170,8 @@ test('invalid, quarantined, identity-mismatched and integrity-failed deployments
     assert.equal((await f.get('deployments/malformed/status')).error, 'invalid-package')
     await f.deploy('legacy-read', botFiles('', { readResources: { wiki: true }, bindings: [{ ...qq(f.bot.id, 'group:one'), readResources: { wiki: true } }, qq(f.bot.id, 'group:two')] }))
     const legacy = await f.get('deployments/legacy-read/status')
-    assert.equal(legacy.state, 'valid')
-    assert.match(legacy.guidance, /do not copy the ceiling or union grants/i)
-    assert.match(legacy.guidance, /Non-lossless in-place conversion is blocked/)
+    assert.equal(legacy.state, 'quarantined')
+    assert.equal(legacy.error, 'invalid-package')
     const metadataPath = join(workspace, 'deployments/healthy/active.json')
     const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'))
     metadata.current.headers = { Authorization: 'PRIVATE_BEARER' }

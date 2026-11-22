@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BotBindingSchema, migratableReadResources, withoutBindingReadScope, bindingSubscription, botSubscriptionKey, parseBotPackage } from './sdk.ts'
+import { BotBindingSchema, botReadResources, bindingSubscription, botSubscriptionKey, parseBotPackage } from './sdk.ts'
 import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
 
 /** Target identity comes exclusively from a host-recorded inbox, never the model's policy JSON. */
@@ -31,11 +31,8 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
   }
   const binding = BotBindingSchema.parse({ ...permissions, ...target })
   const config = JSON.parse(files[configPath]!)
-  const readResources = migratableReadResources(bot)
-  config.readResourcesModel = 'bot-wide'
-  config.readResources = readResources
-  delete config.sourceFolders
-  config.bindings = [...bot.bindings.filter(item => item !== existing), binding].map(withoutBindingReadScope)
+  const readResources = botReadResources(bot)
+  config.bindings = [...bot.bindings.filter(item => item !== existing), binding]
   if (bot.subscriptions !== undefined) {
     const ref = bindingSubscription(binding), key = botSubscriptionKey(ref)
     config.subscriptions = [...bot.subscriptions.filter(item => botSubscriptionKey(item) !== key), ...(binding.enabled ? [ref] : [])]

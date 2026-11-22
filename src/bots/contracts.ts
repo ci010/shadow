@@ -6,7 +6,6 @@ import { CapabilityGrantSchema, ResourceName } from '../execution/grant-contract
 
 const identifier = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
 
-export const ConversationReadFoldersSchema = z.array(identifier).max(32)
 
 export const ConversationBindingSchema = z.object({
   botInstanceId: identifier, platform: z.enum(['qq', 'discord', 'feishu']),
@@ -14,7 +13,6 @@ export const ConversationBindingSchema = z.object({
   agent: ResourceName, skills: z.array(ResourceName).max(32).default([]),
   allowFrom: z.array(identifier).max(1000).optional(),
   readResources: ReadResourcesSchema.optional(),
-  readFolders: ConversationReadFoldersSchema.default([]),
   parameters: z.record(z.unknown()).default({}),
   grants: z.array(CapabilityGrantSchema).max(32).default([]),
 }).strict()

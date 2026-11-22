@@ -118,7 +118,7 @@ falls back to Main's filesystem.
   `agent`; followed by the Agent prompt.
 - `bot.json` (or the JSON path in `config`): data-only `connection`,
   `subscriptions`, `bindings`, `tools`, `allowedModules`, `skills`, and read scopes
-  (`readResourcesModel`, `readResources`, and Discord’s `readDomains` and `discordHistory`). Scope restrictions by mode
+  (`readResources`, and Discord’s `readDomains` and `discordHistory`). Scope restrictions by mode
   still apply. Credentials never belong in either file.
 - JS/TS tool modules and their relative JS/TS helpers.
 - No executable configuration imports, initialization hooks, package installation,
@@ -140,7 +140,6 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
 
 ```json
 {
-  "readResourcesModel": "bot-wide",
   "allowedModules": [],
   "tools": [{
     "name": "remember_note",
@@ -418,15 +417,15 @@ thread, and live platform checks.
 
 ### Built-in read/search for Service BOTs
 
-In the Service BOT companion JSON, set `readResourcesModel` to `"bot-wide"`
-and put the actual grant in optional top-level `readResources`. All QQ, Feishu,
+In the Service BOT companion JSON, use optional top-level `readResources`
+to grant read access. All QQ, Feishu,
 and Discord bindings of that BOT inherit the same grant, including newly linked
 channels. Do not put `readResources`, `readFolders`, or `sourceFolders` on a
 binding. Each binding still selects its permitted built-in tools (`read`,
 `search`) separately. Omitting the grant gives no folders or Project views.
 
 ```json
-{"readResourcesModel":"bot-wide","readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
+{"readResources":{"folders":["43b03ab8-0000-4000-8000-000000000001"],"knowledge":true,"wiki":true}}
 ```
 
 Review the exact registered folders and all intended channel audiences before
@@ -435,18 +434,10 @@ eligible content, not a frozen copy. Assignment previews and publication
 summaries show the inherited grant, including when it is empty. Use separate
 BOTs when channels need different read scopes. Personal BOTs are unchanged.
 
-Unmarked packages retain their original per-binding grants and platform backend
-checks, even when their scopes differ. A ceiling alone never grants access.
-`v:bots/deployments/<id>/status` reports migration guidance without altering
-active deployments or unrelated Personal routing. Assign/link converts only
-when the existing scopes agree and backend checks can be preserved; it copies
-only the shared effective scope, never the ceiling. `propose` also rejects a
-non-lossless in-place conversion of an active legacy BOT, even with exact
-revisions. Unlike ordinary authenticated owner authoring, an intentional scope
-change as part of conversion needs an exact-revision, host-enforced owner decision;
-this tool has no such approval path. Keep the legacy deployment while planning
-separate BOTs for different audiences or arranging explicit owner review. No
-model-supplied confirmation can override this restriction.
+Service packages reject the former `readResourcesModel` marker and top-level
+`sourceFolders`, as well as binding-level `readResources`, `readFolders`, and
+`sourceFolders`, even when empty. Separate Discord record and history scopes
+are unchanged; they do not grant registered folders or Project views.
 
 - `read({path:"."})` lists only authorized folder route names. A unique local
   folder uses its real basename, including spaces, e.g.

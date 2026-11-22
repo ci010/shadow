@@ -1,4 +1,4 @@
-import { ReadResourcesSchema, type ReadResources, equalResourceScopes, hasResourceGrants, resourceSubset, unambiguousResourceFolders } from './read-scope.ts'
+import { ReadResourcesSchema, type ReadResources } from './read-scope.ts'
 import { BotConnectionPolicy } from '../channels/connection-config.ts'
 import { z } from 'zod'
 import { BotHostCapabilities } from './host-contract.ts'
@@ -6,10 +6,10 @@ import { agentInferenceSchema } from '../agent/inference-schema.ts'
 import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { ModelInfo } from '../providers/provider.ts'
 import { parseDocument } from 'yaml'
-import { ConversationBindingSchema, ConversationReadFoldersSchema } from './contracts.ts'
+import { ConversationBindingSchema } from './contracts.ts'
 import { ResourceName } from '../execution/grant-contract.ts'
 import { assertSupportedJsonSchema } from '../execution/grants.ts'
-import { DiscordBindingSchema, DiscordHistoryScopeSchema, SourceFoldersSchema } from '../channels/integration-contract.ts'
+import { DiscordBindingSchema, DiscordHistoryScopeSchema } from '../channels/integration-contract.ts'
 
 /** SDK packages are data at publication time. Only tool invocation executes source. */
 export const BotToolNameSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,127}$/)
@@ -20,12 +20,11 @@ export const BotSourcePathSchema = z.string().min(1).max(256).refine(s =>
   !s.startsWith('/') && !s.includes('\\') && s.split('/').every(p => p !== '' && p !== '.' && p !== '..') && !/[\x00-\x1f\x7f:]/.test(s), 'Use a relative package path without traversal')
 // Service receive policy is package-owned. Missing legacy fields narrow to the
 // platform's mention/reply/topic default; connection-level `all` is never imported.
-const binding = ConversationBindingSchema.omit({ agent: true, skills: true }).extend({
+const binding = ConversationBindingSchema.omit({ agent: true, skills: true, readResources: true }).extend({
   platform: z.enum(['qq', 'feishu']), tools: names,
-  readFolders: ConversationReadFoldersSchema.optional(),
   trigger: z.enum(['mention', 'all']).default('mention'),
 }).strict()
-const discord = DiscordBindingSchema.omit({ agentId: true, epochRevision: true }).extend({ platform: z.literal('discord'), tools: names }).strict()
+const discord = DiscordBindingSchema.omit({ agentId: true, epochRevision: true, readResources: true, sourceFolders: true }).extend({ platform: z.literal('discord'), tools: names }).strict()
 export const BotBindingSchema = z.discriminatedUnion('platform', [binding, discord])
 /** Subscription references select existing authority; they never supply grants or filters. */
 export const BotSubscriptionSchema = z.discriminatedUnion('platform', [
@@ -61,9 +60,7 @@ const baseDefinition = z.object({
   /** Owner-approved host SDK operations; omission grants none. Always scoped to the invoking binding. */
   hostCapabilities: BotHostCapabilities.optional(),
   readDomains: z.array(z.string().uuid()).max(32).optional(),
-  readResourcesModel: z.literal('bot-wide').optional(),
   readResources: ReadResourcesSchema.optional(),
-  sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
   skills: z.array(z.object({ name: ResourceName, content: z.string().min(1).max(64_000) }).strict()).max(32).optional(),
 }).strict()
@@ -73,22 +70,9 @@ const definition = z.discriminatedUnion('mode', [
 ]).superRefine((bot, ctx) => {
   if (bot.mode === 'personal') {
     if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })
-    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResourcesModel || bot.readResources || bot.sourceFolders || bot.discordHistory || bot.skills)
+    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResources || bot.discordHistory || bot.skills)
       ctx.addIssue({ code: 'custom', message: 'Personal BOT uses ordinary role tools/context; custom tools, service bindings and scopes are not supported' })
   } else if (bot.connection || bot.agent) ctx.addIssue({ code: 'custom', message: 'Service BOT cannot select a personal connection or role' })
-  const issue = (message: string) => ctx.addIssue({ code: 'custom', path: ['readResources'], message })
-  if (bot.mode === 'service' && bot.readResourcesModel === 'bot-wide') {
-    if (bot.sourceFolders !== undefined || bot.bindings.some(binding => binding.readResources !== undefined ||
-      (binding.platform === 'discord' ? binding.sourceFolders !== undefined : binding.readFolders !== undefined)))
-      issue('Bot-wide read scope belongs only on the BOT. Remove binding readResources/readFolders/sourceFolders and the legacy BOT sourceFolders ceiling.')
-  } else {
-    if (!unambiguousResourceFolders(bot.readResources, bot.sourceFolders)) issue('Do not mix legacy and new BOT folder ceilings')
-    for (const binding of bot.bindings) {
-      const legacy = binding.platform === 'discord' ? binding.sourceFolders : binding.readFolders
-      if (!resourceSubset(binding.readResources, bot.readResources) || !unambiguousResourceFolders(binding.readResources, legacy))
-        issue('Legacy read resources must narrow the BOT ceiling and cannot mix legacy and new folder grants')
-    }
-  }
   const bindingKeys = bot.bindings.map(value => botSubscriptionKey(bindingSubscription(value)))
   if (new Set(bindingKeys).size !== bindingKeys.length) ctx.addIssue({ code: 'custom', message: 'Duplicate binding subscription identity' })
   const subscriptionKeys = (bot.subscriptions ?? []).map(botSubscriptionKey)
@@ -104,38 +88,9 @@ const definition = z.discriminatedUnion('mode', [
 export const BotDefinitionSchema = definition
 export type BotDefinition = z.infer<typeof BotDefinitionSchema>
 
-export function legacyReadMigrationGuidance(bot: BotDefinition): string | undefined {
-  if (bot.mode !== 'service' || bot.readResourcesModel === 'bot-wide') return
-  const guidance = 'Keep the legacy deployment or plan separate Bots with distinct audiences and backend requirements. Non-lossless in-place conversion is blocked; do not copy the ceiling or union grants.'
-  if (bot.bindings.some(binding => binding.platform === 'discord' ? binding.sourceFolders?.length || bot.sourceFolders?.length : binding.readFolders?.length))
-    return `Legacy platform-specific folder grants or backend checks cannot be migrated automatically. ${guidance}`
-  if (bot.bindings.some(binding => !equalResourceScopes(binding.readResources, bot.bindings[0]?.readResources)))
-    return `Legacy binding read scopes differ. ${guidance}`
-}
-
-/** Read grant of the explicit model; legacy authority remains on each binding. */
+/** The top-level Service BOT grant inherited by every binding. */
 export function botReadResources(bot: BotDefinition): ReadResources | undefined {
-  return bot.mode === 'service' && bot.readResourcesModel === 'bot-wide' ? bot.readResources : undefined
-}
-
-/** Used only at the migration boundary, never to resolve a legacy binding. */
-export function migratableReadResources(bot: BotDefinition): ReadResources | undefined {
-  const guidance = legacyReadMigrationGuidance(bot)
-  if (guidance) throw new Error(guidance)
-  if (bot.readResourcesModel === 'bot-wide') return botReadResources(bot)
-  const shared = bot.bindings[0]?.readResources
-  return hasResourceGrants(shared) ? shared : undefined
-}
-
-/** Remove compatibility-only scope fields before writing or disclosing a binding. */
-export function withoutBindingReadScope(binding: BotDefinition['bindings'][number]) {
-  const { readResources: _resource, ...rest } = binding
-  if (rest.platform === 'discord') {
-    const { sourceFolders: _folders, ...data } = rest
-    return data
-  }
-  const { readFolders: _folders, ...data } = rest
-  return data
+  return bot.mode === 'service' ? bot.readResources : undefined
 }
 
 export function subscribedBindings(bot: BotDefinition): BotDefinition['bindings'] {

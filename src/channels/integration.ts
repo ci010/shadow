@@ -282,7 +282,7 @@ export class DiscordIntegration implements ConversationPolicies {
       agent: { ...this.options.store.definition(profile), allowedTools: [...binding.tools] },
       binding: {
         botInstanceId: bot.id, platform: 'discord', conversationId: address.conversationId, enabled: true,
-        agent: profile.name, skills: [], readFolders: [], grants: [], parameters: {},
+        agent: profile.name, skills: [], grants: [], parameters: {},
       },
       skillPrompts: profile.skills, tools: [],
     }

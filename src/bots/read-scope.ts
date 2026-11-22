@@ -9,10 +9,6 @@ export function resourceSubset(scope?: ReadResources, ceiling?: ReadResources): 
     (scope?.folders ?? []).every(id => ceiling?.folders?.includes(id))
 }
 
-export function equalResourceScopes(a?: ReadResources, b?: ReadResources): boolean {
-  return resourceSubset(a, b) && resourceSubset(b, a)
-}
-
 export function unambiguousResourceFolders(scope?: ReadResources, legacy?: readonly string[]): boolean {
   return scope?.folders === undefined || !legacy?.length
 }
