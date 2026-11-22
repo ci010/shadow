@@ -162,11 +162,7 @@ function start() {
   filesWatch = watchPlayground({ read: (tag, signal) => fetchPlaygroundSnapshot(url, tag, signal), failed: failure,
     async build(snapshot, signal) {
       busy.value = true; error.value = ''
-      const { glb, previewLights } = await buildPreviewSnapshot(snapshot, signal)
-      // Authored code can vary its lighting without changing the GLB bytes.
-      const revisionInputs = new Map<string, Uint8Array>()
-      if (previewLights.length) revisionInputs.set('previewLights', new TextEncoder().encode(JSON.stringify(previewLights)))
-      const version = `${snapshot.version}:${await modelVersion(new Uint8Array(glb), revisionInputs)}`
+      const { glb, previewLights, version } = await buildPreviewSnapshot(snapshot, signal)
       await display({ bytes: glb, version, identity: 'playground', previewLights, shaders: snapshot.shaders, preview: snapshot.preview, signal }, glb)
     },
   })
