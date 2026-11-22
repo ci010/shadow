@@ -1,5 +1,21 @@
 # Electron Three.js viewer checks
 
+## Capture a scene from a custom camera
+
+From the repository root (with dependencies installed):
+
+```sh
+pnpm exec node --import tsx scripts/three-viewer-check/run.mjs capture \
+  examples/three-playground/lit-storefront/playground.three.json '/existing/output/directory/store.png' \
+  --position 4,3,6 --target 0,1,0
+```
+
+`--position` is the camera's world-space location and `--target` is the point it looks at. Supply both as comma-separated decimal triples (negative coordinates and scientific notation are accepted). Coordinates must be finite, have magnitude at most `1e15`, and the two points must differ. Relative paths resolve from your current directory. The output must be a new `.png` in an existing directory; the command never overwrites an existing file.
+
+This runs the real Playground snapshot/build/ThreeViewer pipeline in a hidden Electron window. No running Shadow UI or shader count is needed. It captures one frame, including for static scenes, and prints JSON with the snapshot `version`, actual `camera` position/target, PNG byte count, and absolute `screenshot` path. Repeat with another camera and a different output filename to compare viewpoints; the version remains the same if the scene inputs have not changed.
+
+## Marker regression check
+
 From the repository root, build a synthetic Playground containing only a marker and `main.mjs` (no `scene.json`):
 
 ```sh
