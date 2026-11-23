@@ -376,14 +376,14 @@ function quickOpenSession(projectId: string, sessionId: string, automationId?: s
 // Native desktop input also reaches us when focus belongs to an embedded frame.
 function nativeSessionSearch(event: Event) {
   if ((event as CustomEvent).detail !== 'search-sessions' || !props.visible || !keyboardActive.value) return
-  if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+  if (hasVisibleNewConversationOverlay(document.querySelectorAll('dialog[open], [aria-modal="true"]:not(dialog)'))) return
   openSessionSearch()
 }
 function sessionSearchKeydown(event: KeyboardEvent) {
   if (!props.visible || !keyboardActive.value || !isSessionQuickOpenShortcut(event)) return
   event.preventDefault()
   // Reserve the chord without stealing focus from an existing modal workflow.
-  if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+  if (hasVisibleNewConversationOverlay(document.querySelectorAll('dialog[open], [aria-modal="true"]:not(dialog)'))) return
   openSessionSearch()
 }
 const creating = ref(false)
