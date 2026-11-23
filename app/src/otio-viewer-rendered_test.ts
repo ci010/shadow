@@ -585,7 +585,6 @@ app.whenReady().then(async()=>{
   };
   await click('Toggle files');
   await wait('bound folder',()=>document.querySelector('[data-root-id="folder:edit"] .root-toggle')?.getClientRects().length);
-  await run(()=>document.querySelector('[data-root-id="folder:edit"] .root-toggle').click());
   await wait('timeline in real explorer',()=>document.querySelector('[data-root-id="folder:edit"] .tree-row[data-path="assembly.OTIO"]')?.getClientRects().length);
   await run(()=>document.querySelector('[data-root-id="folder:edit"] .tree-row[data-path="assembly.OTIO"]').click());
   await shellFile();
