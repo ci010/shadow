@@ -444,9 +444,12 @@ lightweight operation support, direct access checks and storage-only legacy adap
 restart of already-running Child processes.
 
 [`FolderService`](../src/folders/routes.ts) routes registered remote folder
-file listings, UTF-8 text previews, and Git status/diffs through Child, including
-folder browsing before a conversation exists. Remote raw/static media remains
-`501 remote_raw_unavailable` in
+file listings, UTF-8 text previews, bounded raster image previews, and Git
+status/diffs through Child, including folder browsing before a conversation
+exists. The folder `/raw` endpoint uses the existing `filesystem.read` image
+operation for PNG, JPEG, GIF, and WebP (at most 5 MiB and 25 million pixels) and
+serves the validated MIME type. Other raw formats and all remote `/static/*`
+requests remain `501 remote_raw_unavailable` in
 [`remote-files.ts`](../src/folders/remote-files.ts); alternate text encodings
 and remote cloning remain unsupported. Errors never select a Main-local folder.
 These changes do not alter pairing or add per-operation approvals, OS isolation,

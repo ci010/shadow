@@ -198,8 +198,7 @@ export class FolderService {
           const path = operation === 'static' ? staticFilePath(c) : c.req.query('path') ?? ''
           if (path === null) return c.json({ error: 'invalid_path' }, 400)
           if (folder.kind === 'layerfs') throw new FolderError('layerfs_route_unsupported', 'This UI operation does not support LayerFS mounts; no Main fallback.', 409)
-          if (folder.kind === 'remote') return serveRemoteFolderFiles(c, this.#remoteTarget(c, folder), folder,
-            operation === 'static' ? 'raw' : operation, path)
+          if (folder.kind === 'remote') return serveRemoteFolderFiles(c, this.#remoteTarget(c, folder), folder, operation, path)
           return await serveLocalFiles(c, folder.path, { folderId: folder.id },
             operation === 'static' ? 'raw' : operation, path)
         } catch (error) {
