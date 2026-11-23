@@ -23,8 +23,17 @@ function preview(value: string, limit = 480): string {
   const text = value.replace(/\s+/g, ' ').trim()
   return JSON.stringify(text.length > limit ? text.slice(0, limit) + '…[truncated]' : text)
 }
-function collaborationArgs(call: Call): string {
-  const fields = collaborationFieldNames(call.function.name)
+const activityFields: Record<string, readonly string[]> = {
+  read: ['path'],
+  write: ['path'],
+  search: ['handler', 'query', 'path', 'domain', 'include'],
+  exec: ['script', 'shell', 'cwd'],
+  invoke_tool: ['name', 'source'],
+}
+
+function overviewArgs(call: Call): string {
+  const name = call.function.name
+  const fields = collaborationFieldNames(name) ?? (Object.hasOwn(activityFields, name) ? activityFields[name] : undefined)
   if (!fields) return ''
   try {
     const args: unknown = JSON.parse(call.function.arguments)
@@ -34,6 +43,18 @@ function collaborationArgs(call: Call): string {
       return typeof value === 'string' ? [` ${key}=${preview(value, 240)}`] : []
     }).join('')
   } catch { return ' [invalid arguments]' }
+}
+
+// Legacy history stores result text, not the tool transport's isError flag.
+// Match the activity UI's display convention, not a verified execution receipt.
+function overviewResultStatus(call: Call | undefined, text: string): string {
+  if (!call) return 'result-recorded'
+  const start = text.trimStart()
+  if (call.function.name === 'exec') {
+    if (/^(?:Error:\s*)?(?:OUTCOME UNKNOWN:|Remote execution outcome is unknown:)/i.test(start)) return 'outcome-unknown'
+    if (/^(?:LayerFS process running in background\.|Remote process (?:started in background\.|still running after )|Process started\. PID=\d+|Process PID=\d+ still running after )/.test(start)) return 'background'
+  }
+  return /^(?:Error:|ERROR\b|Failed\b)/i.test(start) ? 'failed' : 'success'
 }
 
 /** Display filtering only: recognizing an envelope never establishes trust or authority. */
@@ -61,11 +82,12 @@ export function formatSessionMessage(
   const role = msg.role.toUpperCase()
   let body: string
   if (overview && msg.role === 'tool') {
-    body = `[result for ${ref(msg.tool_call_id ?? '?')}] name=${priorCall?.function.name ?? msg.name ?? '?'} status=result-recorded${msg.tool_call_id ? callPath(msg.tool_call_id) : ''}${priorCall && collaborationFieldNames(priorCall.function.name) ? ` preview=${preview(contentText(msg))}` : ''}`
+    const text = priorCall ? contentText(msg) : ''
+    body = `[result for ${ref(msg.tool_call_id ?? '?')}] name=${priorCall?.function.name ?? msg.name ?? '?'} status=${overviewResultStatus(priorCall, text)}${msg.tool_call_id ? callPath(msg.tool_call_id) : ''}${priorCall && collaborationFieldNames(priorCall.function.name) ? ` preview=${preview(text)}` : ''}`
   } else if (msg.role === 'assistant' && msg.tool_calls?.length) {
     const calls = msg.tool_calls
       .map((tc: NonNullable<ChatMessage['tool_calls']>[number]) =>
-        `  [call ${overview ? ref(tc.id) : tc.id}] ${tc.function.name}${overview ? ` status=requested${callPath(tc.id)}${collaborationArgs(tc)}` : `(${tc.function.arguments})`}`
+        `  [call ${overview ? ref(tc.id) : tc.id}] ${tc.function.name}${overview ? ` status=requested${callPath(tc.id)}${overviewArgs(tc)}` : `(${tc.function.arguments})`}`
       )
       .join('\n')
     body = msg.content && (!overview || msg.tool_calls.some(call => collaborationFieldNames(call.function.name))) ? `${overview ? `commentary=${preview(contentText(msg))}` : contentText(msg)}\n${calls}` : calls
