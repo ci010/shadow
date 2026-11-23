@@ -21,7 +21,8 @@ export const backendExternals = ['@jsquash/png', '@jsquash/webp', 'typescript', 
 /** Compile direct TS entries into the same relocatable layout used in dev and production.
  * Additional entries are useful for native-Node integration tests of exported APIs.
  */
-export async function compileBackend(root: string, output: string, entries = backendEntries): Promise<void> {
+export async function compileBackend(root: string, output: string, entries = backendEntries,
+  { stagedDesktopDevelopment = false } = {}): Promise<void> {
   root = resolve(root)
   output = resolve(output)
   if (output === root || root.startsWith(output + sep) || output === join(root, 'src')
@@ -91,6 +92,12 @@ export async function compileBackend(root: string, output: string, entries = bac
   }
   await build({
     root, configFile: false, publicDir: false,
+    // Tray restarts build outside the repository. Only the staged build may
+    // embed a checkout path; ordinary and installed bundles stay relocatable.
+    define: stagedDesktopDevelopment ? {
+      __SHADOW_STAGED_DEV_SAFEGIT__: JSON.stringify(join(root, 'desktop', 'safegit',
+        process.platform === 'win32' ? 'safegit.exe' : 'safegit')),
+    } : undefined,
     plugins: [{
       name: 'shadow-typescript-decorators',
       enforce: 'pre',

@@ -99,20 +99,36 @@ test('backend build rejects compilation failures instead of copying success-shap
   })
 })
 
-test('development backend bundles despite type errors, including with a staged output', async () => {
-  await withTempWorkspace(async root => {
+test('staged development backend bundles despite type errors and resolves safegit from its checkout', async () => {
+  await withTempWorkspace(async root => withTempWorkspace(async stage => {
     await fixture(root)
-    await writeFile(join(root, 'src/index.ts'), 'export const value: number = "development"\n')
-    const output = join(root, 'stage', 'dist')
-    await mkdir(join(root, 'stage'))
+    await mkdir(join(root, 'src/execution/git'), { recursive: true })
+    await cp(fileURLToPath(new URL('../src/execution/git/safegit.ts', import.meta.url)), join(root, 'src/execution/git/safegit.ts'))
+    await writeFile(join(root, 'src/index.ts'), `export const value: number = "development"
+export { requestedSafegitBinary, SafegitRunner } from './execution/git/safegit.ts'
+`)
+    const output = join(stage, 'dist')
     const cli = fileURLToPath(new URL('./build.ts', import.meta.url))
     const tsx = import.meta.resolve('tsx')
-    execFileSync(process.execPath, ['--import', tsx, cli, '--development', '--desktop-stage', join(root, 'stage')], {
+    execFileSync(process.execPath, ['--import', tsx, cli, '--development', '--desktop-stage', stage], {
       cwd: root, stdio: 'pipe',
     })
-    assert.match(await readFile(join(output, 'src/index.js'), 'utf8'), /"development"/)
+    const entry = pathToFileURL(join(output, 'src/index.js')).href
+    const expected = join(root, 'desktop', 'safegit', process.platform === 'win32' ? 'safegit.exe' : 'safegit')
+    execFileSync(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { value, requestedSafegitBinary, SafegitRunner } from ${JSON.stringify(entry)};
+      delete process.env.SHADOW_SAFEGIT_PATH;
+      const expected = ${JSON.stringify(expected)};
+      assert.equal(value, 'development');
+      assert.equal(requestedSafegitBinary(), expected);
+      assert.equal(requestedSafegitBinary(undefined, expected + '.override'), expected + '.override');
+      assert.throws(() => requestedSafegitBinary(undefined, 'relative'), /absolute/);
+      const runner = new SafegitRunner(undefined, () => 'darwin_arm64');
+      await assert.rejects(runner.status(), error => error.message.includes('is missing: ' + expected + '.'));
+    `], { cwd: stage, stdio: 'pipe' })
     await assert.rejects(readFile(join(root, 'dist/src/index.js')), { code: 'ENOENT' })
-  })
+  }))
 })
 
 test('built session routes and usage aggregates run with native Node', async () => {

@@ -19,11 +19,15 @@ export function safegitTarget(platform: string = process.platform, arch: string 
   return Object.hasOwn(SAFEGIT_ARCHIVES, key) ? key : undefined
 }
 
+// Only the desktop development staging build supplies this absolute path.
+declare const __SHADOW_STAGED_DEV_SAFEGIT__: string | undefined
+
 export function requestedSafegitBinary(moduleUrl = import.meta.url, override = process.env.SHADOW_SAFEGIT_PATH): string {
   if (override) {
     if (!isAbsolute(override)) throw new TypeError('SHADOW_SAFEGIT_PATH must be absolute')
     return override
   }
+  if (typeof __SHADOW_STAGED_DEV_SAFEGIT__ !== 'undefined') return __SHADOW_STAGED_DEV_SAFEGIT__
   const modulePath = fileURLToPath(moduleUrl)
   const root = resolve(dirname(modulePath), '..', '..', '..', extname(modulePath) === '.ts' ? '.' : '..')
   if (existsSync(join(root, 'pnpm-workspace.yaml')) && existsSync(join(root, 'scripts', 'desktop.ts'))) {
