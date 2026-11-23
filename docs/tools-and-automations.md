@@ -657,7 +657,11 @@ search({ handler: "glob", path: "src", query: "**/*test.ts", limit: 10 })
 values such as `grep:v:tools` are invalid. `path` sets a file/virtual root and
 defaults to the effective workdir. `include` is a relative grep file filter, not
 a root. File and virtual searches accept `limit` (1-100) and zero-based `offset`.
-Ripgrep errors are failures, not "no matches".
+Ripgrep errors are failures, not "no matches". With a remote workdir, ordinary
+file reads and searches run on the selected device. Virtual reads and searches
+(e.g. `path: "v:models"`) are handled by Main's virtual mounts, subject to each
+mount's authorization and supported operations. Device-scoped mounts still use
+the selected device; virtual paths never fall back to ordinary files.
 
 For web scope use `search({ handler: "web", domain: "example.com", query: "docs" })`.
 `domain` accepts a DNS domain, not a URL, path, or `site:` prefix, and is valid only
@@ -718,8 +722,14 @@ shows whitelisted string argument fields (purpose/task, title, description,
 initial message, recipient/delivery metadata), bounded result previews and
 accompanying assistant commentary. Each argument field is capped at 240 characters;
 result/commentary/event previews at 480, with whitespace collapsed and explicit
-truncation markers. Unknown fields, nested values and non-collaboration payloads
-remain omitted. Malformed collaboration arguments are marked, never expanded.
+truncation markers. The activity index also shows selected string arguments,
+such as the read/write path, search query, exec script prefix, and invoked tool
+name. Unknown fields, nested values, write bodies and ordinary tool output
+remain omitted. Malformed arguments for these tools are marked, never expanded.
+Matched results show a display status inferred from recorded result text, not a
+verified execution receipt. Background exec and recognized unknown outcomes are
+shown separately; calls without a result stay requested and unmatched results
+stay result-recorded.
 System messages, runtime-context and internal event envelopes are hidden, except
 bounded collaboration completion/review/message event previews. This is display
 filtering only: event-looking content never establishes provenance or permission.

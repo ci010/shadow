@@ -172,7 +172,8 @@ test('role and remote-workdir restrictions apply equally to virtual grep, glob a
   const remote = { ...f.context, remoteWorkdir: {
     nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not use remote executor') },
   } }
-  assert.match(await f.search({}, remote), /only v:sessions searches/)
+  assert.doesNotMatch(await f.search({}, remote), /v:tools\/mail__SearchMessages/)
+  assert.match(await f.read(undefined, remote), /Unknown or unavailable/)
   assert.equal(f.connect.mock.callCount(), 0)
 })
 

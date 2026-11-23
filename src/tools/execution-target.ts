@@ -1,4 +1,5 @@
 import { DEVICE_HOME_WORKDIR, deviceHomeNode } from '../execution/device-home.ts'
+import { isVirtualPath } from '../vfs/virtual-fs.ts'
 import type { ExecutionContext } from './context.ts'
 import { ToolNoEffectError, ToolOutcomeUnknownError } from './tool.ts'
 
@@ -34,7 +35,7 @@ export async function executionTargetContext(
     throw new ToolNoEffectError('Use workspace to select a registered Project Workspace, not nodeId/capabilityId. No operation was executed.')
   }
   if (/(?:^|[\\/])v:|^https?:/i.test(String(args.path ?? '').replaceAll('\\', '/')) || args.handler === 'web' || args.space !== undefined
-    || args.handler === 'glob' && /^v:/i.test(String(args.query))) {
+    || args.handler === 'glob' && isVirtualPath(String(args.query))) {
     throw new ToolNoEffectError('Explicit Workspace selection supports ordinary filesystem paths and OS shells only, not virtual paths, URLs, web search or legacy search space.')
   }
   context.signal.throwIfAborted()

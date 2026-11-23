@@ -198,7 +198,7 @@ test('explicit roots cannot bypass remote scope or silently override another roo
   } }
   for (const args of [
     { handler: 'grep', path: 'v:memory', query: 'x' },
-  ]) assert.match(await search.execute(args, remote), /only v:sessions searches/)
+  ]) await assert.rejects(search.execute(args, remote), /Virtual filesystem search is not configured/)
   assert.match(await search.execute({ space: 'grep:v:memory', path: 'src', query: 'x' }, context), /not both/)
   assert.match(await search.execute({ handler: 'web', path: 'src', query: 'x' }, context), /not configured/)
   assert.match(await search.execute({ handler: 'grep', include: resolve('src'), query: 'x' }, context), /put the search root in path/)
@@ -400,7 +400,7 @@ test('legacy space remains runtime-only for stored calls, with conflicting new s
 })
 
 
-test('remote workdir virtual sessions stay on the control plane for handler/path searches', async () => {
+test('remote workdir virtual sessions and models stay on the control plane for read and search', async () => {
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', () => 'needle', () => [{ name: 'web:one', content: 'needle' }])
   const search = new SearchTool('.', undefined, vfs)
@@ -411,9 +411,20 @@ test('remote workdir virtual sessions stay on the control plane for handler/path
   }
   assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), 'v:sessions/web:one')
   assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'needle' }, context), /v:sessions\/web:one.*needle/)
-  for (const path of ['v:tools', 'v:sessions-other']) {
-    assert.match(await search.execute({ handler: 'glob', path, query: '**' }, context), /only v:sessions searches/)
-  }
+  vfs.mount('v:models', 'Models', () => 'fixture model', () => [{ name: 'fixture', content: 'fixture model' }])
+  const read = new ReadTool('.', vfs)
+  assert.equal(await read.execute({ path: '/v:models/fixture' }, context), 'fixture model')
+  assert.match(await search.execute({ handler: 'grep', path: 'v:models', query: 'fixture' }, context), /v:models\/fixture.*fixture model/)
+  assert.equal(await search.execute({ handler: 'glob', query: '/v:models/*' }, context), 'v:models/fixture')
+  await assert.rejects(search.execute({ handler: 'glob', query: '/v:models/*', workspace: 'device:remote' }, context), /Explicit Workspace selection/)
+  const leased = { ...context, memoryAccess: {} } as ExecutionContext
+  await assert.rejects(search.execute({ handler: 'grep', path: 'v:models', query: 'fixture' }, leased), /Channel memory leases/)
+  await assert.rejects(read.execute({ path: 'v:models/fixture' }, leased), /Channel memory leases/)
+  await assert.rejects(search.execute({ handler: 'glob', path: 'v:unknown', query: '**' }, context), /Unknown virtual folder/)
+  await assert.rejects(read.execute({ path: 'v:unknown' }, context), /Unknown virtual filesystem path/)
+  await assert.rejects(new ReadTool('.').execute({ path: 'v:models' }, context), /Virtual filesystem read is not configured/)
+  await assert.rejects(read.execute({ path: resolve('v:models/fixture') }, context), /Must not forward virtual search/)
+  await assert.rejects(search.execute({ handler: 'grep', path: '.', query: 'fixture' }, context), /Must not forward virtual search/)
 })
 
 test('session overview/full paths share read and grep coordinates for logical and physical IDs', async () => {
@@ -423,7 +434,7 @@ test('session overview/full paths share read and grep coordinates for logical an
     { role: 'system' as const, content: 'HIDDEN SYSTEM' },
     { role: 'user' as const, content: 'Outward question\nsecond line' },
     { role: 'user' as const, content: [{ type: 'text' as const, text: '<event type="tick" source="cron" event-id="1" />' }, { type: 'text' as const, text: 'HIDDEN EVENT' }] },
-    { role: 'assistant' as const, content: 'Outward answer', tool_calls: [{ id: 'call-1', type: 'function' as const, function: { name: 'read', arguments: JSON.stringify({ secretArgument: 'x'.repeat(150000) }) } }] },
+    { role: 'assistant' as const, content: 'Outward answer', tool_calls: [{ id: 'call-1', type: 'function' as const, function: { name: 'read', arguments: JSON.stringify({ path: 'v:skills/three-playground', secretArgument: 'x'.repeat(150000) }) } }] },
     { role: 'tool' as const, tool_call_id: 'call-1', content: 'secretResult'.repeat(15000) },
     { role: 'assistant' as const, content: 'Final outward answer' },
   ]
@@ -440,7 +451,7 @@ test('session overview/full paths share read and grep coordinates for logical an
   for (const id of [logical, physical]) {
     const path = `v:sessions/${id}/overview`
     const overview = requireToolText(await read.execute({ path }, context))
-    assert.match(overview, /Outward question[\s\S]*read status=requested[\s\S]*result for 4.1[\s\S]*Final outward answer/)
+    assert.match(overview, /Outward question[\s\S]*read status=requested.*path="v:skills\/three-playground"[\s\S]*result for 4\.1.*status=success[\s\S]*Final outward answer/)
     assert.doesNotMatch(overview, /secretArgument|secretResult|HIDDEN/)
     assert.ok(overview.length < 1000)
     const match = await search.execute({ handler: 'grep', path, query: '^second line$' }, context)

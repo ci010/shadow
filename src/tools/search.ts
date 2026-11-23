@@ -132,8 +132,8 @@ export class SearchTool implements Tool {
       if (include !== undefined) return 'Error: specify the file glob either in include or in space, not both.'
       include = qualifier
     }
-    const virtualPath = ['grep', 'glob'].includes(scheme) && root && isVirtualPath(root) ? root
-      : scheme === 'glob' && !root && isVirtualPath(query) ? query.split(/[\\/]/)[0] : undefined
+    const virtualPath = scheme !== 'web' && (root ? isVirtualPath(root)
+      : scheme === 'glob' && isVirtualPath(query))
     if (scheme !== 'web' && !virtualPath) {
       const layerResult = await layerfsRoute('search', { ...args, handler: scheme, path: root, include }, context, this.workspace)
       if (layerResult !== undefined) {
@@ -141,10 +141,10 @@ export class SearchTool implements Tool {
         return toolResultText(layerResult)
       }
     }
-    // Web search uses the configured Main provider, independently of file locality.
-    if (context.remoteWorkdir && scheme !== 'web') {
-      if (virtualPath && !/^v:sessions(?:[\\/]|$)/.test(virtualPath)) return 'Error: only v:sessions searches of virtual paths are supported with a remote workdir.'
-      if (!virtualPath) return executeRemoteFilesystemSearch({
+    // Virtual mounts and web search keep their own authorization rules.
+    // Only ordinary filesystem searches are forwarded to Child.
+    if (context.remoteWorkdir && scheme !== 'web' && !virtualPath) {
+      return executeRemoteFilesystemSearch({
         ...context.remoteWorkdir,
         sessionId: context.sessionId,
         turnId: context.messageId,

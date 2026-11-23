@@ -247,12 +247,14 @@ export class ReadTool implements Tool<ToolResult> {
       return readOutputSpill(this.workspace, String(args.path), Number(args.offset ?? 1), Number(args.limit ?? OUTPUT_PREVIEW_CHARS), context.signal)
     }
     context = await executionTargetContext(args, context, 'filesystem.read')
-    const layerResult = await layerfsRoute('read', args, context, this.workspace)
-    if (layerResult !== undefined) return layerResult
     const raw = String(args.path)
+    if (!isVirtualPath(raw)) {
+      const layerResult = await layerfsRoute('read', args, context, this.workspace)
+      if (layerResult !== undefined) return layerResult
+    }
     if (args.encoding !== undefined && !isTextEncoding(args.encoding)) throw new TypeError('Unsupported read encoding.')
     const encoding: TextEncoding = isTextEncoding(args.encoding) ? args.encoding : 'auto'
-    if (args.encoding !== undefined && (URL_RE.test(raw) || raw.replace(/\\/g, '/').startsWith('v:'))) throw new Error('read encoding is supported only for local filesystem text files, not URLs or virtual paths.')
+    if (args.encoding !== undefined && (URL_RE.test(raw) || isVirtualPath(raw))) throw new Error('read encoding is supported only for local filesystem text files, not URLs or virtual paths.')
     const flags = typeof args.flag === 'string' ? args.flag : ''
     const showLineNumbers = flags.includes('n')
     const rawFormat = flags.includes('r')
@@ -265,7 +267,8 @@ export class ReadTool implements Tool<ToolResult> {
 
     // ── Virtual filesystem ──
     if (this.virtualFs) {
-      const rel = isAbsolute(raw) ? relative(this.workspace, raw) : raw
+      const rel = isVirtualPath(raw) || !isAbsolute(raw) || context.remoteWorkdir
+        ? raw : relative(this.workspace, raw)
       // Only check virtual mounts for paths that don't escape the workspace
       if (!rel.startsWith('..')) {
         if (listMode && isVirtualPath(rel)) {
@@ -309,6 +312,8 @@ export class ReadTool implements Tool<ToolResult> {
         }
       }
     }
+
+    if (isVirtualPath(raw)) throw new Error('Virtual filesystem read is not configured.')
 
     // ── URL fetch ──
     if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat, args, context)
