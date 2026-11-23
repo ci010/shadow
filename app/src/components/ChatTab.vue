@@ -161,7 +161,7 @@
             <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :api-base="apiBase" :data-msg-idx="idx" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
-            <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!" :render-content="renderMarkdown"
+            <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!" :render-content="renderMarkdown" :preview-image="openImagePreview"
               :api-base="apiBase" :session-id="activeSessionId"
               :default-open="streaming && !viewingPhysicalId && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
               :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
