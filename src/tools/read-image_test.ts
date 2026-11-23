@@ -9,7 +9,7 @@ import { requireToolText, type ToolResult } from './tool.ts'
 import type { ExecutionContext } from './context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { pngFixture } from '../testing/image.ts'
-import { MAX_IMAGE_BYTES, imageFromBytes, imageFromDataUrl } from '../utils/image-input.ts'
+import { MAX_IMAGE_BYTES, MAX_IMAGE_DATA_URL_BYTES, imageFromBytes, imageFromDataUrl } from '../utils/image-input.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 
 function fixture(home: string) {
@@ -62,15 +62,30 @@ test('unsupported, corrupted, oversized and remote images fail explicitly withou
     await writeFile(join(home, name), bytes)
     assert.match(requireToolText(await tools.execute('read', { path: name }, context)), error)
   }
-  const remote: ExecutionContext = { ...context, remoteWorkdir: {
-    nodeId: 'child', workdirId: 'remote',
-    executor: {
-      async *execute() { throw new Error('Must not execute remote text read') },
-      getStatus: async () => null,
-      cancel: async () => { throw new Error('Must not cancel remote work') },
-    },
-  } }
-  assert.match(requireToolText(await tools.execute('read', { path: 'secret.png' }, remote)), /Remote image reads are not supported/)
+  // Main validates the completed Child payload rather than trusting its MIME or size.
+  for (const [chunk, error] of [
+    ['data:image/jpeg;base64,' + pngFixture().toString('base64'), /does not match/],
+    ['x'.repeat(MAX_IMAGE_DATA_URL_BYTES + 1), /exceeded its size limit/],
+  ] as const) {
+    const remote: ExecutionContext = { ...context, remoteWorkdir: {
+      nodeId: 'child', workdirId: 'remote',
+      executor: {
+        async *execute(request) {
+          assert.equal(request.operation, 'filesystem.read')
+          assert.deepEqual(request.args, { path: 'image.png', kind: 'image' })
+          const timestamp = new Date().toISOString()
+          yield { version: 1, jobId: request.jobId, sequence: 0, timestamp, type: 'stdout', chunk }
+          yield { version: 1, jobId: request.jobId, sequence: 1, timestamp, type: 'completed', receipt: {
+            version: 1, jobId: request.jobId, nodeId: 'child', state: 'completed', finishedAt: timestamp,
+          } }
+        },
+        getStatus: async () => null,
+        cancel: async () => { throw new Error('not used') },
+      },
+    } }
+    await writeFile(join(home, 'image.png'), pngFixture())
+    assert.match(requireToolText(await tools.execute('read', { path: 'image.png' }, remote)), error)
+  }
   const oversizedPixels = pngFixture()
   oversizedPixels.writeUInt32BE(30_000, 16)
   oversizedPixels.writeUInt32BE(30_000, 20)

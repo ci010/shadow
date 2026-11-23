@@ -393,10 +393,15 @@ Current remote support is deliberately limited:
   rejects the route; it does not run Main's ripgrep. Use Child OS `exec` within
   its selected workdir when the Project permits shell execution. Local explicit
   targets retain ordinary filesystem search behavior.
-- Explicit targeting does not route virtual resources, URLs, web search, remote
-  images or legacy `search.space`. Omit the selection for control-plane virtual
-  resources. Remote image reads and explicit remote encoding overrides reject
-  without opening a Main file.
+- Explicit targeting does not route virtual resources, URLs, web search, legacy
+  `search.space`. Omit the selection for control-plane virtual resources.
+- Direct `read` calls can return PNG, JPEG, GIF and WebP from an approved Child
+  workdir, including through explicit workspace selection. Use a workdir-relative
+  path and omit paging, flags and encoding. The existing `filesystem.read`
+  grant applies; the Child validates the image (up to 5 MiB and 25 million
+  pixels) and Main validates it again before returning visual content. An older
+  Child may reject the image mode; update the Child rather than retrying on Main.
+  JavaScript reads remain text-only, and remote encoding overrides are unsupported.
 
 `write` records the selected node/workdir and Folder ID with its historical edit, including
 remote writes from an ordinary local session. `view_edit` continues to read the
