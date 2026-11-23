@@ -1,3 +1,4 @@
+import nativePath from 'node:path'
 import { isExecutionIdentifier } from './workdir-contracts.ts'
 
 /** Reserved Child-side binding, never a Project folder or a persisted session cwd. */
@@ -24,4 +25,20 @@ export function deviceHomeArgs<T>(request: T & { workdirId?: string; args: unkno
     else if (/^~[\\/]/.test(value)) args[key] = `.${value.slice(1)}`
   }
   return { ...request, args }
+}
+
+/** Interpret absolute paths on the Child, not on the Main OS. The filesystem
+ * handler still checks realpath containment (including symlinks/junctions). */
+export function deviceHomeReadArgs<T extends { workdirId?: string; args: unknown }>(request: T, root: string, paths = nativePath): T {
+  const { isAbsolute, parse, relative } = paths
+  const normalized = deviceHomeArgs<T>(request)
+  if (request.workdirId !== DEVICE_HOME_WORKDIR || !normalized.args || typeof normalized.args !== 'object') return normalized
+  const args = normalized.args as Record<string, unknown>
+  const path = args.path
+  if (typeof path !== 'string' || !isAbsolute(path)) return normalized
+  const childRelative = relative(root, path)
+  if ((paths === nativePath.win32 && parse(path).root.length === 1) || isAbsolute(childRelative) || /^\.\.(?:[\\/]|$)/.test(childRelative)) {
+    throw new Error('Absolute path is outside the Child home or is not fully qualified.')
+  }
+  return { ...normalized, args: { ...args, path: childRelative || '.' } }
 }

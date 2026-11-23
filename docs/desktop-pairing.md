@@ -199,7 +199,14 @@ this setting, retain its existing configuration, and restart it. Omission or
 working directory for paired OS-shell execution.
 
 When `v:devices` reports `deviceHomeWorkspace`, a direct owner Web turn can
-use `read` or `search` with `workspace: "device:<nodeId>"` and `path: "~"`.
+pass the reported `deviceHomeWorkspace` value (`device:<nodeId>`) explicitly
+as `workspace` in `read` or `search`, with `path: "~"` for the home directory.
+A registered Workspace selector does not grant Child home access.
+For a Windows Child, `~/AppData/Local/Temp/capture.png` and the file's fully
+qualified Windows path both work when the file is inside that Child account's
+home. Direct reads return supported images as image content. Paths outside the
+home, including targets of links or junctions, are denied without falling back
+to Main.
 Direct `write`, workspace switching, and automatic workspace registration are
 not part of this target.
 
