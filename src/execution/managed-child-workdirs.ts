@@ -1,4 +1,4 @@
-import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_SHELL_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs } from './device-home.ts'
+import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_SHELL_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs, deviceHomeReadArgs } from './device-home.ts'
 import { normalizeStoredWorkdirIdentity } from './workdir-storage.ts'
 import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from './derived-workspace-contract.ts'
 import { DERIVED_WORKSPACE_DIRECTORY, executeChildDerivedWorkspace, validateChildDerivedWorkspaceDirectory } from './child-derived-workspace.ts'
@@ -222,7 +222,9 @@ export class ManagedChildWorkdirs {
         if (request.operation === DERIVED_WORKSPACE_OPERATION) return this.#derive(request, signal)
         const bindings = await this.#bindings(request, signal)
         const handlers = [new CapabilityFilesystem(bindings), new CapabilityGit(bindings), new CapabilityWorkdirIdentity(bindings)]
-        return handlers.find(handler => handler.handles(request.operation))!.execute(deviceHomeArgs(request), signal)
+        const scopedRequest = request.operation === 'filesystem.read' && request.workdirId === DEVICE_HOME_WORKDIR
+          ? deviceHomeReadArgs(request, bindings[0]!.rootPath) : deviceHomeArgs(request)
+        return handlers.find(handler => handler.handles(request.operation))!.execute(scopedRequest, signal)
       },
     }, {
       handles: operation => operation === WORKDIR_PROCESS_EXECUTE_OPERATION || operation === 'workdir.process.execute-once',
