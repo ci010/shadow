@@ -20,7 +20,9 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('chat images open an accessible viewer while media playback and authenticated downloads remain intact', {
+for (const toolImage of [true, false]) test(toolImage
+  ? 'read tool images open the shared viewer by click, Enter and Space, and restore focus'
+  : 'chat images open an accessible viewer while media playback and authenticated downloads remain intact', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -50,10 +52,12 @@ test('chat images open an accessible viewer while media playback and authenticat
   await writeFile(output, '<html>Generated review report</html>')
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
+    optimizeDeps: toolImage ? { noDiscovery: true, include: [] } : undefined,
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-attachments',
-      resolveId: id => id === '/media-fixture.ts' ? '\0media-fixture' : undefined,
+      resolveId: id => id === '/media-fixture.ts' ? '\0media-fixture' : id === 'virtual:shadow-pdf-assets' ? '\0fixture-pdf-assets' : undefined,
       load(id) {
+        if (id === '\0fixture-pdf-assets') return 'export const cMapUrl="", standardFontDataUrl="", wasmUrl=""'
         if (id !== '\0media-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
           import { createApp, h, ref } from 'vue';
@@ -61,6 +65,13 @@ test('chat images open an accessible viewer while media playback and authenticat
           import { marked } from 'marked';
           import Attachments from '/src/components/MessageAttachments.vue';
           import ImageViewer from '/src/components/ImageViewer.vue';
+          ${toolImage ? `import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
+          import { groupToolActivity } from '/src/tool-activity.ts';
+          const readImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==';
+          const readBatch = groupToolActivity([
+            {event:'tool_call', content:'', toolCallId:'read-image', toolCall:{name:'read',arguments:{path:'photo.png'}}},
+            {event:'tool_result', content:'Image: photo.png', toolCallId:'read-image', media:[readImage]},
+          ]).get(0);` : ''}
           import { imagePreviewFromEvent, imagePreviewMarkup } from '/src/image-viewer.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
           const body = messageAttachments('Attachments from SNS\\n[file: uploads/clip.webm]\\nArchive: MEDIA:uploads/logs.zip', ['uploads/photo.png']);
@@ -81,6 +92,7 @@ test('chat images open an accessible viewer while media playback and authenticat
               paths: ['uploads/' + 'long-filename-'.repeat(14) + '.zip'] }),
             h(Attachments, { apiBase: location.origin, sessionId:'web:chat-child', paths:report.paths }),
             h('div', {class:'fixture-markdown', innerHTML:markdown.value, onClick:fromEvent, onKeydown:fromEvent}),
+            ${toolImage ? 'h(ToolActivityGroup, {batch:readBatch, previewImage:openImage}),' : ''}
             preview.value ? h(ImageViewer, {image:preview.value, onClose:() => preview.value = undefined}) : null,
           ]) }).mount('#app');`
       },
@@ -121,7 +133,7 @@ test('chat images open an accessible viewer while media playback and authenticat
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
-  const env: NodeJS.ProcessEnv = { MEDIA_SMOKE_URL: url, MEDIA_SCREENSHOTS: process.env.MEDIA_SCREENSHOTS }
+  const env: NodeJS.ProcessEnv = { MEDIA_SMOKE_URL: url, MEDIA_SMOKE_TOOL_IMAGE: toolImage ? '1' : '0', MEDIA_SCREENSHOTS: process.env.MEDIA_SCREENSHOTS }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
@@ -135,5 +147,5 @@ test('chat images open an accessible viewer while media playback and authenticat
   const [code] = await once(child, 'close')
   assert.equal(code, 0, log)
   assert.match(log, /MEDIA_SMOKE_OK/)
-  assert(videoRequests > 0)
+  if (!toolImage) assert(videoRequests > 0)
 })
