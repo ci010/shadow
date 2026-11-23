@@ -10,15 +10,32 @@ function result(content: string): ChatMessage { return { role: 'tool', content, 
 const view = (messages: ChatMessage[], overview = true) => formatSessionHistory(messages, overview, 'physical')
 
 test('overview never expands tool payloads, including folder and self metadata', () => {
-  for (const message of [call('write', { path: 'v:sessions/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'SECRET' }), call('constructor', { task: 'SECRET' })]) {
+  for (const message of [call('write', { path: 'v:sessions/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'v:skills/git-github', unknown: 'SECRET' }), call('constructor', { task: 'SECRET' })]) {
     const messages = [message, result('SECRET RESULT')]
     const text = view(messages)
     assert.doesNotMatch(text, /SECRET|private commentary/)
     assert.match(text, /c\/1\.1/)
     assert.match(text, /status=requested/)
-    assert.match(text, /status=result-recorded/)
+    assert.match(text, /status=success/)
     assert.match(view(messages, false), /SECRET/)
     assert.match(view(messages, false), /private commentary/)
+  }
+})
+
+test('overview shows bounded tool activity and distinguishes exec outcomes', () => {
+  const read = call('read', { path: 'v:skills/three-playground' }, 'read-1')
+  const exec = call('exec', { script: 'git status\n' + 'x'.repeat(1000), args: ['SECRET'] })
+  for (const [output, status] of [
+    ['(no output, exit code 0)', 'success'],
+    ['Error: command exited with code 7\nSECRET', 'failed'],
+    ['Process started. PID=123', 'background'],
+    ['Error: Remote execution outcome is unknown: SECRET', 'outcome-unknown'],
+  ]) {
+    const text = view([read, exec, result(output!)])
+    assert.match(text, /read status=requested.*path="v:skills\/three-playground"/)
+    assert.match(text, /script="git status x+…\[truncated\]"/)
+    assert.match(text, new RegExp(`result for 2\\.1.*status=${status}.*c/2\\.1`))
+    assert.doesNotMatch(text, /SECRET|x{241}/)
   }
 })
 
