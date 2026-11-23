@@ -1,3 +1,5 @@
+import { WEB_SEARCH_PROVIDERS } from '../config/web-search.ts'
+import type { RoutedWebSearchTool } from './web-provider.ts'
 import { executeRemoteFilesystemSearch } from '../execution/remote-filesystem-client.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { layerfsRoute } from './layerfs-route.ts'
@@ -39,8 +41,8 @@ export class SearchTool implements Tool {
         description: 'Glob pattern, regex or web keywords. Use ** to list virtual entries.',
       },
       handler: {
-        type: 'string', enum: ['grep', 'glob', 'web'],
-        description: 'Search implementation: grep (content), glob (names), or web. Bare names only; put file/virtual scope in path and web scope in domain.',
+        type: 'string', enum: ['grep', 'glob', 'web', ...WEB_SEARCH_PROVIDERS.map(id => `web:${id}`)],
+        description: 'Search implementation: grep (content), glob (names), web (default routing), or web:<provider> (explicit, no fallback; requires a configured key). Web results list configured handlers. Put file/virtual scope in path and web scope in domain.',
       },
       domain: { type: 'string', description: 'web only: restrict results to a DNS domain, e.g. github.com. No URL, path or site: prefix.' },
       path: { type: 'string', description: 'File/directory search root or v:<folder>[/path]. Defaults to the effective workdir, not the repository root.' },
@@ -97,8 +99,9 @@ export class SearchTool implements Tool {
     // Runtime-only compatibility for stored calls. Never advertise the overloaded legacy field.
     if (args.handler !== undefined && args.space !== undefined) return 'Error: use handler, not both handler and legacy space.'
     const legacy = args.handler === undefined && typeof args.space === 'string'
-    const { scheme, qualifier } = legacy ? parseSpace(args.space as string) : { scheme: args.handler, qualifier: '' }
-    if (typeof scheme !== 'string' || !['grep', 'glob', 'web'].includes(scheme)) return 'Error: handler must be a bare implementation name: grep, glob or web. Put file/virtual scope in path and web scope in domain.'
+    const override = WEB_SEARCH_PROVIDERS.find(id => args.handler === `web:${id}`)
+    const { scheme, qualifier } = legacy ? parseSpace(args.space as string) : { scheme: override ? 'web' : args.handler, qualifier: '' }
+    if (typeof scheme !== 'string' || !['grep', 'glob', 'web'].includes(scheme)) return 'Error: handler must be a bare implementation name (grep, glob, web) or a supported web:<provider> selector. Put file/virtual scope in path and web scope in domain.'
     if (Object.keys(args).some(key => !['handler', 'domain', 'space', 'query', 'path', 'include', 'limit', 'offset', 'workspace', 'folder'].includes(key))) return 'Error: supported search parameters are handler, query, path, include, domain, limit, offset and workspace.'
     if (args.domain !== undefined) {
       if (scheme !== 'web') return 'Error: domain is supported only by web.'
@@ -184,7 +187,12 @@ export class SearchTool implements Tool {
           ? `${query} site:${domain}`
           : query
         try {
-          const result = await this.webSearchTool.execute({ query: webQuery }, context)
+          const routed = this.webSearchTool as Partial<RoutedWebSearchTool>
+          if (override && !routed.executeSearch) return 'Error: explicit web search routing is not configured for this search tool.'
+          const result = routed.executeSearch
+            ? await routed.executeSearch({ query: webQuery }, context, override)
+            : await this.webSearchTool.execute({ query: webQuery }, context)
+          if (result.startsWith('Error:')) return result
           return ignoredWebOptions.length
             ? `Warning: web search ignores unsupported parameters: ${ignoredWebOptions.join(', ')}. Results are not filtered or paginated by these parameters.\n\n${result}`
             : result

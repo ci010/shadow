@@ -359,7 +359,7 @@ test('handler rejects overloaded selectors and exposes only unambiguous scope fi
   const search = new SearchTool('.')
   const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   assert.equal('space' in search.parameters.properties, false)
-  assert.deepEqual(search.parameters.properties.handler.enum, ['grep', 'glob', 'web'])
+  assert.deepEqual(search.parameters.properties.handler.enum, ['grep', 'glob', 'web', 'web:firecrawl', 'web:brave', 'web:exa', 'web:tavily', 'web:deepseek'])
   assert.ok(search.parameters.properties.domain)
   for (const handler of ['grep:v:tools', 'glob:src', 'web:example.com', 'grep:', 'gh', '', null, 1]) {
     assert.match(await search.execute({ handler, query: 'x' }, context), /handler must be a bare implementation name.*path.*domain/)
@@ -539,4 +539,29 @@ test('remote workdir web search uses the configured provider without remote file
   assert.deepEqual(queries, [{ query: 'docs site:example.com' }, { query: 'legacy' }])
   assert.match(await new SearchTool('.').execute({ handler: 'web', query: 'docs' }, context), /web search is not configured/)
   await assert.rejects(search.execute({ handler: 'web', query: 'docs', folder: 'remote' }, context), /Explicit Workspace selection/)
+})
+
+test('web search identifies the routed handler and configured alternatives on success and failure', async t => {
+  const { createLiveWebSearchTool } = await import('./web-provider.ts')
+  const request = t.mock.method(globalThis, 'fetch', async (url: unknown) => {
+    if (String(url).includes('firecrawl')) return new Response('quota exhausted', { status: 429 })
+    if (String(url).includes('deepseek')) return Response.json({ results: [] })
+    throw new Error('network unavailable')
+  })
+  let config = { firecrawlApiKey: 'synthetic-firecrawl', exaApiKey: 'synthetic-exa', braveApiKey: '  ' }
+  const search = new SearchTool('.', createLiveWebSearchTool(() => config, () => ({ alias: { type: 'deepseek', apiKey: 'synthetic-deepseek' } })))
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
+  const run = (handler: string) => search.execute({ handler, query: 'docs' }, context)
+  const failure = await run('web')
+  assert.match(failure, /^Error:.*429/)
+  assert.match(failure, /Web search handler: web:firecrawl\nConfigured web search handlers: web:firecrawl, web:exa, web:deepseek$/)
+  assert.equal(request.mock.callCount(), 1)
+  assert.match(await run('web:deepseek'), /^Web search handler: web:deepseek[\s\S]*No results found\./)
+  const thrown = await run('web:exa')
+  assert.match(thrown, /^Error:[\s\S]*Web search handler: web:exa/)
+  assert.match(thrown, /Configured web search handlers: web:firecrawl, web:exa, web:deepseek$/)
+  assert.match(await run('web:brave'), /No search was sent/)
+  assert.equal(request.mock.callCount(), 3)
+  config = { ...config, firecrawlApiKey: '' }
+  assert.match(await run('web:deepseek'), /Configured web search handlers: web:exa, web:deepseek\n/)
 })

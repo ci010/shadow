@@ -1,8 +1,8 @@
 import { resolveDeepSeekSearch, type SearchProviders } from '../config/deepseek-search.ts'
 import { DeepSeekSearchTool } from './deepseek-search.ts'
-import { resolveWebSearchProvider, type WebSearchConfig } from '../config/web-search.ts'
+import { resolveWebSearchProvider, webSearchStatus, WEB_SEARCH_PROVIDERS, type WebSearchConfig, type WebSearchProvider } from '../config/web-search.ts'
 import type { ExecutionContext } from './context.ts'
-import type { Tool } from './tool.ts'
+import { toolResultText, type Tool } from './tool.ts'
 import { ExaSearchTool } from './exa.ts'
 import { TavilySearchTool } from './tavily.ts'
 import { FirecrawlSearchTool, WebSearchTool } from './web.ts'
@@ -39,8 +39,34 @@ export function createWebSearchTool(
   return new TavilySearchTool(key)
 }
 
-export function createLiveWebSearchTool(getConfig: () => WebSearchConfig, getProviders: () => SearchProviders = () => ({})): Tool {
+export interface RoutedWebSearchTool extends Tool {
+  executeSearch(args: Record<string, unknown>, context: ExecutionContext, override?: WebSearchProvider): Promise<string>
+}
+
+export function createLiveWebSearchTool(getConfig: () => WebSearchConfig, getProviders: () => SearchProviders = () => ({})): RoutedWebSearchTool {
   return {
+    async executeSearch(args, context, override) {
+      context.signal.throwIfAborted()
+      const config = getConfig()
+      const providers = getProviders()
+      const status = webSearchStatus(config, providers)
+      const configured = WEB_SEARCH_PROVIDERS.filter(provider => provider === 'deepseek'
+        ? status.deepseek.ready : status.keys[provider])
+      const provider = override ?? status.effectiveProvider
+      const metadata = `Web search handler: web:${provider}\nConfigured web search handlers: ${configured.map(id => `web:${id}`).join(', ') || 'none'}`
+      if (override && !configured.includes(override)) {
+        return `Error: web:${override} has no configured API key. No search was sent.\n\n${metadata}`
+      }
+      try {
+        const result = await createWebSearchTool({ ...config, webSearchProvider: provider }, providers).execute(args, context)
+        const text = toolResultText(result)
+        return /^Error:/i.test(text) ? `${text}\n\n${metadata}` : `${metadata}\n\n${text}`
+      } catch (error) {
+        context.signal.throwIfAborted()
+        const message = error instanceof Error ? error.message : String(error)
+        return `Error: Web search failed: ${message}\n\n${metadata}`
+      }
+    },
     name: 'web_search',
     readonly: true,
     description: 'Search the web using the configured search provider and return results.',

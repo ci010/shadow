@@ -34,7 +34,7 @@ export async function executionTargetContext(
     operation !== 'workdir.process.execute-once')) {
     throw new ToolNoEffectError('Use workspace to select a registered Project Workspace, not nodeId/capabilityId. No operation was executed.')
   }
-  if (/(?:^|[\\/])v:|^https?:/i.test(String(args.path ?? '').replaceAll('\\', '/')) || args.handler === 'web' || args.space !== undefined
+  if (/(?:^|[\\/])v:|^https?:/i.test(String(args.path ?? '').replaceAll('\\', '/')) || (args.handler === 'web' || typeof args.handler === 'string' && args.handler.startsWith('web:')) || args.space !== undefined
     || args.handler === 'glob' && isVirtualPath(String(args.query))) {
     throw new ToolNoEffectError('Explicit Workspace selection supports ordinary filesystem paths and OS shells only, not virtual paths, URLs, web search or legacy search space.')
   }
