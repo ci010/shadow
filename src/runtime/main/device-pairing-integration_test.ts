@@ -1,3 +1,4 @@
+import { pngFixture } from '../../testing/image.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
@@ -375,7 +376,11 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
   }
   const stdout = (events: JobEventV1[]) =>
     events.flatMap(event => event.type === 'stdout' ? [event.chunk] : []).join('')
+  // A near-limit image exercises the full multi-frame transfer and queue backpressure.
+  const childImage = pngFixture(1321, 1321)
   async function verifyExecution(content: string): Promise<void> {
+    assert.equal(stdout(await execute('filesystem.read', { path: 'photo.png', kind: 'image' })),
+      `data:image/png;base64,${childImage.toString('base64')}`)
     assert.equal(stdout(await execute('filesystem.read', { path: 'sentinel.txt' })), 'CHILD_ONLY')
     await execute('filesystem.write', { path: 'result.txt', content })
     assert.equal(stdout(await execute('filesystem.read', { path: 'result.txt' })), content)
@@ -398,6 +403,7 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
     await mkdir(childWorkdir, { recursive: true })
     await writeFile(join(mainWorkdir, 'sentinel.txt'), 'MAIN_UNCHANGED')
     await writeFile(join(childWorkdir, 'sentinel.txt'), 'CHILD_ONLY')
+    await writeFile(join(childWorkdir, 'photo.png'), childImage)
     await startMain()
     const config = {
       version: 1, enabled: true, host: '127.0.0.1', port: await availablePort(),

@@ -5,6 +5,7 @@ import { optimizePngForModel } from './image-optimization.ts'
 import type { ImageContentPart } from '../providers/provider.ts'
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+export const MAX_IMAGE_DATA_URL_BYTES = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 'data:image/jpeg;base64,'.length
 export const MAX_IMAGE_PIXELS = 25_000_000
 export const MAX_TOOL_IMAGES = 4
 const formats = new Map([['png', 'image/png'], ['jpg', 'image/jpeg'], ['gif', 'image/gif'], ['webp', 'image/webp']])
@@ -45,9 +46,13 @@ function parseImageDataUrl(url: string): { bytes: Uint8Array; mime: string } {
   return { bytes: Buffer.from(match[2], 'base64'), mime: match[1] }
 }
 
-export function imageFromDataUrl(url: string): ImageContentPart {
+export function validatedImageFromDataUrl(url: string): ReturnType<typeof imageFromBytes> {
   const { bytes, mime } = parseImageDataUrl(url)
-  return imageFromBytes(bytes, mime).part
+  return imageFromBytes(bytes, mime)
+}
+
+export function imageFromDataUrl(url: string): ImageContentPart {
+  return validatedImageFromDataUrl(url).part
 }
 
 async function modelImageFromBytes(bytes: Uint8Array, expectedMime?: string, signal?: AbortSignal) {

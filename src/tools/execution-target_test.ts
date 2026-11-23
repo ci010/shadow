@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from 'node:fs/promises'
+import { pngFixture } from '../testing/image.ts'
+import { MAX_IMAGE_BYTES } from '../utils/image-input.ts'
 import { join } from 'node:path'
 import type { ExecutionContext } from './context.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -74,8 +76,31 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
     assert.deepEqual(change?.target, { nodeId: 'child', workdirId: 'approved', folderId: folder.id })
     assert.match(await new ViewEditTool().execute({ edit_id: change!.id }, context), /Recorded on node "child", workdir "approved"/)
     assert.equal(context.cwd, main); assert.equal(context.remoteWorkdir, undefined)
+    const childImage = pngFixture(400, 400)
+    assert(childImage.length > 256 * 1024)
+    await writeFile(join(child, 'photo.png'), childImage)
+    await writeFile(join(main, 'photo.png'), pngFixture())
+    const result = await read.execute({ folder: 'child', path: 'photo.png' }, context)
+    assert(typeof result !== 'string')
+    assert.deepEqual(result.content, [
+      { type: 'text', text: 'Image from "photo.png" (image/png, 400 x 400).' },
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${childImage.toString('base64')}`, detail: 'auto' } },
+    ])
+    const readChild = (path: string) => read.execute({ folder: 'child', path }, context)
+    await writeFile(join(child, 'invalid.png'), 'not an image')
+    await assert.rejects(readChild('invalid.png'), /Invalid image header/)
+    await writeFile(join(child, 'large.png'), Buffer.alloc(MAX_IMAGE_BYTES + 1))
+    await assert.rejects(readChild('large.png'), /exceeds 5 MiB/)
+    await assert.rejects(readChild('../main/photo.png'), /outside the granted capability/)
+    if (process.platform !== 'win32') {
+      await symlink(join(main, 'photo.png'), join(child, 'outside.png'))
+      await assert.rejects(readChild('outside.png'), /outside the granted capability/)
+    }
+    await writeFile(join(main, 'local-only.png'), pngFixture())
+    await assert.rejects(readChild('local-only.png'), /not found/)
     const before = calls
-    await assert.rejects(read.execute({ folder: 'child', path: 'photo.png' }, context), /Remote image reads/)
+    await assert.rejects(read.execute({ folder: 'child', path: 'photo.png', limit: 1 }, context), /Images do not support line paging/)
+    await assert.rejects(read.execute({ folder: 'child', path: 'photo.png' }, { ...context, javascriptInvocation: true }), /accepts text only/)
     await assert.rejects(read.execute({ folder: 'foreign', path: 'note.txt' }, context), /Unknown or ambiguous/)
     assert.equal(calls, before)
     assert.equal(await new SearchTool(main, undefined, undefined, false).execute({ folder: 'child', handler: 'grep', query: 'x' }, context), 'No matches found')
