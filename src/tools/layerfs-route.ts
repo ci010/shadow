@@ -14,7 +14,7 @@ export async function layerfsRoute(kind: 'read' | 'write' | 'exec' | 'search', i
   const a = workspaceArguments(input)
   const workspace = typeof a.workspace === 'string' && a.workspace.startsWith('layerfs:') ? a.workspace : context.layerfsWorkdir?.workspace
   if (!workspace) return undefined
-  if (a.workspace === undefined && (/^(?:v:|https?:)/.test(String(a.path ?? '')) || kind === 'search' && (a.handler === 'web' || a.path === undefined && /^v:/.test(String(a.query ?? ''))))) return undefined
+  if (a.workspace === undefined && (/^(?:v:|https?:)/.test(String(a.path ?? '')) || kind === 'search' && ((a.handler === 'web' || typeof a.handler === 'string' && a.handler.startsWith('web:')) || a.path === undefined && /^v:/.test(String(a.query ?? ''))))) return undefined
   if (!context.projectId) refuse('Project scope is required')
   if (context.remoteWorkdir) refuse('conflicting remote execution context; no Main fallback')
   if (context.recoveringToolCall) throw new ToolOutcomeUnknownError('LayerFS saved call cannot be reconciled automatically; inspect journal/status/history, do not replay.')
