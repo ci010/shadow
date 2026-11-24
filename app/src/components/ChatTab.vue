@@ -2070,7 +2070,7 @@ function handleImageContext(update: ImageContextUpdate): void {
     return
   }
   try {
-    if (update.file && !update.source) throw new Error(t('The image source is unavailable. Reopen the image before attaching it.'))
+    if (update.file && !update.source && !update.bytesOnly) throw new Error(t('The image source is unavailable. Reopen the image before attaching it.'))
     pendingAttachments.value = updateImageAttachment(pendingAttachments.value, update.sourceKey, update.file, { source: update.source })
   } catch (cause) {
     composerError.value = cause instanceof Error ? cause.message : t('Could not attach the marked image. Try again.')

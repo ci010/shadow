@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { AnnotationPointer, annotationPoint, annotationSizeError, AnnotationLoadError, annotationLoadErrorMessage, drawAnnotationStroke, markedImageName, isAnnotationUndo } from './image-annotation.ts'
 
-async function harness(local = true, mime = 'image/png') {
+async function harness(local = true, mime = 'image/png', bytesOnly = false, missingSource = false) {
   const source = await readFile(new URL('./components/files/ImageAnnotationPreview.vue', import.meta.url), 'utf8')
   const script = source.split('<script setup lang="ts">')[1]!.split('</script>')[0]!.replace(/^import .*$/gm, '')
   const operations: unknown[][] = []
@@ -19,10 +19,11 @@ async function harness(local = true, mime = 'image/png') {
     toBlob(callback: (blob: Blob) => void) { callback(new Blob(['marked'], { type: 'image/png' })) },
   }
   const file = new File(['image'], 'paste.png', { type: mime })
-  const props = { src: '/image', name: 'paste.png', localFile: local ? file : undefined, sourceKey: 'source', contextKey: 'context', active: true, editable: true }
+  const props = { src: '/image', name: 'paste.png', localFile: local ? file : undefined, bytesOnly, sourceKey: 'source', contextKey: 'context', active: true, editable: true }
   const updates: any[] = []
   const watches: Function[] = []
   let fetched = 0
+  const drags: unknown[] = []
   class FakeElement {
     editable = false
     contains(target: unknown) { return target instanceof FakeElement }
@@ -36,7 +37,8 @@ async function harness(local = true, mime = 'image/png') {
     watch: (getter: Function) => watches.push(getter), onMounted() {}, onBeforeUnmount() {},
     t: (text: string) => text, AnnotationPointer, annotationPoint, annotationSizeError, AnnotationLoadError,
     annotationLoadErrorMessage, drawAnnotationStroke, markedImageName, isAnnotationUndo,
-    imageSourcePath: () => '/original.png', startImageReferenceDrag() { throw new Error('must not reference-drag local images') },
+    imageSourcePath: () => { if (missingSource) throw new Error('missing source'); return '/original.png' },
+    startImageReferenceDrag(_data: unknown, reference: unknown) { drags.push(reference); return () => {} },
     fetch: async () => { fetched++; return { ok: true, headers: new Headers(), blob: async () => file } },
     Image: class { naturalWidth = 200; naturalHeight = 100; async decode() {} },
   }
@@ -47,7 +49,7 @@ async function harness(local = true, mime = 'image/png') {
   target.getBoundingClientRect = () => ({ left: 0, top: 0, width: component.zoomSize.value?.width ?? 100, height: component.zoomSize.value?.height ?? 50 })
   await component.loadImage()
   const event = (x: number, y: number, extra = {}) => ({ pointerId: 1, button: 0, buttons: 1, isPrimary: true, ctrlKey: false, shiftKey: false, clientX: x, clientY: y, preventDefault() {}, ...extra })
-  return { component, event, operations, updates, props, watches, fetched, document }
+  return { component, event, operations, updates, props, watches, fetched, document, drags }
 }
 
 test('line preview replaces endpoint, preserves prior marks and exports two-point stroke through undo pipeline', async () => {
@@ -184,4 +186,34 @@ test('pan releases capture on space-up, cancellation and blur without adding mar
   assert.equal(captured, false)
   assert.equal(c.strokes.length, 0)
   assert.equal(updates.length, 0)
+})
+
+test('remote folder bytes support original and marked references without path provenance', async () => {
+  const { component: c, event, drags, updates } = await harness(false, 'image/png', true, true)
+  assert.equal(c.loaded.value, true)
+  assert.equal(c.sourceError.value, '')
+  const drag = () => c.dragStart({ ctrlKey: true, dataTransfer: {}, preventDefault() { assert.fail('drag prevented') } })
+  drag()
+  c.pointerDown(event(1, 1)); c.pointerUp(event(2, 2))
+  const update = updates.findLast(([name]) => name === 'image-context')[1]
+  assert.ok(update.file instanceof File)
+  assert.equal('source' in update, false)
+  assert.equal(update.bytesOnly, true)
+  drag()
+  assert.deepEqual(drags.map((ref: any) => [ref.sourceKey, ref.file.type, 'source' in ref]), [
+    ['source', 'image/png', false], ['source', 'image/png', false],
+  ])
+  assert.equal((drags[1] as { file: File }).file, update.file)
+})
+
+test('path-backed previews still fail closed when source metadata is missing', async () => {
+  const { component: c, event, drags } = await harness(false, 'image/png', false, true)
+  assert.equal(c.loaded.value, true)
+  assert.equal(c.sourceError.value, 'missing source')
+  c.pointerDown(event(1, 1)); c.pointerUp(event(2, 2))
+  assert.equal(c.strokes.length, 0)
+  let prevented = false
+  c.dragStart({ ctrlKey: true, dataTransfer: {}, preventDefault() { prevented = true } })
+  assert.equal(prevented, true)
+  assert.deepEqual(drags, [])
 })
