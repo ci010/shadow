@@ -284,7 +284,7 @@ test('admin, agent-role and remote restrictions cannot be bypassed by skill regi
       nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
     } }
     assert.match(requireToolText(await f.read('v:skills/private', remote)), /local workdir/)
-    assert.match(requireToolText(await f.invoke('secret_tool', {}, remote)), /remote workdirs/)
+    assert.match(requireToolText(await f.invoke('secret_tool', {}, remote)), /unavailable from a remote workdir/)
     f.session.resetDynamic()
   })
 })

@@ -27,8 +27,9 @@ do not promise transient/redacted observations. Avoid collecting unrelated
 private content. Do not copy secrets into logs, messages or artifacts.
 
 Host-device authorization and agent-role tool permissions still apply. The source
-requires its owning local web conversation and enabled local execution. A remote
-folder does not grant Main desktop access; there is no silent device fallback.
+requires its owning Web conversation and enabled Main local execution. The tool
+explicitly targets Main's desktop even when a Child workdir is selected. It never
+operates the Child desktop; do not describe the two devices interchangeably.
 Use existing ask/confirmation semantics before consequential operations. Source
 initialization, session selection and a successful screenshot are not approval
 for destructive actions, sending messages, purchases or other consequential work.

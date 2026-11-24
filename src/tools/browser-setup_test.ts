@@ -20,11 +20,11 @@ import { SharedChrome } from '../browser/shared-chrome.ts'
 import { join } from 'node:path'
 import { ChromeToolSchema } from '../config/schema.ts'
 
-function fixture(t: TestContext, home: string) {
+function fixture(t: TestContext, home: string, canLoad?: (entry: LoadableEntry) => boolean) {
   t.mock.method(BrowserSetupTool.prototype, 'discover', async () => []) // never inspect real profiles in tests
   const importer = new ImportTool(new Map<string, LoadableEntry>([['chrome-devtools', {
     config: { name: 'chrome-devtools', transport: 'stdio', ...bundledChromeAdapter() },
-  }]]), home, 'project')
+  }]]), home, 'project', undefined, undefined, canLoad)
   const base = new Tools(home)
   base.register(new InvokeTool(importer))
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => {})
@@ -84,6 +84,33 @@ test('explicit binding, page interleaving, select hidden and invalid IDs never f
   assert.match(String(bad), /Unknown pageId/)
   assert.equal(f.call.mock.calls.at(-1)!.arguments[1].pageId, 999)
   assert.equal(f.connect.mock.callCount(), 1)
+}))
+
+test('Child workdir can bind Main Chrome without handing the adapter a workdir root', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), local = f.session()
+  const ctx: ExecutionContext = { ...local, cwd: 'synthetic-child-display-path', folderId: 'child',
+    remoteWorkdir: { nodeId: 'child', workdirId: 'registered', executor: {} } as ExecutionContext['remoteWorkdir'] }
+  assert.match(String(await f.setup(ctx, { action: 'discover' })), /installations/)
+  assert.equal(f.connect.mock.callCount(), 0)
+  // An existing local-root binding must not be used by a Child turn.
+  const { instance } = JSON.parse(String(await f.setup(local, { action: 'attach', endpoint: 'http://127.0.0.1:9555' })))
+  assert.equal((f.connect.mock.calls[0].this as McpConnection).workspaceRoot, home)
+  assert.match(String(await f.invoke(ctx, {}, instance, 'list_pages')), /rebind without a filesystem root/)
+  assert.equal(f.call.mock.callCount(), 0)
+  assert.match(String(await f.setup(ctx, { action: 'connect', instance })), /"status":"connected"/)
+  assert.equal((f.connect.mock.calls[1].this as McpConnection).workspaceRoot, undefined)
+  assert.match(String(await ctx.tools.execute('invoke_tool', { source: 'chrome-devtools', args: {} }, ctx)), /Initialized MCP source chrome-devtools/)
+  assert.equal(await f.invoke(ctx, {}, instance, 'list_pages'), '1: A\n2: B')
+  assert.match(String(await f.setup({ ...ctx, projectId: 'other' }, { action: 'discover' })), /project binding mismatch/)
+  assert.match(String(await f.invoke({ ...ctx, tools: f.session(['chrome-devtools__list_pages']).tools }, {}, undefined, 'list_pages')), /not available for this agent type/)
+}))
+
+test('Child browser setup does not bypass disabled Main execution', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home, () => false)
+  const ctx = { ...f.session(), remoteWorkdir: { nodeId: 'child' } as ExecutionContext['remoteWorkdir'] }
+  assert.match(String(await f.setup(ctx, { action: 'discover' })), /Main local executor is disabled/)
+  assert.match(String(await ctx.tools.execute('invoke_tool', { source: 'chrome-devtools', args: {} }, ctx)), /Main local executor is disabled/)
+  assert.equal(f.connect.mock.callCount(), 0)
 }))
 
 test('bindings are owner-local, explicit when multiple, forgotten on reset; disconnect only closes MCP', async t => withTempWorkspace(async home => {

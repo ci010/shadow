@@ -8,7 +8,38 @@ import { InvokeTool } from '../tools/invoke-tool.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { managedDesktopSource } from './service.ts'
+import { McpConnection } from '../mcp/client.ts'
+import { withTempWorkspace } from '../testing/workspace.ts'
 import { verifyAgentDesktopAssets, agentDesktopTarget, agentDesktopHash, AGENT_DESKTOP_REPOSITORY, AGENT_DESKTOP_REVISION, AGENT_DESKTOP_VERSION } from '../../scripts/agent-desktop-integrity.ts'
+
+test('Child workdir does not prevent the owning Web session from initializing and using Main desktop MCP', async t => withTempWorkspace(async home => {
+  const connect = t.mock.method(McpConnection.prototype, 'connect', async () => {})
+  t.mock.method(McpConnection.prototype, 'listTools', async () => [
+    { name: 'desktop_snapshot', description: 'fixture', inputSchema: { type: 'object', properties: {} } },
+  ])
+  const call = t.mock.method(McpConnection.prototype, 'callTool', async () => 'synthetic desktop response')
+  let admitted = true
+  const source = managedDesktopSource('p', home, () => { if (!admitted) throw new Error('owner revoked') }, true, home,
+    async () => ({} as Awaited<ReturnType<typeof verifyAgentDesktopAssets>>))
+  const base = new Tools(home)
+  const importer = new ImportTool(new Map([['agent-desktop', source]]), home, 'p')
+  base.register(new InvokeTool(importer))
+  const tools = new SessionTools(base, home)
+  tools.setExecutionScope('session', [])
+  t.after(() => tools.resetDynamicAndWait())
+  const context = { projectId: 'p', sessionId: 'web:owner', channel: 'web', tools, signal: AbortSignal.timeout(10000),
+    remoteWorkdir: { nodeId: 'child', workdirId: 'registered', executor: {} } } as ExecutionContext
+  const initialize = { source: 'agent-desktop', args: {} }
+  const snapshot = { name: 'agent-desktop__desktop_snapshot', args: {} }
+  assert.match(String(await tools.execute('invoke_tool', initialize, { ...context, channel: 'telegram' })), /host-device authorization/)
+  assert.equal(connect.mock.callCount(), 0)
+  assert.match(String(await tools.execute('invoke_tool', initialize, context)), /Initialized MCP source agent-desktop/)
+  assert.equal(call.mock.callCount(), 0)
+  assert.equal(await tools.execute('invoke_tool', snapshot, context), 'synthetic desktop response')
+  admitted = false
+  assert.match(String(await tools.execute('invoke_tool', snapshot, context)), /owner revoked/)
+  assert.equal(call.mock.callCount(), 1)
+}))
 
 // Executable fixture only, never a desktop action. Windows process/protocol tests
 // use process.execPath fixtures elsewhere; native .exe asset resolution needs CI.
