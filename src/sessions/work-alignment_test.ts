@@ -391,7 +391,7 @@ test('legacy persisted temporary bindings restore without reviving durable selec
   await f.alignment.assignNote(actor(owner), first.key, first.sequence, peer)
   const next = await f.create()
   f.store.close()
-  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
   for (const id of [owner, 'task', 'call']) db.prepare('INSERT INTO work_focus (session_id,work_key) VALUES (?,?)').run(id, first.key)
   db.close()
   f = fixture(home)

@@ -136,7 +136,7 @@ test('append order survives paging during another connection’s inserts and res
 
 test('ledger INSERT failure rolls back the note; legacy attention is neither migrated nor replayed', async () => withTempWorkspace(async home => {
   const f = fixture(home)
-  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
   try {
     const work = await f.create('manager', 'worker')
     db.exec("CREATE TRIGGER reject_notice BEFORE INSERT ON work_notifications BEGIN SELECT RAISE(ABORT, 'synthetic ledger failure'); END;")

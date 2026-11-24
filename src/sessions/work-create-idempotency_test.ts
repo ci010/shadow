@@ -43,7 +43,7 @@ test('creation keys survive restart, normalize defaults, isolate creators and re
 
 test('a rejected creation receipt rolls back the Work, links and audit event', async () => withTempWorkspace(async home => {
   const store = new InitiativeStore(home)
-  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
   const alignment = new WorkAlignment(store, { state: sessionId => ({ sessionId, segmentIndex: 0, mode: 'session' }), changed: async () => {} })
   const request = { title: 'Atomic creation', definition: 'Verify the receipt and Work commit together.', idempotencyKey: 'fixture' }
   const create = () => alignment.execute({ kind: 'session', sessionId: 'owner' }, 'create', undefined, undefined, request) as Promise<WorkRecord>

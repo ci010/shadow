@@ -57,7 +57,7 @@ test('v6 migration retains legacy events, uses actual transition time or null, a
   for (const withHistory of [true, false]) await withTempWorkspace(async home => {
     const initial = new InitiativeStore(home); initial.close()
     const record = completionFixture(); record.sequence = 4; record.status = 'done'
-    const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+    const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
     db.prepare('INSERT INTO work_contracts (id,sequence,data) VALUES (?,?,?)').run(record.key, record.sequence, JSON.stringify(record))
     if (withHistory) {
       const insert = db.prepare('INSERT INTO work_contract_events (id,work_key,actor,kind,created_at,data) VALUES (?,?,?,?,?,?)')

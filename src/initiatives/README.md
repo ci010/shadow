@@ -9,9 +9,8 @@ acceptance remain separate facts.
 ## Storage
 
 `InitiativeStore` is an internal implementation name. It owns one Project Home's
-`state/initiatives.sqlite`, independently of JSONL/SQLite session storage. This
-filename and the `src/initiatives/` directory still hold current Work data and
-must not be deleted merely because of their names.
+`state/work.sqlite`, independently of JSONL/SQLite session storage. The previous `state/initiatives.sqlite` and its sidecars are left untouched. If
+`state/work.sqlite` is absent, Work starts empty; the old database is not imported.
 
 Version 6 stores complete records in `work_contracts`, audit events in
 `work_contract_events`, effect references in `work_effects`, temporary task/call bindings in

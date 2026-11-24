@@ -26,7 +26,7 @@ test('current Work records, links and history survive reopen without legacy tabl
     assert.throws(() => store.assertWorkReference('work:11111111-1111-4111-8111-111111111111', 'work:5e546683-5364-53e9-b8ae-d5d5402b9671'), /does not belong/)
     assert.equal(store.getSessionSummary('web:owner'), null)
     } finally { store.close() }
-    const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+    const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
     assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 6)
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='initiatives'").get(), undefined)
     db.close()
@@ -40,10 +40,28 @@ test('current Work records, links and history survive reopen without legacy tabl
   })
 })
 
+test('Work starts in a new database without importing or modifying initiatives.sqlite', async () => {
+  await withTempWorkspace(async home => {
+    const initial = new InitiativeStore(home)
+    initial.close()
+    const legacyPath = projectStoragePath(home, 'state', 'initiatives.sqlite')
+    const legacy = new DatabaseSync(legacyPath)
+    legacy.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('old Work'); PRAGMA user_version=6;")
+    legacy.close()
+    const before = readFileSync(legacyPath)
+    const store = new InitiativeStore(home)
+    try {
+      assert.deepEqual(store.workRecords(), [])
+      store.saveWork(note(), 0, 'web:owner', 'created')
+    } finally { store.close() }
+    assert.deepEqual(readFileSync(legacyPath), before)
+  })
+})
+
 test('legacy Work databases fail explicitly without changing or deleting their data', async () => {
   await withTempWorkspace(async home => {
     const current = new InitiativeStore(home); current.close()
-    const path = projectStoragePath(home, 'initiatives.sqlite')
+    const path = projectStoragePath(home, 'work.sqlite')
     const db = new DatabaseSync(path)
     db.exec("PRAGMA journal_mode=DELETE; CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('user data'); PRAGMA user_version=5;")
     db.close()
@@ -85,7 +103,7 @@ test('legacy Work identity is rejected without rewriting storage or granting top
       assert.deepEqual(current.workAuthority(canonical.key), { manager: 'web:owner', executor: 'web:owner', active: true })
       assert.throws(() => current.workAuthority('topic:web:owner'), /canonical Work key/)
     } finally { current.close() }
-    const path = projectStoragePath(home, 'initiatives.sqlite')
+    const path = projectStoragePath(home, 'work.sqlite')
     const db = new DatabaseSync(path)
     const legacy = { ...canonical, key: 'initiative:retained', subject: { kind: 'initiative', initiativeId: 'retained' } }
     const raw = JSON.stringify(legacy)
