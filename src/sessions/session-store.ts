@@ -124,6 +124,31 @@ export interface ConversationArchivePage { items: ConversationArchiveSummary[]; 
 export interface ConversationArchiveRange { nextOffset?: number; records: Record<string, unknown>[]; total: number }
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
+export interface SessionFollowUp {
+  next: string
+  after: number
+}
+
+export interface SessionFollowUpState {
+  dueAt: number
+  wakes: number
+  startedAt: number
+  phase: 'self_check' | 'follow_up'
+  inputId: string
+}
+
+/** Validate persisted recovery data without coercion or inventing defaults. */
+export function parseSessionFollowUpState(value: unknown): SessionFollowUpState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid session follow-up state')
+  const { dueAt, wakes, startedAt, phase, inputId } = value as Record<string, unknown>
+  const nonnegativeInteger = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
+  if (!nonnegativeInteger(dueAt) || !nonnegativeInteger(wakes) || !nonnegativeInteger(startedAt) ||
+    (phase !== 'self_check' && phase !== 'follow_up') || typeof inputId !== 'string' || !inputId.trim()) {
+    throw new TypeError('Invalid session follow-up state')
+  }
+  return { dueAt, wakes, startedAt, phase, inputId }
+}
+
 export interface SessionState {
   /** Assembly pin, independent of definition ID and draft revision. */
   promptVersion?: PromptVersion
@@ -155,6 +180,10 @@ export interface SessionState {
   name?: string
   /** Optional current step. Never inferred from legacy description. */
   focus?: string
+  /** Explicit null opts out; absence leaves the default policy in effect. */
+  followUp?: SessionFollowUp | null
+  /** Internal recovery data; never exposed through self metadata. */
+  sessionFollowUp?: SessionFollowUpState
   /** Explicit current-goal completion; independent of inferred runtime activity. Absent means open. */
   completed?: boolean
   /** Host-stamped self completion freshness; absent on legacy records. Not a public self patch. */

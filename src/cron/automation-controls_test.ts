@@ -259,3 +259,30 @@ test('Workflow host controls use the authorized system config owner and retain f
     assert.equal(cron.workflow.enabled(id), true)
   } finally { await cron.stop() }
 }))
+
+test('linked cron protects its Session while scheduled and through removal during an admitted run', async () => {
+  await withTempWorkspace(async workspace => {
+    const cron = new CronService(workspace)
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    cron.setHandler(async () => { started.resolve(); await release.promise })
+    await cron.start()
+    try {
+      const id = cron.addJob({ session: 'existing', schedule: 'every 1h', task: 'existing continuation',
+        target: { sessionId: 'web:target' }, originSessionId: 'web:owner' })
+      assert.equal(cron.hasSessionJob('web:owner'), true)
+      assert.equal(cron.hasSessionJob('web:target'), true)
+      assert.equal(cron.hasSessionJob('web:other'), false)
+      await cron.setJobEnabled(id, false)
+      assert.equal(cron.hasSessionJob('web:target'), false)
+      await cron.setJobEnabled(id, true)
+      const running = cron.runNow(id)
+      await started.promise
+      cron.removeJob(id)
+      assert.equal(cron.hasSessionJob('web:target'), true)
+      release.resolve()
+      await running
+      assert.equal(cron.hasSessionJob('web:target'), false)
+    } finally { release.resolve(); await cron.stop() }
+  })
+})

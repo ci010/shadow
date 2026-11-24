@@ -1745,6 +1745,7 @@ export async function createProjectRuntime(
   cronService.setOnChanged(reason => {
     if (reason === 'inventory') realtime.invalidateSessions()
     realtime.invalidateResource?.('automations')
+    sessions.wakeSessionFollowUps()
   })
   const automationProfiles = new AutomationProfileService(cronService, sessions, project.id, id => {
     if (id === 'system:work-organizer') return { kind: 'event', scope: 'current_runtime',
@@ -2305,6 +2306,7 @@ export async function createProjectRuntime(
   // Local readiness must not wait for external platform authentication or networking.
   // Admission starts only after the session runtime can receive channel messages.
   await channels.startAll(app, { waitForConnections: false })
+  sessions.startSessionFollowUps(id => cronService.hasSessionJob(id))
   startup.ready()
   console.info('[main] All services started')
   return { app, folders: folderRegistry, ready, shutdown, updateConfig, authorizeA2a: a2a.authorize, debugRead }
