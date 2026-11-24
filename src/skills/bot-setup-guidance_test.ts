@@ -2,31 +2,23 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { getBuiltinSkills } from './builtins.ts'
 
-test('Bot setup guidance distinguishes verified personal entry points and restricted service roles', async () => {
+test('Bot setup guidance separates transport from exact BOT assignments', async () => {
   const skill = (await getBuiltinSkills()).get('tool-operations')
   assert(skill)
-  assert.match(skill.meta.description, /personal assistant versus service Bot/)
   assert.equal(skill.meta.tools, undefined, 'Setup instructions must not add executable tools')
   for (const rule of [
-    /Connect my assistant/,
-    /Create a service Bot/,
-    /Private versus group chat alone does not determine the purpose/,
-    /exact-Project\/exact-Bot owner verification/,
-    /Only the verified owner's direct messages/,
-    /Unbound identities, other people and group messages must\s+be rejected/,
-    /ordinary Project dynamic Skill discovery\/activation path/,
-    /Owner DMs remain service conversations/,
-    /Unassigned conversations must not fall back/,
+    /Connection is transport only/,
+    /exact verified inbox assignment/,
+    /does not execute or replay/,
+    /distinct inboxes/,
+    /does not grant owner or admin status/,
+    /ordinary Project dynamic Skill discovery\/activation/,
     /must not acquire extra tools by dynamically reading `v:skills`/,
-    /must not silently serve both purposes/,
     /Web-only operations or platform limits/,
-    /do not currently start legacy WeChat adapters/,
     /does not execute the tools or authorize unrelated side effects/,
     /Agent allowed\/blocked tools, module ceilings/,
-    /Selecting instructions can change behavior even when a tool is\s+not allowed/,
-    /readResources.*named grants do\s+not sandbox/s,
-    /restart persistence, revoked owner/,
-    /workflows below configure service Bots, not personal Project entry points/,
+    /readResources.*named grants do\s+not sandbox/,
+    /assignment revocation, restart persistence/,
   ]) assert.match(skill.body, rule)
 })
 
@@ -52,6 +44,9 @@ test('Bot state guidance prefers owner-only VFS reads without activating operati
   const skills = await getBuiltinSkills()
   const setup = skills.get('bot-setup')!
   assert.equal(setup.meta.tools, undefined)
+  assert.match(setup.body, /transport only.*exact conversation assignment/)
+  assert.match(setup.body, /exact host-recorded WeChat private inbox.*Personal BOT/)
+  assert.doesNotMatch(setup.body, /owner challenge|ownerVerified|explicit purpose/)
   for (const rule of [/v:bots\/overview/, /v:bots\/connections\/index/, /v:bots\/deployments\/<id>\/status/,
     /v:bots\/deployments\/<id>\/listeners/, /processing success is unknown/, /old `bot_setup` \/ `bot_package`/,
     /owner durable Web management boundary/, /do not start connections/, /No status read repairs/]) assert.match(setup.body, rule)

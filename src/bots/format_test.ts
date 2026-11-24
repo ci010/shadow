@@ -7,7 +7,7 @@ import { freeze } from './deployments.ts'
 import type { ModelInfo } from '../providers/provider.ts'
 
 const inference = { model: 'chosen@fixture', temperature: 0, maxTokens: 321, thinking: { type: 'enabled' }, reasoningEffort: 'high' }
-const personal = { mode: 'personal', connection: '11111111-1111-4111-8111-111111111111', agent: 'general', tools: [] }
+const personal = { mode: 'personal', agent: 'general', tools: [] }
 const modern = (overrides: Record<string, unknown> = {}) => migrateBotFrontmatter(botFiles('', overrides))
 const setConfig = (files: Record<string, string>, patch: Record<string, unknown>) => ({ ...files, 'bot.json': JSON.stringify({ ...JSON.parse(files['bot.json']!), ...patch }) })
 
@@ -22,7 +22,6 @@ test('whole legacy and new Service/Personal formats normalize identically withou
     assert.equal(converted['tools/main.ts'], legacy['tools/main.ts'])
     const config = JSON.parse(converted['bot.json']!)
     for (const key of ['mode', 'agent', ...Object.keys(inference)]) assert.equal(Object.hasOwn(config, key), false)
-    if (overrides === personal) assert.equal(config.connection, personal.connection)
     assert.equal(config.subscriptions, undefined, 'do not materialize omitted subscriptions')
     assert.equal(config.bindings.length, 0)
   }
@@ -57,8 +56,9 @@ test('strict mode-specific header types and duplicate YAML keys', () => {
   }
   const files = modern(personal)
   assert.throws(() => parseBot({ ...files, 'BOT.md': files['BOT.md']!.replace('agent: general\n', '') }))
-  assert.throws(() => parseBot(setConfig(modern(), { connection: personal.connection })))
-  assert.throws(() => parseBot(setConfig(files, { connection: undefined })))
+  for (const candidate of [modern(), files]) assert.throws(() => parseBot(setConfig(candidate, { connection: "11111111-1111-4111-8111-111111111111" })))
+  const unassigned = parseBot(setConfig(files, { subscriptions: [] }))
+  assert.deepEqual(unassigned.bindings, [])
 })
 
 test('custom config path, CRLF prompt bytes, zero values and explicit empty subscriptions survive conversion', () => {

@@ -5,7 +5,7 @@ import { workflowCanvas } from './workflow-canvas.ts'
 import { parseWorkflows } from './workflows.ts'
 
 export const bots = {
-  connections: [{ id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', purpose: 'service', enabled: true, health: 'disconnected' }],
+  connections: [{ id: 'qq-shared', displayName: 'Shared QQ', platform: 'qq', enabled: true, health: 'disconnected' }],
   deployments: [{ id: 'sales', state: 'valid', mode: 'service', agent: 'BOT:sales' }, { id: 'support', state: 'valid', mode: 'service', agent: 'BOT:support' }, { id: 'invalid', state: 'quarantined' }],
   bindings: [
     { id: 'one', deploymentId: 'sales', connectionId: 'qq-shared', platform: 'qq', topic: 'group:one', enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: [] },
@@ -47,8 +47,8 @@ test('isolated group shortcuts remain distinct from binding inspector configurat
   assert.equal(groups.filter(n => n.data.definition.id === 'connection:qq-shared').length, 1)
 })
 
-// Regression: the common receipt sink must not replace the real personal Agent.
-test('personal paired DM ingress survives a sink with an extra group, without granting group replies', async () => {
+// Regression: an unrelated receipt must not claim the Personal BOT.
+test('a Personal BOT with an exact DM assignment stays separate from a recorded group', async () => {
   const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
   const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
   const source = { version: 1 as const, projectId: 'p', connectionId: 'qq-shared', platform: 'qq' as const,
@@ -56,17 +56,17 @@ test('personal paired DM ingress survives a sink with an extra group, without gr
   const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq',
     histories: [{ sessionId: passiveChannelId(source), projectId: 'p', channelSource: source }], observations: [] })
   const snapshot = parseBotProjection({ ...bots, sinks: [sink], deployments: [{ id: 'personal', mode: 'personal', state: 'valid', agent: 'general' }],
-    bindings: [{ id: 'owner', deploymentId: 'personal', connectionId: 'qq-shared', platform: 'qq', kind: 'host-owner-ingress',
+    bindings: [{ id: 'owner', deploymentId: 'personal', connectionId: 'qq-shared', platform: 'qq', kind: 'message', topic: 'dm:owner',
       enabled: true, subscribed: true, listener: true, sessionIds: ['owner-dm-session'] }] }, 'p')
   const flows = botCanvas(snapshot)
   assert.equal(flows.length, 1)
   assert.equal(flows[0]?.connectionSettingsId, 'qq-shared')
   assert.equal(flows[0]?.sinkProjection?.receivers.length, 1)
   const owner = flows[0]!
-  assert.deepEqual(owner.graph?.map(node => node.nodeType), ['connection', 'sink', 'deployment'])
+  assert.deepEqual(owner.graph?.map(node => node.nodeType), ['connection', 'sink', 'sink', 'deployment'])
   assert.match(JSON.stringify(owner.graph), /general/)
-  assert.match(JSON.stringify(owner.graph), /not permission to reply in every group/)
-  assert.equal(owner.graph?.find(node => node.id === 'bot:owner')?.parentId, 'connection')
+  assert.match(JSON.stringify(owner.graph), /do not confirm that messages were received/)
+  assert.equal(owner.graph?.find(node => node.id === 'bot:owner')?.parentId, 'entry:owner')
   assert.deepEqual((owner.graph?.find(node => node.id === 'bot:owner')?.config as { sessionIds: string[] }).sessionIds, ['owner-dm-session'])
   assert(flows.every(flow => flow.graph?.every(node => node.status === 'unknown')))
   const receiverConfig = flows[0]!.graph![1]!.config as { evidence: unknown }
@@ -82,7 +82,7 @@ test('personal paired DM ingress survives a sink with an extra group, without gr
   assert.deepEqual(binding.graph![0]!.config, { id: 'missing' })
  })
 
-test('one transport branches through exact receiver identities, with configured-only and owner entries kept separate', async () => {
+test('one transport branches through exact receiver identities, with configured-only and Personal entries kept separate', async () => {
   const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
   const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
   const histories = ['group:one', 'group:unbound'].map(conversationId => {
@@ -92,7 +92,7 @@ test('one transport branches through exact receiver identities, with configured-
   const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq', histories, observations: [] })
   const projection = parseBotProjection({ ...bots, deployments: bots.deployments.map(deployment => ({ ...deployment, revision: 'rev-one' })), sinks: [sink], bindings: [...bots.bindings,
     { ...bots.bindings[0], id: 'same-package', topic: 'group:unbound' },
-    { ...bots.bindings[0], id: 'owner', kind: 'host-owner-ingress', topic: undefined }] })
+    { ...bots.bindings[0], id: 'owner', kind: 'message', topic: 'dm:owner' }] })
   const flows = botCanvas(projection)
   const flow = flows.find(flow => flow.definition.id === sink.id)!
   assert.equal(flows.filter(flow => flow.connectionSettingsId === 'qq-shared').length, 1)
@@ -100,7 +100,7 @@ test('one transport branches through exact receiver identities, with configured-
   assert.equal(flow.graph!.find(node => node.id === 'bot:one')!.parentId, `receiver:${receiver.id}`)
   assert.equal(flow.graph!.find(node => node.id === 'bot:one')!.receiverId, receiver.id)
   assert.equal(flow.graph!.find(node => node.id === 'bot:two')!.parentId, 'entry:two')
-  assert.equal(flow.graph!.find(node => node.id === 'bot:owner')!.parentId, 'connection')
+  assert.equal(flow.graph!.find(node => node.id === 'bot:owner')!.parentId, 'entry:owner')
   assert.equal(flow.graph!.some(node => node.nodeType === 'binding'), false, 'Binding lives inside the published BOT')
   const first = flow.graph!.find(node => node.id === 'bot:one')!.config as { deployment: unknown; executed: string }
   const second = flow.graph!.find(node => node.id === 'bot:same-package')!.config as { deployment: unknown }
@@ -119,7 +119,7 @@ test('one transport branches through exact receiver identities, with configured-
   assert.equal(withoutBinding.graph!.some(node => node.nodeType === 'deployment'), false)
 })
 
-test('receiver titles share names or typed raw identities; owner associations cannot consume groups', async () => {
+test('receiver titles share names or typed raw identities; DM assignments never attach to an unrelated receiver', async () => {
   const { connectionSinkProjection } = await import('../../src/channels/sink-projection.ts')
   const { passiveChannelId } = await import('../../src/channels/passive-contract.ts')
   const { receiverLabel } = await import('./receiver-label.ts')
@@ -131,13 +131,13 @@ test('receiver titles share names or typed raw identities; owner associations ca
   const sink = connectionSinkProjection({ projectId: 'p', connectionId: 'qq-shared', platform: 'qq', observations: [], histories: sources.map(channelSource => ({ projectId: 'p', sessionId: passiveChannelId(channelSource), channelSource })) })
   const owner = sink.receivers.find(r => r.address.conversationId === 'dm:owner')!
   const group = sink.receivers.find(r => r.kind === 'group')!
-  const projection = parseBotProjection({ ...bots, sinks: [sink], bindings: [{ ...bots.bindings[0], id: 'owner', kind: 'host-owner-ingress', topic: undefined, receiverIds: [owner.id] }] })
+  const projection = parseBotProjection({ ...bots, sinks: [sink], bindings: [{ ...bots.bindings[0], id: 'owner', kind: 'message', topic: 'dm:owner' }] })
   const flow = botCanvas(projection)[0]!
   assert.equal(flow.graph!.find(n => n.id === 'bot:owner')?.parentId, `receiver:${owner.id}`)
   for (const receiver of sink.receivers) assert.equal(flow.graph!.find(n => n.id === `receiver:${receiver.id}`)?.label, receiverLabel(receiver))
   assert.equal(receiverLabel(owner), 'Owner chat')
   assert.equal(receiverLabel(group), 'qq · Group · group:one')
-  assert.equal(botCanvas({ ...projection, bindings: [{ ...projection.bindings[0]!, receiverIds: [group.id] }] })[0]!.graph!.find(n => n.id === 'bot:owner')?.parentId, 'connection')
+  assert.equal(botCanvas({ ...projection, bindings: [{ ...projection.bindings[0]!, topic: 'dm:missing' }] })[0]!.graph!.find(n => n.id === 'bot:owner')?.parentId, 'entry:owner')
 })
 
 test('Discord top-level and thread-parent receiver matching uses guild/channel IDs, never name', async () => {

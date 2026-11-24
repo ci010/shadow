@@ -9,8 +9,8 @@ const settings = readFileSync(new URL('./components/ChannelsView.vue', import.me
 const status = readFileSync(new URL('./components/BotServiceStatus.vue', import.meta.url), 'utf8')
 
 test('Discord service setup has minimal credentials and file-authored permissions, not configuration wizards', () => {
-  assert.match(view, /Connection does not grant service access/)
-  assert.match(view, /Owner pairing is only for personal Bots/)
+  assert.match(view, /assign it to the exact conversation/)
+  assert.doesNotMatch(view, /Start owner pairing|Select a role/)
   assert.match(view, /Guilds, channels, participants and grants belong in BOT files/)
   assert.doesNotMatch(settings + view, /<DiscordAccess|Publish and assign an Agent|setup-steps|Advanced settings and access/)
   assert.match(settings, /retired Discord configuration workflow. No change has been approved or published/)
@@ -21,7 +21,7 @@ test('Discord service setup has minimal credentials and file-authored permission
 })
 
 test('legacy Discord access settings remain untouched by credential-only patches', () => {
-  const bot = parseBotStatus({ id: 'discord-bot', projectId: 'p', platform: 'discord', label: 'Discord', displayName: 'Discord', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { triggerMode: 'all', memberIntent: true, allowFrom: ['123'], adminChats: ['456'] }, secrets: { token: true } }, 'p')
+  const bot = parseBotStatus({ id: 'discord-bot', projectId: 'p', platform: 'discord', label: 'Discord', displayName: 'Discord', enabled: false, configured: true, state: 'disabled', config: { triggerMode: 'all', memberIntent: true, allowFrom: ['123'], adminChats: ['456'] }, secrets: { token: true } }, 'p')
   const draft = botConnectionDraft('discord')
   assert.deepEqual(draft, { token: '' })
   assert.deepEqual(botConnectionPatch(bot, draft, true), { config: { enabled: true } })

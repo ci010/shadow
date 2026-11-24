@@ -9,10 +9,10 @@ import { ChannelSetupError } from './setup.ts'
 
 const displayName = z.string().trim().min(1).max(100)
 const createSchema = z.object({
-  purpose: z.enum(['personal', 'service']), platform: z.enum(CHANNEL_IDS), displayName, config: z.record(z.unknown()).default({}),
+  platform: z.enum(CHANNEL_IDS), displayName, config: z.record(z.unknown()).default({}),
 }).strict()
 const patchSchema = z.object({
-  purpose: z.enum(['personal', 'service']).optional(), displayName: displayName.optional(), config: z.record(z.unknown()).optional(),
+  displayName: displayName.optional(), config: z.record(z.unknown()).optional(),
 }).strict()
 
 /**
@@ -39,22 +39,6 @@ export function botSetupPlugin(options: {
       maxSize: 256 * 1024, onError: c => c.json({ error: 'channel_config_too_large' }, 413),
     }))
     app.get('/api/channels/:id/pending-groups', c => c.json({ groups: options.runtime.pendingServiceGroups(c.req.param('id')) }))
-    app.get('/api/channels/:id/owner-candidate', c => c.json(options.runtime.ownerCandidate(c.req.param('id'))))
-    app.post('/api/channels/:id/owner-challenge', c => {
-      try { return c.json(options.runtime.createOwnerChallenge(c.req.param('id'))) }
-      catch { return c.json({ error: 'owner_pairing_unavailable' }, 400) }
-    })
-    app.post('/api/channels/:id/owner-confirm', async c => {
-      try {
-        const body = z.object({ challenge: z.string() }).strict().parse(await c.req.json())
-        await options.runtime.confirmOwner(c.req.param('id'), body.challenge)
-        return c.json({ confirmed: true })
-      } catch (error) { return c.json({ error: error instanceof ConversationContextsBusyError ? 'bot_context_busy' : 'owner_confirmation_failed' }, error instanceof ConversationContextsBusyError ? 409 : 400) }
-    })
-    app.delete('/api/channels/:id/owner', async c => {
-      try { await options.runtime.revokeOwner(c.req.param('id')); return c.json({ revoked: true }) }
-      catch (error) { return c.json({ error: error instanceof ConversationContextsBusyError ? 'bot_context_busy' : 'owner_revocation_failed' }, error instanceof ConversationContextsBusyError ? 409 : 400) }
-    })
     app.post('/api/channels/:id/wechat/:operation', async c => {
       const operation = c.req.param('operation')
       if (operation !== 'login' && operation !== 'wait') return c.json({ error: 'unknown_operation' }, 404)

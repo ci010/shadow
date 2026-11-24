@@ -51,10 +51,8 @@ or merging thread histories. Unknown Discord channel types remain unknown rather
 than being guessed from numeric IDs. Discovery-only stream entries without
 parent/type evidence do not invent graph receivers.
 
-Connection configuration and BOT admission changes use an explicit offline
-migration; receipt storage itself never migrates or replays history. See
-[Connection policy migration](connection-migration.md) for v2/v3 startup,
-backup/recovery and the still-unperformed real-Project rollout.
+[Connection storage](connection-migration.md) and BOT admission are separate
+from receipt storage. Assigning a BOT never replays recorded receipts.
 
 The stream contains bounded text and identities, not downloaded attachments or
 raw credential-bearing payloads. Platform content is untrusted data, never agent

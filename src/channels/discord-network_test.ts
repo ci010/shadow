@@ -53,7 +53,7 @@ test('saved enabled Discord Bots retry even after failed adapter was removed', a
   mkdirSync(root, { recursive: true })
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const store = new BotInstanceStore({ projectId: 'network-test', path: join(root, 'bots.json') })
-  const bot = store.create('discord', 'Test', { enabled: true, token: 'synthetic' }, undefined, 'personal')
+  const bot = store.create('discord', 'Test', { enabled: true, token: 'synthetic' })
   const bus = new Bus()
   let starts = 0
   const manager = new ChannelManager(ConfigSchema.parse({}), bus, {} as SessionManager,
@@ -83,7 +83,7 @@ test('trusted Discord transport selects only current Project Bot and guards conn
   mkdirSync(root, { recursive: true })
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const store = new BotInstanceStore({ projectId: 'patrol', path: join(root, 'bots.json') })
-  const bot = store.create('discord', 'Test', { enabled: true, token: 'synthetic' }, undefined, 'personal')
+  const bot = store.create('discord', 'Test', { enabled: true, token: 'synthetic' })
   const bus = new Bus()
   let calls = 0
   class PatrolAdapter extends DiscordChannel {

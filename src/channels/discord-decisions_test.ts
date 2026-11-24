@@ -39,9 +39,11 @@ async function flush() {
 async function fixture(t: TestContext, allowFrom?: string[]) {
   const socket = new Socket()
   const calls: Call[] = []
-  const channel = new DiscordChannel(new Bus(), { token: 'synthetic-bot-token', allowFrom })
+  class FixtureChannel extends DiscordChannel {
+    protected override openSocket() { socket.readyState = 1; return socket as unknown as ReturnType<DiscordChannel['openSocket']> }
+  }
+  const channel = new FixtureChannel(new Bus(), { token: 'synthetic-bot-token', allowFrom })
   let nextMessage = 500
-  t.mock.method(globalThis, 'WebSocket', function () { socket.readyState = 1; return socket })
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input)).pathname.replace('/api/v10', '')
     const method = init?.method ?? 'GET'
@@ -229,12 +231,15 @@ test('Discord stop cancels pending acknowledgements and suppresses stale gateway
   f.channel.setDecisionHandler(async () => { answers++; return 'Accepted' })
   const pending = Promise.withResolvers<Response>()
   let signal: AbortSignal | undefined
+  const ackStarted = Promise.withResolvers<void>()
   t.mock.method(globalThis, 'fetch', (_input: unknown, init?: RequestInit) => {
     signal = init?.signal ?? undefined
+    ackStarted.resolve()
     return pending.promise
   })
   const staleGateway = f.socket.onmessage!
   f.socket.emit('INTERACTION_CREATE', f.interaction())
+  await ackStarted.promise
   await f.channel.stop()
   assert.equal(signal?.aborted, true)
   pending.resolve(new Response(null, { status: 204 }))

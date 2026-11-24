@@ -24,7 +24,6 @@ export function mountBotUi(t: TestContext, filename: string, props: Record<strin
       }
       if (id === './UiSelect.vue') return { default: Vue.defineComponent({ inheritAttrs: false, setup: (_props, { attrs, slots }) => () => Vue.h('select', attrs, slots.default?.()) }) }
       if (id === 'vue-router') return { RouterLink: Vue.defineComponent({ setup: (_props, { attrs, slots }) => () => Vue.h('a', attrs, slots.default?.()) }) }
-      if (id === './BotPairingCommand.vue') return { default: Vue.defineComponent({ props: ['challenge'], setup: props => () => Vue.h('pairing-command', { challenge: props.challenge }) }) }
       if (options.stubs?.[id]) return { default: options.stubs[id] }
       if (id.endsWith('.vue')) return { default: load(id.replace('./', '')) }
       return require(id)

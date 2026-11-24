@@ -4,14 +4,13 @@ import type { ChannelManager } from '../channels/manager.ts'
 import { publishedBotAgentName, type DirectoryBots } from './runtime.ts'
 import { bindingSubscribed } from './sdk.ts'
 import { channelSessionId } from '../bus/events.ts'
-import type { InputListener } from '../input/router.ts'
 import type { ConnectionSinkProjection } from '../channels/sink-contract.ts'
 import { connectionSinkProjection } from '../channels/sink-projection.ts'
 
 /** Inspection-only DTO: never a Workflow definition, routing authority or run receipt. */
 export interface BotWorkflowProjection {
   sinks: ConnectionSinkProjection[]
-  connections: Array<{ id: string; displayName: string; platform: string; purpose: string; enabled: boolean; health: string }>
+  connections: Array<{ id: string; displayName: string; platform: string; enabled: boolean; health: string }>
   deployments: Array<{ id: string; state: 'valid' | 'quarantined' | 'unavailable'; mode?: 'service' | 'personal'; agent?: string; revision?: string }>
   bindings: Array<{ id: string; deploymentId: string; connectionId: string; platform: string; topic?: string; enabled: boolean; subscribed: boolean; listener: boolean; kind: string; sessionIds: string[]; receiverIds?: string[] }>
   warnings: string[]
@@ -28,7 +27,6 @@ export function botWorkflowProjection(options: {
   channels: Pick<ChannelManager, 'projectId' | 'botStatus'>
   directory: Pick<DirectoryBots, 'deployments' | 'inspect'>
   sessionIds: readonly string[]
-  personalListeners: readonly InputListener[]
   sinkLookup?: (connectionId: string) => ConnectionSinkProjection
 }): BotWorkflowProjection {
   const { projectId, store, channels, directory } = options
@@ -43,7 +41,7 @@ export function botWorkflowProjection(options: {
       const status = channels.botStatus(id)
       if (status.projectId !== projectId) throw new Error('Project mismatch')
       result.connections.push({ id: safe(status.id), displayName: safe(status.displayName), platform: status.platform,
-        purpose: status.purpose ?? 'unknown', enabled: status.enabled, health: status.state })
+        enabled: status.enabled, health: status.state })
       try {
         const sink = options.sinkLookup?.(id) ?? connectionSinkProjection({ projectId, connectionId: id, platform: status.platform, histories: [], observations: [] })
         if (sink.projectId !== projectId || sink.connectionId !== id) throw new Error('Sink ownership mismatch')
@@ -60,16 +58,6 @@ export function botWorkflowProjection(options: {
       ...(item.deployment ? { revision: item.deployment.revision } : {}) })
     if (!bot) continue
     if (result.bindings.length >= 5000) { if (!result.warnings.includes('binding-index-limit')) result.warnings.push('binding-index-limit'); continue }
-    if (bot.mode === 'personal') {
-      const listeners = options.personalListeners.filter(listener => listener.source.id === bot.connection && listener.source.type === result.connections.find(c => c.id === bot.connection)?.platform && listener.kind === 'message' && listener.target.kind === 'session')
-      result.bindings.push({ id: JSON.stringify([id, 'personal']), deploymentId: id, connectionId: bot.connection, platform: result.connections.find(c => c.id === bot.connection)?.platform ?? 'unknown',
-        enabled: result.connections.find(c => c.id === bot.connection)?.enabled ?? false, subscribed: true, listener: listeners.length > 0, kind: 'host-owner-ingress',
-        // Associate only an existing direct inbox with the exact live owner topic.
-        // Never export private owner selectors or infer a receiver from a Session ID.
-        receiverIds: (result.sinks.find(sink => sink.connectionId === bot.connection)?.receivers ?? []).filter(receiver => receiver.kind === 'direct' && listeners.some(listener => listener.topic === receiver.address.conversationId && listener.source.type === receiver.address.platform)).map(receiver => receiver.id),
-        sessionIds: listeners.map(listener => listener.target.id).filter(id => sessions.has(id)) })
-      continue
-    }
     for (const binding of bot.bindings) {
       if (result.bindings.length >= 5000) { if (!result.warnings.includes('binding-index-limit')) result.warnings.push('binding-index-limit'); break }
       const topic = binding.platform !== 'discord' ? binding.conversationId : binding.observation ? binding.id
@@ -82,13 +70,17 @@ export function botWorkflowProjection(options: {
       if (binding.platform !== 'discord' || !binding.observation && binding.target.kind === 'channel') {
         try {
           const connection = store.get(binding.botInstanceId)
-          const sessionId = channelSessionId({ projectId, botInstanceId: binding.botInstanceId, platform: binding.platform, conversationId: binding.platform === 'discord' && binding.target.kind === 'channel' ? binding.target.channelId : binding.platform !== 'discord' ? binding.conversationId : '',
-            ...(connection.legacySessionId ? { legacySessionId: true } : {}) })
+          if (connection.platform !== binding.platform) throw new Error('Connection platform mismatch')
+          const sessionId = channelSessionId({ projectId, botInstanceId: binding.botInstanceId, platform: binding.platform, conversationId: binding.platform === 'discord' && binding.target.kind === 'channel' ? binding.target.channelId : binding.platform !== 'discord' ? binding.conversationId : '' })
           if (sessions.has(sessionId)) sessionIds = [sessionId]
         } catch { /* Missing connection cannot provide a verified session association. */ }
       }
+      const receiverIds = binding.platform === 'discord' ? undefined
+        : result.sinks.find(sink => sink.connectionId === binding.botInstanceId)?.receivers
+          .filter(receiver => receiver.address.platform === binding.platform && receiver.address.conversationId === binding.conversationId)
+          .map(receiver => receiver.id)
       result.bindings.push({ id: createHash('sha256').update(JSON.stringify([id, binding.platform, binding.botInstanceId, topic])).digest('hex'), deploymentId: id, connectionId: safe(binding.botInstanceId),
-        platform: binding.platform, topic: safe(topic), enabled: binding.enabled, subscribed: bindingSubscribed(bot, binding), listener, kind, sessionIds })
+        platform: binding.platform, topic: safe(topic), enabled: binding.enabled, subscribed: bindingSubscribed(bot, binding), listener, kind, sessionIds, ...(receiverIds?.length ? { receiverIds } : {}) })
     }
   }
   return result
