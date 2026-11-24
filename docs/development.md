@@ -499,7 +499,8 @@ IDs without building physical nodes; delegation parents retain their own field.
 
 The shared Project live reader owns one conditional summary and one activity
 snapshot per scope. Full/unparameterized summary access remains compatible;
-Quick Open loads that full scope on demand, while automation history uses its
+Quick Open shares navigation on open and reads full history only after a nonempty
+search, while the automation history menu uses its
 existing paginated run endpoint and history expansion control. Navigation omits
 only terminal historical fresh-automation branches, preserving the newest run
 per job, active/waiting work and context/delegation ancestors. Ordinary chat,
