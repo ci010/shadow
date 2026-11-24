@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
+import { BotInstanceStore } from '../channels/bot-store.ts'
 import { QQChannel } from '../channels/qq.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import type { MainCluster } from '../cluster/main-cluster.ts'
@@ -22,9 +23,10 @@ test('project becomes locally ready while QQ connects, and shutdown cancels pend
   const config = ConfigSchema.parse({
     agent: { workspace: home, model: 'fixture@openai' },
     providers: { openai: { apiKey: 'synthetic-unused', baseUrl: 'http://127.0.0.1:1' } },
-    channels: { qq: { enabled: true, appId: 'synthetic-startup-bot', secret: 'synthetic-unused' } },
     mcp: {},
   })
+  new BotInstanceStore({ projectId: project.id, path: join(home, 'config', 'bots.v1.json') })
+    .create('qq', 'Startup fixture', { enabled: true, appId: 'synthetic-startup-bot', secret: 'synthetic-unused' })
   const configStore = new ProjectConfigStore({ configPath: join(root, 'config', 'project.json'), home, getSharedConfig: () => config })
   const effective = await configStore.init(config)
   const connection = Promise.withResolvers<void>()
@@ -45,6 +47,7 @@ test('project becomes locally ready while QQ connects, and shutdown cancels pend
     throw new Error('Startup must not probe optional network services')
   })
   const cluster = {
+    observeInventory: () => () => {},
     workdirLookup: () => undefined,
     registry: { listWorkdirs: () => [] },
     getNodeInventory: () => ({ version: 1, nodes: [] }),
@@ -100,6 +103,7 @@ for (const primaryRetired of [true, false]) {
       fetch: async () => assert.fail('Startup must not contact an account'),
     })
     const cluster = {
+      observeInventory: () => () => {},
       workdirLookup: () => undefined, registry: { listWorkdirs: () => [] },
       getNodeInventory: () => ({ version: 1, nodes: [] }),
     } as unknown as MainCluster
@@ -111,5 +115,52 @@ for (const primaryRetired of [true, false]) {
       assert.equal((await runtime.app.request('/api/sessions/graph')).status, 200)
       assert.equal(files.size, 0)
     } finally { await runtime.shutdown(); scope.close() }
+  })
+}
+
+for (const bots of [[], [{
+  id: 'legacy-id', projectId: 'default', platform: 'discord', displayName: 'Legacy',
+  purpose: 'personal', verifiedOwner: { userId: 'old-owner' }, config: { enabled: false },
+}]]) {
+  test(`Project startup and Connection Settings work with ${bots.length ? 'populated' : 'empty'} v3 storage`, { timeout: 15000 }, async t => {
+    const { root, workspace } = await folderFixture(t)
+    const home = join(workspace, 'legacy-startup-home')
+    const legacyPath = join(home, 'config', 'bots.v1.json')
+    await mkdir(join(home, 'config'), { recursive: true })
+    const legacy = JSON.stringify({ version: 3, bots })
+    await writeFile(legacyPath, legacy)
+    const catalog = new ProjectCatalog(join(root, 'catalog'))
+    await catalog.init()
+    const project = catalog.get('default')!
+    const config = ConfigSchema.parse({
+      agent: { workspace: home, model: 'fixture@openai' },
+      providers: { openai: { apiKey: 'synthetic-unused', baseUrl: 'http://127.0.0.1:1' } }, mcp: {},
+    })
+    const configStore = new ProjectConfigStore({ configPath: join(root, 'config', 'project.json'), home, getSharedConfig: () => config })
+    const effective = await configStore.init(config)
+    const cluster = {
+      observeInventory: () => () => {},
+      workdirLookup: () => undefined, registry: { listWorkdirs: () => [] },
+      getNodeInventory: () => ({ version: 1, nodes: [] }),
+    } as unknown as MainCluster
+    const scope = createProjectScope(project.id)
+    try {
+      const runtime = await scope.run(() => createProjectRuntime(effective, {
+        project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticatorV2(), authorize: () => true,
+      }))
+      try {
+        await runtime.ready
+        const initial = await runtime.app.request('/api/channels')
+        assert.equal(initial.status, 200)
+        assert.deepEqual(await initial.json(), bots.length ? { channels: [], legacyConnectionsDetected: true } : { channels: [] })
+        const created = await runtime.app.request('/api/channels', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ platform: 'wechat', displayName: 'New Connection', config: { enabled: false } }),
+        })
+        assert.equal(created.status, 201)
+        assert.notEqual((await created.json()).channel.id, 'legacy-id')
+        assert.equal(await readFile(legacyPath, 'utf8'), legacy)
+      } finally { await runtime.shutdown() }
+    } finally { scope.close() }
   })
 }

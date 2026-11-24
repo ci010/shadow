@@ -4321,6 +4321,7 @@
   "Connection in this Project": "此项目的连接",
   "Choose an existing connection or create one": "复用已有连接或新建",
   "Create a new connection": "新建连接",
+  "Legacy connections were not imported. Select “Create a new connection” to set them up again, then review and republish any BOT inbox bindings you still need.": "旧版连接未导入。请选择「新建连接」重新配置，然后检查并重新发布仍需使用的 BOT 收件箱绑定。",
   "No connections for this platform in this Project. Create one to continue.": "此项目尚无该平台的连接。新建连接后继续。",
   "Create connection": "创建连接",
   "Update private credentials": "更新私密凭据",

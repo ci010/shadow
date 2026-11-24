@@ -45,7 +45,10 @@ export function botSetupPlugin(options: {
       try { return c.json(await options.runtime.wechatLogin(c.req.param('id'), operation === 'wait') as Record<string, unknown>) }
       catch (error) { return c.json({ error: error instanceof ChannelSetupError ? error.code : 'wechat_login_failed' }, 400) }
     })
-    app.get('/api/channels', c => c.json({ channels: options.runtime.botStatuses() }))
+    app.get('/api/channels', c => c.json({
+      channels: options.runtime.botStatuses(),
+      ...(options.store.legacyConnectionsDetected ? { legacyConnectionsDetected: true } : {}),
+    }))
     app.on(['POST', 'PATCH', 'DELETE'], ['/api/channels', '/api/channels/:id'], async c => {
       const id = c.req.param('id')
       try {

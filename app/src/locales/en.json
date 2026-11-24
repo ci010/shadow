@@ -4321,6 +4321,7 @@
   "Connection in this Project": "Connection in this Project",
   "Choose an existing connection or create one": "Choose an existing connection or create one",
   "Create a new connection": "Create a new connection",
+  "Legacy connections were not imported. Select “Create a new connection” to set them up again, then review and republish any BOT inbox bindings you still need.": "Legacy connections were not imported. Select “Create a new connection” to set them up again, then review and republish any BOT inbox bindings you still need.",
   "No connections for this platform in this Project. Create one to continue.": "No connections for this platform in this Project. Create one to continue.",
   "Create connection": "Create connection",
   "Update private credentials": "Update private credentials",

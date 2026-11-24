@@ -19,7 +19,7 @@ test('Connections persist and expose only transport identity and configuration',
       writeFileSync(path, JSON.stringify({ ...document, bots: [{ ...document.bots[0], ...field }] }))
       assert.throws(() => new BotInstanceStore({ projectId: 'p', path }))
     }
-    for (const version of [2, 3]) {
+    for (const version of [1, 2, 5]) {
       const previous: string = JSON.stringify({ ...document, version })
       writeFileSync(path, previous)
       assert.throws(() => new BotInstanceStore({ projectId: 'p', path }), /require version 4/)
@@ -27,3 +27,34 @@ test('Connections persist and expose only transport identity and configuration',
     }
   })
 })
+
+for (const populated of [false, true]) {
+  test(`${populated ? 'Nonempty' : 'Empty'} v3 starts with a separate writable roleless store`, async t => {
+    const warn = t.mock.method(console, 'warn', () => {})
+    await withTempWorkspace(async root => {
+      const path = join(root, 'bots.v1.json')
+      const bots = populated ? [{
+        id: 'legacy-id', projectId: 'p', platform: 'discord', displayName: 'Legacy',
+        purpose: 'personal', verifiedOwner: { userId: 'legacy-owner' },
+        config: { enabled: true, token: 'legacy-secret' },
+      }] : []
+      const legacy = JSON.stringify({ version: 3, bots }) + '\n'
+      writeFileSync(path, legacy)
+      const store = new BotInstanceStore({ projectId: 'p', path })
+      assert.deepEqual(store.list(), [])
+      assert.equal(readFileSync(path, 'utf8'), legacy)
+      assert.equal(warn.mock.callCount(), populated ? 1 : 0)
+      if (populated) {
+        const warning = String(warn.mock.calls[0]?.arguments[0])
+        assert.ok(warning.includes(path))
+        assert.match(warning, /Recreate Connections in Settings/)
+        assert.doesNotMatch(warning, /legacy-secret|legacy-owner/)
+        assert.throws(() => store.get('legacy-id'), /unknown_bot/)
+      }
+      const connection = store.create('wechat', 'New Connection', { enabled: false })
+      assert.notEqual(connection.id, 'legacy-id')
+      assert.deepEqual(new BotInstanceStore({ projectId: 'p', path }).list(), [connection])
+      assert.equal(readFileSync(path, 'utf8'), legacy)
+    })
+  })
+}
