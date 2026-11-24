@@ -348,7 +348,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal((await request(a + '/api/automations', 'POST', {})).status, 404)
       const addBot = async (scope: string, name: string) =>
         (await json<{ channel: BotInstanceStatus }>(scope + '/api/channels', 'POST',
-          { purpose: 'service', platform: 'qq', displayName: name, config: { enabled: false } }, 201)).channel
+          { platform: 'qq', displayName: name, config: { enabled: false } }, 201)).channel
       const botsA = await Promise.all([addBot(a, 'Bot one'), addBot(a, 'Bot two')])
       const botB = await addBot(b, 'Bot one')
       assert.notEqual(botsA[0].id, botsA[1].id)

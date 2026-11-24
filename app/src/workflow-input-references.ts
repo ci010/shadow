@@ -75,7 +75,7 @@ export function botInputReference(projectId: string, entry: WorkflowCanvasEntry,
     try {
       const [reference] = parseInputReferences([{ kind: 'bot-deployment', projectId, botId: bot.id, revision: bot.revision,
         ...(config?.id ? { bindingId: config.id } : {}), ...(nodeId?.startsWith('entry:') ? { selector: 'entry' } : {}) }])
-      const target = config?.id ? config.kind === 'host-owner-ingress' ? t('Host owner ingress') : configuredTarget({ platform: config.platform ?? '', topic: config.topic, kind: config.kind ?? '' }) : ''
+      const target = config?.id ? configuredTarget({ platform: config.platform ?? '', topic: config.topic, kind: config.kind ?? '' }) : ''
       return { reference: reference!, label: `${bot.agent || bot.id} · ${bot.id}${target ? ` · ${target}` : ''}${nodeId?.startsWith('entry:') ? ` · ${t('Conversation entry')}` : ''}` }
     } catch { return }
   }

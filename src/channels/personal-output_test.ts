@@ -11,7 +11,7 @@ import { DirectoryBots } from '../bots/runtime.ts'
 import { stampPersonalOutput } from '../bots/personal-output.ts'
 import { DirectoryBotService } from '../bots/conversation-policy.ts'
 import { BotInstanceStore } from './bot-store.ts'
-import { botConversationPolicies, isPersonalConnectionSession } from './bot-policies.ts'
+import { botConversationPolicies } from './bot-policies.ts'
 import { AbstractChannel } from './base.ts'
 import { ChannelManager } from './manager.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -31,33 +31,31 @@ class Adapter extends AbstractChannel {
   }
 }
 
-for (const legacy of [false, true]) test(`Personal output fences pause/re-enable ABA, redeploy and final asynchronous send (legacySessionId=${legacy})`, async () => {
+test('Personal output fences pause/re-enable ABA, redeploy and final asynchronous send', async () => {
   await withTempWorkspace(async home => {
     const config = ConfigSchema.parse({ agent: { workspace: home }, channels: { qq: { enabled: true, appId: 'synthetic', secret: 'synthetic' } } })
-    const store = new BotInstanceStore({ projectId: 'p', path: join(home, 'connections.json'), ...(legacy ? { legacyConfig: config } : {}) })
-    const connection = legacy ? store.update('legacy-qq', { purpose: 'personal' }) : store.create('qq', 'synthetic', { enabled: true, appId: 'synthetic', secret: 'synthetic' }, undefined, 'personal')
-    store.bindOwner(connection.id, 'owner', '10')
+    const store = new BotInstanceStore({ projectId: 'p', path: join(home, 'connections.json') })
+    const connection = store.create('qq', 'synthetic', { enabled: true, appId: 'synthetic', secret: 'synthetic' })
+    const address = { projectId: 'p', botInstanceId: connection.id, platform: 'qq' as const, conversationId: 'group:10' }
     const deployments = new BotDeployments({ projectId: 'p', directory: join(home, 'deployments'), runGit: async () => { throw Error('synthetic unavailable') } })
     const source = { folderId: 'synthetic', directory: '' }
     const files = { 'BOT.md': '---\nid: personal\nmode: personal\nconfig: bot.json\nagent: general\n---\nOriginal instructions',
-      'bot.json': JSON.stringify({ connection: connection.id, tools: [], allowedModules: [], bindings: [] }) }
+      'bot.json': JSON.stringify({ tools: [], allowedModules: [], bindings: [{ botInstanceId: connection.id, platform: address.platform, conversationId: address.conversationId, enabled: true, tools: [] }] }) }
     await deployments.deploy({ id: 'personal', source, ...deployments.freeze(files) })
     const bots = new DirectoryBots(deployments)
     let execution = { enabled: true, generation: '0' }
     bots.setExecutionPolicy(() => execution)
     const policies = botConversationPolicies(store, new DirectoryBotService({ projectId: 'p', workspace: home, folders: {} as never }, bots), bots)
-    const id = channelSessionId({ projectId: 'p', botInstanceId: connection.id, platform: 'qq', conversationId: '10', ...(legacy ? { legacySessionId: true } : {}) })
-    assert.equal(isPersonalConnectionSession(store, id, connection.id), true, 'publication must retire the legacy owner session too')
-    assert.equal(isPersonalConnectionSession(store, 'qq:some-other-owner', connection.id), false)
+    const id = channelSessionId(address)
     const capture = () => {
       const personal = policies.personal!(id)!
       assert.equal(personal.agent, 'general')
-      return stampPersonalOutput({ channel: 'qq', chatId: '10', content: 'synthetic output', event: 'response', done: true,
-        ...(!legacy ? { channelAddress: { projectId: 'p', botInstanceId: connection.id, platform: 'qq', conversationId: '10' } } : {}) }, personal.assertCurrent!)
+      return stampPersonalOutput({ channel: 'qq', chatId: address.conversationId, content: 'synthetic output', event: 'response', done: true,
+        channelAddress: address }, personal.assertCurrent!)
     }
     const bus = new Bus(), adapter = new Adapter(bus)
     const manager = new ChannelManager(config, bus, { getSessionState: () => undefined, listSessions: () => [] } as unknown as SessionManager,
-      async () => { throw Error('no input expected') }, { projectId: 'p', instanceStore: store, factory: () => adapter, personalGeneration: id => bots.personalGeneration(id) })
+      async () => { throw Error('no input expected') }, { projectId: 'p', instanceStore: store, factory: () => adapter, personalInboxAssigned: input => bots.personalInbox(input)?.enabled === true })
     await manager.init(); await manager.startAll(new Hono())
     try {
       await assert.doesNotReject(manager.deliver({ channel: 'web', chatId: 'owner-web', event: 'response', content: 'synthetic Web output', done: true }), 'non-BOT Web delivery must not require a Personal lease')
@@ -66,7 +64,7 @@ for (const legacy of [false, true]) test(`Personal output fences pause/re-enable
       assert.equal(adapter.requests, 1)
       await assert.rejects(manager.deliver({ ...original }), /lease required/, 'serialized or copied output cannot fabricate a lease')
       execution = { enabled: false, generation: '1' }
-      await assert.rejects(manager.deliver(original), /paused/)
+      await assert.rejects(manager.deliver(original), /no longer active/)
       execution = { enabled: true, generation: '2' }
       await assert.rejects(manager.deliver(original), /execution changed/, 'ABA must not revive the queue')
       const beforeRedeploy = capture(), active = deployments.read('personal')!.deployment

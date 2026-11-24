@@ -14,7 +14,7 @@ import type { OutboundMessage } from '../bus/events.ts'
 test('real manager delivery rechecks service lease after queuing and immediately before the transport request', async t => {
   await withTempWorkspace(async workspace => {
     const bots = new BotInstanceStore({ projectId: 'p', path: join(workspace, 'connections.json') })
-    const bot = bots.create('qq', 'fixture', { enabled: true, appId: 'synthetic', secret: 'synthetic' }, undefined, 'service')
+    const bot = bots.create('qq', 'fixture', { enabled: true, appId: 'synthetic', secret: 'synthetic' })
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
     let assigned = true, requests = 0
     class Transport extends QQChannel {

@@ -982,8 +982,10 @@ ${JSON.stringify(request)}`,
       content: [
         request.question,
         ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
-        `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
-        `Or write your own response: /reply ${request.id} text <your response>.`,
+        ...(channelAddress ? ['Open the conversation in authenticated Web to answer if no buttons are available.'] : [
+          `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
+          `Or write your own response: /reply ${request.id} text <your response>.`,
+        ]),
         request.deadline ? `At ${request.deadline}, the default will be used if unanswered.` : 'Waiting for your answer; no automatic default.',
       ].join('\n'),
       done: true,
@@ -1049,7 +1051,8 @@ ${JSON.stringify(request)}`,
       event: 'response', channel: channelAddress?.platform ?? request.sessionId.slice(0, separator),
       chatId: channelAddress?.conversationId ?? request.sessionId.slice(separator + 1),
       ...(channelAddress ? { channelAddress } : {}), replyTo: context.platformMessageId, done: true,
-      content: `${request.question}\nReply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.\nNo answer is chosen automatically.`,
+      content: [request.question, channelAddress ? 'Open the conversation in authenticated Web to answer.'
+        : `Reply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.`, 'No answer is chosen automatically.'].join('\n'),
     }
     const stamped = this.stampPersonalNotification(request.sessionId, message)
     if (this.deps.deliverInput) await this.deps.deliverInput(stamped)
@@ -4485,6 +4488,7 @@ ${JSON.stringify(request)}`,
       }
     }
 
+    personal?.assertCurrent?.() // Tool preload may have awaited a publication change.
     return {
       behavior,
       state,

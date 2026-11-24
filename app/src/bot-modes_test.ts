@@ -2,36 +2,26 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createBotSettingsClient, parseBotStatus } from './bot-settings.ts'
 
-const status = { id: 'b', projectId: 'p', platform: 'qq', displayName: 'Bot', label: 'QQ', enabled: false, configured: false, state: 'disabled', config: {}, secrets: {}, purpose: 'personal', ownerVerified: false }
+const status = { id: 'b', projectId: 'p', platform: 'wechat', displayName: 'Bot', label: 'WeChat', enabled: false, configured: false, state: 'disabled', config: {}, secrets: {} }
 
-test('Bot client creates explicit modes and keeps owner challenges scoped to exact Bot URL', async () => {
-  const calls: Array<{ url: string; body?: unknown; method?: string }> = []
-  const client = createBotSettingsClient('http://localhost/projects/p', 'p', async (url, init) => {
-    calls.push({ url: String(url), method: init?.method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined })
-    const body = String(url).endsWith('/owner-challenge') ? { challenge: 'synthetic', expiresAt: 'later' }
-      : String(url).endsWith('/owner-candidate') ? { candidate: 'platform-owner' }
-      : String(url).endsWith('/owner-confirm') ? { confirmed: true }
-      : String(url).endsWith('/owner') ? { revoked: true } : { channel: status }
-    return Response.json(body)
+test('connection client creates transport only and scopes WeChat QR to the exact connection', async () => {
+  const calls: Array<{ path: string; method: string; body?: unknown }> = []
+  const client = createBotSettingsClient('http://127.0.0.1/projects/p', 'p', async (url, init) => {
+    calls.push({ path: new URL(String(url)).pathname, method: init?.method ?? 'GET', body: init?.body && JSON.parse(String(init.body)) })
+    return Response.json(String(url).endsWith('/wechat/login') ? { qrcodeUrl: 'synthetic' } : { channel: status })
   })
-  assert.equal((await client.create('qq', 'Personal', undefined, 'personal')).purpose, 'personal')
-  assert.equal((calls[0].body as any).purpose, 'personal')
-  await client.create('qq', 'Service', undefined, 'service')
-  assert.equal((calls[1].body as any).purpose, 'service')
-  assert.equal((await client.challenge('b')).challenge, 'synthetic')
-  assert.equal((await client.candidate('b')).candidate, 'platform-owner')
-  await client.confirm('b', 'synthetic')
-  await client.revoke('b')
-  assert.ok(calls.slice(2).every(call => call.url.startsWith('http://localhost/projects/p/api/channels/b/')))
-  assert.deepEqual(calls[4].body, { challenge: 'synthetic' })
-  assert.equal(calls[5].method, 'DELETE')
+  assert.equal((await client.create('wechat', 'Transport')).platform, 'wechat')
+  assert.deepEqual(await client.wechat('b', 'login'), { qrcodeUrl: 'synthetic' })
+  assert.deepEqual(calls, [
+    { path: '/projects/p/api/channels', method: 'POST', body: { platform: 'wechat', displayName: 'Transport', config: { enabled: false } } },
+    { path: '/projects/p/api/channels/b/wechat/login', method: 'POST', body: undefined },
+  ])
 })
 
-test('old Bot status is explicit legacy, never inferred personal or owner verified', () => {
-  const { purpose: _, ownerVerified: __, ...old } = status
-  const parsed = parseBotStatus(old, 'p')
-  assert.equal(parsed.purpose, 'legacy')
-  assert.equal(parsed.ownerVerified, false)
-  assert.throws(() => parseBotStatus(status, 'other'))
+test('transport status carries no BOT mode, owner verification, or fallback role', () => {
+  const parsed = parseBotStatus(status, 'p')
+  assert.equal(parsed.id, 'b')
+  assert.equal('purpose' in parsed, false)
+  assert.equal('ownerVerified' in parsed, false)
+  assert.throws(() => parseBotStatus(status, 'foreign'), /ownership/)
 })
-

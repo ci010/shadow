@@ -935,7 +935,7 @@ export class QQChannel extends AbstractChannel {
     }
     await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: true }, async configuration => {
     // Service receives frozen package configuration from its selected BOT. Only
-    // personal/standalone adapters (no service policy) read the legacy option.
+    // standalone adapters (no BOT policy) read the legacy option.
     const triggerMode = configuration?.platform === 'qq' ? configuration.trigger : this.triggerMode
     const mentionsBot = mentioned || (Array.isArray(data.mentions) && data.mentions.some(
       (mention: unknown) => mention !== null && typeof mention === 'object'

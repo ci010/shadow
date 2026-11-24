@@ -19,7 +19,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 
 const snapshot = (): BotWorkflowProjection => ({
   sinks: [connectionSinkProjection({ projectId: 'p', connectionId: 'conn', platform: 'qq', observations: [], histories: [] })],
-  connections: [{ id: 'conn', displayName: 'Transport', platform: 'qq', purpose: 'service', enabled: true, health: 'connected' }],
+  connections: [{ id: 'conn', displayName: 'Transport', platform: 'qq', enabled: true, health: 'connected' }],
   deployments: [{ id: 'role', state: 'valid', mode: 'service', agent: 'BOT:role', revision: 'actual-published-revision' }],
   bindings: [{ id: 'entry-identity', deploymentId: 'role', connectionId: 'conn', platform: 'qq', topic: 'group:PRIVATE_TOPIC', kind: 'message', enabled: true, subscribed: true, listener: true, sessionIds: ['PRIVATE_SESSION'] }],
   warnings: [], routing: 'not-probed', processingSuccess: 'unknown',

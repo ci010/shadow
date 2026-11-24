@@ -11,16 +11,16 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/
 const AUTHORING = `BOT authoring and linking (current Project, read-only guide)
 Connection is transport only; inspect v:connections/index.json and the selected canonical sink/receiver path. The common receipt sink records messages without a model BOT and retains the same address before and after a BOT is linked.
 Use bot_package action create in a registered, authorized local source Folder to create a new BOT source directory and apply it with zero subscriptions. Inspect the live contract for required fields; then configure its prompt, skills and capabilities in BOT.md and its companion source as appropriate. Never put credentials in BOT.md. Action propose validates and applies the source directly; there is no separate native approval or publication stage.
-BOT.md is the sole BOT listener and message-admission configuration. A service BOT defines id, mode: service, prompt, allowedModules, tools and bindings; subscriptions select those existing bindings and [] receives nothing. Set trigger, participants/allowFrom and tools per binding. For Service read access use companion JSON optional top-level readResources; every binding inherits the same grant. Inspect that scope before linking a channel. Do not copy Connection-level filters or assume selection grants permissions.
-Service skills are BOT.md skills: [{name, content}]; use only required skill content and configure the BOT tool/module capabilities separately. A skill name or content does not grant capabilities. Personal BOTs use the selected ordinary Agent role tools/context and do not support service skills/bindings.
+BOT.md is the sole BOT listener and message-admission configuration. A service BOT defines id, mode: service, prompt, allowedModules, tools and bindings; subscriptions select those existing bindings and [] receives nothing. Set trigger and tools per binding. Assign admits the conversation by default; omit participants/allowFrom unless explicitly requesting or preserving a narrower sender scope. For Service read access use companion JSON optional top-level readResources; every binding inherits the same grant. Inspect that scope before linking a channel. Do not copy Connection-level filters or assume selection grants permissions.
+Service skills are BOT.md skills: [{name, content}]; use only required skill content and configure the BOT tool/module capabilities separately. A skill name or content does not grant capabilities. Personal BOTs use the selected ordinary Agent role tools/context, not service skills or grants. A Personal package can use link for exact QQ/Feishu private or group inboxes, or an exact host-recorded WeChat private inbox (no Service or group BOTs on WeChat); use bindingJson {enabled,trigger,tools:[]} with no sender list.
 To link an existing BOT, use bot_package action source to inspect its current source and revision, then action link to update that BOT's own companion bindings/subscriptions for the selected real receiver and apply it. Preserve other listeners and use source-revision concurrency checks; inspect the current tool contract for exact fields. Do not create a duplicate BOT, clone bindings into Workflow or widen a legacy thread rule to its parent. Workflow references BOT identity, not copied receive policy.
-Graph receiver references identify top-level groups/parent channels only. Browse threads inside the existing parent channel content page; do not offer a thread assignment from this graph. Linking affects future admission only and never replays inbox history.
+Use an existing QQ/Feishu or WeChat private inbox Session reference in owner Chat to link that exact private conversation; no allowFrom is required, and the group trigger does not apply. Graph assignment is not required for this Chat path. Browse threads inside the existing parent channel content page; do not offer an exact thread assignment. Linking affects future admission only and never replays inbox history.
 Read/search/selection is not authorization to create a session, send platform messages or run a Workflow. Use only the currently authorized source editing/tool scope.`
 const GUIDE = `Read-only current Project Bot management, restricted to authenticated owner durable Web chats (not Service, channel, child, script or remote-workdir access).
 BOT authoring: v:bots/authoring. Canonical transport/sink inspection: v:connections/index.json and v:connections/<id>/overview.json / sink.json. v:bots/connections is compatibility inspection only, not a second Connection authority.
 Paths: v:bots/connections/index; v:bots/connections/<id>; v:bots/deployments/index; v:bots/deployments/<id>/status; v:bots/deployments/<id>/listeners.
 Indexes and object views contain at most 50 rows; follow next paths (/<page>, starting at 2). read offset/limit pages lines; search limit/offset pages matching entries. Broad search expands only the first page of the first 50 objects per kind; narrow to an ID or follow index pages. Discovery scans at most 1024 deployment entries / 1000 connections; warnings mean incomplete results.
-Connections export only id/displayName/platform/purpose/enabled/health/ownerVerified. Health is transport state, not processing success. No credentials, config, owner sender IDs, private drafts, exception text or URLs are exported.
+Connections export only id/displayName/platform/enabled/health. Health is transport state, not processing success. No credentials, config, private drafts, exception text or URLs are exported.
 Deployments are immutable active copies, not unpublished source. loaded=lazy-validated means this object's current verified bytes pass DirectoryBots' strict parser, not a running process or successful delivery. Invalid packages remain quarantined; integrity/storage failures expose no unverified metadata. Listeners are the same botInputListeners projection used by InputRouter, not a new registry. Personal ingress uses host-owned Session listeners and is not exposed here.
 Configured bindings, subscription selection, binding enablement, projected listeners, connection health and processing success are distinct. Routing is not probed: conflicting subscribers, corrupt sibling storage and live admission/policy checks can still block delivery. processingSuccess is unknown (not recorded by this view).
 No reads/searches connect, import BOT modules, publish, repair, update quarantine bookkeeping or start Sessions. Operations remain bot_setup, bot_package and credential_request; legacy status actions remain compatible.`
@@ -81,8 +81,8 @@ export function createBotsHandler(options: Options): { read: VirtualFsHandler; l
     let value
     try { value = options.channels.botStatus(id) } catch { throw new Error('Bot connection not found or unavailable.') }
     if (value.projectId !== options.projectId) throw new Error('Bot connection not found or unavailable.')
-    return { id: value.id, displayName: value.displayName, platform: value.platform, purpose: value.purpose,
-      enabled: value.enabled, health: value.state, ownerVerified: value.ownerVerified === true }
+    return { id: value.id, displayName: value.displayName, platform: value.platform,
+      enabled: value.enabled, health: value.state }
   }
   const deployment = (id: string, view: 'status' | 'listeners', page: number, item = options.directory.inspect(id)) => {
     if (!item) throw new Error('Bot deployment not found.')
@@ -91,14 +91,13 @@ export function createBotsHandler(options: Options): { read: VirtualFsHandler; l
     const common = { id, ...metadata, state: item.state, loaded: item.loaded ? 'lazy-validated' : item.state,
       error: item.error ?? null, format: item.format ?? null, processingSuccess: 'unknown', routing: 'not-probed' }
     if (view === 'listeners') return { ...common, projection: 'InputRouter botInputListeners',
-      personalIngress: item.bot?.mode === 'personal' ? 'host-session-listeners-not-exported' : undefined,
       ...rowsPage(`deployments/${id}/listeners`, item.listeners ?? [], page) }
     const bot = item.bot
     const subscribed = new Set(bot ? subscribedBindings(bot) : [])
     const bindings = bot?.bindings.map(binding => ({ binding: bindingSubscription(binding), connectionPath: `v:connections/${encodeURIComponent(binding.botInstanceId)}/overview.json`, enabled: binding.enabled,
       subscribed: subscribed.has(binding) })) ?? []
-    return { ...common, mode: bot?.mode, connection: bot?.connection,
-      subscriptionMode: bot ? bot.mode === 'personal' ? 'host-owner-ingress' : bot.subscriptions === undefined ? 'legacy-bindings' : 'explicit' : null,
+    return { ...common, mode: bot?.mode,
+      subscriptionMode: bot ? bot.subscriptions === undefined ? 'legacy-bindings' : 'explicit' : null,
       counts: bot ? { bindings: bindings.length, subscribed: bindings.filter(row => row.subscribed).length,
         enabledBindings: bindings.filter(row => row.enabled).length, listeners: item.listeners?.length ?? 0 } : null,
       ...rowsPage(`deployments/${id}/status`, bindings, page), listenersPath: `v:bots/deployments/${id}/listeners` }

@@ -37,7 +37,7 @@ async function fixture(t: TestContext, workspace: string, platform: 'qq' | 'feis
   const store = new BotInstanceStore({ projectId, path: join(workspace, 'bot-send-fixture.json') })
   const appId = `synthetic-${randomUUID()}`
   const config = platform === 'qq' ? { appId, secret: 'synthetic', enabled: true } : { appId, appSecret: 'synthetic', enabled: true }
-  const bot = store.create(platform, 'synthetic', config, undefined, 'service')
+  const bot = store.create(platform, 'synthetic', config)
   const address: ChannelAddress = { projectId, platform, botInstanceId: bot.id, conversationId: platform === 'qq' ? 'group:one' : 'oc_group' }
   const states: Record<string, SessionState> = {}
   const sessions = { getSessionState: (id: string) => states[id], listSessions: () => [], retireIdleConversationContexts: async () => {} } as unknown as SessionManager
@@ -51,6 +51,7 @@ async function fixture(t: TestContext, workspace: string, platform: 'qq' | 'feis
     async message => ({ status: 'accepted', sessionId: 'fixture', inputId: message.messageId }), {
       projectId, instanceStore: store, factory: () => adapter,
       serviceAssigned: value => assigned && value.conversationId === address.conversationId,
+      serviceGeneration: value => assigned && value.conversationId === address.conversationId ? 'generation' : undefined,
     })
   await manager.init(); await manager.startAll(new Hono())
   t.after(() => manager.stopAll())

@@ -4,40 +4,38 @@ import type { ConversationPolicies } from '../bots/conversation-policy.ts'
 import type { DirectoryBots } from '../bots/runtime.ts'
 import type { BotInstanceStore } from './bot-store.ts'
 
-/** Publication retirement includes the pre-address-format verified owner DM. */
-export function isPersonalConnectionSession(store: BotInstanceStore, sessionId: string, connectionId: string): boolean {
-  const bot = store.get(connectionId), address = channelAddressFromSessionId(sessionId)
-  if (address) return address.projectId === store.projectId && address.botInstanceId === bot.id && address.platform === bot.platform
-  return !!bot.legacySessionId && !!bot.verifiedOwner && sessionId === channelSessionId({ projectId: store.projectId, botInstanceId: bot.id, platform: bot.platform, conversationId: bot.verifiedOwner.chatId, legacySessionId: true })
-}
-
 /** Enforced on session admission and policy refresh, including non-adapter inputs. */
 export function botConversationPolicies(store: BotInstanceStore, existing: ConversationPolicies, directory?: DirectoryBots): ConversationPolicies {
+  const retiredAddress = /^(bot|qq|feishu|discord|wechat):/
   const botFor = (id: string) => {
     const address = channelAddressFromSessionId(id)
     if (address) {
+      if (id !== channelSessionId(address)) throw new Error('Non-canonical channel session cannot execute')
       if (address.projectId !== store.projectId) throw new Error('Bot Project mismatch')
       store.assertAccess(address.botInstanceId)
       const bot = store.get(address.botInstanceId)
       if (address.platform !== bot.platform) throw new Error('Bot platform mismatch')
       return bot
     }
-    const bot = store.list().find(bot => bot.legacySessionId && id.startsWith(`${bot.platform}:`))
-    if (bot) store.assertAccess(bot.id)
-    return bot
+    if (retiredAddress.test(id)) throw new Error('Unscoped channel session cannot execute')
+    return undefined
+  }
+  const explicitPersonal = (id: string) => {
+    const address = channelAddressFromSessionId(id)
+    if (!address || !['qq', 'feishu', 'wechat'].includes(address.platform)) return undefined
+    const bot = botFor(id)
+    return bot?.enabled ? directory?.personalInbox(address) : undefined
   }
   const resolve = (id: string) => {
     const bot = botFor(id)
     if (!bot) return existing.resolve(id)
-    if (!bot.enabled || bot.purpose === 'legacy') throw new Error('Bot disabled or role not configured')
-    if (bot.purpose === 'personal') {
-      if (!bot.verifiedOwner) throw new Error('Verified owner required')
-      if (directory && !directory.personal(bot.id)) throw new Error('Personal BOT deployment required')
-      if (id !== channelSessionId({ projectId: store.projectId, botInstanceId: bot.id, platform: bot.platform,
-        conversationId: bot.verifiedOwner.chatId, ...(bot.legacySessionId ? { legacySessionId: true } : {}) }))
-        throw new Error('Verified owner direct conversation required')
-      return undefined // Normal Project dynamic skills, not a published service Agent.
+    if (!bot.enabled) throw new Error('Connection is disabled')
+    const assigned = explicitPersonal(id)
+    if (assigned) {
+      if (!assigned.enabled) throw new Error('Personal inbox assignment is not active')
+      return undefined
     }
+    if (bot.platform === 'wechat') throw new Error('Explicit Personal WeChat direct inbox assignment required')
     const policy = existing.resolve(id)
     if (!policy?.binding.enabled) throw new Error('Explicit service assignment required')
     return policy
@@ -45,26 +43,32 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
   return {
     personal: id => {
       const bot = botFor(id)
-      resolve(id) // Live purpose, enabled state, verified owner and Project checks.
-      if (bot?.purpose !== 'personal') return undefined
-      const definition = directory?.personal(bot.id)
-      if (!definition) return undefined
-      const generation = directory!.personalGeneration(bot.id), verify = store.accessGuard(bot.id)
-      return { agent: definition.agent!, prompt: definition.prompt, assertCurrent: () => {
-        verify(); resolve(id)
-        if (!generation || directory!.personalGeneration(bot.id) !== generation) throw new Error('Personal BOT execution changed')
-      } }
+      resolve(id) // Live assignment, connection and Project checks.
+      const assigned = explicitPersonal(id)
+      if (bot && assigned) {
+        const verify = store.accessGuard(bot.id)
+        return { agent: assigned.bot.agent, prompt: assigned.bot.prompt, assertCurrent: () => {
+          verify()
+          directory!.assertExecution(assigned.bot.id)
+          const live = explicitPersonal(id)
+          if (!live?.enabled || live.bot.id !== assigned.bot.id || live.generation !== assigned.generation) throw new Error('Personal BOT execution changed')
+        } }
+      }
+      return undefined
     },
-    managed: id => botFor(id)?.purpose === 'personal' ? false : existing.managed(id),
+    managed: id => retiredAddress.test(id) || (botFor(id) ? !explicitPersonal(id)?.enabled : existing.managed(id)),
     resolve,
     authorize: (id, input) => {
-      const bot = botFor(id)
       resolve(id)
-      if (bot?.purpose === 'personal') {
-        const senders = directory?.personal(bot.id)?.connectionPolicies?.[bot.id]?.allowFrom
-        if (input.source.kind === 'user' && senders && !senders.includes(input.source.sender.senderId)) throw new Error('Sender is outside BOT admission policy')
-        if (input.source.kind === 'user' && (input.source.sender.isGroup !== false ||
-          input.source.sender.senderId !== bot.verifiedOwner?.senderId || input.source.sender.chatId !== bot.verifiedOwner?.chatId)) throw new Error('Verified owner direct input required')
+      if (explicitPersonal(id)?.enabled) {
+        existing.assertInputAvailable?.(id)
+        if (input.source.kind === 'user') {
+          const { sender } = input.source, address = channelAddressFromSessionId(id)!
+          if (address.platform === 'wechat' && (sender.isGroup !== false || sender.senderId !== address.conversationId || !sender.channelInputGuard))
+            throw new Error('WeChat Personal input requires a verified direct arrival')
+          if (sender.channel !== address.platform || sender.chatId !== address.conversationId || sender.channelAddress?.projectId !== address.projectId || sender.channelAddress?.botInstanceId !== address.botInstanceId || sender.channelAddress?.platform !== address.platform || sender.channelAddress?.conversationId !== address.conversationId)
+            throw new Error('Personal input source does not match the assigned inbox')
+        }
         return
       }
       existing.authorize(id, input)
@@ -72,7 +76,7 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
     tools: (policy, id, state) => {
       resolve(id)
       const tools = existing.tools(policy, id, state), bot = botFor(id)
-      if (bot?.purpose === 'service' && tools.stampOutput) {
+      if (bot && tools.stampOutput) {
         const verify = store.accessGuard(bot.id), stamp = tools.stampOutput, snapshot = tools.assertSnapshot
         tools.assertSnapshot = () => { verify(); resolve(id); snapshot?.() }
         tools.stampOutput = message => {

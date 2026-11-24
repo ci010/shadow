@@ -23,7 +23,7 @@ const tree = (path: string): unknown => readdirSync(path).sort().map(name => { c
 test('real immutable BOT packages project shared connection, distinct groups/Agents, disabled/unsubscribed and invalid deployment without effects or secrets', async () => {
   await withTempWorkspace(async workspace => {
     const store = new BotInstanceStore({ projectId: 'p', path: join(workspace, 'connections.json') })
-    const connection = store.create('qq', 'Shared QQ', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' }, undefined, 'service')
+    const connection = store.create('qq', 'Shared QQ', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' })
     const bus = new Bus()
     const channels = new ChannelManager(ConfigSchema.parse({}), bus, {} as SessionManager, async () => { throw Error('Must not receive') }, { projectId: 'p', instanceStore: store, factory: () => { throw Error('Must not connect') } })
     const deployments = new BotDeployments({ projectId: 'p', directory: join(workspace, 'deployments'), runGit: async () => { throw Error('No git') } })
@@ -40,7 +40,7 @@ test('real immutable BOT packages project shared connection, distinct groups/Age
     const existing = channelSessionId({ projectId: 'p', botInstanceId: connection.id, platform: 'qq', conversationId: 'group:two' })
     const sink = connectionSinkProjection({ projectId: 'p', connectionId: connection.id, platform: 'qq', histories: [], observations: [] })
     const lookedUp: string[] = []
-    const options = { projectId: 'p', store, channels, directory, sessionIds: [existing], personalListeners: [],
+    const options = { projectId: 'p', store, channels, directory, sessionIds: [existing],
       sinkLookup: (id: string) => {
         lookedUp.push(id)
         return connectionSinkProjection({ projectId: 'p', connectionId: id, platform: 'qq', histories: [], observations: [] })
@@ -79,31 +79,24 @@ test('real immutable BOT packages project shared connection, distinct groups/Age
     assert.equal(disabled.connections[0]?.enabled, false)
     assert.equal(disabled.bindings.find(b => b.topic === 'group:one')?.enabled, true, 'Connection disablement does not rewrite package binding enablement')
     assert.equal(disabled.bindings.find(b => b.topic === 'group:one')?.listener, true, 'Listener projection is not transport admission')
-    const personal = store.create('qq', 'Personal QQ', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' }, undefined, 'personal')
-    store.bindOwner(personal.id, 'PRIVATE_OWNER', 'PRIVATE_OWNER_TOPIC')
-    await deploy('personal', { mode: 'personal', connection: personal.id, agent: 'general', tools: [], allowedModules: [], bindings: [] })
-    const personalSession = channelSessionId({ projectId: 'p', botInstanceId: personal.id, platform: 'qq', conversationId: 'owner-conversation' })
-    const personalView = botWorkflowProjection({ ...options, sessionIds: [personalSession], personalListeners: [{ source: { type: 'qq', id: personal.id }, kind: 'message', topic: 'PRIVATE_OWNER_TOPIC', target: { kind: 'session', id: personalSession } }] })
+    const personalInbox = 'dm:assistant'
+    await deploy('personal', { mode: 'personal', agent: 'general', tools: [], allowedModules: [], bindings: [{ platform: 'qq', botInstanceId: connection.id, conversationId: personalInbox, tools: [] }] })
+    const personalSession = channelSessionId({ projectId: 'p', botInstanceId: connection.id, platform: 'qq', conversationId: personalInbox })
+    const personalSource = { version: 1 as const, projectId: 'p', connectionId: connection.id, platform: 'qq' as const, conversationId: personalInbox, kind: 'direct' as const }
+    const otherDM = { ...personalSource, conversationId: 'dm:someone-else' }
+    const metadata = [personalSource, otherDM].map(channelSource => ({ sessionId: passiveChannelId(channelSource), projectId: 'p', channelSource }))
+    const personalView = botWorkflowProjection({ ...options, sessionIds: [personalSession],
+      sinkLookup: (id: string) => connectionSinkProjection({ projectId: 'p', connectionId: id, platform: 'qq', histories: metadata, observations: [] }) })
     const ingress = personalView.bindings.find(b => b.deploymentId === 'personal')
-    assert.equal(ingress?.kind, 'host-owner-ingress')
+    assert.equal(ingress?.kind, 'message')
     assert.deepEqual(ingress?.sessionIds, [personalSession])
-    assert.equal(ingress?.topic, undefined)
+    assert.equal(ingress?.topic, personalInbox)
+    assert.equal(ingress?.listener, true)
     assert.equal(personalView.deployments.find(d => d.id === 'personal')?.agent, 'general')
-    assert.doesNotMatch(JSON.stringify(personalView), /PRIVATE_/)
-    const ownerSource = { version: 1 as const, projectId: 'p', connectionId: personal.id, platform: 'qq' as const, conversationId: 'PRIVATE_OWNER_TOPIC', kind: 'direct' as const }
-    const groupSource = { ...ownerSource, kind: 'group' as const, conversationId: 'group:one' }
-    const otherDM = { ...ownerSource, conversationId: 'dm:someone-else' }
-    const metadata = [ownerSource, groupSource, otherDM].map(channelSource => ({ sessionId: passiveChannelId(channelSource), projectId: 'p', channelSource }))
-    const ownerOptions = { ...options, personalListeners: [{ source: { type: 'qq', id: personal.id }, kind: 'message', topic: ownerSource.conversationId, target: { kind: 'session' as const, id: personalSession } }],
-      sinkLookup: (id: string) => connectionSinkProjection({ projectId: 'p', connectionId: id, platform: 'qq', histories: metadata, observations: [] }) }
-    const ownerView = botWorkflowProjection(ownerOptions)
-    const ownerSink = ownerView.sinks.find(sink => sink.connectionId === personal.id)!
-    assert.deepEqual(ownerView.bindings.find(b => b.deploymentId === 'personal')?.receiverIds, [ownerSink.receivers.find(r => r.address.conversationId === ownerSource.conversationId)!.id])
-    for (const listener of [
-      { ...ownerOptions.personalListeners[0]!, topic: 'unknown-owner' },
-      { ...ownerOptions.personalListeners[0]!, source: { type: 'discord', id: personal.id } },
-      { ...ownerOptions.personalListeners[0]!, topic: groupSource.conversationId },
-    ]) assert.deepEqual(botWorkflowProjection({ ...ownerOptions, personalListeners: [listener] }).bindings.find(b => b.deploymentId === 'personal')?.receiverIds, [])
+    assert.equal(personalView.connections.length, 1, 'Personal and Service can share the same transport')
+    assert.doesNotMatch(JSON.stringify(personalView), /PRIVATE_|purpose|host-owner-ingress/)
+    const personalSink = personalView.sinks.find(sink => sink.connectionId === connection.id)!
+    assert.deepEqual(ingress?.receiverIds, [personalSink.receivers.find(r => r.address.conversationId === personalInbox)!.id])
     const brokenApp = new Hono()
     registerWorkflowRoutes(brokenApp, runtime, () => true, undefined, () => { throw Error('PRIVATE_STORAGE_ERROR') })
     const unavailable = await (await brokenApp.request('/api/workflows')).json()

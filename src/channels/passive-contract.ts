@@ -13,6 +13,7 @@ export const ChannelSourceSchema = z.object({
 }).strict().superRefine((source, context) => {
   const issue = (message: string) => context.addIssue({ code: 'custom', message })
   if ((source.kind === 'thread') !== !!source.parentId) issue('Thread origins require exact parent ancestry')
+  if (source.platform === 'wechat' && source.kind !== 'direct') issue('WeChat receipts are direct only')
   if (source.platform === 'discord') {
     if (!source.botUserId || source.kind === 'group') issue('Verified Discord identity and location required')
     if (source.kind === 'direct' ? !source.recipientId || !!source.guildId : !source.guildId || !!source.recipientId) issue('Discord origin ancestry mismatch')
