@@ -74,7 +74,15 @@ attempt data, text-observation categories, input/output/cache tokens and
 reporting counts, and sampled latency. Global usage displays per-Project
 percentiles and samples, not averages of percentiles. `v:stats/model-requests` reports Project outcomes, observed attempt
 counts, cache-token coverage, and P50/P95/sample counts for first text, retry
-queue and total elapsed times.
+queue and total elapsed times. Both the usage page and `v:stats/model-requests`
+report estimated output speed (`tokens/s`) and its sample count per Project.
+The estimate divides the sum of provider-reported output tokens by the sum of
+seconds from the first observed streamed answer text to the end of the successful
+attempt. Requests with unknown or zero output tokens, missing stream timing, or a
+nonpositive interval are excluded; no samples means unavailable. Existing indexed
+records with these fields contribute without a rebuild. This is not a decoder
+benchmark or visible-text-only rate: provider token counts can include reasoning
+or tool output, and the measured interval can include stream finalization.
 
 ## Recall
 

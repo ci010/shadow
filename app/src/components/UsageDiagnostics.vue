@@ -7,6 +7,12 @@
       <summary>{{ project.name || t('Selected project') }}<template v-if="!project.usage?.requestQuality"> · {{ t('Unavailable') }}</template></summary>
       <template v-if="project.usage?.requestQuality">
         <p>{{ through(project.usage.requestQuality.asOf) }} · {{ coverage(project.usage.requestQuality.coverage) }}</p>
+        <p class="output-rate">
+          {{ t('Estimated output speed') }}: <strong>{{ formatOutputRate(project.usage.requestQuality.outputRate?.tokensPerSecond) }}</strong>
+          <template v-if="project.usage.requestQuality.outputRate">
+            · {{ t('From first streamed text to attempt end. Samples: {count}.', { count: number(project.usage.requestQuality.outputRate.samples) }) }}
+          </template>
+        </p>
         <div class="tables">
           <div class="scroll" tabindex="0" :aria-label="t('Request outcomes')">
             <table><caption>{{ t('Request outcomes') }}</caption><thead><tr><th scope="col">{{ t('Result') }}</th><th scope="col">{{ t('Requests') }}</th><th scope="col">{{ t('Observed attempts') }}</th><th scope="col">{{ t('Requests with attempt data') }}</th></tr></thead>
@@ -43,6 +49,9 @@ const telemetry = [
 ] as const
 function number(value: number | null) { return value === null ? t('Unavailable') : formatNumber(value) }
 function milliseconds(value: number | null) { return value === null ? t('Unavailable') : `${number(value)} ms` }
+function formatOutputRate(value: number | null | undefined) {
+  return value == null ? t('Unavailable') : t('{rate} tokens/s', { rate: formatNumber(value, { maximumSignificantDigits: 3 }) })
+}
 function coverage(value: string) { return t(value === 'complete' ? 'Index backfill complete' : 'Index coverage partial') }
 function through(asOf: string) { return t('As of {time} UTC', { time: formatDateTime(asOf, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }) }) }
 function outcome(value: string) { return t(({ success: 'Succeeded', failure: 'Failed', cancelled: 'Cancelled', aborted: 'Cancelled', unknown: 'Unknown' } as Record<string, MessageKey>)[value] ?? 'Unknown') }

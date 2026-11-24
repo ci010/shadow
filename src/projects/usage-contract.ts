@@ -28,6 +28,7 @@ export const requestQualitySchema = z.object({
   cache: z.object({ readTokens: amount.nullable(), writeTokens: amount.nullable(), inputTokens: amount.nullable(), outputTokens: amount.nullable(),
     requestsWithReadTokens: count, requestsWithWriteTokens: count, requestsWithInputTokens: count, requestsWithOutputTokens: count }),
   firstText: latency, queue: latency, duration: latency,
+  outputRate: z.object({ tokensPerSecond: amount.nullable(), samples: count }).optional(),
 })
 export type RequestQuality = z.infer<typeof requestQualitySchema>
 const recallRow = z.object({ entry: z.string(), reads: count })
