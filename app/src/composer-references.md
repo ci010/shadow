@@ -138,3 +138,11 @@ Only the unused rich-file SDK leaf is replaced with a throwing test module, so
 PDF/Office infrastructure is neither loaded nor claimed covered. The actual
 image, Markdown, file-modal and attachment components and their resource/fetch
 code are not mocked. No production backend or profile is used.
+
+### Remote folder image previews
+
+Supported raster previews from a registered remote folder can be marked or
+Ctrl-dragged into the composer where those actions are available. They attach
+image bytes rather than a Child filesystem path. The destination conversation's
+normal image upload rules still apply. Local path-backed previews still require
+canonical source metadata to record the original path.
