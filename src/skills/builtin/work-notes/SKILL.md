@@ -26,7 +26,9 @@ boundaries and any known source evidence in natural prose; no fixed headings
 are required. Cite only real sources, and state what remains uncertain. Definition
 text is not verified proof or permission. Keep shared progress in summary and transient planning in the session.
 Set kind to goal, approach, task or finding. Use parentKey to place Work
-under a goal and dependencies for real prerequisites. Explain any relevant
+under a goal. Pass `dependencies` to `work_create` when prerequisites are known
+so they exist before dispatch can see the item. On `work_update`, `dependencies`
+replaces the full list (use `[]` to clear it). Explain any relevant
 assumptions in the definition.
 Do not turn an implementation preference into a user requirement.
 

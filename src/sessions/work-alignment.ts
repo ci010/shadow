@@ -49,9 +49,9 @@ export const WORK_HELP = {
   notice: 'Notes orient work, never gate tools or grant permission. Completion is a reported result, not human acceptance.',
   create: { title: 'Short name', definition: WORK_DEFINITION_GUIDANCE,
     idempotencyKey: 'Optional creator/Project-scoped retry key (max 200); normalized identical requests return existing Work, changed parameters conflict. Retries do not republish saved creation.',
-    parentKey: 'Optional existing parent', assignee: 'Optional durable session ID or null',
+    parentKey: 'Optional existing parent', dependencies: 'Optional prerequisite Work keys, saved atomically with creation', assignee: 'Optional durable session ID or null',
     kind: 'goal|approach|task|finding', summary: 'Optional shared Markdown summary', artifacts: 'Optional structured links' },
-  update: { summary: 'Current shared state or result in Markdown (max 2,000 characters); keep transient planning in the session',
+  update: { dependencies: 'Optional full replacement list; [] clears prerequisites', summary: 'Current shared state or result in Markdown (max 2,000 characters); keep transient planning in the session',
     artifacts: [{ label: 'Result', href: 'HTTP(S) or Project-relative resource URL' }],
     status: 'Optional pending|in_progress|blocked|done|cancelled', blockedReason: 'Required when blocked',
     definition: 'Same free Markdown as create. Only the human can revise a human-authored goal; agents may revise interpretations only with controller authority. Do not turn implementation preferences into user requirements.' },
@@ -473,11 +473,13 @@ export class WorkAlignment implements WorkToolGuard {
         title: z.string().trim().min(1).max(160), parentKey: workKeySchema.optional(),
         assignee: z.string().min(1).max(512).nullable().optional(),
         definition: workDefinitionSchema,
+        dependencies: z.array(workKeySchema).max(100).optional(),
         ...workReportFields,
         }).strict().parse(data)
       if (actor.kind === 'session') this.requireSession(actor.sessionId)
       const creator = actor.kind === 'session' ? `session:${actor.sessionId}` : 'user'
-      const normalized = { ...request, assignee: request.assignee === undefined ? actor.kind === 'session' ? actor.sessionId : null : request.assignee }
+      const { dependencies, ...input } = request
+      const normalized = { ...input, ...(dependencies?.length ? { dependencies } : {}), assignee: request.assignee === undefined ? actor.kind === 'session' ? actor.sessionId : null : request.assignee }
       const creation = request.idempotencyKey ? { creator, idempotencyKey: request.idempotencyKey, fingerprint: requestHash(normalized) } : undefined
       const replay = creation && this.store.replayWorkCreation(creation)
       if (replay) return replay
@@ -496,7 +498,7 @@ export class WorkAlignment implements WorkToolGuard {
         kind: request.kind, summary: request.summary, artifacts: request.artifacts, basis: this.basis(request.parentKey),
         parentKey: request.parentKey,
         manager: actor.kind === 'session' ? actor.sessionId : parent ? this.store.workAuthority(parent.key).manager : assignee,
-        assignee, assignmentRevision: 1, status: 'pending', dependencies: [],
+        assignee, assignmentRevision: 1, status: 'pending', dependencies: dependencies ?? [],
       }
       const committed = this.store.createWork(record, this.actorName(actor), creation)
       if (!committed.created) return committed.record

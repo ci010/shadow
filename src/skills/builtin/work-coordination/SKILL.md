@@ -44,7 +44,10 @@ constraints, evidence requirements and stop condition rather than making them
 reconstruct their assignment from the whole tree. Do not turn implementation
 preferences into user requirements.
 
-Use the live Work schema for operations, required fields and version checks.
+Create with `work_create` (`title`, `definition`); include known prerequisite
+Work keys in `dependencies` on creation. Update with `work_update` (`key`,
+current `version` from `v:works`, and changed fields only). A supplied
+`dependencies` list replaces the old one; omit it to leave it unchanged.
 
 ## Responsibility and execution
 
