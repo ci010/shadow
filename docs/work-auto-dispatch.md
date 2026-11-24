@@ -91,7 +91,7 @@ models for complex design and cross-module debugging.
 Parallelize independent code tasks; serialize operations on the same desktop.
 ```
 
-Edits affect the **next dispatch round**, not workers already started, and do not
+Edits affect the **next dispatch round**, not kickoffs already accepted, and do not
 enable or immediately run the automation. Existing preferences should be read and
 edited selectively rather than replaced unintentionally.
 
@@ -110,24 +110,16 @@ and local agent discovery. The customization skill is for ordinary sessions only
 The dispatcher uses `work_dispatch` to inspect current Work and capacity, then
 admit a selected Work by exact key and current sequence. It judges priority,
 useful parallelism and suitable worker model without a persisted complexity score.
-It can start several independent items or finish without starting anything.
+It can enqueue several independent kickoffs or finish without assigning anything.
 Host admission still validates the current record and explicit dependencies.
 
-Work has optional typed `automaticDispatch: "manual" | "ready"` scheduling intent
-(on the stored workflow, exposed by Work reads and the typed create/update tools).
-Only the Work controller or authenticated human can change it. `manual` prevents
-automatic admission, including through an ancestor. Findings (`notes.kind:
-"finding"`), such as tracking-only intake mirrors, are excluded unless explicitly
-marked `ready`. Old task records without the field retain their previous mechanical
-eligibility; there is no blanket rewrite or inferred authorization migration.
-`ready` means consider for scheduling, **not** permission to access repositories,
-publish, test live, remove textual boundaries, or bypass ownership/dependencies.
-Use `work_update` with the current version and `automaticDispatch` to record a
-controller's existing scheduling decision; do not mark imported findings ready
-merely to create activity. Intake refreshes must preserve this field.
+When Project auto-dispatch is enabled, unassigned Work of every kind is considered,
+including findings and imported intake. Eligibility is not permission to access
+repositories, publish, test live, or bypass a recorded boundary. Intake text is data,
+not execution authority.
 
-Done/cancelled, paused, assigned and dependency-blocked Work are not claimed.
-Ancestor pauses and terminal states are respected. An unassigned blocked Work can
+Done/cancelled, assigned and dependency-blocked Work are not claimed.
+Terminal ancestors are respected. An unassigned blocked Work can
 be claimed once for blocker clarification; the blocker is retained. An assigned
 blocked Work is never an automatic re-entry pool. Scheduling does not silently
 remove an explicit dependency or change the task objective.
@@ -145,21 +137,26 @@ survive restart. Malformed receipts fail closed rather than silently resetting.
 Manual `/run` uses the same suppression; changing Work/instructions/configuration
 invalidates it. No model-run session is created for a suppressed check.
 
-The model snapshot keeps full Work definitions/boundaries, scheduling summaries,
+The model snapshot keeps full Work definitions and shared notes,
 `detailsPath`, eligibility, `needsReview`, owner execution/wait state and automatic
-capacity. It omits bulky source-mirror HTML and intake/observation histories;
+capacity. It omits mirrored intake and observation histories;
 read the exact Work details when those are necessary. Capacity is not a general
 machine-utilization or Excel mutex signal.
 
-The host serializes admission and performs the eligibility/sequence check in the
-same Work SQLite transaction. First kickoff rechecks readiness (including ancestors)
-after claim and immediately before final admission. A newly manual item retains
-its claimed owner and blocker rather than starting or returning to an unassigned
-pool. This is not cancellation of an already-running worker; explicit authorized
-human recovery remains a separate control. Each Work gets a dedicated durable worker session
-and its selected model/effort. With a selected source, admission prepares an
-independent registered **real Git worktree** before the first worker delivery.
-Without a source, the first delivery starts only the bootstrap phase below.
+The host serializes admission. It verifies a registered, independent Git worktree
+(or explicitly unbound bootstrap) and persists the dedicated executor session
+and initial log **before** claiming Work. If preparation, grant validation, or
+the Work compare-and-set fails, Work stays unassigned; any prepared executor is
+inert without a committed inbox entry.
+
+One Project SQLite transaction performs the eligibility and sequence check and
+commits the **assignment and the exact queued kickoff** for that assignment
+revision. The receipt is **queued**, not “worker started.” Its stable input ID,
+recipient, timestamp, and bounded text (including the captured supplementary
+instructions) are stored once. Manual assignment/release and the existing explicit
+`message.work` follow-up remain separate from this automatic transaction; ordinary
+coordination notifications use their existing route.
+
 The current derived-workspace backend creates a `shadow-derived-<uuid>` branch in
 a sibling worktree from a committed source branch. Source staged, unstaged,
 untracked and ignored files are not copied, stashed, reset or checked out.
@@ -174,15 +171,28 @@ Capacity is automatic-worker admission accounting, not CPU/GPU utilization or a
 general desktop-resource lock manager. Independent worktrees isolate checkouts,
 not external services or operating-system side effects.
 
-Every implementation-phase first delivery and recovery verifies retained isolation.
-Bootstrap deliveries instead require the current unbound automatic assignee and
-current dependency/ancestor/capacity checks; they are not implementation admission.
-A missing or replaced implementation workspace fails closed, never falls back to
-source or recreates lost user resources. The write-ahead `delivering` receipt precedes admission; only an
-exact accepted receipt advances it to `running`. Ordinary resumes and replies also
-pass current assignment, pause, capacity and isolation checks. Unconfirmed delivery
-or interruption blocks for inspection instead of blindly resending operations.
-Automatic session metadata persists through JSONL and SQLite stores.
+The session inbox drains after acceptance, on restart, and when its target is
+idle. Transient errors use bounded backoff; once exhausted, a new Work or
+session-availability event can wake the inbox without a permanent poll loop.
+Before appending and again immediately before first inference, the host verifies
+actual isolation on its owning device and rechecks the current assignment and
+revision, dependencies (including ancestor dependencies), capacity and target access. Existing waits or a recovery request are
+not overwritten. A release, reassignment, or terminal transition invalidates the
+old inbox entry; a racing append can remain as history but cannot launch a stale
+turn. This is not cancellation of a turn that already started.
+
+JSONL and SQLite history store the stable kickoff ID on the message itself. On
+restart the host reconciles the stamped physical segment and the current segment:
+a complete match is never enqueued again; a proven absence can retry the exact
+input. Missing, unreadable, or torn history is not proof of absence. It fails
+closed and durably quarantines the accepted input. The Work remains assigned
+and reports a blocker for inspection. Restart, ordinary replies and explicit
+resume cannot replay that assignment; release or reassign only after reviewing
+history and reconciling any possible effects. No inference runs on an unsaved kickoff. If history was saved but execution was interrupted or never
+started, recovery stays explicit, including acknowledgement before replaying
+unfinished tools. Legacy `claimed`/`delivering`/`running` flags do not create an
+inbox entry or authorize replay. Ordinary resumes and replies still pass the
+existing assignment, capacity, and isolation checks; there is no source fallback.
 
 LayerFS is not used as a pretend Git/PR bridge. Its internal publish operation is
 not a verified real Git remote/PR export. The current automation uses the existing
@@ -200,7 +210,7 @@ arbitrary directories. Missing authority or unavailable acquisition routes requi
 publisher/human help. This does not add a generic clone/download operation.
 
 The narrow dynamic `work_bootstrap` tool is available only to that Work's current
-unpaused bootstrap assignee, in its owning Project, through a direct call (not a
+bootstrap assignee, in its owning Project, through a direct call (not a
 script, remote-bound context or replay of an unfinished tool):
 
 1. `register` requires an explicit inventory `nodeId` and existing directory `path`.
@@ -247,9 +257,8 @@ Use it when an otherwise eligible item needs existing-PR/owner reconciliation,
 authenticated lookups or missing authorization, or an assigned blocked owner has
 stopped and needs coordinator review. The host can schedule these stopped-owner
 reviews even without capacity for a new automatic worker. Normal tool/input or
-external waits and busy owners do not qualify as stalled work. Tracking-only
-findings without explicit readiness, and manual, paused or terminal Work/ancestors,
-are not automatically reviewed.
+external waits and busy owners do not qualify as stalled work. Terminal Work
+and Work under a terminal ancestor are not automatically reviewed.
 
 The recipient is **only the Work's current available durable coordinator in the
 same Project**. There is no arbitrary recipient fallback. The action queues a
@@ -299,7 +308,7 @@ with `{"key":"<Work key>","version":<current Work sequence>}`. It verifies owner
 status, capacity and isolation and uses existing session recovery. If unfinished
 tool calls require acknowledgement, inspect effects before adding
 `"acknowledgeToolReplay":true`. A missing original executor needs explicit normal
-reassignment, never silent replacement. Cancellation, pause and reassignment do
+reassignment, never silent replacement. Cancellation and reassignment do
 not authorize replay of uncertain side effects.
 
 ## Verification and current limits

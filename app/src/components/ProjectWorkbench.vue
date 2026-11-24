@@ -104,7 +104,7 @@ import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import WorkCompletionList from './WorkCompletionList.vue'
 import { useWorkCompletions } from '../composables/useWorkCompletions.ts'
-import { filterWork, workAttention, workRoots } from '../project-work.ts'
+import { filterWork, workNeedingReassessment, workRoots } from '../project-work.ts'
 import WorkBoard from './WorkBoard.vue'
 
 
@@ -169,7 +169,7 @@ const filter = reactive({ query: '', root: '', assignee: '', terminal: false })
 const completedMatches = computed(() => filterWork(data.value?.items ?? [], { ...filter, terminal: true }).filter(item => item.status === 'done'))
 const filtered = computed(() => filterWork(data.value?.items ?? [], { ...filter, terminal: true }))
 const selectedItem = computed(() => data.value?.items.find(item => item.key === selected.value))
-const reviews = computed(() => data.value ? workAttention(data.value) : [])
+const reviews = computed(() => data.value ? workNeedingReassessment(data.value) : [])
 const unknownEffects = computed(() => data.value?.effects.filter(effect => effect.status === 'unknown') ?? [])
 const initiatives = computed(() => {
   const items = data.value?.items ?? [], roots = workRoots(items)

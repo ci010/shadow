@@ -389,7 +389,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
       await artifact('progress.json', { state, taskId: task!.id, contextId: task!.contextId, status: task!.status, calls, maxCalls,
         deadlineAt: timeline.snapshot().deadlineAt, timeline: timeline.snapshot(), apps: apps.length,
         blockedWork: work.items.filter(item => item.status === 'blocked').length,
-        pendingWorkReviews: work.items.filter(item => item.contextChanged || item.notes?.attention && !item.notes.attention.reviewed).length })
+        pendingWorkReviews: work.items.filter(item => item.contextChanged).length })
       const controlPath = join(output, 'control.json')
       let control: { id: string; action: string; appId?: string; revision?: string; text?: string;
         workKey?: string; requestId?: string; option?: string } | undefined

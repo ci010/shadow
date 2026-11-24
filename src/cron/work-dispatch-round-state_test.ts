@@ -39,7 +39,7 @@ test('failure and interrupted rounds back off, concurrent admissions serialize',
 }))
 
 test('review write-ahead receipts prevent unknown notification replay and survive restart', async () => withTempWorkspace(async home => {
-  const input = { key: 'work:test', version: 1, recipient: 'manager', inputId: 'review:one' }
+  const input = { key: 'work:4446e47e-1cae-5221-b77f-26df1b396424', version: 1, recipient: 'manager', inputId: 'review:one' }
   const first = new WorkDispatchRoundState(home)
   assert.equal((await first.reserveReview(input)).send, true)
   const restarted = new WorkDispatchRoundState(home)

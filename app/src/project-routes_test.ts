@@ -66,11 +66,11 @@ for (const protocol of ['http:', 'file:'] as const) {
   })
   test(`${protocol} the legacy Dashboard URL redirects to Board with Work and hash intact`, async () => {
     const router = applicationRouter(protocol)
-    await router.push('/projects/owner%20one/dashboard?work=topic%3Alegacy#details')
+    await router.push('/projects/owner%20one/dashboard?work=work%3A6421bbfb-de99-58b8-b296-68517d3e4d2d#details')
     const current = router.currentRoute.value
     assert.equal(current.name, 'project-board')
     assert.equal(current.params.projectId, 'owner one')
-    assert.equal(current.query.work, 'topic:legacy')
+    assert.equal(current.query.work, 'work:6421bbfb-de99-58b8-b296-68517d3e4d2d')
     assert.equal(current.hash, '#details')
   })
   test(`${protocol} legacy Agents navigation retains project, agent, channel and hash`, async () => {

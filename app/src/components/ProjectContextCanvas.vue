@@ -9,18 +9,17 @@
     <article v-for="row in rows" :key="row.item.key" :data-work-key="row.item.key"
       class="context-node" :class="{ root: row.depth === 0, selected: selected === row.item.key, contextual: row.contextOnly }"
       :style="{ '--node-depth': Math.min(row.depth, 4) }">
-      <p v-if="row.item.notes?.relation" class="node-relation">{{ relationLabel(row.item.notes.relation.kind) }}: {{ row.item.notes.relation.reason }}</p>
       <header class="node-heading">
         <button v-if="row.children" class="branch-toggle" type="button" :aria-expanded="expanded.has(row.item.key)"
           :aria-label="t('Toggle branch: {title}', { title: row.item.title })" @click="toggle(row.item.key)">
           <span :class="expanded.has(row.item.key) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
         </button>
         <h3><button type="button" @click="emit('select', row.item.key)">{{ row.item.title }}</button></h3>
-        <span class="node-kind">{{ workKind(row.item.notes?.kind ?? 'task') }}</span>
+        <span class="node-kind">{{ workKind(row.item.kind ?? 'task') }}</span>
         <span class="node-status" :class="`status-${row.item.status}`">{{ workStatus(row.item) }}</span>
       </header>
       <div class="node-body">
-        <p v-if="row.item.objective" class="node-objective">{{ row.item.objective }}</p>
+        <p v-if="row.item.definition" class="node-objective">{{ row.item.definition }}</p>
         <p class="node-provenance">{{ row.item.observation ? t('Automatically observed · not user acceptance') : row.item.origin === 'human' ? t('User-defined goal') : t('Working interpretation') }}</p>
         <details v-if="row.item.observation" class="observation-source">
           <summary>{{ t('Observation sources') }}</summary>
@@ -29,10 +28,7 @@
           <ul><li v-for="source in row.item.observation.sources" :key="source.id"><code>{{ source.id }}</code></li></ul>
         </details>
         <p v-if="row.item.contextChanged" class="impact-pending" role="status">{{ t('An ancestor changed. This branch has not been reassessed yet.') }}</p>
-        <p v-if="row.item.notes?.attention && !row.item.notes.attention.reviewed" class="impact-pending">
-          <strong>{{ t('Impact not yet reviewed') }}</strong> {{ row.item.notes.attention.summary }}
-        </p>
-        <WorkNoteContent v-if="row.item.notes" :notes="row.item.notes" :api-base="apiBase" :compact="!details.has(row.item.key)" />
+        <WorkReportContent :summary="row.item.summary" :artifacts="row.item.artifacts" :context-assessment="row.item.contextAssessment" :api-base="apiBase" :compact="!details.has(row.item.key)" />
         <p v-if="row.item.blockedReason" class="node-blocker">{{ t('Blocker') }}: {{ row.item.blockedReason }}</p>
         <div class="node-executions">
           <template v-for="session in linkedSessions(row.item)" :key="session.sessionId">
@@ -75,11 +71,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { t } from '../i18n.ts'
-import { relationLabel, workCanvasRows, workKind, workPath, workStatus } from '../project-work.ts'
+import { workCanvasRows, workKind, workPath, workStatus } from '../project-work.ts'
 import { isWorkingStage, sessionActivity } from '../session-activity.ts'
 import type { ProjectWorkItem, ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
 import type { AskRequest } from '../yield-requests.ts'
-import WorkNoteContent from './WorkNoteContent.vue'
+import WorkReportContent from './WorkReportContent.vue'
 import YieldQuestion from './YieldQuestion.vue'
 const props = defineProps<{ data: ProjectWorkOverview; matches: ProjectWorkItem[]; apiBase: string; selected: string; canWrite: boolean; active: boolean; filtering?: boolean; focusRequest?: { id: string } }>()
 const emit = defineEmits<{ select: [key: string]; session: [id: string]; discuss: [key: string]; updated: [] }>()
@@ -178,8 +174,7 @@ h2 { font-size: 19px; font-weight: 600; line-height: 1.4; margin: 0 0 7px; }
 h3 { flex: 1; min-width: 100px; margin: 0; font-size: 16px; font-weight: 600; }
 .root h3 { font-size: 19px; }
 .node-heading h3 button { text-align: left; font: inherit; padding: 0; }
-.node-kind, .node-status, .node-provenance, .node-relation, .node-executions, .collapsed-count { font-size: 12px; color: var(--c-text-secondary); }
-.node-relation { margin: 0 0 7px; max-width: 75ch; }
+.node-kind, .node-status, .node-provenance, .node-executions, .collapsed-count { font-size: 12px; color: var(--c-text-secondary); }
 .node-status { white-space: nowrap; }
 .status-blocked { color: var(--c-warn); }
 .status-done { color: var(--c-success); }
@@ -190,7 +185,6 @@ h3 { flex: 1; min-width: 100px; margin: 0; font-size: 16px; font-weight: 600; }
 .node-executions button { color: var(--c-primary); padding-inline: 0; }
 .node-actions button { padding: 4px 8px; border: 1px solid var(--c-border); }
 .impact-pending, .node-blocker { max-width: 75ch; color: var(--c-warn); padding: 8px; background: var(--c-warn-bg); }
-.impact-pending strong { font-weight: 500; margin-right: 6px; }
 .project-activity, .unlinked-questions { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--c-border); }
 .project-activity ul { list-style: none; padding: 0; margin: 0 0 12px; }
 .project-activity li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--c-border-soft); }

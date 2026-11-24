@@ -16,7 +16,7 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   } else if (mode !== 'call' && allows('work')) {
     sections.push(`### Shared work notes
 
-Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Work is not a prerequisite or permission; completion is not human acceptance, and notes.html is never approval.`)
+Read/list/search Work via \`v:works/overview\`; writes use dynamic \`work_create\`, \`work_update\`, \`work_assign\`, \`work_review\`, \`work_link\`, \`work_note_create\` through invoke_tool with typed fields, not action/data. Prefer Work for durable shared facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work before creating it; one-off exchanges need no record. Read \`v:skills/work-coordination\` when shared state or recovery is needed. Update only meaningful changes; rely on targeted Work notifications rather than duplicate messages. Comments are silent unless the assignee asks to notify the manager; manager replies notify the original author and never authorize action. Work is not a prerequisite or permission; completion is not human acceptance. Keep shared state/results in summary and transient planning in the session.`)
   }
 
   if (allows('sql')) {

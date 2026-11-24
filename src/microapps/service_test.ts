@@ -652,8 +652,7 @@ test('compact Micro App receipts preserve model pin, failures and exact scope re
   const f = await fixture(home)
   try {
     const app = await f.publish()
-    const work = [{ key: 'work:fixture', revision: 3, acceptance: Array.from({ length: 8 }, (_, index) =>
-      `${index}: Verify startup, state, recovery and repeat-use behavior. `.repeat(8)) }]
+    const work = [{ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 3, definition: '- Verify startup, state, recovery and repeat-use behavior.\n'.repeat(64).trim() }]
     const record = { ...app, manifest: { ...app.manifest, description: 'Detailed app description. '.repeat(12) },
       work, lastRun: { id: app.id, status: 'failed' as const, error: 'Backend dependency missing' },
       model: 'fixture',
@@ -666,7 +665,7 @@ test('compact Micro App receipts preserve model pin, failures and exact scope re
     assert.equal(receipt.acceptanceSummary?.error, 'Device use not approved')
     assert.equal(receipt.acceptanceSummary?.status, 'blocked')
     assert.equal(receipt.acceptanceSummary?.reportSaved, false)
-    assert.deepEqual(receipt.workRefs, [{ key: 'work:fixture', revision: 3, acceptanceCount: 8 }])
+    assert.deepEqual(receipt.workRefs, [{ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 3 }])
     assert.deepEqual(record, before)
     assert.deepEqual(f.service.get(app.id), app, 'Projection does not update storage or grant access')
   } finally { await f.service.shutdown() }

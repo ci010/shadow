@@ -89,10 +89,3 @@ export interface ExecutionContext extends MessageContext {
   /** DeepSeek reasoning effort level */
   reasoningEffort?: ReasoningEffort
 }
-
-export function currentOwnerWorkInput(context: ExecutionContext) {
-  if (context.inputSource !== 'user' || context.admin !== true || context.isGroup
-    || context.channel === 'a2a' || context.workUserInput === undefined) return undefined
-  return { text: context.workUserInput, source: { sessionId: context.sessionId, physicalId: context.physicalSessionId,
-    kind: 'user' as const, id: context.messageId } }
-}

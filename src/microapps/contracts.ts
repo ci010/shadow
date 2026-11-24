@@ -1,4 +1,6 @@
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { z } from 'zod'
+import { workDefinitionSchema } from '../initiatives/work-definition.ts'
 import { decisionEvidenceSchema } from '../sessions/decision-brief.ts'
 
 export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024
@@ -22,7 +24,7 @@ export const microAppCapabilities = {
   acceptance: { onRequest: 'ask-local-owner', timeoutMs: 60_000, default: 'defer-without-approval',
     scope: 'published-revision-only', open: 'author-owned-browser', reports: 'agent-assessment-with-host-observations',
     categories: ['startup', 'state', 'recovery', 'reopen'], deviceAuthorization: 'unchanged',
-    requirements: 'published-work-acceptance-snapshot; report each criterion, including blocked/not_tested',
+    requirements: 'published-work-definition-snapshot; assess each Work scope, including blocked/not_tested',
     evidence: 'action:evidence resolves own recorded tool IDs and exact excerpts into canonical report references',
     handoff: 'queued-notification, author-turn, runtime-testing, terminal-report-or-explicit-missing-report' },
   model: { input: 'text-only', maxConcurrentCalls: 2, failedAttemptsConsumeAllowance: true },
@@ -104,8 +106,8 @@ const appCheckSchema = z.object({
   evidence: z.array(decisionEvidenceSchema.extend({ kind: z.literal('tool') })).max(6),
 }).strict()
 export const appWorkScopeSchema = z.object({
-  key: z.string().min(1).max(600), revision: z.number().int().positive(),
-  acceptance: z.array(z.string().min(1).max(4000)).min(1).max(12),
+  key: workKeySchema, revision: z.number().int().positive(),
+  definition: workDefinitionSchema,
 }).strict()
 export type AppWorkScope = z.infer<typeof appWorkScopeSchema>
 export const appTestReportSchema = z.object({
@@ -113,9 +115,8 @@ export const appTestReportSchema = z.object({
     category: z.enum(['startup', 'state', 'recovery', 'reopen', 'business', 'device']),
   })).min(4).max(6),
   requirements: z.array(appCheckSchema.extend({
-    workKey: z.string().min(1).max(600), workRevision: z.number().int().positive(),
-    criterion: z.number().int().nonnegative().max(11),
-  })).max(240).optional(),
+    workKey: workKeySchema, workRevision: z.number().int().positive(),
+  })).max(20).optional(),
 }).strict().superRefine(({ checks, requirements }, ctx) => {
   const categories: string[] = checks.map(check => check.category)
   if (new Set(categories).size !== checks.length ||

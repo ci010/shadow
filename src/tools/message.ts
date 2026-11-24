@@ -7,6 +7,7 @@ import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { sessionReplyAddress, type DeliverInput, type SessionInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import { buildSenderTag } from '../agent/message-builder.ts'
 import { z } from 'zod'
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { parseWorkRoot } from '../sessions/initiative-metadata.ts'
 import type { WorkStamp } from '../initiatives/work-contract.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
@@ -14,7 +15,7 @@ import type { A2aSessions } from '../a2a/sessions.ts'
 const coordinationSchema = z.object({
   intent: z.enum(['request', 'question', 'progress', 'handoff', 'acknowledgement']).default('request'),
   initiativeId: z.string().trim().min(1).max(600).optional(),
-  itemId: z.string().trim().min(1).max(600).optional(),
+  itemId: workKeySchema.optional(),
 }).refine(value => !value.itemId || !!value.initiativeId, 'itemId requires workRoot.')
 
 /**

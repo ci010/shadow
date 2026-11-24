@@ -1,11 +1,8 @@
 import { t } from './i18n.ts'
 import type { ProjectWorkItem, ProjectWorkOverview } from '../../src/projects/work-overview.ts'
-import type { WorkNotes } from '../../src/initiatives/work-notes.ts'
+import type { WorkKind } from '../../src/initiatives/work-notes.ts'
 
-export function relationLabel(kind: 'supports' | 'requires' | 'assumption') {
-  return { supports: t('Chosen approach'), requires: t('Required dependency'), assumption: t('Unverified assumption') }[kind]
-}
-export function workKind(kind: WorkNotes['kind']) {
+export function workKind(kind: WorkKind) {
   return { goal: t('Goal'), approach: t('Approach'), task: t('Task'), finding: t('Finding') }[kind]
 }
 export function workPath(items: readonly ProjectWorkItem[], key: string): ProjectWorkItem[] {
@@ -75,7 +72,7 @@ export function filterWork(items: ProjectWorkItem[], filter: { query: string; ro
   return items.filter(item => (filter.terminal || !['done', 'cancelled'].includes(item.status ?? '') && !terminalRoots.has(roots.get(item.key)!))
     && (!filter.root || roots.get(item.key) === filter.root)
     && (!filter.assignee || (filter.assignee === 'unassigned' ? item.assignee === null : item.assignee === filter.assignee))
-    && (!query || `${item.title} ${item.key} ${item.objective ?? ''} ${item.notes?.summary ?? ''} ${item.result?.summary ?? ''}`.toLowerCase().includes(query)))
+    && (!query || `${item.title} ${item.key} ${item.definition ?? ''} ${item.summary ?? ''}`.toLowerCase().includes(query)))
 }
 export function groupWork(items: ProjectWorkItem[], all: ProjectWorkItem[]) {
   const roots = workRoots(all)
@@ -93,8 +90,8 @@ export function groupWork(items: ProjectWorkItem[], all: ProjectWorkItem[]) {
     initiative: key !== 'standalone',
   }))
 }
-export function workAttention(data: ProjectWorkOverview) {
-  return data.items.filter(item => item.contextChanged || item.notes?.attention && !item.notes.attention.reviewed)
+export function workNeedingReassessment(data: ProjectWorkOverview) {
+  return data.items.filter(item => item.contextChanged)
 }
 
 export function workGraph(items: ProjectWorkItem[]) {

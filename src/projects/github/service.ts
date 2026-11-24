@@ -188,11 +188,10 @@ export class GitHubService {
         entry = { resourceId, token: randomUUID(), sourceHash, title: fresh.title, definition: accepted }
         this.update(state => { state.imports.push(entry!) })
       } else if (digest(entry.definition) !== digest(accepted)) throw new GitHubError('Resume the original import before revising its Work.', 409)
-      const reason = `Confirmed GitHub import ${entry.token} from ${resourceId}`
-      // The marker recovers a Work committed before its linkage receipt was saved.
-      const existing = this.deps.alignment.store.workRecords().find(work => work.reason === reason)
-      const record = existing ?? workRecordSchema.parse(await this.deps.alignment.execute({ kind: 'user' }, 'create', undefined, undefined, {
-        title: entry.title.slice(0, 160), assignee: null, definition: entry.definition, reason,
+      // Reuse the saved import identity if Work committed before its linkage receipt was saved.
+      const record = workRecordSchema.parse(await this.deps.alignment.execute({ kind: 'user' }, 'create', undefined, undefined, {
+        idempotencyKey: `github-import:${entry.token}`,
+        title: entry.title.slice(0, 160), assignee: null, definition: entry.definition,
       }, signal))
       this.bind(item, record.key, entry.sourceHash)
       this.update(state => { state.imports.find(value => value.resourceId === resourceId)!.workKey = record.key })
@@ -278,7 +277,7 @@ export class GitHubService {
           throw new GitHubError('Choose an original inline review comment belonging to this PR, not a reply.')
         }
         if (input.kind === 'close_issue' && input.reason === 'completed') {
-          if (this.state().links.filter(link => link.resourceId === input.resourceId).some(link => this.deps.alignment.get(link.workKey).workflow?.status !== 'done')) {
+          if (this.state().links.filter(link => link.resourceId === input.resourceId).some(link => this.deps.alignment.get(link.workKey).status !== 'done')) {
             throw new GitHubError('Linked Work has not passed its completion gate. Do not close the Issue as completed.', 409)
           }
         }
@@ -314,7 +313,7 @@ export class GitHubService {
       const current = this.deps.alignment.get(input.workKey)
       if (current.revision !== operation.workRevision || current.sequence !== operation.workSequence) throw new GitHubError('Work changed during preflight. Prepare a new preview.', 409)
       if (input.kind === 'close_issue' && input.reason === 'completed'
-        && this.state().links.filter(link => link.resourceId === input.resourceId).some(link => this.deps.alignment.get(link.workKey).workflow?.status !== 'done')) {
+        && this.state().links.filter(link => link.resourceId === input.resourceId).some(link => this.deps.alignment.get(link.workKey).status !== 'done')) {
         throw new GitHubError('Linked Work has not passed its completion gate. Prepare a new preview after acceptance.', 409)
       }
       signal.throwIfAborted()
@@ -426,8 +425,7 @@ export class GitHubService {
     return this.serial(async () => {
       const work = this.linked(input.resourceId, input.workKey)
       this.resource(input.resourceId)
-      if (!work.workflow) throw new GitHubError('Historical Work must be migrated before automatic follow-up.')
-      const subscription = githubSubscriptionSchema.parse({ ...input, assignmentRevision: work.workflow.assignmentRevision })
+      const subscription = githubSubscriptionSchema.parse({ ...input, assignmentRevision: work.assignmentRevision })
       if (input.enabled) this.assertTarget(subscription)
       this.defineWorkflow(subscription)
       this.update(state => {
@@ -439,8 +437,8 @@ export class GitHubService {
   }
   private assertTarget(subscription: GitHubSubscription) {
     const work = this.linked(subscription.resourceId, subscription.workKey)
-    if (!this.deps.durableSession(subscription.sessionId) || ![work.workflow?.assignee, work.workflow?.manager].includes(subscription.sessionId)
-      || work.workflow?.assignmentRevision !== subscription.assignmentRevision) {
+    if (!this.deps.durableSession(subscription.sessionId) || ![work.assignee, work.manager].includes(subscription.sessionId)
+      || work.assignmentRevision !== subscription.assignmentRevision) {
       throw new GitHubError('Session or assignment changed. Review and save the subscription again.', 409)
     }
   }

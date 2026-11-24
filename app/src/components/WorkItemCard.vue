@@ -2,7 +2,7 @@
   <article class="work-item-card" :class="{ selected }" :data-work-key="item.key">
     <button type="button" class="work-title" :aria-pressed="selected" @click="$emit('select', item.key)">{{ item.title }}</button>
     <div class="work-item-state"><span :class="`status-${item.status}`">{{ workStatus(item) }}</span>
-      <span v-if="item.contextChanged || item.notes?.attention && !item.notes.attention.reviewed" class="review">{{ t('Impact not yet reviewed') }}</span>
+      <span v-if="item.contextChanged" class="review">{{ t('Impact not yet reviewed') }}</span>
     </div>
     <button v-if="item.assignee && sessionExists" type="button" class="work-assignee" :title="item.assignee" @click="$emit('session', item.assignee)">
       <span class="i-lucide-message-square" aria-hidden="true" />{{ sessionTitle }}<span class="i-lucide-arrow-up-right" aria-hidden="true" />

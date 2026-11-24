@@ -70,7 +70,11 @@ test('message and typed Work descriptions agree with the inline tool selection r
   assert.match(work.find(tool => tool.name === 'work_create')!.description, /Reuse relevant Work first; one-off discussion belongs in message and observation in read/)
   const update = work.find(tool => tool.name === 'work_update')!.description
   assert.match(update, /Routine progress stays silent/)
-  assert.match(update, /entering done\/blocked or a new coordination attention can notify the Work manager/)
+  assert.match(update, /entering done\/blocked can notify the Work manager/)
+  const comment = work.find(tool => tool.name === 'work_note_create')!.description
+  assert.match(comment, /silent unless notifyManager is true/)
+  assert.match(comment, /notifies the original author/)
+  assert.match(comment, /not delivered, approved or read/)
   assert.match(update, /Do not send a duplicate message/)
   assert.match(update, /not acceptance or permission to execute/)
 })

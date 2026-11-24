@@ -73,7 +73,7 @@ test('conversation links open scoped previews and reveal nested files without na
               contextKey:'fixture', active:true, initialExplorerOpen:true, style:'height:100vh'}, {
               default:() => [
                 h('article', {class:'fixture-message', onClick:openConversationLink,
-                  innerHTML:DOMPurify.sanitize(marked.parse(markdown + '\\n\\n' + workReference('fixture', 'work:one', 'Referenced work')))}),
+                  innerHTML:DOMPurify.sanitize(marked.parse(markdown + '\\n\\n' + workReference('fixture', 'work:688f598b-b124-5af7-9b75-38bd8046d293', 'Referenced work')))}),
                 h(Attachments, {paths:attachments.paths, apiBase:props.apiBase, sessionId:activeSessionId.value,
                   workdir:{kind:'local',displayPath:'C:\\\\synthetic\\\\owner'},
                   onOpen:file => workbench.value.openLinkedFile(file)}),

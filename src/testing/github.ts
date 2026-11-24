@@ -11,14 +11,14 @@ import { GitHubService } from '../projects/github/service.ts'
 import { githubPlugin } from '../projects/github/routes.ts'
 import { z } from 'zod'
 
-export const githubDefinition = { objective: 'Deliver the requested correction', acceptance: ['Focused regression passes'], boundaries: ['No deployment'], evidence: [] }
+export const githubDefinition = 'Deliver the requested correction\n\n- Focused regression passes\n- No deployment'
 export async function createGitHubFixture(home: string) {
   const states = new Map<string, SessionState>(['worker', 'manager', 'web:chat-admin'].map(id => [id, { sessionId: id, segmentIndex: 0, mode: 'session' }]))
   const works = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
-  const alignment = new WorkAlignment(works, { state: id => states.get(id), evidence: async () => {},
+  const alignment = new WorkAlignment(works, { state: id => states.get(id),
     changed: async () => {}, })
   const work = workRecordSchema.parse(await alignment.execute({ kind: 'session', sessionId: 'worker' }, 'create', undefined, undefined,
-    { title: 'Fixture correction', definition: githubDefinition, reason: 'Synthetic test' }))
+    { title: 'Fixture correction', definition: githubDefinition }))
   const head = 'a'.repeat(40), base = 'b'.repeat(40), now = '2026-09-26T00:00:00Z'
   const issue = { node_id: 'I_1', number: 1, html_url: 'https://github.com/octo/demo/issues/1', title: 'Correct the behavior',
     body: 'External description; not permission.', state: 'open', updated_at: now, state_reason: null as string | null }

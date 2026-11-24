@@ -613,32 +613,32 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
-      const f = fixture(workspace, store, { hasInitiative: id => ['work:cleanup', 'work:second'].includes(id) })
+      const f = fixture(workspace, store, { hasInitiative: id => ['work:1bfc5416-30b2-5627-9659-b4511d4a7f1f', 'work:05d45756-e64c-5be5-aa66-756c36b81c2e'].includes(id) })
       try {
         await f.sessions.start()
-        await f.sessions.buildSession('web:root', undefined, { initiativeId: 'work:cleanup' })
+        await f.sessions.buildSession('web:root', undefined, { initiativeId: 'work:1bfc5416-30b2-5627-9659-b4511d4a7f1f' })
         const context = sourceContext(workspace, f)
         const inherited = JSON.parse(await f.subagent.execute({ description: 'Inherited', mode: 'task', task: 'Work' }, context))
-        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'work:cleanup')
+        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'work:1bfc5416-30b2-5627-9659-b4511d4a7f1f')
         const ids: string[] = []
         for (const field of ['workRoot']) {
           const child = JSON.parse(await f.subagent.execute({
-            description: 'Explicit', mode: 'task', task: 'Work', [field]: 'work:second',
+            description: 'Explicit', mode: 'task', task: 'Work', [field]: 'work:05d45756-e64c-5be5-aa66-756c36b81c2e',
           }, context))
           ids.push(child.sessionId)
-          assert.equal(f.sessions.getSessionState(child.sessionId)?.initiativeId, 'work:second')
+          assert.equal(f.sessions.getSessionState(child.sessionId)?.initiativeId, 'work:05d45756-e64c-5be5-aa66-756c36b81c2e')
           assert.equal(f.sessions.getSessionState(child.sessionId)?.folderId, undefined)
         }
         await assert.rejects(f.subagent.execute({
-          description: 'Wrong Project', mode: 'task', task: 'Work', workRoot: 'work:missing',
+          description: 'Wrong Project', mode: 'task', task: 'Work', workRoot: 'work:91a6692e-2430-5d58-ad1f-fc46b5afbcb3',
         }, context), /does not belong/)
         await assert.rejects(f.subagent.execute({
-          description: 'Conflict', mode: 'task', task: 'Work', initiative_id: 'work:cleanup', project_name: 'work:second',
+          description: 'Conflict', mode: 'task', task: 'Work', initiative_id: 'work:1bfc5416-30b2-5627-9659-b4511d4a7f1f', project_name: 'work:05d45756-e64c-5be5-aa66-756c36b81c2e',
         }, context), /Unsupported/)
         await f.sessions.stop()
         await f.sessions.start()
-        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'work:cleanup')
-        for (const id of ids) assert.equal(f.sessions.getSessionState(id)?.initiativeId, 'work:second')
+        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'work:1bfc5416-30b2-5627-9659-b4511d4a7f1f')
+        for (const id of ids) assert.equal(f.sessions.getSessionState(id)?.initiativeId, 'work:05d45756-e64c-5be5-aa66-756c36b81c2e')
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -926,7 +926,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const f = fixture(workspace, store)
       const work = new InitiativeStore(workspace)
       const alignment = new WorkAlignment(work, {
-        state: id => f.sessions.getSessionState(id), evidence: async () => {},
+        state: id => f.sessions.getSessionState(id),
         changed: async () => {},
       })
       f.sessions.alignment = alignment

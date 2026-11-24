@@ -37,8 +37,8 @@ test('input context is revalidated after persistence before any question is deli
   const saved = Promise.withResolvers<void>()
   let current = true
   const f = fixture(async record => { if (!record.answer && !record.closed) await saved.promise }, () => current)
-  const pending = f.inputs.ask('Which release report?', f.context(), { originKey: 'goal', decisionKey: 'goal', path: [
-    { key: 'goal', revision: 1, title: 'Release impact', objective: 'Measure token usage', kind: 'goal', origin: 'human' },
+  const pending = f.inputs.ask('Which release report?', f.context(), { originKey: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', decisionKey: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', path: [
+    { key: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', revision: 1, title: 'Release impact', definition: 'Measure token usage', kind: 'goal', origin: 'human' },
   ] })
   const rejected = assert.rejects(pending, /goal path changed while opening/)
   assert.equal(f.inputs.get('web:root'), null)

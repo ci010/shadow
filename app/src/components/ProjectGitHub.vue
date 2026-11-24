@@ -61,9 +61,10 @@
             <p>{{ t('Confirm the interpretation below. Importing does not start a session, grant permissions, or change the Issue.') }}</p>
             <p v-if="resource.sourceHash !== importSourceHash" role="alert">{{ t('Issue text changed while you were editing. Review the latest description and adjust your interpretation before confirming.') }}</p>
             <button v-if="resource.sourceHash !== importSourceHash" type="button" @click="importSourceHash = resource.sourceHash">{{ t('Use this reviewed source') }}</button>
-            <label>{{ t('Accepted outcome') }}<textarea v-model="objective" required maxlength="4000" /></label>
-            <label>{{ t('Acceptance, one per line') }}<textarea v-model="acceptance" required /></label>
-            <label>{{ t('Existing boundaries, one per line') }}<textarea v-model="boundaries" /></label>
+            <label>{{ t('Work definition') }}
+              <span>{{ t('In Markdown, describe the outcome, how to verify it, its boundaries, and any known sources.') }}</span>
+              <textarea v-model="definition" required :maxlength="WORK_DEFINITION_MAX_LENGTH" />
+            </label>
             <button :disabled="busy || resource.sourceHash !== importSourceHash">{{ t('Confirm and create Work') }}</button>
           </form>
         </details>
@@ -163,6 +164,7 @@
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
+import { WORK_DEFINITION_MAX_LENGTH } from '../../../src/initiatives/work-definition.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { githubOperationSchema, githubSnapshotSchema, githubStateSchema, type GitHubOperation, type GitHubOperationInput, type GitHubSubscription } from '../../../src/projects/github/contracts.ts'
@@ -184,8 +186,8 @@ const subscription = computed(() => state.value?.subscriptions.find(item => item
 const targets = computed(() => props.sessions.filter(session => session.assignable
   && [linkedWork.value?.assignee, linkedWork.value?.manager].includes(session.sessionId)))
 const repository = ref(''), allowWrites = ref(false), url = ref(''), busy = ref(false), error = ref('')
-const objective = ref(''), acceptance = ref(''), boundaries = ref(''), importSourceHash = ref('')
-const importDrafts = new Map<string, { objective: string; acceptance: string; boundaries: string; sourceHash: string }>()
+const definition = ref(''), importSourceHash = ref('')
+const importDrafts = new Map<string, { definition: string; sourceHash: string }>()
 const kind = ref<GitHubOperationInput['kind']>('comment'), repositoryId = ref(''), head = ref(''), base = ref(''), title = ref(''), body = ref(''), draft = ref(true)
 const commentId = ref(0), closeReason = ref<'completed' | 'not_planned'>('completed')
 const preview = ref<GitHubOperation>(), confirmed = ref(false), verification = ref(''), duplicateRisk = ref(false)
@@ -215,9 +217,8 @@ async function loadLink() {
 }
 async function importWork() {
   if (!resource.value) return
-  const lines = (value: string) => value.split('\n').map(line => line.trim()).filter(Boolean)
   const result = await run('/import', { resourceId: resource.value.id, sourceHash: importSourceHash.value,
-    definition: { objective: objective.value, acceptance: lines(acceptance.value), boundaries: lines(boundaries.value), evidence: [] } })
+    definition: definition.value })
   if (result) { workKey.value = workRecordSchema.parse(result).key; emit('updated') }
 }
 async function prepare() {
@@ -241,10 +242,10 @@ async function subscribe(enabled: boolean) {
 }
 watch(() => props.selected, selected => { if (selected) workKey.value = selected })
 watch(resourceId, (_, previous) => {
-  if (previous) importDrafts.set(previous, { objective: objective.value, acceptance: acceptance.value, boundaries: boundaries.value, sourceHash: importSourceHash.value })
+  if (previous) importDrafts.set(previous, { definition: definition.value, sourceHash: importSourceHash.value })
   const draft = importDrafts.get(resourceId.value)
-  objective.value = draft?.objective ?? resource.value?.title ?? ''; acceptance.value = draft?.acceptance ?? ''
-  boundaries.value = draft?.boundaries ?? ''; importSourceHash.value = draft?.sourceHash ?? resource.value?.sourceHash ?? ''
+  definition.value = draft?.definition ?? resource.value?.title ?? ''
+  importSourceHash.value = draft?.sourceHash ?? resource.value?.sourceHash ?? ''
   commentId.value = 0
 })
 watch([resourceId, workKey], () => {

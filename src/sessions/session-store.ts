@@ -1,3 +1,4 @@
+import type { WorkKickoffStamp } from '../initiatives/work-kickoff.ts'
 import type { AgentPromptDraft } from '../agent/context/sub-override.ts'
 import type { PromptVersion } from '../agent/context/prompt-version.ts'
 import type { TaskRecord } from './task-record.ts'
@@ -249,6 +250,8 @@ export interface SessionStartEvent {
 }
 
 export interface StoredMessage {
+  /** Only the durable automatic kickoff drain may write this stamp. */
+  work_kickoff?: WorkKickoffStamp
   /** Host provenance, assigned only when admitting direct user input. */
   direct_input?: { sessionId: string; id: string; text: string; at: string; profileSource?: import('../agent/identity.ts').ReflectionProfileSource }
   /** Atomic history-only channel input marker, scoped to this physical context. */
@@ -320,7 +323,7 @@ export interface SessionStore {
   // ── Session log operations ────────────────────────────────────────────
 
   /** Read all raw records from a physical session log, in order. */
-  readSessionLog(sessionId: string): AsyncIterable<Record<string, unknown>>
+  readSessionLog(sessionId: string, options?: { strict?: boolean }): AsyncIterable<Record<string, unknown>>
   /** Append messages to a physical session log. */
   appendMessages(sessionId: string, messages: StoredMessage[]): Promise<void>
   /** Write the initial records for a new physical session (start + optional init). */

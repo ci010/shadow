@@ -22,10 +22,9 @@ const pending: YieldRequest = {
 
 test('live and saved decision cards retain the host goal path at the original abstraction level', () => {
   const workContext: NonNullable<YieldRequest['workContext']> = {
-    originKey: 'task', decisionKey: 'goal', path: [
-      { key: 'goal', revision: 1, title: 'Release impact', objective: 'Report token usage', kind: 'goal', origin: 'human' },
-      { key: 'task', revision: 1, title: 'Grader', objective: 'Prepare scoring', kind: 'task', origin: 'agent_interpretation',
-        relation: { kind: 'assumption', reason: 'Scoring was assumed to be necessary' } },
+    originKey: 'work:5cf0ff8c-60d9-5244-bcbe-656a0c2eaf81', decisionKey: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', path: [
+      { key: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', revision: 1, title: 'Release impact', definition: 'Report token usage', kind: 'goal', origin: 'human' },
+      { key: 'work:5cf0ff8c-60d9-5244-bcbe-656a0c2eaf81', revision: 1, title: 'Grader', definition: 'Prepare scoring', kind: 'task', origin: 'agent_interpretation' },
     ],
   }
   const request = { ...pending, workContext, origin: { physicalId: 'segment', toolCallId: 'ask' } }
@@ -180,7 +179,7 @@ test('journal identities restore context without restoring waits and survive rep
 
 test('proposal decisions use recorded identity rather than missing question arguments', () => {
   const request = { ...pending, origin: { physicalId: 'web_owner-0', toolCallId: 'ask' } }
-  const proposal = { kind: 'decision', proposal: { key: 'work:fixture', id: 'proposal' }, brief: {} }
+  const proposal = { kind: 'decision', proposal: { key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', id: 'proposal' }, brief: {} }
   for (const toolCall of [
     { name: 'ask', arguments: proposal },
     { name: 'invoke_tool', arguments: { name: 'ask', args: proposal } },
@@ -221,7 +220,7 @@ test('unbound historical revisions stay beside their original ask, including inv
 
 test('receipt identities locate decisions without call origins but missing or ambiguous asks stay explicitly unlinked', () => {
   const records = parseDecisionRecords([{ request: { ...pending, origin: { physicalId: 'web_owner-0' } }, answer: receipt() }])
-  const proposal = { ...call(), toolCall: { name: 'ask', arguments: { kind: 'decision', proposal: { key: 'work:fixture', id: 'proposal' } } } }
+  const proposal = { ...call(), toolCall: { name: 'ask', arguments: { kind: 'decision', proposal: { key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', id: 'proposal' } } } }
   assert.equal(inlineYieldDecisions([proposal, result(receipt())], null, records).entries.get(0)?.requestId, pending.id)
   const missing = inlineYieldDecisions([{ content: 'Current segment only' }], null, records)
   assert.deepEqual(missing.unlinked.map(([index, decision]) => [index, decision.requestId]), [[1, pending.id]])

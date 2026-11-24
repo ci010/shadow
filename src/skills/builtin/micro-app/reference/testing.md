@@ -9,9 +9,10 @@ that exact revision for an isolated browser handle. Exercise the real UI/SDK;
 stop and reopen to check persistence, and check failure/cancel recovery.
 Save `report` with startup/state/recovery/reopen results, host observation IDs
 from `get.acceptance`, and genuine recorded tool excerpts. Cover every
-`get.acceptance.work` criterion in `report.requirements` using
-`workKey`, `workRevision`, zero-based `criterion`, and the same result/basis/summary/
-observations/evidence fields. Mark unavailable checks blocked/not_tested, not passed.
+definition snapshot in `get.acceptance.work` once in `report.requirements`, using
+`workKey`, `workRevision`, and the same result/basis/summary/observations/evidence
+fields. Assess the outcome and verification expectations in the text, identify
+coverage gaps, and mark unavailable checks blocked/not_tested, not passed.
 Before reporting, call `evidence` with this app's `id`, exact `revision`, and
 `sources:[{id:"recorded tool call ID",quote:"exact result excerpt"}]` (1-12 entries).
 Copy its returned `evidence` references into the relevant checks. The host finds

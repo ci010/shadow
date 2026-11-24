@@ -31,7 +31,7 @@ test('GitHub resource subscription uses common run/effect state and never replay
     f.remote.failDelivery = false; runtime.manage(run.id, 'retry', true); await runtime.drain()
     assert.equal(f.delivered.length, 2)
     assert.equal(runtime.inspect().runs.at(-1)?.status, 'blocked')
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'pending')
+    assert.equal(f.alignment.get(f.work.key).status, 'pending')
   } finally { await runtime.stop(); await f.close() }
 }))
 

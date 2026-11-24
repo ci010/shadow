@@ -11,7 +11,7 @@ import { retirementReceiptSchema } from './retirement-contract.ts'
 import { join } from 'node:path'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { readStatePool } from './state-read-pool.ts'
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { parseSessionName } from './session-name.ts'
 import type {
   SessionState,
@@ -239,13 +239,26 @@ export class JsonlSessionStore implements SessionStore {
 
   async *readSessionLog(
     sessionId: string,
+    options?: { strict?: boolean },
   ): AsyncIterable<Record<string, unknown>> {
     const filePath = this.logPath(sessionId)
-    for await (
-      const obj of streamJsonlObjects<Record<string, unknown>>(filePath)
-    ) {
+    if (options?.strict) {
+      await using file = await open(filePath, 'r')
+      const info = await file.stat()
+      const tail = Buffer.alloc(1)
+      if (!info.isFile() || !info.size || (await file.read(tail, 0, 1, info.size - 1)).bytesRead !== 1 || tail[0] !== 10) {
+        throw new Error('Missing or torn session log; repair history before retrying')
+      }
+    }
+    let found = false
+    for await (const obj of streamJsonlObjects<Record<string, unknown>>(filePath, options?.strict ? {
+      onParseError: () => { throw new Error('Malformed or torn session log; repair history before retrying') },
+    } : undefined)) {
+      if (options?.strict && (!obj || typeof obj !== 'object' || Array.isArray(obj))) throw new Error('Invalid session log record')
+      found = true
       yield obj
     }
+    if (options?.strict && !found) throw new Error('Missing or empty session log')
   }
 
   async appendMessages(
@@ -256,7 +269,7 @@ export class JsonlSessionStore implements SessionStore {
     await mkdir(this.sessionsDir, { recursive: true })
     const filePath = this.logPath(sessionId)
     const lines = messages.map((m) => JSON.stringify(m)).join('\n')
-    await appendFile(filePath, `${lines}\n`)
+    await appendFile(filePath, `${lines}\n`, { flush: messages.some(message => message.work_kickoff) })
   }
 
   async createSessionLog(

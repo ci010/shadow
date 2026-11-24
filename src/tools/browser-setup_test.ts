@@ -144,7 +144,7 @@ test('connection URLs and cleanup admission are strict', () => {
 
 
 test('owner-scoped cleanup does not mutate shared Work notes in any state', async t => {
-  for (const state of ['blocked', 'paused', 'done', 'cancelled', 'stale', 'unknown'] as const) {
+  for (const state of ['blocked', 'done', 'cancelled', 'stale', 'unknown'] as const) {
     await t.test(state, async t => withTempWorkspace(async home => {
       const f = fixture(t, home)
       const owner = f.session(), peer = f.session()
@@ -154,7 +154,6 @@ test('owner-scoped cleanup does not mutate shared Work notes in any state', asyn
       const store = new InitiativeStore(home, { isSessionKnown: id => [owner.sessionId, peer.sessionId].includes(id) })
       const alignment = new WorkAlignment(store, {
         state: id => [owner.sessionId, peer.sessionId].includes(id) ? { sessionId: id, mode: 'session', segmentIndex: 0 } : undefined,
-        evidence: async () => { throw new Error('No acceptance evidence is provided by this fixture') },
         changed: async () => {},
       })
       const actor = { kind: 'session' as const, sessionId: owner.sessionId }
@@ -162,8 +161,8 @@ test('owner-scoped cleanup does not mutate shared Work notes in any state', asyn
         f.base.setWorkGuard(alignment)
         f.base.register(new WorkTool(alignment))
         const record = await alignment.execute(actor, 'create', undefined, undefined, {
-          title: 'Browser acceptance', reason: 'Synthetic request',
-          definition: { objective: 'Inspect then release the owned browser', acceptance: ['Owner review remains required'], boundaries: ['No extra authority'], evidence: [] },
+          title: 'Browser acceptance',
+          definition: 'Inspect then release the owned browser\n\n- Owner review remains required\n- No extra authority',
         }) as WorkRecord
         owner.workStamps = alignment.snapshot(owner.sessionId)
         const current = alignment.get(record.key)
@@ -178,8 +177,8 @@ test('owner-scoped cleanup does not mutate shared Work notes in any state', asyn
         } else {
           store.saveWork({
             ...current, sequence: current.sequence + 1,
-            ...(state === 'paused' ? { paused: true } : state === 'stale' ? { revision: current.revision + 1 }
-              : { workflow: { ...current.workflow!, status: 'done' } }),
+            ...(state === 'stale' ? { revision: current.revision + 1 }
+              : { status: 'done' as const, summary: 'Browser inspection finished.' }),
           }, current.sequence, owner.sessionId, 'fixture')
         }
         const before = alignment.get(record.key), effects = store.workEffects()

@@ -475,8 +475,8 @@ async function runViewport(origin: string, width: number, height: number) {
       options: [WORK_APPROVE, WORK_REJECT], defaultOption: WORK_REJECT, brief: decisionBrief,
       origin: { physicalId: 'physical-0' },
       workProposal: { key: 'work:11111111-1111-4111-8111-111111111111', id: '22222222-2222-4222-8222-222222222222',
-        baseRevision: 1, assignmentRevision: 2, change: 'pause', reason: 'Review acceptance first', paused: true,
-        definition: { objective: 'Verify both directions', acceptance: ['Inbound and outbound verified'], boundaries: ['No publication'], evidence: [] } },
+        baseRevision: 1, assignmentRevision: 2,
+        definition: 'Verify both directions\n\n- Inbound and outbound verified\n- No publication' },
     })
     live.publisher.invalidateSessions(root)
     await waitFor(window, `document.querySelector('.work-proposal')`)

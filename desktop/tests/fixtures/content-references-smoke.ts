@@ -61,7 +61,7 @@ async function main() {
     // The production Markdown/sanitizer creates real anchors; the production
     // click handler drives the real memory router and its destination readout.
     await run(`document.querySelector('#links a[href*="board?work="]').click()`)
-    await wait(`document.querySelector('#destination').textContent === 'Work details: work:one'`)
+    await wait(`document.querySelector('#destination').textContent === 'Work details: work:688f598b-b124-5af7-9b75-38bd8046d293'`)
     await run(`document.querySelector('#links a[href*="chat/web%3Achat-other"]').click()`)
     await wait(`document.querySelector('#destination').textContent === 'Conversation: web:chat-other'`)
     assert.equal(await run(`document.querySelectorAll('#links a').length`), 2)

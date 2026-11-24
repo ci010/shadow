@@ -40,7 +40,7 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
     ownerSession: id => yields.ownerSession(id), ask: (...args) => yields.askOwner(...args),
     notify: async () => {},
     evidence: async () => { assert.fail('No report is submitted by this rendered test') },
-    work: () => [{ key: 'work:rendered-fixture', revision: 1, acceptance: ['Text becomes a useful result', 'Saved preferences survive reopening'] }],
+    work: () => [{ key: 'work:03d4d01a-abd0-5815-b2a4-4db1eb2ea50d', revision: 1, acceptance: ['Text becomes a useful result', 'Saved preferences survive reopening'] }],
   })
   const host = new Hono()
   microAppsPlugin(service, req => req.headers.get('x-owner') === 'yes')(host)

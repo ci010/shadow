@@ -923,33 +923,37 @@ pagination links. Read the returned encoded key path for goal, notes and the
 host-built ancestor path; `v:works/schema` is opt-in field help. Broad VFS search
 is bounded and warns when incomplete. Writes use discoverable dynamic
 `work_create`, `work_update`, `work_assign`, `work_review`,
-`work_link` tools and return short receipts, not repeated definitions or HTML.
+`work_link` and `work_note_create` tools and return short receipts, not repeated definitions or reports.
 The base action-dispatch `work` tool is no longer published.
 
-Create through `invoke_tool({name:"work_create",args:{title:"Outcome",definition:{objective:"Desired result"},notes:{kind:"goal"}}})`.
+Create through `invoke_tool({name:"work_create",args:{title:"Outcome",definition:"Desired result and how to verify it",kind:"goal"}})`.
 Kinds are `goal`, `approach`, `task` and `finding`. Children also supply parentKey
-and notes.relation with a kind (`supports`, `requires` or `assumption`) and reason.
+to identify the relevant parent; record prerequisites as dependencies.
 Distinguish a chosen approach from a real prerequisite or unverified premise.
 The Work tree shows a note and its descendants; it has no second editable
 goal/status store. Parent/completion-dependency cycles are rejected.
 
-Parents maintain causal structure; assigned workers maintain current
-`summary`, `plan`, `next` and `artifacts`. `work_update` takes key, the current note
+Coordinators maintain the Work hierarchy and dependencies; assigned workers
+maintain the top-level `summary` (Markdown) and `artifacts`. `work_update` takes key, the current note
 `version`, and only changed top-level fields. Versions reject stale writes;
 semantic goal revisions change separately from routine progress.
-Agent changes to human-set/source-backed goals need a genuine quote from the
-current authenticated user input. Metadata, peer messages and old quotes are not
-user authority. Boundary descriptions never grant protected-action access.
+Only the human can make a semantic change to human-authored Work. A quote in
+Markdown, metadata or a peer message does not authorize an edit. Boundary
+descriptions never grant protected-action access.
 
-Routine notes refresh the UI through the existing Project live-state channel,
-without waking agents. Use notes.attention only for a material premise, scope,
-dependency, decision or blocker requiring the coordinator to act. Pending impact
-notifications coalesce until reviewed. The coordinator reads the current branch,
-updates affected reasoning and records `work_review` with a conclusion. Do not echo
-the same report by message or ask for periodic acknowledgements.
-Changed ancestors leave descendants explicitly **not yet reassessed**. Local note
-edits do not silently acknowledge that change. Review is not approval for tools.
-A notification failure reports that the note was saved but delivery failed.
+Routine Work updates refresh the UI without waking agents. Entering done or
+blocked can notify the Work manager. To append a separate shared Markdown
+comment, use `work_note_create`. The current assignee may post an original
+silently or set `notifyManager: true` to queue a notice for the current manager.
+A manager reply uses `replyTo` and notifies the original author, even after
+reassignment. The receipt confirms a save and whether a notice was queued, not
+whether anyone read or approved it. Comments are Project-visible, not private.
+There is no Web comment composer. Do not duplicate notices by message.
+
+Changed ancestors leave descendants explicitly **not yet reassessed**. Local
+updates and comments do not acknowledge that change. Use `work_review` with
+the Work version and a conclusion to reassess the stale ancestor basis; this is
+not a comment reply, approval or unblock.
 
 Optional `session create` work:{key} links an unassigned note before kickoff;
 the creator must control it. Stable keys survive ordinary note edits, and retries
@@ -1020,10 +1024,9 @@ narrow screen, preserves local answer drafts. Reopening first reloads the pendin
 question; a draft is restored only for the same Project, session and request.
 This does not persist an answer draft across a page reload.
 
-HTML in notes.html is a read-only exhibit: sanitized and rendered in an opaque,
-empty-sandbox iframe with a restrictive CSP. No scripts, network requests, forms,
-navigation or privileged bridge; native controls outside it retain answer and
-authorization authority. Use a Micro App for an actual executable reusable app.
+Work summaries are shared state or results in Markdown. The detail view renders
+Markdown without executing HTML; compact views show a short preview. Keep
+transient plans in the session, not in Work.
 
 Unknown operation outcomes still require inspection before retry, through the
 owning service's recovery controls, not a general Work gate. Native no-effect
@@ -1611,27 +1614,31 @@ as a completed creation; no retry resets or deletes it.
 
 Read `v:works/overview`, `v:works/index` (20 rows; follow `next`) and
 `v:works/context` (associated keys). Exact paths returned by indexes are
-`v:works/keys/<encodeURIComponent(key)>`; optional `/definition`, `/notes`, `/path`
-select current goal, notes or ancestor path. Search at `v:works` is bounded;
+`v:works/keys/<encodeURIComponent(key)>` (canonical key `work:<uuid>`); optional `/definition`, `/summary`, `/path`
+select the current definition, summary or ancestor path. Append `/comments` for
+the latest ten comments and follow `next` for older pages; `/comments/id/<id>`
+reads one exact comment. Search at `v:works` is bounded;
 follow warnings and narrow to a key or explicit index page. `v:works/schema` is
 field help, not an authorization grant.
 
 Catalog source and callable names match:
-- `work_create`: `{title,definition:{objective,acceptance?,boundaries?,evidence?},idempotencyKey?,parentKey?,assignee?,notes?,reason?,requestQuote?}`.
-- `work_update`: `{key,version,title?,definition?,parentKey?,dependencies?,notes?,status?,blockedReason?,requestQuote?}`; only changed fields.
+- `work_create`: `{title,definition,idempotencyKey?,parentKey?,assignee?,kind?,summary?,artifacts?}`.
+- `work_update`: `{key,version,title?,definition?,parentKey?,dependencies?,kind?,summary?,artifacts?,status?,blockedReason?}`; only changed fields.
+  `definition` is non-empty free Markdown, up to 8,000 characters after normalization. Describe the outcome, verification, boundaries and any known sources naturally; no headings are required. Definition prose is not proof or permission. Capture shared state/results in `summary` as Markdown; keep transient plans in the session. Only a human can semantically revise human-authored Work.
 - `work_assign`: `{key,version,assignee}` (durable session ID or null).
-- `work_review`: `{key,version,conclusion}` (attention review, not task acceptance).
+- `work_review`: `{key,version,conclusion}` (stale ancestor reassessment, not task acceptance).
 - `work_link`: `{key}` (historical association only).
+- `work_note_create`: `{workKey,body,replyTo?,notifyManager?}` (append-only Markdown comment, no Work version needed). `notifyManager` is for originals only. Use `replyTo` with the original ID from the same Work. A missing, ineligible or self recipient leaves the note saved without a notice.
 
 Read `v:tools/work_update` for its exact strict schema, then
-`invoke_tool({name:"work_update",args:{key:"work:...",version:2,notes:{summary:"Result"},status:"done"}})`.
+`invoke_tool({name:"work_update",args:{key:"work:...",version:2,summary:"Result",status:"done"}})`.
 No base `work` tool or action/data wrapper is published. Old recorded calls remain
 history, not replayable current contracts. Reads and mutations retain current
 Project, role, execution-mode and assignment/authority checks. Remote workdir
 sessions use only these built-in Project-Home Work operations, never remote files
 or a different Project database.
 
-Current Work defaults to the unique unfinished assignee record, not management or links. Pending, in_progress, blocked and paused occupy one slot; done/cancelled retain history without occupying it. Conflicting assignments are rejected transactionally with the existing key. Legacy duplicates can be completed/released without losing history, but cannot grow. Temporary task/call bindings remain explicit context, not durable assignments.
+Current Work defaults to the unique unfinished assignee record, not management or links. Pending, in_progress and blocked occupy one slot; done/cancelled retain history without occupying it. Conflicting assignments are rejected transactionally with the existing key. Legacy duplicates can be completed/released without losing history, but cannot grow. Temporary task/call bindings remain explicit context, not durable assignments.
 
 Workspace parent hierarchy, archive lookup, and the explicit boundary between lifecycle
 assessment and physical cleanup are documented in [Workspace lineage](workspace-lineage.md).

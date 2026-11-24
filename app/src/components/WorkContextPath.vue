@@ -4,23 +4,20 @@
     <p v-if="unassessed.length" class="path-warning" role="status">{{ t('This question includes branches not yet reassessed after a goal change:') }} {{ unassessed.map(node => node.title).join(', ') }}. {{ t('Check the premise before choosing an answer; a new question does not make the old approach necessary.') }}</p>
     <ol>
       <li v-for="node in upper" :key="node.key" :class="{ anchor: node.key === context.decisionKey }">
-        <p v-if="node.relation" class="path-link">{{ relationLabel(node.relation.kind) }}: {{ node.relation.reason }}</p>
         <button v-if="navigable" type="button" @click="emit('select', node.key)">{{ node.title }}</button>
         <strong v-else>{{ node.title }}</strong>
         <span v-if="node.key === context.decisionKey" class="anchor-label">{{ t('Choice at this level') }}</span>
-        <p class="path-objective">{{ node.objective }}</p>
+        <p class="path-objective">{{ node.definition }}</p>
         <small>{{ node.origin === 'human' ? t('User-defined goal') : t('Working interpretation') }}</small>
         <p v-if="node.assessment" class="path-objective"><strong>{{ t('Impact assessment') }}</strong>: {{ node.assessment }}</p>
-        <details v-if="node.userQuote"><summary>{{ t('User source') }}</summary><blockquote>{{ node.userQuote }}</blockquote></details>
       </li>
     </ol>
     <details v-if="lower.length" class="technical-origin">
       <summary>{{ t('Where this arose') }}: {{ lower.at(-1)?.title }}</summary>
       <ol><li v-for="node in lower" :key="node.key">
-        <p v-if="node.relation" class="path-link">{{ relationLabel(node.relation.kind) }}: {{ node.relation.reason }}</p>
         <button v-if="navigable" type="button" @click="emit('select', node.key)">{{ node.title }}</button>
         <strong v-else>{{ node.title }}</strong>
-        <p class="path-objective">{{ node.objective }}</p>
+        <p class="path-objective">{{ node.definition }}</p>
         <p v-if="node.assessment" class="path-objective"><strong>{{ t('Impact assessment') }}</strong>: {{ node.assessment }}</p>
       </li></ol>
     </details>
@@ -29,7 +26,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { t } from '../i18n.ts'
-import { relationLabel } from '../project-work.ts'
 import type { WorkDecisionContext } from '../../../src/initiatives/work-notes.ts'
 const props = defineProps<{ context: WorkDecisionContext; navigable?: boolean }>()
 const emit = defineEmits<{ select: [key: string] }>()
@@ -47,7 +43,7 @@ li.anchor { background: var(--c-bg-soft); padding-top: 8px; padding-right: 8px; 
 strong, button { font-weight: 600; }
 button { display: inline; border: 0; background: none; padding: 4px 0; text-align: left; font: inherit; font-weight: 600; color: var(--c-primary); cursor: pointer; }
 button:hover { text-decoration: underline; text-underline-offset: 3px; }
-.path-link, small { color: var(--c-text-secondary); font-size: 12px; }
+small { color: var(--c-text-secondary); font-size: 12px; }
 .path-link { margin: 0 0 5px; }
 .path-objective { max-width: 75ch; margin: 4px 0; white-space: pre-wrap; }
 .anchor-label { display: inline-block; margin-left: 8px; color: var(--c-warn); font-size: 12px; }

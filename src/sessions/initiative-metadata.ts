@@ -1,14 +1,15 @@
-const WORK_KEY = /^(?:work|initiative|item|topic):[^/\\\s]+$/
+import { workKeySchema } from '../initiatives/work-key.ts'
 
 export class InitiativeMetadataError extends TypeError {}
 
 /** Public context selector; stored metadata retains its internal field name. */
 export function parseWorkRoot(value: unknown): string | undefined {
   if (value === undefined) return undefined
-  if (typeof value !== 'string' || value.length > 600 || !WORK_KEY.test(value)) {
+  const parsed = workKeySchema.safeParse(value)
+  if (!parsed.success) {
     throw new InitiativeMetadataError('Work context must use a canonical Work key.')
   }
-  return value
+  return parsed.data
 }
 
 export function parseInitiativeId(record: Record<string, unknown>): string | undefined {

@@ -92,7 +92,6 @@ async function fixture(workspace: string, store: SessionStore, execute = false, 
   const initiatives = new InitiativeStore(workspace, { isSessionKnown: id => !!sessions.getSessionState(id) })
   const alignment = new WorkAlignment(initiatives, {
     state: id => sessions.getSessionState(id),
-    evidence: source => sessions.validateWorkEvidence(source),
     changed: async () => {},
   })
   sessions.alignment = alignment

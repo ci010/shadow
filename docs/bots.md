@@ -727,8 +727,7 @@ cannot use these capabilities. Each approved custom tool can call the following
 host-backed SDK methods. These do not import modules, expose credentials, allow
 arbitrary destinations or authorize local session management:
 
-- `ctx.work.call({ action: "create", idempotencyKey, title, definition: { objective,
-  acceptance: [], boundaries: [] } })` creates a **normal Project Work record** with
+- `ctx.work.call({ action: "create", idempotencyKey, title, definition: "Describe the reported issue and how to assess it" })` creates a **normal Project Work record** with
   `pending`, `manager=null`, `assignee=null`. No session is created, selected,
   assigned, focused or messaged by Bot intake itself. An explicitly configured and
   enabled automatic Work dispatch may subsequently claim eligible unassigned Work

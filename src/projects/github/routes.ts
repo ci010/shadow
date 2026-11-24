@@ -1,3 +1,4 @@
+import { workKeySchema } from '../../initiatives/work-key.ts'
 import { z } from 'zod'
 import { Hono } from 'hono'
 import type { GatewayPlugin } from '../../gateway/types.ts'
@@ -28,11 +29,11 @@ export function githubPlugin(service: GitHubService, authorize: (request: Reques
       return c.json(await service.configureRepository(body.name, body.read, body.write, c.req.raw.signal))
     })
     app.post('/api/github/links', async c => {
-      const body = z.object({ url: z.string().url(), workKey: z.string().min(1).optional() }).strict().parse(await c.req.json())
+      const body = z.object({ url: z.string().url(), workKey: workKeySchema.optional() }).strict().parse(await c.req.json())
       return c.json(await service.link(body.url, body.workKey, c.req.raw.signal))
     })
     app.post('/api/github/unlink', async c => {
-      const body = z.object({ resourceId: z.string(), workKey: z.string() }).strict().parse(await c.req.json())
+      const body = z.object({ resourceId: z.string(), workKey: workKeySchema }).strict().parse(await c.req.json())
       await service.unlink(body.resourceId, body.workKey)
       return c.json({ removed: true })
     })

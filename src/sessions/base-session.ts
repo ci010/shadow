@@ -12,7 +12,7 @@ import { InferenceBudget } from '../agent/context/execution-budget.ts'
 import { runtimeContextEvent } from './runtime-context-event.ts'
 import { createNodeInference } from '../script-runtime/infer.ts'
 import { continuedUserInvolvement, createResponseContext, reconcileResponseContinuity, type ResponseContext } from './response-context.ts'
-import { buildUserChatMessage } from '../agent/message-builder.ts'
+import { buildTextInputMessage, buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
 import type { OutboundMessage } from '../bus/events.ts'
@@ -67,6 +67,15 @@ import { providerFailureKind, type ProviderFailureKind } from '../providers/prov
  * accessors.  Subclasses add lifecycle-specific behaviour (event loop with
  * steering for {@link Session}, fire-and-forget for {@link EphemeralSession}).
  */
+/** Runtime-only capability attached to the exact input object by SessionManager. */
+export interface AutomaticKickoffTurn {
+  append(physicalId: string, message: ChatMessage, signal: AbortSignal): Promise<boolean>
+  settle(): void
+  verifyBeforeInference(signal: AbortSignal): Promise<void>
+  beforeInference(): void
+  finished(): void
+}
+
 export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
   protected responseContext: ResponseContext | undefined
@@ -137,6 +146,21 @@ export abstract class BaseSession {
    */
   /** Host receipt after a newly admitted input is durably in history. */
   inputPersisted?: (input: SessionInput) => void
+  /** Synchronous guard at the log append boundary, after working context and compaction. */
+  revalidateWorkNotification?: (input: SessionMessageInput, physicalId: string) => SessionMessageInput | null
+  private readonly workNotificationInputs = new WeakMap<ChatMessage, SessionMessageInput>()
+  private readonly persistedWorkNotifications = new WeakMap<SessionInput, SessionMessageInput>()
+
+  private isManagedWorkNotification(input: SessionInput): boolean {
+    return !!this.revalidateWorkNotification && input.kind === 'message'
+      && input.source.kind === 'event' && input.source.type === 'work-notification' && input.source.source === 'work-notebook'
+  }
+
+  protected notifyInputPersisted(input: SessionInput): void {
+    const recorded = this.persistedWorkNotifications.get(input)
+    if (recorded) this.inputPersisted?.(recorded)
+    else if (!this.isManagedWorkNotification(input) && !this.messagePersistenceFailed) this.inputPersisted?.(input)
+  }
 
   protected async appendMessages(
     llm: LlmRuntimeConfig,
@@ -150,6 +174,7 @@ export abstract class BaseSession {
 
   protected async buildInputMessage(input: SessionMessageInput, cwd: string): Promise<ChatMessage> {
     const message = await buildUserChatMessage(input, this.workspace, cwd)
+    if (this.isManagedWorkNotification(input)) this.workNotificationInputs.set(message, input)
     if (input.source.kind === 'user' && input.content.trim()) {
       const { channel, senderId, channelAddress, isGroup } = input.source.sender
       this.directInputs.set(message, { sessionId: this.id, id: input.id, text: input.content, at: input.timestamp,
@@ -179,12 +204,26 @@ export abstract class BaseSession {
     const prepared = this.imagePreparationSignal?.aborted ? messages
       : await prepareNewMessageImages(messages, this.imagePreparationSignal)
     const now = new Date().toISOString()
-    const stampedMessages = prepared.map(message => ({ ...message, timestamp: now }))
+    const inputs: ChatMessage[] = []
+    const guarded = new Map<ChatMessage, [SessionMessageInput, SessionMessageInput]>()
+    const stampedMessages = prepared.flatMap((message, index) => {
+      const original = messages[index]!
+      const notification = this.workNotificationInputs.get(original)
+      if (notification) {
+        const current = this.revalidateWorkNotification?.(notification, this.physicalSessionId)
+        if (!current) return []
+        message = buildTextInputMessage(current) // Host notifications are text-only.
+        guarded.set(original, [notification, current])
+      }
+      inputs.push(original)
+      return [{ ...message, timestamp: now }]
+    })
+    if (!stampedMessages.length) return
     this.messages.push(...stampedMessages)
     let savedCount = 0
     try {
       const stored: StoredMessage[] = stampedMessages.map((e, index) => ({
-        direct_input: this.directInputs.get(messages[index]!),
+        direct_input: this.directInputs.get(inputs[index]!),
         role: e.role,
         content: e.content,
         reasoning_content: e.role === 'assistant'
@@ -199,11 +238,13 @@ export abstract class BaseSession {
         timestamp: now,
         usage: e.role === 'assistant' ? e.usage ?? this.usage : undefined,
       }))
-      const recorded = messages.map(message => this.recordedChannelMessages.get(message))
+      const recorded = inputs.map(message => this.recordedChannelMessages.get(message))
       const publishSaved = (index: number) => {
         const message = stampedMessages[index]!
         savedCount++
         if (message.role !== 'user') return
+        const notification = guarded.get(inputs[index]!)
+        if (notification) this.persistedWorkNotifications.set(...notification)
         this.onUserMessageWrite(message, true)
         if (!recorded[index]) this.bus.emit('session.message.appended', {
           sessionId: this.id, physicalSessionId: this.physicalSessionId, message,
@@ -221,6 +262,9 @@ export abstract class BaseSession {
       }
     } catch (err) {
       this.messagePersistenceFailed = true
+      const unsavedNotifications = new Set<ChatMessage>(stampedMessages.slice(savedCount)
+        .filter((_, index) => this.workNotificationInputs.has(inputs[savedCount + index]!)))
+      if (unsavedNotifications.size) this.messages = this.messages.filter(message => !unsavedNotifications.has(message))
       for (const message of stampedMessages.slice(savedCount)) if (message.role === 'user') this.onUserMessageWrite(message, false)
       console.error(
         `[session] Failed to persist messages for ${this.id}:`,
@@ -331,6 +375,7 @@ export abstract class BaseSession {
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
     turnId: string = crypto.randomUUID(),
+    kickoff?: AutomaticKickoffTurn,
   ): Promise<string> {
     this.boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
     const model = executionContext.model ?? llm.model
@@ -367,6 +412,7 @@ export abstract class BaseSession {
 
     const pending = pendingToolCalls(this.messages)
     if (pending.length) {
+      if (kickoff) throw new Error('Automatic kickoff cannot replay unfinished calls')
       await this.executeToolCalls(pending.map(call => {
         const args: unknown = JSON.parse(call.function.arguments)
         if (!args || typeof args !== 'object' || Array.isArray(args)) {
@@ -441,6 +487,7 @@ export abstract class BaseSession {
             this.state.executionInference = executionInference
             this.bus.emit('session.changed', { sessionId: this.id, metadataOnly: true })
           }
+          if (kickoff && i === 0) await kickoff.verifyBeforeInference(signal)
           const captureId = this.promptCaptures?.capture({
             projectId: this.state.projectId,
             sessionId: this.id,
@@ -460,6 +507,7 @@ export abstract class BaseSession {
           }, () => {
             this.tools.assertSnapshot?.()
             signal.throwIfAborted()
+            if (i === 0) kickoff?.beforeInference()
             const request = this.provider.chat(inferenceMessages, toolDefs, {
               model,
               maxTokens,
@@ -821,6 +869,7 @@ export abstract class BaseSession {
     input: SessionInput,
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
+    kickoff?: AutomaticKickoffTurn,
   ): Promise<SessionTurnFact | undefined> {
     if (input.kind === 'control' && input.command.type !== 'retry' && input.command.type !== 'resume') return
     if (input.kind === 'message' && input.source.kind === 'session' && input.source.workStamps?.length
@@ -870,6 +919,16 @@ export abstract class BaseSession {
       content: '',
     }
     const attempted = !silent
+    const workNotice = this.isManagedWorkNotification(input)
+    let started = false
+    const startTurn = async () => {
+      this.state.executionStatus = 'running'
+      delete this.state.recovery
+      await this.store.saveState(this.id, this.state)
+      kickoff?.settle()
+      started = true
+      this.bus.emit('session.turn.started', { sessionId: this.id, turnId: queryId, inputId: input.id, source: fact.source })
+    }
     try {
       if (this.tools.boundary) {
         signal = AbortSignal.any([signal, this.tools.boundary.signal])
@@ -877,12 +936,7 @@ export abstract class BaseSession {
       }
       this.imagePreparationSignal = signal
       spanAttributes(attributes)
-      if (attempted) {
-        this.state.executionStatus = 'running'
-        delete this.state.recovery
-        await this.store.saveState(this.id, this.state)
-        this.bus.emit('session.turn.started', { sessionId: this.id, turnId: queryId, inputId: input.id, source: input.source })
-      }
+      if (attempted && !kickoff && !workNotice) await startTurn()
 
       console.log(`[${this.id}] Processing message`)
 
@@ -908,7 +962,19 @@ export abstract class BaseSession {
       const messageWorkdir = cwd ?? locations.sessionDataDir
       await mkdir(locations.sessionDataDir, { recursive: true })
 
-      if (input.kind === 'control') {
+      if (kickoff) {
+        if (input.kind !== 'message' || this.state.recovery || pendingToolCalls(this.messages).length) {
+          throw new Error('Automatic kickoff cannot supersede interrupted history')
+        }
+        const message = { ...await this.buildInputMessage(input, messageWorkdir), timestamp: input.timestamp }
+        // Bypass normal append/compaction: this first input must be durable before
+        // entering context or triggering any provider request, including handoff.
+        if (!await kickoff.append(this.physicalSessionId, message, signal)) return
+        this.messages.push(message)
+        this.state.lastActivityAt = new Date().toISOString()
+        this.bus.emit('session.message.appended', { sessionId: this.id, physicalSessionId: this.physicalSessionId, message })
+        await startTurn()
+      } else if (input.kind === 'control') {
         if (input.command.type === 'resume') {
           if (!this.messages.some(message => message.role !== 'system')) throw new Error('No saved history to continue.')
         } else {
@@ -961,7 +1027,13 @@ export abstract class BaseSession {
           if (signal.aborted) await this.persistMessages(llm, message)
           else await this.appendMessages(llm, message)
         }
-        if (!this.messagePersistenceFailed) this.inputPersisted?.(input)
+        if (workNotice) {
+          const recorded = this.persistedWorkNotifications.get(input)
+          if (!recorded) return
+          fact.source = recorded.source
+          this.notifyInputPersisted(input)
+          await startTurn()
+        } else this.notifyInputPersisted(input)
       }
 
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
@@ -1006,8 +1078,9 @@ export abstract class BaseSession {
       }
 
       signal.throwIfAborted()
-      fact.content = await this.runLlmLoop(executionContext, llm, signal, queryId)
+      fact.content = await this.runLlmLoop(executionContext, llm, signal, queryId, kickoff)
     } catch (err) {
+      if ((kickoff || workNotice) && !started) throw err
       if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
         fact.status = 'cancelled'
         if (!silent && !this.tools.boundary) {
@@ -1044,7 +1117,7 @@ export abstract class BaseSession {
     } finally {
       this.imagePreparationSignal = undefined
       try {
-        if (attempted) await this.finishTurn(fact)
+        if (attempted && (!kickoff && !workNotice || started)) await this.finishTurn(fact)
       } finally {
         this.tools.boundary?.finish()
         this.responseContext = undefined

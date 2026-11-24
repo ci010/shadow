@@ -27,7 +27,7 @@ async function main() {
     await wait(`!!document.querySelector('.fixture-message a') && !!document.querySelector('[data-path="reports"]')`)
     const originalUrl = window.webContents.getURL()
     await execute(`document.querySelector('a[href*="board?work="]').click()`)
-    assert.equal(await execute('window.referenceDestination'), '/projects/fixture/board?work=work%3Aone')
+    assert.equal(await execute('window.referenceDestination'), '/projects/fixture/board?work=work%3A688f598b-b124-5af7-9b75-38bd8046d293')
     assert.equal(window.webContents.getURL(), originalUrl, 'Work reference uses the app router, not raw browser navigation')
     await execute(`document.querySelector('[aria-label="Toggle files"]').click()`)
     await execute(`document.querySelector('.fixture-message a').click()`)

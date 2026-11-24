@@ -1,28 +1,28 @@
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { z } from 'zod'
 import { projectFocusSnapshotSchema, projectFocusOverviewSchema } from './focus-contract.ts'
 import { workFocusInferenceSchema, workProgressSchema, workDefinitionSchema } from '../initiatives/work-contract.ts'
 import { githubSnapshotSchema } from './github/contracts.ts'
-import { workNotesSchema, workDecisionContextSchema } from '../initiatives/work-notes.ts'
+import { workReportFields, workBasisSchema, workDecisionContextSchema } from '../initiatives/work-notes.ts'
 
 const id = z.string().min(1)
 export const githubWorkReferenceSchema = githubSnapshotSchema.pick({
   url: true, repository: true, number: true, kind: true, state: true, ci: true, review: true, fetchedAt: true,
 })
 export const projectWorkItemSchema = z.object({
-  key: id, title: id, revision: z.number().int().positive(), sequence: z.number().int().positive(),
-  status: workProgressSchema.nullable(), parentKey: id.nullable(), dependencies: z.array(id),
+  key: workKeySchema, title: id, revision: z.number().int().positive(), sequence: z.number().int().positive(),
+  status: workProgressSchema.nullable(), parentKey: workKeySchema.nullable(), dependencies: z.array(workKeySchema),
   blockedReason: id.nullable(),
-  manager: id.nullable(), assignee: id.nullable(), paused: z.boolean(),
+  manager: id.nullable(), assignee: id.nullable(),
   changedAt: id,
-  objective: z.string().optional(),
-  result: z.object({ summary: z.string().min(1).max(2000), evidence: workDefinitionSchema.shape.evidence }).strict().optional(),
+  definition: workDefinitionSchema.optional(),
   origin: z.enum(['human', 'agent_interpretation']).optional(),
-  userQuote: z.string().optional(),
-  notes: workNotesSchema.optional(),
+  ...workReportFields,
+  basis: workBasisSchema.default([]), contextAssessment: z.string().trim().min(1).max(2000).optional(),
   contextChanged: z.boolean().optional(),
   github: z.array(githubWorkReferenceSchema).optional(),
   observation: z.object({ sessionId: id, observedAt: z.string(), sources: z.array(z.object({ id, physicalId: id })), focus: workFocusInferenceSchema.optional() }).optional(),
-})
+}).strict()
 const projectWorkOverviewBaseSchema = z.object({
   focus: projectFocusSnapshotSchema.optional(),
   items: z.array(projectWorkItemSchema),
@@ -30,19 +30,19 @@ const projectWorkOverviewBaseSchema = z.object({
     sessionId: id, title: id, assignable: z.boolean(),
     parentSessionId: id.nullable().optional(), lastActivityAt: id.optional(),
     activity: z.string().optional(),
-    workKey: id.optional(),
-    workKeys: z.array(id).optional(),
+    workKey: workKeySchema.optional(),
+    workKeys: z.array(workKeySchema).optional(),
     topic: z.string().optional(), focus: z.string().optional(),
     description: z.string().optional(), completed: z.boolean().optional(),
     topicSequence: z.number().int().positive().optional(),
   })),
   requests: z.array(z.object({
-    id, sessionId: id, kind: z.enum(['input', 'decision']), question: id, workKeys: z.array(id),
+    id, sessionId: id, kind: z.enum(['input', 'decision']), question: id, workKeys: z.array(workKeySchema),
     recipient: z.enum(['user', 'parent', 'caller']).optional(),
     context: workDecisionContextSchema.optional(),
   })),
   effects: z.array(z.object({
-    id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(id),
+    id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(workKeySchema),
   })),
   organization: z.object({
     organization: z.object({phase:z.enum(['evidence','hierarchy']).optional(),mode:z.enum(['full','delta']),status:z.enum(['running','completed','partial']),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),

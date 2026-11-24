@@ -1,3 +1,4 @@
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { appId, appInputName, jsonValue } from '../microapps/contracts.ts'
 import { z } from 'zod'
 import { validScheduleDelivery } from '../cron/delivery.ts'
@@ -62,14 +63,14 @@ export const AuthorDefinition = z.object({ id: WorkflowId.refine(id => !/^(sched
   source: z.object({ kind: z.enum(['external', 'bot']), id: WorkflowId }).strict(), binding: z.object({ demand: z.unknown() }).strict().optional(),
   gate: RevisionGate.optional(), nodes: z.array(Node).min(1).max(8), enabled: z.boolean(),
 }).strict().refine(d => d.nodes.every(n => !['schedule-action', 'host-action', 'github-notify'].includes(n.kind)), 'Host actions cannot be authored')
-export const Mapping = z.object({ initial: Observation, objective: z.string(), key: z.string().optional(), title: z.string().optional(), summary: z.string().optional(), revision: z.string().optional() }).strict()
+export const Mapping = z.object({ initial: Observation, objective: z.string(), key: workKeySchema.optional(), title: z.string().optional(), summary: z.string().optional(), revision: z.string().optional() }).strict()
 export const WorkflowRun = z.object({
   id: WorkflowId, workflow: WorkflowId, definition: WorkflowDefinition, observation: Observation,
   timestamp: z.string(), status: z.enum(['queued', 'running', 'retry', 'blocked', 'completed', 'cancelled']),
   cursor: z.number().int().nonnegative(), attempts: z.number().int().nonnegative(), nextAt: z.number(),
   aggregateInputs: z.record(appInputName, Observation).optional(), aggregateResult: AggregateResult.optional(),
   started: z.boolean(), delivered: z.number().int().nonnegative(), drafts: Drafts.optional(),
-  output: z.object({ sessionId: z.string().min(1).optional(), workKey: z.string().optional(), stale: z.boolean().optional() }).strict().optional(),
+  output: z.object({ sessionId: z.string().min(1).optional(), workKey: workKeySchema.optional(), stale: z.boolean().optional() }).strict().optional(),
   error: z.enum(['action_failed', 'interrupted_effect', 'authority_unavailable', 'mapping_conflict']).optional(),
 }).strict()
 export const WorkflowState = z.object({

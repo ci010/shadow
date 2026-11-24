@@ -1,14 +1,13 @@
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
 import type { InitiativeStore } from '../initiatives/store.ts'
-import type { WorkRecord } from '../initiatives/work-contract.ts'
 import { WorkConflict } from '../initiatives/work-contract.ts'
 import { projectFocusGroupSchema, projectFocusSnapshotSchema, type ProjectFocusSnapshot } from './focus-contract.ts'
 import { sourceIdentity, validatePresentation, type PresentationSource } from './presentation-contract.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool } from '../tools/tool.ts'
 
-export type OrganizationTopic = Pick<WorkRecord, 'key' | 'sequence' | 'changedAt'> & { definition: { objective: string }; workflow?: { title?: string; parentKey?: string }; notes?: { summary?: string }; observation?: { sessionId: string }; sessionCompleted?: boolean }
+export type OrganizationTopic = { key: string; sequence: number; changedAt: string; title: string; definition: string; parentKey?: string; summary?: string; observation?: { sessionId: string }; sessionCompleted?: boolean }
 
 export type OrganizationMode = 'full' | 'delta'
 export const ORGANIZATION_TOOLS = ['organization_read', 'organization_patch', 'organization_finish'] as const
@@ -62,7 +61,7 @@ export class WorkOrganizer {
 
   private candidates(mode: OrganizationMode, topics: OrganizationTopic[]) {
     const records: OrganizationTopic[]=this.store.workRecords().map(record => ({...record, observation: record.observation ?? (this.deps.sessionForWork?.(record.key) ? {sessionId:this.deps.sessionForWork(record.key)!} : undefined)})), observations=this.store.workObservations(), previous=this.store.projectFocus()
-    const candidates=[...records, ...topics].filter(r=>!r.workflow?.parentKey && !observations.find(o=>o.sessionId===r.observation?.sessionId)?.parentSessionId)
+    const candidates=[...records, ...topics].filter(r=>!r.parentKey && !observations.find(o=>o.sessionId===r.observation?.sessionId)?.parentSessionId)
       .sort((a,b)=>b.changedAt.localeCompare(a.changedAt)||a.key.localeCompare(b.key))
     this.restoreAdmission()
     for(const [key,f] of this.failures)if(!candidates.some(r=>r.key===key&&r.sequence===f.sequence)||previous?.sources.some(s=>s.key===key&&s.sequence===f.sequence))this.failures.delete(key)
@@ -78,7 +77,7 @@ export class WorkOrganizer {
     this.shownRoots.clear()
     this.run={phase,startRevision:previous?.revision??0,sessionId,signal,mode,manifest,candidates:candidates.length,stale:new Set(),evidence:new Map(),omissions:new Map(),read:new Map(),covered:new Set(),versions:new Map(),receipts:new Map(),patches:0,finished:false,bytes:0}
     this.last={phase,mode,status:'running',coveredCount:0,manifestCount:manifest.length,patches:0};this.deps.changed(sessionId)
-    return JSON.stringify({mode,phase,manifest:manifest.map(r=>({key:r.key,sequence:r.sequence,title:r.workflow?.title,sessionCompleted:r.sessionCompleted,objective:r.definition.objective.slice(0,800),summary:r.notes?.summary?.slice(0,800)})),revision:previous?.revision??0,
+    return JSON.stringify({mode,phase,manifest:manifest.map(r=>({key:r.key,sequence:r.sequence,title:r.title,sessionCompleted:r.sessionCompleted,definition:r.definition.slice(0,800),summary:r.summary?.slice(0,800)})),revision:previous?.revision??0,
       instruction:'Read bounded evidence, then commit valid small patches immediately. Do not wait for a complete project response. Finish explicitly. Manifest is fixed; omission is not deletion. Delta only reclassifies manifest keys, preserving unrelated groups/cards/hierarchy identities except explicit rootRegroup display edges. Prefer few coherent macro roots (3–5 soft target), subthemes and evidence groups; reuse existing hierarchy, never force Other. Existing hierarchy is display interpretation, never authority.'})
   }
   private bound(context:ExecutionContext) {
@@ -134,7 +133,7 @@ export class WorkOrganizer {
   async initialContext(task:string):Promise<string> {
     const run=this.run!;run.signal.throwIfAborted()
     const base=JSON.parse(task), {snapshot,groups,nodes}=this.keyed()
-    base.manifest=base.manifest.map((r:Record<string,unknown>)=>({...r,objective:String(r.objective??'').slice(0,run.mode==='delta'?800:120),summary:String(r.summary??'').slice(0,run.mode==='delta'?800:120),textTruncated:String(r.objective??'').length>(run.mode==='delta'?800:120)||String(r.summary??'').length>(run.mode==='delta'?800:120)}))
+    base.manifest=base.manifest.map((r:Record<string,unknown>)=>({...r,definition:String(r.definition??'').slice(0,run.mode==='delta'?800:120),summary:String(r.summary??'').slice(0,run.mode==='delta'?800:120),textTruncated:String(r.definition??'').length>(run.mode==='delta'?800:120)||String(r.summary??'').length>(run.mode==='delta'?800:120)}))
     if((snapshot?.revision??0)!==base.revision)throw new WorkConflict('Presentation revision changed during preload')
     const keys=new Set(run.manifest.map(r=>r.key))
     const relevant=groups.filter(g=>g.topicKeys.some(k=>keys.has(k)))

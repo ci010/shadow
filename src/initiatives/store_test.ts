@@ -8,10 +8,11 @@ import { InitiativeStore } from './store.ts'
 import type { WorkRecord } from './work-contract.ts'
 
 const note = (key = 'work:11111111-1111-4111-8111-111111111111'): WorkRecord => ({
-  key, subject: { kind: 'work', id: key.slice(5) }, revision: 1, sequence: 1,
-  definition: { objective: 'Keep current Work', acceptance: [], boundaries: [], evidence: [] },
+  key, revision: 1, sequence: 1,
+  definition: 'Keep current Work',
   origin: 'agent_interpretation', changedBy: 'web:owner', changedAt: '2026-10-01T00:00:00.000Z',
-  change: 'understanding', reason: 'Current note', paused: false,
+  title: 'Current Work', manager: 'web:owner', assignee: 'web:owner', assignmentRevision: 1, status: 'pending', dependencies: [],
+  kind: 'task', summary: '', artifacts: [], basis: [],
 })
 
 test('current Work records, links and history survive reopen without legacy tables', async () => {
@@ -21,8 +22,8 @@ test('current Work records, links and history survive reopen without legacy tabl
     store.saveWork(note(), 0, 'web:owner', 'created')
     store.linkWorkSession('web:owner', 'work:11111111-1111-4111-8111-111111111111')
     assert.throws(() => store.saveWork(note(), 0, 'web:owner', 'created'), /changed/)
-    assert.throws(() => store.assertWorkReference('root'), /not found/)
-    assert.throws(() => store.assertWorkReference('work:11111111-1111-4111-8111-111111111111', 'work:foreign'), /does not belong/)
+    assert.throws(() => store.assertWorkReference('root'), /canonical Work key/)
+    assert.throws(() => store.assertWorkReference('work:11111111-1111-4111-8111-111111111111', 'work:5e546683-5364-53e9-b8ae-d5d5402b9671'), /does not belong/)
     assert.equal(store.getSessionSummary('web:owner'), null)
     } finally { store.close() }
     const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
@@ -75,21 +76,28 @@ test('engine authorizer only permits current Work tables and guarded writes', as
   })
 })
 
-test('version-6 Work keeps existing prefixed keys and leaves unused archive tables untouched', async () => {
+test('legacy Work identity is rejected without rewriting storage or granting topic authority', async () => {
   await withTempWorkspace(async home => {
     const current = new InitiativeStore(home)
-    const retained: WorkRecord = { ...note(), key: 'initiative:retained', subject: { kind: 'initiative', initiativeId: 'retained' } }
-    try { current.saveWork(retained, 0, 'web:owner', 'created') } finally { current.close() }
+    const canonical = note()
+    try {
+      current.saveWork(canonical, 0, 'web:owner', 'created')
+      assert.deepEqual(current.workAuthority(canonical.key), { manager: 'web:owner', executor: 'web:owner', active: true })
+      assert.throws(() => current.workAuthority('topic:web:owner'), /canonical Work key/)
+    } finally { current.close() }
     const path = projectStoragePath(home, 'initiatives.sqlite')
     const db = new DatabaseSync(path)
-    try { db.exec("CREATE TABLE initiatives(value TEXT); INSERT INTO initiatives VALUES ('untouched archive');") } finally { db.close() }
-    const reopened = new InitiativeStore(home)
+    const legacy = { ...canonical, key: 'initiative:retained', subject: { kind: 'initiative', initiativeId: 'retained' } }
+    const raw = JSON.stringify(legacy)
     try {
-      assert.deepEqual(reopened.workRecords(), [retained])
-      assert.match(reopened.getSummary('initiative:retained')!, /initiative:retained/)
-      assert.equal(reopened.getSummary('retained'), null)
-    } finally { reopened.close() }
+      db.prepare('INSERT INTO work_contracts (id,sequence,data) VALUES (?,1,?)').run(legacy.key, raw)
+      db.exec("CREATE TABLE initiatives(value TEXT); INSERT INTO initiatives VALUES ('untouched archive');")
+    } finally { db.close() }
+    assert.throws(() => new InitiativeStore(home), /canonical Work key/)
     const check = new DatabaseSync(path)
-    try { assert.equal(check.prepare('SELECT value FROM initiatives').get()!.value, 'untouched archive') } finally { check.close() }
+    try {
+      assert.equal(check.prepare('SELECT data FROM work_contracts WHERE id=?').get(legacy.key)!.data, raw)
+      assert.equal(check.prepare('SELECT value FROM initiatives').get()!.value, 'untouched archive')
+    } finally { check.close() }
   })
 })
