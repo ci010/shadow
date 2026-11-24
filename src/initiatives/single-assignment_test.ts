@@ -53,7 +53,7 @@ test('legacy duplicates remain readable and editable, cannot grow, and converge 
   let { store, create } = setup(home)
   const a = await create('A'), b = await create('B', null)
   store.close()
-  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
   const legacy = { ...b, assignee: 'worker' }
   db.prepare('UPDATE work_contracts SET data=? WHERE id=?').run(JSON.stringify(legacy), b.key)
   db.close()

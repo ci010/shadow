@@ -35,7 +35,7 @@ export class InitiativeStore {
   constructor(home: string, options: InitiativeStoreOptions = {}) {
     this.home = resolve(home)
     this.#options = options
-    const filename = projectStoragePath(this.home, 'initiatives.sqlite')
+    const filename = projectStoragePath(this.home, 'work.sqlite')
     mkdirSync(dirname(filename), { recursive: true })
     if (existsSync(filename)) {
       const stat = lstatSync(filename)

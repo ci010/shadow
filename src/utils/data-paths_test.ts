@@ -32,7 +32,7 @@ test('app and Project layout helpers describe canonical roots without creating d
     ['skills/custom/SKILL.md', 'config/skills/custom/SKILL.md'],
     ['SOUL.md', 'config/SOUL.md'],
     ['memory/wiki/note.md', 'memory/wiki/note.md'],
-    ['initiatives.sqlite', 'state/initiatives.sqlite'],
+    ['work.sqlite', 'state/work.sqlite'],
   ]) assert.equal(workspacePath(home, entry!), resolve(home, expected!))
   assert.equal(projectStoragePath(home, '__proto__'), join(home, '__proto__'))
   assert.equal(projectStoragePath(home, 'constructor'), join(home, 'constructor'))

@@ -68,7 +68,7 @@ test('the claim transaction rechecks candidate sequence and current dependency a
 
 test('kickoff insert failure rolls back Work, then exact replay and release retain one immutable receipt', async () => withTempWorkspace(async home => {
   const f = setup(home)
-  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
   try {
     const work = await f.create()
     db.exec(`CREATE TRIGGER reject_kickoff BEFORE INSERT ON work_kickoffs BEGIN SELECT RAISE(ABORT, 'fixture insert failed'); END;`)

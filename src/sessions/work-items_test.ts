@@ -80,7 +80,7 @@ test('synthetic v6 rows ignore named retired fields without rewriting storage, p
   const work = await f.create('Legacy readable')
   f.store.close()
   const { projectStoragePath } = await import('../utils/data-paths.ts')
-  const path = projectStoragePath(home, 'initiatives.sqlite')
+  const path = projectStoragePath(home, 'work.sqlite')
   const db = new DatabaseSync(path)
   const serialized = JSON.stringify({ ...work, ...retired })
   db.prepare('UPDATE work_contracts SET data=? WHERE id=?').run(serialized, work.key)

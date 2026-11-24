@@ -296,7 +296,7 @@ standalone callers fall back to `agent.workspace`. Pure helpers in
     memory/                          wiki, identities, logs and indexes
     state/
       sessions/                      JSONL and/or SQLite history
-      initiatives.sqlite  conventions.sqlite
+      work.sqlite  conventions.sqlite
       events/  cron/  learning/  io/  microapps/  browser/
       telemetry/otel.db
     workdirs/<safe-session-id>/      managed working directories and uploads
@@ -1612,7 +1612,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 
 ### Work coordination
 
-[`InitiativeStore`](../src/initiatives/store.ts) opens one `initiatives.sqlite`
+[`InitiativeStore`](../src/initiatives/store.ts) opens one `work.sqlite`
 per Project Home, independently of the selected JSONL/SQLite session backend.
 Current notes live in `work_contracts`, preserving keys, definitions, assignments,
 status, dependencies, audit history and effect references. Dynamic `work_*` tools
@@ -1849,7 +1849,7 @@ automatically replayed against that new request.
 
 `src/initiatives/work-notes.ts`, `work-contract.ts`, `InitiativeStore`, and
 `src/sessions/work-alignment.ts` keep a current shared notebook in the existing
-`initiatives.sqlite`, independently of the JSONL/SQLite session backend. There
+`work.sqlite`, independently of the JSONL/SQLite session backend. There
 is no separate canvas/task database. Legacy records remain readable; adoption,
 policy, checkpoint, settlement and proposal fields are historical/internal
 compatibility data, not the current public tool protocol.
