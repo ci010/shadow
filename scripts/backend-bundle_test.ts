@@ -53,7 +53,8 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
       assert.doesNotMatch(code, /__shadow_module_(?:url|dir)__/)
       execFileSync(process.execPath, ['--check', file], { cwd: root, stdio: 'pipe' })
     }
-    for (const asset of ['agent/context/AGENTS.tools.md', 'agent/context/sub-behavior.md', 'sessions/handoff/HANDOFF.md',
+    for (const asset of ['agent/context/AGENTS.tools.md', 'agent/context/sub-behavior.md', 'agent/context/behavior-fragments.md', 'sessions/handoff/HANDOFF.md',
+      'agent/types/builtin/general/AGENT.md', 'agent/types/retired-general-legacy.md',
       'execution/processes/windows-guardian.ps1',
       'skills/builtin/computer-use/SKILL.md', 'microapps/sdk.js']) assert.ok(await readFile(join(target, 'dist/src', asset)))
     await assert.rejects(readFile(join(target, 'dist/src/execution/computer/windows-host.cs')), { code: 'ENOENT' })

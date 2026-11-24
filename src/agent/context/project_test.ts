@@ -9,6 +9,7 @@ import { ContextBuilder } from './builder.ts'
 import { workspaceProvider } from './workspace.ts'
 import { runtimeDiscoveryProvider } from './runtime.ts'
 import { IdentityManager } from '../identity.ts'
+import { getBuiltinAgentTypes } from '../types/builtins.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirLookup } from '../../sessions/locality.ts'
 
@@ -115,7 +116,7 @@ test('one environment section owns the effective working directory regardless of
   }
 })
 
-test('general-v2 Web Session keeps file boundaries and moves the VFS catalog to discovery and clarifies knowledge navigation', async () => {
+test('General with V2 assembly keeps Web file boundaries and moves the VFS catalog to discovery', async () => {
   const home = resolve('.test-data', 'prompt-home')
   const vfs = new VirtualFs()
   vfs.mount('v:devices', 'device inventory', () => { throw new Error('Prompt assembly must not read VFS content') })
@@ -126,9 +127,10 @@ test('general-v2 Web Session keeps file boundaries and moves the VFS catalog to 
   builder.register(runtimeDiscoveryProvider({
     projectId: project.id, identity: new IdentityManager(home), getSkillsSummary: () => '', getAgentTypesSummary: () => '',
   }, vfs))
-  const ctx = { ...context, mode: 'session' as const, agent: { ...context.agent, name: 'general-v2', soul: false } }
+  const general = (await getBuiltinAgentTypes()).find(agent => agent.name === 'general')!
+  const ctx: SessionPromptContext = { ...context, mode: 'session', promptVersion: 'v2', agent: { ...general, soul: false } }
   const candidate = await builder.buildSystemPromptDetails(ctx)
-  const legacy = await builder.buildSystemPromptDetails({ ...ctx, agent: { ...ctx.agent, name: 'general' } })
+  const legacy = await builder.buildSystemPromptDetails({ ...ctx, promptVersion: 'v1' })
   const otherChannel = await builder.buildSystemPromptDetails({ ...ctx, channel: 'discord' })
   const section = (result: typeof candidate, name: string) => result.sections.find(part => part.name === name)!.content
   const intro = section(candidate, 'workspace-intro')

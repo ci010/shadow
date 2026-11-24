@@ -1,5 +1,5 @@
 import type { AgentTypesManager } from './manager.ts'
-import { isSelectableAgentType } from './types.ts'
+import { isRetiredBuiltinGeneral, isSelectableAgentType } from './types.ts'
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import type { GatewayPlugin } from '../../gateway/types.ts'
 
@@ -54,6 +54,8 @@ export function agentTypesPlugin(
       }
       const authorizedWeb = channel === 'web' && await authorizeDefinition?.(c.req.raw)
       if (requestedPreview && !authorizedWeb) return c.json({ error: 'Unauthorized' }, 401)
+      const definition = agentTypes?.resolve(name)
+      if (definition && isRetiredBuiltinGeneral(definition)) return c.json({ error: 'agent_type_not_found', name }, 404)
       const visibleRole = authorizedWeb && agentTypes?.knowledgeDefinitions().some(type => type.name === name && isSelectableAgentType(type))
       if (requestedPreview && !visibleRole) return c.json({ error: 'agent_type_not_found', name }, 404)
       const rolePreview = visibleRole ? 'owner-web' : undefined

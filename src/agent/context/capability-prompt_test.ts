@@ -21,6 +21,14 @@ test('explicit role fragments honor both role and execution-mode capability ceil
   assert.doesNotMatch(capabilityPrompt(prompt, restricted), /delegate tutorial|work tutorial/)
 })
 
+test('clean behavior checks native exposure for legacy markers without changing classic policy', () => {
+  const markdown = '<!-- capability:read,search -->Search procedure<!-- /capability -->\n<!-- capability:read,work -->Work procedure<!-- /capability -->'
+  const scoped = { ...ctx('session'), offeredTools: new Set(['read']) }
+  assert.match(capabilityPrompt(markdown, scoped), /Search procedure/)
+  assert.doesNotMatch(capabilityPrompt(markdown, scoped, true), /Search procedure/)
+  assert.match(capabilityPrompt(markdown, scoped, true), /Work procedure/)
+})
+
 test('one-shot role and common guidance omit unavailable operation tutorials', async () => {
   for (const agent of await getBuiltinAgentTypes()) {
     for (const mode of ['task', 'call'] as const) {

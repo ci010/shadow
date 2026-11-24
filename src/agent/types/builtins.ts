@@ -22,3 +22,12 @@ export async function getBuiltinAgentTypes(): Promise<AgentTypeDefinition[]> {
   }
   return types
 }
+
+/** Historical definitions are resolution-only, not independent active Agent sources. */
+export async function getRetiredBuiltinGeneralTypes(general: AgentTypeDefinition): Promise<AgentTypeDefinition[]> {
+  const legacy = parseAgentFile(await readFile(new URL('./retired-general-legacy.md', import.meta.url), 'utf8'), 'general-legacy', dirname(BUILTIN_AGENTS_DIR))
+  return [
+    { ...general, name: 'general-v2', description: 'Historical General V2 definition', dirPath: undefined },
+    { ...legacy, source: 'builtin', dirPath: undefined },
+  ]
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { readAgentPromptDraft, type SubOverrideStore } from '../agent/context/sub-override.ts'
+import { readAgentPromptDraft, saveAgentPromptDraft, type SubOverrideStore } from '../agent/context/sub-override.ts'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
+import { isRetiredBuiltinGeneral } from '../agent/types/types.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { ExecutionContext } from './context.ts'
 import { assertPromptDraftOwner } from './sub-override-save.ts'
@@ -13,15 +14,16 @@ export function agentPromptDraftTools(
   sessions: Pick<SessionManager, 'alignment' | 'buildSession' | 'getSessionState' | 'getContext'>,
   authorized: (context: ExecutionContext) => boolean,
 ): Tool[] {
-  const draftRole = (name: unknown) => {
+  const draftRole = (name: unknown, forPreview = false) => {
     if (typeof name !== 'string' || name.startsWith('a2a:')) throw new Error('Specify an exact local agent definition; remote A2A prompt drafts are unsupported.')
     const role = agentTypes.resolve(name)
     if (!role || role.runtimeOrigin) throw new Error('Unknown local definition or publisher-managed role.')
+    if (!forPreview && isRetiredBuiltinGeneral(role)) throw new Error('This General definition is retired for new runs; use "general".')
     return role
   }
   const save: Tool = {
     name: 'agent_prompt_draft_save', readonly: false,
-    description: 'Save immutable role behavior Markdown for an exact local agent definition. Does not enable the draft. Direct Project owner Web turn only.',
+    description: 'Save an immutable replacement for the complete AGENT.md body of an exact local agent definition, including pinned shared behavior fragments. Does not enable the draft. Direct Project owner Web turn only.',
     parameters: { type: 'object', additionalProperties: false, required: ['agent_type', 'markdown'], properties: {
       agent_type: { type: 'string' }, markdown: { type: 'string', description: 'Behavior Markdown, at most 16 KiB.' },
     } },
@@ -29,7 +31,7 @@ export function agentPromptDraftTools(
       assertPromptDraftOwner(context, projectId, authorized)
       if (Object.keys(args).some(key => key !== 'agent_type' && key !== 'markdown') || typeof args.markdown !== 'string') throw new TypeError('Expected agent_type and markdown.')
       const role = draftRole(args.agent_type)
-      const revision = await subOverrides.forAgent(role).save(args.markdown)
+      const revision = await saveAgentPromptDraft(subOverrides, role, args.markdown)
       return JSON.stringify({ agentType: role.name, revision, enabled: false })
     },
   }
@@ -43,7 +45,7 @@ export function agentPromptDraftTools(
       assertPromptDraftOwner(context, projectId, authorized)
       if (Object.keys(args).some(key => key !== 'agent_type' && key !== 'prompt_revision') || typeof args.prompt_revision !== 'string') throw new TypeError('Expected agent_type and prompt_revision.')
       const role = draftRole(args.agent_type)
-      if (role.root && !(role.source === 'builtin' && ['general', 'general-v2', 'general-legacy'].includes(role.name))) {
+      if (role.root && !(role.source === 'builtin' && role.name === 'general')) {
         throw new Error('Host-only roles cannot start independent Web sessions. Use an existing permitted execution path.')
       }
       if (sessions.alignment?.required(context.sessionId)) throw new Error('Cannot create an unmanaged draft session from a Work-bound session.')
@@ -65,7 +67,7 @@ export function agentPromptDraftTools(
     async execute(args, context) {
       assertPromptDraftOwner(context, projectId, authorized)
       if (Object.keys(args).some(key => key !== 'agent_type' && key !== 'prompt_revision') || typeof args.prompt_revision !== 'string') throw new TypeError('Expected agent_type and prompt_revision.')
-      const role = draftRole(args.agent_type)
+      const role = draftRole(args.agent_type, true)
       const draft = await readAgentPromptDraft(subOverrides, role, args.prompt_revision)
       context.signal.throwIfAborted()
       const result = await sessions.getContext({ agentType: role.name, channel: 'web', rolePreview: 'owner-web', previewDraft: { draft, mode: role.defaultMode } })

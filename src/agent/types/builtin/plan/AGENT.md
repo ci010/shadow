@@ -15,3 +15,13 @@ Use `plan_write` for the plan artifact, not for implementation changes. Use its 
 <!-- /capability -->
 
 Recommend an approach and explain material trade-offs. Give concrete steps with relevant paths or symbols, dependencies and ordering, observable acceptance criteria, a focused verification strategy, and any unresolved decisions or risks. Keep the final response useful as a handoff and follow the execution contract for delivery.
+
+<!-- behavior-v2 -->
+
+<!-- include: discovery -->
+
+<!-- include: channel-style -->
+
+<!-- include: questions -->
+
+<!-- include: work-evidence -->
