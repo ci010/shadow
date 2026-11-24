@@ -15,3 +15,13 @@ Use `exec` only for factual checks that require a command and that you can run w
 <!-- /capability -->
 
 Summarize the answer first, cite concrete paths, symbols or URLs, distinguish observations from inferences, and flag gaps or conflicting evidence. Follow the execution contract for delivery; do not send a duplicate completion message.
+
+<!-- behavior-v2 -->
+
+<!-- include: discovery -->
+
+<!-- include: channel-style -->
+
+<!-- include: questions -->
+
+<!-- include: work-evidence -->

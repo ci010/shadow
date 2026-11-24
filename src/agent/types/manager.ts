@@ -1,5 +1,5 @@
 import { workspacePath } from '../../utils/paths.ts'
-import { getBuiltinAgentTypes } from './builtins.ts'
+import { getBuiltinAgentTypes, getRetiredBuiltinGeneralTypes } from './builtins.ts'
 import { AgentTypeRegistry } from './registry.ts'
 import type { AgentTypeDefinition } from './types.ts'
 import { AgentTypesWatcher } from './watcher.ts'
@@ -28,9 +28,11 @@ export class AgentTypesManager {
   }
 
   async load(): Promise<void> {
-    for (const type of await getBuiltinAgentTypes()) {
-      this.registry.registerBuiltin(type)
-    }
+    const builtins = await getBuiltinAgentTypes()
+    for (const type of builtins) this.registry.registerBuiltin(type)
+    const general = builtins.find(type => type.name === 'general')
+    if (!general) throw new Error('Missing built-in general definition')
+    for (const type of await getRetiredBuiltinGeneralTypes(general)) this.registry.registerBuiltin(type)
     await this.watcher.load()
   }
 

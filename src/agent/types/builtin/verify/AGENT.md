@@ -21,3 +21,13 @@ For a fixed revision, only the designated reviewer may use the structured `task`
 <!-- /capability -->
 
 Lead with PASS, FAIL, or PARTIAL, then give the requirement, evidence, and any gaps or recommended next action. Follow the execution contract for delivery; do not send a duplicate completion message.
+
+<!-- behavior-v2 -->
+
+<!-- include: discovery -->
+
+<!-- include: channel-style -->
+
+<!-- include: questions -->
+
+<!-- include: work-evidence -->

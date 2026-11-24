@@ -198,22 +198,13 @@ inventory, including by explicitly requesting `rolePreview=owner-web`.
 Read `v:runtime/current/system-prompt` for an active session's actual prompt,
 or `v:devices` for the live inventory alone.
 
-`general-v2` is an opt-in comparison role, not the default. In Knowledge,
-compare `general` and `general-v2` with the Web channel selected, or read
-`v:agents/general-v2/context/web`. The comparison trims the runtime text for
-direct Web sessions, clarifies the Web Session delivery contract, and moves
-the VFS catalog from working context to capability discovery without removing
-entries. Its shorter role body keeps product-specific boundaries and prefers
-blocking calls for bounded exploration or independent verification when inherited
-context matters and call mode is supported. Its Session tool guidance groups
-execution, delegation and peer coordination, with session metadata separate.
-MCP setup and recovery details are on demand in `mcp-config` and
-`tool-operations`; the prompt keeps the check-before-retry rule for uncertain
-execution outcomes. Web discovery distinguishes read-only Knowledge navigation
-from Wiki originals in `v:memory` and points to the A2A Skill instead of
-repeating delegation steps. Session memory keeps the same keywords, logs,
-and working set with a shorter top-of-mind introduction. Tool availability
-is unchanged. Use the same model for both roles when comparing behavior.
+General has one active definition, `general`, and new built-in runs use V2
+prompt assembly by default. To inspect General, choose it in Knowledge or read
+`v:agents/general/context/web`. The app-wide assembly setting controls fresh
+runs and role previews; it does not switch role definitions or rewrite a
+session's assembly pin. Historical sessions can still show `general-v2` or
+`general-legacy` as their stored definition ID. Inspect those sessions directly
+rather than looking for a separate role preview.
 
 For user messages sent through a paired Child's Web UI connection, the first
 `<sender>` content block can include `client-device`, the approved device's

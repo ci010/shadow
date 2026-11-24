@@ -19,13 +19,14 @@ export function resolvePrompt(agent: AgentTypeDefinition, options: { pinned?: Pr
   const family = agent.source === 'builtin' && !agent.runtimeOrigin
     ? BUILTIN_AGENT_VERSIONS.find(entry => entry.versions.some(option => option.agentType === agent.name))
     : undefined
-  const historical = family?.versions.find(option => option.agentType === agent.name)?.version ?? 'v1'
+  const historicalGeneralV2 = agent.source === 'builtin' && !agent.runtimeOrigin && agent.name === 'general-v2'
+  const historical = historicalGeneralV2 ? 'v2' : family?.versions.find(option => option.agentType === agent.name)?.version ?? 'v1'
   const configured = family && options.fresh && !options.pinned ? builtinPromptDefault(options.defaultVersion).version : historical
   if (configured === null) {
     throw new Error('SHADOW_BUILTIN_PROMPT_VERSION must be v1 or v2')
   }
   return {
-    role: family?.role ?? agent.name,
+    role: family?.role ?? (historicalGeneralV2 ? 'general' : agent.name),
     version: options.pinned ?? configured,
   } as const
 }

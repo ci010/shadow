@@ -1252,7 +1252,15 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
 
 ### Prompt assembly
 
-For ordinary local Project sessions, `ContextBuilder` concatenates providers in registration order:
+For ordinary local Project sessions, `ContextBuilder` collects providers in
+registration order. Classic V1 preserves that order. V2 groups their sections
+as **Information**, **Fixed contract**, and **Markdown behavior**. Runtime facts
+and host protocols are composed in TypeScript; role strategy comes from the
+role's `AGENT.md` body and the behavior fragments it explicitly includes.
+[Local agent prompt drafts](sub-prompt-drafts.md) describes the authoring syntax
+and revision semantics.
+
+The main providers cover:
 
 1. **Runtime identity and execution contract:** platform, shell, channel/audience,
    role, permissions, and the session/task/call lifecycle. Role and mode limits
@@ -1316,9 +1324,10 @@ Runtime types are parsed from
 Frontmatter controls tool allow/block lists, default execution mode, skills/Soul
 inclusion, model settings, and visibility. Existing built-ins include `general`,
 `sub`, `explore`, `plan`, `verify`, `reflector`, `encapsulator`, and
-`soul-reflector`; retained definitions such as `general-legacy` are not a second
-engine. Root repository `AGENTS.md` is a contributor guide, not one of these
-runtime definitions.
+`soul-reflector`. New General runs use `general/AGENT.md`; the global prompt
+assembly defaults to V2. Historical `general-v2` and `general-legacy` IDs remain
+resolvable for persisted runs, not new role choices. Root repository `AGENTS.md`
+is a contributor guide, not one of these runtime definitions.
 
 Legacy `ephemeral` frontmatter maps to `defaultMode` with a visible deprecation
 warning; conflicting old/new fields are rejected. `soul` is an explicit role

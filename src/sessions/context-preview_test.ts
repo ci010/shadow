@@ -8,7 +8,7 @@ import { runtimeIdentityProvider } from '../agent/context/runtime.ts'
 import { unavailableCapabilities } from '../channels/capabilities.ts'
 import { IdentityManager } from '../agent/identity.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
-import { readAgentPromptDraft, SubOverrideStore } from '../agent/context/sub-override.ts'
+import { readAgentPromptDraft, saveAgentPromptDraft, SubOverrideStore } from '../agent/context/sub-override.ts'
 import { agentPromptDraftTools } from '../tools/agent-prompt-draft.ts'
 import { AgentTypesManager } from '../agent/types/manager.ts'
 import { agentTypesPlugin } from '../agent/types/routes.ts'
@@ -31,13 +31,13 @@ import type { SessionStore } from './session-store.ts'
 import { WorkAlignment } from './work-alignment.ts'
 
 async function fixture(workspace: string, store: SessionStore, execute = false, getBuiltinPromptVersion?: () => 'v1' | 'v2' | undefined) {
-  const requests: ChatMessage[][] = []
+  const requests: Array<{ messages: ChatMessage[]; tools: string[] }> = []
   const bus = new Bus()
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => [],
-    chat: async messages => {
+    chat: async (messages, tools) => {
       if (!execute) throw new Error('Context previews must not call a model')
-      requests.push(structuredClone(messages))
+      requests.push({ messages: structuredClone(messages), tools: tools.map(tool => tool.function.name) })
       return { content: 'Fixture response', toolCalls: [] }
     },
   }
@@ -121,6 +121,24 @@ async function fixture(workspace: string, store: SessionStore, execute = false, 
   }
 }
 
+async function sendFixtureInput(f: Awaited<ReturnType<typeof fixture>>, sessionId: string) {
+  const requestIndex = f.requests.length
+  await f.sessions.deliver(sessionId, {
+    kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), content: 'Fixture input', policy: 'queue',
+    source: { kind: 'event', eventId: crypto.randomUUID(), type: 'fixture', source: 'fixture' },
+  })
+  const finishBy = Date.now() + 4000
+  while (!f.requests[requestIndex]) {
+    assert.ok(Date.now() < finishBy, 'provider did not receive the runtime prompt')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const request = f.requests[requestIndex]!
+  const system = request.messages[0]
+  assert.equal(system?.role, 'system')
+  assert.ok(typeof system?.content === 'string')
+  return { systemPrompt: system.content, tools: request.tools }
+}
+
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: agent role previews need no session and preserve strict real-session Work checks`, async () => {
     const original = process.env.SHADOW_BUILTIN_PROMPT_VERSION
@@ -185,10 +203,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(await vfs.resolve(`${path}/system-prompt`, context), ui.systemPrompt)
 
         process.env.SHADOW_BUILTIN_PROMPT_VERSION = 'v2'
-        const candidatePath = 'v:agents/general-v2/context/web'
-        const candidate = await (await f.app.request(previewUrl.replace('/general/', '/general-v2/'), owner)).json()
+        const candidatePath = path
+        const candidate = await (await f.app.request(previewUrl, owner)).json()
         assert.deepEqual(JSON.parse((await vfs.resolve(candidatePath, context))!), {
-          agentType: 'general-v2', channel: 'web', source: 'preview', rolePreview: 'owner-web', promptIdentity: candidate.promptIdentity, systemPrompt: candidate.systemPrompt, sections: candidate.sections,
+          agentType: 'general', channel: 'web', source: 'preview', rolePreview: 'owner-web', promptIdentity: candidate.promptIdentity, systemPrompt: candidate.systemPrompt, sections: candidate.sections,
         })
         assert.equal(candidate.promptIdentity.version, 'v2')
         assert.match(candidate.systemPrompt, /"owner-child" "Owner-only fixture device" \(child, connected\)/)
@@ -206,7 +224,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           const preview = await response.json()
           assert.equal(f.contexts.at(-1)?.mode, mode)
           assert.match(preview.systemPrompt, marker)
-          assert.doesNotMatch(preview.systemPrompt, /<!-- capability:/)
+          assert.doesNotMatch(preview.systemPrompt, /<!-- (?:capability|include|when):/)
+          assert(!preview.sections.some((section: { name: string }) => section.name === 'tool-discovery-reference'))
           assert.equal(await vfs.resolve(`v:agents/${role}/context/web/system-prompt`, context), preview.systemPrompt)
           if (role === 'verify') assert.doesNotMatch(preview.systemPrompt, /Device Inventory/)
         }
@@ -214,55 +233,73 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(await vfs.resolve(`${candidatePath}/system-prompt`, context), candidate.systemPrompt)
         assert.deepEqual(candidate.tools, ui.tools)
         assert(candidate.tools.some((tool: { name: string }) => tool.name === 'ask'))
-        const section = (preview: typeof ui, name: string): string => preview.sections.find((part: { name: string }) => part.name === name).content
-        const candidateTools = section(candidate, 'tool-discovery-reference') + '\n\n' + section(candidate, 'tool-operations')
+        const part = (preview: typeof ui, name: string) => {
+          const found = preview.sections.find((entry: { name: string }) => entry.name === name)
+          assert.ok(found, `Missing ${name} prompt section`)
+          return found
+        }
+        const section = (preview: typeof ui, name: string): string => part(preview, name).content
         const baselineTools = section(ui, 'tool-guidance')
-        const coordinationAt = candidateTools.indexOf('### Delegation and coordination')
-        assert(coordinationAt > 0)
-        assert.equal(candidateTools.slice(candidateTools.indexOf('### Shared work notes'), candidateTools.indexOf('### Text edits')),
-          baselineTools.slice(baselineTools.indexOf('### Shared work notes'), baselineTools.indexOf('### Executions')))
-        assert.match(candidateTools, /Use the live schema, not copied examples/)
-        assert.match(candidateTools, /Before adding, removing, or changing an MCP server, read `v:skills\/mcp-config`/)
-        assert.match(candidateTools, /For MCP recovery, read `v:skills\/tool-operations`.*check the outcome before retrying/)
-        assert.doesNotMatch(candidateTools, /Tool schemas and runtime role restrictions are authoritative|v:config\/mcp\.json|toolExecution:|sanitized reason/)
         assert.match(baselineTools, /Tool schemas and runtime role restrictions are authoritative/)
         assert.match(baselineTools, /v:config\/mcp\.json/)
-        assert.match(candidateTools, /blocking, inherited-context result/)
-        assert.match(candidateTools, /Admission is not a result/)
-        assert.match(candidateTools, /confirmed cancellation, then reread/)
-        assert.match(candidateTools, /A receipt is admission, not execution or transfer of responsibility/)
-        assert.match(candidateTools, /### Text edits\n\nUse the `write` tool/)
-        assert.match(candidateTools, /### Session metadata\n\nBefore substantive work.*use `write` on `v:sessions\/self\.json`/)
-        assert.match(candidateTools, /Before the final response, write `completed: true`/)
+        assert.match(baselineTools, /### Shared work notes/)
         assert.doesNotMatch(baselineTools, /### Text edits|Before the final response, write `completed: true`/)
-        assert.doesNotMatch(candidateTools, /^### (Executions|Delegation|Peer conversations|Messaging)$/m)
+
+        for (const name of ['tool-discovery-reference', 'tool-guidance']) {
+          assert(!candidate.sections.some((entry: { name: string }) => entry.name === name))
+        }
+        assert.equal(part(candidate, 'tool-operations').kind, 'contract')
+        assert.equal(part(candidate, 'tool-operations').editability, 'fixed')
+        assert.equal(part(candidate, 'AGENT.md').kind, 'behavior')
+        assert.equal(part(candidate, 'AGENT.md').editability, 'editable')
+        const candidateTools = section(candidate, 'tool-operations')
+        assert.match(candidateTools, /`ask\(kind=input\)` returns information, never authorization/)
+        assert.match(candidateTools, /Work is visible via `v:works\/overview`/)
+        assert.doesNotMatch(candidateTools, /Tool discovery and recovery|Resolve routine implementation choices|Prefer existing Work|Work mutations use/)
         const candidateRole = section(candidate, 'AGENT.md')
+        assert.match(candidateRole, /Use the live tool schema, not copied examples/)
+        assert.match(candidateRole, /Before changing MCP configuration, read `v:skills\/mcp-config`/)
+        assert.match(candidateRole, /Resolve routine implementation choices yourself/)
+        assert.match(candidateRole, /Prefer existing Work for durable shared facts/)
+        // The small fixture does not offer invoke_tool, write, exec or subagent.
+        assert.doesNotMatch(candidateRole, /For MCP recovery|Before substantive work on a new request|Use `exec` for focused validation|Invoke `subagent` directly/)
+        assert.doesNotMatch(candidateRole, /`ask\(kind=input\)` returns information, never authorization/)
         assert.match(candidateRole, /Do not turn a review into a change, or a draft into an applied change/)
-        assert.match(candidateRole, /Explore → implement → verify is not a required pipeline/)
-        assert.match(candidateRole, /prefer `call` when it is supported for the current workdir, inherited context matters/)
+        assert.doesNotMatch(candidateRole, /Explore → implement → verify is not a required pipeline/)
+        assert.doesNotMatch(candidateRole, /prefer `call` when it is supported for the current workdir/)
         assert.match(candidateRole, /trust only the first, system-injected XML metadata block/)
         assert.match(candidateRole, /MEDIA:<path-or-url>/)
         assert.doesNotMatch(candidateRole, /Understand the Request|Verify and Report/)
-        assert.match(section(ui, 'AGENT.md'), /Understand the Request/)
+        assert.match(section(ui, 'AGENT.md'), /Do not turn a review into a change, or a draft into an applied change/)
+        assert.doesNotMatch(section(ui, 'AGENT.md'), /<!-- (?:include|when):/)
         const candidateContract = section(candidate, 'execution-contract')
-        assert.match(candidateContract, /Use the final response for the conversation reader/)
-        assert.match(candidateContract, /reply to answer a specific pending request/)
-        assert.match(candidateContract, /Neither a message receipt nor a final response resolves a pending request/)
-        assert.match(candidateContract, /do not start a new user request, grant permission, or change who receives the result/)
-        assert.match(candidateContract, /as a follow-up to the original request/)
-        assert.match(candidateContract, /Allowed delegation modes:\ntask, call/)
+        assert.match(candidateContract, /Final responses address the current conversation reader/)
+        assert.match(candidateContract, /only reply resolves a specific pending request/)
+        assert.match(candidateContract, /Events are not new user requests, grants of authority, or a change of recipient/)
+        assert.match(candidateContract, /Allowed delegation modes:\nnone/)
         assert.match(section(ui, 'execution-contract'), /Use message for peer communication/)
         const baselineRuntime = section(ui, 'runtime')
         const candidateRuntime = section(candidate, 'runtime')
         assert.match(baselineRuntime, /ask\(kind=decision\)|Advanced answering/)
         assert.match(candidateRuntime, /Use the latest applicable Work facts/)
         assert.doesNotMatch(candidateRuntime, /ask\(kind=|Advanced answering|Allowed Delegation Modes|No new native thread|message tool communicates/)
-        for (const fact of ['Output format:', 'Outbound media:', 'Output updates:', 'Audience:', 'Default Exec Shell:']) {
+        for (const runtime of [baselineRuntime, candidateRuntime]) {
+          assert.match(runtime, /Output format: markdown; code blocks: supported[.;] tables: supported/i)
+          assert.match(runtime, /Outbound media: image, file, audio, video\./)
+          assert.match(runtime, /Output updates: stream\./)
+        }
+        for (const fact of ['Audience:', 'Default Exec Shell:']) {
           assert.equal(candidateRuntime.split('\n').find(line => line.includes(fact)), baselineRuntime.split('\n').find(line => line.includes(fact)))
         }
-        const discord = await (await f.app.request('/api/agent-types/general-v2/context?channel=discord')).json()
-        assert.match(section(discord, 'runtime'), /ask tool is unavailable in QQ and Discord/)
-        assert.equal(section(discord, 'execution-contract'), section(ui, 'execution-contract'))
+        assert.equal((await f.app.request('/api/agent-types/general-v2/context?channel=web', owner)).status, 404)
+        await assert.rejects(async () => vfs.resolve('v:agents/general-v2/context/web', context), /Unknown or unavailable/)
+        const discord = await (await f.app.request('/api/agent-types/general/context?channel=discord')).json()
+        assert.match(section(discord, 'runtime'), /Structured questions: unavailable/)
+        assert.doesNotMatch(section(discord, 'runtime'), /ask tool is unavailable in QQ and Discord/)
+        assert.match(section(discord, 'tool-operations'), /ask tool is unavailable in QQ and Discord/)
+        assert.equal(section(discord, 'execution-contract'), candidateContract)
+        assert.match(section(discord, 'AGENT.md'), /unsolicited mentions/)
+        assert.doesNotMatch(candidateRole, /unsolicited mentions/)
         assert(!discord.tools.some((tool: { name: string }) => tool.name === 'ask'))
         assert.throws(() => vfs.write(path, { content: 'new prompt' }, context), /read-only/)
         assert.deepEqual(f.policyLookups, [])
@@ -326,6 +363,64 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: a generic sub draft replaces the role body and renders against scoped tools`, async () => {
+    const key = 'SHADOW_BUILTIN_PROMPT_VERSION'
+    const original = process.env[key]
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      const f = await fixture(workspace, store, true, () => 'v2')
+      try {
+        process.env[key] = 'v2'
+        const drafts = new SubOverrideStore(workspace)
+        const role = f.agentTypes.resolve('sub')!
+        const markdown = `# Replacement sub role
+
+<!-- when: tools=ask; channels=web,discord; modes=session -->
+Scoped request sentinel.
+<!-- /when -->`
+        const revision = await saveAgentPromptDraft(drafts, role, markdown)
+        const draft = await readAgentPromptDraft(drafts, role, revision)
+        const assertBody = (text: string, matchesCondition: boolean) => {
+          assert.match(text, /# Replacement sub role/)
+          assert.equal(text.includes('Scoped request sentinel.'), matchesCondition)
+          assert.doesNotMatch(text, /# Sub-Agent|Complete the assigned outcome|Tool selection and coordination|Tool discovery and recovery|<!-- \/?when/)
+        }
+        const ownerPreview = await f.sessions.getContext({ agentType: 'sub', channel: 'web', rolePreview: 'owner-web',
+          previewDraft: { draft, mode: 'session' } })
+        assert.equal(ownerPreview.promptIdentity?.behaviorSource, 'agent-draft')
+        assert.equal(ownerPreview.promptIdentity?.promptRevision, revision)
+        assert.deepEqual(ownerPreview.sections?.filter(section => section.kind === 'behavior' && section.editability === 'editable')
+          .map(section => section.name), [`AGENT.md@${revision}`])
+        assert(!ownerPreview.sections?.some(section => section.name === 'tool-discovery-reference'))
+        assert.ok(ownerPreview.tools.some(tool => tool.name === 'ask'))
+        assertBody(ownerPreview.systemPrompt, true)
+        assert.match(ownerPreview.systemPrompt, /`ask\(kind=input\)` returns information, never authorization/)
+        assert.equal(f.requests.length, 0)
+        assert.deepEqual(await store.listAllStates(), {})
+
+        for (const [channel, mode, offersAsk, matchesCondition] of [
+          ['web', 'session', true, true],
+          ['discord', 'session', false, false], // Channel matches the directive, but ask is filtered out.
+          ['feishu', 'session', true, false], // ask is offered, but the channel is not listed.
+          ['web', 'task', true, false], // Channel and tools match, but the mode does not.
+        ] as const) {
+          const sessionId = `${channel}:scoped-sub-${mode}`
+          await f.sessions.buildSession(sessionId, undefined, { agentType: 'sub', promptDraft: draft, mode })
+          const preview = await f.sessions.getContext({ sessionId, preview: true })
+          assert.equal(preview.tools.some(tool => tool.name === 'ask'), offersAsk, sessionId)
+          assertBody(preview.systemPrompt, matchesCondition)
+          const request = await sendFixtureInput(f, sessionId)
+          assert.equal(request.tools.includes('ask'), offersAsk, sessionId)
+          assertBody(request.systemPrompt, matchesCondition)
+        }
+      } finally {
+        if (original === undefined) delete process.env[key]
+        else process.env[key] = original
+        await f.close()
+      }
+    })
+  })
+
   test(`${Store.name}: assembly switch is shared by Knowledge, VFS and runtime; existing sessions remain pinned`, async () => {
     const key = 'SHADOW_BUILTIN_PROMPT_VERSION'
     const original = process.env[key]
@@ -333,14 +428,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
       await store.saveState('web:legacy-assembly', { sessionId: 'web:legacy-assembly', segmentIndex: 0, agentType: 'sub', mode: 'session' })
-      let savedVersion: 'v1' | 'v2' = 'v1'
+      const historicalState = { sessionId: 'web:historical-general', segmentIndex: 0, physicalIdVersion: 2, agentType: 'general-v2', mode: 'session' } as const
+      await store.saveState(historicalState.sessionId, historicalState)
+      await store.createSessionLog(SessionManager.currentPhysicalId(historicalState), [{
+        sessionId: historicalState.sessionId, previous_physical_id: null, timestamp: new Date().toISOString(),
+      }])
+      let savedVersion: 'v1' | 'v2' | undefined = 'v1'
       const f = await fixture(workspace, store, true, () => savedVersion)
       try {
         delete process.env[key]
         const root = 'web:app-default-root'
         await f.sessions.buildSession(root)
         const initial = await f.sessions.getContext({ sessionId: root, preview: true })
-        assert.equal(initial.promptIdentity?.definition, 'general-v2')
+        assert.equal(initial.promptIdentity?.definition, 'general')
         assert.equal(initial.promptIdentity?.version, 'v1')
         savedVersion = 'v2'
         for (const mode of ['call', 'task'] as const) {
@@ -349,12 +449,18 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal((await store.getState(child))?.promptVersion, 'v2')
         }
         assert.equal((await f.sessions.getContext({ sessionId: root, preview: true })).promptIdentity?.version, 'v1')
+        savedVersion = undefined
+        await f.sessions.buildSession('web:new-general-default')
+        const defaultState = await store.getState('web:new-general-default')
+        assert.equal(defaultState?.agentType, 'general')
+        assert.equal(defaultState?.promptVersion, 'v2')
+        await assert.rejects(f.sessions.buildSession('web:new-historical-definition', undefined, { agentType: 'general-v2' }), /retired for new runs/)
         const vfs = new VirtualFs()
         const preview = createAgentsHandler(f.agentTypes, undefined, { types: f.agentTypes, sessions: f.sessions, canRead: () => true })
         vfs.mount('v:agents', 'role preview', preview.read, preview.list)
         const vfsContext = { signal: new AbortController().signal } as ExecutionContext
         const owner = { headers: { 'x-owner': 'yes' } }
-        for (const role of ['general', 'general-v2', 'sub', 'verify', 'plan', 'explore']) {
+        for (const role of ['general', 'sub', 'verify', 'plan', 'explore']) {
           for (const version of ['v1', 'v2'] as const) {
             process.env[key] = version
             const result = await f.app.request(`/api/agent-types/${role}/context?channel=web&rolePreview=owner-web`, owner)
@@ -372,6 +478,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.requests.length, 0, 'preview does not invoke a provider')
         const legacy = await f.sessions.getContext({ sessionId: 'web:legacy-assembly', preview: true })
         assert.equal(legacy.promptIdentity?.version, 'v1')
+        process.env[key] = 'v1'
+        const historical = await f.sessions.getContext({ sessionId: 'web:historical-general', preview: true })
+        assert.deepEqual(historical.promptIdentity, { role: 'general', definition: 'general-v2', version: 'v2', mode: 'session', behaviorSource: 'builtin' })
         const draftStore = new SubOverrideStore(workspace)
         f.agentTypes.setWorkspaceType('custom-draft', {
           name: 'custom-draft', source: 'workspace', prompt: 'Original custom behavior',
@@ -394,7 +503,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(inspection.promptIdentity.promptRevision, saved.revision)
         assert.match(inspection.systemPrompt, /assembly verification sentinel/)
         assert.equal((await store.listAllStates()).length, countBefore)
-        await assert.rejects(create.execute({ ...args, agent_type: 'general-v2' }, ownerContext), /not found/)
+        const retired = f.agentTypes.resolve('general-v2')!
+        const historicalRevision = await saveAgentPromptDraft(draftStore, retired, markdown)
+        const historicalArgs = { agent_type: retired.name, prompt_revision: historicalRevision }
+        const historicalDraft = JSON.parse(await inspect.execute(historicalArgs, ownerContext))
+        assert.equal(historicalDraft.promptIdentity.definition, 'general-v2')
+        assert.match(historicalDraft.systemPrompt, /assembly verification sentinel/)
+        await assert.rejects(create.execute(historicalArgs, ownerContext), /retired for new runs/)
+        await assert.rejects(save.execute({ agent_type: retired.name, markdown }, ownerContext), /retired for new runs/)
         await assert.rejects(create.execute(args, { ...ownerContext, projectId: 'other' }), /direct authorized/)
         await assert.rejects(save.execute({ agent_type: 'a2a:outside', markdown }, ownerContext), /remote A2A/)
         const created = JSON.parse(await create.execute(args, ownerContext))
@@ -406,8 +522,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.requests.length, 0, 'save, preview and idle session creation must not start inference')
         const revision = 'a'.repeat(64)
         const draft = { revision, markdown: 'Use the assembly verification sentinel.' }
-        let expected = 0
-        for (const role of ['general', 'general-v2', 'sub', 'verify', 'plan', 'explore', 'custom-draft']) for (const version of ['v1', 'v2'] as const) {
+        for (const role of ['general', 'sub', 'verify', 'plan', 'explore', 'custom-draft']) for (const version of ['v1', 'v2'] as const) {
           const sessionId = `web:${role}-${version}`
           const mode = role === 'verify' ? 'task' : 'session'
           const subDraft = role === 'sub' && version === 'v1' ? draft : undefined
@@ -420,26 +535,29 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.deepEqual((await store.getState(sessionId))?.subDraft, subDraft)
           process.env[key] = version === 'v1' ? 'v2' : 'v1'
           const rebuilt = await f.sessions.getContext({ sessionId, preview: true })
-          assert.deepEqual(rebuilt.promptIdentity, { role: role === 'general-v2' ? 'general' : role, definition: role, version: assembly, mode,
+          assert.deepEqual(rebuilt.promptIdentity, { role, definition: role, version: assembly, mode,
             ...(subDraft ? { behaviorSource: 'sub-draft', subRevision: revision } : { behaviorSource: 'agent-draft', promptRevision: promptDraft!.revision }) })
-          await f.sessions.deliver(sessionId, {
-            kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), content: 'Fixture input', policy: 'queue',
-            source: { kind: 'event', eventId: crypto.randomUUID(), type: 'fixture', source: 'fixture' },
-          })
-          const finishBy = Date.now() + 4000
-          expected++
-          while (f.requests.length < expected) {
-            assert.ok(Date.now() < finishBy, 'provider did not receive the runtime prompt')
-            await new Promise(resolve => setTimeout(resolve, 5))
+          if (subDraft) {
+            assert.match(rebuilt.systemPrompt, /Complete the assigned outcome/)
+            assert.ok(rebuilt.sections?.some(section => section.name === `sub-behavior.md@${revision}`))
+            assert.ok(rebuilt.sections?.some(section => section.name === 'tool-discovery-reference'))
           }
-          const system = f.requests.at(-1)?.[0]
-          assert.equal(system?.role, 'system')
-          assert.match(String(system?.content), /assembly verification sentinel/)
-          assert.match(String(system?.content), new RegExp(`Execution Contract: ${mode === 'task' ? 'Task' : 'Session'}`))
-          assert.equal(String(system?.content).startsWith('# Information\n'), assembly === 'v2')
+          const { systemPrompt } = await sendFixtureInput(f, sessionId)
+          assert.match(systemPrompt, /assembly verification sentinel/)
+          assert.match(systemPrompt, new RegExp(`Execution Contract: ${mode === 'task' ? 'Task' : 'Session'}`))
+          assert.equal(systemPrompt.startsWith('# Information\n'), assembly === 'v2')
           const live = await f.sessions.getContext({ sessionId })
           assert.deepEqual(live.promptIdentity, rebuilt.promptIdentity)
-          assert.equal(live.systemPrompt, system?.content)
+          assert.equal(live.systemPrompt, systemPrompt)
+        }
+        process.env[key] = 'v1'
+        for (const [sessionId, definition] of [['web:new-general-default', 'general'], [historicalState.sessionId, 'general-v2']] as const) {
+          const { systemPrompt } = await sendFixtureInput(f, sessionId)
+          assert.match(systemPrompt, /^# Information\n/)
+          assert.match(systemPrompt, /Do not turn a review into a change/)
+          const live = await f.sessions.getContext({ sessionId })
+          assert.equal(live.promptIdentity?.definition, definition)
+          assert.equal(live.promptIdentity?.version, 'v2')
         }
       } finally {
         if (original === undefined) delete process.env[key]
