@@ -672,8 +672,9 @@ Historical runs remain browsable through the existing automation catalog and
 Conversation history menu. `GET /api/automations/:id/runs?offset=0&limit=30`
 returns `{runs,total,offset}` (limit 1–100); the existing history reader loads pages
 on demand and locates deep-linked old runs without retargeting them. Quick Open
-acquires an independent full-summary lease only while its dialog is mounted. Blank
-queries retain ordinary-root results; nonempty title searches also include explicitly
+shares the live navigation snapshot on open. Blank queries retain ordinary-root
+results; a nonempty title search fetches full summary once per searched project
+per dialog (retryable on failure) and also includes explicitly
 labeled automation runs, opening their saved session with its automation owner.
 Unrelated task/call results remain excluded. Each Project keeps independent
 loading/errors/retry; close/project changes abort obsolete requests and full

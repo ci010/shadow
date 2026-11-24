@@ -28,16 +28,20 @@ export function searchQuickOpenSessions<T extends QuickOpenSession>(sessions: re
   const projectRank = new Map(projectOrder.map((id, index) => [id, index]))
   const rank = (session: T) => projectRank.get(session.projectId) ?? projectOrder.length
   const prefix = query.trim().toLocaleLowerCase()
-  const isPrefix = (session: T) => [session.title ?? '', session.label]
-    .some(field => field.toLocaleLowerCase().startsWith(prefix))
-  const recency = (session: T) => {
+  const tokens = prefix ? prefix.split(/\s+/u) : []
+  const matches: Array<{ session: T; prefixMatch: number; recency: number }> = []
+  for (const session of sessions) {
+    if (projectFilter && session.projectId !== projectFilter) continue
+    if (!isRegularQuickOpenSession(session) && !(prefix && session.automation)) continue
+    const fields = prefix ? [session.title ?? '', session.label].map(value => value.toLocaleLowerCase()) : []
+    if (!tokens.every(token => fields.some(field => field.includes(token)))) continue
     const time = Date.parse(session.lastActivityAt ?? '')
-    return Number.isFinite(time) ? time : 0
+    matches.push({ session, prefixMatch: Number(fields.some(field => field.startsWith(prefix))),
+      recency: Number.isFinite(time) ? time : 0 })
   }
-  return sessions.filter(session => (!projectFilter || session.projectId === projectFilter)
-    && (isRegularQuickOpenSession(session) || !!query.trim() && !!session.automation) && matchesSessionTitle(session, query)).sort((a, b) =>
-    rank(a) - rank(b) || a.projectId.localeCompare(b.projectId) || Number(isPrefix(b)) - Number(isPrefix(a)) || recency(b) - recency(a)
-    || a.sessionId.localeCompare(b.sessionId))
+  return matches.sort(({ session: a, prefixMatch: ap, recency: at }, { session: b, prefixMatch: bp, recency: bt }) =>
+    rank(a) - rank(b) || a.projectId.localeCompare(b.projectId) || bp - ap || bt - at
+    || a.sessionId.localeCompare(b.sessionId)).map(row => row.session)
 }
 
 export function isSessionQuickOpenShortcut(event: Pick<KeyboardEvent,
