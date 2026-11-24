@@ -50,11 +50,6 @@ export function discordIntegrationPlugin(options: {
               resources: options.memory.ownerResources(),
               templates: options.agents.all().filter(agent => !agent.root && agent.defaultMode === 'session')
                 .map(agent => ({ name: agent.name, description: agent.description, prompt: agent.prompt, model: agent.model })),
-              legacy: options.bots.list().filter(bot => bot.platform === 'discord').map(bot => ({
-                botId: bot.id, legacySessionId: !!bot.legacySessionId,
-                adminChats: Array.isArray(bot.config.adminChats) ? bot.config.adminChats : [],
-                notice: 'Legacy trigger/admin settings do not grant channel access. Review explicit assignments. Existing IDs and history are preserved; legacy memory remains Project-private.',
-              })),
               sessions: options.sessions.listSessions().flatMap(row => {
                 const scope = options.sessions.getSessionState(row.sessionId)?.channelBoundary
                 return scope ? [{ sessionId: row.sessionId, ...scope }] : []

@@ -53,32 +53,27 @@ function message(id = '800', channel = '100', content = 'Historical message') {
   }
 }
 
-async function fixture(t: TestContext, platform: ChannelId = 'discord', count = 1, projectId = 'A', legacy = false) {
+async function fixture(t: TestContext, platform: ChannelId = 'discord', count = 1, projectId = 'A') {
   const base = join(process.cwd(), '.test-data')
   await mkdir(base, { recursive: true })
   const workspace = await mkdtemp(join(base, 'channel-tools-'))
   const bus = new Bus()
-  const config = ConfigSchema.parse({ agent: { workspace }, channels: legacy ? {
-    discord: { enabled: true, token: 'synthetic-legacy', allowFrom: ['400'] },
-  } : {} })
-  const store = new BotInstanceStore({
-    projectId, path: join(workspace, 'bots.json'),
-    ...(legacy ? { legacyConfig: config, legacyRawChannels: config.channels } : {}),
-  })
-  const bots = legacy ? store.list() : Array.from({ length: count }, (_, index) => store.create(platform, `Bot ${index}`, {
-    enabled: true, allowFrom: ['400'],
+  const config = ConfigSchema.parse({ agent: { workspace } })
+  const store = new BotInstanceStore({ projectId, path: join(workspace, 'bots.json') })
+  const bots = Array.from({ length: count }, (_, index) => store.create(platform, `Bot ${index}`, {
+    enabled: true,
     ...(platform === 'discord' ? { token: `synthetic-${projectId}-${index}` }
       : { appId: `synthetic-${projectId}-${index}`, ...(platform === 'qq' ? { secret: 'synthetic' } : { appSecret: 'synthetic' }) }),
   }))
   const created: ReadyDiscord[] = []
-  const manager = new ChannelManager(config, bus, {} as SessionManager, async () => {
+  const manager = new ChannelManager(config, bus, { async retireIdleConversationContexts() {} } as unknown as SessionManager, async () => {
     throw new Error('Read tools must not admit new messages')
   }, { projectId, instanceStore: store, factory: (name, config, bot) => {
     assert.ok(bot)
     if (name !== 'discord') return new OtherChannel(name, bus, bot)
     assert.ok(config.channels.discord)
     assert.ok(config.channels.discord.token)
-    const channel = new ReadyDiscord(bus, bot, { ...config.channels.discord, token: config.channels.discord.token })
+    const channel = new ReadyDiscord(bus, bot, { ...config.channels.discord, allowFrom: ['400'], token: config.channels.discord.token })
     created.push(channel)
     return channel
   } })
@@ -101,7 +96,6 @@ async function fixture(t: TestContext, platform: ChannelId = 'discord', count = 
   const context = (bot = bots[0], chatId = '100'): ExecutionContext => {
     const channelAddress: ChannelAddress = {
       projectId, botInstanceId: bot.id, platform, conversationId: chatId,
-      ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     }
     return {
       projectId, channelAddress, channel: platform, chatId, sessionId: channelSessionId(channelAddress),
@@ -260,13 +254,11 @@ test('every operation requires current project, bot root, admitted human and loc
   assert.equal(foreign.calls.length, 0)
 })
 
-test('migrated legacy bots keep exact current-bot scoping without default-platform fallback', async t => {
-  const f = await fixture(t, 'discord', 1, 'A', true)
-  assert.equal(f.context().sessionId, 'discord:100')
-  assert.equal(JSON.parse(await f.historyTool.execute({}, f.context())).messages.length, 2)
+test('channel tools never fall back to a bare platform session ID', async t => {
+  const f = await fixture(t)
   const own = f.context()
   await assert.rejects(f.historyTool.execute({}, { ...own, channelAddress: undefined }), /current bot/)
-  await assert.rejects(f.historyTool.execute({}, { ...own, channelAddress: { ...own.channelAddress!, legacySessionId: false } }), /current bot|unavailable/)
+  await assert.rejects(f.historyTool.execute({}, { ...own, sessionId: 'discord:100' }), /current bot/)
 })
 
 for (const platform of ['qq'] as const) {
@@ -386,12 +378,12 @@ test('malformed, oversized, cross-channel and wrong-message responses fail expli
   assert.equal(restricted.message.embeds, null)
 })
 
-test('platform errors and rate limits remain errors and never become empty history or trigger replay', async t => {
+test('platform errors and exhausted rate-limit retries do not become empty history', async t => {
   const f = await fixture(t)
   for (const status of [403, 404, 429, 500]) {
-    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ message: 'synthetic-private-error' }, { status }))
+    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ message: 'synthetic-private-error', ...(status === 429 ? { retry_after: 0.001 } : {}) }, { status }))
     await assert.rejects(f.historyTool.execute({}, f.context()), new RegExp(`status=${status}`))
-    assert.equal(fetch.mock.callCount(), 1)
+    assert.equal(fetch.mock.callCount(), status === 429 ? 4 : 1, 'Only rate limits permit bounded transport retries')
   }
   t.mock.method(globalThis, 'fetch', async () => { throw new Error('synthetic-token-credential-url') })
   await assert.rejects(f.historyTool.execute({}, f.context()), error => {
@@ -408,15 +400,12 @@ test('platform errors and rate limits remain errors and never become empty histo
   })
 })
 
-test('imported tools recheck live allowlists, disconnects, replacement, deletion and agent tool filtering', async t => {
+test('imported tools recheck disconnects, replacement, deletion and agent tool filtering', async t => {
   const f = await fixture(t, 'discord', 2)
   await f.importer.execute({ source: 'v:tools/discord_history' }, f.context())
-  await f.manager.updateBot(f.bots[0].id, { config: { allowFrom: ['401'] } })
-  assert.match(requireToolText(await f.invoke.execute({ name: 'discord_history', args: {} }, f.context())), /Sender is not authorized/)
-  await f.manager.updateBot(f.bots[0].id, { config: { allowFrom: ['400'] } })
-  f.created.at(-1)!.state('disconnected')
+  f.created[0]!.state('disconnected')
   assert.match(requireToolText(await f.invoke.execute({ name: 'discord_history', args: {} }, f.context())), /unavailable/)
-  f.created.at(-1)!.state('connected')
+  f.created[0]!.state('connected')
   const filtered = new SessionTools(f.baseTools, f.workspace, undefined, ['discord_history'])
   filtered.registerDynamic(f.historyTool)
   assert.match(requireToolText(await f.invoke.execute({ name: 'discord_history', args: {} }, { ...f.context(), tools: filtered })), /not available/)

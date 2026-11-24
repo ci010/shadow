@@ -53,7 +53,7 @@ export class DiscordIntegration implements ConversationPolicies {
     const scope = binding.observation
     const connectionRevision = this.connectionRevisions.get(binding.botInstanceId) ?? 0
     const bot = this.options.bots.get(binding.botInstanceId)
-    if (this.closed || bot.purpose !== 'service' || !bot.enabled || !binding.enabled || !scope?.enabled || !this.transport || binding.target.kind !== 'channel' ||
+    if (this.closed || bot.platform !== 'discord' || !bot.enabled || !binding.enabled || !scope?.enabled || !this.transport || binding.target.kind !== 'channel' ||
       binding.target.guildId !== scope.guildId || binding.target.channelId !== scope.audienceChannelId) throw new IntegrationError('observation_disabled','Observation scope is unavailable.',403)
     const profile = this.options.store.agent(binding.agentId)
     if (profile.execution !== 'restricted' || profile.tools.length || profile.readDomains.length || binding.tools.length || binding.readDomains.length || binding.manage)
@@ -195,44 +195,45 @@ export class DiscordIntegration implements ConversationPolicies {
       return this.address(owner.sessionId)
     }
     const address = channelAddressFromSessionId(sessionId)
-    if (address) return address.projectId === this.options.projectId && address.platform === 'discord' ? address : undefined
-    if (!sessionId.startsWith('discord:')) return undefined
-    const bot = this.options.bots.list().find(bot => bot.platform === 'discord' && bot.legacySessionId)
-    return bot ? { projectId: this.options.projectId, platform: 'discord', botInstanceId: bot.id,
-      conversationId: sessionId.slice(8), legacySessionId: true } : undefined
+    return address?.projectId === this.options.projectId && address.platform === 'discord' ? address : undefined
   }
 
   managed(sessionId: string): boolean {
     if (sessionId.startsWith('discord-observation:')) return true
-    const address = this.address(sessionId)
-    if (address && this.options.bots.get(address.botInstanceId).purpose === 'personal') return false
     return !!this.sessions?.getSessionState(sessionId)?.channelBoundary || !!this.address(sessionId) || sessionId.startsWith('discord:') ||
       channelAddressFromSessionId(sessionId)?.platform === 'discord'
   }
 
-  private binding(connectionId: string, location: DiscordLocation): DiscordBinding | undefined {
+  private binding(connectionId: string, location: DiscordLocation, candidates = this.options.store.bindings()): DiscordBinding | undefined {
     if (![0, 1, 5, 10, 11].includes(location.type)) return undefined
-    const bindings = this.options.store.bindings().filter(binding => binding.botInstanceId === connectionId)
+    const bindings = candidates.filter(binding => binding.botInstanceId === connectionId)
     const direct = bindings.find(binding => binding.target.kind === 'dm'
       ? location.type === 1 && binding.target.userId === location.recipientId
-      : binding.target.channelId === location.id && binding.target.guildId === location.guildId)
+      : location.type !== 1 && binding.target.channelId === location.id && binding.target.guildId === location.guildId)
     if (direct) return direct
     if (![10, 11].includes(location.type) || !location.parentId) return undefined
     return bindings.find(binding => binding.target.kind === 'channel' && binding.target.channelId === location.parentId &&
       binding.target.guildId === location.guildId && binding.inheritThreads)
   }
 
-  /** Arrival-time selection only. Live ingress and output must still revalidate all permissions. */
+  /** Freeze the selection before inspecting the receipt. An exact binding takes
+   * precedence over inherited threads, even when that exact binding is disabled. */
   snapshotInputAssignment(connectionId: string): (location: DiscordLocation) => { assigned: boolean; assertCurrent: () => void } {
     const bot = this.options.bots.get(connectionId)
-    const bindings = this.closed || !bot.enabled || bot.purpose !== 'service' ? [] : structuredClone(this.options.store.bindings().filter(binding => binding.botInstanceId === connectionId && binding.enabled))
+    const verify = this.options.bots.accessGuard(connectionId)
+    const connectionRevision = this.connectionRevisions.get(connectionId) ?? 0
+    const snapshot = this.options.store.snapshot()
+    const candidates = this.closed || !bot.enabled || bot.platform !== 'discord' ? [] :
+      structuredClone(snapshot.bindings.filter(binding => binding.botInstanceId === connectionId))
     return location => {
-      const captured = [0, 1, 5, 10, 11].includes(location.type) ? bindings.find(binding => binding.target.kind === 'dm'
-        ? location.type === 1 && binding.target.userId === location.recipientId
-        : binding.target.guildId === location.guildId && (binding.target.channelId === location.id || !!location.parentId && binding.inheritThreads && binding.target.channelId === location.parentId)) : undefined
-      return { assigned: !!captured, assertCurrent: () => {
-        const current = captured && this.options.store.bindings().find(binding => binding.id === captured.id && binding.enabled)
-        if (!captured || !current || JSON.stringify(current) !== JSON.stringify(captured)) throw new Error('Arrival assignment changed; retained in inbox only')
+      const captured = this.binding(connectionId, location, candidates)
+      return { assigned: captured?.enabled === true && !captured.observation, assertCurrent: () => {
+        verify()
+        const live = this.options.store.snapshot()
+        const current = this.binding(connectionId, location, live.bindings)
+        if (this.closed || !captured?.enabled || captured.observation || !current?.enabled || current.observation ||
+            snapshot.revision !== live.revision || connectionRevision !== (this.connectionRevisions.get(connectionId) ?? 0) ||
+            fingerprint(current) !== fingerprint(captured)) throw new Error('Arrival assignment changed; retained in inbox only')
       } }
     }
   }
@@ -245,7 +246,7 @@ export class DiscordIntegration implements ConversationPolicies {
   /** Scope-only trusted Web collection gate; sender/platform permissions still use prepareIngress. */
   streamAssigned(connectionId:string, conversation:string, parent?:string): boolean {
     const bot=this.options.bots.get(connectionId)
-    if(this.closed || !bot.enabled || bot.purpose!=='service') return false
+    if(this.closed || !bot.enabled || bot.platform !== 'discord') return false
     const bindings=this.options.store.bindings().filter(b=>b.botInstanceId===connectionId&&b.enabled)
     return bindings.some(b=>b.target.kind==='channel' && (b.target.channelId===conversation || !!parent && b.target.channelId===parent && b.inheritThreads))
   }
@@ -257,7 +258,7 @@ export class DiscordIntegration implements ConversationPolicies {
       return
     }
     const bot = this.options.bots.get(address.botInstanceId)
-    if (!bot.enabled || this.closed) throw new IntegrationError('bot_disabled', 'The Discord connection is disabled.', 403)
+    if (!bot.enabled || bot.platform !== 'discord' || this.closed) throw new IntegrationError('bot_disabled', 'The Discord connection is disabled.', 403)
     let location = this.locations.get(sessionId) ?? this.sessions?.getSessionState(sessionId)?.channelBoundary?.location
     if (!location) {
       const binding = this.options.store.bindings().find(binding => binding.botInstanceId === bot.id &&
@@ -318,12 +319,14 @@ export class DiscordIntegration implements ConversationPolicies {
     if (!this.transport || this.closed) throw new IntegrationError('unavailable', 'Discord authorization is unavailable.', 503)
     const bot = this.options.bots.get(connectionId)
     if (!bot.enabled || bot.platform !== 'discord') throw new IntegrationError('bot_disabled', 'Discord connection is disabled.', 403)
+    const verify = this.options.bots.accessGuard(connectionId)
     const connectionRevision = this.connectionRevisions.get(connectionId) ?? 0
     const inspection = await this.transport.inspect(connectionId, input.chatId, input.senderId, signal)
-    signal.throwIfAborted()
+    signal.throwIfAborted(); verify()
+    if (inspection.location.id !== input.chatId || inspection.actor.id !== input.senderId) throw new IntegrationError('scope_mismatch', 'Discord input scope changed.', 403)
     if (connectionRevision !== (this.connectionRevisions.get(connectionId) ?? 0)) throw new IntegrationError('connection_changed', 'Discord connection changed during authorization. Send a new message.', 409)
     const address: ChannelAddress = { projectId: this.options.projectId, botInstanceId: connectionId,
-      platform: 'discord', conversationId: input.chatId, ...(bot.legacySessionId ? { legacySessionId: true } : {}) }
+      platform: 'discord', conversationId: input.chatId }
     const sessionId = channelSessionId(address)
     this.locations.set(sessionId, inspection.location)
     const policy = this.resolve(sessionId)!
@@ -874,9 +877,8 @@ export class DiscordIntegration implements ConversationPolicies {
     const draft = this.options.store.draft(id)
     this.assertChatChange(binding, draft.change)
     if (draft.change.kind === 'knowledge.publish') {
-      const bot = this.options.bots.get(connectionId)
       const sessionId = channelSessionId({ projectId: this.options.projectId, botInstanceId: connectionId, platform: 'discord',
-        conversationId: chatId, ...(bot.legacySessionId ? { legacySessionId: true } : {}) })
+        conversationId: chatId })
       const access = this.access(this.resolve(sessionId)!, sessionId, this.sessions?.getSessionState(sessionId) ?? undefined)
       try { for (const source of draft.change.sources) this.options.memory.observe(access, source) }
       finally { this.options.memory.close(access) }
@@ -887,9 +889,8 @@ export class DiscordIntegration implements ConversationPolicies {
   async preview(connectionId: string, chatId: string, senderId: string, signal: AbortSignal) {
     const admission = await this.prepareIngress(connectionId, { chatId, senderId, messageId: `preview-${randomUUID()}` }, signal)
     this.discardAdmission(admission.admissionId)
-    const bot = this.options.bots.get(connectionId)
     const sessionId = channelSessionId({ projectId: this.options.projectId, platform: 'discord',
-      botInstanceId: connectionId, conversationId: chatId, ...(bot.legacySessionId ? { legacySessionId: true } : {}) })
+      botInstanceId: connectionId, conversationId: chatId })
     const policy = this.resolve(sessionId)!
     const state = this.sessions?.getSessionState(sessionId)
     const current = state?.channelBoundary?.revision === policy.revision ? structuredClone(state) : undefined
@@ -934,6 +935,7 @@ export class DiscordIntegration implements ConversationPolicies {
         throw new IntegrationError('output_scope', 'Discord connection or conversation context changed before delivery.', 403)
       }
       this.options.memory.assert(stamp.access)
+      this.assertPolicy(output.policy, stamp.access.sessionId)
     }
     assertCurrent()
     await this.inspectResourceScopes(binding,message.chatId,stamp.senderId,output.state,signal)
@@ -947,11 +949,12 @@ export class DiscordIntegration implements ConversationPolicies {
 }
 
 export function combineConversationPolicies(discord: DiscordIntegration, existing: ConversationPolicies): ConversationPolicies {
-  const forSession = (id: string) => discord.managed(id) ? discord : existing
+  const forSession = (id: string): ConversationPolicies => discord.managed(id) ? discord : existing
   return {
     managed: id => forSession(id).managed(id),
     resolve: id => forSession(id).resolve(id),
     authorize: (id, input) => forSession(id).authorize(id, input),
+    assertInputAvailable: id => forSession(id).assertInputAvailable?.(id),
     tools: (policy, id, state) => forSession(id).tools(policy, id, state),
     prompt: (policy, id, state) => forSession(id).prompt(policy, id, state),
     boundary: (policy, id, state) => discord.managed(id) ? discord.boundary(policy, id, state) : undefined,

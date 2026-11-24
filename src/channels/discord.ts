@@ -871,7 +871,7 @@ export class DiscordChannel extends AbstractChannel {
       const delivered = this.decisionMessages.get(match[1])
       if (!delivered || delivered.chatId !== data.channel_id || delivered.messageId !== message.id) throw new Error('Unknown decision')
       const option = match[2] === 'cancel' ? 'cancel' : Number(match[2]) as 1 | 2 | 3
-      result = await this.answerDecision({ chatId: data.channel_id, senderId: actor.id, requestId: match[1], option })
+      result = await this.answerDecision({ chatId: data.channel_id, senderId: actor.id, requestId: match[1], ...(this.address(data.channel_id) ? { platformMessageId: delivered.messageId } : {}), option })
       accepted = delivered
     } catch {
       // Handler and transport errors can contain private context. Never echo their raw messages.
@@ -910,6 +910,10 @@ export class DiscordChannel extends AbstractChannel {
     throw new ChannelConnectionError(res.status === 401 ? 'authentication' : res.status === 403 ? 'permission' : 'gateway')
   }
 
+  protected openSocket(url: string): WebSocket {
+    return new WebSocket(url, { dispatcher: getGlobalDispatcher() })
+  }
+
   private async connect(): Promise<void> {
     if (this.stopping) return
     const controller = this.controller
@@ -918,7 +922,7 @@ export class DiscordChannel extends AbstractChannel {
     const gatewayUrl = await this.getGatewayUrl()
     if (this.stopping || this.controller !== controller) return
 
-    const ws = new WebSocket(gatewayUrl, { dispatcher: getGlobalDispatcher() })
+    const ws = this.openSocket(gatewayUrl)
     this.ws = ws
 
     this.ws.onopen = this.bindCallback(() => {
@@ -1259,6 +1263,7 @@ export class DiscordChannel extends AbstractChannel {
         await this.collectStream({kind:'created',conversation:data.channel_id,message:data.id,sender:author.id,content:typeof content==='string'?content.slice(0,32000):'',
           ...((this.threadParentMap.get(data.channel_id) ?? admission?.location.parentId)?{parent:this.threadParentMap.get(data.channel_id) ?? admission?.location.parentId ?? undefined}:{})}, !!guildId)
       }
+      arrival?.assertCurrent()
       const sessionTriggerMode = admission?.trigger ?? state?.config?.triggerMode ?? this.triggerMode
       const approval = /^\/shadow-approve ([a-f0-9-]{36}) ([a-f0-9]{64})\s*$/i.exec(content)
       if (approval && this.integration && admission) {

@@ -11,7 +11,7 @@ const health = z.enum(['disabled', 'unconfigured', 'connecting', 'connected', 'd
 const healthLabel = (state: z.infer<typeof health>) => channelStateLabel({ state, configured: true })
 const deploymentLabel = (state: 'valid' | 'quarantined' | 'unavailable') => state === 'valid' ? t('Validated package') : state === 'quarantined' ? t('Quarantined package') : t('Unavailable')
 const projection = z.object({
-  connections: z.array(z.object({ id: text, displayName: text, platform: text, purpose: text, enabled: z.boolean(), health }).strict()).max(1000),
+  connections: z.array(z.object({ id: text, displayName: text, platform: text, enabled: z.boolean(), health }).strict()).max(1000),
   deployments: z.array(z.object({ id: text, state: z.enum(['valid', 'quarantined', 'unavailable']), mode: z.enum(['personal', 'service']).optional(), agent: text.optional(), revision: text.optional() }).strict()).max(1024),
   bindings: z.array(z.object({ id: text, deploymentId: text, connectionId: text, platform: text, topic: text.optional(), enabled: z.boolean(), subscribed: z.boolean(), listener: z.boolean(), kind: text, sessionIds: z.array(text).max(1000), receiverIds: z.array(text).max(1000).optional() }).strict()).max(5000),
   sinks: z.array(connectionSinkProjectionSchema).max(1000).optional(),
@@ -34,8 +34,7 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
     graph.push({ id, nodeType: 'deployment', parentId, receiverId, label: t('Published BOT / Agent'),
       detail: `${deployment?.agent ?? t('Unavailable')} · ${deployment ? deploymentLabel(deployment.state) : t('Unavailable')}`,
       config: { ...binding, deployment: deployment ?? null, admission: 'unknown', executed: 'unknown' }, status: 'unknown',
-      description: binding?.kind === 'host-owner-ingress' ? t('Owner ingress is not permission to reply in every group. Admission and execution are unknown.')
-        : t('Configuration and chat history do not confirm that messages were received or the bot ran. Check the activity logs for actual results.') })
+      description: t('Configuration and chat history do not confirm that messages were received or the bot ran. Check the activity logs for actual results.') })
     return id
   }
   for (const connection of [...bots.connections, ...(bots.sinks ?? []).filter(sink => !bots.connections.some(connection => connection.id === sink.connectionId)).map(sink => ({ id: sink.connectionId, displayName: sink.connectionId, platform: 'unknown', enabled: false, health: 'disconnected' as const }))]) {
@@ -47,19 +46,15 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
     const aliases: Record<string, string> = { [`bot-connection:${connection.id}`]: 'connection' }
     for (const binding of bots.bindings.filter(binding => binding.connectionId === connection.id)) {
       // Match only the wire identity explicitly represented by this projection.
-      // Discord guild/channel selectors carry a channel ID; observation IDs and
-      // owner ingress alone never imply a receiver association.
+      // Discord guild/channel selectors carry a channel ID; observation IDs
+      // never imply a receiver association.
       const channel = binding.platform === 'discord' && binding.kind === 'message' ? /^guild:([^:]+):channel:([^:]+)$/.exec(binding.topic ?? '') : undefined
-      const ownerReceivers = binding.kind === 'host-owner-ingress' ? sink?.receivers.filter(receiver => receiver.kind === 'direct' && receiver.address.platform === binding.platform && binding.receiverIds?.includes(receiver.id)) ?? [] : []
-      const receiver = binding.kind === 'host-owner-ingress' ? (ownerReceivers.length === 1 ? ownerReceivers[0] : undefined)
-        : binding.kind === 'message' ? sink?.receivers.find(receiver => receiver.address.platform === binding.platform &&
+      const receiver = binding.kind === 'message' ? sink?.receivers.find(receiver => receiver.address.platform === binding.platform &&
           (binding.platform === 'discord' ? !!channel && receiver.address.conversationId === channel[2] &&
             (receiver.guildId ?? (receiver.navigation.kind === 'channel-content' ? receiver.navigation.guildId : undefined)) === channel[1]
             : receiver.address.conversationId === binding.topic)) : undefined
-      // Owner ingress is BOT configuration, not a fictional receiver. Without an
-      // exact metadata-backed owner DM leave the BOT at its connection root.
-      const parentId = receiver ? `receiver:${receiver.id}` : binding.kind === 'host-owner-ingress' ? 'connection' : `entry:${binding.id}`
-      if (!receiver && binding.kind !== 'host-owner-ingress') graph.push({ id: parentId, nodeType: 'sink', parentId: 'connection', label: configuredTarget(binding),
+      const parentId = receiver ? `receiver:${receiver.id}` : `entry:${binding.id}`
+      if (!receiver) graph.push({ id: parentId, nodeType: 'sink', parentId: 'connection', label: configuredTarget(binding),
         detail: t('Configured entry; receipt unknown'), config: { kind: binding.kind, topic: binding.topic, received: 'unknown' }, status: 'unknown',
         description: t('Configured entry; receipt unknown') })
       const botId = addBot(graph, binding, bots.deployments.find(deployment => deployment.id === binding.deploymentId), parentId, receiver?.id)
@@ -74,8 +69,7 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
   for (const binding of bots.bindings.filter(binding => !bots.connections.some(connection => connection.id === binding.connectionId) && !bots.sinks?.some(sink => sink.connectionId === binding.connectionId))) {
     const graph: Graph = [{ id: 'connection', nodeType: 'connection', label: t('Connection'), detail: t('Connection unavailable'), config: { id: binding.connectionId }, status: 'unknown' },
       { id: `entry:${binding.id}`, nodeType: 'sink', parentId: 'connection', label: configuredTarget(binding), detail: t('Configured entry; receipt unknown'), config: binding, status: 'unknown' }]
-    if (binding.kind === 'host-owner-ingress') graph.splice(1, 1)
-    addBot(graph, binding, bots.deployments.find(deployment => deployment.id === binding.deploymentId), binding.kind === 'host-owner-ingress' ? 'connection' : `entry:${binding.id}`)
+    addBot(graph, binding, bots.deployments.find(deployment => deployment.id === binding.deploymentId), `entry:${binding.id}`)
     result.push({ definition: { id: `bot-binding:${binding.id}`, name: t('Connection unavailable'), enabled: false }, graph, projection: true, topology: true, enabled: false,
       conversation: binding.sessionIds[0] ? { kind: 'fixed', sessionId: binding.sessionIds[0] } : undefined })
   }
@@ -87,7 +81,6 @@ export function botCanvas(bots?: BotProjection): WorkflowCanvasEntry[] {
 }
 
 export function configuredTarget(binding: Pick<BotProjection['bindings'][number], 'platform' | 'topic' | 'kind'>): string {
-  if (binding.kind === 'host-owner-ingress') return t('Owner message target unavailable')
   const channel = binding.platform === 'discord' ? /^guild:([^:]+):channel:([^:]+)$/.exec(binding.topic ?? '') : undefined
   if (channel) return `${conversationTargetLabel(binding.platform, channel[2]!, 'channel')} · ${t('Guild')} ${channel[1]}`
   return binding.topic ? conversationTargetLabel(binding.platform, binding.topic) : t('Configured target unavailable')

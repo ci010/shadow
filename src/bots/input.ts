@@ -1,4 +1,5 @@
-import type { InboundMessage } from '../bus/events.ts'
+import { type InboundMessage } from '../bus/events.ts'
+import { sessionInputListeners, type InputSessions } from '../sessions/input-listeners.ts'
 import type { DeliveryReceipt, ReceiveChannelMessage, RunChannelPolicy } from '../sessions/input.ts'
 import type { InputEnvelope, InputListener } from '../input/router.ts'
 import { matchesInput } from '../input/router.ts'
@@ -38,8 +39,8 @@ function assertBotChannelInput(bot: BotDefinition, message: InboundMessage) {
  */
 export async function handleBotReceivePolicy(bot: BotDefinition, message: InboundMessage, runPolicy: RunChannelPolicy): Promise<void> {
   const binding = assertBotChannelInput(bot, message)
-  if (message.channel === 'discord') {
-    await runPolicy(Object.freeze({ platform: 'discord' }))
+  if (message.channel === 'discord' || message.channel === 'wechat') {
+    await runPolicy(Object.freeze({ platform: message.channel }))
   } else {
     if (!binding || binding.platform === 'discord') throw new Error('Selected BOT receive binding required')
     await runPolicy(Object.freeze({ platform: binding.platform, trigger: binding.trigger }))
@@ -60,18 +61,26 @@ export async function handleBotChannelInput(bot: BotDefinition, message: Inbound
   return receive(message)
 }
 
+type BotInputHandlers = {
+  sessions: InputSessions; bots: BotInstanceStore; directory: DirectoryBots; receive: ReceiveChannelMessage
+}
+
+/** Web targets host Sessions; channel inputs target exact BOT subscriptions. */
+export function projectInputListeners(projectId: string, { sessions, bots, directory }: Omit<BotInputHandlers, 'receive'>): InputListener[] {
+  if (directory.deployments.projectId !== projectId) throw new Error('BOT input Project mismatch')
+  return [...sessionInputListeners(projectId, sessions, bots), ...directory.inputListeners()]
+}
+
 /** The router-selected BOT handler owns policy execution. Re-read deployment and
  * connection authority at delivery, not a captured definition from enumeration. */
-export async function handleBotInput(id: string, input: InputEnvelope<ChannelInputPayload>, options: {
-  bots: BotInstanceStore; directory: DirectoryBots; receive: ReceiveChannelMessage
-}): Promise<ChannelInputResult> {
+export async function handleBotInput(id: string, input: InputEnvelope<ChannelInputPayload>, options: BotInputHandlers): Promise<ChannelInputResult> {
   const { bots, directory, receive } = options
   if (input.projectId !== bots.projectId || directory.deployments.projectId !== bots.projectId) throw new Error('BOT input Project mismatch')
   directory.assertExecution(id)
   const bot = directory.definition(id)
-  if (!bot || bot.mode !== 'service') throw new Error('Service BOT no longer deployed')
-  if (!botInputListeners(bot).some(listener => matchesInput(listener, input))) throw new Error('BOT is not subscribed to this input')
+  if (!bot) throw new Error('BOT no longer deployed')
   const payload = input.payload
+  if (!botInputListeners(bot).some(listener => matchesInput(listener, input))) throw new Error('BOT is not subscribed to this input')
   if (payload.kind === 'observation') {
     const expected = observationEnvelope(bots, input.source.id, input.topic, payload.runPolicy)
     if (!matchesInput({ ...expected, target: { kind: 'bot', id } }, input)) throw new Error('Observation input source mismatch')
@@ -79,13 +88,18 @@ export async function handleBotInput(id: string, input: InputEnvelope<ChannelInp
     return true
   }
   const expected = channelMessageEnvelope(bots, payload.message, payload.kind === 'policy' ? payload.runPolicy : undefined)
-  if (!matchesInput({ ...expected, target: { kind: 'bot', id } }, input) || bots.get(input.source.id).purpose !== 'service')
+  if (!matchesInput({ ...expected, target: { kind: 'bot', id } }, input))
     throw new Error('BOT input source mismatch')
+  if (bot.mode === 'personal') {
+    const address = payload.message.channelAddress
+    const assignment = address && directory.personalInbox(address)
+    if (!assignment?.enabled || assignment.bot.id !== id) throw new Error('Personal inbox assignment is not active')
+  }
   if (payload.kind === 'policy') {
     await handleBotReceivePolicy(bot, payload.message, payload.runPolicy)
     return true
   }
-  // A Service payload cannot elevate Session/command authority, even if a host
+  // A channel payload cannot elevate Session/command authority, even if a host
   // producer supplied a message-shaped object with an admin field.
   const message = payload.message.admin === false ? payload.message : { ...payload.message, admin: false }
   return handleBotChannelInput(bot, message, receive)

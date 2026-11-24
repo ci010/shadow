@@ -15,7 +15,7 @@ function overview(projectId = 'p') {
     drafts: [], audit: [],
     domains: [{ id: domainId, name: 'Public help articles', kind: 'shared', revision: 1, revoked: false, createdAt: now }],
     resources: [{ id: resourceId, domainId, kind: 'note', title: 'Getting started', version: 'b'.repeat(64), contentHash: 'c'.repeat(64), current: true, revoked: false, createdAt: now, sources: [], publication: { id: randomUUID(), actor: 'shadow-owner', at: now } }],
-    tools: integrationToolNames, templates: [], legacy: [], sessions: [], learning: [],
+    tools: integrationToolNames, templates: [], sessions: [], learning: [],
   })
 }
 const props = { apiBase: 'http://localhost/projects/p', projectId: 'p', botId: 'discord-bot' }
@@ -54,7 +54,7 @@ test('read-only access rejects foreign Projects, clears content on scope change 
 })
 
 test('settings keeps read-only entry optional and old review deep links never approve or restore the retired wizard', async t => {
-  const methods: string[] = [], bot = { id: 'discord-bot', projectId: 'p', platform: 'discord', displayName: 'Discord connection', label: 'Discord', purpose: 'service', enabled: true, configured: true, state: 'connected', config: {}, secrets: { token: true } }
+  const methods: string[] = [], bot = { id: 'discord-bot', projectId: 'p', platform: 'discord', displayName: 'Discord connection', label: 'Discord', enabled: true, configured: true, state: 'connected', config: {}, secrets: { token: true } }
   t.mock.method(globalThis, 'fetch', async (url: URL | RequestInfo, init?: RequestInit) => {
     methods.push(init?.method ?? 'GET')
     if (String(url).endsWith('/api/channels')) return Response.json({ channels: [bot] })
@@ -65,7 +65,7 @@ test('settings keeps read-only entry optional and old review deep links never ap
   await settleBotUi()
   assert.match(view.text(), /retired Discord configuration workflow. No change has been approved or published/)
   assert.doesNotMatch(view.text(), /Approve and apply|Channels & people|Review new domain/)
-  await view.select(0, 'discord'); await view.select(1, `connection:${bot.id}`)
+  await view.click('Configure')
   assert.match(view.text(), /Saved service access/)
   assert.doesNotMatch(view.text(), /Customer support/)
   const details = view.nodes().find(node => node.tag === 'details' && node.props.onToggle)

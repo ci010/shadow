@@ -263,7 +263,7 @@ export class IntegrationStore {
     if (binding.processor?.classifier) throw new IntegrationError('classifier_scope','Classifier capability is restricted to independently reviewed observation scopes.')
     if (binding.observation) {
       const scope = binding.observation
-      if (bot.purpose !== 'service' || binding.target.kind !== 'channel' || binding.target.guildId !== scope.guildId || binding.target.channelId !== scope.audienceChannelId ||
+      if (binding.target.kind !== 'channel' || binding.target.guildId !== scope.guildId || binding.target.channelId !== scope.audienceChannelId ||
         ids.length || hasResourceGrants(binding.readResources) || binding.discordHistory || agent.sourceFolders?.length || agent.discordHistory || binding.manage || binding.inheritThreads || binding.processor || agent.execution !== 'restricted' || agent.tools.length || agent.readDomains.length ||
         binding.tools.length || binding.readDomains.length || binding.participants.everyone || binding.participants.userIds.length || binding.participants.roleIds.length) {
         throw new IntegrationError('observation_scope', 'Observation requires a dedicated same-guild output channel binding, restricted tool/domain-free Agent, no participants, management, threads or ordinary processor.')
@@ -291,7 +291,6 @@ export class IntegrationStore {
       if(state.agents.some(existing=>existing.name===agent.name && existing.id!==agent.id))throw new IntegrationError('agent_owned','BOT Agent identity is owned by another configuration.')
     }
     for (const binding of bindings) {
-      if(this.options.bots.get(binding.botInstanceId).purpose!=='service')throw new IntegrationError('service_connection_required','Directory BOTs require a service connection.')
       if(state.bindings.some(existing=>(existing.id===binding.id || targetKey(existing)===targetKey(binding)) && existing.agentId!==binding.agentId))throw new IntegrationError('binding_owned','BOT target is already owned by another configuration.')
       this.validateBinding(binding, agents)
       if (!binding.enabled) continue

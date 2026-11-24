@@ -39,12 +39,10 @@ export function assertChannelMessage(bots: BotInstanceStore, message: InboundMes
     throw new ChannelAdmissionError('External input Project or address mismatch', 403)
   bots.assertAccess(address.botInstanceId)
   const bot = bots.get(address.botInstanceId)
-  if (!bot.enabled || bot.platform !== address.platform || !!bot.legacySessionId !== !!address.legacySessionId)
+  if (!bot.enabled || bot.platform !== address.platform || address.legacySessionId !== undefined)
     throw new ChannelAdmissionError('External input connection mismatch', 403)
-  if (bot.purpose === 'personal') {
-    if (message.isGroup !== false || bot.verifiedOwner?.senderId !== message.senderId || bot.verifiedOwner?.chatId !== message.chatId)
-      throw new ChannelAdmissionError('Verified owner direct messages only', 403)
-  } else if (bot.purpose !== 'service') throw new ChannelAdmissionError('Explicit service assignment required', 403)
+  if (bot.platform === 'wechat' && (message.isGroup !== false || message.chatId !== message.senderId || !message.channelInputGuard))
+    throw new ChannelAdmissionError('WeChat requires verified direct arrival', 403)
   return bot
 }
 
@@ -54,7 +52,6 @@ export function channelMessageEnvelope(bots: BotInstanceStore, message: InboundM
   const bot = assertChannelMessage(bots, message)
   if (runPolicy && !bot) throw new ChannelAdmissionError('Platform policy connection required', 403)
   const route = !bot ? { source: { type: 'web', id: 'web' }, kind: 'message', topic: message.chatId }
-    : bot.purpose === 'personal' ? { source: { type: bot.platform, id: bot.id }, kind: 'message', topic: bot.verifiedOwner!.chatId }
     : channelInputSource(message)
   return { projectId: bots.projectId, id: message.messageId, ...route,
     reply: { channelAddress: message.channelAddress, platformMessageId: message.platformMessageId },
@@ -64,7 +61,7 @@ export function channelMessageEnvelope(bots: BotInstanceStore, message: InboundM
 export function observationEnvelope(bots: BotInstanceStore, connection: string, bindingId: string, runPolicy: () => Promise<void>): InputEnvelope<ChannelInputPayload> {
   bots.assertAccess(connection)
   const bot = bots.get(connection)
-  if (!bot.enabled || bot.platform !== 'discord' || bot.purpose !== 'service') throw new ChannelAdmissionError('Service observation unavailable', 403)
+  if (!bot.enabled || bot.platform !== 'discord') throw new ChannelAdmissionError('Service observation unavailable', 403)
   return { projectId: bots.projectId, id: randomUUID(), correlationId: bindingId,
     source: { type: 'discord', id: connection }, kind: 'observation', topic: bindingId, payload: { kind: 'observation', runPolicy } }
 }

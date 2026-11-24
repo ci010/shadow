@@ -437,7 +437,7 @@ test('directory Feishu ingress routes after native mention policy; unsubscribed 
     f.channel['admitGroup'] = (chatId, name, message) => { if (message?.triggerEligible !== undefined) order.push('trigger'); return admit(chatId, name, message) }
     const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, inputs.receive,
-      { projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
+      { projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned, serviceGeneration: address => { const policy = directory.resolve(address); return policy?.generation ?? policy?.revision },
         routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
     try {
       await manager.init()
@@ -484,7 +484,7 @@ test('two directory Feishu BOTs on one connection own independent mention/all re
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, inputs.receive, {
-      projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
+      projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned, serviceGeneration: address => { const policy = directory.resolve(address); return policy?.generation ?? policy?.revision },
       routeInputPolicy: (message, run) => inputs.policy(message, async configuration => {
         assert.ok(configuration?.platform === 'feishu' && Object.isFrozen(configuration))
         configured.push(`${message.chatId}:${configuration.trigger}`)

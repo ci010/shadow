@@ -45,7 +45,7 @@ test('Service inference overrides are strict; personal roles inherit their own s
   for (const invalid of [{ model: '' }, { temperature: -1 }, { temperature: 3 }, { maxTokens: 0 }, { maxTokens: 1.5 }, { thinking: { type: 'adaptive' } }, { thinking: { type: 'enabled', budget: 1 } }, { reasoningEffort: 'extreme' }, { model: null }]) {
     assert.throws(() => parseBot(botFiles('', invalid)))
   }
-  const personal = { mode: 'personal', connection: '11111111-1111-4111-8111-111111111111', agent: 'general', tools: [] }
+  const personal = { mode: 'personal', agent: 'general', tools: [] }
   assert.doesNotThrow(() => parseBot(botFiles('', personal)))
   assert.throws(() => parseBot(botFiles('', { ...personal, model: 'fixture' })))
 })

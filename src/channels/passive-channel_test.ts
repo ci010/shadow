@@ -40,7 +40,7 @@ import { AgentApp, type AgentOptions } from '../agent/app.ts'
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated of [false, true]) test(`real QQ passive ingress -> trusted owner source assignment -> exact deployment -> new inputs only (${Store.name}, migrated=${migrated})`, async t => {
   await withTempWorkspace(async workspace => {
     const projectId = 'p', bus = new Bus(), bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
-    const connection = bots.create('qq', 'Shared QQ', { appId: 'synthetic', secret: 'synthetic', enabled: true }, undefined, 'service')
+    const connection = bots.create('qq', 'Shared QQ', { appId: 'synthetic', secret: 'synthetic', enabled: true })
     const stream = new ChannelMessageStream(workspace, projectId)
     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } }), directory = new DirectoryBots(deployments)
     const sourcePath = join(workspace, 'source'); mkdirSync(sourcePath)

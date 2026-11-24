@@ -19,7 +19,5 @@ export interface BotInstanceStatus extends Omit<ChannelSetupStatus, 'id'> {
   id: string
   projectId: string
   platform: ChannelId
-  purpose?: 'personal' | 'service' | 'legacy'
-  ownerVerified?: boolean
   displayName: string
 }

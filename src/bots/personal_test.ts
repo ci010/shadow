@@ -7,6 +7,7 @@ import { BotDeployments } from './deployments.ts'
 import { parseBot } from './sdk.ts'
 import { migrateBotFrontmatter } from './format.ts'
 import { DirectoryBots } from './runtime.ts'
+import { projectInputListeners } from './input.ts'
 import { botConversationPolicies } from '../channels/bot-policies.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
 import { channelSessionId, deriveSessionId } from '../bus/events.ts'
@@ -24,29 +25,28 @@ import { Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ConversationPolicies } from './conversation-policy.ts'
 import type { LLMProvider } from '../providers/provider.ts'
-import { channelMessageInput } from '../sessions/input.ts'
+import { channelMessageInput, inputAdmin } from '../sessions/input.ts'
 
-const files = (connection: string, extra = {}) => ({
+const files = (extra = {}) => ({
   'BOT.md': '---\nid: shadow\nconfig: bot.json\n---\nScoped personal instructions.',
-  'bot.json': JSON.stringify({mode:'personal',connection,agent:'general',allowedModules:[],tools:[],bindings:[],...extra}),
+  'bot.json': JSON.stringify({mode:'personal',agent:'general',allowedModules:[],tools:[],bindings:[],...extra}),
 })
 test('personal discriminator denies package-defined authority and service escalation', () => {
-  const connection='00000000-0000-4000-8000-000000000001'
-  assert.equal(parseBot(files(connection)).mode,'personal')
-  for(const extra of [{admin:true},{verifiedOwner:{senderId:'attacker'}},{tools:[{name:'read'}]},{agent:undefined},{mode:'service'},{mode:undefined},{readDomains:[]}]) assert.throws(()=>parseBot(files(connection,extra)))
+  assert.equal(parseBot(files()).mode,'personal')
+  for(const extra of [{connection:'00000000-0000-4000-8000-000000000001'},{admin:true},{verifiedOwner:{senderId:'attacker'}},{tools:[{name:'read'}]},{agent:undefined},{mode:'service'},{mode:undefined},{readDomains:[]}]) assert.throws(()=>parseBot(files(extra)))
 })
-test('personal deployment uses real normal SessionManager prompt/tools, live owner gate; service stays restricted', async () => {
+test('personal deployment uses real normal SessionManager prompt/tools, exact inbox without owner authority; service stays restricted', async () => {
   await withTempWorkspace(async workspace => {
     const projectId='p', store=new BotInstanceStore({projectId,path:join(workspace,'bots.json')})
-    const bot=store.create('qq','Owner',{appId:'synthetic',secret:'synthetic',enabled:true},undefined,'personal')
-    store.bindOwner(bot.id,'owner','dm')
+    const bot=store.create('qq','Shared transport',{appId:'synthetic',secret:'synthetic',enabled:true})
     const deployments=new BotDeployments({directory:join(workspace,'deployments'),projectId,runGit:async()=>{throw new Error('No git')}})
-    const frozen=deployments.freeze(migrateBotFrontmatter(files(bot.id,{agent:'personal-role'})))
+    const frozen=deployments.freeze(migrateBotFrontmatter(files({agent:'personal-role',bindings:[{platform:'qq',botInstanceId:bot.id,conversationId:'dm',tools:[]}]})))
     await deployments.deploy({id:'shadow',source:{folderId:'f',directory:'shadow'},files:frozen.files,revision:frozen.revision,signal:new AbortController().signal})
     const runtime=new DirectoryBots(deployments)
     let execution = { enabled: true, generation: '0' }
     runtime.setExecutionPolicy(() => execution)
-    const existing={managed:()=>true,resolve:()=>undefined,authorize:()=>{},tools:()=>{throw new Error('Restricted service tools')},prompt:()=>{throw new Error('Restricted prompt')}} as unknown as ConversationPolicies
+    let publishing = false
+    const existing={assertInputAvailable: () => { if (publishing) throw new Error('Publication in progress') }, managed:()=>true,resolve:()=>undefined,authorize:()=>{},tools:()=>{throw new Error('Restricted service tools')},prompt:()=>{throw new Error('Restricted prompt')}} as unknown as ConversationPolicies
     const policies=botConversationPolicies(store,existing,runtime)
     const id=channelSessionId({projectId,botInstanceId:bot.id,platform:'qq',conversationId:'dm'})
     const bus=new Bus(), agents=new AgentTypesManager(workspace);await agents.load()
@@ -54,7 +54,12 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
     const outbound: OutboundMessage[] = []
     bus.on('message.outbound', message => { outbound.push(message) })
     const tools=new Tools(workspace)
-    tools.register({name:'read',description:'ordinary owner tool',parameters:{type:'object',properties:{}},execute:async()=>''})
+    tools.register({name:'read',description:'ordinary role tool',parameters:{type:'object',properties:{}},execute:async()=>''})
+    let preloadGate: (() => Promise<void>) | undefined
+    tools.register({name:'invoke_tool',description:'fixture invoke',parameters:{type:'object',properties:{}},execute:async()=>''})
+    const importer = {name:'import_tool',description:'fixture import',parameters:{type:'object' as const,properties:{}},execute:async()=>'',
+      importSource: async () => { await preloadGate?.(); return 'fixture loaded' }}
+    tools.register(importer)
     const context=new ContextBuilder(workspace)
     const admins:boolean[]=[]
     let prepareGate: (() => Promise<void>) | undefined
@@ -69,14 +74,21 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
     try {
       await sessions.start()
       const address={projectId,botInstanceId:bot.id,platform:'qq',conversationId:'dm'} as const
-      const message={channelInputGuard:()=>{},channel:'qq',chatId:'dm',channelAddress:address,senderId:'owner',isGroup:false,admin:true,content:'hello',messageId:'m',timestamp:new Date().toISOString()}
+      const message={channelInputGuard:()=>{},channel:'qq',chatId:'dm',channelAddress:address,senderId:'any-inbox-sender',isGroup:false,admin:true,content:'hello',messageId:'m',timestamp:new Date().toISOString()}
       assert.equal(policies.managed(id),false)
+      publishing = true
+      assert.throws(() => policies.authorize(id, channelMessageInput(message)), /Publication in progress/)
+      publishing = false
+      assert.equal(inputAdmin(id, channelMessageInput(message)), false, 'a scoped sender cannot elevate by setting the admin hint')
       const personal = { personalAgent: 'personal-role' }
-      assert.equal(sessions.inspectBotContext(id, personal), undefined, 'a verified connection is not an active runtime context')
+      assert.equal(sessions.inspectBotContext(id, personal), undefined, 'a bound inbox is not an active runtime context')
       const finished=Promise.withResolvers<void>()
       bus.on('session.turn.finished',()=>finished.resolve())
       const inputs = channelInputFixture({ projectId, sessions, bots: store, directory: runtime,
         receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
+      assert.deepEqual(projectInputListeners(projectId, { sessions, bots: store, directory: runtime }).filter(listener => listener.source.id === bot.id), [
+        { source: { type: 'qq', id: bot.id }, kind: 'message', topic: 'dm', target: { kind: 'bot', id: 'shadow' } },
+      ])
       await sessions.recordPassiveChannel({version:1,projectId,connectionId:bot.id,platform:'qq',conversationId:'dm',kind:'direct'},message,()=>{})
       await inputs.receive(message)
       await finished.promise
@@ -84,7 +96,8 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       assert.match(calls[0]!.prompt,/Custom role prompt/)
       assert.equal(calls[0]!.model,'role-model')
       assert.ok(calls[0]!.tools.includes('read'))
-      assert.ok(admins.includes(true))
+      assert.ok(admins.length > 0)
+      assert.ok(admins.every(admin => !admin), 'channel-derived role must not acquire owner/admin authority')
       assert.equal(sessions.getSessionState(id)?.agentType,'personal-role')
       const runtimeContext = sessions.inspectBotContext(id, personal)
       assert.equal(runtimeContext?.source, 'active-history')
@@ -125,17 +138,25 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       release.resolve()
       await rejected
       prepareGate = undefined
+      const preloading = Promise.withResolvers<void>(), finishPreload = Promise.withResolvers<void>()
+      preloadGate = async () => { preloading.resolve(); await finishPreload.promise }
+      const state = sessions.getSessionState(id)!
+      await (sessions as any).saveState(id, { ...state, preloadTools: { 'fixture-preload': [] } })
+      const preload = (sessions as any).prepareSessionContext(channelMessageInput(message), id) as Promise<unknown>
+      const rejectedPreload = assert.rejects(preload, /execution changed/)
+      await Promise.race([preloading.promise, preload.then(() => assert.fail('Expected asynchronous tool preload'))])
+      execution = { enabled: true, generation: '5' }
+      finishPreload.resolve()
+      await rejectedPreload
+      preloadGate = undefined
       assert.equal(calls.length, 2, 'changed preparation must never start another provider call')
-      for(const sender of [{senderId:'stranger'},{isGroup:true}]) await assert.rejects(sessions.deliver(id,channelMessageInput({...message,...sender})),/Verified owner/)
-      await assert.rejects(sessions.deliver(channelSessionId({...address,conversationId:'other-dm'}),channelMessageInput(message)),/Verified owner/)
+      await assert.rejects(sessions.deliver(channelSessionId({...address,conversationId:'other-dm'}),channelMessageInput(message)),/assignment|required|source/i)
       await assert.rejects(sessions.deliver(channelSessionId({...address,platform:'feishu'}),channelMessageInput(message)),/platform mismatch/)
       const cross=channelSessionId({...address,projectId:'other'})
       await assert.rejects(sessions.deliver(cross,channelMessageInput(message)),/Project mismatch/)
-      store.update(bot.id,{purpose:'service'})
-      await assert.rejects(sessions.deliver(id,channelMessageInput(message)),/service assignment/)
-      store.update(bot.id,{purpose:'personal'})
-      store.bindOwner(bot.id)
-      await assert.rejects(sessions.deliver(id,channelMessageInput(message)),/Verified owner/)
+      store.update(bot.id,{config:{enabled:false}})
+      assert.throws(() => assertPersonalOutput(fresh), /execution changed|disabled/)
+      await assert.rejects(sessions.deliver(id,channelMessageInput(message)),/disabled/)
     } finally {await sessions.stop();await handoff.stop();await backgroundTasks.stop();await events.stop();bus.stopAll()}
   })
 })

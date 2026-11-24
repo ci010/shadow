@@ -106,21 +106,14 @@ export class DirectoryBots {
   }
   inputListeners() { return this.definitions().filter(({bot}) => this.execution(bot.id).enabled).flatMap(({bot}) => botInputListeners(bot)) }
   definition(id: string) { return this.definitions().find(({bot}) => bot.id === id)?.bot }
-  personal(connection: string) {
-    const matches = this.definitions().filter(({bot}) => bot.mode === 'personal' && bot.connection === connection)
-    if (matches.length > 1) throw new Error('Connection is owned by multiple personal BOT deployments.')
-    // Invalid source cannot safely identify its connection. Never interpret a
-    // missing parsed definition as permission to fall back to an ordinary role.
-    if (!matches.length && this.invalidDeployments.size) throw new Error('Quarantined BOT deployment prevents personal role fallback; correct and redeploy the package.')
-    if (matches[0]) this.assertExecution(matches[0].bot.id)
-    return matches[0]?.bot
-  }
-  personalGeneration(connection: string): string | undefined {
-    const bot = this.personal(connection) // validates ownership, package and live Workflow gate
-    if (!bot) return undefined
-    const deployment = this.deployments.read(bot.id)?.deployment
-    if (!deployment) throw new Error('Personal BOT deployment disappeared.')
-    return `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}`
+  /** Personal and Service share exact address ownership. */
+  personalInbox(address: Pick<ChannelAddress, 'botInstanceId' | 'platform' | 'conversationId'>) {
+    const matches = this.definitions().flatMap(({ bot, deployment }) => bot.mode === 'personal' ? bot.bindings
+      .filter(binding => binding.platform !== 'discord' && conversationBindingKey(binding) === conversationBindingKey(address))
+      .map(binding => ({ bot, binding, generation: `${deployment.generation ?? deployment.revision}:${this.execution(bot.id).generation}` })) : [])
+    if (matches.length > 1 || matches.length && this.resolve(address)) throw new Error('Conversation is owned by multiple BOT deployments.')
+    const match = matches[0]
+    return match && { ...match, enabled: match.binding.enabled && bindingSubscribed(match.bot, match.binding) && this.execution(match.bot.id).enabled }
   }
   isManaged(address: Pick<ChannelAddress, 'botInstanceId' | 'platform' | 'conversationId'>): boolean {
     const managed = this.definitions().some(({bot}) => bot.bindings.some(binding => binding.platform === address.platform && binding.botInstanceId === address.botInstanceId))
@@ -129,7 +122,7 @@ export class DirectoryBots {
     return managed || this.invalidDeployments.size > 0
   }
   resolve(address: Pick<ChannelAddress, 'botInstanceId' | 'platform' | 'conversationId'>): ResolvedConversationPolicy | undefined {
-    const matches = this.definitions().flatMap(({ bot, deployment }) => bot.bindings.flatMap(binding => {
+    const matches = this.definitions().filter(({ bot }) => bot.mode === 'service').flatMap(({ bot, deployment }) => bot.bindings.flatMap(binding => {
       if (binding.platform === 'discord' || conversationBindingKey(binding) !== conversationBindingKey(address)) return []
       // Receive configuration belongs to the BOT handler, not Session tool grants.
       const { tools, trigger: _trigger, ...rawData } = binding

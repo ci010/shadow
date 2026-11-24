@@ -328,7 +328,7 @@ with only a reference and purpose; it never grants access or deploys a BOT.
 
 In an authenticated owner durable Web conversation, read `v:bots/overview` first.
 `v:bots/connections/index` discovers compact, allowlisted live connection state;
-`v:bots/connections/<id>` shows enabled, transport health and ownerVerified without
+`v:bots/connections/<id>` shows enabled state and transport health without
 credentials/configuration or the owner's private platform identity.
 `v:bots/deployments/index` links `v:bots/deployments/<id>/status` (verified current /
 previous revisions, registered source, format, validation and binding/subscription

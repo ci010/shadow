@@ -42,7 +42,7 @@ import type {
   WeixinMessageItem,
   WeixinSendDiagnostic,
 } from './wechat/sdk.ts'
-import { AbstractChannel } from './base.ts'
+import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 
 // ---------------------------------------------------------------------------
 // Options
@@ -441,12 +441,18 @@ export class WeChatChannel extends AbstractChannel {
       }
     }
 
+    const previous = this.options.scoped ? this.repository.getLatestAccount() : null
+    if (previous && (previous.accountId !== status.ilink_bot_id ||
+        previous.linkedUserId && status.ilink_user_id && previous.linkedUserId !== status.ilink_user_id)) {
+      this.repository.updateLoginStatus(session.sessionKey, 'failed')
+      throw new ChannelAdmissionError('Use a new Connection for a different WeChat account', 403)
+    }
     const baseUrl = status.baseurl?.trim() || session.baseUrl
     const account: WeixinAccountRecord = {
       accountId: status.ilink_bot_id,
       baseUrl,
       botToken: status.bot_token,
-      linkedUserId: status.ilink_user_id,
+      linkedUserId: status.ilink_user_id ?? previous?.linkedUserId,
       savedAt: new Date().toISOString(),
     }
     this.reportIdentity(account.accountId)
@@ -550,7 +556,7 @@ export class WeChatChannel extends AbstractChannel {
                 msg.item_list?.length ?? 0
               }`,
             )
-            await this._processMessage(msg, account.linkedUserId)
+            await this._processMessage(msg, account.linkedUserId, account)
           }
         }
 
@@ -569,6 +575,7 @@ export class WeChatChannel extends AbstractChannel {
   private async _processMessage(
     msg: WeixinMessage,
     linkedUserId?: string,
+    account = this.options.scoped ? this.repository.getLatestAccount() : undefined,
   ): Promise<void> {
     console.info(
       `[wechat] _processMessage: type=${msg.message_type} state=${msg.message_state} from=${msg.from_user_id} to=${msg.to_user_id} items=${
@@ -577,64 +584,85 @@ export class WeChatChannel extends AbstractChannel {
     )
 
     const ownReply = msg.message_type === WeixinMessageType.BOT
+    // iLink only exposes this direct-message shape. Never derive a direct
+    // inbox from unsupported events or an explicitly marked room.
+    if (this.options.scoped && (!ownReply && msg.message_type !== WeixinMessageType.USER ||
+        Object.hasOwn(msg, 'group_id') || Object.hasOwn(msg, 'group_chat_id'))) return
     const senderId = msg.from_user_id?.trim()
     const chatId = ownReply ? msg.to_user_id?.trim() : senderId
-    if (!chatId || !senderId || msg.message_id === undefined) return
+    if (!chatId || !senderId || msg.message_id === undefined ||
+        this.options.scoped && (chatId.endsWith('@chatroom') || !Number.isSafeInteger(msg.message_id))) return
 
     const dedupKey = `${chatId}:${msg.message_id}`
 
+    const assertAccount = () => {
+      if (this.options.scoped) this.assertAccountCurrent(account)
+    }
+    assertAccount()
     const arrival = await this.collectPassive({ senderId, chatId, messageId: String(msg.message_id ?? ''),
       platformMessageId: String(msg.message_id ?? ''), content: bodyFromMessageItems(msg.item_list, null) || '[media message]', isGroup: false })
     if (ownReply) return // Own platform echoes are records only, never BOT input.
-    // Linked-user and owner admission constrain processing, not common receipt.
-    if (arrival && !arrival.eligible) return
-    // Only accept messages from the linked user (if configured)
-    if (linkedUserId && chatId !== linkedUserId) {
+    if ((arrival && !arrival.eligible) || (this.options.scoped && (!arrival || !this.hasReceivePolicy))) return
+    // Preserve the iLink linked-peer constraint when the platform provides it.
+    const linkedPeer = account?.linkedUserId ?? linkedUserId
+    if (linkedPeer && chatId !== linkedPeer) {
       console.info(
-        `[wechat] Skipping: from_user_id=${chatId} !== linkedUserId=${linkedUserId}`,
+        `[wechat] Skipping: from_user_id=${chatId} !== linkedUserId=${linkedPeer}`,
       )
       return
     }
 
     if (!this.isAllowed(chatId)) return
-    if (!this.repository.tryMarkMessageSeen(dedupKey)) return
+    const assertArrival = arrival && (() => { assertAccount(); arrival.assertCurrent() })
+    await this.runReceivePolicy({ senderId, chatId, messageId: String(msg.message_id), platformMessageId: String(msg.message_id),
+      content: bodyFromMessageItems(msg.item_list, null), isGroup: false, channelInputGuard: assertArrival }, async () => {
+      if (!this.repository.tryMarkMessageSeen(dedupKey)) return
 
-    let mediaResult: InboundMediaResult | null = null
-    const mainMedia = findMainMediaItem(msg.item_list)
-    if (mainMedia) {
-      const cdnMedia = mainMedia.image_item?.media ??
-        mainMedia.voice_item?.media ??
-        mainMedia.file_item?.media ??
-        mainMedia.video_item?.media
-      if (cdnMedia?.encrypt_query_param) {
-        try {
-          mediaResult = await downloadMedia(
-            cdnMedia.encrypt_query_param,
-            cdnMedia.aes_key,
-            this.mediaDir,
-            mainMedia.file_item?.file_name,
-          )
-        } catch (err) {
-          console.warn('[wechat] Media download failed:', err)
+      let mediaResult: InboundMediaResult | null = null
+      const mainMedia = findMainMediaItem(msg.item_list)
+      if (mainMedia) {
+        const cdnMedia = mainMedia.image_item?.media ??
+          mainMedia.voice_item?.media ??
+          mainMedia.file_item?.media ??
+          mainMedia.video_item?.media
+        if (cdnMedia?.encrypt_query_param) {
+          try {
+            mediaResult = await downloadMedia(
+              cdnMedia.encrypt_query_param,
+              cdnMedia.aes_key,
+              this.mediaDir,
+              mainMedia.file_item?.file_name,
+            )
+          } catch (err) {
+            console.warn('[wechat] Media download failed:', err)
+          }
         }
       }
-    }
 
-    const text = bodyFromMessageItems(msg.item_list, mediaResult)
-    if (!text) {
-      console.info(`[wechat] Skipping: empty text after parsing items`)
-      return
-    }
+      const text = bodyFromMessageItems(msg.item_list, mediaResult)
+      if (!text) {
+        console.info(`[wechat] Skipping: empty text after parsing items`)
+        return
+      }
 
-    if (msg.context_token?.trim()) {
-      const previousToken = this.repository.getContextToken(chatId)
-      this.repository.saveContextToken(chatId, msg.context_token)
-      if (previousToken !== msg.context_token) this.repository.enableUndeliveredNotice(chatId)
-    }
+      assertArrival?.()
+      if (msg.context_token?.trim()) {
+        const previousToken = this.repository.getContextToken(chatId)
+        this.repository.saveContextToken(chatId, msg.context_token)
+        if (previousToken !== msg.context_token) this.repository.enableUndeliveredNotice(chatId)
+      }
 
-    console.info(`[wechat] Incoming from ${chatId}: "${text.slice(0, 80)}"`)
-    const media = mediaResult ? [mediaResult.filePath] : undefined
-    await this.handleIncoming(chatId, chatId, text, String(msg.message_id ?? ''), { isGroup: false }, media)
+      console.info(`[wechat] Incoming from ${chatId}: "${text.slice(0, 80)}"`)
+      const media = mediaResult ? [mediaResult.filePath] : undefined
+      await this.handleIncoming(chatId, chatId, text, String(msg.message_id ?? ''), { isGroup: false }, media)
+    })
+  }
+
+  private assertAccountCurrent(account: WeixinAccountRecord | null | undefined): void {
+    const current = this.repository.getLatestAccount()
+    if (!account || !current || current.accountId !== account.accountId || current.botToken !== account.botToken ||
+        current.baseUrl !== account.baseUrl || current.linkedUserId !== account.linkedUserId)
+      throw new ChannelAdmissionError('WeChat account changed or is not connected', 403)
   }
 
   // ── Outbound helpers ──────────────────────────────────────────────────────
@@ -702,6 +730,10 @@ export class WeChatChannel extends AbstractChannel {
       context_token: contextToken ?? undefined,
     }
     await this.assertDelivery()
+    if (this.options.scoped) {
+      this.assertAccountCurrent(account)
+      if (account.linkedUserId && chatId !== account.linkedUserId) throw new ChannelAdmissionError('WeChat recipient is outside the linked account', 403)
+    }
     await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg }, { ...diagnostic })
   }
 
@@ -725,6 +757,10 @@ export class WeChatChannel extends AbstractChannel {
       context_token: contextToken ?? undefined,
     }
     await this.assertDelivery()
+    if (this.options.scoped) {
+      this.assertAccountCurrent(account)
+      if (account.linkedUserId && chatId !== account.linkedUserId) throw new ChannelAdmissionError('WeChat recipient is outside the linked account', 403)
+    }
     await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg }, { ...diagnostic })
   }
 }

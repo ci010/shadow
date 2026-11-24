@@ -621,7 +621,7 @@ export class FeishuChannel extends AbstractChannel {
       const own = this.address(rootId)
       if (address) return own && address.projectId === own.projectId && address.botInstanceId === own.botInstanceId
         && address.platform === this.name && address.conversationId.startsWith('oc_') ? address.conversationId : undefined
-      return (!own || own.legacySessionId) && parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
+      return !own && parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
     }
     const own = this.address(rootId)
     const stored = own && this.hasPassiveCollector ? this.sessionManager?.getSessionState(passiveChannelId({ ...own, connectionId: own.botInstanceId }))?.channelSource : undefined
@@ -1145,7 +1145,8 @@ export class FeishuChannel extends AbstractChannel {
         if (!mentioned && !isReplyToBot) silent = true
       }
 
-      // Add a reaction only for messages the bot will actually respond to.
+      // Add a reaction only while the original inbox authorization is current.
+      arrival?.assertCurrent()
       if (!silent) {
         this._addReaction(messageId, SEEN_EMOJI).catch(() => {})
       }

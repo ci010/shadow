@@ -179,7 +179,6 @@ let controller: AbortController | undefined
 const client = () => createDiscordIntegrationClient(props.apiBase, props.projectId)
 const botBindings = computed(() => overview.value?.bindings.filter(binding => binding.botInstanceId === props.bot.id) ?? [])
 const botLearning = computed(() => overview.value?.learning.filter(item => item.botInstanceId === props.bot.id) ?? [])
-const legacy = computed(() => overview.value?.legacy.find(item => item.botId === props.bot.id))
 const assignedAgent = computed(() => overview.value?.agents.find(agent => agent.id === assignedAgentId.value))
 const availableDomains = computed(() => overview.value?.domains.filter(domain => !domain.revoked && ['shared', 'agent-private'].includes(domain.kind)) ?? [])
 const assignableDomains = computed(() => availableDomains.value.filter(domain => assignedAgent.value?.readDomains.includes(domain.id)))

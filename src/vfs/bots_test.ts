@@ -35,8 +35,7 @@ import { createBotsHandler } from './bots.ts'
 
 function fixture(workspace: string) {
   const store = new BotInstanceStore({ projectId: 'p', path: join(workspace, 'connections.json') })
-  const bot = store.create('qq', 'Synthetic connection', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' }, undefined, 'personal')
-  store.bindOwner(bot.id, 'PRIVATE_OWNER', 'PRIVATE_CHAT')
+  const bot = store.create('qq', 'Synthetic connection', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' })
   const bus = new Bus()
   const channels = new ChannelManager(ConfigSchema.parse({}), bus, {} as SessionManager, async () => { throw Error('No delivery') },
     { projectId: 'p', instanceStore: store, factory: () => { throw Error('Status must not construct adapters') } })
@@ -78,10 +77,10 @@ test('Bot VFS connection whitelist uses the same live status as bot_setup, witho
     const status = await f.get(`connections/${f.bot.id}`)
     const previous = JSON.parse(await setup.execute({ action: 'status' }, f.context)).bots[0]
     assert.deepEqual(status, { id: previous.id, displayName: previous.displayName, platform: previous.platform,
-      purpose: previous.purpose, enabled: previous.enabled, health: previous.state, ownerVerified: previous.ownerVerified })
+      enabled: previous.enabled, health: previous.state })
     assert.equal(status.health, 'disconnected')
     assert.equal(status.enabled, true, 'Enabled does not imply connected')
-    assert.deepEqual(Object.keys(status).sort(), ['displayName', 'enabled', 'health', 'id', 'ownerVerified', 'platform', 'purpose'])
+    assert.deepEqual(Object.keys(status).sort(), ['displayName', 'enabled', 'health', 'id', 'platform'])
     f.channels['health'].set(f.bot.id, { state: 'connected' })
     assert.equal((await f.get(`connections/${f.bot.id}`)).health, 'connected', 'No persisted/cross-read status cache')
     for (const handler of ['glob', 'grep']) {
@@ -284,14 +283,14 @@ test('storage boundary failures and pathological indexes are safe, bounded and n
   })
 })
 
-test('personal deployments do not export private owner/session listeners, and URL-bearing labels are omitted', async () => {
+test('Personal deployments expose exact BOT listeners, and URL-bearing labels are omitted', async () => {
   await withTempWorkspace(async workspace => {
     const f = fixture(workspace)
-    await f.deploy('personal', botFiles('', { mode: 'personal', connection: f.bot.id, agent: 'general', tools: [] }))
-    assert.equal((await f.get('deployments/personal/status')).subscriptionMode, 'host-owner-ingress')
+    await f.deploy('personal', botFiles('', { mode: 'personal', agent: 'general', tools: [], bindings: [{ platform: 'qq', botInstanceId: f.bot.id, conversationId: 'dm:one', tools: [] }] }))
+    assert.equal((await f.get('deployments/personal/status')).subscriptionMode, 'legacy-bindings')
     const listeners = await f.get('deployments/personal/listeners')
-    assert.equal(listeners.total, 0)
-    assert.equal(listeners.personalIngress, 'host-session-listeners-not-exported')
+    assert.equal(listeners.total, 1)
+    assert.match(JSON.stringify(listeners), /dm:one/)
     f.store.update(f.bot.id, { displayName: 'https://example.invalid/?sig=PRIVATE_SIGNATURE' })
     assert.equal((await f.get(`connections/${f.bot.id}`)).displayName, '[url-omitted]')
     assert.doesNotMatch(await f.search.execute({ handler: 'grep', path: 'v:bots', query: 'PRIVATE_' }, f.context), /PRIVATE_/)
@@ -372,7 +371,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.match(String(result), /Read-only/)
           const setup = new BotSetupTool(new BotChatSetup('p'), f.channels, f.assertSession)
           assert.match(await setup.execute({ action: 'status' }, context), /bots/)
-          for (const action of [{ action: 'open' }, { action: 'create', purpose: 'personal', platform: 'qq', displayName: 'Denied' }, { action: 'connection', id: f.bot.id, enabled: false }]) {
+          for (const action of [{ action: 'open' }, { action: 'create', platform: 'qq', displayName: 'Denied' }, { action: 'connection', id: f.bot.id, enabled: false }]) {
             await assert.rejects(() => setup.execute(action, context), /direct administrator human turn/)
           }
           captured.push(context)

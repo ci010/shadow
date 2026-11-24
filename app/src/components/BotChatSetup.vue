@@ -1,7 +1,7 @@
 <template>
   <section v-if="enabled && (request || error || closeError)" class="bot-chat-setup" :aria-label="t('Private Bot connection')">
     <header><strong>{{ t('Private Bot connection') }}</strong><button :disabled="busy || !request" @click="close('closed')">{{ t('Done') }}</button><button :disabled="busy || !request" @click="close('cancelled')">{{ t('Cancel') }}</button></header>
-    <p>{{ t('Use this private card for credentials and owner pairing. Continue other setup in chat. Done closes this card; it does not confirm readiness or deployment.') }} {{ t('Closing does not undo saved connection changes.') }}</p>
+    <p>{{ t('Use this private card for platform credentials and connection status. Done closes this card; it does not confirm readiness or deployment.') }} {{ t('Closing does not undo saved connection changes.') }}</p>
     <p v-if="error || closeError" role="alert">{{ error || closeError }} <button :disabled="busy" @click="refresh(true)">{{ t('Reload') }}</button></p>
     <BotConnectionSetup v-if="request && !busy" :key="request.id" :api-base="apiBase" :project-id="projectId" :available="enabled" :active="enabled" compact />
   </section>
