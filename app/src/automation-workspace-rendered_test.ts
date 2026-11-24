@@ -22,13 +22,17 @@ for (const variant of [
   { id: 'learning:reflector', name: 'Reflector', source: 'learning' },
   { id: 'default:work-dispatch-v1', name: 'Work dispatch', source: 'system' },
   { id: 'cron:weekly', name: 'Weekly report', source: 'cron' },
-]) test(`${variant.id}: ordinary conversation layout keeps results exclusively in history`, {
+  { id: 'cron:workflow-transition', name: 'Weekly report', source: 'cron', transition: true },
+]) test(variant.transition ? 'Workflow conversation loading and empty states stay inside the workbench' : `${variant.id}: ordinary conversation layout keeps results exclusively in history`, {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
   const directory = resolve(root, '.test-artifacts', `automations-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
-  const automation = { ...variant, session: 'fresh', schedule: '0 9 * * 1', task: 'Review recent work', enabled: true }
+  const workflow = { id: 'schedule:fixture', name: variant.name, revision: 1, enabled: true,
+    source: { kind: 'schedule', id: 'fixture' }, nodes: [{ kind: 'schedule-action', action: 'agent', job: { session: 'fresh' } }] }
+  const automation = { ...variant, session: 'fresh', schedule: '0 9 * * 1', task: 'Review recent work', enabled: true,
+    workflow: { id: workflow.id, pending: 0, blocked: 0 } }
   const runs = Array.from({ length: 65 }, (_, index) => ({
     id: `run-${index}`, sessionId: `cron:run-${index}`, startedAt: new Date(Date.UTC(2026, 8, 30, 0, -index)).toISOString(),
     status: index === 2 ? 'failed' : index === 3 ? 'running' : index === 9 ? 'cancelled' : 'completed', title: `Saved conversation ${index} ${'Long prompt text '.repeat(20)}`,
@@ -80,9 +84,10 @@ for (const variant of [
             {name:'project-settings',path:'/projects/:projectId/settings/:section?',component:{}},
             {name:'agents',path:'/projects/:projectId/agents',component:{}},
             {name:'project-workflows',path:'/projects/:projectId/workflows',component:{}},
+            {name:'project-board',path:'/projects/:projectId/board',component:{}},
             {name:'settings',path:'/settings/:section?',component:{}},
           ]});
-          await router.push({name:'chat',params:{projectId:'fixture'},query:{automation:${JSON.stringify(automation.id)}}});
+          await router.push(${variant.transition ? `{name:'project-workflows',params:{projectId:'fixture'}}` : `{name:'chat',params:{projectId:'fixture'},query:{automation:${JSON.stringify(automation.id)}}}`});
           const app = createApp({render:() => h(ProjectsWorkspace,{apiBase:location.origin,visible:true})});
           const disposers = new Set();
           const pool = {onDispose(callback){disposers.add(callback);return()=>disposers.delete(callback);},dispose(){for(const callback of disposers)callback();disposers.clear();},observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
@@ -122,9 +127,11 @@ for (const variant of [
             pendingHistory.splice(0).forEach(send => send())
             json({ ok: true })
           } else if (path === '/api/projects') json({ projects: [{ id: 'fixture', name: 'Fixture project', createdAt: '' }] })
+          else if (path === '/api/workflows') json({ version: 1, kind: 'full', cursor: 'fixture',
+            snapshot: { projectId: 'fixture', definitions: [workflow], runs: [] } })
           else if (path === '/api/automations') {
             const send = () => json({ automations: [automation] })
-            if (hold) pending.push(send)
+            if (hold && !variant.transition) pending.push(send)
             else send()
           } else if (path.endsWith('/runs')) {
             const offset = Number(url.searchParams.get('offset'))
@@ -183,7 +190,8 @@ for (const variant of [
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
-  const env: NodeJS.ProcessEnv = { AUTOMATION_SMOKE_URL: url, AUTOMATION_ID: automation.id, AUTOMATION_SCREENSHOTS: process.env.AUTOMATION_SCREENSHOTS }
+  const env: NodeJS.ProcessEnv = { AUTOMATION_SMOKE_URL: url, AUTOMATION_ID: automation.id,
+    AUTOMATION_TRANSITION: variant.transition ? '1' : '', AUTOMATION_SCREENSHOTS: process.env.AUTOMATION_SCREENSHOTS }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
@@ -200,6 +208,10 @@ for (const variant of [
   if (code !== 0) process.stderr.write(output)
   assert.equal(code, 0, output)
   assert.match(output, /AUTOMATION_WORKSPACE_OK/)
+  if (variant.transition) {
+    assert.deepEqual(offsets, [0, 0], 'Only the latest history page is requested on each open')
+    return
+  }
   assert.ok(offsets.includes(30))
   assert.ok(offsets.includes(60), 'Deep links can resolve runs beyond the first two pages')
   assert.ok(fileRequests.length > 0, 'Run conversations use the ordinary file explorer defaults')

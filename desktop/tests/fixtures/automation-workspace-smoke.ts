@@ -28,7 +28,7 @@ async function main() {
       if (await execute(code)) return
       await delay(50)
     }
-    throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
+    throw new Error(`Timed out: ${code}\nRoute: ${await execute('window.__automationRouter?.currentRoute.value.fullPath')}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
   }
   const frame = () => execute('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   const selected = () => execute('window.__automationRouter.currentRoute.value.params.sessionId')
@@ -52,8 +52,42 @@ async function main() {
   }
   try {
     await window.loadURL(new URL('__automations', process.env.AUTOMATION_SMOKE_URL).href)
-    await wait(`!!document.querySelector('.automation-empty')`)
     await execute(`window.__visible = selector => Array.from(document.querySelectorAll(selector)).find(node => node.getClientRects().length > 0); undefined`)
+    if (process.env.AUTOMATION_TRANSITION) {
+      const openWorkflow = async () => {
+        await execute(`Array.from(document.querySelectorAll('.editor-workspace-header [role="tab"]')).find(tab => tab.textContent.trim() === 'Workflows').click()`)
+        await wait(`window.__automationRouter.currentRoute.value.name === 'project-workflows' && window.__visible('.group-conversation')?.getAttribute('aria-disabled') === 'false'`)
+      }
+      await wait(`window.__visible('.group-conversation')?.getAttribute('aria-disabled') === 'false'`)
+      await execute(`window.__workflowBefore = window.__visible('.workflow-manager'); window.__headerTop = window.__visible('.editor-workspace-header').getBoundingClientRect().top; undefined`)
+      const pendingLayout = async () => {
+        assert.equal(await execute(`!!window.__visible('.automation-empty')?.closest('.editor-group-content')`), true, 'Pending content belongs to an editor pane')
+        assert.equal(await execute(`window.__visible('.editor-workspace-header').getBoundingClientRect().top === window.__headerTop`), true, 'Pending content does not push the tab strip down')
+        assert.equal(await execute(`!!window.__visible('.workflow-manager')`), false, 'The same pane never shows the graph and pending conversation together')
+      }
+      await click('.group-conversation')
+      await wait(`window.__visible('.automation-empty')?.getAttribute('aria-busy') === 'true'`)
+      await frame()
+      await pendingLayout()
+      await execute(`Promise.all([fetch('/__fixture/release'), fetch('/__fixture/history')]).then(() => true)`)
+      await wait(`window.__automationRouter.currentRoute.value.params.sessionId === 'cron:run-0' && !!window.__visible('.chat-messages')`)
+      assert.equal(await execute(`document.querySelector('.automation-empty')`), null, 'The real conversation replaces the pending tab')
+      await openWorkflow()
+      await execute(`fetch('/__fixture/empty').then(() => true)`)
+      await click('.group-conversation')
+      await wait(`window.__visible('.automation-empty')?.innerText.includes('No saved runs yet')`)
+      await pendingLayout()
+      assert.equal(await selected(), undefined, 'Empty history does not create a session')
+      assert.equal(await execute(`!!window.__visible('.chat-workspace')`), false, 'An empty automation does not create a draft conversation')
+      assert.equal(await execute(`document.querySelector('.automation-info, .automation-projection')`), null, 'Empty workflows have no conversation configuration surfaces')
+      await noRunLayout()
+      await openWorkflow()
+      assert.equal(await execute(`window.__visible('.workflow-manager') === window.__workflowBefore`), true, 'Returning preserves the canvas instance')
+      assert.equal(await execute(`document.querySelector('.automation-empty')`), null, 'Returning to Workflows removes the temporary tab without remounting the canvas')
+      console.log('AUTOMATION_WORKSPACE_OK')
+      return
+    }
+    await wait(`!!document.querySelector('.automation-empty')`)
     await noRunLayout()
     // Direct run links can load details before the automation catalog. Persisted
     // fresh-run association must suppress focus without waiting for result fetches.
@@ -181,7 +215,13 @@ async function main() {
     await noRunLayout()
     assert.deepEqual(errors.filter(message => !message.includes('vite') && !message.includes('Electron Security Warning')), [], 'No Vue warnings or renderer errors')
     console.log('AUTOMATION_WORKSPACE_OK')
-  } finally { await execute('window.__disposeFixture?.()'); window.destroy() }
+  } catch (error) {
+    console.error('Automation renderer diagnostics:', errors.join('\n'))
+    throw error
+  } finally {
+    try { await execute('window.__disposeFixture?.(); undefined') }
+    finally { window.destroy() }
+  }
 }
 
 main().then(() => app.exit(0), error => { console.error(error); app.exit(1) })
