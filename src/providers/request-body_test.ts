@@ -121,3 +121,16 @@ test('protocol image statistics count actual blocks, not strings or tool argumen
   assert.deepEqual(prepared.stats, { bodyBytes: Buffer.byteLength(JSON.stringify(body)),
     wireBodyBytes: Buffer.byteLength(JSON.stringify(body)), contentEncoding: 'identity', imageCount: 4, imageBase64Bytes: 14 })
 })
+
+test('Responses image statistics include structured function outputs, not text or arguments', async () => {
+  const image = { type: 'input_image', image_url: 'data:image/png;base64,AQID' }
+  const body = { input: [
+    { type: 'function_call_output', call_id: 'call_1', output: [image] },
+    { type: 'function_call_output', call_id: 'call_2', output: JSON.stringify([image]) },
+    { type: 'function_call', call_id: 'call_3', arguments: JSON.stringify([image]) },
+  ] }
+  const prepared = await prepareRequestBody(body)
+  assert.equal(prepared.stats.imageCount, 1)
+  assert.equal(prepared.stats.imageBase64Bytes, 4)
+  assert.equal(prepared.body, JSON.stringify(body))
+})
