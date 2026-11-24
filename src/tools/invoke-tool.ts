@@ -1,3 +1,4 @@
+import { ChildMcpTool, setupChildBrowser } from '../mcp/remote-client.ts'
 import type { ExecutionContext } from './context.ts'
 import type { SessionTools } from './registry.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
@@ -13,7 +14,6 @@ export interface DynamicToolImporter {
     signal?: AbortSignal,
     cwd?: string,
     folderId?: string,
-    remoteWorkdir?: boolean,
   ): Promise<string | undefined>
 }
 
@@ -59,15 +59,23 @@ export class InvokeTool implements Tool<ToolResult> {
       if (!args.args || typeof args.args !== 'object' || Array.isArray(args.args) || Object.keys(args.args).length) {
         return 'Error: source initialization requires args: {}.'
       }
-      if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(args.source)) return 'Error: this source is unavailable from a remote workdir. Discover supported host-owned sources through v:tools/@sources__.'
       if (context.layerfsWorkdir && args.source !== 'layerfs') return 'Error: only the LayerFS maintenance source can be initialized from this workspace; no host source fallback.'
       return await this.importer?.initializeSource?.(args.source, args.args as Record<string, unknown>, context, true)
         ?? 'Error: unknown or unavailable source; read v:tools/@sources__ for initialization metadata.'
     }
     const name = typeof args.name === 'string' ? args.name : ''
     if (!name) return 'Error: name is required (or use source with args: {} for initialization)'
+    if (context.remoteWorkdir && name === 'browser_setup' && args.instance === undefined && args.args && typeof args.args === 'object' && !Array.isArray(args.args)) {
+      return setupChildBrowser(args.args as Record<string, unknown>, context)
+    }
+    const childTool = context.remoteWorkdir && context.tools.activeDynamicTools().find(tool => tool.name === name && tool instanceof ChildMcpTool)
+    if (childTool instanceof ChildMcpTool) {
+      if (!args.args || typeof args.args !== 'object' || Array.isArray(args.args) ||
+          (args.instance !== undefined && (!name.startsWith('chrome-devtools__') || args.instance !== childTool.binding))) return 'Error: invalid Child MCP arguments or browser instance.'
+      return context.tools.executeDynamic(name, args.args as Record<string, unknown>, context)
+    }
     if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {
-      return 'Error: this tool is unavailable from a remote workdir. Discover supported host-owned tools through v:tools; there is no Main execution fallback.'
+      return 'Error: remote workdirs support only built-in Project-Home session and Work tools through invoke_tool.'
     }
 
     if (context.layerfsWorkdir && !context.tools.activeDynamicTools().some(tool => tool.name === name && tool.supportsLayerFSWorkdir) && !this.importer?.canInvokeFromLayerFS?.(name)) {
@@ -99,7 +107,7 @@ export class InvokeTool implements Tool<ToolResult> {
     if (initialized !== undefined) return initialized
 
     if (this.importer) {
-      const result = await this.importer.importForInvocation(name, context.tools, context.signal, context.cwd, context.folderId, !!context.remoteWorkdir)
+      const result = await this.importer.importForInvocation(name, context.tools, context.signal, context.cwd, context.folderId)
       if (!context.tools.hasDynamic(name)) {
         if (result) return result.startsWith('Error') ? result : `Error: ${result}`
         return `Error: dynamic tool "${name}" is not active and could not be imported automatically. Search with handler "grep" and path "v:tools", then read matching paths for current tool IDs.`

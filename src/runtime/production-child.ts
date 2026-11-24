@@ -1,4 +1,11 @@
+import { SharedChrome } from '../browser/shared-chrome.ts'
+import { bundledChromeAdapter } from '../browser/chrome-adapter.ts'
+import { attachmentTarget } from '../browser/session-browsers.ts'
+import { McpConnection } from '../mcp/client.ts'
+import { createManagedDesktopConnection } from '../desktop-mcp/service.ts'
 import { homedir } from 'node:os'
+import { ChildMcpService } from '../mcp/child-service.ts'
+import { readChildMcpConfig, resolveChildMcpSource, resolveChildManagedMcpGrant } from '../mcp/child-config.ts'
 import { assertExecutionSupported } from '../execution/workdir-contracts.ts'
 import { RemoteLayerFSService } from '../execution/layerfs/remote-service.ts'
 import { RemoteLayerFSRuntimes } from '../execution/layerfs/remote-runtime.ts'
@@ -73,11 +80,42 @@ export async function startProductionChildRuntime(
   const pairingScope = createHash('sha256').update(JSON.stringify([
     new URL(config.mainEndpoint).href, reference.credentialId,
   ])).digest('hex')
+  const mcpConfig = await readChildMcpConfig(join(paths.dataDir, 'child-mcp.json'))
+  const registeredWorkdirs = config.workdirs ?? []
+  const grantedMcpWorkdirs = new Set(registeredWorkdirs.filter(binding => mcpConfig.some(grant =>
+    grant.pairingId === reference.credentialId && grant.workdirId === binding.workdirId && (grant.sources.servers.length > 0 || grant.browser || grant.desktop),
+  )).map(binding => binding.workdirId))
   const workdirs = new ManagedChildWorkdirs(
-    join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, config.workdirs ?? [],
-    homedir(), config.allowDeviceHome === true,
+    join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, registeredWorkdirs,
+    homedir(), config.allowDeviceHome === true, grantedMcpWorkdirs,
   )
   await workdirs.init()
+  const browsers = new Map<string, SharedChrome>()
+  const mcp = new ChildMcpService(async (request, source, _action, signal) => {
+    await workdirs.assertCanExecute(request, signal)
+    if (source === 'chrome-devtools' || source === 'agent-desktop') {
+      const { grant, cwd } = resolveChildManagedMcpGrant(mcpConfig, reference.credentialId, request, source, registeredWorkdirs)
+      const root = join(paths.dataDir, 'managed-mcp-v1', pairingScope, request.projectScope!)
+      const config = { name: source, transport: 'stdio' as const }
+      if (source === 'agent-desktop') {
+        return { config, managed: () => createManagedDesktopConnection(root) }
+      }
+      if (grant.browser) {
+        const choice = grant.browser
+        return { config, managed: async () => {
+          const adapter = bundledChromeAdapter()
+          let browser = browsers.get(root)
+          if (!browser) { browser = new SharedChrome(join(root, 'profiles')); browsers.set(root, browser) }
+          const endpoint = attachmentTarget(await browser.ensure(choice, signal))
+          const launch = { ...config, command: adapter.command, env: adapter.env,
+            args: [...adapter.args, '--page-id-routing', ...endpoint.arguments] }
+          return { config: launch, connection: new McpConnection(launch, adapter.cwd, cwd), receipt: browser.copyReport() }
+        } }
+      }
+      throw new Error('Child managed source not granted')
+    }
+    return resolveChildMcpSource(mcpConfig, reference.credentialId, request, source, registeredWorkdirs)
+  })
   const layerfsRuntimes = new RemoteLayerFSRuntimes(join(paths.dataDir, 'layerfs-project-services-v1', pairingScope), config.localNodeId, () => ({ online: connection === 'connected', epoch: connectionEpoch, pairingId: reference.credentialId }))
   const layerfsService = new RemoteLayerFSService({ nodeId: config.localNodeId, pairingId: reference.credentialId,
     directory: join(paths.dataDir, 'layerfs-service-receipts-v1', pairingScope),
@@ -93,7 +131,7 @@ export async function startProductionChildRuntime(
   const executor = new JournaledShellExecutor(new LocalExecutor(
     processManager,
     config.localNodeId,
-    [...workdirs.operationHandlers, layerfsService],
+    [...workdirs.operationHandlers, layerfsService, mcp],
     async (request, signal) => {
       if (request.operation === LAYERFS_REMOTE_OPERATION) {
         assertExecutionSupported(request, workdirs.workdirs, support())
@@ -180,10 +218,15 @@ export async function startProductionChildRuntime(
     : undefined
   runtime = startChildRuntime(config, {
     nodeIdentity: new CredentialIdentityService(validateCredential),
-    localExecutors: new LocalExecutorService(processManager, workdirs, () => layerfsRuntimes.close()),
+    localExecutors: new LocalExecutorService(processManager, workdirs, async () => { await Promise.all([layerfsRuntimes.close(), mcp.reset(), ...[...browsers.values()].map(browser => browser.shutdown())]) }),
     mainConnector: connector,
     localControl,
-  }, { connectionChanged: (state, error) => { if (connection !== state) connectionEpoch++; connection = state; connectionError = error } })
+  }, { connectionChanged: (state, error) => {
+    if (connection !== state) connectionEpoch++
+    connection = state
+    connectionError = error
+    if (state !== 'connected') void mcp.reset().catch(() => console.error('[child] MCP disconnect cleanup failed'))
+  } })
   if (localControl) {
     runtime.ready.then(() => localControl.markReady(), () => {})
   }

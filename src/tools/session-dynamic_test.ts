@@ -64,7 +64,7 @@ test('session lazy invocation preserves local, remote and execution-mode boundar
   tools.resetDynamic()
   await importer.updateMcpServers([{ name: 'session', transport: 'stdio', command: 'must-not-run' }])
   assert.equal(importer.canInvokeFromRemote('session'), false)
-  assert.match(await invoke({ action: 'create', topic: 'Shadowed' }), /unavailable from a remote workdir/)
+  assert.match(await invoke({ action: 'create', topic: 'Shadowed' }), /remote workdirs support only built-in/)
   await importer.updateMcpServers([])
   assert.equal(importer.canInvokeFromRemote('session'), true)
 })

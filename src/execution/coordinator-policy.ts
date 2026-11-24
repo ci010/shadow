@@ -1,3 +1,4 @@
+import { ChildMcpTool } from '../mcp/remote-client.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool, ToolResult } from '../tools/tool.ts'
 import type { ToolExecutionPolicy } from '../tools/registry.ts'
@@ -23,6 +24,9 @@ export class CoordinatorExecutionPolicy {
       return `Error: ${LOCAL_EXECUTOR_DISABLED} Executable MCP configuration writes are unavailable.`
     }
     if (this.allowed.has(tool)) return undefined
+    // Child adapters are target-bound and route through the Project executor;
+    // this exception cannot enable the local MCP adapter or local initialization.
+    if (context.remoteWorkdir && tool instanceof ChildMcpTool) return undefined
     if (this.remoteShells.has(tool) && (context.remoteWorkdir || context.layerfsWorkdir && this.remoteLayerFS?.(context.layerfsWorkdir.workspace))) return undefined
     return `Error: ${LOCAL_EXECUTOR_DISABLED} Tool "${tool.name}" is not available in the coordinator capability profile.`
   }

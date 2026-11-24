@@ -4,6 +4,17 @@ import type { McpServerConfig } from '../config/schema.ts'
 import { McpConnection, type McpToolInfo } from './client.ts'
 import { McpToolAdapter } from './adapter.ts'
 import { mcpReadOnlyPolicy } from './readonly.ts'
+import type { ExecutionContext } from '../tools/context.ts'
+
+test('Main MCP adapters reject Child turns before calling either transport', async t => {
+  const context = { remoteWorkdir: { nodeId: 'child', workdirId: 'registered' } } as ExecutionContext
+  for (const source of [config, { name: 'fixture', transport: 'streamable-http', url: 'https://example.invalid/mcp' } as const]) {
+    const connection = new McpConnection(source)
+    const call = t.mock.method(connection, 'callToolInContext', async () => 'unexpected Main invocation')
+    assert.match(String(await new McpToolAdapter(connection, tool).execute({}, context)), /Main-local/)
+    assert.equal(call.mock.callCount(), 0)
+  }
+})
 
 const config: McpServerConfig = { name: 'fixture', transport: 'stdio', command: 'never-run' }
 const tool: McpToolInfo = { name: 'get_record', description: 'Read a record', inputSchema: { type: 'object' } }

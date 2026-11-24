@@ -491,7 +491,7 @@ export class SessionTools extends Tools {
     }
     // Only our own directory schemas carry this exact property object. MCP
     // tools with a business field named folder must retain their own contract.
-    if (tool.parameters.properties.workspace === executionTargetParameters.workspace) {
+    if (tool.parameters.properties?.workspace === executionTargetParameters.workspace) {
       try { args = workspaceArguments(args) }
       catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}` }
     }

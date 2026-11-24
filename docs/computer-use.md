@@ -15,17 +15,19 @@ allowlist; Shadow and browser windows are not excluded. Application content goes
 to the configured model and can be retained in normal tool history. Do not rely
 on the removed transient-observation/redaction behavior.
 
-Host-device authorization, Main local-executor enablement and role permissions
-remain in force. The source requires the owning Web conversation. It explicitly
-operates **Main's desktop**, even when a Child workspace is selected. It cannot
-operate the Child desktop, and it is not available on a coordinator with Main
-execution disabled. Consequential actions still use the existing user confirmation
-flow. OS permission changes and system dependency installation are never automatic.
-Browser MCP is a separate Main-host service.
+Host-device authorization, local-executor enablement and role permissions remain
+in force. The source requires an owning Web conversation. For a selected Child
+workdir, the Child operator must explicitly grant `desktop: true` for that
+pairing, Project, and workdir; the official binary runs on that Child. See
+[Child MCP grants](tools-and-automations.md). A remote folder cannot silently
+operate Main's desktop. Consequential actions still use the
+existing user confirmation flow before execution. OS permission changes and
+system dependency installation are never automatic. Browser MCP behavior is
+unchanged and remains independently available.
 
 ## Cancellation and uncertainty
 
-All official tool calls share a host-wide FIFO desktop lock across Projects.
+All official tool calls share a host-wide FIFO desktop lock across Projects on the executing device.
 Cancellation sends the official request cancellation; unknown dispatched results
 are never replayed. EOF alone is not cancellation because official MCP drains
 in-flight work. The host bounds direct-child shutdown, using Unix TERM followed

@@ -385,6 +385,42 @@ Current remote support is deliberately limited:
 
 - UTF-8 text and directory `read`, and the existing text overwrite/edit/append
   `write`, use the existing workdir filesystem operations.
+- Ordinary MCP can run on a selected, explicitly configured Child workdir.
+  The Child operator creates `child-mcp.json` in the Child runtime data directory
+  and restarts the Child. This file is local to the Child and may contain
+  credentials; protect it like the Child's other private configuration. Its
+  format is an array of grants, each with `pairingId` (the Child credential ID
+  for the active Main pairing), `projectScope` (the runtime's
+  32-character `managedProjectScope(projectId)` value), `workdirId` (a statically configured
+  Child workdir ID), and `sources` (a name-to-server map using the ordinary
+  stdio, SSE or streamable HTTP MCP configuration format). An absent file
+  disables this capability. Main must also have access to that exact workdir.
+  Use `invoke_tool` with `source` and empty `args` to discover contracts, then
+  invoke the exact returned names. Main sends only the configured source name,
+  binding and tool arguments, never launch options or MCP credentials. Session
+  reset releases connections; disconnect or 30 minutes idle invalidates them.
+  Reset the session tools before reinitializing a stale ordinary binding.
+- To authorize managed tools, put the optional fields on the **same unique
+  grant** for that pairing, Project and workdir (`sources` can be omitted):
+  - `desktop: true` enables the bundled official `agent-desktop` on Child.
+    Initialize it from an authorized owning Web conversation with
+    `invoke_tool` (`source: "agent-desktop", args: {}`). It accesses the Child’s
+    logged-in desktop, subject to OS permissions and the usual consequence
+    confirmations. See [desktop use](computer-use.md).
+  - `browser` selects an explicitly approved local profile. Fields are
+    `browser` (`chrome`, `edge`, `brave`, or `chromium`), `executablePath` and
+    `userDataDir` (absolute **Child** paths, with `userDataDir` the profile
+    root), and `profileDirectory` (`Default` or `Profile N`). Confirm copying
+    that profile and granting Project-wide browser access before creating the
+    grant. `invoke_tool` with `name: "browser_setup"` and `args: {action:
+    "discover"}` checks the grant without copying or launching. `connect`
+    uses a Child-local managed copy and runs `list_pages`; subsequent calls
+    can include the returned `instance`. `close` requires the instance and
+    releases the adapter, not the shared browser. Child runtime shutdown
+    stops the browser; the sensitive copy remains. Remote `managed` path
+    overrides, `attach`, and `autoConnect` are not supported.
+  There is no Main fallback. Child MCP results have a 1 MiB JSON transfer limit;
+  large screenshots or other outputs may exceed it even when the action completes.
 - OS `exec` uses the existing bounded remote process protocol. Its existing
   lifecycle/time-limit/permission restrictions are unchanged. Call-mode remote
   OS-shell execution and remote background execution remain unsupported.
@@ -1054,13 +1090,6 @@ can exceed the request deadline even on a healthy connection. For idle checks,
 record state/time and inspect later with a short call, rather than sleeping
 inside one RPC. MCP-declared text errors retain their JSON envelope and explicit
 failure status.
-Selecting a Child workspace routes workspace operations to that Child; it does
-not move host services. The built-in browser MCP and `agent-desktop` target Main
-even with a Child selected, provided Main execution and the tool's normal access
-checks permit the call. Browser connections from Child workdirs advertise no
-workspace file root (the adapter's own temporary storage still applies). Ordinary
-MCP configuration files and workspace scripts do not gain a Main fallback.
-
 Use `browser_setup(action: "connect")` as the idempotent everyday entry. It reuses
 this session's binding or binds the approved Project managed choice; after a managed
 crash it restores the same copy. Multiple bindings require `instance`. With no approved

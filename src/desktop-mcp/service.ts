@@ -10,7 +10,7 @@ import type { SessionTools } from '../tools/registry.ts'
 import { verifyAgentDesktopAssets, agentDesktopDirectory } from '../../scripts/agent-desktop-integrity.ts'
 import { DesktopStdioTransport } from './transport.ts'
 
-export const DESKTOP_DESCRIPTION = 'Official agent-desktop MCP v1.2.0. Targets the Main host even with a Child workdir selected. Broad logged-in-user desktop access: applications, screenshots, input, clipboard and application launch within host OS permissions; NOT isolated to a bound window and NOT excluding Shadow/browser windows. Use only task-relevant content, obtain existing consequence confirmations before consequential operations, and never replay an unknown outcome. Source initialization only discovers official tools. Guide: v:skills/computer-use.'
+export const DESKTOP_DESCRIPTION = 'Official agent-desktop MCP v1.2.0. Broad logged-in-user desktop access: applications, screenshots, input, clipboard and application launch within host OS permissions; NOT isolated to a bound window and NOT excluding Shadow/browser windows. Use only task-relevant content, obtain existing consequence confirmations before consequential operations, and never replay an unknown outcome. Source initialization only discovers official tools. Guide: v:skills/computer-use.'
 
 /** One gate per physical host process, shared across every Project/conversation.
  * No API silently clears uncertainty. An operator must establish an idle desktop
@@ -103,9 +103,9 @@ export function managedDesktopSource(projectId: string, workspace: string,
   const command = join(agentDesktopDirectory(root, process.platform, process.arch), process.platform === 'win32' ? 'agent-desktop.exe' : 'agent-desktop')
   const authorize = (context: ExecutionContext) => {
     context.signal.throwIfAborted()
-    if (!enabled || context.projectId !== projectId || context.channel !== 'web'
+    if (!enabled || context.projectId !== projectId || context.remoteWorkdir || context.channel !== 'web'
       || context.tools.dynamicOwner !== context.tools || context.tools.executionMode !== 'session') {
-      throw new ToolNoEffectError('Desktop MCP targets Main and requires host-device authorization in the owning web conversation; no Child desktop or borrowed execution.')
+      throw new ToolNoEffectError('Desktop MCP requires host-device authorization in the owning local web conversation; no remote-device/Main fallback or borrowed execution.')
     }
     if (!context.tools.canUseDynamic('agent-desktop')) {
       throw new ToolNoEffectError('Desktop MCP is unavailable for this role')
@@ -124,7 +124,6 @@ export function managedDesktopSource(projectId: string, workspace: string,
     }
   }
   return { config: { name: 'agent-desktop', description: DESKTOP_DESCRIPTION, transport: 'stdio' as const, command },
-    supportsRemoteWorkdir: true,
     managed: {
       authorize,
       configuration: async (tools: SessionTools) => {
@@ -143,4 +142,18 @@ export function managedDesktopSource(projectId: string, workspace: string,
       }),
     },
   }
+}
+
+/** Child-owned managed desktop launch; paired workdir admission is checked by the caller. */
+export async function createManagedDesktopConnection(root: string) {
+  const assetsRoot = fileURLToPath(new URL('../../', import.meta.url))
+  desktopDeviceGate.assertReady()
+  await verifyAgentDesktopAssets(assetsRoot)
+  const id = randomUUID()
+  const home = join(root, 'desktop-mcp', id)
+  await mkdir(home, { recursive: true, mode: 0o700 })
+  const command = join(agentDesktopDirectory(assetsRoot, process.platform, process.arch), process.platform === 'win32' ? 'agent-desktop.exe' : 'agent-desktop')
+  const config = { name: 'agent-desktop', transport: 'stdio' as const, command,
+    args: ['--session', id, 'mcp'], env: { AGENT_DESKTOP_HOME: home, AGENT_DESKTOP_AGENT_ID: id } }
+  return { config, connection: new DesktopConnection(config, desktopDeviceGate) }
 }

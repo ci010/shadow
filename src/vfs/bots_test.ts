@@ -385,7 +385,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const sessions = new SessionManager({ workspace, store, provider, bus, tools,
         agentTypes: { resolve: (name: string) => ({ name, description: '', prompt: '', source: 'builtin', defaultMode: 'session' }), allNames: () => ['general'] } as unknown as AgentTypesManager,
         handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
-        context: { buildSystemPrompt: async () => 'Synthetic continuation fixture.' },
+        context: { buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic continuation fixture.', sections: [] }) },
         getLlmRuntimeConfig: () => ({ model: 'fixture', temperature: 0, contextWindow: 128000 }),
       } as unknown as SessionManagerDeps)
       const state: SessionState = { sessionId: 'web:owner', projectId: 'p', segmentIndex: 0, mode: 'session' }

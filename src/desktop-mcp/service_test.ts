@@ -91,7 +91,7 @@ test('host local-device and role admission precede startup; binding cannot move 
   const ctx = context()
   source.managed.authorize(ctx)
   assert.throws(() => source.managed.authorize({ ...ctx, sessionId: 'web:other' }), /binding mismatch/)
-  assert.throws(() => source.managed.authorize({ ...context(), channel: 'telegram' }), /host-device authorization/)
+  assert.throws(() => source.managed.authorize({ ...context(), remoteWorkdir: {} as never }), /host-device authorization/)
   assert.throws(() => managedDesktopSource('p', '/tmp', () => {}, false).managed.authorize(context()), /host-device authorization/)
   const denied = context()
   denied.tools = new SessionTools(new Tools('/tmp'), '/tmp', ['read'])

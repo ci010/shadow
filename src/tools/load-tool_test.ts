@@ -56,13 +56,12 @@ test('adapter defense rejects selected-page tools and missing/malformed page IDs
   validateChromeCall({ ...config, name: 'generic' }, { ...page, name: 'select_page' }, {})
 })
 
-test('remote invocation admits only the exact host-owned typed LayerFS factory, never general factories or MCP', async () => withTempWorkspace(async home => {
+test('remote invocation admits the exact host-owned LayerFS factory without initializing Main factories', async () => withTempWorkspace(async home => {
   let loads = 0, effects = 0, forbidden = 0
   const contract = { name: 'layerfs_doctor', description: 'fixture typed service', supportsRemoteWorkdir: true, supportsLayerFSWorkdir: true, parameters: { type: 'object' as const, properties: {}, additionalProperties: false }, execute: async () => { effects++; return 'target fixture' } }
   const entries = new Map<string, LoadableEntry>([
     ['layerfs', { contracts: [contract], factory: async () => { loads++; return [contract] } }],
     ['untrusted', { contracts: [{ ...contract, name: 'untrusted_doctor' }], factory: async () => { forbidden++; throw Error('untrusted factory executed') } }],
-    ['generic', { config: { name: 'generic', transport: 'stdio', command: 'never-run' }, supportsRemoteWorkdir: true }],
   ])
   const importer = new ImportTool(entries, home, 'p')
   const base = new Tools(home); const invoke = new InvokeTool(importer); base.register(invoke)
@@ -74,10 +73,7 @@ test('remote invocation admits only the exact host-owned typed LayerFS factory, 
   assert.equal(await invoke.execute({ name: 'layerfs_doctor', args: {} }, context), 'target fixture')
   assert.equal(effects, 1)
   assert.match(String(await invoke.execute({ source: 'untrusted', args: {} }, context)), /unavailable/)
-  assert.match(String(await invoke.execute({ name: 'untrusted_doctor', args: {} }, context)), /unavailable from a remote workdir/)
-  assert.match(String(await invoke.execute({ source: 'generic', args: {} }, context)), /unavailable from a remote workdir/)
-  assert.match(String(await invoke.execute({ name: 'generic__ping', args: {} }, context)), /unavailable from a remote workdir/)
-  assert.match(await importer.execute({ source: 'untrusted.json' }, context), /unavailable from a remote workdir/)
+  assert.match(String(await invoke.execute({ name: 'untrusted_doctor', args: {} }, context)), /remote workdirs support/)
   assert.equal(forbidden, 0)
   entries.set('layerfs', { contracts: [contract], factory: async () => { forbidden++; throw Error('replaced builtin') } })
   assert.equal(importer.canInvokeFromRemote('layerfs_doctor'), false)
