@@ -1474,7 +1474,6 @@
   "Deletion was not confirmed. Refresh the catalog before retrying.": "删除未获确认。请刷新列表后重试。",
   "Delivery": "投递",
   "Delivery may already have reached the session. Retrying can start a duplicate turn.": "消息可能已到达会话。重试可能启动重复的轮次。",
-  "Delivery unconfirmed": "投递未确认",
   "Dependencies:": "依赖：",
   "Depends on:": "依赖：",
   "Description": "描述",
