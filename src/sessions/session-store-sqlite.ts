@@ -556,13 +556,19 @@ export class SqliteSessionStore implements SessionStore {
 
   async *readSessionLog(
     sessionId: string,
+    options?: { strict?: boolean },
   ): AsyncIterable<Record<string, unknown>> {
     const rows = this.db.prepare('SELECT data FROM session_logs WHERE session_id = ? ORDER BY seq ASC').iterate(sessionId) as Iterable<{ data: string }>
+    let found = false
     for (const row of rows) {
       try {
-        yield JSON.parse(row.data) as Record<string, unknown>
-      } catch { /* skip malformed */ }
+        const record = JSON.parse(row.data) as Record<string, unknown>
+        if (options?.strict && (!record || typeof record !== 'object' || Array.isArray(record))) throw new Error('Invalid session log record')
+        found = true
+        yield record
+      } catch (error) { if (options?.strict) throw error }
     }
+    if (options?.strict && !found) throw new Error('Missing or empty session log')
   }
 
   /** Archive admission is strict: never delete source rows that were silently skipped. */

@@ -11,7 +11,7 @@ import type { BotHostScope } from './host-contract.ts'
 const scope: BotWorkScope = { projectId: 'project-a', botId: 'helper', bindingKey: 'qq:connection:group-a',
   revision: 'release-1', sessionId: 'host-selected-session', sourceInputId: 'platform-message-1' }
 const create = { action: 'create', idempotencyKey: 'issue-7', title: 'Investigate report',
-  definition: { objective: 'Assess the untrusted external report' } }
+  definition: 'Assess the untrusted external report' }
 function fixture(t: TestContext, limits?: { works?: number; supplements?: number }) {
   const home = resolve('src/bots', `.work-test-${randomUUID()}`)
   let store = new InitiativeStore(home)
@@ -31,12 +31,15 @@ test('Bot intake is shared pending Work with host provenance, no owner, assignme
   const record = f.store.workRecords()[0]!
   assert.equal(record.key, receipt.key)
   assert.equal(record.origin, 'agent_interpretation')
-  assert.deepEqual(record.definition.evidence, [])
-  assert.deepEqual(record.workflow, { title: create.title, manager: null, assignee: null,
-    assignmentRevision: 1, status: 'pending', dependencies: [] })
+  assert.equal(record.definition, create.definition)
+  assert.equal(record.title, create.title)
+  assert.equal(record.manager, null)
+  assert.equal(record.assignee, null)
+  assert.equal(record.assignmentRevision, 1)
+  assert.equal(record.status, 'pending')
+  assert.deepEqual(record.dependencies, [])
   assert.deepEqual(f.store.workSessionKeys(scope.sessionId), [])
-  assert.deepEqual(f.store.workAuthority(record.subject), { manager: null, executor: null, active: true })
-  assert.equal(record.requestSource, undefined)
+  assert.deepEqual(f.store.workAuthority(record.key), { manager: null, executor: null, active: true })
   assert.equal(record.botSource?.projectId, scope.projectId)
   assert.equal(record.botSource?.botId, scope.botId)
   assert.equal(record.botSource?.bindingKey, scope.bindingKey)
@@ -54,7 +57,7 @@ test('creation retries survive restart and normalization without changing proven
   const original = f.store.workRecords()[0]!
   f.reopen()
   assert.deepEqual(f.execute({ ...create, title: ` ${create.title} `,
-    definition: { ...create.definition, acceptance: [], boundaries: [] } },
+    definition: create.definition },
   { ...scope, revision: 'release-2', sessionId: 'new-host-session', sourceInputId: 'new-input' }), first)
   assert.deepEqual(f.store.workRecords(), [original])
   assert.equal(f.store.workHistory(first.key).length, 1)
@@ -80,8 +83,8 @@ test('append retries are durable, conflict-safe and cannot mutate current Work a
   const f = fixture(t)
   const { key } = f.execute(create)
   const initial = f.store.workRecords()[0]!
-  const assigned = { ...initial, sequence: 2, revision: 2, definition: { objective: 'Private owner plan', acceptance: [], boundaries: [], evidence: [] },
-    workflow: { ...initial.workflow!, manager: 'local-owner', assignee: 'local-worker', status: 'in_progress' as const } }
+  const assigned = { ...initial, sequence: 2, revision: 2, definition: 'Private owner plan',
+    manager: 'local-owner', assignee: 'local-worker', status: 'in_progress' as const }
   f.store.saveWork(assigned, 1, 'local-owner', 'assignment')
   const input = { action: 'append', key, idempotencyKey: 'follow-up', content: 'More untrusted information' }
   const first = f.execute(input)
@@ -89,7 +92,10 @@ test('append retries are durable, conflict-safe and cannot mutate current Work a
   assert.equal(saved.sequence, 3)
   assert.equal(saved.revision, assigned.revision)
   assert.deepEqual(saved.definition, assigned.definition)
-  assert.deepEqual(saved.workflow, assigned.workflow)
+  assert.equal(saved.assignee, assigned.assignee)
+  assert.equal(saved.manager, assigned.manager)
+  assert.equal(saved.status, assigned.status)
+  assert.equal(saved.assignmentRevision, assigned.assignmentRevision)
   assert.equal(saved.changedBy, assigned.changedBy)
   assert.equal(saved.botSource!.supplements.length, 1)
   f.reopen()
@@ -98,12 +104,12 @@ test('append retries are durable, conflict-safe and cannot mutate current Work a
   assert.throws(() => f.execute({ ...input, content: 'Changed content' }), /conflicts/)
   const query = f.execute({ action: 'query', key })
   assert.equal(query.items[0].status, 'in_progress')
-  assert.equal(query.items[0].definition.objective, create.definition.objective)
+  assert.equal(query.items[0].definition, create.definition)
   assert.equal(query.items[0].supplements[0].content, input.content)
   const text = JSON.stringify(query)
   for (const privateValue of ['local-owner', 'local-worker', 'Private owner plan', scope.sessionId, scope.sourceInputId])
     assert.ok(!text.includes(privateValue), `query leaked ${privateValue}`)
-  assert.deepEqual(f.execute({ action: 'query', key: 'work:unknown' }), { items: [], total: 0 })
+  assert.deepEqual(f.execute({ action: 'query', key: 'work:9e637181-7533-5a72-b1bd-12cadb60d692' }), { items: [], total: 0 })
 })
 
 test('strict inputs reject foreign authority, oversized content and invalid actions before any writes', t => {
@@ -111,8 +117,8 @@ test('strict inputs reject foreign authority, oversized content and invalid acti
   for (const field of ['manager', 'assignee', 'status', 'sessionId', 'workspace', 'parentKey', 'projectId', 'botSource', 'sourceInputId'])
     assert.throws(() => f.execute({ ...create, [field]: 'forged' }))
   for (const input of [
-    { ...create, definition: { ...create.definition, evidence: [{ kind: 'user' }] } },
-    { ...create, title: 'x'.repeat(161) }, { ...create, definition: { objective: 'x'.repeat(4001) } },
+    { ...create, definition: { objective: create.definition, evidence: [{ kind: 'user' }] } },
+    { ...create, title: 'x'.repeat(161) }, { ...create, definition: 'x'.repeat(8001) },
     { ...create, idempotencyKey: '' }, { action: 'assign', assignee: scope.sessionId },
     { action: 'query', limit: 51 }, { action: 'query', offset: -1 }, { action: 'query', sessionId: 'other' },
     { action: 'append', key: 'a', idempotencyKey: 'a', content: 'x'.repeat(4001) },
@@ -148,20 +154,19 @@ test('query pagination is bounded and repeated bridge instances observe the same
 
 test('query byte budget paginates large definitions and returns only five latest supplements', t => {
   const f = fixture(t)
-  const definition = { objective: 'x'.repeat(4000), acceptance: Array(12).fill('a'.repeat(1500)),
-    boundaries: Array(12).fill('b'.repeat(1500)) }
+  const definition = '测'.repeat(8000)
   let firstKey = ''
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 16; i++) {
     const { key } = f.execute({ ...create, idempotencyKey: `large-${i}`, definition })
     if (i === 0) firstKey = key
   }
   for (let i = 0; i < 6; i++) f.execute({ action: 'append', key: firstKey, idempotencyKey: `note-${i}`, content: `Note ${i}` })
   const page = f.execute({ action: 'query', limit: 50 })
-  assert.ok(page.items.length > 0 && page.items.length < 8)
+  assert.ok(page.items.length > 0 && page.items.length < 16)
   assert.equal(page.nextOffset, page.items.length)
   assert.ok(Buffer.byteLength(JSON.stringify(page)) < 257_000)
   const rest = f.execute({ action: 'query', offset: page.nextOffset })
-  assert.equal(page.items.length + rest.items.length, 8)
+  assert.equal(page.items.length + rest.items.length, 16)
   const single = f.execute({ action: 'query', key: firstKey }).items[0]
   assert.equal(single.supplementCount, 6)
   assert.deepEqual(single.supplements.map((note: { content: string }) => note.content), ['Note 1', 'Note 2', 'Note 3', 'Note 4', 'Note 5'])

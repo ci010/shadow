@@ -26,7 +26,7 @@ arguments. Data stays in Project Home even with a remote workdir.
 | --- | --- |
 | `project_conventions` | Query; guarded insert, update and delete |
 | `convention_history` | Read-only append-only audit, including deleted records and source evidence |
-| `work_items` | Read-only current Work projection, including parent, assignment, objective, acceptance and boundaries |
+| `work_items` | Read-only current Work projection, including parent, assignment, Markdown definition, kind, Markdown summary and structured artifacts |
 | `work_dependencies` | Read-only current Work dependency edges |
 
 Work projections are temporary snapshots rebuilt from `InitiativeStore` for

@@ -34,7 +34,7 @@ test('Issue import is unassigned, explicitly accepted, idempotent and survives a
     const first = await f.service.importIssue(issue.id, issue.sourceHash, githubDefinition)
     const again = await f.service.importIssue(issue.id, issue.sourceHash, githubDefinition)
     assert.equal(first.key, again.key)
-    assert.equal(first.workflow?.assignee, null)
+    assert.equal(first.assignee, null)
     assert.deepEqual(first.definition, githubDefinition)
     assert.equal(f.delivered.length, 0)
     f.store.update(state => { state.links = []; state.imports[0].workKey = undefined })
@@ -71,7 +71,7 @@ test('exact write previews are required, reject remote/Work changes and publish 
     assert.equal(f.works.workEffects().length, 0)
     const stale = await f.service.prepare(input)
     await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
-      { definition: { ...githubDefinition, objective: 'New agreement' } })
+      { definition: 'New agreement' })
     await assert.rejects(f.service.execute(stale.id), /Work changed/)
     assert.equal(f.remote.comments.length, 1)
   } finally { await f.close() }
@@ -91,16 +91,16 @@ test('unknown writes block duplicate publication and Work completion until marke
     await assert.rejects(f.service.execute(preview.id), /cannot be replayed/)
     await assert.rejects(f.service.prepare(input), /unresolved/)
     await assert.rejects(f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
-      { status: 'done', notes: { summary: 'Verified' } }), /effect|operation|unresolved/i)
+      { status: 'done', summary: 'Verified' }), /effect|operation|unresolved/i)
     assert.equal(f.alignment.get(f.work.key).sequence, 1, 'Rejected completion must not mutate the note')
-    assert.notEqual(f.alignment.get(f.work.key).workflow?.status, 'done')
+    assert.notEqual(f.alignment.get(f.work.key).status, 'done')
     const reconciled = await f.service.reconcile(preview.id)
     assert.equal(reconciled.status, 'reconciled')
     assert.equal(f.remote.comments.length, 1)
     assert.equal(f.works.workEffects().length, 0)
     await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
-      { status: 'done', notes: { summary: 'Verified after reconciliation' } })
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'done')
+      { status: 'done', summary: 'Verified after reconciliation' })
+    assert.equal(f.alignment.get(f.work.key).status, 'done')
     f.store.update(state => { state.operations[0].status = 'sending' })
     assert.equal(new GitHubStore(home).read().operations[0].status, 'unknown')
   } finally { await f.close() }
@@ -123,10 +123,10 @@ test('PR creation binds exact remote branches, and inline replies use the origin
     const reply = await f.service.prepare({ kind: 'reply', resourceId: 'PR_2', workKey: f.work.key, commentId: 20, body: 'Covered by the focused regression.' })
     await f.service.execute(reply.id)
     assert.ok(f.requests.some(request => request.method === 'POST' && request.path === 'repos/octo/demo/pulls/2/comments/20/replies'))
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'pending')
+    assert.equal(f.alignment.get(f.work.key).status, 'pending')
     f.remote.pull.merged = true
     await f.service.refresh('PR_2')
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'pending', 'Merged is not locally accepted')
+    assert.equal(f.alignment.get(f.work.key).status, 'pending', 'Merged is not locally accepted')
   } finally { await f.close() }
 }))
 
@@ -138,11 +138,11 @@ test('Issue closure observes local completion and never cancels or finishes Work
     const close = { kind: 'close_issue' as const, resourceId: 'I_1', workKey: f.work.key, reason: 'completed' as const }
     await assert.rejects(f.service.prepare(close), /completion gate/)
     await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
-      { status: 'done', notes: { summary: 'Acceptance verified' } })
+      { status: 'done', summary: 'Acceptance verified' })
     const preview = await f.service.prepare(close)
     await f.service.execute(preview.id)
     assert.equal(f.remote.issue.state_reason, 'completed')
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'done')
+    assert.equal(f.alignment.get(f.work.key).status, 'done')
   } finally { await f.close() }
 }))
 
@@ -161,7 +161,7 @@ test('subscriptions deliver changed snapshots only to their bound session and st
     assert.deepEqual(f.delivered[0].audienceSessionIds, ['worker'])
     assert.equal(f.delivered[0].delivery?.urgency, 'queue')
     assert.match(f.delivered[0].content!, /not an instruction or approval/)
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'pending')
+    assert.equal(f.alignment.get(f.work.key).status, 'pending')
     f.remote.failDelivery = true
     f.remote.reviews[0].state = 'CHANGES_REQUESTED'
     await f.service.refresh('PR_2'); await f.service.refresh('PR_2')
@@ -224,10 +224,10 @@ test('closing rechecks all linked Work and existing previews cannot bypass an un
     await f.service.configureRepository('octo/demo', true, true)
     await f.service.link(f.remote.issue.html_url, f.work.key)
     await f.alignment.editNote({ kind: 'user' }, f.work.key, 1,
-      { status: 'done', notes: { summary: 'Acceptance verified' } })
+      { status: 'done', summary: 'Acceptance verified' })
     const closure = await f.service.prepare({ kind: 'close_issue', resourceId: 'I_1', workKey: f.work.key, reason: 'completed' })
     await f.alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-      { title: 'Additional required work', assignee: null, definition: githubDefinition, reason: 'Additional acceptance is now required' })
+      { title: 'Additional required work', assignee: null, definition: githubDefinition })
     const additional = f.works.workRecords().find(work => work.key !== f.work.key)!
     await f.service.link(f.remote.issue.html_url, additional.key)
     assert.equal((await f.request(`/operations/${closure.id}/execute`, { confirm: true })).status, 409)

@@ -2,7 +2,7 @@
 
 Work is an optional shared notebook. Conversations and execution do not require
 Work records. Current reads use `v:works`; typed dynamic `work_create`, `work_update`,
-`work_assign`, `work_review` and `work_link` mutations reuse `WorkAlignment`;
+`work_assign`, `work_review`, `work_link` and `work_note_create` mutations reuse `WorkAlignment`;
 SQL projections are read-only. Note completion, execution activity and human
 acceptance remain separate facts.
 
@@ -17,8 +17,9 @@ Version 6 stores complete records in `work_contracts`, audit events in
 `work_contract_events`, effect references in `work_effects`, temporary task/call bindings in
 `work_execution_bindings` (legacy `work_focus` is read only for restored temporary lineage), and historical conversation associations in `work_session_links`.
 Presentation observations and snapshots remain in `work_observations` and
-`project_focus_summary`. Existing current record keys are immutable, including
-keys whose persisted prefix is `initiative:`, `item:` or `topic:`.
+`project_focus_summary`. Persisted Work identity is its immutable `work:<uuid>`
+key. Session topics and presentation observations are separate; they never
+confer Work authority. Obsolete Work identifiers and subject fields are rejected.
 
 New databases create only current Work tables. Current version-6 files may
 contain unused historical tables; they are not read, imported or deleted.
@@ -58,15 +59,16 @@ subscribe sessions. A necessary recipient outside supported routing can receive
 one direct actionable message referencing the Work, without duplicating an
 already-routed notification. No new subscription API is introduced here.
 
-- summary/plan/next/artifacts and ordinary in_progress updates are silent.
-- Entering done or blocked routes one notice to the Work manager, not the session parent. A blocked transition plus attention in one write produces one manager fact.
-- New unreviewed attention reports a material coordination issue. `awaitingResponse: true` means the executor is waiting; old omitted values are nonwaiting. Identical repeated unreviewed attention preserves its version/identity.
-- `work_review` records a conclusion and optional `record | return_to_assignee` disposition. Waiting attention defaults to return; other reviews default to record. Review never changes blocked/status, assignment or authorization. Returned execution must read latest Work; no ack protocol exists.
-- Goal changes notify affected active descendants for reassessment; release warns the previous executor without cancelling running operations. Reassessment reviews retire obsolete context notices.
+- Routine summary/artifact and in_progress updates are silent. Entering done or blocked can notify the Work manager, not the session parent. Trusted automatic host blockers use publisher-help instead of a duplicate ordinary blocker notice.
+- Goal changes notify affected active descendants for reassessment; release warns the previous executor without cancelling running operations. `work_review` takes the current version and a conclusion, refreshes a stale ancestor basis, and retires obsolete context notices. It is not a reply and does not change status, assignment or authorization.
+- `work_note_create` appends a Markdown comment (`WorkNote {id, workKey, author, createdAt, body, replyTo?}`). The host stamps the canonical durable Project session and UTC time. Only the current assignee posts originals; only the current manager replies to an original on the same Work. Replies are new rows, not edits. Comments don't change the Work or confer permission, settle a question, or unblock anything.
+- Originals are silent unless `notifyManager: true`, which targets only the manager at commit. A reply targets the original author, even after reassignment. If the recipient is missing, ineligible or the author, the comment still saves with `not_queued`. Manager-directed pending notices expire when the manager changes; they neither follow the manager role nor revive if an old manager returns. Replies remain historical and are not retargeted.
 
-An additive `work_notifications` delivery-fact table is written in the same transaction as Work, without rewriting legacy records or changing the v6 boundary. It is an internal delivery ledger, not another approval or task system. Delivery/settlement writes produce no Work events. Historical Work is not backfilled into wake events at upgrade.
+`work_notes` and the existing `work_notifications` delivery ledger are separate Project SQLite tables. Comment and queued notice commit together. Notes are retained with their Work, without TTL, silent eviction, or a comment-count cap. Pre-existing attention is not imported; legacy attention and return notices stop being pending while existing history is retained. A notice links to the exact comment; it does not carry its Markdown body. `queued` is not delivered, read, accepted, or approved.
 
-SessionManager admits at most one Work wake marker per recipient. `next-step` uses the existing input queue and safe checkpoints rather than aborting current inference; consumption merges all currently pending facts. Before appending anything, it checks current assignment generations, manager/assignee, status episode, attention/review identity and ancestor basis. Ended/reassigned/reviewed/reopened episodes are discarded. done reopening and blocked clearing expire the old facts atomically, so subsequent completion/blocking is a new episode. Manager null, manager=assignee and mutation-source=self never invent a recipient or self-wake.
+Read `v:works/keys/<encoded-key>/comments` for the latest ten by append order, follow `next` for older pages, or use `/comments/id/<id>` for an exact read. Comments are visible to Project Work readers, not private messages; broad discovery and Work overviews do not include their bodies. This slice has no Web comment composer.
+
+SessionManager admits at most one Work wake marker per recipient. `next-step` uses safe input boundaries rather than aborting inference. Consumption revalidates pending facts against current routing and assignment/status/ancestor episodes, or exact comment relationships as applicable. Ordinary notice admission does not bypass the automatic kickoff inbox.
 
 Facts remain pending if the responsible durable session is unavailable, retired, in explicit recovery or cannot admit input. Recovery is attempted on runtime startup, later Work changes and ordinary input admission; there is no polling or LLM retry loop. Temporary task/call executions are not reopened as coordinators. Issues remain visible in notes even without a usable coordinator; no human approval is synthesized.
 
@@ -75,19 +77,20 @@ A physical-log delivery stamp is saved before append. Settlement happens only af
 ## Retired Work execution channels
 
 Current Work actions are `context/list/tree/create/update/assign/review/link`.
-Versioned notebook update, assignment and impact review use their dedicated
+Versioned notebook update, assignment and ancestor reassessment use their dedicated
 methods; the legacy generic `execute` mutation routes are removed. Work-specific
 adoption, checkpoint, proposal approval/application/recovery, and fresh/successor
 context lifecycles no longer execute. Ordinary `ask` decisions, task review,
 conversation realignment and context clearing remain independent capabilities.
 
 The current strict record schema/type has no `adoption`, `checkpoint`,
-`transition`, `answerReview`, `handoffFrom`, `successors` or `proposals`.
-`parseStoredWorkRecord` omits exactly these top-level keys at database read
-boundaries, then validates all current fields strictly. Arbitrary unknown keys
-and corrupt current fields still fail. Current writes reject retired keys.
-Historical audit payloads omit the same top-level keys but preserve other audit
-details; they are partial historical facts, not current Work records. Effect and
+`transition`, `answerReview`, `handoffFrom`, `successors`, `proposals` or
+`attention`. The existing storage adapter omits only the older execution keys
+at database read boundaries, then validates current fields strictly. There is
+no new compatibility adapter for `attention`: a current Work row carrying that
+field is unsupported and fails validation without rewriting the row. Current
+writes reject retired keys. Historical audit data remains historical, including
+attention if it was recorded there. Effect and
 persisted decision stamps omit only retired `adoptionId`; current stamp writes
 remain strict. Existing stored JSON is not rewritten by this compatibility read.
 
@@ -99,17 +102,21 @@ other segments remain separate. No startup proposal application or successor
 creation remains. Resolving a goal change now requires a new ordinary decision
 in its current context and an independently authorized notebook update.
 
-Retained fields include definition/acceptance/boundaries/evidence, attribution
-(`origin`, `requestSource`, `changedBy/At`, `change`, `reason`), `paused` (automatic
-execution preflight), workflow status/blocked metadata/results, parent/dependency
-relations, manager/assignee and assignment generations, notes/attention/basis,
-record revision/sequence, creation idempotency, Bot intake, automatic execution
-receipts and presentation observation. They still serve current notebook,
-authority, scheduling, reporting or compatibility behavior; a historical-sounding
-name alone is not grounds for deletion. Completion/read receipts remain separate.
+Work `definition` is one non-empty Markdown string (at most 8,000 characters
+once line endings and outer whitespace are normalized). Its prose may describe
+an outcome, acceptance, boundaries and known source evidence; no headings are
+required or interpreted programmatically. Prior structured Work definitions and
+retired record fields are not supported or migrated. Attribution remains in
+`origin`, `changedBy` and `changedAt`. Work fields are flat: `title`, `kind`,
+`definition`, `summary`, `artifacts`, ancestry and dependency keys, `status`,
+`blockedReason`, manager/assignee and assignment revision.
+`basis` and the reassessment conclusion are maintained by the host. There is no `workflow` or `notes`
+wrapper. A title-only edit advances the sequence, not the semantic revision.
+Bot intake, automatic execution receipts and presentation observations remain
+independent structured records. Completion/read receipts remain separate.
 Overview wire data no longer exposes adoption/proposal/reinterpretation flags or
 applied-proposal influence links; ordinary decision context/reference history is
-retained. No current visual design or layout is changed.
+retained. Work details display the Markdown definition as one document, separate from progress notes.
 
 ## Identity and input
 
@@ -127,9 +134,15 @@ are unsupported. A failure leaves stored records and conversation history intact
 
 ## Integrity and authority
 
-Writes use transactions and expected record sequences. Work identities cannot
+Writes use transactions and expected record sequences. A normalized definition
+change advances the semantic revision; a routine report edit does not. Only the
+human may semantically revise human-authored Work. A completion summary reports
+an outcome through non-empty `summary`; Work does not generate a separate
+result or evidence record from the definition. Work identities cannot
 change during replacement. Parent/completion cycles and missing references are
-rejected. Audit entries and assignment admission receipts persist with the Work.
+rejected. Audit entries and assignment admission receipts persist with the Work. A keyed
+creation stores its normalized-request fingerprint and Work key in a separate
+Project SQLite receipt, in the same transaction as creation. There is no backfill.
 Only current Work tables are allowed by the SQLite engine authorizer; file
 attachment, arbitrary schema changes, external databases and extension loading
 are denied. This database boundary is not an OS sandbox.
@@ -191,7 +204,7 @@ Work data and mocked unrelated integrations, never a copied user profile.
 ## Single unfinished assignment
 
 Each durable session may be assignee of at most one unfinished Work in this Project.
-Pending, in_progress and blocked all occupy the slot, including paused Work.
+Pending, in_progress and blocked all occupy the slot.
 Done/cancelled keep their historical assignee without occupying the slot. Managers
 and historical links may cover many Work records and never supply a default scope.
 `saveWork` checks new admissions, reassignment, reopening and automatic claims inside

@@ -30,7 +30,7 @@ export function microAppReceipt(record: ReturnType<MicroApps['get']>) {
     id: record.id, revision: record.revision, name: record.manifest.name, createdBy: record.createdBy,
     status: record.status, model: record.model ?? null, calls: record.calls, llm: record.manifest.llm,
     lastRun: record.lastRun, cleanupPending: record.cleanupPending, acceptanceAvailable: record.acceptanceAvailable,
-    workRefs: record.work?.map(work => ({ key: work.key, revision: work.revision, acceptanceCount: work.acceptance.length })),
+    workRefs: record.work?.map(work => ({ key: work.key, revision: work.revision })),
     acceptanceSummary: acceptance ? {
       id: acceptance.id, revision: acceptance.revision, status: acceptance.status, decision: acceptance.decision,
       error: acceptance.error, authorTurn: acceptance.authorTurn, sequence: acceptance.sequence,

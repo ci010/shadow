@@ -252,12 +252,16 @@ export class ConversationArchive {
       }
     }
     const hasArchive = (id: string) => this.has(id)
-    store.readSessionLog = async function* (id) {
-      if (!await hasArchive(id)) { yield* read(id); return }
+    store.readSessionLog = async function* (id, options) {
+      if (!await hasArchive(id)) { yield* read(id, options); return }
       let offset = 0
       while (true) {
         const page = await store.readArchivedLogRange!(id, offset, 128)
-        if (!page) { yield* read(id); return }
+        if (!page) {
+          if (options?.strict) throw new Error('Archived session log is unavailable')
+          yield* read(id, options); return
+        }
+        if (options?.strict && !page.records.length) throw new Error('Archived session log is empty or incomplete')
         yield* page.records; offset += page.records.length
         if (offset >= page.total) return
       }

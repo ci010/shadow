@@ -263,7 +263,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const physicalId = physicalSessionId(state)
     const records = new YieldRecords(store, id => id === state.sessionId ? state : undefined)
     const current = { ...request(state.sessionId), origin: { physicalId },
-      workStamps: [{ key: 'work:fixture', revision: 1, assignmentRevision: 2 }] }
+      workStamps: [{ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 1, assignmentRevision: 2 }] }
     try {
       await store.appendRawEvents(physicalId, [{ yield_decision: { version: 1, request: {
         ...current, workStamps: [{ ...current.workStamps[0], adoptionId: { obsolete: true } }],

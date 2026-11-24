@@ -1,12 +1,12 @@
 import { z } from 'zod'
 import { t } from './i18n.ts'
-import { workRecordSchema } from '../../src/initiatives/work-contract.ts'
+import { workRecordObjectSchema, validateWorkReport } from '../../src/initiatives/work-contract.ts'
 
-const agreementSchema = workRecordSchema.extend({
+const agreementSchema = workRecordObjectSchema.extend({
   contextChanged: z.boolean().optional(),
   authority: z.object({ manager: z.string().nullable(), executor: z.string().nullable(), active: z.boolean() }),
   history: z.array(z.object({ kind: z.string(), actor: z.string(), at: z.string(), data: z.unknown() })),
-})
+}).superRefine(validateWorkReport)
 const viewSchema = z.object({
   selected: z.string().optional(),
   records: z.array(agreementSchema),

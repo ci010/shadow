@@ -1,3 +1,5 @@
+import { workKeySchema } from '../../src/initiatives/work-key.ts'
+
 /** Canonical actionable references are Markdown, not a second message schema. */
 export function referenceLabel(text: string): string {
   return text.replace(/[\r\n\u0000-\u001f]+/g, ' ').replace(/[&\\`*_{}\[\]()<>!|"]/g, char => `&#${char.charCodeAt(0)};`)
@@ -17,6 +19,7 @@ export function contentReference(href: string): ContentReference | undefined {
     const projectId = decodeURIComponent(match[2]!)
     const id = decodeURIComponent((match[3] ?? match[4])!)
     if (!projectId || !id || /[\/\\\u0000-\u001f\u007f]/.test(projectId + id)) return undefined
+    if (!match[3] && !workKeySchema.safeParse(id).success) return undefined
     return { kind: match[3] ? 'session' : 'work', projectId, id, href: match[1]! }
   } catch { return undefined }
 }

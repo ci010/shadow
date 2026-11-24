@@ -1,3 +1,4 @@
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { InitiativeStore } from '../initiatives/store.ts'
@@ -20,15 +21,13 @@ export function botWorkScope(scope: BotHostScope, sourceInputId: string): BotWor
   return { projectId: scope.projectId, botId: scope.botId, bindingKey, revision: scope.revision, sessionId: scope.sessionId, sourceInputId }
 }
 const retryKey = z.string().trim().min(1).max(200)
-// External content is data, not evidence of human authorization. In particular,
-// the evidence field of the ordinary Work API is not exposed here.
-const definition = workDefinitionSchema.omit({ evidence: true })
+// External Markdown is data, not evidence of human authorization.
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('create'), idempotencyKey: retryKey,
-    title: z.string().trim().min(1).max(160), definition }).strict(),
-  z.object({ action: z.literal('query'), key: z.string().max(600).optional(),
+    title: z.string().trim().min(1).max(160), definition: workDefinitionSchema }).strict(),
+  z.object({ action: z.literal('query'), key: workKeySchema.optional(),
     offset: z.number().int().min(0).max(1000).default(0), limit: z.number().int().min(1).max(50).default(20) }).strict(),
-  z.object({ action: z.literal('append'), key: z.string().min(1).max(600),
+  z.object({ action: z.literal('append'), key: workKeySchema,
     idempotencyKey: retryKey, content: z.string().trim().min(1).max(4000) }).strict(),
 ])
 function canonical(value: unknown): string {
@@ -40,7 +39,8 @@ const fingerprint = (value: unknown) => createHash('sha256').update(canonical(va
 
 /** Narrow external intake into the existing Project Work store, not a second inbox.
  * This bridge grants no generic WorkAlignment authority. Creation has no manager,
- * executor, focus link, initial message or automatic pickup. Host must revalidate
+ * executor, focus link or initial message. The normal Project dispatcher may
+ * consider the Work later if enabled. Host must revalidate
  * deployment/binding authorization before each call. One Project runtime owns the
  * store; synchronous read/modify/save plus store sequence CAS prevents lost edits.
  */
@@ -73,7 +73,7 @@ export class BotWork {
       for (const record of selected.slice(input.offset, input.offset + input.limit)) {
         const item = {
           key: record.key, title: record.botSource!.title, definition: record.botSource!.definition,
-          status: record.workflow?.status ?? 'pending',
+          status: record.status,
           // This is a bounded orientation view, not a bulk history export.
           supplementCount: record.botSource!.supplements.length,
           supplements: record.botSource!.supplements.slice(-5).map(({ id, content, at }) => ({ id, content, at })),
@@ -95,15 +95,13 @@ export class BotWork {
       if (records.length >= this.limits.works) throw new WorkConflict('Bot Work source quota exceeded.')
       const id = randomUUID(), at = new Date().toISOString()
       const record: WorkRecord = {
-        key: `work:${id}`, subject: { kind: 'work', id }, revision: 1, sequence: 1,
-        definition: { ...input.definition, evidence: [] }, origin: 'agent_interpretation',
-        changedBy: actor, changedAt: at, change: 'understanding', paused: false,
-        reason: 'Untrusted external BOT intake; not human authorization or an assignment.',
-        creationRequest: { creator: actor, key: input.idempotencyKey, fingerprint: hash },
-        workflow: { title: input.title, manager: null, assignee: null, assignmentRevision: 1,
-          status: 'pending', dependencies: [] },
+        key: `work:${id}`, revision: 1, sequence: 1,
+        definition: input.definition, kind: 'task', summary: '', artifacts: [], basis: [], origin: 'agent_interpretation',
+        changedBy: actor, changedAt: at,
+        title: input.title, manager: null, assignee: null, assignmentRevision: 1,
+        status: 'pending', dependencies: [],
         botSource: { ...scope, idempotencyKey: input.idempotencyKey, fingerprint: hash,
-          title: input.title, definition: { ...input.definition, evidence: [] }, supplements: [] },
+          title: input.title, definition: input.definition, supplements: [] },
       }
       this.store.saveWork(record, 0, actor, 'bot_intake', { source: scope, untrusted: true })
       return { status: 'created', key: record.key }

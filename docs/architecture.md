@@ -970,12 +970,13 @@ normal save persists the current metadata. New requests still reject the retired
 kind and unknown kinds remain invalid.
 The **Project workbench** is a Project view, not a session.
 Its default canvas is an expandable causal outline of goals, approaches, tasks
-and findings, with current notes, optional read-only HTML exhibits and native
+and findings, with current Markdown summaries and native
 questions anchored at the affected goal. The lower technical origin stays
 available on demand. A Work-grouped board and parent/dependency graph
 remain alternate views. Discussing a premise opens an ordinary Web conversation
-with an editable draft, not an automatic message. Work details and GitHub use a
-resizable side panel.
+with an editable draft, not an automatic message. Each Work item opens in its
+own editor tab, including existing `/projects/:projectId/board?work=...` links.
+The Board remains a separate tab, and GitHub still uses a resizable side panel.
 On wide containers the side panel's left separator supports
 dragging and keyboard resizing (arrows, Home/End), retaining the preferred width
 across panel switches and temporary container shrinkage. It reserves at least
@@ -1622,7 +1623,7 @@ Work is an optional shared notebook of goals and related notes. Read
 `v:works/overview`, then `v:works/index` for compact receipts (20 per page;
 follow `next`) or `v:works/context` for the conversation's associated keys.
 `v:works/keys/<encodeURIComponent(key)>` returns the current definition, notes,
-authority, assignment delivery and ancestor path; append `/definition`, `/notes`
+authority, assignment delivery and ancestor path; append `/definition`, `/summary`
 or `/path` for focused reads. Search uses the existing VFS search interface;
 broad discovery includes only the first 20 records and reports incompleteness.
 Follow index pages or narrow to an exact key. No full history or retired fields
@@ -1880,22 +1881,32 @@ schemas by default. Mutations return compact receipts. Inference gets a bounded
 goal-path/current-state index, not full notes, HTML, schema dumps or every event.
 Full detail is an explicit read. `list/tree` derive indexes and Work progress.
 
-Ordinary changes invalidate the Project live-state UI, without sending messages
-to agents. Material notes.attention wakes the controller once while impact review
-is pending. Goal/assignment changes notify affected durable assignees and retire
-stale questions. A newly created peer receives its linked note before kickoff
-without an extra assignment-triggered turn. These are post-save notifications,
-not an atomic distributed transaction: failure explicitly reports saved data and
-failed delivery, and no durable notification retry queue is provided.
+Ordinary Work updates invalidate the Project live-state UI without waking agents.
+Entering done or blocked can notify the manager; goal or assignment changes
+notify affected durable assignees and retire stale questions. Automatic host
+blockers retain their separate publisher-help delivery. An atomic automatic
+assignment and kickoff inbox prevents ordinary notices from overtaking the first
+accepted kickoff.
+
+`work_note_create` appends a separate Markdown comment, not a Work update. An
+original by the current assignee is silent unless explicitly sent to the current
+manager. A manager reply points to an original on the same Work and notifies
+that author, even after reassignment. The comment and any queued notice commit
+in one Project transaction. A changed manager expires an undelivered original
+notice, without forwarding it. Delivery rechecks pending facts and reconciles
+the stamped JSONL/SQLite history after restart. Notifications contain exact VFS
+links, not comment bodies. Read comments with bounded pages under the exact
+Work key. Posting, replying and delivery do not settle an Ask, unblock Work or
+grant permission.
 
 Host-owned ancestor revision snapshots leave a descendant **not yet reassessed**
 when an upstream premise changes. Local edits do not erase this marker. An
-explicit version-checked `review` records the controller/human conclusion and
+explicit version-checked `work_review` records the controller/human conclusion and
 the current ancestry. This is an impact assessment, never operation approval.
 No parent polling loop or required worker reporting cadence was introduced.
 
 `ask` can carry an originating workKey and ancestor decisionKey; the host resolves
-their root-to-origin path, titles, objectives, relation types and provenance.
+their root-to-origin path, titles, Markdown definitions and provenance.
 One unambiguous assignment/focus can supply a default path, but notes are not
 required to ask. The canvas positions native questions at decisionKey, exposing
 lower technical detail on demand. A user can change the ancestor rather than
@@ -1922,14 +1933,12 @@ The mounted overview retains its last snapshot while hidden, without keeping its
 live subscription. Visibility changes preserve same-question drafts; reopening
 must fetch the current question before an answer is enabled. A changed Project,
 session or question identity clears the old draft.
-The note editor pins its write version and retains a draft on conflict; reloading
-the latest note or review basis is explicit. HTML is sanitized and rendered in
-an opaque empty-sandbox iframe with CSP blocking scripts, network, forms and
-navigation, with no privileged bridge. It is a read-only exhibit, not a Micro App
-or another authorization surface.
+The impact review pins its write version and retains its draft on conflict.
+Work details show the definition and shared summary as sanitized Markdown, with
+raw HTML disabled. Transient planning stays in the conversation.
 
 Micro App publication separately captures the selected/unambiguous goal path's
-version-bound acceptance criteria; removal of general inference Work stamps
+version-bound Markdown definitions; removal of general inference Work stamps
 does not drop that report baseline. Explicit owner continuation for author testing
 and the owning integration's uncertain-operation recovery remain separate. Apps
 open directly after publication without a separate execution approval.
@@ -1961,8 +1970,8 @@ the local plan and never sends an ordinary chat message to impersonate an edit.
 These controls enforce provenance, version boundaries and answer authority,
 not semantic understanding. The regression provider is deterministic; passing
 tests does not establish live-model alignment reliability or autonomous remote
-job cancellation. Routine reports archive by default, while important attention
-events still wake their recipient; content classification remains a model duty.
+job cancellation. Routine progress and comments are silent by default. Targeted notices follow
+explicit comment options or the defined Work transitions.
 
 The `write` tool returns a compact receipt after the filesystem operation
 completes, with mode, line-change counts and an edit ID when recorded. Source

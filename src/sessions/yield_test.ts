@@ -24,8 +24,8 @@ test('a goal change during journal persistence prevents publication of the now-s
       write: async record => { if (record.closed) closed.push(record.closed.reason) },
     },
   })
-  const waiting = manager.ask('root', { ...question(), workContext: { originKey: 'goal', decisionKey: 'goal', path: [
-    { key: 'goal', revision: 1, title: 'Release impact', objective: 'Measure token usage', kind: 'goal', origin: 'human' },
+  const waiting = manager.ask('root', { ...question(), workContext: { originKey: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', decisionKey: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', path: [
+    { key: 'work:5dbee63b-d9ae-591d-b89c-c4502e582fff', revision: 1, title: 'Release impact', definition: 'Measure token usage', kind: 'goal', origin: 'human' },
   ] } }, signal())
   const rejected = assert.rejects(waiting, /goal path changed while opening/)
   assert.equal(manager.get('root'), null)

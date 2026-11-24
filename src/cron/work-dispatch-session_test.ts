@@ -34,7 +34,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await store.init()
     const bus = new Bus(), tools = new Tools(home)
     let inferences = 0, executions = 0, accepted = 0
-    let raceKey: string | undefined, raceDependency: string | undefined, raceMode: 'cancelled' | 'paused' | 'dependency' | 'abort-during-verify' | 'abort-during-context' | undefined
+    let raceKey: string | undefined, raceDependency: string | undefined, raceMode: 'cancelled' | 'dependency' | 'abort-during-verify' | 'reassigned' | undefined
     let raceController: AbortController | undefined, verificationCalls = 0
     let hold = false, holdEntered = false, identityFails = false
     tools.register({ name: 'step', description: 'Synthetic step', parameters: { type: 'object', properties: {} }, execute: async (_args, context) => {
@@ -64,28 +64,28 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       workdirLookup: () => ({ node: 'online', workdir: { online: true, path: isolated } }),
       backgroundTasks: { listTasks: () => [] },
       agentTypes: { resolve: (name: string) => name === 'general' ? { name, description: '', prompt: '', source: 'builtin', defaultMode: 'session', allowedTools: ['step'] } : undefined },
-      context: { buildSystemPrompt: async () => {
+      context: { buildSystemPromptDetails: async () => {
         if (raceKey && raceMode) {
-          if (raceMode === 'abort-during-context') raceController!.abort(new Error('cancelled during Session preparation'))
-          else if (raceMode === 'dependency') {
+          if (raceMode === 'dependency') {
             const record = initiatives.workRecords().find(item => item.key === raceKey)!
             initiatives.saveWork({ ...record, sequence: record.sequence + 1,
-              workflow: { ...record.workflow!, dependencies: [raceDependency!] } }, record.sequence, 'user', 'admission_dependency_race')
+              dependencies: [raceDependency!] }, record.sequence, 'user', 'admission_dependency_race')
           }
-          else if (raceMode === 'paused' || raceMode === 'cancelled') {
+          else if (raceMode === 'cancelled' || raceMode === 'reassigned') {
             const record = initiatives.workRecords().find(item => item.key === raceKey)!
             initiatives.saveWork({ ...record, sequence: record.sequence + 1,
-              ...(raceMode === 'paused' ? { paused: true } : { workflow: { ...record.workflow!, status: 'cancelled' } }) }, record.sequence, 'user', 'admission_race')
+              ...(raceMode === 'cancelled' ? { status: 'cancelled' as const } : { assignee: 'work-executor:historical',
+                assignmentRevision: record.assignmentRevision + 1, automaticExecution: undefined }) }, record.sequence, 'user', 'admission_race')
           }
           raceKey = undefined
         }
-        return 'Synthetic system prompt'
+        return { systemPrompt: 'Synthetic system prompt', sections: [] }
       } },
       handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
       getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128000, temperature: 0 }),
     } as unknown as SessionManagerDeps)
     const initiatives = new InitiativeStore(home, { isSessionKnown: id => !!manager.getSessionState(id) })
-    const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), evidence: async () => {},
+    const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id),
       changed: (record, previous) => manager.notifyWorkChange(record, previous), })
     manager.alignment = alignment
     const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source', maxConcurrent: 1, inferenceRequests: 2, toolCalls: 2 })
@@ -94,8 +94,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       verify: async (_config, _id, _execution, signal) => {
         if (identityFails) throw new Error('Isolated Git identity changed')
         verificationCalls++
-        if (raceMode === 'abort-during-verify' && verificationCalls === 2) {
-          assert.equal(signal, raceController!.signal, 'the admission recheck must retain the original Cron/host signal')
+        if (raceMode === 'abort-during-verify' && verificationCalls === 1) {
+          assert.equal(signal, raceController!.signal, 'pre-commit verification must retain the original Cron/host signal')
           raceController!.abort(new Error('cancelled during admission identity verification'))
         }
       },
@@ -110,7 +110,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const legacyId = 'work-executor:historical'
       await store.saveState(legacyId, { sessionId: legacyId, projectId: 'fixture', segmentIndex: 0,
         mode: 'session', agentType: 'general', folderId: 'isolated', workdir: localFolderWorkdirRef('isolated'),
-        automaticWork: { key: 'work:historical', jobId: WORK_DISPATCH_ID, limits: config },
+        automaticWork: { key: 'work:ad71b681-6627-5feb-a94e-beb1d8152bbf', jobId: WORK_DISPATCH_ID, limits: config },
         automation: { jobId: WORK_DISPATCH_ID, name: 'Work auto-dispatch', runId: legacyId,
           startedAt: new Date().toISOString(), contextMode: 'fresh', config: { source: 'cron', schedule: 'every 60s', agentType: 'general' } },
       })
@@ -132,46 +132,47 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const job = { ...WORK_DISPATCH_AUTOMATION, program: config, id: WORK_DISPATCH_ID, createdAt: new Date().toISOString() }
       await dispatcher.dispatch(job, new AbortController().signal)
       assert.equal(inferences, 0)
-      await manager.buildSession('work-executor:unbound', undefined, { mode: 'session', agentType: 'general', automaticWork: { key: 'work:unbound', jobId: WORK_DISPATCH_ID, limits: config } })
+      await manager.buildSession('work-executor:unbound', undefined, { mode: 'session', agentType: 'general', automaticWork: { key: 'work:8da08c12-7908-594d-87e6-a380fd60f0c1', jobId: WORK_DISPATCH_ID, limits: config } })
       await assert.rejects(manager.deliver('work-executor:unbound', { id: 'unsafe', kind: 'message', policy: 'queue', timestamp: new Date().toISOString(),
         source: { kind: 'event', eventId: 'unsafe', source: 'system', type: 'test' }, content: 'Must not execute in source or session data directory' }), /prepared isolated Workspace|no longer admissible/)
       await assert.rejects(manager.bindAutomaticWorkWorkspace('work-executor:unbound', 'foreign-project-folder'), /another Project/)
       assert.equal(inferences, 0)
-      for (const action of ['cancelled', 'paused', 'dependency', 'abort-during-verify', 'abort-during-context'] as const) {
+      for (const action of ['cancelled', 'dependency', 'abort-during-verify', 'reassigned'] as const) {
         const raced = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-          { title: `Synthetic ${action} during manager preparation`, definition: { objective: 'Do not infer after cancellation or pause' }, assignee: null }) as WorkRecord
+          { title: `Synthetic ${action} during manager preparation`, definition: 'Do not infer after cancellation', assignee: null }) as WorkRecord
         if (action === 'dependency') {
           const prerequisite = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-            { title: 'Unfinished explicit prerequisite', definition: { objective: 'Prevent dependent inference' }, assignee: null }) as WorkRecord
-          initiatives.saveWork({ ...prerequisite, sequence: prerequisite.sequence + 1, paused: true }, prerequisite.sequence, 'user', 'fixture_paused')
+            { title: 'Unfinished explicit prerequisite', definition: 'Prevent dependent inference', assignee: null }) as WorkRecord
+          await alignment.editNote({ kind: 'user' }, prerequisite.key, prerequisite.sequence, { status: 'cancelled' })
           raceDependency = prerequisite.key
         }
         raceKey = raced.key; raceMode = action; raceController = new AbortController(); verificationCalls = 0
-        await dispatcher.dispatch(job, raceController.signal)
+        if (action === 'abort-during-verify') {
+          await assert.rejects(dispatcher.dispatch(job, raceController.signal), /cancelled during admission identity verification/)
+          assert.equal(alignment.get(raced.key).assignee, null)
+        } else {
+          await dispatcher.dispatch(job, raceController.signal)
+          await until(() => raceKey === undefined && !manager.isSessionBusy(alignment.get(raced.key).assignee!))
+          const record = alignment.get(raced.key)
+          if (action === 'cancelled') assert.equal(record.status, 'cancelled')
+          if (action === 'reassigned') assert.equal(record.assignee, legacyId)
+          if (action === 'dependency') assert.equal(initiatives.workKickoff(record.automaticExecution!.inputId)?.state, 'pending')
+        }
         assert.equal(inferences, 0)
         assert.equal(accepted, 0)
-        if (action === 'cancelled') assert.equal(alignment.get(raced.key).workflow?.status, 'cancelled')
-        else if (action === 'paused') assert.equal(alignment.get(raced.key).paused, true)
-        else if (action === 'dependency') {
-          assert.equal(alignment.get(raced.key).workflow?.status, 'blocked')
-          assert.match(alignment.get(raced.key).workflow!.blockedReason!, /dependency/)
-        }
-        else {
-          assert.equal(raceController.signal.aborted, true)
-          assert.equal(alignment.get(raced.key).workflow?.status, 'blocked')
-          assert.ok(alignment.get(raced.key).workflow?.assignee)
-        }
+        const record = alignment.get(raced.key)
+        if (record.status !== 'cancelled') await alignment.editNote({ kind: 'user' }, record.key, record.sequence, { status: 'cancelled' })
       }
       raceMode = undefined; raceKey = undefined; raceController = undefined
       const work = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-        { title: 'Synthetic automatic task', definition: { objective: 'Verify execution limits' }, assignee: null }) as WorkRecord
+        { title: 'Synthetic automatic task', definition: 'Verify execution limits', assignee: null }) as WorkRecord
       await dispatcher.dispatch(job, new AbortController().signal)
-      await until(() => alignment.get(work.key).workflow?.status === 'blocked')
-      const final = alignment.get(work.key), id = final.workflow!.assignee!
-      assert.equal(accepted, 1, 'notifyWorkChange must not bypass the dispatcher write-ahead first-admission barrier')
+      await until(() => alignment.get(work.key).status === 'blocked')
+      const final = alignment.get(work.key), id = final.assignee!
+      assert.equal(accepted, 1, 'notifyWorkChange must not bypass the durable kickoff first-admission boundary')
       assert.equal(inferences, 2)
       assert.equal(executions, 2)
-      assert.match(final.workflow!.blockedReason!, /maximum number of iterations/)
+      assert.match(final.blockedReason!, /maximum number of iterations/)
       const state = manager.getSessionState(id)!
       assert.equal(state.mode, 'session')
       assert.equal(state.agentType, 'general')
@@ -186,15 +187,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.match(alignment.prompt(id), /retain responsibility/i)
       hold = true
       const second = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-        { title: 'Synthetic capacity occupant', definition: { objective: 'Hold the one execution slot' }, assignee: null }) as WorkRecord
+        { title: 'Synthetic capacity occupant', definition: 'Hold the one execution slot', assignee: null }) as WorkRecord
       await dispatcher.dispatch(job, new AbortController().signal)
       await until(() => holdEntered)
       await assert.rejects(manager.resumeSession(id, state.recovery!.id, true), /capacity is occupied/,
         'ordinary Session recovery must use the same controller, not bypass the automatic recovery endpoint')
-      const secondCurrent = alignment.get(second.key), secondId = secondCurrent.workflow!.assignee!
+      const secondCurrent = alignment.get(second.key), secondId = secondCurrent.assignee!
       assert.equal(await dispatcher.cancel(), true)
-      await until(() => !manager.isSessionBusy(secondId) && alignment.get(second.key).workflow?.status === 'blocked')
-      assert.equal(alignment.get(second.key).workflow?.assignee, secondId)
+      await until(() => !manager.isSessionBusy(secondId) && alignment.get(second.key).status === 'blocked')
+      assert.equal(alignment.get(second.key).assignee, secondId)
       identityFails = true
       await assert.rejects(manager.resumeSession(id, state.recovery!.id, true), /Git identity changed/,
         'ordinary Session recovery must reverify the actual isolated Git identity')

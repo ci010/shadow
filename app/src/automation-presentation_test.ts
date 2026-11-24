@@ -7,7 +7,7 @@ test('retired observer is not a readable live automation', () => {
 })
 
 test('organizer manifest and plain finish remain readable while arbitrary payloads stay secondary', () => {
-  const input = automationPresentation('{"mode":"delta","manifest":[{"key":"internal-key","title":"Navigation","objective":"Fix menus"}],"instruction":"SECRET"}', true, 'system:work-organizer')
+  const input = automationPresentation('{"mode":"delta","manifest":[{"key":"internal-key","title":"Navigation","definition":"Fix menus"}],"instruction":"SECRET"}', true, 'system:work-organizer')
   assert.deepEqual(input.map(field => field.text), ['delta', 'Navigation', 'Fix menus'])
   assert.equal(automationPresentation('Organized two topics; one remains partial.', false, 'system:work-organizer')[0].text, 'Organized two topics; one remains partial.')
   assert.deepEqual(automationPresentation('{broken', false, 'system:work-organizer'), [])

@@ -614,7 +614,7 @@ export function sessionsApiPlugin(
         const visible = sessions.alignment.records(id)
         if (body.action === 'create') {
           const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(),
-            notes: z.unknown().optional(), reason: z.string().optional() }).strict().parse(body.data)
+            kind: z.unknown().optional(), summary: z.unknown().optional(), artifacts: z.unknown().optional() }).strict().parse(body.data)
           if (data.parentKey && !visible.some(record => record.key === data.parentKey)) return c.json({ error: 'forbidden' }, 403)
           body.data = { ...data, assignee: id }
         } else if (!visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)

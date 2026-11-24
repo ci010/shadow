@@ -2,7 +2,7 @@ import type { ProjectWorkOverview } from '../../src/projects/work-overview.ts'
 import { projectTopics, projectFocusGroups } from './project-topic-history.ts'
 import type { YieldDecisionRecord } from '../../src/sessions/yield-contract.ts'
 export type OverviewNode = { id: string; title: string; kind: string; at: string; authority: string; evidence: string; workKey?: string; sessionId?: string; detail?: string; status?: string; parentId?: string }
-export type OverviewEdge = { from: string; to: string; kind: 'hierarchy' | 'dependency' | 'precedence' | 'context' | 'reference' | 'reconsiders' | 'relation' | 'causal'; evidence: string }
+export type OverviewEdge = { from: string; to: string; kind: 'hierarchy' | 'dependency' | 'precedence' | 'context' | 'reference' | 'reconsiders' | 'causal'; evidence: string }
 /** References provide context, not proof of causal impact. Dates only order events. */
 export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionRecord[] = []) {
   if (data.focus?.presentationVersion === 1 || data.focus?.result.groups.some(group => group.cards !== undefined)) {
@@ -50,11 +50,11 @@ export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionR
   const hidden = new Set(data.items.filter(item => childSessions.has(item.observation?.sessionId ?? item.assignee ?? '') || !!item.observation && !!item.parentKey && item.origin !== 'human').map(item => item.key))
   const items = data.items.filter(item => !hidden.has(item.key))
   const nodes: OverviewNode[] = items.map(item => ({ id: item.key, parentId: item.parentKey ?? undefined, title: item.title,
-    kind: item.notes?.kind ?? (item.parentKey ? 'task' : 'goal'), at: item.changedAt,
+    kind: item.kind ?? (item.parentKey ? 'task' : 'goal'), at: item.changedAt,
     authority: item.origin === 'human' ? 'human' : 'agent_interpretation', workKey: item.key, status: item.status ?? undefined,
     sessionId: item.observation?.sessionId ?? item.assignee ?? undefined,
     evidence: item.observation ? item.observation.sources.map(source => `${source.physicalId}/${source.id}`).join(', ') : `${item.key} v${item.sequence}`,
-    detail: item.notes?.summary ?? item.objective }))
+    detail: item.summary || item.definition }))
   for (const session of data.sessions) if (session.assignable && !data.items.some(item => item.key === session.workKey || session.workKeys?.includes(item.key) || item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId)) {
     nodes.push({ id: `session:${session.sessionId}`, title: session.title, kind: 'topic', at: session.lastActivityAt ?? '', authority: 'session_derived', sessionId: session.sessionId, evidence: 'Conversation identity and explicit metadata; no inferred Work association.', detail: session.focus || session.topic || session.description || session.activity, status: session.completed ? 'completed' : session.activity })
   }
@@ -62,10 +62,9 @@ export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionR
   for (const item of items) {
     if (item.parentKey) edges.push({ from: item.parentKey, to: item.key, kind: 'hierarchy', evidence: `${item.key} parentKey` })
     for (const dependency of item.dependencies) edges.push({ from: dependency, to: item.key, kind: 'dependency', evidence: `${item.key} dependencies` })
-    if (item.parentKey && item.notes?.relation) edges.push({ from: item.key, to: item.parentKey, kind: 'relation', evidence: `${item.notes.relation.kind}: ${item.notes.relation.reason}` })
-    if (item.notes?.summary) {
+    if (item.summary) {
       const id = `report:${item.key}`
-      nodes.push({ id, parentId: item.key, title: item.notes.summary, kind: 'result', at: item.changedAt, authority: 'reported', evidence: `${item.key} notes.summary v${item.sequence}`, workKey: item.key })
+      nodes.push({ id, parentId: item.key, title: item.summary, kind: 'result', at: item.changedAt, authority: 'reported', evidence: `${item.key} notes.summary v${item.sequence}`, workKey: item.key })
       edges.push({ from: item.key, to: id, kind: 'context', evidence: 'Saved report; not user acceptance or proof of impact.' })
     }
   }

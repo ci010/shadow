@@ -32,7 +32,7 @@ type Row = Record<string, string | number | null>
 const columns: Record<string, readonly string[]> = {
   project_conventions: ['id', 'text', 'revision', 'created_at', 'updated_at', 'created_by_session_id', 'updated_by_session_id'],
   convention_history: ['id', 'convention_id', 'operation', 'revision', 'actor_session_id', 'created_at', 'source', 'before_record', 'after_record'],
-  work_items: ['key', 'title', 'parent_key', 'manager', 'assignee', 'revision', 'sequence', 'assignment_revision', 'status', 'paused', 'objective', 'acceptance', 'boundaries', 'result'],
+  work_items: ['key', 'title', 'parent_key', 'manager', 'assignee', 'revision', 'sequence', 'assignment_revision', 'status', 'definition', 'kind', 'summary', 'artifacts'],
   work_dependencies: ['work_key', 'depends_on_key'],
 }
 
@@ -87,8 +87,8 @@ export class ProjectConventions {
         || this.db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Corrupt Project conventions database.')
       this.db.exec(`CREATE TEMP TABLE work_items (
         key TEXT PRIMARY KEY, title TEXT, parent_key TEXT, manager TEXT, assignee TEXT,
-        revision INTEGER, sequence INTEGER, assignment_revision INTEGER, status TEXT, paused INTEGER,
-        objective TEXT, acceptance TEXT, boundaries TEXT, result TEXT
+        revision INTEGER, sequence INTEGER, assignment_revision INTEGER, status TEXT,
+        definition TEXT, kind TEXT, summary TEXT, artifacts TEXT
       );
       CREATE TEMP TABLE work_dependencies (work_key TEXT, depends_on_key TEXT);`)
     } catch (error) { this.db.close(); throw error }
@@ -202,15 +202,13 @@ export class ProjectConventions {
 
   private refreshWork(): void {
     this.db.exec('DELETE FROM temp.work_items; DELETE FROM temp.work_dependencies;')
-    const insert = this.db.prepare('INSERT INTO temp.work_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    const insert = this.db.prepare('INSERT INTO temp.work_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
     const dependency = this.db.prepare('INSERT INTO temp.work_dependencies VALUES (?,?)')
     for (const record of this.work()) {
-      const flow = record.workflow
-      insert.run(record.key, flow?.title ?? null, flow?.parentKey ?? null, flow?.manager ?? null, flow?.assignee ?? null,
-        record.revision, record.sequence, flow?.assignmentRevision ?? null, flow?.status ?? null, record.paused ? 1 : 0,
-        record.definition.objective, JSON.stringify(record.definition.acceptance), JSON.stringify(record.definition.boundaries),
-        flow?.result ? JSON.stringify(flow.result) : null)
-      for (const key of flow?.dependencies ?? []) dependency.run(record.key, key)
+      insert.run(record.key, record.title, record.parentKey ?? null, record.manager, record.assignee,
+        record.revision, record.sequence, record.assignmentRevision, record.status,
+        record.definition, record.kind, record.summary, JSON.stringify(record.artifacts))
+      for (const key of record.dependencies) dependency.run(record.key, key)
     }
   }
 }

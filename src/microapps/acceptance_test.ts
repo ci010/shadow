@@ -275,9 +275,9 @@ test('runtime schema errors locate every affected report field, including blocke
     const before = f.service.get(f.app.id).acceptance!
     const checks = untestedChecks()
     checks[0] = { ...checks[0], result: 'passed', basis: 'runtime' }
-    const requirements = [{ workKey: 'work:fixture', workRevision: 1, criterion: 0, result: 'failed',
+    const requirements = [{ workKey: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', workRevision: 1, result: 'failed',
       basis: 'runtime', summary: 'Actual attempted feature did not complete', observations: [], evidence: [] },
-    { workKey: 'work:fixture', workRevision: 1, criterion: 1, result: 'blocked',
+    { workKey: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', workRevision: 1, result: 'blocked',
       basis: 'runtime', summary: 'Partly exercised, missing device test', observations: [], evidence: [] }]
     await assert.rejects(tool.execute({ action: 'report', id: f.app.id, revision: f.app.revision, report: { checks, requirements } }, context), error => {
       assert.ok(error instanceof ToolNoEffectError && error.cause instanceof z.ZodError)
@@ -369,7 +369,7 @@ test('evidence lookup propagates failures and rechecks cancellation, approval an
 
 test('report citation diagnostics batch the Sol trace mistakes and preserve supported results on repair', async () => withTempWorkspace(async home => {
   let evidenceChecks = 0
-  const work = [{ key: 'work:report', revision: 2, acceptance: ['Show translated text'] }]
+  const work = [{ key: 'work:b2cf4d4b-cf3c-551a-94bd-1bac10a3cea9', revision: 2, definition: 'Show translated text' }]
   const f = await fixture(home, work, async evidence => { evidenceChecks++; assert.deepEqual(evidence, source) })
   const tools = new SessionTools(new Tools(home), home), tool = new MicroAppTool(f.service, () => {})
   const context = { sessionId: 'web:author', projectId: 'p', tools, signal: AbortSignal.timeout(5000) } as ExecutionContext
@@ -396,7 +396,7 @@ test('report citation diagnostics batch the Sol trace mistakes and preserve supp
         { category: 'recovery', result: 'passed', basis: 'runtime', summary: 'Synthetic provider failure then success.', observations: ids('model_completed'), evidence: [source] },
         { category: 'reopen', result: 'passed', basis: 'runtime', summary: 'Stopped then reconnected; not a Shadow restart.', observations: ids('stopped', 'started', 'state_read'), evidence: [source] },
       ],
-      requirements: [{ workKey: work[0].key, workRevision: 2, criterion: 0, result: 'passed', basis: 'runtime',
+      requirements: [{ workKey: work[0].key, workRevision: 2, result: 'passed', basis: 'runtime',
         summary: 'Synthetic provider result returned through the SDK.', observations: ids('model_completed'), evidence: [source] }],
     }
     const original = structuredClone(report)
@@ -576,25 +576,29 @@ test('valid observation hints cannot bypass tool evidence, aborts, approval chan
   }
 })
 
-test('reports cover the immutable published Work criteria, including unavailable hardware, and validation does not fence repairs', async () => withTempWorkspace(async home => {
-  const work = [{ key: 'work:fixture', revision: 2, acceptance: ['Text becomes speech', 'Incoming audio becomes subtitles'] }]
+test('reports assess immutable published Work definitions, including unavailable hardware, and validation does not fence repairs', async () => withTempWorkspace(async home => {
+  const work = [
+    { key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 2, definition: 'Verify audio behavior.\n\n- Text becomes speech\n- Incoming audio becomes subtitles' },
+    { key: 'work:8c00e502-9917-5cee-ac8b-d8c5ff48d2d4', revision: 4, definition: 'Measure real device latency.' },
+  ]
+  const publishedDefinition = work[0].definition
   const f = await fixture(home, work)
   const tools = new SessionTools(new Tools(home), home)
   const tool = new MicroAppTool(f.service, () => {})
   const context = { sessionId: 'web:author', projectId: 'p', tools, signal: AbortSignal.timeout(5000) } as ExecutionContext
   try {
-    work[0].acceptance[0] = 'Changed after publication'
+    work[0].definition = 'Changed after publication'
     await f.approve(); await f.answer(0)
     const acceptance = f.service.get(f.app.id).acceptance!
-    assert.equal(acceptance.work![0].acceptance[0], 'Text becomes speech')
+    assert.equal(acceptance.work![0].definition, publishedDefinition)
     const report = { checks: untestedChecks() }
     const args = { action: 'report', id: f.app.id, revision: f.app.revision, report }
     await assert.rejects(tool.execute(args, context), error => error instanceof ToolNoEffectError && /every published Work/.test(error.message))
     assert.equal(f.service.get(f.app.id).acceptance!.report, undefined)
-    const requirements = acceptance.work!.flatMap(scope => scope.acceptance.map((_text, criterion) => ({
+    const requirements = acceptance.work!.map(scope => ({
       result: 'not_tested' as const, basis: 'not_tested' as const, summary: 'No device access.', observations: [], evidence: [],
-      workKey: scope.key, workRevision: scope.revision, criterion,
-    })))
+      workKey: scope.key, workRevision: scope.revision,
+    }))
     await assert.rejects(tool.execute({ ...args, report: { ...report, requirements: [requirements[0], requirements[0]] } }, context), ToolNoEffectError)
     await assert.rejects(tool.execute({ ...args, report: { ...report, requirements: requirements.map(check => ({ ...check, workRevision: 3 })) } }, context), ToolNoEffectError)
     await assert.rejects(tool.execute({ ...args, report: { ...report, requirements: requirements.map(check => ({ ...check, result: 'passed', basis: 'fixture' })) } }, context), ToolNoEffectError)

@@ -243,11 +243,10 @@ export class AppAcceptanceFlow {
     const acceptanceId = this.authorize(id, revision, sessionId)
     const report = appTestReportSchema.parse(value)
     const acceptance = this.store.get(id).acceptance!
-    const expected = (acceptance.work ?? []).flatMap(work => work.acceptance.map((_text, criterion) =>
-      JSON.stringify([work.key, work.revision, criterion])))
-    const supplied = (report.requirements ?? []).map(item => JSON.stringify([item.workKey, item.workRevision, item.criterion]))
+    const expected = (acceptance.work ?? []).map(work => JSON.stringify([work.key, work.revision]))
+    const supplied = (report.requirements ?? []).map(item => JSON.stringify([item.workKey, item.workRevision]))
     if (expected.length !== supplied.length || new Set(supplied).size !== supplied.length || supplied.some(key => !expected.includes(key))) {
-      throw new MicroAppError('requirement_coverage', 'Report every published Work acceptance criterion exactly once using workKey, workRevision and zero-based criterion. Use blocked/not_tested when unavailable; do not invent a pass.')
+      throw new MicroAppError('requirement_coverage', 'Assess every published Work definition exactly once using workKey and workRevision. Use blocked/not_tested when unavailable; do not invent a pass.')
     }
     const observations = acceptance.observations
     const checks = [

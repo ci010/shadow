@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { z } from 'zod'
 import { projectDataPaths } from '../utils/data-paths.ts'
 import { writePrivateFile } from '../utils/private-file.ts'
@@ -9,7 +10,7 @@ import { isNotFoundError } from '../utils/runtime.ts'
 export const DISPATCH_RECHECK_MS = 30 * 60_000
 export const DISPATCH_FAILURE_RECHECK_MS = 5 * 60_000
 const reviewSchema = z.object({
-  key: z.string().min(1), version: z.number().int().positive(), recipient: z.string().min(1),
+  key: workKeySchema, version: z.number().int().positive(), recipient: z.string().min(1),
   inputId: z.string().min(1), status: z.enum(['unconfirmed', 'accepted']),
 }).strict()
 export type DispatchReviewReceipt = z.infer<typeof reviewSchema>

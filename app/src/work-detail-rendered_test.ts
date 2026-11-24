@@ -37,11 +37,11 @@ test('Work detail hierarchy and read-only roles survive narrow localized layouts
         const state=reactive({revision:1,canWrite:true});
         window.fixture=state; window.writes=[];
         window.setLocale=value=>{i18n.global.locale.value=value};
-        const record={key:'topic:web:fixture',subject:{kind:'topic',sessionId:'web:fixture'},revision:1,sequence:1,
-          definition:{objective:'Compare the release candidates using available measurements, preserving the original evidence and explaining uncertainty.',acceptance:['Report both candidates with source-backed evidence.','Explain the limitations of the comparison.'],boundaries:['Do not publish the report or modify production data.'],evidence:[]},
-          origin:'human',changedBy:'human',changedAt:'2026-10-05T00:00:00Z',change:'goal',reason:'User outcome',paused:false,
-          workflow:{title:'Compare release candidates',manager,assignee:worker,assignmentRevision:1,status:'blocked',blockedReason:'Waiting for the reviewer to confirm which measurements belong in the report. Work already completed remains available.',dependencies:[]},
-          notes:{kind:'task',summary:'Input fixtures are available. The comparison includes measured token usage and excludes speculative scoring.',next:'Confirm the evidence needed for the release report',plan:['Read the usage report','Compare candidates'],artifacts:[]},
+        const record={key:'work:1d7572b8-f94a-50e1-bb3d-a1679fb67b80', revision:1,sequence:1,
+          definition:'Compare the release candidates, **preserving the original evidence**.\\n\\n- Report both candidates.\\n- Do not publish or modify production data.\\n\\n![Untrusted tracker](https://example.invalid/track.gif)',
+          origin:'human',changedBy:'human',changedAt:'2026-10-05T00:00:00Z',
+          title: 'Compare release candidates', manager,assignee:worker,assignmentRevision:1,status:'blocked',blockedReason:'Waiting for the reviewer to confirm which measurements belong in the report. Work already completed remains available.',dependencies:[],
+          kind:'task',summary:'**Input fixtures are available.** <script>window.fromNotes=true</script>',artifacts:[],
           authority:{manager,executor:worker,active:true},history:[]};
         window.record=record;
         window.fetch=async(url,options)=>{
@@ -80,16 +80,20 @@ test('Work detail hierarchy and read-only roles survive narrow localized layouts
       const wait=async fn=>{for(let i=0;i<160;i++){if(await run(fn))return;await new Promise(r=>setTimeout(r,50));}throw new Error('Timed out: '+fn.toString());};
       await wait(()=>!!document.querySelector('.alignment-heading'));
       assert.equal(await run(()=>document.querySelector('h3').textContent),'Compare release candidates');
-      assert.match(await run(()=>document.querySelector('.work-objective').textContent),/preserving the original evidence/);
+      assert.match(await run(()=>document.querySelector('.work-definition').textContent),/preserving the original evidence/);
       assert.equal(await run(()=>document.querySelector('.work-status').textContent.trim()),'blocked');
       assert.match(await run(()=>document.querySelector('.work-blocker').textContent),/Waiting for the reviewer/);
       assert.match(await run(()=>document.querySelector('.work-people').textContent),/Release coordinator/);
       assert.equal(await run(()=>document.querySelector('.technical-details').open),false);
-      assert.equal(await run(()=>document.querySelectorAll('.work-criteria details').length),2);
+      assert.equal(await run(()=>document.querySelector('.work-definition strong').textContent),'preserving the original evidence');
+      assert.equal(await run(()=>document.querySelectorAll('.work-definition li').length),2);
+      assert.equal(await run(()=>document.querySelectorAll('.work-definition img').length),0);
+      assert.equal(await run(()=>document.querySelector('.note-summary strong').textContent),'Input fixtures are available.');
+      assert.equal(await run(()=>!!document.querySelector('.note-summary script') || !!window.fromNotes),false);
       assert.equal(await run(()=>!!document.querySelector('textarea')),false);
       assert.equal(await run(()=>document.querySelectorAll('.work-people .person-row').length),2);
       assert.equal(await run(()=>document.querySelectorAll('.work-people [role=combobox], .session-link, .decision-owner').length),0);
-      await run(()=>{document.querySelectorAll('.work-criteria details').forEach(el=>el.open=true);document.querySelector('.technical-details').open=true;});
+      await run(()=>{document.querySelector('.technical-details').open=true;});
       assert.equal(await run(()=>document.querySelector('.technical-details').innerText.includes('virtual:manager')),false);
       for(const width of [760,390]){
         win.setSize(width,1100);
@@ -103,15 +107,12 @@ test('Work detail hierarchy and read-only roles survive narrow localized layouts
         }
       }
       assert.deepEqual(await run(()=>window.writes),[]);
-      await run(()=>{window.record.definition.objective='A long goal that must remain fully accessible without overwhelming the heading. '.repeat(20);window.fixture.revision++;});
-      await wait(()=>!!document.querySelector('.long-objective'));
-      assert.equal(await run(()=>document.querySelector('.long-objective').open),false);
-      await run(()=>document.querySelector('.long-objective summary').click());
-      assert.ok(await run(()=>document.querySelector('.long-objective .work-objective').innerText.length)>1000);
+      await run(()=>{window.record.definition='A long goal that must remain fully accessible without overwhelming the heading. '.repeat(20);window.fixture.revision++;});
+      await wait(()=>document.querySelector('.work-definition').innerText.length>1000);
       await run(()=>{document.querySelector('.refresh-state').focus();});
       assert.equal(await run(()=>document.activeElement.matches('.refresh-state')),true);
-      await run(()=>{window.record.definition.objective=window.record.workflow.title;window.fixture.revision++;window.fixture.canWrite=false;});
-      await wait(()=>!document.querySelector('.work-objective'));
+      await run(()=>{window.record.definition=window.record.title;window.fixture.revision++;window.fixture.canWrite=false;});
+      await wait(()=>!document.querySelector('.work-definition'));
       assert.equal(await run(()=>!!document.querySelector('.work-people [role=combobox]')),false);
       console.log('WORK_DETAIL_OK');app.exit(0);
     }).catch(error=>{console.error(error);app.exit(1)});

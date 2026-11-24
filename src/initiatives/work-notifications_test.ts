@@ -10,51 +10,44 @@ const worker = { kind: 'session' as const, sessionId: 'worker' }
 const manager = { kind: 'session' as const, sessionId: 'manager' }
 function setup(home: string) {
   const store = new InitiativeStore(home)
-  const alignment = new WorkAlignment(store, { state: sessionId => ({ sessionId, segmentIndex: 0, mode: 'session' }), evidence: async () => {}, changed: async () => {} })
+  const alignment = new WorkAlignment(store, { state: sessionId => ({ sessionId, segmentIndex: 0, mode: 'session' }),changed: async () => {} })
   const create = (assignee: string | null = 'worker') => alignment.execute(manager, 'create', undefined, undefined,
-    { title: 'Synthetic Work', assignee, definition: { objective: 'Synthetic evidence' } }) as Promise<WorkRecord>
+    { title: 'Synthetic Work', assignee, definition: 'Synthetic evidence' }) as Promise<WorkRecord>
   return { store, alignment, create }
 }
 
-test('notification matrix: progress silent, blocked+attention once, review returns only waiting, no read/ack loop', async () => withTempWorkspace(async home => {
+test('notification matrix: progress silent, blocked once, no read/ack loop', async () => withTempWorkspace(async home => {
   const { store, alignment, create } = setup(home)
   try {
     let work = await create()
     const update = async (patch: unknown) => work = await alignment.editNote(worker, work.key, work.sequence, patch)
-    await update({ status: 'in_progress', notes: { summary: 'Measuring', plan: ['Collect'], next: 'Compare', artifacts: [{ label: 'Evidence', href: 'https://example.test/evidence' }] } })
+    await update({ status: 'in_progress', summary: 'Measuring', artifacts: [{ label: 'Evidence', href: 'https://example.test/evidence' }] })
     assert.equal(store.pendingWorkNotifications().length, 0)
-    await update({ status: 'blocked', blockedReason: 'Need scope', notes: { attention: { kind: 'scope', summary: 'Choose scope', awaitingResponse: true } } })
+    await update({ status: 'blocked', blockedReason: 'Need scope' })
     assert.deepEqual(store.pendingWorkNotifications().map(n => [n.kind, n.target]), [['blocked', 'manager']])
-    const version = work.notes!.attention!.version
-    await update({ status: 'blocked', blockedReason: 'Need scope', notes: { attention: { kind: 'scope', summary: 'Choose scope', awaitingResponse: true } } })
-    assert.equal(work.notes!.attention!.version, version)
-    assert.equal(store.pendingWorkNotifications().length, 1)
-    work = await alignment.reviewNote(manager, work.key, work.sequence, 'Use existing scope')
-    assert.equal(work.workflow!.status, 'blocked')
-    assert.deepEqual(store.pendingWorkNotifications().map(n => [n.kind, n.target]), [['return_to_assignee', 'worker']])
+    await update({ status: 'blocked', blockedReason: 'Still need scope' })
+    await assert.rejects(alignment.reviewNote(manager, work.key, work.sequence, 'Does not apply'), /stale ancestor basis/)
     const ids = store.pendingWorkNotifications().map(n => n.id)
+    assert.equal(ids.length, 1)
     store.settleWorkNotifications(ids); store.settleWorkNotifications(ids)
     assert.equal(store.pendingWorkNotifications().length, 0)
     assert.equal(alignment.get(work.key).sequence, work.sequence, 'settlement is not a Work mutation')
-    await update({ notes: { attention: { kind: 'dependency', summary: 'Report dependency' } } })
-    work = await alignment.reviewNote(manager, work.key, work.sequence, 'Recorded')
-    assert.equal(store.pendingWorkNotifications().length, 0)
   } finally { store.close() }
 }))
 
-test('status episodes expire before reopen/reblock; attention, release and review cannot revive stale assignment', async () => withTempWorkspace(async home => {
+test('status episodes expire before reopen/reblock; release cannot revive stale assignment', async () => withTempWorkspace(async home => {
   const { store, alignment, create } = setup(home)
   try {
     let work = await create()
     const update = async (patch: unknown) => work = await alignment.editNote(worker, work.key, work.sequence, patch)
-    await update({ status: 'done', notes: { summary: 'Measured' } })
+    await update({ status: 'done', summary: 'Measured' })
     const first = store.pendingWorkNotifications()[0]
     await update({ status: 'in_progress' })
     assert.equal(store.pendingWorkNotifications().length, 0)
     await update({ status: 'done' })
     assert.equal(store.pendingWorkNotifications().length, 1)
     assert.notEqual(store.pendingWorkNotifications()[0].id, first.id)
-    await update({ notes: { summary: 'More precise result' } })
+    await update({ summary: 'More precise result' })
     assert.equal(store.pendingWorkNotifications().length, 1)
     await update({ status: 'in_progress' })
     await update({ status: 'blocked', blockedReason: 'External wait' })
@@ -62,37 +55,34 @@ test('status episodes expire before reopen/reblock; attention, release and revie
     await update({ status: 'in_progress' })
     await update({ status: 'blocked', blockedReason: 'External wait' })
     assert.notEqual(store.pendingWorkNotifications()[0].id, block)
-    work = await alignment.reviewNote(manager, work.key, work.sequence, 'Retry later', undefined, 'return_to_assignee')
-    const returned = store.pendingWorkNotifications()[0]
+    const staleBlock = store.pendingWorkNotifications()[0]
     work = await alignment.assignNote(manager, work.key, work.sequence, null)
-    assert(!store.pendingWorkNotifications().some(n => n.id === returned.id))
-    assert(!currentWorkNotification(returned, store.workRecords()))
+    assert(!store.pendingWorkNotifications().some(n => n.id === staleBlock.id))
+    assert(!currentWorkNotification(staleBlock, store.workRecords()))
     work = await alignment.assignNote(manager, work.key, work.sequence, 'worker')
-    assert(!currentWorkNotification(returned, store.workRecords()))
+    assert(!currentWorkNotification(staleBlock, store.workRecords()))
   } finally { store.close() }
 }))
 
-test('routing is Work responsibility, not parent; null and self managers never fabricate recipients, legacy attention remains readable', async () => withTempWorkspace(async home => {
+test('routing is Work responsibility, not parent; null and self managers never fabricate recipients', async () => withTempWorkspace(async home => {
   const { store, create } = setup(home)
   try {
     const prior = await create()
-    const next = { ...prior, sequence: prior.sequence + 1, changedBy: 'worker', notes: { ...prior.notes!, attention: { kind: 'scope' as const, summary: 'Legacy issue', version: 2, at: new Date().toISOString(), by: 'worker' } } }
-    assert.deepEqual(workNotifications(next, prior, [next]).map(n => n.target), ['manager'])
+    const next: WorkRecord = { ...prior, sequence: prior.sequence + 1, changedBy: 'worker', status: 'blocked', blockedReason: 'Need scope' }
+    assert.deepEqual(workNotifications(next, prior, [next], 'note').map(n => n.target), ['manager'])
     for (const owner of [null, 'worker']) {
-      const record = { ...next, workflow: { ...next.workflow!, manager: owner } }
-      assert.equal(workNotifications(record, prior, [record]).length, 0)
+      const record = { ...next, manager: owner }
+      assert.equal(workNotifications(record, prior, [record], 'note').length, 0)
     }
     const ownChange = { ...next, changedBy: 'manager' }
-    assert.equal(workNotifications(ownChange, prior, [ownChange]).length, 0)
-    const noAssignee = { ...next, workflow: { ...next.workflow!, assignee: null }, notes: { ...next.notes, attention: { ...next.notes.attention, reviewed: { at: new Date().toISOString(), by: 'manager', conclusion: 'Return', disposition: 'return_to_assignee' as const, assignmentRevision: next.workflow!.assignmentRevision } } } }
-    assert.equal(workNotifications(noAssignee, prior, [noAssignee]).length, 0)
+    assert.equal(workNotifications(ownChange, prior, [ownChange], 'note').length, 0)
   } finally { store.close() }
 }))
 
 test('pending facts survive restart and repeated settlement without Work review or resurrection', async () => withTempWorkspace(async home => {
   let { store, alignment, create } = setup(home)
   const work = await create()
-  await alignment.editNote(worker, work.key, work.sequence, { status: 'done', notes: { summary: 'Complete' } })
+  await alignment.editNote(worker, work.key, work.sequence, { status: 'done', summary: 'Complete' })
   const pending = store.pendingWorkNotifications()
   store.close()
   ;({ store } = setup(home))
@@ -100,32 +90,28 @@ test('pending facts survive restart and repeated settlement without Work review 
     assert.deepEqual(store.pendingWorkNotifications(), pending)
     store.settleWorkNotifications(pending.map(n => n.id))
     assert.equal(store.pendingWorkNotifications().length, 0)
-    assert.equal(store.workRecords()[0].notes?.attention, undefined)
   } finally { store.close() }
 }))
 
 
-test('ancestor re-review creates a fresh return and expires old review/context handoffs', async () => withTempWorkspace(async home => {
+test('ancestor reassessment clears its pending context notice and does not send a reply', async () => withTempWorkspace(async home => {
   const { store, alignment, create } = setup(home)
   try {
     let parent = await create(null)
     let child = await alignment.execute(manager, 'create', undefined, undefined, { title: 'Child', assignee: 'worker', parentKey: parent.key,
-      definition: { objective: 'Collect evidence' }, notes: { relation: { kind: 'supports', reason: 'Supply evidence' } } }) as WorkRecord
-    child = await alignment.editNote(worker, child.key, child.sequence, { notes: { attention: { kind: 'scope', summary: 'Choose scope', awaitingResponse: true } } })
-    child = await alignment.reviewNote(manager, child.key, child.sequence, 'Initial scope')
-    const oldReturn = store.pendingWorkNotifications().find(n => n.kind === 'return_to_assignee')!
-    parent = await alignment.editNote(manager, parent.key, parent.sequence, { definition: { ...parent.definition, objective: 'Changed evidence goal' } })
-    assert(!currentWorkNotification(oldReturn, store.workRecords()), 'ancestor changes expire a return before re-review')
-    assert(!store.pendingWorkNotifications().some(n => n.id === oldReturn.id))
+      definition: 'Collect evidence' }) as WorkRecord
+    child = await alignment.editNote(worker, child.key, child.sequence, { status: 'blocked', blockedReason: 'Need external input' })
+    parent = await alignment.editNote(manager, parent.key, parent.sequence, { definition: 'Changed evidence goal' })
     const context = store.pendingWorkNotifications().find(n => n.kind === 'context')!
     assert(context)
-    child = await alignment.reviewNote(manager, child.key, child.sequence, 'Revised scope', undefined, 'return_to_assignee')
-    const returns = store.pendingWorkNotifications().filter(n => n.kind === 'return_to_assignee')
-    assert.equal(returns.length, 1)
-    assert.notEqual(returns[0].id, oldReturn.id)
-    assert(!currentWorkNotification(oldReturn, store.workRecords()))
-    assert.equal(returns[0].reviewVersion, child.sequence)
-    assert(!store.pendingWorkNotifications().some(n => n.kind === 'context'), 'review retires old reassessment notice')
+    const before = child
+    child = await alignment.reviewNote(manager, child.key, child.sequence, 'Revised scope')
+    assert.equal(child.status, 'blocked')
+    assert.equal(child.blockedReason, before.blockedReason)
+    assert.equal(child.revision, before.revision)
+    assert.equal(child.assignmentRevision, before.assignmentRevision)
+    assert.equal(child.contextAssessment, 'Revised scope')
+    assert.deepEqual(store.pendingWorkNotifications().map(n => n.kind), ['blocked'])
     parent = await alignment.assignNote(manager, parent.key, parent.sequence, 'other')
     assert(!currentWorkNotification(context, store.workRecords()), 'old ancestor assignment episode is obsolete')
   } finally { store.close() }
@@ -136,13 +122,13 @@ test('state persistence is not broadcast: only matching transitions notify, then
   const { store, create } = setup(home)
   try {
     const prior = await create()
-    const dependent: WorkRecord = { ...prior, key: 'work:dependent',
-      workflow: { ...prior.workflow!, manager: 'other-manager', assignee: 'observer', dependencies: [prior.key] } }
+    const dependent: WorkRecord = { ...prior, key: 'work:43f9813c-ecae-5dd2-a07e-70740e4228a6',
+      manager: 'other-manager', assignee: 'observer', dependencies: [prior.key] }
     const progress: WorkRecord = { ...prior, sequence: prior.sequence + 1, changedBy: 'worker',
-      notes: { ...prior.notes!, summary: 'Updated development evidence' } }
-    assert.deepEqual(workNotifications(progress, prior, [progress, dependent]), [], 'persisted notes alone must not wake readers')
-    const done: WorkRecord = { ...progress, workflow: { ...progress.workflow!, status: 'done' } }
-    const notices = workNotifications(done, progress, [done, dependent])
+      summary: 'Updated development evidence' }
+    assert.deepEqual(workNotifications(progress, prior, [progress, dependent], 'note'), [], 'persisted notes alone must not wake readers')
+    const done: WorkRecord = { ...progress, summary: 'Finished fixture Work.', status: 'done' }
+    const notices = workNotifications(done, progress, [done, dependent], 'note')
     assert.deepEqual(notices.map(notice => [notice.kind, notice.target]), [['done', 'manager']], 'a dependency edge is not a peer subscription')
     const content = workNotificationContent(notices, [done, dependent])
     assert.match(content, /Read latest Work before acting/)

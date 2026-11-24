@@ -28,21 +28,21 @@ test('peer work messages validate references and distinguish admission from owne
     inputs.push(input)
     return { status: 'accepted', sessionId, inputId: input.id }
   }, () => true, (initiativeId, itemId) => {
-    if (initiativeId !== 'work:root' || itemId !== 'item') throw new Error('Work reference belongs to another Project or Work')
+    if (initiativeId !== 'work:f901fba3-4a09-5d9e-98bb-16ab12dea65e' || itemId !== 'work:b46a3755-f79b-5e59-a315-d99314d402e7') throw new Error('Work reference belongs to another Project or Work')
     checks.push([initiativeId, itemId])
   })
   const receipt = await tool.execute({
-    sessionId: 'web:target', content: 'Please review this boundary.', intent: 'handoff', workRoot: 'work:root', itemId: 'item',
+    sessionId: 'web:target', content: 'Please review this boundary.', intent: 'handoff', workRoot: 'work:f901fba3-4a09-5d9e-98bb-16ab12dea65e', itemId: 'work:b46a3755-f79b-5e59-a315-d99314d402e7',
   }, context())
-  assert.deepEqual(checks, [['work:root', 'item']])
+  assert.deepEqual(checks, [['work:f901fba3-4a09-5d9e-98bb-16ab12dea65e', 'work:b46a3755-f79b-5e59-a315-d99314d402e7']])
   assert(inputs[0].source.kind === 'session')
-  assert.deepEqual(inputs[0].source.coordination, { intent: 'handoff', initiativeId: 'work:root', itemId: 'item' })
+  assert.deepEqual(inputs[0].source.coordination, { intent: 'handoff', initiativeId: 'work:f901fba3-4a09-5d9e-98bb-16ab12dea65e', itemId: 'work:b46a3755-f79b-5e59-a315-d99314d402e7' })
   assert.equal(inputs[0].source.sessionId, 'web:source')
   assert.match(receipt, /admission only.*ownership is unchanged/)
-  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', itemId: 'item' }, context()), /requires workRoot/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', itemId: 'work:b46a3755-f79b-5e59-a315-d99314d402e7' }, context()), /requires workRoot/)
   await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', intent: 'assign' }, context()))
-  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', workRoot: 'work:foreign', itemId: 'item' }, context()), /another Project/)
-  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', initiativeId: 'work:root' }, context()), /Unsupported context selector/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', workRoot: 'work:5e546683-5364-53e9-b8ae-d5d5402b9671', itemId: 'work:b46a3755-f79b-5e59-a315-d99314d402e7' }, context()), /another Project/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', initiativeId: 'work:f901fba3-4a09-5d9e-98bb-16ab12dea65e' }, context()), /Unsupported context selector/)
   await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', workRoot: 'old-slug' }, context()), /canonical Work key/)
   assert.equal('initiativeId' in tool.parameters.properties!, false)
   assert.equal(inputs.length, 1)

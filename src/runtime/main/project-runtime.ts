@@ -986,7 +986,7 @@ export async function createProjectRuntime(
       alignment.assertCurrent(stamps, sessionId)
       return stamps.map(stamp => {
         const record = alignment.get(stamp.key)
-        return { key: record.key, revision: record.revision, acceptance: record.definition.acceptance }
+        return { key: record.key, revision: record.revision, definition: record.definition }
       })
     },
     blocker: record => {
@@ -995,9 +995,8 @@ export async function createProjectRuntime(
       return (record.acceptance?.work ?? []).map(scope => {
         const work = records.find(item => item.key === scope.key)
         if (!work || work.revision !== scope.revision) return `${scope.key} changed since publication`
-        if (work.paused) return `${work.key} is paused`
-        if (work.workflow?.status === 'blocked') return work.workflow.blockedReason
-        if (work.workflow?.status === 'done' || work.workflow?.status === 'cancelled') return `${work.key} is ${work.workflow.status}`
+        if (work.status === 'blocked') return work.blockedReason
+        if (work.status === 'done' || work.status === 'cancelled') return `${work.key} is ${work.status}`
         return undefined
       }).find(Boolean)
     },
@@ -1012,7 +1011,7 @@ export async function createProjectRuntime(
           'Read micro_app get and current Work before acting; stale or already reported requests must not restart testing. ' +
           'Use micro_app test to open this version in your isolated browser. Exercise startup/preparation, SDK state across reopening, failure/cancel recovery, and stop/reopen. ' +
           'Use get for host observations and evidence with recorded tool IDs/exact excerpts for canonical references, then report. Separate fixtures from actual runtime behavior and mark untested devices explicitly. ' +
-          'Account for every get.acceptance.work criterion in report.requirements, including blocked/not_tested items. ' +
+          'Assess each published Work definition in report.requirements, including blocked/not_tested scopes. ' +
           'Do not install, capture, play or transmit beyond existing authorization. A fixed new revision requires a new owner review. Stop the app and close your test browser when finished.',
       })
     },
@@ -1075,8 +1074,9 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
   initiatives.recoverWorkEffects()
   const alignment: WorkAlignment = new WorkAlignment(initiatives, {
+    projectId: project.id,
+    wakeWorkNotifications: () => sessions.recoverWorkNotifications(),
     state: id => sessions.getSessionState(id),
-    evidence: source => sessions.validateWorkEvidence(source),
     changed: async (record, previous) => {
       realtime.invalidateSessions()
       await sessions.notifyWorkChange(record, previous)
@@ -1104,7 +1104,7 @@ export async function createProjectRuntime(
     for (const state of topicStates) for (const key of associations.get(state.sessionId)!) if (!organizationSessionsByWork.has(key)) organizationSessionsByWork.set(key, state.sessionId)
     const topics = topicStates.filter(state => !associations.get(state.sessionId)!.length).map(state => ({
       key: sessionTopicKey(state.sessionId), sessionCompleted: state.completed ?? false, sequence: sessionTopicSequence(state), changedAt: state.lastActivityAt ?? '',
-      definition: { objective: sessionTopicFocus(state) || sessionTopicTitle(state) }, workflow: { title: sessionTopicTitle(state) },
+      title: sessionTopicTitle(state), definition: sessionTopicFocus(state) || sessionTopicTitle(state),
       observation: { sessionId: state.sessionId },
     }))
     return topics
@@ -1664,7 +1664,10 @@ export async function createProjectRuntime(
   importTool.registerBuiltin(workBootstrap.name, workBootstrap)
   coordinator?.allow(workBootstrap)
   const workFinished = bus.on('session.turn.finished', scope.bind(fact => workDispatcher.finished(fact)))
-  cleanup.push(() => { bus.off(workFinished) })
+  const kickoffAvailability = bus.on('session.activity.changed', scope.bind(({ sessionId }) => {
+    if (sessions.getSessionState(sessionId)?.automaticWork && !sessions.isSessionBusy(sessionId)) sessions.wakeAutomaticWorkKickoffs()
+  }))
+  cleanup.push(() => { bus.off(workFinished); bus.off(kickoffAvailability) })
   const assertBotWake = (scope: BotHostScope) => {
     directoryBots.assertHostScope(scope, 'wake')
     channels.assertStreamAccess(scope.address.botInstanceId, scope.address.conversationId)
@@ -2286,7 +2289,9 @@ export async function createProjectRuntime(
   await cronService.ensureDefaultJob(REFLECTION_DIARY_DEFAULT_KEY, REFLECTION_DIARY_AUTOMATION)
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   await cronService.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
+  await sessions.recoverAutomaticWorkKickoffs()
   await workDispatcher.recover()
+  sessions.wakeAutomaticWorkKickoffs()
   await sessions.recoverWorkNotifications()
   workDispatchReady = true
   signalProviders.start()

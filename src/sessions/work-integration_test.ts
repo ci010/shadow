@@ -55,9 +55,8 @@ import { VirtualFs } from '../vfs/virtual-fs.ts'
 const id = 'web:worker', coordinator = 'web:coordinator'
 const projectId = '11111111-1111-4111-8111-111111111111'
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
-const definition = { objective: 'Measure release impact', acceptance: ['Report token usage'], boundaries: ['No publication'], evidence: [] }
+const definition = 'Measure release impact\n\n- Report token usage\n- No publication'
 const actor = (sessionId = id) => ({ kind: 'session' as const, sessionId })
-const relation = { kind: 'supports', reason: 'Collect evidence for the release decision' }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
 const call = (name: string, args: Record<string, unknown>, toolId: string = crypto.randomUUID()): LLMResponse =>
   ({ content: '', toolCalls: [{ id: toolId, name, arguments: args }] })
@@ -97,7 +96,9 @@ async function fixture(workspace: string, store: SessionStore) {
   const initiatives = new InitiativeStore(workspace, { isSessionKnown: target => !!sessions.getSessionState(target) })
   let notifications = false
   const alignment = new WorkAlignment(initiatives, {
-    state: target => sessions.getSessionState(target), evidence: source => sessions.validateWorkEvidence(source),
+    projectId,
+    wakeWorkNotifications: async () => { if (notifications) await sessions.recoverWorkNotifications() },
+    state: target => sessions.getSessionState(target),
     changed: async (record, previous) => { if (notifications) await sessions.notifyWorkChange(record, previous) },
   })
   sessions.alignment = alignment
@@ -138,7 +139,7 @@ async function fixture(workspace: string, store: SessionStore) {
   })
   const note = async (data: Record<string, unknown> = {}, creator = id) => workRecordSchema.parse(
     await alignment.execute(actor(creator), 'create', undefined, undefined,
-      { title: 'Release metrics', definition, notes: { kind: 'goal' }, ...data }))
+      { title: 'Release metrics', definition, kind: 'goal', ...data }))
   async function finish(target = id) {
     await waitFor(() => {
       for (const entry of calls) if (!entry.resolved) entry.resolve(done())
@@ -165,21 +166,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const peer = await topics.create(request, id)
       await f.finish(peer.sessionId)
       const assigned = f.alignment.get(work.key)
-      const first = f.initiatives.assignmentDelivery(work.key, assigned.workflow!.assignmentRevision)!
+      const first = f.initiatives.assignmentDelivery(work.key, assigned.assignmentRevision)!
       assert.equal(first.status, 'accepted')
       assert.equal((await topics.create(request, id)).initialMessageStatus, 'not_replayed')
-      await f.alignment.editNote(actor(peer.sessionId), work.key, f.alignment.get(work.key).sequence, { status: 'done', notes: { summary: 'First task complete' } })
+      await f.alignment.editNote(actor(peer.sessionId), work.key, f.alignment.get(work.key).sequence, { status: 'done', summary: 'First task complete' })
       const next = await f.note({ assignee: peer.sessionId })
       const message = new MessageTool(new Bus(), (target, source) => f.sessions.canReceiveSessionMessage(target, source),
         () => undefined, () => [], (target, input) => f.sessions.deliver(target, input), undefined, undefined, undefined, undefined, f.alignment)
-      const args = { sessionId: peer.sessionId, content: 'Second task', work: { key: next.key, assignmentRevision: next.workflow!.assignmentRevision } }
+      const args = { sessionId: peer.sessionId, content: 'Second task', work: { key: next.key, assignmentRevision: next.assignmentRevision } }
       const receipt = await message.execute(args, f.ctx())
       await f.finish(peer.sessionId)
       const calls = f.calls.length
       assert.match(await message.execute(args, f.ctx()), /already accepted/)
       assert.equal(f.calls.length, calls)
       assert.match(receipt, /inputId=/)
-      assert.equal(f.alignment.get(next.key).workflow!.status, 'pending')
+      assert.equal(f.alignment.get(next.key).status, 'pending')
       const reopened = new InitiativeStore(workspace)
       const restored = new Store(join(workspace, 'sessions')); await restored.init()
       try {
@@ -189,16 +190,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         for await (const row of restored.readSessionLog(physicalSessionId(restoredState))) history.push(row)
         assert.match(JSON.stringify(history), /assignment-revision/)
         assert(JSON.stringify(history).includes(first.inputId), 'Stored sender metadata retains the receipt input identity')
-        assert.equal(reopened.assignmentDelivery(work.key, assigned.workflow!.assignmentRevision)?.inputId, first.inputId)
-        assert.equal(reopened.assignmentDelivery(next.key, next.workflow!.assignmentRevision)?.status, 'accepted')
+        assert.equal(reopened.assignmentDelivery(work.key, assigned.assignmentRevision)?.inputId, first.inputId)
+        assert.equal(reopened.assignmentDelivery(next.key, next.assignmentRevision)?.status, 'accepted')
         const recoveredAlignment = new WorkAlignment(reopened, {
-          state: target => f.sessions.getSessionState(target), evidence: async () => {}, changed: async () => {},
+          state: target => f.sessions.getSessionState(target),changed: async () => {},
         })
         const recovered = await recoveredAlignment.deliverAssignment(id, peer.sessionId, args.work, {
           id: crypto.randomUUID(), kind: 'message', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: id },
           policy: 'next-step', content: args.content,
         }, async () => { throw new Error('A recovered receipt must not replay delivery') })
-        assert.equal(recovered.inputId, reopened.assignmentDelivery(next.key, next.workflow!.assignmentRevision)?.inputId)
+        assert.equal(recovered.inputId, reopened.assignmentDelivery(next.key, next.assignmentRevision)?.inputId)
       } finally { reopened.close(); restored.close?.() }
     } finally { await f.close(); store.close?.() }
   }))
@@ -226,7 +227,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await waitFor(() => f.calls.length === 5)
       assert.equal(f.writes(), 1)
       f.calls[4].resolve(call('work', { action: 'update', key: note.key, version: blocked.sequence,
-        data: { status: 'done', notes: { summary: 'Token measurements collected', next: 'Compare results' } } }, 'note-result'))
+        data: { status: 'done', summary: 'Token measurements collected' } }, 'note-result'))
       await waitFor(() => f.calls.length === 6)
       const receipt = JSON.parse(String(f.calls[5].messages.find(message => message.tool_call_id === 'note-result')?.content))
       assert.equal(receipt.status, 'done'); assert.equal(receipt.goalRevision, 1)
@@ -237,7 +238,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal('adoption' in f.alignment.get(note.key), false)
       assert.equal((await f.post({ action: 'policy', data: { mode: 'required' } })).status, 400)
       const restored = new InitiativeStore(workspace)
-      try { assert.equal(restored.workRecords()[0].notes?.summary, 'Token measurements collected') }
+      try { assert.equal(restored.workRecords()[0].summary, 'Token measurements collected') }
       finally { restored.close() }
     } finally { await f.close(); store.close?.() }
   }))
@@ -256,7 +257,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const request = { requestId: crypto.randomUUID(), topic: 'Metrics worker', work: { key: work.key }, initialMessage: 'Collect the measurements.' }
       const peer = await topics.create(request, id)
       await waitFor(() => f.calls.length === 1)
-      assert.equal(f.alignment.get(work.key).workflow?.assignee, peer.sessionId)
+      assert.equal(f.alignment.get(work.key).assignee, peer.sessionId)
       assert.equal(f.alignment.required(peer.sessionId), false)
       assert.equal((await store.getState(peer.sessionId))?.workPolicy?.mode, 'optional')
       assert.match(JSON.stringify(f.calls[0].messages), /Shared work notes/)
@@ -272,7 +273,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         { mode: 'call', parentSessionId: 'virtual:metrics-task' })
       f.alignment.linkExecution('virtual:metrics-call', 'virtual:metrics-task')
       const current = f.alignment.get(work.key)
-      await f.alignment.editNote(actor('virtual:metrics-task'), work.key, current.sequence, { notes: { summary: 'Read the usage report' } })
+      await f.alignment.editNote(actor('virtual:metrics-task'), work.key, current.sequence, { summary: 'Read the usage report' })
       assert.equal(f.alignment.decisionContext('virtual:metrics-call')?.originKey, work.key)
       assert.deepEqual(f.alignment.context('virtual:metrics-task').records.map(record => record.key), [work.key])
       assert.equal((await f.overview()).sessions.find(session => session.sessionId === 'virtual:metrics-task')?.activity, 'pending')
@@ -288,10 +289,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.sessions.prepareCommandSession(id)
       const goal = await f.note({ assignee: null })
       const approach = await f.note({ title: 'Evaluate release candidates', assignee: null, parentKey: goal.key,
-        notes: { kind: 'approach', relation }, definition: { objective: 'Compare evaluation results' } })
+        kind: 'approach', definition: 'Compare evaluation results' })
       const grader = await f.note({ title: 'Build a grader', parentKey: approach.key,
-        notes: { kind: 'task', relation: { kind: 'assumption', reason: 'Scored evaluation is assumed to be necessary' } },
-        definition: { objective: 'Make the unavailable grader ready' } })
+        kind: 'task',
+        definition: 'Make the unavailable grader ready only if necessary. Scored evaluation is assumed to be necessary.' })
       f.enableNotifications()
       await f.send('Identify the decision needed for the release report.')
       await waitFor(() => f.calls.length === 1)
@@ -303,14 +304,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(request.brief, undefined)
       assert.equal(request.workContext?.decisionKey, goal.key)
       assert.deepEqual(request.workContext?.path.map(node => node.key), [goal.key, approach.key, grader.key])
-      assert.equal(request.workContext?.path.at(-1)?.relation?.kind, 'assumption')
-      await f.alignment.editNote(actor(), grader.key, grader.sequence, { notes: { summary: 'Checked the available fixtures' } })
+      await f.alignment.editNote(actor(), grader.key, grader.sequence, { summary: 'Checked the available fixtures' })
       assert.equal(f.sessions.yields.get(id)?.id, request.id)
       const projected = (await f.overview()).requests[0]
       assert.deepEqual(projected.context, request.workContext)
       assert.equal(projected.recipient, 'user')
       const response = await f.project(`/${encodeURIComponent(goal.key)}`, { action: 'update', key: goal.key, version: goal.sequence,
-        data: { definition: { ...goal.definition, objective: 'Report token metrics without a grader' } } })
+        data: { definition: 'Report token metrics without a grader' } })
       assert.equal(response.status, 200, await response.text())
       assert.equal(f.sessions.yields.get(id), null)
       assert.equal((await f.post({ requestId: request.id, option: 'Wait for a grader' }, 'ask')).status, 404)
@@ -321,7 +321,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.match(JSON.stringify(f.calls[1].messages), /Report token metrics without a grader/)
       assert((await f.overview()).items.filter(item => item.parentKey).every(item => item.contextChanged))
       const before = f.alignment.get(grader.key)
-      await f.alignment.editNote(actor(), grader.key, before.sequence, { notes: { next: 'Reassess the obsolete prerequisite' } })
+      await f.alignment.editNote(actor(), grader.key, before.sequence, { summary: 'Waiting on a review of the revised metrics goal.' })
       assert.equal(f.alignment.contextChanged(f.alignment.get(grader.key)), true, 'Writing progress must not pretend to reassess a changed premise')
       await f.alignment.reviewNote(actor(), grader.key, f.alignment.get(grader.key).sequence, 'A grader is no longer needed for token metrics')
       assert.equal(f.alignment.contextChanged(f.alignment.get(grader.key)), false)
@@ -359,9 +359,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await waitFor(() => !!f.sessions.inputs.get(id))
       const request = f.sessions.inputs.get(id)!
       assert.equal(request.workContext?.originKey, goal.key)
-      await f.alignment.editNote(actor(), goal.key, goal.sequence, { notes: { summary: 'Two reports are available' } })
+      await f.alignment.editNote(actor(), goal.key, goal.sequence, { summary: 'Two reports are available' })
       assert.equal(f.sessions.inputs.get(id)?.id, request.id)
-      await f.alignment.editNote(actor(), goal.key, f.alignment.get(goal.key).sequence, { definition: { ...definition, objective: 'Measure only the latest release' } })
+      await f.alignment.editNote(actor(), goal.key, f.alignment.get(goal.key).sequence, { definition: 'Measure only the latest release' })
       await rejected
       assert.equal(f.sessions.inputs.get(id), null)
       assert.throws(() => f.sessions.inputs.replyUser(id, request.id, 'old report'), /no longer pending/)
@@ -404,69 +404,114 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     } finally { await f.close(); store.close?.() }
   }))
 
-  test(`${Store.name}: routine notes are silent, impact updates coalesce, and pending notification facts retain the latest issue`, async t => withTempWorkspace(async workspace => {
+  test(`${Store.name}: silent comments and coalesced link-only notices, even across reassignment`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
     try {
       await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
-      const work = await f.note({ assignee: id }, coordinator)
-      const deliveries: { sessionId: string; input: SessionInput }[] = []
-      t.mock.method(f.sessions, 'deliver', async (sessionId: string, input: SessionInput): Promise<DeliveryReceipt> => {
-        deliveries.push({ sessionId, input }); return { status: 'accepted', sessionId, inputId: input.id }
-      })
-      f.enableNotifications()
-      const update = (notes: Record<string, unknown>) => f.alignment.editNote(actor(), work.key, f.alignment.get(work.key).sequence, { notes })
-      await update({ summary: 'Read inputs', plan: ['Compare model usage'] })
-      assert.equal(deliveries.length, 0)
-      await update({ attention: { kind: 'assumption', summary: 'Scored evaluation may not be necessary' } })
-      await update({ attention: { kind: 'assumption', summary: 'Token metrics are available without a grader' } })
-      assert.equal(deliveries.length, 1)
-      assert.equal(deliveries[0].sessionId, coordinator)
-      await f.alignment.reviewNote(actor(coordinator), work.key, f.alignment.get(work.key).sequence, 'Proceed with token metrics')
-      assert.equal(deliveries.length, 1)
-      const version = f.alignment.get(work.key).sequence + 1
-      await update({ attention: { kind: 'dependency', summary: 'The selected report is missing' } })
-      assert.equal(f.initiatives.pendingWorkNotifications().length, 1)
-      assert.equal(f.alignment.get(work.key).sequence, version)
-      assert.equal((await f.overview()).items[0].notes?.attention?.summary, 'The selected report is missing')
-      assert.equal(f.calls.length, 0)
-    } finally { await f.close(); store.close?.() }
-  }))
-
-  test(`${Store.name}: notification markers merge at a safe boundary, discard stale issues, and return a waiting executor without unblocking`, async () => withTempWorkspace(async workspace => {
-    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
-    try {
-      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      await f.sessions.prepareCommandSession('web:replacement')
       let work = await f.note({ assignee: id }, coordinator)
       await f.sessions.deliver(coordinator, { kind: 'message', id: 'manager-user', timestamp: new Date().toISOString(), policy: 'interactive',
         source: { kind: 'user', sender: { channel: 'web', chatId: 'coordinator', senderId: 'owner', messageId: 'manager-user', admin: true } }, content: 'Continue existing coordination' }, llm)
       await waitFor(() => f.calls.length === 1)
       f.enableNotifications()
-      work = await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'blocked', blockedReason: 'Need scope',
-        notes: { attention: { kind: 'scope', summary: 'Old scope question', awaitingResponse: true } } })
-      work = await f.alignment.editNote(actor(), work.key, work.sequence, {
-        notes: { attention: { kind: 'scope', summary: 'Latest scope question', awaitingResponse: true } } })
+      work = await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'blocked', blockedReason: 'Need scope' })
+      const note = (body: string, notifyManager?: boolean) => f.alignment.createWorkNote(id, { workKey: work.key, body, notifyManager })
+      const silent = await note('Silent comment payload')
+      const first = await note('First private-to-the-comment-body payload', true)
+      const second = await note('Second distinct payload', true)
+      assert.equal(silent.notification, 'not_queued')
+      assert.equal(first.notification, 'queued')
+      assert.equal(second.notification, 'queued')
       assert.equal(f.calls.length, 1, 'next-step must not abort the current inference')
       f.calls[0].resolve(done())
       await waitFor(() => f.calls.length === 2)
       const notices = f.calls[1].messages.filter(message => message.name === '__work_notification__')
       assert.equal(notices.length, 1)
-      assert.match(JSON.stringify(notices), /Latest scope question/)
-      assert.doesNotMatch(JSON.stringify(notices), /Old scope question/)
+      const text = JSON.stringify(notices)
+      assert.match(text, /Blocked: Need scope/)
+      for (const receipt of [first, second]) assert(text.includes(`/comments/id/${receipt.note.id}`))
+      for (const receipt of [silent, first, second]) assert(!text.includes(receipt.note.body))
+      assert(!text.includes(silent.note.id))
       assert.equal(f.initiatives.pendingWorkNotifications().length, 0)
+      assert.equal(f.alignment.get(work.key).sequence, work.sequence)
       await f.finish(coordinator)
-      work = await f.alignment.reviewNote(actor(coordinator), work.key, work.sequence, 'Use existing scope')
-      await waitFor(() => f.calls.length === 3)
-      assert.equal(work.workflow?.status, 'blocked', 'review is not an unblock')
-      assert.match(JSON.stringify(f.calls[2].messages), /Coordinator response: Use existing scope/)
+      work = await f.alignment.assignNote(actor(coordinator), work.key, work.sequence, 'web:replacement')
+      await f.finish(id) // Let the independent release notice finish first.
+      const response = await f.alignment.createWorkNote(coordinator, { workKey: work.key, replyTo: first.note.id, body: 'Use existing scope' })
+      await waitFor(() => f.calls.some(call => JSON.stringify(call.messages).includes(`/comments/id/${response.note.id}`)))
+      const replyTurn = f.calls.find(call => JSON.stringify(call.messages).includes(`/comments/id/${response.note.id}`))!
+      assert.match(JSON.stringify(replyTurn.messages), /Test session web:worker/)
+      assert.doesNotMatch(JSON.stringify(replyTurn.messages), /Use existing scope/)
       await f.finish(id)
+      assert.equal(f.alignment.get(work.key).status, 'blocked', 'comment and reply do not unblock')
+      assert.equal(f.alignment.get(work.key).sequence, work.sequence)
       assert.equal(f.initiatives.pendingWorkNotifications().length, 0)
-      const count = f.calls.length
-      work = await f.alignment.editNote(actor(), work.key, work.sequence, { notes: { attention: { kind: 'dependency', summary: 'Now obsolete' } } })
-      // A record-only review consumes no return handoff and cancels an unconsumed issue.
-      await f.alignment.reviewNote(actor(coordinator), work.key, work.sequence, 'Already resolved', undefined, 'record')
-      await delay(20)
-      assert(f.calls.length <= count + 1, 'no review or ack notification loop')
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: overlapping wakes during log scanning reserve one marker and drain later comments`, async t => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    const scanning = Promise.withResolvers<void>(), unblock = Promise.withResolvers<void>()
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      const work = await f.note({ assignee: id }, coordinator)
+      const physical = physicalSessionId(f.sessions.getSessionState(coordinator)!)
+      const readLog = store.readSessionLog.bind(store)
+      const pending = f.initiatives.pendingWorkNotifications.bind(f.initiatives)
+      let paused = false, preparingMarker = false
+      t.mock.method(f.initiatives, 'pendingWorkNotifications', (target?: string) => {
+        if (target === coordinator) preparingMarker = true
+        return pending(target)
+      })
+      t.mock.method(store, 'readSessionLog', async function* (target: string, options?: { strict?: boolean }) {
+        if (preparingMarker && !paused && target === physical) { paused = true; scanning.resolve(); await unblock.promise }
+        yield* readLog(target, options)
+      })
+      const deliver = t.mock.method(f.sessions, 'deliver')
+      f.enableNotifications()
+      const post = (body: string) => f.alignment.createWorkNote(id, { workKey: work.key, body, notifyManager: true })
+      const first = await post('First comment')
+      await scanning.promise
+      const second = await post('During scan')
+      await Promise.all([f.sessions.recoverWorkNotifications(), f.sessions.recoverWorkNotifications()])
+      assert.equal(deliver.mock.callCount(), 1)
+      unblock.resolve()
+      await waitFor(() => f.calls.length === 1)
       await f.finish(coordinator)
+      await waitFor(() => f.initiatives.pendingWorkNotifications().length === 0)
+      await f.finish(coordinator)
+      const rows = await Array.fromAsync(readLog(physical))
+      const notices = rows.filter(row => row.name === '__work_notification__')
+      assert.equal(notices.length, 2)
+      for (const { note } of [first, second]) assert.equal(notices.filter(row => JSON.stringify(row).includes(`/comments/id/${note.id}`)).length, 1)
+    } finally { unblock.resolve(); await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: a manager change after marker preparation prevents the log append`, async t => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      await f.sessions.prepareCommandSession('web:successor')
+      const work = await f.note({ assignee: id }, coordinator)
+      const prepare = f.initiatives.prepareWorkNotificationDelivery.bind(f.initiatives)
+      let checkedAtAppend = false
+      t.mock.method(f.initiatives, 'prepareWorkNotificationDelivery', (...args: Parameters<typeof prepare>) => {
+        const result = prepare(...args)
+        if (!args[3] && result.notices.length) {
+          const changed = { ...work, manager: 'web:successor', sequence: work.sequence + 1 }
+          f.initiatives.saveWork(changed, work.sequence, 'human', 'note')
+          f.initiatives.saveWork({ ...changed, manager: coordinator, sequence: changed.sequence + 1 }, changed.sequence, 'human', 'note')
+        } else if (args[3]) checkedAtAppend = true
+        return result
+      })
+      f.enableNotifications()
+      const { note } = await f.alignment.createWorkNote(id, { workKey: work.key, body: 'Must not reach stale recipient', notifyManager: true })
+      await waitFor(() => checkedAtAppend && f.quiet(coordinator))
+      assert.equal(f.calls.length, 0)
+      assert.deepEqual(f.initiatives.pendingWorkNotifications(), [])
+      const physical = physicalSessionId(f.sessions.getSessionState(coordinator)!)
+      assert(!(await Array.fromAsync(store.readSessionLog(physical))).some(row => JSON.stringify(row).includes(note.id)))
+      assert.equal(f.initiatives.workNote(work.key, note.id).author, id)
     } finally { await f.close(); store.close?.() }
   }))
 
@@ -478,10 +523,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       let attempts = 0
       const mock = t.mock.method(f.sessions, 'deliver', async (): Promise<DeliveryReceipt> => { attempts++; throw new Error('Synthetic unavailable coordinator') })
       f.enableNotifications()
-      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', notes: { summary: 'Completed' } })
+      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', summary: 'Completed' })
       assert.equal(attempts, 1)
       assert.equal(f.initiatives.pendingWorkNotifications().length, 1)
-      assert.equal(f.alignment.get(work.key).notes?.attention, undefined)
+      assert.equal(f.alignment.get(work.key).contextAssessment, undefined)
       mock.mock.restore()
       await f.sessions.recoverWorkNotifications()
       await waitFor(() => f.calls.length === 1)
@@ -502,7 +547,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.sessions.deliver(coordinator, managerInput(), llm)
       await waitFor(() => f.calls.length === 1)
       f.enableNotifications()
-      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', notes: { summary: 'Retained handoff' } })
+      const { note } = await f.alignment.createWorkNote(id, { workKey: work.key, body: 'Retained comment', notifyManager: true })
       const active = f.sessions.getActiveSession(coordinator)!
       active.stop(); await active.completion
       assert.equal(f.initiatives.pendingWorkNotifications().length, 1)
@@ -511,29 +556,64 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.finish(coordinator)
       assert.equal(f.initiatives.pendingWorkNotifications().length, 0)
       const noticeMessages = f.calls.flatMap(entry => entry.messages.filter(message => message.name === '__work_notification__'))
-      assert(noticeMessages.some(message => JSON.stringify(message).includes('Retained handoff')))
+      assert(noticeMessages.some(message => JSON.stringify(message).includes(`/comments/id/${note.id}`)))
     } finally { await f.close(); store.close?.() }
   }))
 
-  test(`${Store.name}: history receipt closes append/settle crash window even after a context segment reset`, async t => withTempWorkspace(async workspace => {
+  test(`${Store.name}: a failed comment append stays pending and cannot start inference`, async t => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
+      const work = await f.note({ assignee: id }, coordinator)
+      const append = store.appendMessages.bind(store)
+      let failed = false
+      const persistence = t.mock.method(store, 'appendMessages', async (...args: Parameters<typeof append>) => {
+        if (args[1].some(row => row.name === '__work_notification__')) { failed = true; throw new Error('Synthetic comment append failure') }
+        await append(...args)
+      })
+      f.enableNotifications()
+      const { note } = await f.alignment.createWorkNote(id, { workKey: work.key, body: 'Retry the notice, not the comment', notifyManager: true })
+      await waitFor(() => failed && f.quiet(coordinator))
+      const physical = physicalSessionId(f.sessions.getSessionState(coordinator)!)
+      assert.deepEqual(f.initiatives.pendingWorkNotifications(coordinator).map(row => [row.id, row.deliveryPhysicalIds]), [[`note:${note.id}`, [physical]]])
+      assert.equal(f.calls.length, 0)
+      assert(!(await Array.fromAsync(store.readSessionLog(physical))).some(row => row.name === '__work_notification__'))
+      persistence.mock.restore()
+      await f.sessions.recoverWorkNotifications()
+      await waitFor(() => f.calls.length === 1)
+      await f.finish(coordinator)
+      assert.deepEqual(f.initiatives.pendingWorkNotifications(coordinator), [])
+      const rows = (await Array.fromAsync(store.readSessionLog(physical))).filter(row => row.name === '__work_notification__')
+      assert.equal(rows.length, 1)
+      assert(JSON.stringify(rows[0]).includes(`/comments/id/${note.id}`))
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: comment history receipt closes append/settle crash window across restart and segment reset`, async t => withTempWorkspace(async workspace => {
+    const directory = join(workspace, 'sessions')
+    let store: SessionStore = new Store(directory), f = await fixture(workspace, store)
     try {
       await f.sessions.prepareCommandSession(id); await f.sessions.prepareCommandSession(coordinator)
       const work = await f.note({ assignee: id }, coordinator)
       const settlement = t.mock.method(f.initiatives, 'settleWorkNotifications', () => {})
       f.enableNotifications()
-      await f.alignment.editNote(actor(), work.key, work.sequence, { status: 'done', notes: { summary: 'One durable handoff' } })
+      const { note } = await f.alignment.createWorkNote(id, { workKey: work.key, body: 'One durable comment', notifyManager: true })
       await waitFor(() => f.calls.length === 1)
+      assert.match(JSON.stringify(f.calls[0].messages), new RegExp(`/comments/id/${note.id}`))
       await f.finish(coordinator)
       const pending = f.initiatives.pendingWorkNotifications()
       assert.equal(pending.length, 1)
       assert(pending[0].deliveryPhysicalIds?.length)
       settlement.mock.restore()
       assert.equal(await f.sessions.clearSessionContext(coordinator), 'cleared')
+      await f.close(); store.close?.()
+      store = new Store(directory); f = await fixture(workspace, store)
+      assert.deepEqual(f.initiatives.pendingWorkNotifications(), pending)
       await f.sessions.recoverWorkNotifications()
       await waitFor(() => f.initiatives.pendingWorkNotifications().length === 0)
       await delay(20)
-      assert.equal(f.calls.length, 1, 'already persisted handoff must not wake a new inference')
+      assert.equal(f.calls.length, 0, 'already persisted handoff must not wake a new inference')
+      assert.deepEqual(f.initiatives.workNote(work.key, note.id), note)
     } finally { await f.close(); store.close?.() }
   }))
 
@@ -552,13 +632,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(f.calls.length, 0)
       const assign = { action: 'assign', key: work.key, version: work.sequence, data: { assignee: id } }
       assert.equal((await f.project(path, assign, false)).status, 401)
-      assert.equal((await f.project(path, { ...assign, key: 'work:foreign' })).status, 400)
-      assert.equal((await f.project('/work%3Aforeign')).status, 404)
+      assert.equal((await f.project(path, { ...assign, key: 'work:5e546683-5364-53e9-b8ae-d5d5402b9671' })).status, 400)
+      assert.equal((await f.project('/work%3A5e546683-5364-53e9-b8ae-d5d5402b9671')).status, 404)
       assert.equal((await f.project(path, assign)).status, 200)
       assert.equal((await f.project(path, assign)).status, 409)
       const current = f.alignment.get(work.key)
       const update = { action: 'update', key: work.key, version: current.sequence,
-        data: { status: 'done', notes: { summary: 'Measurements collected; review remains separate' } } }
+        data: { status: 'done', summary: 'Measurements collected; review remains separate' } }
       assert.equal((await f.project(path, update)).status, 200)
       assert.equal((await f.project(path, update)).status, 409)
       assert.equal((await f.project(path, { action: 'adopt', key: work.key, revision: 1, data: {} })).status, 400)
@@ -567,7 +647,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(detail.schema, undefined)
       assert((await (await f.project(`${path}?history=1`)).json()).records[0].history.length > 0)
       await assert.rejects(f.alignment.editNote(actor(), work.key, f.alignment.get(work.key).sequence,
-        { definition: { ...definition, objective: 'Replace the coordinator goal' } }), /controller/)
+        { definition: 'Replace the coordinator goal' }), /controller/)
       assert.equal(f.calls.length, 0)
     } finally { await f.close(); store.close?.() }
   }))
@@ -587,7 +667,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.deepEqual(next.workContext, original.workContext)
       assert.equal(f.sessions.yields.get(id)?.id, next.id)
       f.enableNotifications()
-      await f.alignment.editNote(actor(), goal.key, goal.sequence, { definition: { ...definition, objective: 'A corrected release goal' } })
+      await f.alignment.editNote(actor(), goal.key, goal.sequence, { definition: 'A corrected release goal' })
       assert.equal(JSON.parse(requireToolText(await waiting)).disposition, 'invalidated')
       const records = await f.sessions.getYieldRecords(id)
       assert.equal(records.find(record => record.request.id === original.id)?.closed?.reason, 'superseded')
@@ -632,7 +712,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.alignment.assertCurrent(stamps, sessionId)
         return stamps.map(stamp => {
           const record = f.alignment.get(stamp.key)
-          return { key: record.key, revision: record.revision, acceptance: record.definition.acceptance }
+          return { key: record.key, revision: record.revision, definition: record.definition }
         })
       },
     })
@@ -648,12 +728,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.deepEqual(f.alignment.snapshot(id), [], 'Ordinary inference does not acquire execution fences')
       const receipt = JSON.parse(await tool.execute({ action: 'publish', directory: 'fixture-app' }, f.ctx()))
       const app = service.get(receipt.id)
-      assert.deepEqual(app.work, [{ key: work.key, revision: work.revision, acceptance: definition.acceptance }])
+      assert.deepEqual(app.work, [{ key: work.key, revision: work.revision, definition }])
       assert.equal(app.model, undefined)
       await service.start(app.id)
       assert.equal(service.get(app.id).status, 'running')
       const basis = f.alignment.operationBasis(id)
-      await f.alignment.editNote(actor(), work.key, work.sequence, { definition: { ...definition, objective: 'Corrected app requirements' } })
+      await f.alignment.editNote(actor(), work.key, work.sequence, { definition: 'Corrected app requirements' })
       assert.throws(() => f.alignment.assertCurrent(basis, id), /referenced goal/)
     } finally { await service.shutdown(); await f.close(); store.close?.() }
   }))
@@ -691,7 +771,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.sessions.validateWorkEvidence({ sessionId: id, physicalId: physicalSessionId(f.sessions.getSessionState(id)!),
         kind: 'tool', id: 'github-read', quote: 'External GitHub snapshot' })
       assert.deepEqual(f.alignment.get(work.key).definition, definition)
-      assert.equal(f.alignment.get(work.key).workflow?.status, 'pending')
+      assert.equal(f.alignment.get(work.key).status, 'pending')
     } finally { await github.stop(); await workflows.stop(); await remote.close(); await f.close(); store.close?.() }
   }))
 

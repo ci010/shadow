@@ -12,24 +12,22 @@
         <details v-if="data.focus && group.inferred" class="group-sources"><summary>{{ t('Evidence') }}</summary><p v-for="topic in group.topics" :key="topic.key">{{ topic.title }} · {{ topic.key }} · {{ t('Note version') }} {{ data.focus.sources.find(source => source.key === topic.key)?.sequence }}</p></details>
       </header>
     <details v-for="topic in group.topics" :key="topic.key" @toggle="onToggle($event, topic)">
-      <summary><span class="toggle-marker" aria-hidden="true">▸</span><strong>{{ topic.title }}</strong><span>{{ topic.root ? (topic.root.observation && topic.root.status === 'done' ? t('Execution ended') : t('Reported state') + ': ' + workStatus(topic.root)) : t('Session-derived topic') }}</span><span v-for="activity in [...new Set(topic.sessions.map(session => session.activity))]" :key="activity">{{ t('Execution') }}: {{ sessionActivity(activity).label }}</span><time>{{ topic.changedAt ? new Date(topic.changedAt).toLocaleString() : '' }}</time><span class="latest-report">{{ topic.root?.notes?.summary || topic.root?.objective || t('No recorded outcome summary. Open the conversation for evidence.') }}</span></summary>
+      <summary><span class="toggle-marker" aria-hidden="true">▸</span><strong>{{ topic.title }}</strong><span>{{ topic.root ? (topic.root.observation && topic.root.status === 'done' ? t('Execution ended') : t('Reported state') + ': ' + workStatus(topic.root)) : t('Session-derived topic') }}</span><span v-for="activity in [...new Set(topic.sessions.map(session => session.activity))]" :key="activity">{{ t('Execution') }}: {{ sessionActivity(activity).label }}</span><time>{{ topic.changedAt ? new Date(topic.changedAt).toLocaleString() : '' }}</time><span class="latest-report">{{ topic.root?.summary || topic.root?.definition || t('No recorded outcome summary. Open the conversation for evidence.') }}</span></summary>
       <div v-if="topic.root?.observation?.focus" class="focus-evidence">
         <p class="notice">{{ t('Model interpretation — not confirmed user intent') }}</p>
         <p><strong>{{ t('Inferred motivation') }}:</strong> {{ topic.root.observation.focus.motivation }}</p>
         <p>{{ topic.root.observation.focus.purpose }}</p>
         <small>{{ t('Evidence') }} · {{ topic.root.observation.sessionId }} · {{ topic.root.observation.observedAt }} · {{ topic.root.observation.focus.evidence.map(source => source.physicalId + '/' + source.id).join(', ') }}</small>
       </div>
-      <p class="report">{{ topic.root?.notes?.summary || topic.root?.objective || t('No recorded outcome summary. Open the conversation for evidence.') }}</p>
+      <p class="report">{{ topic.root?.summary || topic.root?.definition || t('No recorded outcome summary. Open the conversation for evidence.') }}</p>
       <p v-if="topic.root?.blockedReason">{{ t('Blocked') }}: {{ topic.root.blockedReason }}</p>
-      <p v-if="topic.root?.notes?.next">{{ t('Next') }}: {{ topic.root.notes.next }}</p>
       <p v-if="topic.fallback" class="notice">{{ t('This label comes from a session, not a verified topic boundary.') }}</p>
-      <p v-if="!topic.items.some(item => item.notes?.relation || item.dependencies.length)" class="notice">{{ t('No saved causal relationships for this topic.') }}</p>
+      <p v-if="!topic.items.some(item => item.parentKey || item.dependencies.length)" class="notice">{{ t('No saved causal relationships for this topic.') }}</p>
       <h3 v-if="topic.items.length">{{ t('Internal structure') }}</h3>
-      <ul><li v-for="item in topic.items" :key="item.key" :style="{ marginInlineStart: `${(workPath(topic.items, item.key).length - 1) * 16}px` }"><button @click="emit('select', item.key)">{{ item.title }}</button> · {{ item.notes?.kind ? workKind(item.notes.kind) : t('No saved work role') }} · {{ workStatus(item) }}
-        <p v-if="item.notes?.relation">{{ relationLabel(item.notes.relation.kind) }}: {{ item.notes.relation.reason }}</p>
+      <ul><li v-for="item in topic.items" :key="item.key" :style="{ marginInlineStart: `${(workPath(topic.items, item.key).length - 1) * 16}px` }"><button @click="emit('select', item.key)">{{ item.title }}</button> · {{ item.kind ? workKind(item.kind) : t('No saved work role') }} · {{ workStatus(item) }}
         <p v-if="item.parentKey">{{ t('Parent work') }}: <button @click="emit('select', item.parentKey)">{{ data.items.find(value => value.key === item.parentKey)?.title ?? item.parentKey }}</button></p>
         <p v-if="item.dependencies.length">{{ t('Depends on:') }} <button v-for="key in item.dependencies" :key="key" @click="emit('select', key)">{{ data.items.find(value => value.key === key)?.title ?? key }}{{ topic.items.some(value => value.key === key) ? '' : ' · ' + t('Cross-topic dependency') }}</button></p>
-        <p v-if="item.notes?.summary">{{ item.notes.summary }}</p>
+        <p v-if="item.summary">{{ item.summary }}</p>
         <small v-if="item.observation">{{ t('Observer interpretation') }} · {{ item.observation.sessionId }} · {{ item.observation.sources.map(source => source.physicalId + '/' + source.id).join(', ') }}</small>
       </li></ul>
       <h3>{{ t('Conversations and execution') }}</h3>
@@ -63,11 +61,11 @@ import type { ProjectWorkOverview } from '../../../src/projects/work-overview.ts
 import { parseYieldDecisionRecord, type YieldDecisionRecord } from '../../../src/sessions/yield-contract.ts'
 import { sessionActivity } from '../session-activity.ts'
 import { projectFocusGroups, projectTopics } from '../project-topic-history.ts'
-import { relationLabel, workKind, workStatus, workPath } from '../project-work.ts'
+import { workKind, workStatus, workPath } from '../project-work.ts'
 const props = defineProps<{ data: ProjectWorkOverview; apiBase: string; query: string }>()
 const emit = defineEmits<{ select: [key: string]; session: [id: string] }>()
 const topics = computed(() => projectTopics(props.data).filter(topic => !props.query.trim() ||
-  [topic.title, topic.root?.observation?.focus?.category ?? '', topic.root?.observation?.focus?.motivation ?? '', topic.root?.observation?.focus?.purpose ?? '', ...topic.items.map(item => `${item.title} ${item.notes?.summary ?? ''}`)].join(' ').toLowerCase().includes(props.query.trim().toLowerCase())))
+  [topic.title, topic.root?.observation?.focus?.category ?? '', topic.root?.observation?.focus?.motivation ?? '', topic.root?.observation?.focus?.purpose ?? '', ...topic.items.map(item => `${item.title} ${item.summary ?? ''}`)].join(' ').toLowerCase().includes(props.query.trim().toLowerCase())))
 const focusGroups = computed(() => {
   const query = props.query.trim().toLowerCase(), matched = new Set(topics.value.map(topic => topic.key))
   return projectFocusGroups(projectTopics(props.data), props.data.focus).map(group => ({ ...group,

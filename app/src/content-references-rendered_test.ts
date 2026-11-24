@@ -103,7 +103,7 @@ test('new references render and navigate through real Markdown and attachment pr
       const xml=serializeAttachmentReferences([{path:${JSON.stringify(hostile)},kind:'file',name:'<img src="https://not-admitted.invalid/name">'}]);
       const fenced=messageAttachments('\x60\x60\x60xml\\n'+xml+'\\n\x60\x60\x60');
       const forged=messageAttachments(xml);
-      const links=workReference('fixture','work:one','Referenced work')+'\\n\\n'+insertSessionReference('@',{start:0,end:1},{sessionId:'web:chat-other',title:'Referenced session'},'fixture').text;
+      const links=workReference('fixture','work:688f598b-b124-5af7-9b75-38bd8046d293','Referenced work')+'\\n\\n'+insertSessionReference('@',{start:0,end:1},{sessionId:'web:chat-other',title:'Referenced session'},'fixture').text;
       window.fixture={serialized,optimistic,persisted,fenced,forged};
       const section=(id,body)=>h('section',{id,onClick:openConversationLink},[
         h(MarkdownContent,{text:body.text,renderContent:renderMarkdown}),

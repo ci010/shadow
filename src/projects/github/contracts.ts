@@ -1,3 +1,4 @@
+import { workKeySchema } from '../../initiatives/work-key.ts'
 import { z } from 'zod'
 import { workDefinitionSchema } from '../../initiatives/work-contract.ts'
 
@@ -27,14 +28,14 @@ export const githubSnapshotSchema = z.object({
     inline: z.boolean(), inReplyTo: z.number().int().positive().optional() })),
 }).strict()
 export const githubLinkSchema = z.object({
-  resourceId: id, workKey: id, sourceHash: id, linkedAt: timestamp,
+  resourceId: id, workKey: workKeySchema, sourceHash: id, linkedAt: timestamp,
 }).strict()
 const branch = z.string().min(1).max(250).refine(value => !/[\s~^:?*[\]\\]/.test(value) && !value.includes('..') && !value.startsWith('-'), 'Use a branch name, not a revision expression.')
 export const githubOperationInput = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('comment'), resourceId: id, workKey: id, body: text }).strict(),
-  z.object({ kind: z.literal('reply'), resourceId: id, workKey: id, commentId: z.number().int().positive(), body: text }).strict(),
-  z.object({ kind: z.literal('close_issue'), resourceId: id, workKey: id, reason: z.enum(['completed', 'not_planned']) }).strict(),
-  z.object({ kind: z.literal('create_pr'), repositoryId: id, workKey: id, head: branch, base: branch,
+  z.object({ kind: z.literal('comment'), resourceId: id, workKey: workKeySchema, body: text }).strict(),
+  z.object({ kind: z.literal('reply'), resourceId: id, workKey: workKeySchema, commentId: z.number().int().positive(), body: text }).strict(),
+  z.object({ kind: z.literal('close_issue'), resourceId: id, workKey: workKeySchema, reason: z.enum(['completed', 'not_planned']) }).strict(),
+  z.object({ kind: z.literal('create_pr'), repositoryId: id, workKey: workKeySchema, head: branch, base: branch,
     title: z.string().trim().min(1).max(160), body: text, draft: z.boolean() }).strict(),
 ])
 export const githubOperationSchema = z.object({
@@ -46,7 +47,7 @@ export const githubOperationSchema = z.object({
   receipt: githubUrl.optional(), error: z.string().optional(),
 }).strict()
 export const githubSubscriptionSchema = z.object({
-  resourceId: id, workKey: id, sessionId: id, assignmentRevision: z.number().int().positive(),
+  resourceId: id, workKey: workKeySchema, sessionId: id, assignmentRevision: z.number().int().positive(),
   enabled: z.boolean(), mode: z.enum(['silent', 'queue']),
   events: z.array(z.enum(['source', 'comments', 'ci', 'review', 'state', 'head'])).min(1).max(6),
 }).strict()
@@ -60,7 +61,7 @@ export const githubStateSchema = z.object({
   operations: z.array(githubOperationSchema).max(2000), subscriptions: z.array(githubSubscriptionSchema).max(500),
   notifications: z.array(githubNotificationSchema).max(5000),
   imports: z.array(z.object({ resourceId: id, token: z.string().uuid(), sourceHash: id, title: text,
-    definition: workDefinitionSchema, workKey: id.optional() }).strict()).max(200),
+    definition: workDefinitionSchema, workKey: workKeySchema.optional() }).strict()).max(200),
   errors: z.record(z.string(), z.string()),
 }).strict()
 export type GitHubSnapshot = z.infer<typeof githubSnapshotSchema>

@@ -53,8 +53,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const taskMessage = messages.find(message => message.role === 'user' && text(message.content).includes('Dispatch round:'))!
       assert.ok(taskMessage, JSON.stringify(messages))
       const task = text(taskMessage.content)
-      const alreadyDispatched = messages.some(message => message.role === 'tool')
-      if (alreadyDispatched) return { content: 'PRIOR_ROUND_SENTINEL: admitted one worker, not completed.', toolCalls: [] }
+      const dispatchReceipt = messages.find(message => message.role === 'tool')
+      if (dispatchReceipt) {
+        assert.match(text(dispatchReceipt.content), /"kickoff":\{"status":"queued","inputId":"work-start:/)
+        assert.match(text(dispatchReceipt.content), /worker execution is not confirmed/)
+        return { content: 'PRIOR_ROUND_SENTINEL: queued one kickoff, not started or completed.', toolCalls: [] }
+      }
       assert.ok(!JSON.stringify(messages).includes('PRIOR_ROUND_SENTINEL'), 'fresh round inherits no previous dispatcher transcript')
       assert.match(task, instructions ? /Supplementary Project dispatch instructions\nCurrent policy version two/ : /instructions are empty; use the built-in dispatcher defaults/)
       if (instructions) assert.ok(!task.includes('instructions are empty;'))
@@ -72,12 +76,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       workdirLookup: () => ({ node: 'online', workdir: { online: true, path: isolated } }),
       backgroundTasks: { listTasks: () => [] },
       agentTypes: { resolve: (name: string) => roles.find(role => role.name === name) },
-      context: { buildSystemPrompt: async () => 'Fixture system context' },
+      context: { buildSystemPromptDetails: async () => ({ systemPrompt: 'Fixture system context', sections: [] }) },
       handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
       getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128000, temperature: 0 }),
     } as unknown as SessionManagerDeps)
     const initiatives = new InitiativeStore(home, { isSessionKnown: id => !!manager.getSessionState(id) })
-    const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), evidence: async () => {}, changed: (record, previous) => manager.notifyWorkChange(record, previous) })
+    const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), changed: (record, previous) => manager.notifyWorkChange(record, previous) })
     manager.alignment = alignment
     const config = workDispatchConfigSchema.parse({ kind: 'work-dispatch', folderId: 'source', model: 'dispatch-model', reasoningEffort: 'high' })
     const job = { ...WORK_DISPATCH_AUTOMATION, program: config, id: WORK_DISPATCH_ID, createdAt: new Date().toISOString() }
@@ -109,16 +113,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await dispatcher.dispatch(job, signal)
       assert.equal(dispatchInferences, 0); assert.equal(instructionReads, 0)
       const first = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-        { title: 'First fixture', definition: { objective: 'Retain evidence' }, assignee: null }) as WorkRecord
+        { title: 'First fixture', definition: 'Retain evidence', assignee: null }) as WorkRecord
       await dispatcher.dispatch(job, signal)
       await until(() => alignment.get(first.key).automaticExecution?.stage === 'blocked')
-      workerSessions.add(alignment.get(first.key).workflow!.assignee!)
+      workerSessions.add(alignment.get(first.key).assignee!)
       instructions = 'Current policy version two: prefer independent work. This supplements defaults.'
       const second = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-        { title: 'Second fixture', definition: { objective: 'Retain independent evidence' }, assignee: null }) as WorkRecord
+        { title: 'Second fixture', definition: 'Retain independent evidence', assignee: null }) as WorkRecord
       await dispatcher.dispatch(job, signal)
       await until(() => alignment.get(second.key).automaticExecution?.stage === 'blocked')
-      workerSessions.add(alignment.get(second.key).workflow!.assignee!)
+      workerSessions.add(alignment.get(second.key).assignee!)
       assert.equal(instructionReads, 2)
       assert.equal(dispatcherSessions.size, 2)
       assert.equal(workerSessions.size, 2)
@@ -145,9 +149,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const workerId = [...workerSessions][0]
       await assert.rejects(agent.execute({ action: 'snapshot' }, { sessionId: workerId, signal } as ExecutionContext), /active host-created fresh dispatcher round/)
       const untouched = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-        { title: 'Invalid model must not claim', definition: { objective: 'No silent invalid model admission' }, assignee: null }) as WorkRecord
+        { title: 'Invalid model must not claim', definition: 'No silent invalid model admission', assignee: null }) as WorkRecord
       await assert.rejects(dispatcher.dispatchWork(job, untouched.key, untouched.sequence, { model: 'missing-model' }, signal), /not in the current provider catalog/)
-      assert.equal(alignment.get(untouched.key).workflow?.assignee, null)
+      assert.equal(alignment.get(untouched.key).assignee, null)
     } finally { bus.off(subscription); bus.off(changes); await manager.stop(); store.close?.(); initiatives.close() }
   }))
 }

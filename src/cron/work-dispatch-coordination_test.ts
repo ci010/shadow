@@ -30,7 +30,7 @@ function fixture() {
   } as unknown as Pick<SessionManager, 'getSessionState' | 'deliver'>
   const dispatcher = {
     snapshot: (_config: unknown, offset = 0) => ({ capacity: { available: true }, targets: [], total: 2, next: offset === 0 ? 1 : undefined,
-      records: [{ key: offset === 0 ? 'work:one' : 'work:two', sequence: offset === 0 ? version : secondPage, ownerBusy }] }),
+      records: [{ key: offset === 0 ? 'work:688f598b-b124-5af7-9b75-38bd8046d293' : 'work:aa6a220e-f015-58bb-a2ea-e35ba168c762', sequence: offset === 0 ? version : secondPage, ownerBusy }] }),
     reviewTarget: (key: string, expected: number) => {
       if (expected !== version) throw new Error('Work changed')
       return { record: { key, sequence: version }, recipient }
@@ -70,13 +70,13 @@ test('agent no-op suppression invalidates on instructions, all Work pages, owner
 
 test('coordinator review is bounded, preserves ownership, rejects stale grants and prevents subsequent new-worker dispatch', async () => {
   const f = fixture()
-  const request = { action: 'request_review', key: 'work:one', version: 1, reason: 'Existing PR evidence needs owner reconciliation.' }
+  const request = { action: 'request_review', key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', version: 1, reason: 'Existing PR evidence needs owner reconciliation.' }
   f.onRun(async () => {
     const first = JSON.parse(await f.agent.execute(request, f.context))
     assert.equal(first.status, 'accepted')
     const repeated = JSON.parse(await f.agent.execute({ ...request, reason: 'Different wording must not cause another notification.' }, f.context))
     assert.equal(repeated.replayed, false)
-    await assert.rejects(f.agent.execute({ action: 'dispatch', key: 'work:one', version: 1 }, f.context), /review is pending/)
+    await assert.rejects(f.agent.execute({ action: 'dispatch', key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', version: 1 }, f.context), /review is pending/)
     await assert.rejects(f.agent.execute({ ...request, version: 2 }, f.context), /changed/)
   })
   await f.agent.run(f.job, f.signal)
@@ -86,7 +86,7 @@ test('coordinator review is bounded, preserves ownership, rejects stale grants a
 
 test('uncertain coordinator delivery is not replayed even in the same round', async () => {
   const f = fixture(); f.failDelivery()
-  const request = { action: 'request_review', key: 'work:one', version: 1, reason: 'Need coordinator review.' }
+  const request = { action: 'request_review', key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', version: 1, reason: 'Need coordinator review.' }
   f.onRun(async () => {
     await assert.rejects(f.agent.execute(request, f.context), /outcome unknown/)
     const retry = JSON.parse(await f.agent.execute(request, f.context))
@@ -105,7 +105,7 @@ test('failed rounds back off and revoked configuration cannot notify a coordinat
   const revoked = fixture()
   revoked.onRun(async () => {
     revoked.job.enabled = false
-    await assert.rejects(revoked.agent.execute({ action: 'request_review', key: 'work:one', version: 1, reason: 'Need review' }, revoked.context), /revoked/)
+    await assert.rejects(revoked.agent.execute({ action: 'request_review', key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', version: 1, reason: 'Need review' }, revoked.context), /revoked/)
   })
   await revoked.agent.run(revoked.job, revoked.signal)
   assert.equal(revoked.counts().deliveries, 0)
@@ -116,7 +116,7 @@ test('known pre-delivery abort releases only the unsent reservation; same-versio
   const f = fixture()
   const controller = new AbortController()
   const context = { ...f.context, signal: controller.signal }
-  const request = { action: 'request_review', key: 'work:one', version: 1, reason: 'Reconcile owner.' }
+  const request = { action: 'request_review', key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', version: 1, reason: 'Reconcile owner.' }
   const reserve = f.receipts.reserveReview.bind(f.receipts)
   f.receipts.reserveReview = async input => {
     const reservation = await reserve(input)
@@ -126,7 +126,7 @@ test('known pre-delivery abort releases only the unsent reservation; same-versio
   f.onRun(async () => {
     await assert.rejects(f.agent.execute(request, context), /abort/i)
     assert.equal(f.counts().deliveries, 0)
-    assert.equal(await f.receipts.reviewFor('work:one', 1), undefined)
+    assert.equal(await f.receipts.reviewFor('work:688f598b-b124-5af7-9b75-38bd8046d293', 1), undefined)
     const retried = JSON.parse(await f.agent.execute(request, f.context))
     assert.equal(retried.status, 'accepted')
   })

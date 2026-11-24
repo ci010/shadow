@@ -1,3 +1,5 @@
+import { workNotePath } from '../initiatives/work-note.ts'
+import { workKeySchema } from '../initiatives/work-key.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
 import { WORK_HELP } from '../sessions/work-alignment.ts'
 import { WorkTool } from '../tools/work.ts'
@@ -5,11 +7,12 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { VirtualEntry, VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
 
 const PAGE = 20
-const GUIDE = `Read-only current Project Work. Notes orient work, never grant permission or imply human acceptance.
+const GUIDE = `Read-only current Project Work. Use Markdown definitions and summaries for shared state and results. Keep transient planning in the session. Neither grants permission or implies human acceptance. Definition citations are not validated evidence.
 Paths: v:works/index (20 receipts/page), v:works/index/2, v:works/context (associated keys, 20/page), v:works/context/2,
-v:works/keys/<encodeURIComponent(key)> (current definition, notes, authority, assignment delivery and ancestor path); append /definition, /notes or /path for a focused view.
+v:works/keys/<encodeURIComponent(key)> (current definition, summary, artifacts, authority, assignment delivery and ancestor path); append /definition, /summary or /path for a focused view.
+Append /comments for the latest 10 shared Markdown comments; follow next for older pages or read an exact comment path. Comments are Project Work, not private messages, and are not included in broad discovery.
 Use search with path v:works for bounded discovery; broad search includes only the first 20 records and warns when incomplete. Follow index pages or narrow search to an exact key path. No history or retired fields are exported.
-Read v:works/schema for field help. Mutations are dynamic tools: discover v:tools/work_create, work_update, work_assign, work_review, work_link; invoke_tool({name:"work_update",args:{key,version,notes:{summary:"Result"}}}). Source and callable names coincide. No action/data wrapper. Existing Project/session/mode/authority checks still apply.`
+Read v:works/schema for field help. Mutations are dynamic tools: discover v:tools/work_create, work_update, work_assign, work_review, work_link, work_note_create; invoke_tool({name:"work_update",args:{key,version,summary:"Result"}}). Source and callable names coincide. No action/data wrapper. Existing Project/session/mode/authority checks still apply.`
 const keyPath = (key: string) => `keys/${encodeURIComponent(key)}`
 function page(raw?: string): number {
   const value = raw === undefined ? 1 : Number(raw)
@@ -45,15 +48,22 @@ export function createWorksHandler(alignment: WorkAlignment): { read: VirtualFsH
         next: n * PAGE < keys.length ? `v:works/context/${n + 1}` : null }, null, 2)
     }
     if (path.startsWith('keys/')) {
-      const [encoded = '', view] = path.slice(5).split('/')
-      if (path.slice(5).split('/').length > 2 || view && !['definition', 'notes', 'path'].includes(view)) throw new Error('Work view not found.')
+      const [encoded = '', view, ...tail] = path.slice(5).split('/')
       const key = decodeURIComponent(encoded)
-      if (!key || key.length > 600 || encoded !== encodeURIComponent(key)) throw new Error('Use the encoded key path returned by the index.')
+      if (!workKeySchema.safeParse(key).success || encoded !== encodeURIComponent(key)) throw new Error('Use the encoded key path returned by the index.')
+      if (view === 'comments') {
+        if (tail.length === 2 && tail[0] === 'id') return JSON.stringify(alignment.store.workNote(key, tail[1]!), null, 2)
+        if (tail.length !== 0 && (tail.length !== 2 || tail[0] !== 'before')) throw new Error('Work comment view not found.')
+        const { items, next } = alignment.store.workNotes(key, tail[1])
+        return JSON.stringify({ items: items.map(note => ({ ...note, path: workNotePath(key, note.id) })),
+          next: next ? `v:works/${keyPath(key)}/comments/before/${next}` : null }, null, 2)
+      }
+      if (tail.length || view && !['definition', 'summary', 'path'].includes(view)) throw new Error('Work view not found.')
       const result = JSON.parse(await tool.execute({ action: 'context', key }, context))
       // Exact-key reads (also expanded by grep) must not duplicate the adapter's
       // unpaginated association inventory. Discovery lives in context pages only.
       if (!view) return JSON.stringify({ selected: result.selected, records: result.records,
-        associatedPath: 'v:works/context' })
+        associatedPath: 'v:works/context', commentsPath: `v:works/${keyPath(key)}/comments` })
       const record = result.records[0]
       return JSON.stringify({ key, version: record.version, goalRevision: record.goalRevision, [view]: record[view] }, null, 2)
     }
@@ -71,8 +81,9 @@ export function createWorksHandler(alignment: WorkAlignment): { read: VirtualFsH
       }
       if (scope.startsWith('keys/')) {
         // Name-only discovery must not invent entries for missing/invalid keys.
-        await render(scope, context)
-        for (const suffix of ['', '/definition', '/notes', '/path']) await add(scope.split('/').slice(0, 2).join('/') + suffix)
+        const content = await render(scope, context)
+        if (scope.split('/')[2] === 'comments') return [{ name: scope, content: options?.content === false ? '' : content }]
+        for (const suffix of ['', '/definition', '/summary', '/path']) await add(scope.split('/').slice(0, 2).join('/') + suffix)
         return entries
       }
       if (/^(index|context)\/[1-9][0-9]*$/.test(scope)) { await add(scope); return entries }

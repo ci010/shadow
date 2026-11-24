@@ -15,10 +15,11 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 const source = { id: 'request', physicalId: 'segment' }
 const focus = { category: 'Understand release effects', purpose: 'Decide using evidence', motivation: 'May want confidence', evidence: [source] }
 const record = (i: number) => workRecordSchema.parse({
-  key: `topic:web:chat-${i}`, subject: { kind: 'topic', sessionId: `web:chat-${i}` }, sequence: 1, revision: 1,
-  definition: { objective: 'Explain the release', acceptance: [], boundaries: [], evidence: [] },
+  key: `work:55555555-5555-4555-8555-${String(i).padStart(12, '0')}`, sequence: 1, revision: 1,
+  definition: 'Explain the release',
   origin: 'agent_interpretation', changedBy: 'work-observer', changedAt: '2026-10-11T00:00:00Z',
-  change: 'understanding', reason: 'Evidence', paused: false,
+
+  title: 'Observed Work', manager: null, assignee: null, assignmentRevision: 1, status: 'pending', dependencies: [],
   observation: { sessionId: `web:chat-${i}`, observedAt: '2026-10-11T00:00:00Z', sources: [source], focus },
 })
 
@@ -59,10 +60,10 @@ test('explicit organization dispatches bounded tool organization, persists safel
     assert.equal(store.projectFocus()?.result.groups.length, 30, 'all bounded concrete topics retained')
     assert.equal(store.projectFocus()?.result.hierarchy?.filter(node => !node.parentId).length, 3, 'organization actually reduces semantic roots, not filters')
     assert.equal(store.projectFocus()?.origin, 'model_interpretation')
-    const saved = store.projectFocus()
+    const saved = store.projectFocus()!
     mode = 'fail'
     await assert.rejects(controller.organize(new AbortController().signal), /Provider/)
-    assert.deepEqual(store.projectFocus(), saved)
+    assert.deepEqual({ ...store.projectFocus(), organizerAdmission: saved.organizerAdmission }, saved)
     mode = 'wait'
     const running = controller.organize(new AbortController().signal)
     await assert.rejects(controller.organize(new AbortController().signal), /already running/)
@@ -71,10 +72,11 @@ test('explicit organization dispatches bounded tool organization, persists safel
     store.saveWork({ ...prior, sequence: 2 }, 1, 'human', 'note')
     gate.resolve()
     await assert.rejects(running, /Topics changed/)
-    assert.deepEqual(store.projectFocus(), saved)
+    assert.deepEqual({ ...store.projectFocus(), organizerAdmission: saved.organizerAdmission }, saved)
+    const beforeReopen = store.projectFocus()
     await controller.stop(); store.close()
     store = new InitiativeStore(home)
-    assert.deepEqual(store.projectFocus(), saved, 'SQLite reopen retains inference without replay')
+    assert.deepEqual(store.projectFocus(), beforeReopen, 'SQLite reopen retains inference without replay')
   } finally { await controller.stop(); store.close(); scope.close() }
 }))
 

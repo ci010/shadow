@@ -29,11 +29,11 @@ test('isolated Work board keeps read receipts explicit and completed history acc
         import '/src/styles.css'; import 'uno.css';
         import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h, reactive} from 'vue'; import {createRouter,createMemoryHistory} from 'vue-router';
         import ProjectWorkbench from '/src/components/ProjectWorkbench.vue'; import {i18n} from '/src/i18n.ts';
-        const record={key:'topic:web:done',subject:{kind:'topic',sessionId:'web:done'},revision:1,sequence:2,
-          definition:{objective:'Finished outcome',acceptance:[],boundaries:[],evidence:[]},origin:'human',changedBy:'human',changedAt:'2026-01-01T00:00:00Z',change:'goal',reason:'Fixture',paused:false,
-          workflow:{title:'Finished outcome',manager:null,assignee:null,assignmentRevision:1,status:'done',dependencies:[],result:{summary:'Actual measured result',evidence:[]}},authority:{manager:null,executor:null,active:false},history:[]};
-        const item={key:record.key,title:'Finished outcome',revision:1,sequence:2,status:'done',parentKey:null,dependencies:[],blockedReason:null,manager:null,assignee:null,paused:false,changedAt:record.changedAt,result:record.workflow.result};
-        const state=reactive({value:{items:[item,{...item,key:'topic:web:active',title:'Current work',status:'in_progress',result:undefined}],sessions:[],requests:[],effects:[]},revision:1,loading:false});
+        const record={key:'work:e3359114-1432-5d52-97f5-be58a6456acd', revision:1,sequence:2,
+          definition:'Finished outcome',origin:'human',changedBy:'human',changedAt:'2026-01-01T00:00:00Z',
+          title: 'Finished outcome', manager:null,assignee:null,assignmentRevision:1,status:'done',dependencies:[],summary:'Actual measured result',artifacts:[],authority:{manager:null,executor:null,active:false},history:[]};
+        const item={key:record.key,title:'Finished outcome',revision:1,sequence:2,status:'done',parentKey:null,dependencies:[],blockedReason:null,manager:null,assignee:null,changedAt:record.changedAt,kind:record.kind,summary:record.summary,artifacts:record.artifacts,basis:record.basis};
+        const state=reactive({value:{items:[item,{...item,key:'work:b5efcced-8e25-5449-924c-06d716158f13',title:'Current work',status:'in_progress',summary:''}],sessions:[],requests:[],effects:[]},revision:1,loading:false});
         const completions=[{key:item.key,completionId:'first',sequence:2,completedAt:'2026-01-02T00:00:00Z',unread:true}];
         window.writes=[]; window.state=state; window.record=record; window.completions=completions;
         window.setLocale=value=>{i18n.global.locale.value=value};
@@ -78,9 +78,9 @@ test('isolated Work board keeps read receipts explicit and completed history acc
       await run(()=>{
         window.originalItems=window.state.value.items;
         const base=window.originalItems[0];
-        window.state.value.items=[{...base,key:'finished-parent',title:'Completed parent group'},...Array.from({length:3000},(_,i)=>({...base,key:'bulk-'+i,parentKey:'finished-parent',title:'Measured card '+i,
+        window.state.value.items=[{...base,key:'work:44444444-4444-4444-8444-999999999999',title:'Completed parent group'},...Array.from({length:3000},(_,i)=>({...base,key:'work:44444444-4444-4444-8444-'+String(i).padStart(12,'0'),parentKey:'work:44444444-4444-4444-8444-999999999999',title:'Measured card '+i,
           blockedReason:i%3===0?'Variable height blocker with a long wrapping explanation. '.repeat(2+i%8):null,
-          dependencies:i%2?['dependency']:[]}))];
+          dependencies:i%2?['work:44444444-4444-4444-8444-999999999998']:[]}))];
       });
       await wait(()=>document.querySelector('[data-status="done"] h3').textContent.includes('3001'));
       await new Promise(r=>setTimeout(r,200));
@@ -90,7 +90,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
       assert.equal(await run(noOverlap),true);
       await run(()=>{document.querySelector('[data-status="done"] .work-lane').scrollTop=180000});
       await new Promise(r=>setTimeout(r,350));
-      assert.ok(await run(()=>[...document.querySelectorAll('[data-status="done"] .work-item-card')].some(el=>Number(el.dataset.workKey.split('-')[1])>500)));
+      assert.ok(await run(()=>[...document.querySelectorAll('[data-status="done"] .work-item-card')].some(el=>Number(el.dataset.workKey.split('-').at(-1))>500)));
       assert.equal(await run(noOverlap),true);
       console.log('VIRTUAL_BOARD_DOM '+JSON.stringify(await run(()=>({items:window.state.value.items.length,mounted:document.querySelectorAll('.work-item-card').length,heights:[...document.querySelectorAll('[data-status="done"] .lane-row')].map(el=>el.getBoundingClientRect().height)}))));
       await run(()=>{const lane=document.querySelector('[data-status="done"] .work-lane');lane.focus();lane.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}));});
@@ -100,7 +100,7 @@ test('isolated Work board keeps read receipts explicit and completed history acc
       assert.ok(await run(()=>document.querySelectorAll('.work-item-card').length)<30);
       await capture('virtual-board-end-1250-light');
       await run(()=>document.activeElement.click());
-      await wait(()=>window.requestPaths.some(path=>path.endsWith('/api/work/bulk-2999')));
+      await wait(()=>window.requestPaths.some(path=>path.endsWith('/api/work/work%3A44444444-4444-4444-8444-000000002999')));
       assert.deepEqual(await run(()=>window.writes),[]);
       await run(()=>[...document.querySelectorAll('button')].find(el=>el.getAttribute('aria-label')==='Close coordination panel').click());
       await wait(()=>!!document.querySelector('[data-status="done"] .work-lane'));

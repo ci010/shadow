@@ -8,13 +8,14 @@ import { z } from 'zod'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { WorkConflict } from '../initiatives/work-contract.ts'
 import { FolderError } from '../folders/registry.ts'
 import { projectWorkOverviewSchema, projectWorkLiveOverviewSchema, visibleProjectFocus, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
 
 export const humanWorkActionSchema = z.object({
   action: z.enum(['create', 'update', 'assign', 'review']),
-  key: z.string().optional(), version: z.number().int().positive().optional(), data: z.unknown().optional(),
+  key: workKeySchema.optional(), version: z.number().int().positive().optional(), data: z.unknown().optional(),
 }).strict()
 
 export async function applyHumanWorkAction(sessions: SessionManager, body: z.infer<typeof humanWorkActionSchema>, signal: AbortSignal) {
@@ -45,16 +46,17 @@ export async function projectWorkOverview(sessions: SessionManager, github: Reco
     organization,
     focus: alignment.store.projectFocus(),
     items: records.map(record => {
-      const authority = alignment.store.workAuthority(record.subject)
+      const authority = alignment.store.workAuthority(record.key)
+      const contextChanged = alignment.contextChanged(record)
       return {
-        key: record.key, title: record.workflow?.title ?? record.definition.objective,
-        revision: record.revision, sequence: record.sequence, status: record.workflow?.status ?? null,
-        blockedReason: record.workflow?.blockedReason ?? null,
-        parentKey: record.workflow?.parentKey ?? null, dependencies: record.workflow?.dependencies ?? [],
-        manager: authority.manager, assignee: authority.executor, paused: record.paused,
+        key: record.key, title: record.title,
+        revision: record.revision, sequence: record.sequence, status: record.status,
+        blockedReason: record.blockedReason ?? null,
+        parentKey: record.parentKey ?? null, dependencies: record.dependencies,
+        manager: authority.manager, assignee: authority.executor,
         changedAt: record.changedAt,
-        objective: record.definition.objective, origin: record.origin, userQuote: record.requestSource?.quote,
-        notes: record.notes, result: record.workflow?.result, contextChanged: alignment.contextChanged(record),
+        definition: record.definition, origin: record.origin,
+        kind: record.kind, summary: record.summary, artifacts: record.artifacts, basis: record.basis, contextAssessment: contextChanged ? undefined : record.contextAssessment, contextChanged,
         github: github[record.key],
         observation: record.observation,
 
