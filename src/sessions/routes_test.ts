@@ -114,12 +114,14 @@ test('file and Git routes distinguish offline nodes from unavailable capabilitie
 
 test('cancel route requires an existing authorized logical session and distinguishes idle from requested', async () => {
   let cancellations = 0
+  let followUpCancellations = 0
   let phase = 'idle'
   const key = 'web:chat-cancel'
   const app = new Hono()
   testSessionsApiPlugin({
     projectId: 'owned-org',
     getSessionState: (id: string) => id === key ? { sessionId: key } : undefined,
+    cancelScheduledSessionFollowUp: async (id: string) => { assert.equal(id, key); followUpCancellations++ },
     getActiveSession: () => ({ get phase() { return phase }, activeRequestId: 'current-request', cancel: () => { cancellations++ } }),
   } as unknown as SessionManager)(app)
   const endpoint = `/api/sessions/${encodeURIComponent(key)}/cancel`
@@ -145,6 +147,7 @@ test('cancel route requires an existing authorized logical session and distingui
     assert.equal((await app.request(`/api/sessions/${encodeURIComponent(unknown)}/cancel`, { method: 'POST' })).status, 404)
   }
   assert.equal(cancellations, 2)
+  assert.equal(followUpCancellations, 3)
   const missing = new Hono()
   testSessionsApiPlugin(undefined)(missing)
   assert.equal((await missing.request(endpoint, { method: 'POST' })).status, 501)

@@ -3,7 +3,8 @@ import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { cleanupTempFiles } from '../utils/paths.ts'
 import { physicalSessionId } from './session-identity.ts'
-import { inputContent, sessionReplyAddress, type SessionInput, type SessionMessageInput } from './input.ts'
+import { inputContent, sessionReplyAddress, type SessionInput, type SessionMessageInput, type SessionTurnFact } from './input.ts'
+import { followUpPhase } from './session-follow-up.ts'
 import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 import { Span } from '../otel/tracing.ts'
@@ -111,7 +112,18 @@ export class Session extends BaseSession {
   workNotificationFinished?: (input: SessionInput) => void
   prepareWorkNotification?: (input: SessionMessageInput) => Promise<SessionMessageInput | null>
 
+  prepareSessionFollowUp?: (input: SessionInput) => Promise<boolean>
+  settleFollowUpTurn?: (fact: SessionTurnFact) => void
+  isFollowUpSettled?: () => boolean
+
+  protected override followUpFinalAllowed(): boolean { return this.isFollowUpSettled?.() ?? false }
+
+  protected override beforeTurnStateSaved(fact: SessionTurnFact): void {
+    this.settleFollowUpTurn?.(fact)
+  }
+
   private async prepareQueuedInput(input: SessionInput): Promise<SessionInput | null> {
+    if (followUpPhase(input.source) && !await this.prepareSessionFollowUp?.(input)) return null
     if (input.kind === 'message' && input.source.kind === 'event' && input.source.type === 'work-notification-wake') {
       return this.prepareWorkNotification ? this.prepareWorkNotification(input) : null
     }

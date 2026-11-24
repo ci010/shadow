@@ -1399,6 +1399,46 @@ separate parent-owned contracts. Self views adapt task title to read-only topic,
 never task description to focus. New focus is persisted independently; clearing it
 falls back to topic without erasing any historical discovery metadata.
 
+### Automatic Session follow-up
+
+An ordinary owner Web conversation can end its current turn while still owing a
+result. It uses the existing `write` tool and `v:sessions/self.json`:
+
+```json
+{
+  "followUp": {
+    "next": "Check eval run #8421 and report the comparison against baseline",
+    "after": 1800
+  }
+}
+```
+
+`after` is an integer number of seconds (5–86400), counted from the end of the
+successful turn. Follow-up is independent of Work, Task review, and cron. At the
+due time the host delivers `next` to the same Session as a system-origin queue
+input; it neither checks the external system itself nor grants new authority.
+Keeping the same record schedules another check at the same interval.
+
+If a direct user turn ends naturally without completion, a follow-up, or a
+pending question, the host delivers one self-check at the next idle boundary.
+If the Session already owns pending asynchronous work (a subagent, a managed
+background process/task, or an enabled or running linked cron job), the host
+skips the initial self-check. A previously saved follow-up waits until that
+work is no longer active; unrelated Sessions' jobs do not block it.
+The self-check can only read or write its own `self.json` or use `ask`. It must save
+`followUp`, set `completed: true`, or actually open a user question. A final
+message claiming a next action is not a substitute. An unsettled self-check is
+corrected in the same turn; if it still fails to settle within the budget, it
+fails visibly and does not schedule another self-check. An open `ask` pauses the
+check until the actual answer or the existing request lifecycle ends.
+
+`completed: true` clears the follow-up. `followUp: null` or a manual stop cancels
+automatic follow-up without claiming completion; a new user turn may start a
+new one. Sleep is not a stop. The host limits automatic wake-ups to 12 in seven
+days and restores pending schedules after restart from either Session backend.
+An already admitted interrupted check is not automatically replayed. Old
+conversations are not retrospectively scanned on startup.
+
 ### Log briefings and detail lookup
 
 Memory's curated history is called **logs**, not external signals or runtime/bus events. This is a

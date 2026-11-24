@@ -558,11 +558,15 @@ export function sessionsApiPlugin(
         return c.json({ error: 'invalid_request' }, 400)
       }
       const active = sessions.getActiveSession(key)
-      if (!active || active.phase === 'idle') return c.json({ sessionId: key, status: 'idle' })
+      if (!active || active.phase === 'idle') {
+        if (!body.requestId) await sessions.cancelScheduledSessionFollowUp(key)
+        return c.json({ sessionId: key, status: 'idle' })
+      }
       if (body.requestId && (!('activeRequestId' in active) || active.activeRequestId !== body.requestId)) {
         return c.json({ error: 'request_not_active', sessionId: key }, 409)
       }
       active.cancel()
+      await sessions.cancelScheduledSessionFollowUp(key)
       return c.json({ sessionId: key, status: 'requested' })
     })
 

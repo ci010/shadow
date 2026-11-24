@@ -9,7 +9,9 @@ import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { parseChannelSource, passiveChannelId, PASSIVE_CHANNEL_PREFIX, type ChannelSource, type PassiveChannelMessage } from '../channels/passive-contract.ts'
 import { localFolderWorkdirRef } from './locality.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
-import { parseSessionFocus, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
+import { parseSessionFocus, parseSessionFollowUp, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
+import { isOwnerSession } from './owner-policy.ts'
+import { FOLLOW_UP_MAX_AGE, FOLLOW_UP_MAX_WAKES, FOLLOW_UP_SOURCE, followUpInput, followUpPhase, nextFollowUp } from './session-follow-up.ts'
 import { UserPresence, resolveUserWaitPolicy, type UserWaitPolicy } from './presence.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
 import { parseTaskRecord, type TaskRecord } from './task-record.ts'
@@ -1490,6 +1492,7 @@ ${JSON.stringify(request)}`,
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise
     this.stopped = true
+    clearTimeout(this.sessionFollowUpTimer)
     clearTimeout(this.kickoffWakeTimer)
     this.kickoffWakeTimer = undefined
     const discussionStop = this.yieldDiscussions.stop()
@@ -1505,6 +1508,7 @@ ${JSON.stringify(request)}`,
       // than allowing an in-flight preparation to outlive shutdown.
       await Promise.allSettled(this.preparations.values())
       await this.kickoffDrain
+      await this.sessionFollowUpDrain
       await Promise.allSettled(this.stateCreations.values())
       await discussionStop
       for (const session of Object.values(this.sessions)) {
@@ -1594,6 +1598,9 @@ ${JSON.stringify(request)}`,
   /** Resolves after preparation and admission, never after model completion. */
   deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
     sessionId = this.resolveSessionIdentity(sessionId)
+    if (input.source.kind === 'event' && input.source.source === FOLLOW_UP_SOURCE && !this.sessionFollowUpInputs.has(input)) {
+      return Promise.reject(new Error('Session follow-up delivery is host-owned'))
+    }
     if (input.id.startsWith('work-start:')) return Promise.reject(new Error('Automatic kickoff requires the Project inbox drain'))
     if (sessionId.startsWith('work-executor:') && !this.sessionStates[sessionId]?.automaticWork) {
       return Promise.reject(new Error('Canonical automatic executor is unavailable; delivery cannot recreate it'))
@@ -1629,6 +1636,7 @@ ${JSON.stringify(request)}`,
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
+      if (input.kind === 'control' && input.command.type === 'cancel') await this.cancelScheduledSessionFollowUp(sessionId)
       if (kickoff) {
         this.assertKickoffAvailable(kickoff)
         const active = this.sessions[sessionId]
@@ -1784,6 +1792,7 @@ ${JSON.stringify(request)}`,
           if (input.kind === 'message') {
             const current = this.sessionStates[sessionId]
             current.lastUserMessageAt = new Date().toISOString()
+            if (current.followUp === null && this.canFollowUp(current) && !input.source.sender.isGroup) delete current.followUp
             await this.store.saveState(sessionId, current)
           }
         }
@@ -1992,6 +2001,10 @@ ${JSON.stringify(request)}`,
       this.promptProvenance.delete(id)
       this.scheduledWorkNotifications.delete(id)
       this.scheduledAutomaticKickoffs.delete(id)
+      for (const [inputId, target] of this.queuedSessionFollowUps) {
+        if (target === id) this.queuedSessionFollowUps.delete(inputId)
+      }
+      this.armSessionFollowUps()
       this.executionLimits.delete(id)
       if (ctx.state.mode !== 'session') {
         this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
@@ -2044,9 +2057,173 @@ ${JSON.stringify(request)}`,
       )
       if (ctx.personalGuard) this.personalContextGuards.set(sess, ctx.personalGuard)
       if (ctx.state.automaticWork) sess.onIdle = () => this.wakeAutomaticWorkKickoffs()
+      else if (this.canFollowUp(ctx.state)) {
+        sess.onIdle = () => this.armSessionFollowUps()
+        sess.prepareSessionFollowUp = input => this.claimSessionFollowUp(sessionId, input)
+        sess.settleFollowUpTurn = fact => this.settleSessionFollowUp(ctx.state, fact)
+        sess.isFollowUpSettled = () => ctx.state.completed === true || !!ctx.state.followUp || this.hasFollowUpQuestion(sessionId)
+      }
       this.sessions[sessionId] = sess
       return sess
     }
+  }
+
+  private sessionFollowUpsStarted = false
+  private sessionHasCronJob?: (id: string) => boolean
+  private sessionFollowUpTimer?: ReturnType<typeof setTimeout>
+  private sessionFollowUpDrain?: Promise<void>
+  private readonly sessionFollowUpInputs = new WeakSet<SessionInput>()
+  private readonly queuedSessionFollowUps = new Map<string, string>()
+
+  /** Start only after explicit recovery; never scan old conversations for missing metadata. */
+  startSessionFollowUps(hasCronJob?: (id: string) => boolean): void {
+    this.sessionHasCronJob = hasCronJob
+    this.sessionFollowUpsStarted = true
+    this.armSessionFollowUps()
+  }
+
+  /** Cron inventory/operation changes can unblock an already scheduled follow-up. */
+  wakeSessionFollowUps(): void { this.armSessionFollowUps() }
+
+  private canFollowUp(state: SessionState): boolean {
+    return !!this.deps.projectId && isOwnerSession(state, this.deps.projectId)
+      && !state.channelBoundary && !state.automaticWork && !this.isManagedConversation(state.sessionId)
+  }
+
+  private hasFollowUpQuestion(id: string): boolean {
+    return !!this.inputs.get(id, true) || !!this.yields.get(id)
+  }
+
+  private hasFollowUpAsyncWork(id: string): boolean {
+    if (this.sessionHasCronJob?.(id) || this.isWaitingForExternalExecution(id) || this.isWaitingForCall(id) || this.ownedCreations.get(id)?.size) return true
+    return Object.values(this.sessionStates).some(child => {
+      if (delegationOwner(child) !== id || child.mode !== 'task') return false
+      if (child.task?.workflow) return !child.task.workflow.terminal || !child.task.workflow.delivered
+      return !['completed', 'failed', 'cancelled'].includes(child.executionStatus ?? '') || !!child.reportTo && !child.completionReported
+    })
+  }
+
+  private settleSessionFollowUp(state: SessionState, fact: SessionTurnFact): void {
+    if (!this.sessionFollowUpsStarted || this.stopped || !this.canFollowUp(state) || fact.status !== 'completed') return
+    const phase = followUpPhase(fact.source)
+    const direct = fact.source.kind === 'user' && fact.source.sender.channel === 'web'
+      && !fact.source.sender.isGroup && !fact.source.sender.channelAddress
+    if (!phase && !direct) return
+    const prior = state.sessionFollowUp
+    if (phase && prior?.inputId !== fact.inputId) return
+    if (state.completed || state.followUp === null) {
+      delete state.sessionFollowUp
+      return
+    }
+    if (this.hasFollowUpQuestion(state.sessionId)) {
+      if (prior) state.sessionFollowUp = { ...prior, dueAt: 0 }
+      return
+    }
+    // Existing async work already has its own continuation path. Do not invent a
+    // self-check to compete with it; keep an explicitly saved follow-up dormant.
+    if (!state.followUp && this.hasFollowUpAsyncWork(state.sessionId)) {
+      delete state.sessionFollowUp
+      return
+    }
+    state.sessionFollowUp = nextFollowUp(state, phase || state.followUp ? prior : undefined, Date.now(), crypto.randomUUID())
+  }
+
+  private runnableSessionFollowUp(state: SessionState): boolean {
+    const entry = state.sessionFollowUp
+    return !!entry?.dueAt && this.canFollowUp(state) && !this.sessionHasCronJob?.(state.sessionId) && !state.completed && !state.recovery && !state.retirement
+      && !this.deleting.has(state.sessionId) && !this.historyConflict(state.sessionId)
+      && (entry.phase === 'self_check' ? state.followUp === undefined : !!state.followUp)
+  }
+
+  private armSessionFollowUps(): void {
+    if (!this.sessionFollowUpsStarted || this.stopped || this.sessionFollowUpDrain) return
+    clearTimeout(this.sessionFollowUpTimer)
+    const now = Date.now()
+    let next = Infinity
+    for (const state of Object.values(this.sessionStates)) {
+      if (!this.runnableSessionFollowUp(state) || this.queuedSessionFollowUps.has(state.sessionFollowUp!.inputId)) continue
+      const dueAt = state.sessionFollowUp!.dueAt
+      next = Math.min(next, Math.max(dueAt, this.isSessionBusy(state.sessionId) || this.hasFollowUpAsyncWork(state.sessionId) ? now + 5_000 : now))
+    }
+    if (!Number.isFinite(next)) return
+    this.sessionFollowUpTimer = setTimeout(() => {
+      this.sessionFollowUpDrain = this.drainSessionFollowUps().catch(error => console.warn(`[session-follow-up] ${errMsg(error)}`)).finally(() => {
+        this.sessionFollowUpDrain = undefined
+        this.armSessionFollowUps()
+      })
+    }, Math.min(2_147_483_647, next - now))
+    this.sessionFollowUpTimer.unref()
+  }
+
+  private async drainSessionFollowUps(): Promise<void> {
+    for (const state of Object.values(this.sessionStates)) {
+      if (this.stopped) return
+      if (!this.runnableSessionFollowUp(state) || this.isSessionBusy(state.sessionId) || this.hasFollowUpAsyncWork(state.sessionId)) continue
+      const entry = state.sessionFollowUp!
+      if (this.queuedSessionFollowUps.has(entry.inputId) || entry.dueAt > Date.now()) continue
+      const expired = entry.wakes >= FOLLOW_UP_MAX_WAKES || Date.now() >= entry.startedAt + FOLLOW_UP_MAX_AGE
+      if (expired) {
+        await this.pauseSessionFollowUp(state.sessionId, entry.inputId, 'the automatic check limit was reached')
+        continue
+      }
+      const input = followUpInput(entry, state.followUp)
+      this.sessionFollowUpInputs.add(input)
+      this.queuedSessionFollowUps.set(input.id, state.sessionId)
+      try {
+        await this.deliver(state.sessionId, input)
+      } catch (error) {
+        this.queuedSessionFollowUps.delete(input.id)
+        if (!this.stopped) await this.pauseSessionFollowUp(state.sessionId, entry.inputId, errMsg(error))
+      }
+    }
+  }
+
+  private async pauseSessionFollowUp(id: string, inputId: string, reason: string): Promise<void> {
+    const paused = await this.withStateCreation(id, async () => {
+      const state = this.sessionStates[id]
+      if (!state?.sessionFollowUp?.dueAt || state.sessionFollowUp.inputId !== inputId) return false
+      const entry = { ...state.sessionFollowUp, dueAt: 0 }
+      await this.store.saveState(id, { ...state, sessionFollowUp: entry })
+      state.sessionFollowUp = entry
+      return true
+    })
+    if (!paused || this.stopped) return
+    const reply = sessionReplyAddress(id)
+    if (reply) this.deps.bus.emit('message.outbound', { ...reply, event: 'response', done: true,
+      content: `Automatic Session follow-up paused: ${reason}. The conversation is not marked complete.` })
+  }
+
+  private async claimSessionFollowUp(id: string, input: SessionInput): Promise<boolean> {
+    try {
+      if (!this.sessionFollowUpInputs.has(input)) return false
+      return await this.withStateCreation(id, async () => {
+        const state = this.sessionStates[id]
+        if (this.stopped || !state || !this.runnableSessionFollowUp(state) || this.hasFollowUpQuestion(id)
+          || this.hasFollowUpAsyncWork(id) || state.sessionFollowUp?.inputId !== input.id) return false
+        this.assertFolderAccess(id)
+        this.assertHistoryWritable(id)
+        // Claim before any inference. A crash after this boundary never blindly replays the check.
+        const entry = { ...state.sessionFollowUp, dueAt: 0, wakes: state.sessionFollowUp.wakes + 1 }
+        await this.store.saveState(id, { ...state, sessionFollowUp: entry })
+        state.sessionFollowUp = entry
+        return true
+      })
+    } catch (error) {
+      if (!this.stopped) await this.pauseSessionFollowUp(id, input.id, errMsg(error))
+      return false
+    } finally { this.queuedSessionFollowUps.delete(input.id) }
+  }
+
+  async cancelScheduledSessionFollowUp(id: string): Promise<void> {
+    id = this.resolveSessionIdentity(id)
+    await this.withStateCreation(id, async () => {
+      const state = this.sessionStates[id]
+      if (!state || !this.canFollowUp(state) || !state.sessionFollowUp && !state.followUp) return
+      await this.store.saveState(id, { ...state, followUp: null, sessionFollowUp: undefined })
+      state.followUp = null
+      delete state.sessionFollowUp
+    })
+    this.armSessionFollowUps()
   }
 
   /** Mark interrupted histories for explicit continuation; startup never resumes them. */
@@ -2545,10 +2722,11 @@ ${JSON.stringify(request)}`,
     sessionId = this.resolveSessionIdentity(sessionId)
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
-    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['topic', 'focus', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
+    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['topic', 'focus', 'completed', 'followUp'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
     const changes: Partial<SessionState> = {}
     if ('topic' in patch && typeof patch.topic !== 'string') throw new TypeError('Topic must be text')
     if ('focus' in patch) changes.focus = parseSessionFocus(patch.focus)
+    if ('followUp' in patch) changes.followUp = parseSessionFollowUp(patch.followUp)
     if ('completed' in patch) {
       if (typeof patch.completed !== 'boolean') throw new TypeError('completed must be boolean')
       changes.completed = patch.completed
@@ -2561,6 +2739,14 @@ ${JSON.stringify(request)}`,
       if (state.mode === 'task' && 'topic' in patch && patch.topic !== sessionTopic(state)) throw new Error('Task topic is adapted from its parent-owned title; preserve it unchanged or omit it.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')
       if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      if ('followUp' in patch && !this.canFollowUp(state)) throw new Error('Follow-up is available only in ordinary owner Web sessions')
+      if (changes.followUp && changes.completed === undefined && state.completed) {
+        throw new Error('Reopen the session with completed: false before scheduling follow-up')
+      }
+      if (changes.completed === true || changes.followUp === null) {
+        changes.sessionFollowUp = undefined
+        if (changes.completed === true) changes.followUp = undefined
+      }
       if ('completed' in patch) changes.completedAt = patch.completed ? new Date().toISOString() : undefined
       const currentTopic = sessionTopic(state)
       if ('topic' in patch && patch.topic !== currentTopic) changes.topic = parseSessionName(patch.topic as string)

@@ -4,7 +4,7 @@ import { parseExecutionInference } from '../agent/llm-config.ts'
 import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
-import { parseSessionFocus } from './session-metadata.ts'
+import { parseSessionFocus, parseStoredSessionFollowUp } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
@@ -69,7 +69,7 @@ function parseStoredState(raw: string): SessionState {
   if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
   if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
   Object.assign(state, parseTopicSessionFields(state))
-  return normalizeWorkExecutorMetadata(state)
+  return normalizeWorkExecutorMetadata({ ...state, ...parseStoredSessionFollowUp(state) })
 }
 
 /**
@@ -109,12 +109,13 @@ export class JsonlSessionStore implements SessionStore {
 
   async getState(sessionKey: string): Promise<SessionState | null> {
     const active = await this.fresh.getActive(sessionKey)
-    if (active) return active
+    if (active) return { ...active, ...parseStoredSessionFollowUp(active) }
     const raw = await readStateFile(this.statePath(sessionKey))
     return raw === undefined ? null : parseStoredState(raw)
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    state = { ...state, ...parseStoredSessionFollowUp(state) }
     if (state.statePersistence) {
       if (sessionKey !== state.sessionId) throw new Error('Fresh automation key mismatch')
       if (await readStateFile(this.statePath(sessionKey)) !== undefined) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
