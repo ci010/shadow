@@ -15,6 +15,12 @@ For recordings, microphone, camera and interactive input panels use `v:skills/io
 unless the user explicitly wants a separate web application. Do not build a
 standalone recorder merely to collect missing task input.
 
+The browser and any attachment endpoint are on **Main**, independently of the
+selected workspace. With a Child workdir, no workspace file root is exposed to
+the browser adapter; Child paths cannot be used for browser uploads or outputs.
+Use `browser_setup connect` to refresh a binding that still carries a local
+workdir root. Main execution must be enabled.
+
 ## Route the task before searching
 
 One source, `v:tools/chrome-devtools`, covers interactions, diagnostics, and

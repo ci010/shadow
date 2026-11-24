@@ -56,8 +56,9 @@ runtime command must be updated; setup does not silently skip the connection.
 
 ## Desktop applications
 
-In an authorized local Main conversation, the assistant can initialize the built-in
-`agent-desktop` source and use the complete official MCP catalog. This grants broad
+In the owning, authorized Web conversation, the assistant can initialize the built-in
+`agent-desktop` source and use the complete official MCP catalog on Main, even with
+a Child workspace selected. This grants broad
 logged-in-user desktop capability within OS permissions: applications, screenshots,
 input, clipboard and application launch, not access isolated to a bound window.
 Shadow and browser windows are not excluded. Consequential actions still need

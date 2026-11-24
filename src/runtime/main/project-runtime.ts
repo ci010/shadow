@@ -697,7 +697,7 @@ export async function createProjectRuntime(
   loadable.set('chrome-devtools', {
     config: {
       name: 'chrome-devtools',
-      description: 'Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium) using an explicitly selected copied profile. Start with browser_setup connect: reuse an unambiguous session binding or approved Project managed choice and verify actual list_pages; multiple bindings require instance. No choice returns needs-selection candidates without launch/copy (agent discovers paths, never asks the user for paths); obtain profile-copy and browser-wide access approval before initial managed setup, even with one candidate. Explicit discover is inventory-only. Compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
+      description: 'Main-host Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium), independent of the selected workspace. Uses an explicitly selected copied profile. Start with browser_setup connect: reuse an unambiguous session binding or approved Project managed choice and verify actual list_pages; multiple bindings require instance. No choice returns needs-selection candidates without launch/copy (agent discovers paths, never asks the user for paths); obtain profile-copy and browser-wide access approval before initial managed setup, even with one candidate. Explicit discover is inventory-only. Compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
       transport: 'stdio',
       ...bundledChromeAdapter(),
     },
@@ -904,12 +904,12 @@ export async function createProjectRuntime(
     const state = sessions.getSessionState(sessionId)
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
       || state.parentSessionId || state.automation) {
-      throw new Error('Desktop MCP requires a local, user-owned web conversation.')
+      throw new Error('Desktop MCP requires a user-owned web conversation.')
     }
     sessions.assertFolderAccess(sessionId)
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
-    if (!locations.workdir.available || locations.workdir.locality === 'remote') {
-      throw new Error('Desktop MCP is not available in a remote or unavailable workdir.')
+    if (!locations.workdir.available) {
+      throw new Error('Desktop MCP requires an available conversation workdir.')
     }
   }
   importTool.registerBuiltin('agent-desktop', managedDesktopSource(project.id, workspace, assertComputerSession, !coordinator))

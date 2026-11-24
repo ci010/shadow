@@ -1054,6 +1054,13 @@ can exceed the request deadline even on a healthy connection. For idle checks,
 record state/time and inspect later with a short call, rather than sleeping
 inside one RPC. MCP-declared text errors retain their JSON envelope and explicit
 failure status.
+Selecting a Child workspace routes workspace operations to that Child; it does
+not move host services. The built-in browser MCP and `agent-desktop` target Main
+even with a Child selected, provided Main execution and the tool's normal access
+checks permit the call. Browser connections from Child workdirs advertise no
+workspace file root (the adapter's own temporary storage still applies). Ordinary
+MCP configuration files and workspace scripts do not gain a Main fallback.
+
 Use `browser_setup(action: "connect")` as the idempotent everyday entry. It reuses
 this session's binding or binds the approved Project managed choice; after a managed
 crash it restores the same copy. Multiple bindings require `instance`. With no approved

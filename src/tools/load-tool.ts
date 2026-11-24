@@ -1,4 +1,3 @@
-import { isWorkTool } from './work-names.ts'
 import { discoverFolderMcp, type FolderMcpSource } from '../mcp/folder.ts'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { LOCAL_EXECUTOR_DISABLED } from '../execution/coordinator-policy.ts'
@@ -43,6 +42,8 @@ import { toolResultText } from './tool.ts'
  */
 export interface McpLoadable {
   config: McpServerConfig
+  /** Explicit host service, independent of the selected Child filesystem. Built-in only. */
+  supportsRemoteWorkdir?: boolean
   /** Host-owned managed sources cannot be configured by MCP documents. */
   managed?: {
     authorize(context: ExecutionContext): void
@@ -106,6 +107,7 @@ function isFactoryLoadable(entry: LoadableEntry): entry is FactoryLoadable {
 interface ImportOptions {
   signal: AbortSignal
   cwd?: string
+  remoteWorkdir?: boolean
 }
 
 class ScriptToolAdapter implements Tool {
@@ -278,7 +280,7 @@ export class ImportTool implements Tool {
             binding.ready = false
             try {
               return await this.withImports(binding.tools, signal, async () => {
-                const imported = await this.loadByName('chrome-devtools', binding.tools, [], { signal, cwd: context.cwd ?? this.workspace })
+                const imported = await this.loadByName('chrome-devtools', binding.tools, [], { signal, cwd: context.cwd, remoteWorkdir: !!context.remoteWorkdir })
                 if (typeof imported === 'string') return imported
                 const pages = binding.tools.activeDynamicTools().find(tool => tool.name === 'chrome-devtools__list_pages')
                 if (!(pages instanceof McpToolAdapter)) return 'Error: list_pages is unavailable; CDP connection was not verified.'
@@ -300,7 +302,7 @@ export class ImportTool implements Tool {
           }
           const instance = this.browsers.create(context.tools, request.target)
           const result = await this.withImports(instance.tools, signal, () =>
-            this.loadByName('chrome-devtools', instance.tools, [], { signal, cwd: context.cwd ?? this.workspace }))
+            this.loadByName('chrome-devtools', instance.tools, [], { signal, cwd: context.cwd, remoteWorkdir: !!context.remoteWorkdir }))
           if (typeof result === 'string') return result
           return JSON.stringify(this.browserReceipt(instance))
         })
@@ -310,7 +312,7 @@ export class ImportTool implements Tool {
 
   private providerBrowser(context: ExecutionContext, id: string): { endpoint: string; check: () => void; signal: AbortSignal } {
     const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
-    if (denied || !this.sessionBrowsersEnabled() || context.tools.dynamicOwner !== context.tools || context.tools.executionMode === 'call') throw new Error('Browser provider requires the owning authorized local session')
+    if (denied || context.remoteWorkdir || !this.sessionBrowsersEnabled() || context.tools.dynamicOwner !== context.tools || context.tools.executionMode === 'call') throw new Error('Browser provider requires the owning authorized local session')
     const instance = this.browsers.resolve(context.tools, id)
     if (typeof instance === 'string' || instance.target.mode !== 'managed' || !instance.providerEndpoint) throw new Error('Explicit connected managed browser instance required')
     const endpoint = instance.providerEndpoint
@@ -364,6 +366,7 @@ export class ImportTool implements Tool {
     open: () => Promise<{ url: string }>) {
     const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
     if (denied) throw new Error(denied)
+    if (context.remoteWorkdir) throw new Error('App author testing requires a local workdir.')
     if (!this.sessionBrowsersEnabled() || context.tools.executionMode === 'call' || context.tools.dynamicOwner !== context.tools ||
       !context.tools.has('invoke_tool') ||
       ['browser_setup', 'chrome-devtools__new_page', 'chrome-devtools__evaluate_script'].some(name => !context.tools.canUseDynamic(name))) {
@@ -832,10 +835,10 @@ export class ImportTool implements Tool {
   async importSource(
     args: Record<string, unknown>,
     tools: SessionTools,
-    options: { signal?: AbortSignal; cwd?: string } = {},
+    options: Partial<ImportOptions> = {},
   ): Promise<string> {
     const signal = options.signal ? AbortSignal.any([options.signal, tools.dynamicSignal]) : tools.dynamicSignal
-    return this.withImports(tools, signal, () => this.performImport(args, tools, { signal, cwd: options.cwd }))
+    return this.withImports(tools, signal, () => this.performImport(args, tools, { ...options, signal }))
   }
 
   private async withImports<T>(tools: SessionTools, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
@@ -900,6 +903,7 @@ export class ImportTool implements Tool {
 
     // JSON MCP config file
     if (path.endsWith('.json')) {
+      if (options.remoteWorkdir) return 'Error: MCP configuration files cannot be imported from a remote workdir.'
       if (this.canLoad) return `Error: ${LOCAL_EXECUTOR_DISABLED} MCP configuration imports are unavailable.`
       return await this.loadFromJsonConfig(path, tools, extraArgs, args.server, options)
     }
@@ -914,19 +918,19 @@ export class ImportTool implements Tool {
     if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const error = this.contextError(String(args.source ?? ''), context)
     if (error) return error
-    return await this.importSource(args, context.tools, { signal: context.signal, cwd: context.cwd ?? this.workspace })
+    return await this.importSource(args, context.tools, { signal: context.signal, cwd: context.remoteWorkdir ? undefined : context.cwd ?? this.workspace, remoteWorkdir: !!context.remoteWorkdir })
   }
 
   private contextError(source: string, context: ExecutionContext): string | undefined {
-    if (context.remoteWorkdir &&
-      (!source.startsWith(VIRTUAL_TOOLS_PREFIX) || !this.canInvokeFromRemote(source.slice(VIRTUAL_TOOLS_PREFIX.length)))) {
-      return 'Error: remote workdirs can import only the built-in Project-Home session tool.'
-    }
     const name = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? source.slice(VIRTUAL_TOOLS_PREFIX.length) : ''
+    if (context.remoteWorkdir && !this.canInvokeFromRemote(name)) {
+      return 'Error: this source is unavailable from a remote workdir. Discover supported host-owned tools through v:tools.'
+    }
     const available = this.scopedBuiltins.get(name)
     if (available && !available(context)) return 'Error: this tool requires an active binding for the current turn.'
-    const entry = this.loadable.get(name)
+    const entry = this.loadable.get(name) ?? this.loadable.get(name.split('__')[0])
     if (entry && isMcpLoadable(entry)) {
+      if (context.remoteWorkdir && this.canLoad && !this.canLoad(entry)) return `Error: ${LOCAL_EXECUTOR_DISABLED}`
       if (entry.managed) {
         try { entry.managed.authorize(context) } catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}` }
       }
@@ -953,16 +957,24 @@ export class ImportTool implements Tool {
   canInvokeFromRemote(toolName: string): boolean {
     const layerfs = this.loadable.get('layerfs')
     if (layerfs && layerfs === this.builtins.get('layerfs') && isFactoryLoadable(layerfs) && (toolName === 'layerfs' || layerfs.contracts?.some(tool => tool.name === toolName && tool.supportsRemoteWorkdir === true))) return true
-    const workspace = this.loadable.get(toolName)
-    if (['workspace_create', 'workspace_fork'].includes(toolName) && workspace && workspace === this.builtins.get(toolName) && !isMcpLoadable(workspace) && !isFactoryLoadable(workspace) && !isScriptLoadable(workspace) && workspace.supportsRemoteWorkdir === true) return true
-    const entry = this.loadable.get(toolName)
-    return (toolName === 'session' || isWorkTool(toolName)) && entry !== undefined && entry === this.builtins.get(toolName) &&
-      !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
+    const name = this.loadable.has(toolName) ? toolName : toolName.split('__')[0]
+    const entry = this.loadable.get(name)
+    if (!entry || entry !== this.builtins.get(name)) return false
+    if (isMcpLoadable(entry)) {
+      return this.isRemoteHostMcp(name, entry) && (toolName === name || toolName.startsWith(`${entry.config.name}__`))
+    }
+    return name === toolName && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
+  }
+
+  private isRemoteHostMcp(name: string, entry: McpLoadable): boolean {
+    return entry === this.builtins.get(name) && entry === this.loadable.get(name) &&
+      (entry.managed !== undefined && entry.supportsRemoteWorkdir === true ||
+        name === 'chrome-devtools' && entry.config.name === name && this.sessionBrowsersEnabled())
   }
 
   /** Explicit source initialization returns contracts, never executes an MCP tool. */
   async initializeSource(name: string, args: Record<string, unknown>, context: ExecutionContext, explicit = false): Promise<string | undefined> {
-    if (context.remoteWorkdir && (name !== 'layerfs' || !this.canInvokeFromRemote(name))) return undefined
+    if (context.remoteWorkdir && !this.canInvokeFromRemote(name)) return undefined
     if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const entry = this.catalogFor(context.tools).get(name)
     if (!entry || (!isMcpLoadable(entry) && !(explicit && isFactoryLoadable(entry)))) return undefined
@@ -971,7 +983,7 @@ export class ImportTool implements Tool {
     const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}${name}`, context)
     if (denied) return denied
     const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
-    const result = await this.withImports(context.tools, signal, () => this.loadByName(name, context.tools, [], { signal, cwd: context.cwd }))
+    const result = await this.withImports(context.tools, signal, () => this.loadByName(name, context.tools, [], { signal, cwd: context.cwd, remoteWorkdir: !!context.remoteWorkdir }))
     return typeof result === 'string' ? result : `Initialized ${isMcpLoadable(entry) ? 'MCP ' : ''}source ${name}; no tool executed.\n${toolInvocationContract(result)}`
   }
 
@@ -982,8 +994,10 @@ export class ImportTool implements Tool {
     signal?: AbortSignal,
     cwd?: string,
     folderId?: string,
+    remoteWorkdir = false,
   ): Promise<string | undefined> {
-    await this.prepareFolder(sessionTools, folderId)
+    if (remoteWorkdir && !this.canInvokeFromRemote(toolName)) return undefined
+    if (!remoteWorkdir) await this.prepareFolder(sessionTools, folderId)
     if (!sessionTools.canUseDynamic(toolName)) return undefined
     if (toolName.startsWith('chrome-devtools__') && this.sessionBrowsersEnabled()) {
       const target = this.browsers.resolve(sessionTools)
@@ -994,7 +1008,7 @@ export class ImportTool implements Tool {
     const activeSignal = signal ? AbortSignal.any([signal, sessionTools.dynamicSignal]) : sessionTools.dynamicSignal
     const load = (name: string) => this.withImports(sessionTools, activeSignal, async () => {
       if (sessionTools.hasDynamic(toolName)) return undefined
-      const result = await this.loadByName(name, sessionTools, [], { signal: activeSignal, cwd })
+      const result = await this.loadByName(name, sessionTools, [], { signal: activeSignal, cwd, remoteWorkdir })
       return typeof result === 'string' ? result : undefined
     })
 
@@ -1048,13 +1062,19 @@ export class ImportTool implements Tool {
       return `Unknown tool "${name}".${hint}`
     }
 
+    if (options.remoteWorkdir && (this.loadable.get(name) !== entry || !this.canInvokeFromRemote(name))) {
+      return 'Error: this source is unavailable from a remote workdir.'
+    }
     if (this.canLoad && !this.canLoad(entry)) return `Error: ${LOCAL_EXECUTOR_DISABLED} Source "${name}" cannot be initialized.`
 
     if (isMcpLoadable(entry)) {
       if (name === 'chrome-devtools' && this.sessionBrowsersEnabled()) {
         const instance = this.browsers.resolve(tools)
         if (typeof instance === 'string') return instance
-        instance.fileRoot ??= options.cwd ?? this.workspace
+        // A Child workdir has no Main filesystem root. Do not retain a local
+        // root on a browser connection reinitialized from a remote turn.
+        if (options.remoteWorkdir) instance.fileRoot = undefined
+        else instance.fileRoot ??= options.cwd ?? this.workspace
         if (extraArgs.length && instance.importArgs && !isDeepStrictEqual(extraArgs, instance.importArgs)) {
           return 'Error loading project Chrome: browser instance startup arguments are fixed. Close it before changing preload arguments. Use browser_setup for separately routed browser targets.'
         }
@@ -1126,7 +1146,7 @@ export class ImportTool implements Tool {
       const config = await entry.managed.configuration(sessionTools)
       return this.connectMcp(config, config.name, sessionTools, undefined, options,
         () => this.catalogFor(sessionTools).get(name) === entry, undefined,
-        () => entry.managed!.connection(config, sessionTools))
+        () => entry.managed!.connection(config, sessionTools), this.isRemoteHostMcp(name, entry))
     }
     // If this entry shares a connection with another loadable, resolve it
     const connOwner = entry.sharedConn ?? entry
@@ -1178,6 +1198,7 @@ export class ImportTool implements Tool {
         { ...connOwner.config, args: effectiveArgs }, connKey, sessionTools, entry.toolFilter, { ...options, cwd: entry.folderSource?.cwd ?? options.cwd },
         () => this.catalogFor(sessionTools).get(name) === entry && this.browsers.forTools(sessionTools)?.active !== false,
         (this.configured.get(name) === entry || entry.folderSource) && !extraCliArgs.length && !managedChrome ? entry.config : undefined,
+        undefined, this.isRemoteHostMcp(name, entry),
       )
       return adapters
     } catch (error) {
@@ -1199,6 +1220,7 @@ export class ImportTool implements Tool {
     isCurrent: () => boolean = () => true,
     indexConfig?: McpServerConfig,
     connectionFactory?: () => McpConnection,
+    remoteHostService = false,
   ): Promise<Tool[]> {
     const checkCurrent = () => {
       options.signal.throwIfAborted()
@@ -1253,7 +1275,7 @@ export class ImportTool implements Tool {
       sessionTools.refreshMcpTools(connKey, JSON.stringify(tools))
       const connection = cached.conn
       const adapters = tools.filter(tool => chromeToolAllowed(config, tool) && (!filter || filter.has(tool.name)))
-        .map(tool => new McpToolAdapter(connection, tool))
+        .map(tool => new McpToolAdapter(connection, tool, remoteHostService))
         .filter(tool => sessionTools.canUseDynamic(tool.name))
       for (const adapter of adapters) sessionTools.registerDynamic(adapter, connKey)
       return adapters
