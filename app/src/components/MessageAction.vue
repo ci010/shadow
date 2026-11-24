@@ -3,7 +3,7 @@
     :title="t('Send to session')" :recipient="message.recipient" :session-id="message.sessionId" outgoing
     @inspect="emit('inspect', $event)" @interact="emit('interact')">
     <template #status>
-      <span class="message-action-status" :class="{ failed: message.status === 'failed' }" role="status">{{ status }}</span>
+      <span v-if="status" class="message-action-status" :class="{ failed: message.status === 'failed' }" role="status">{{ status }}</span>
     </template>
     <div v-if="message.content" class="message-action-content"><slot>{{ message.content }}</slot></div>
     <template #details>
@@ -36,7 +36,7 @@ const status = computed(() => ({
   queued: t('Queued'),
   recorded: t('Recorded silently'),
   failed: t('Failed'),
-  unknown: t('Delivery unconfirmed'),
+  unknown: null,
 })[props.message.status])
 </script>
 

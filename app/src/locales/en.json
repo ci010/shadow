@@ -1445,7 +1445,6 @@
   "Deletion was not confirmed. Refresh the catalog before retrying.": "Deletion was not confirmed. Refresh the catalog before retrying.",
   "Delivery": "Delivery",
   "Delivery may already have reached the session. Retrying can start a duplicate turn.": "Delivery may already have reached the session. Retrying can start a duplicate turn.",
-  "Delivery unconfirmed": "Delivery unconfirmed",
   "Dependencies:": "Dependencies:",
   "Depends on:": "Depends on:",
   "Description": "Description",
