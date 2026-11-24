@@ -27,7 +27,6 @@ export class McpToolAdapter implements Tool<ToolResult> {
   constructor(
     private connection: McpConnection,
     private toolInfo: McpToolInfo,
-    readonly supportsRemoteWorkdir = false,
   ) {
     const contract = mcpToolContract(connection.config, toolInfo)
     this.name = contract.name
@@ -44,9 +43,7 @@ export class McpToolAdapter implements Tool<ToolResult> {
   }
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
-    if (context.remoteWorkdir && this.connection.config.name === 'chrome-devtools' && this.connection.workspaceRoot) {
-      return 'Error: this browser binding has a Main workdir root. Use browser_setup connect to rebind without a filesystem root.'
-    }
+    if (context.remoteWorkdir) return 'Error: this MCP connection is Main-local and cannot execute for a Child workspace.'
     validateChromeCall(this.connection.config, this.toolInfo, args)
     return this.connection.callToolInContext(this.toolInfo.name, args, context)
   }

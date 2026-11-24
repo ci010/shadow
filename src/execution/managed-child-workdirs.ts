@@ -63,6 +63,7 @@ export class ManagedChildWorkdirs {
     readonly staticWorkdirs: readonly (WorkdirBinding & { displayName?: string })[],
     readonly deviceHomePath?: string,
     readonly allowDeviceHomeRead = false,
+    readonly mcpWorkdirs: ReadonlySet<string> = new Set(),
   ) {
     if (!isAbsolute(rootPath) || (deviceHomePath !== undefined && !isAbsolute(deviceHomePath))) throw new TypeError('Managed storage and device home must be absolute')
     const ids = new Set<string>()
@@ -249,7 +250,7 @@ export class ManagedChildWorkdirs {
   #descriptor(binding: WorkdirBinding & { displayName?: string }): WorkdirAdvertisement {
     return {
       version: 2, workdirId: binding.workdirId, nodeId: this.nodeId,
-      support: { operations: [...MANAGED_WORKDIR_OPERATIONS], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000, untilExit: true } },
+      support: { operations: [...MANAGED_WORKDIR_OPERATIONS, ...(this.mcpWorkdirs.has(binding.workdirId) ? ['workdir.mcp'] : [])], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000, untilExit: true } },
       displayName: binding.displayName ?? binding.workdirId, displayPath: binding.rootPath, platform: process.platform,
       online: !this.#unavailable.has(binding.workdirId),
     }

@@ -697,7 +697,7 @@ export async function createProjectRuntime(
   loadable.set('chrome-devtools', {
     config: {
       name: 'chrome-devtools',
-      description: 'Main-host Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium), independent of the selected workspace. Uses an explicitly selected copied profile. Start with browser_setup connect: reuse an unambiguous session binding or approved Project managed choice and verify actual list_pages; multiple bindings require instance. No choice returns needs-selection candidates without launch/copy (agent discovers paths, never asks the user for paths); obtain profile-copy and browser-wide access approval before initial managed setup, even with one candidate. Explicit discover is inventory-only. Compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
+      description: 'Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium) using an explicitly selected copied profile. Start with browser_setup connect: reuse an unambiguous session binding or approved Project managed choice and verify actual list_pages; multiple bindings require instance. No choice returns needs-selection candidates without launch/copy (agent discovers paths, never asks the user for paths); obtain profile-copy and browser-wide access approval before initial managed setup, even with one candidate. Explicit discover is inventory-only. Compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
       transport: 'stdio',
       ...bundledChromeAdapter(),
     },
@@ -900,17 +900,26 @@ export async function createProjectRuntime(
     changed: () => realtime.invalidateResource?.('automations'),
   }))
   activitySource = sessions
-  const assertComputerSession = (sessionId: string) => {
+  const assertComputerSession = (sessionId: string, remote = false) => {
     const state = sessions.getSessionState(sessionId)
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
-      || state.parentSessionId || state.automation) {
-      throw new Error('Desktop MCP requires a user-owned web conversation.')
+      || state.parentSessionId || state.parentToolCallId || state.automation) {
+      throw new Error('Desktop MCP requires an owning, user-controlled Web conversation.')
     }
     sessions.assertFolderAccess(sessionId)
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
-    if (!locations.workdir.available) {
-      throw new Error('Desktop MCP requires an available conversation workdir.')
+    if (!locations.workdir.available || (locations.workdir.locality === 'remote') !== remote) {
+      throw new Error('Desktop MCP requires an available workdir on the selected execution device.')
     }
+  }
+  importTool.authorizeChildDesktop = context => {
+    context.signal.throwIfAborted()
+    if (!context.remoteWorkdir || context.projectId !== project.id || context.channel !== 'web' ||
+      context.tools.dynamicOwner !== context.tools || context.tools.executionMode !== 'session' || !context.tools.canUseDynamic('agent-desktop')) throw new Error('Child desktop requires an authorized owning Web session')
+    assertComputerSession(context.sessionId, true)
+    const location = resolveSessionLocations(workspace, sessions.getSessionState(context.sessionId)!, undefined, sessions.workdirLookup).workdir
+    if (!location.available || location.locality !== 'remote' || location.workdir.nodeId !== context.remoteWorkdir.nodeId ||
+      location.workdir.workdirId !== context.remoteWorkdir.workdirId) throw new Error('Child desktop target changed')
   }
   importTool.registerBuiltin('agent-desktop', managedDesktopSource(project.id, workspace, assertComputerSession, !coordinator))
   const a2a = createA2aRuntime({ projectId: project.id, workspace, config: config.a2a, app, sessions, bus, agentTypes })

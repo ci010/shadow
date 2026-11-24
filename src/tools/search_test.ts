@@ -417,7 +417,7 @@ test('remote workdir virtual sessions and models stay on the control plane for r
   assert.match(await search.execute({ handler: 'grep', path: 'v:models', query: 'fixture' }, context), /v:models\/fixture.*fixture model/)
   assert.equal(await search.execute({ handler: 'glob', query: '/v:models/*' }, context), 'v:models/fixture')
   await assert.rejects(search.execute({ handler: 'glob', query: '/v:models/*', workspace: 'device:remote' }, context), /Explicit Workspace selection/)
-  const leased = { ...context, memoryAccess: {} } as ExecutionContext
+  const leased: ExecutionContext = { ...context, memoryAccess: { projectId: 'fixture', sessionId: 'web:fixture', epoch: 'fixture' } }
   await assert.rejects(search.execute({ handler: 'grep', path: 'v:models', query: 'fixture' }, leased), /Channel memory leases/)
   await assert.rejects(read.execute({ path: 'v:models/fixture' }, leased), /Channel memory leases/)
   await assert.rejects(search.execute({ handler: 'glob', path: 'v:unknown', query: '**' }, context), /Unknown virtual folder/)

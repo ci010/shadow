@@ -8,7 +8,7 @@ import { LAYERFS_REMOTE_OPERATION, remoteLayerFSCallSchema, remoteLayerFSReadAct
 
 /** Fixed host-owned directory operation profile; advertisements cannot widen it. */
 export const DIRECTORY_OPERATIONS = Object.freeze([
-  'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
+  'workdir.mcp', 'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
   'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile', DERIVED_WORKSPACE_OPERATION,
 ])
 
@@ -66,7 +66,10 @@ export class ProjectExecutor implements Executor {
     const layerfs = request.operation === LAYERFS_REMOTE_OPERATION ? remoteLayerFSCallSchema.safeParse(request.args) : undefined
     const readOnlyQuery = reconciliation || request.operation === 'workdir.identity' || derivedAction === 'inspect' || derivedAction === 'verify'
       || layerfs?.success === true && remoteLayerFSReadActions.has(layerfs.data.action)
-    if (!readOnlyQuery) this.recordJob?.(request.jobId, true)
+    // Child owns ephemeral MCP connections; a lost receipt cannot strand a durable journal reservation.
+    const ephemeralMcp = request.operation === 'workdir.mcp'
+    const durableJob = !readOnlyQuery && !ephemeralMcp
+    if (durableJob) this.recordJob?.(request.jobId, true)
     const jobId = this.#key('job', request.jobId)
     this.#jobs.set(request.jobId, jobId)
     if (!readOnlyQuery) this.#pending.add(request.jobId)
@@ -86,21 +89,28 @@ export class ProjectExecutor implements Executor {
       // Keep the old scope algorithm; a caller's Project scope is never authority.
       projectScope: managedProjectScope(this.projectId),
     }
-    for await (const event of this.executor.execute(scoped, signal)) {
-      if (event.jobId !== jobId) throw new Error('Project executor received an unowned job event')
-      if ('receipt' in event) {
-        if (reconciliation) {
-          // Refusing or losing the query says nothing about the original process.
-          // Only a correlated journal replay can release its ownership protection.
-          if (event.receipt.reconciledJobId && !isUnknownShellReceipt(event.receipt)) {
-            this.recordReconciliation?.(event.receipt.reconciledJobId)
-            for (const [id, key] of this.#executionKeys) {
-              if (key === executionKey) this.#settle(id, event.receipt)
+    try {
+      for await (const event of this.executor.execute(scoped, signal)) {
+        if (event.jobId !== jobId) throw new Error('Project executor received an unowned job event')
+        if ('receipt' in event) {
+          if (reconciliation) {
+            // Refusing or losing the query says nothing about the original process.
+            // Only a correlated journal replay can release its ownership protection.
+            if (event.receipt.reconciledJobId && !isUnknownShellReceipt(event.receipt)) {
+              this.recordReconciliation?.(event.receipt.reconciledJobId)
+              for (const [id, key] of this.#executionKeys) {
+                if (key === executionKey) this.#settle(id, event.receipt)
+              }
             }
-          }
-        } else if (!readOnlyQuery) this.#settle(request.jobId, event.receipt)
+          } else if (durableJob) this.#settle(request.jobId, event.receipt)
+        }
+        yield { ...event, jobId: request.jobId, ...('receipt' in event ? { receipt: { ...event.receipt, jobId: request.jobId } } : {}) }
       }
-      yield { ...event, jobId: request.jobId, ...('receipt' in event ? { receipt: { ...event.receipt, jobId: request.jobId } } : {}) }
+    } finally {
+      if (ephemeralMcp) {
+        this.#pending.delete(request.jobId)
+        this.#jobs.delete(request.jobId)
+      }
     }
   }
 
