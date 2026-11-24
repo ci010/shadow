@@ -20,7 +20,7 @@ const report = {
 }
 const nullable = (value: object) => ({ anyOf: [value, { type: 'null' }] })
 const schemas: Record<Operation, ToolParameters> = {
-  create: object({ idempotencyKey: string(200), title: string(160), parentKey: key, assignee: nullable(string(512)), definition,
+  create: object({ idempotencyKey: string(200), title: string(160), parentKey: key, assignee: nullable(string(512)), definition, dependencies: array(key, 100),
     ...report }, ['title', 'definition']) as ToolParameters,
   update: object({ key, version, title: string(160), definition, parentKey: nullable(key), dependencies: array(key, 100),
     ...report,
@@ -32,7 +32,7 @@ const schemas: Record<Operation, ToolParameters> = {
 }
 const descriptions: Record<Operation, string> = {
   create: 'Create shared Work for durable coordination facts: deliverables, dependencies, blockers and responsibility. Reuse relevant Work first; one-off discussion belongs in message and observation in read. Associates this session. Optional idempotencyKey replays only the same normalized request in this Project/creator. Use parentKey for children and dependencies for prerequisites. No new authorization.',
-  update: 'Persist only changed shared facts using the current version from v:works. Workers edit their branch; structural changes need coordinator authority. Routine progress stays silent; entering done/blocked can notify the Work manager. Do not send a duplicate message. done reports completion, not acceptance or permission to execute.',
+  update: 'Persist only changed shared facts using the current version from v:works. If provided, dependencies replaces the entire prerequisite list; [] clears it. Workers edit their branch; structural changes need coordinator authority. Routine progress stays silent; entering done/blocked can notify the Work manager. Do not send a duplicate message. done reports completion, not acceptance or permission to execute.',
   assign: 'Assign Work using its current version. Only coordinator/human; never stops running operations or transfers file ownership. null clears assignment.',
   review: 'Reassess a stale ancestor basis using the current Work version and a conclusion. Does not change status, assignment or authorization.',
   note_create: 'Append shared Markdown to existing Work. The current assignee may post an original (silent unless notifyManager is true). The current manager may reply to an original on the same Work using replyTo, which notifies the original author and does not accept notifyManager. Queued is not delivered, approved or read. Comments do not unblock or authorize.',
