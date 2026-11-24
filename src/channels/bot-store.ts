@@ -37,6 +37,8 @@ export interface BotInstanceStoreOptions {
  */
 export class BotInstanceStore {
   readonly projectId: string
+  readonly legacyConnectionsDetected: boolean
+  private readonly storagePath: string
   private document: z.infer<typeof documentSchema>
   private accessChanges = new Map<string, { active: number; revision: number }>()
 
@@ -67,15 +69,27 @@ export class BotInstanceStore {
   constructor(private readonly options: BotInstanceStoreOptions) {
     this.projectId = options.projectId
     if (!this.projectId) throw new TypeError('Project ID is required')
-    if (existsSync(options.path)) {
-      const raw: unknown = JSON.parse(readFileSync(options.path, 'utf8'))
+    this.storagePath = options.path
+    let raw: unknown = existsSync(options.path) ? JSON.parse(readFileSync(options.path, 'utf8')) : undefined
+    this.legacyConnectionsDetected = false
+    if ((raw as { version?: unknown })?.version === 3) {
+      const legacy = z.object({ version: z.literal(3), bots: z.array(z.unknown()) }).parse(raw)
+      // Do not load legacy records, credentials, IDs, or permissions into the active store.
+      this.storagePath = `${options.path}.v4`
+      this.legacyConnectionsDetected = legacy.bots.length > 0
+      if (this.legacyConnectionsDetected) {
+        console.warn(`[connections] Project ${this.projectId}: legacy Connections were not imported. The original file is retained at ${options.path}. Recreate Connections in Settings and review and re-publish any needed BOT inbox bindings.`)
+      }
+      raw = existsSync(this.storagePath) ? JSON.parse(readFileSync(this.storagePath, 'utf8')) : undefined
+    }
+    if (raw !== undefined) {
       if ((raw as { version?: unknown })?.version !== 4) {
         throw new Error('Unsupported Connection document version; roleless Connections require version 4')
       }
       this.document = documentSchema.parse(raw)
     } else {
       this.document = { version: 4, bots: [] }
-      mkdirSync(dirname(options.path), { recursive: true })
+      mkdirSync(dirname(this.storagePath), { recursive: true })
       this.save(this.document)
     }
     const ids = new Set<string>()
@@ -124,7 +138,7 @@ export class BotInstanceStore {
 
   private save(document: z.infer<typeof documentSchema>): void {
     const changed = JSON.stringify(document) !== JSON.stringify(this.document)
-    writePrivateFile(this.options.path, JSON.stringify(document, null, 2) + '\n')
+    writePrivateFile(this.storagePath, JSON.stringify(document, null, 2) + '\n')
     this.document = document
     if (changed) this.options.changed?.()
   }

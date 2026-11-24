@@ -2,6 +2,7 @@
   <section class="bot-connection" :aria-label="t('Platform connection')">
     <p v-if="!enabled" role="status">{{ t('Private connection setup requires an authorized Main administrator and HTTPS or loopback access.') }}</p>
     <template v-else>
+      <p v-if="!compact && legacyConnectionsDetected" class="legacy-notice" role="status">{{ t('Legacy connections were not imported. Select “Create a new connection” to set them up again, then review and republish any BOT inbox bindings you still need.') }}</p>
       <div v-if="!compact && channels.length" class="connection-cards" :aria-label="t('Configured connections')">
         <article v-for="bot in channels" :key="bot.id" class="connection-card" :data-connection-id="bot.id" :data-selected="selected?.id === bot.id">
           <header><h3>{{ bot.displayName }}</h3><span v-if="selected?.id === bot.id">{{ t('Selected') }}</span></header>
@@ -105,6 +106,7 @@ const busy = ref(false)
 const needsRefresh = ref(false)
 const locked = computed(() => busy.value || loading.value || needsRefresh.value || !!listError.value)
 const listError = ref(''), error = ref(''), notice = ref('')
+const legacyConnectionsDetected = ref(false)
 const qr = ref('')
 const groups = ref<Awaited<ReturnType<ReturnType<typeof createBotSettingsClient>['pendingGroups']>>>()
 let read: AbortController | undefined, mutation: AbortController | undefined
@@ -136,6 +138,7 @@ watch(() => props.requestedConnectionId, () => {
 })
 function stop() {
   generation++; read?.abort(); mutation?.abort(); read = mutation = undefined
+  legacyConnectionsDetected.value = false
   channels.value = []; platform.value = ''; selection.value = ''; resetSelection()
   loading.value = busy.value = needsRefresh.value = false; listError.value = ''
 }
@@ -143,10 +146,11 @@ async function refresh() {
   if (!enabled.value || busy.value) return
   read?.abort(); const controller = new AbortController(); read = controller; loading.value = true
   try {
-    const result = await createBotSettingsClient(props.apiBase, props.projectId).list(controller.signal)
+    const result = await createBotSettingsClient(props.apiBase, props.projectId).listWithStatus(controller.signal)
     if (controller.signal.aborted) return
     const uncertainCreation = needsRefresh.value && selection.value === 'new'
-    channels.value = result; listError.value = ''; needsRefresh.value = false; error.value = ''
+    legacyConnectionsDetected.value = result.legacyConnectionsDetected
+    channels.value = result.channels; listError.value = ''; needsRefresh.value = false; error.value = ''
     // A lost create response may already have created a connection. Require a
     // fresh choice from the authoritative list, never replay creation blindly.
     if (uncertainCreation || (selection.value && selection.value !== 'new' && !selected.value)) selection.value = ''
@@ -226,6 +230,7 @@ header, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px
 header { justify-content: space-between; }
 p { margin: 8px 0; }
 .muted, .connection-state { color: var(--c-text-secondary); }
+.legacy-notice { padding: 8px 12px; color: var(--c-warn); background: var(--c-warn-bg); }
 .connection-id { font-family: monospace; }
 .connection-state[data-state="connected"] { color: var(--c-success); }
 .connection-state[data-state="error"], .error { color: var(--c-error); }

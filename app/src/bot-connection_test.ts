@@ -198,3 +198,19 @@ test('configured connection cards stay visible across platforms and configure ex
   assert(view.nodes().some(n => n.props.class === 'new-connection'))
   assert(requests.every(r => r.method === 'GET'))
 })
+
+test('Connection Settings prompts for reconfiguration only when Main reports legacy connections', async t => {
+  let response: Record<string, unknown> = { channels: [], legacyConnectionsDetected: true }
+  t.mock.method(globalThis, 'fetch', async () => Response.json(response))
+  const view = mountBotUi(t, 'BotConnectionSetup.vue', { ...props, compact: false })
+  await settleBotUi()
+  assert.match(view.text(), /Legacy connections were not imported.*Create a new connection.*BOT inbox bindings/)
+  await view.click('Create a new connection')
+  assert.equal(view.nodes().filter(node => node.tag === 'select').length, 1)
+  response = { channels: [], legacyConnectionsDetected: '/private/legacy-secret' }
+  await view.click('Refresh status')
+  assert.doesNotMatch(view.text(), /Legacy connections were not imported|legacy-secret/)
+  response = { channels: [] }
+  await view.click('Refresh status')
+  assert.doesNotMatch(view.text(), /Legacy connections were not imported/)
+})

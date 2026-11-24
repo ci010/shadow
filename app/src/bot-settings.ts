@@ -124,6 +124,13 @@ export function createBotSettingsClient(base: string, projectId: string, request
     return bot
   }
   return {
+    async listWithStatus(signal?: AbortSignal) {
+      const response = await json('', { signal })
+      return {
+        channels: parseBotList(response, projectId),
+        legacyConnectionsDetected: isRecord(response) && response.legacyConnectionsDetected === true,
+      }
+    },
     async list(signal?: AbortSignal) { return parseBotList(await json('', { signal }), projectId) },
     async catalog(signal?: AbortSignal) { return parseBotCatalog(await json('', { signal }), projectId) },
     async create(platform: ChannelId, displayName: string, signal?: AbortSignal) {
