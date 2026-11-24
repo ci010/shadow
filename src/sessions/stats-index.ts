@@ -238,6 +238,19 @@ export class StatsIndex {
       output: row.output as number | null, total: row.total as number | null, tools: Number(tools.calls),
       tracked: !!this.db.prepare('SELECT 1 FROM model WHERE session=? LIMIT 1').get(session) }
   }
+  private outputRate(asOf: number) {
+    // Use the successful attempt's own clock, not the logical duration (which can include retries).
+    const row = this.db.prepare(`WITH streams AS (
+      SELECT json_extract(usage,'$.completionTokens') AS tokens,
+        json_extract(attempts,'$[#-1].durationMs') - json_extract(attempts,'$[#-1].firstTextMs') AS generationMs
+      FROM model WHERE at < ? AND outcome='success' AND text_observation='stream_text'
+        AND json_extract(attempts,'$[#-1].outcome')='success'
+    ) SELECT count(*) AS samples, total(tokens) AS tokens, total(generationMs) AS generationMs
+      FROM streams WHERE tokens > 0 AND generationMs > 0`).get(asOf)!
+    const samples = Number(row.samples)
+    const rate = Number(row.tokens) / (Number(row.generationMs) / 1000)
+    return { samples, tokensPerSecond: samples && Number.isFinite(rate) ? rate : null }
+  }
   requestSummary(asOf: number): RequestQuality {
     const outcomes = this.db.prepare(`SELECT coalesce(outcome,'unknown') AS outcome,count(*) AS requests,
       sum(json_array_length(attempts)) AS observedAttempts, count(attempts) AS requestsWithAttempts
@@ -256,7 +269,7 @@ export class StatsIndex {
       requestsWithReadTokens: Number(cacheRow.requestsWithReadTokens), requestsWithWriteTokens: Number(cacheRow.requestsWithWriteTokens),
       requestsWithInputTokens: Number(cacheRow.requestsWithInputTokens), requestsWithOutputTokens: Number(cacheRow.requestsWithOutputTokens) }
     return { asOf: new Date(asOf).toISOString(), coverage: this.complete ? 'complete' : 'partial', outcomes, textObservations, cache,
-      firstText: this.latency(asOf), queue: this.latency(asOf, 'queue'), duration: this.latency(asOf, 'duration') }
+      firstText: this.latency(asOf), queue: this.latency(asOf, 'queue'), duration: this.latency(asOf, 'duration'), outputRate: this.outputRate(asOf) }
   }
   *records(session?: string, modelFrom?: number): Iterable<Row> {
     const filter = session === undefined ? '' : ' WHERE session=?'

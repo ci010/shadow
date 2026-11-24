@@ -45,7 +45,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           const latency = {samples:1,p50Ms:32,p95Ms:32};
           data.requestQuality = {asOf:data.asOf,coverage:'partial',outcomes:[{outcome:'success',requests:1,observedAttempts:2,requestsWithAttempts:1}],
             textObservations:[{observation:'stream_text',requests:1}],cache:{readTokens:0,writeTokens:null,inputTokens:24,outputTokens:20,requestsWithReadTokens:1,requestsWithWriteTokens:0,requestsWithInputTokens:1,requestsWithOutputTokens:1},
-            firstText:latency,queue:{samples:0,p50Ms:null,p95Ms:null},duration:latency};
+            firstText:latency,queue:{samples:0,p50Ms:null,p95Ms:null},duration:latency,outputRate:{samples:1,tokensPerSecond:25.5}};
           data.recall = {coverage:'complete',skills:[{entry:'skill-example',reads:3}],memory:[{entry:'memory-example',source:'automatic',reads:5}]};
           window.fetch = async url => {
             if (String(url).endsWith('/api/project/usage')) return Response.json(data);
@@ -57,6 +57,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           data.daily[2].usage = {...metrics,tokens:null,durationMs:null,costs:[],unknownTokenCalls:1,unknownCostCalls:1,unknownDurationCalls:1};
           data.month = {...metrics,tokens:42000000};
           window.addUsageFixtureTool = () => activity.tools.unshift({name:'refresh-fixture',calls:9000});
+          window.setOutputRateFixture = mode => { if (mode === 'legacy') delete data.requestQuality.outputRate; else data.requestQuality.outputRate = {samples:0,tokensPerSecond:null}; };
           window.setRecallFixture = mode => { if (mode === 'restricted') delete data.recall; else data.recall = {coverage:'complete',skills:[],memory:[]}; };
           window.usageInstance = getInstanceByDom;
           window.usageLocale = setLocalePreference;
@@ -117,6 +118,9 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
             assert.ok(info.plots.every(p=>p.height===240));
             assert.ok(info.radius.every(r=>r==='0px')); assert.equal(info.overflow,false);
             assert.equal(info.headingOverlap,false,JSON.stringify({locale,dark,width,info}));
+            const outputRate = await win.webContents.executeJavaScript('document.querySelector(".output-rate").innerText');
+            assert.ok(outputRate.includes('25.5 tokens/s'), outputRate);
+            assert.match(outputRate, locale === 'en' ? /Estimated output speed: .*Samples: 1/ : /估算输出速率: .*1 个样本/);
             const rankings = await win.webContents.executeJavaScript('('+(() => {
               const sections = [...document.querySelectorAll('.activity-grid > .activity-section, .tool-recall-grid > .activity-section')];
                 const tool = sections[1].getBoundingClientRect();
@@ -219,10 +223,16 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("button")).find(e=>e.innerText.trim()==="Memory").click()');
           assert.match(await win.webContents.executeJavaScript('document.querySelector('+JSON.stringify('section[aria-label="Recall"]')+').innerText'),/memory-example.*Automatic log brief/);
           const recallText = () => run('document.querySelector(".recall").innerText');
-          const refreshRecall = async mode => {
-            await run('window.setRecallFixture('+JSON.stringify(mode)+'); document.querySelector(".project-usage header button").click()');
+          const refresh = async fixtureUpdate => {
+            await run(fixtureUpdate+'; document.querySelector(".project-usage header button").click()');
             for (let attempt=0;attempt<30 && await run('document.querySelector(".project-usage header button").disabled');attempt++) await new Promise(r=>setTimeout(r,20));
           };
+          const outputRateText = () => run('document.querySelector(".output-rate").innerText');
+          await refresh('window.setOutputRateFixture("empty")');
+          assert.match(await outputRateText(),/Estimated output speed: Unavailable.*Samples: 0/);
+          await refresh('window.setOutputRateFixture("legacy")');
+          assert.equal(await outputRateText(),'Estimated output speed: Unavailable');
+          const refreshRecall = mode => refresh('window.setRecallFixture('+JSON.stringify(mode)+')');
           await refreshRecall('restricted');
           assert.match(await recallText(),/not available with current access/);
           assert.doesNotMatch(await recallText(),/skill-example|memory-example|No recorded entries/);

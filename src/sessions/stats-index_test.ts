@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
+import { projectUsageSchema } from '../projects/usage-contract.ts'
 import { SkillRecallStore } from '../skills/recall.ts'
 import { measureProviderAttempt, observeStreamText } from '../providers/request-meter.ts'
 import { readProjectUsage } from './project-usage.ts'
@@ -22,7 +23,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
     const physical = physicalSessionId(state)
     const timestamp = '2026-10-10T12:00:00Z'
     const model = { type: 'model_usage', sessionId: 's', id: 'm', timestamp, model: 'fixture', durationMs: 200, firstTextMs: 40, queueMs: 30, outcome: 'success', textObservation: 'stream_text',
-      attempts: [{ outcome: 'failure', durationMs: 60, mode: 'stream' }, { outcome: 'success', durationMs: 100, mode: 'stream' }],
+      attempts: [{ outcome: 'failure', durationMs: 60, mode: 'stream' }, { outcome: 'success', durationMs: 100, firstTextMs: 40, mode: 'stream' }],
       usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, cachedTokens: 0, cacheWriteTokens: 2, costs: [{ currency: 'USD', amount: 0.1 }] } }
     await source.init()
     try {
@@ -48,6 +49,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       assert.deepEqual(usage.activity.today.models, [{ name: 'fixture', calls: 1, usage: usage.today }])
       const quality = usage.requestQuality!
       assert.deepEqual(quality.duration, { samples: 2, p50Ms: 0, p95Ms: 200 })
+      assert.deepEqual(quality.outputRate, { samples: 1, tokensPerSecond: 2 / 0.06 })
+      assert.deepEqual(projectUsageSchema.parse(usage).requestQuality?.outputRate, quality.outputRate)
       assert.deepEqual(quality.queue, { samples: 1, p50Ms: 30, p95Ms: 30 })
       assert.deepEqual(quality.outcomes, [
         { outcome: 'cancelled', requests: 1, observedAttempts: null, requestsWithAttempts: 0 },
@@ -64,6 +67,35 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       assert.equal((await readProjectUsage(store, [], 'p', asOf)).total.calls, 0)
     } finally { await index.close(); source.close?.() }
   })
+})
+
+test('estimated output speed weights eligible streams by post-first-text time only', async () => {
+  const index = new StatsIndex(':memory:')
+  const noSamples = { samples: 0, tokensPerSecond: null }
+  const usage = (completionTokens: number) => ({ promptTokens: 10, completionTokens, totalTokens: 10 + completionTokens })
+  const attempt = { outcome: 'success', firstTextMs: 200, durationMs: 1000 }
+  const model = { type: 'model_usage', sessionId: 's', timestamp: new Date(asOf - 1).toISOString(),
+    outcome: 'success', textObservation: 'stream_text', firstTextMs: 200, durationMs: 5000,
+    usage: usage(80), attempts: [{ outcome: 'failure', durationMs: 900 }, attempt] }
+  try {
+    index.ingest('p', [
+      { ...model, id: 'tool', textObservation: 'tool_only' },
+      { ...model, id: 'nonstream', textObservation: 'nonstream' },
+      { ...model, id: 'failed-request', outcome: 'failure' },
+      { ...model, id: 'failed-attempt', attempts: [{ ...attempt, outcome: 'failure' }] },
+      { ...model, id: 'no-attempt', attempts: undefined },
+      { ...model, id: 'no-first-text', attempts: [{ ...attempt, firstTextMs: undefined }] },
+      { ...model, id: 'zero-interval', attempts: [{ ...attempt, durationMs: 200 }] },
+      { ...model, id: 'negative-interval', attempts: [{ ...attempt, durationMs: 100 }] },
+      { ...model, id: 'unknown-usage', usage: null },
+      { ...model, id: 'zero-output', usage: usage(0) },
+      { ...model, id: 'future', timestamp: new Date(asOf).toISOString() },
+    ])
+    assert.deepEqual(index.requestSummary(asOf).outputRate, noSamples)
+    index.ingest('p', [{ ...model, id: 'a' },
+      { ...model, id: 'b', usage: usage(20), firstTextMs: 400, attempts: [{ ...attempt, firstTextMs: 400, durationMs: 1600 }] }])
+    assert.deepEqual(index.requestSummary(asOf).outputRate, { samples: 2, tokensPerSecond: 50 })
+  } finally { await index.close() }
 })
 
 test('logical usage captures measured attempts and does not invent a streaming sample', async () => {
