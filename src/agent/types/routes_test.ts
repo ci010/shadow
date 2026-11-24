@@ -5,6 +5,7 @@ import { AgentTypesManager } from './manager.ts'
 import { agentTypesPlugin } from './routes.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import { isExecutionMode } from '../../sessions/execution-mode.ts'
+import type { SessionManager } from '../../sessions/session-manager.ts'
 
 test('agent role API exposes default execution mode rather than a lifetime flag', async () => {
   await withTempWorkspace(async workspace => {
@@ -57,12 +58,50 @@ test('internal roles stay out of public role selection while general remains ava
     await agentTypesPlugin(undefined, roles)(app)
     const body = await (await app.request('/api/agent-types')).json() as Array<{ name: string }>
     assert(body.some(role => role.name === 'general'))
-    assert(body.some(role => role.name === 'general-v2'))
-    assert(!roles.getAgentTypesSummary().includes('general-v2'))
     assert(!body.some(role => role.name === 'internal-fixture'))
     assert(!body.some(role => role.name === 'dispatcher'))
     assert(!body.some(role => role.name === 'work-organizer'))
     assert(!roles.getAgentTypesSummary().includes('internal-fixture'))
+  })
+})
+
+test('retired builtin General IDs resolve internally but are not exposed by public role APIs', async () => {
+  await withTempWorkspace(async workspace => {
+    const roles = new AgentTypesManager(workspace)
+    await roles.load()
+    const retired = ['general-v2', 'general-legacy']
+    const contexts: Array<string | undefined> = []
+    const sessions: Pick<SessionManager, 'getContext'> = {
+      getContext: async ({ agentType }) => {
+        contexts.push(agentType)
+        return { systemPrompt: 'General preview fixture', source: 'preview', tools: [] }
+      },
+    }
+    const app = new Hono()
+    await agentTypesPlugin(sessions as SessionManager, roles, () => true)(app)
+
+    for (const suffix of ['', '?view=index', '?view=knowledge']) {
+      const response = await app.request(`/api/agent-types${suffix}`)
+      assert.equal(response.status, 200)
+      const names = (await response.json() as { name: string }[]).map(role => role.name)
+      assert.deepEqual(names.filter(name => ['general', ...retired].includes(name)), ['general'])
+    }
+    for (const name of retired) {
+      assert.equal(roles.resolve(name)?.name, name)
+      assert(!roles.getAgentTypesSummary().includes(`name="${name}"`))
+      const detail = await app.request(`/api/agent-types?definition=${name}`)
+      assert.equal(detail.status, 200)
+      assert.deepEqual(await detail.json(), [])
+      for (const suffix of ['', '?channel=web&rolePreview=owner-web']) {
+        const context = await app.request(`/api/agent-types/${name}/context${suffix}`)
+        assert.equal(context.status, 404)
+        assert.deepEqual(await context.json(), { error: 'agent_type_not_found', name })
+      }
+    }
+    assert.deepEqual(contexts, [])
+    const general = await app.request('/api/agent-types/general/context?channel=web&rolePreview=owner-web')
+    assert.equal(general.status, 200)
+    assert.deepEqual(contexts, ['general'])
   })
 })
 

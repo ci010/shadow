@@ -157,7 +157,7 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: new ordinary Web sessions pin the built-in version without changing historical or explicit roles`, async () => {
+  test(`${Store.name}: new Web sessions use General regardless of old role defaults; historical forks keep their role ID`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -165,25 +165,29 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const f = fixture(workspace, store, { agentVersionDefaults: () => defaults })
       try {
         await store.saveState('web:historical', { sessionId: 'web:historical', segmentIndex: 0 })
+        await store.saveState('web:historical-v2', { sessionId: 'web:historical-v2', segmentIndex: 0, agentType: 'general-v2', mode: 'session' })
         await f.sessions.start()
         await f.sessions.prepareCommandSession('web:historical')
         await f.sessions.prepareCommandSession('web:implicit')
         await f.sessions.buildSession('web:explicit', undefined, { agentType: 'general' })
         await f.sessions.buildSession('cron:automation', undefined, { agentType: 'general' })
         await f.sessions.prepareCommandSession('discord:historical-default')
-        assert.equal((await store.getState('web:implicit'))?.agentType, 'general-v2')
+        assert.equal((await store.getState('web:implicit'))?.agentType, 'general')
         assert.equal((await store.getState('web:historical'))?.agentType, undefined)
         assert.equal((await store.getState('web:explicit'))?.agentType, 'general')
         assert.equal((await store.getState('cron:automation'))?.agentType, 'general')
         assert.equal((await store.getState('discord:historical-default'))?.agentType, undefined)
-        defaults = { general: 'v1' }
+        defaults = { general: 'v2' }
         await f.sessions.buildSession('web:new', undefined, { config: { model: 'override' } })
         await f.sessions.buildSession('web:fork', { id: 'web:implicit' }, { parentSessionId: null })
         await f.sessions.prepareCommandSession('web:implicit')
         assert.equal((await store.getState('web:new'))?.agentType, 'general')
         assert.equal((await store.getState('web:new'))?.config?.model, 'override')
-        assert.equal((await store.getState('web:implicit'))?.agentType, 'general-v2')
-        assert.equal((await store.getState('web:fork'))?.agentType, 'general-v2')
+        assert.equal((await store.getState('web:implicit'))?.agentType, 'general')
+        assert.equal((await store.getState('web:fork'))?.agentType, 'general')
+        await f.sessions.buildSession('web:historical-fork', { id: 'web:historical-v2' }, { parentSessionId: null })
+        assert.equal((await store.getState('web:historical-fork'))?.agentType, 'general-v2')
+        await assert.rejects(f.sessions.buildSession('web:new-v2-role', undefined, { agentType: 'general-v2' }), /retired for new runs/)
       } finally { await f.sessions.stop(); await store.close?.() }
     })
   })

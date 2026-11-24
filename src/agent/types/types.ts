@@ -43,7 +43,12 @@ export interface AgentTypeDefinition {
   reasoningEffort?: ReasoningEffort
 }
 
+/** Historical IDs still resolve for persisted sessions, bindings and draft reads. */
+export function isRetiredBuiltinGeneral(type: Pick<AgentTypeDefinition, 'source' | 'name'>): boolean {
+  return type.source === 'builtin' && (type.name === 'general-v2' || type.name === 'general-legacy')
+}
+
 /** User-selectable root roles stay out of automatic delegation suggestions. */
-export function isSelectableAgentType(type: Pick<AgentTypeDefinition, 'name' | 'root'>): boolean {
-  return !type.root || type.name === 'general' || type.name === 'general-v2'
+export function isSelectableAgentType(type: Pick<AgentTypeDefinition, 'name' | 'root' | 'source'>): boolean {
+  return !isRetiredBuiltinGeneral(type) && (!type.root || type.name === 'general')
 }

@@ -46,6 +46,8 @@ export interface SessionPromptContext {
   promptVersion?: PromptVersion
   promptDraft?: AgentPromptDraft
   subDraft?: { revision: string; markdown: string }
+  /** Native tool surface after scope/channel filters, at assembly time. */
+  offeredTools?: ReadonlySet<string>
   /** Stable Work ID for shared work context (from SessionState). */
   initiativeId?: string
   /** Explicit display/goal metadata for the acting durable session, never authority. */

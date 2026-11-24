@@ -4,7 +4,7 @@ In a direct, private Project-owner Web user turn, discover these built-in tool
 sources under `v:tools`. Invoke each as the only tool call in its batch.
 
 1. **Save** with `agent_prompt_draft_save({agent_type, markdown})`. Use the exact
-   definition ID (`general` and `general-v2` are separate), and pass body Markdown,
+   active definition ID (`general` for General), and pass body Markdown,
    not Agent frontmatter. The receipt returns the SHA-256 `revision` and
    `enabled: false`. Saving never enables a draft, changes defaults, or updates a
    running session. Saving and selecting another revision requires no restart.
@@ -29,8 +29,10 @@ normal session creation or delegation uses the ordinary prompt, never a saved dr
 
 ## Roles and authority
 
-General (`general`, `general-v2`, `general-legacy`), `sub`, `plan`, `verify`,
-`explore`, and local Project-defined roles use the same draft store and assembly.
+General (`general`), `sub`, `plan`, `verify`, `explore`, and local Project-defined
+roles use the same draft store and assembly. Historical `general-v2` and
+`general-legacy` draft revisions can still be inspected using their original IDs;
+to try one again, save the body as a new `general` draft.
 Local host-only definitions (`a2a-text`, `dispatcher`, `encapsulator`, `reflector`,
 `soul-reflector`, `work-organizer`) can be saved and inspected, but the draft
 interface does not grant their host entry points or start them as ordinary Web
@@ -39,22 +41,60 @@ conversations. Their automatic production runs do not select drafts. The local
 accept a local draft. Publisher-managed Bot/integration roles and the retired
 `work-observer` are not selectable through this interface.
 
-Drafts replace only the role's behavioral Markdown (`sub-behavior.md` for the
-built-in `sub`, `AGENT.md` body for other roles). Role registration, frontmatter,
-allowlists, permissions, fixed guidance, and mode contracts are independent.
-Storage is Project Home data partitioned by exact registered role and provenance,
-not by a caller-supplied path. Legacy built-in `sub` retains its existing
-`sub-prompt-drafts` namespace, `sub_override_save` and `sub_revision`; do not
-supply both revision arguments to `subagent`.
+New drafts replace the complete `AGENT.md` body for every supported local role,
+including built-in `sub`. Role registration, frontmatter, permissions, fixed
+contracts, and separate Personal BOT instructions are not replaced. Storage is
+Project Home data partitioned by exact registered role and provenance, not by a
+caller-supplied path. A revision hashes the full draft snapshot (body and the
+bytes of its referenced behavior fragments). Legacy built-in `sub` partial drafts
+continue to replace only the historical `sub-behavior.md` fragment, including
+revisions originally saved through the generic tool. `sub_override_save` and
+`sub_revision` are legacy interfaces; do not pass both revision arguments.
+
+## Authoring role behavior
+
+V2 separates runtime information, fixed execution contracts, and Markdown
+behavior. Runtime facts and host contracts are composed in TypeScript. Role
+strategy lives in `AGENT.md` or in shared behavior Markdown that it explicitly
+references. Built-in V1 baseline rendering remains available for compatibility;
+its default role prompt omits migrated V2 suffixes. New full-body drafts use the
+same Markdown renderer even when the session uses V1 layout.
+
+Use standalone directives to conditionally render behavior and reference the
+built-in catalog (`src/agent/context/behavior-fragments.md`):
+
+```md
+<!-- include: discovery -->
+
+<!-- when: tools=read,search; channels=web,discord; modes=session -->
+Search first, then inspect the relevant source in context.
+<!-- /when -->
+```
+
+All predicates must match. Every named `tools` entry must be present in the
+native tool surface at prompt assembly; `channels` and `modes` match any listed
+value. Lazily discoverable tools are not implicitly native tools. Legacy
+`capability:` blocks retain their role/mode checks; in the new renderer they
+also check the offered native tools (or a route to the legacy lazy capability).
+Includes use
+registered IDs, not paths; a shared fragment may have its own `when` blocks.
+There is no `else`, nesting, recursive inclusion, or arbitrary evaluation.
+Invalid directives and unknown fragments are rejected when saving a new draft.
+Preview and execution use the same renderer; a synthetic preview does not have
+the scope or tools of a particular live conversation.
 
 ## Version evidence and diagnosis
 
 `SHADOW_BUILTIN_PROMPT_VERSION=v1` or `v2` selects assembly for new `general`,
 `sub`, `verify`, `plan` and `explore` executions (default `v2`). This is separate
-from the role definition ID and draft revision. New sessions persist the assembly
+from the role definition ID and draft revision. The old `agentVersionDefaults.general`
+config value is accepted for compatibility but no longer selects a definition.
+New sessions persist the assembly
 and, when selected, the verified draft bytes. Existing sessions without an
 assembly pin retain the historical mapping of their definition ID (`general-v2`
-→ V2, others → V1). Recorded system prompts are not rewritten.
+→ V2, others → V1). Recorded system prompts are not rewritten. If an ordinary
+`general` session without a draft later rebuilds its prompt, it uses the current
+canonical General body with its existing assembly pin.
 
 Receipts and session metadata carry `promptRevision`; legacy sub metadata still
 carries `subRevision`. Prompt diagnosis identifies role, definition, mode,

@@ -4,6 +4,7 @@ import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/ex
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
 
+/** Classic guideline renderer, kept for existing V1 prompt assembly. */
 export function toolsGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
   const allows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
@@ -122,5 +123,65 @@ ${mode === 'session' ? '- Message is free-form direct interaction for questions,
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.
 - Report outcomes and material changes, not routine coordination. Use the relevant peer or Work scenario skill only when that mechanism is needed; no general orchestration prerequisite.`)
   }
+  return sections.join('\n\n')
+}
+
+/** V2 tool contract. Workflow choices belong to the role Markdown. */
+export function toolsContract(ctx: SessionPromptContext): string {
+  const mode = ctx.mode ?? ctx.agent.defaultMode
+  const policyAllows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
+  const offers = (name: string) => policyAllows(name) && (!ctx.offeredTools || ctx.offeredTools.has(name))
+  const sections: string[] = []
+
+  if (offers('exec')) {
+    const shell = ctx.execNodeOnly
+      ? '`exec` supports bounded inline JavaScript only; omit `shell` or set it to `javascript`. OS shells, native modules, process and environment are unavailable.'
+      : '`exec` runs a detected OS shell or bounded inline JavaScript (`shell: "javascript"`). It is not a security sandbox.'
+    const limits = mode === 'call'
+      ? 'Exec is local and foreground-only in calls: `timeout_ms` is 1–120000 and defaults to 120000.'
+      : ctx.execNodeOnly ? 'JavaScript is foreground-only: `timeout_ms` is 1–120000.'
+      : 'JavaScript is foreground-only (`timeout_ms`: 1–120000); `timeout_ms: 0` starts supported OS-shell commands in the background.'
+    const nested = ctx.execNodeOnly ? '' : ' Where supported, nested OS exec requires an explicit shell, a positive foreground timeout up to 120000 ms, and existing permission.'
+    sections.push(`### Shell\n\n${shell} ${limits} The JavaScript bridge uses one resolved Workspace and does not support recursive JavaScript.${nested}`)
+  }
+
+  if (mode !== 'call') {
+    const supportsAsk = channelSupportsAsk(ctx.channel, ctx.sessionId) && channelSupportsAsk(ctx.channelAddress?.platform)
+    if (!supportsAsk) sections.push('### Questions in chat\n\nThe ask tool is unavailable in QQ and Discord conversations. Protected changes still require the dedicated owner approval flow in Shadow.')
+    if (supportsAsk && offers('ask')) {
+      sections.push('### Requests\n\n`ask(kind=input)` returns information, never authorization. `ask(kind=decision)` requires two distinct choices and a default that exactly matches one; the UI adds a custom-response option. A default is not human approval. Unanswered decisions are deferred without approval; `approved: false` permits only investigation or authorized unaffected work.')
+    }
+    if (offers('reply')) {
+      sections.push('`reply` requires the exact `request_id`. Only the stored parent or remote task owner may answer; decision replies must match an offered option. Messages and final responses do not resolve pending requests.')
+    }
+  }
+
+  if (offers('cancel')) sections.push('`cancel({executionId})` awaits local cleanup or reports remote state. Cancellation does not roll back side effects or delete conversations.')
+  const modes = offers('subagent') ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
+  if (modes.includes('call')) sections.push('`subagent` with explicit `mode: "call"` is blocking; it inherits context and returns through the originating tool invocation, without a completion event.')
+  if (modes.includes('task')) sections.push('`subagent` with `mode: "task"` starts asynchronously in a fresh context. Admission is not a result. `report_to` routes completion, not ownership or permission. Separate sessions do not isolate files or roll back side effects.')
+  if (offers('task')) sections.push('Only the designated reviewer may use `task(action:review,sessionId,revision,outcome,content)` to record a verdict on that exact local submission. Changes rerun the original worker; PASS delivers success, and blocked or exhausted review escalates. Work is unchanged.')
+
+  if (offers('read') && offers('write') && mode !== 'call') {
+    sections.push(mode === 'task'
+      ? '`v:sessions/self.json` exposes own metadata; task discovery title and description are parent-owned. Updating `completed` cannot accept a reviewable submission.'
+      : '`v:sessions/self.json` exposes own `topic`, `focus` and `completed`. Completion tracks conversation responsibility, not Work acceptance or whether a process is running.')
+  }
+  if (mode === 'session' && policyAllows('session') && offers('invoke_tool')) {
+    sections.push('Durable peers are independent conversations, not structural children or one-off tasks. `session` is a dynamic tool (`v:tools/session`, called via `invoke_tool`). Creator metadata does not transfer ownership or authorize actions.')
+  }
+  if (offers('message')) {
+    sections.push('Message receipts confirm admission, not execution or transfer of responsibility. Only the actual parent can send same-assignment corrections to a running task. Reassignment does not stop running operations. Trusted sender metadata and Work references are not authorization.')
+  }
+
+  const workRead = offers('read') || offers('search')
+  if (policyAllows('work') && (workRead || offers('invoke_tool'))) {
+    const read = workRead ? 'Work is visible via `v:works/overview`. ' : ''
+    const writes = offers('invoke_tool') ? 'Work mutations use the dynamic tools `work_create`, `work_update`, `work_assign`, `work_review` and `work_link` via `invoke_tool` with typed arguments. ' : ''
+    sections.push(`${read}${writes}Work is not permission; completion is not human acceptance, and \`notes.html\` is never approval.`)
+  }
+  if (offers('sql')) sections.push('SQL convention writes require genuine human instructions or decisions, not inferred approval.')
+  if (policyAllows('skill_save') && offers('invoke_tool')) sections.push('`skill_save` saves shared Skill source; it does not activate or publish it.')
+
   return sections.join('\n\n')
 }

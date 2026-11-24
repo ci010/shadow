@@ -29,7 +29,7 @@ import { parseAutomationSessionRef, parseOrganizationOutcome, resolveAutomationS
 import { parseInitiativeId } from './initiative-metadata.ts'
 import type { Hono } from 'hono'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
-import type { AgentTypeDefinition } from '../agent/types/types.ts'
+import { isRetiredBuiltinGeneral, type AgentTypeDefinition } from '../agent/types/types.ts'
 import type { ConversationPolicies } from '../bots/conversation-policy.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type {
@@ -2182,6 +2182,12 @@ ${JSON.stringify(request)}`,
       )
     }
     if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
+    const caller = stateFields?.parentSessionId ?? (parent?.index === undefined ? parent?.id : undefined)
+    const inheritedLegacyCall = stateFields?.mode === 'call' && caller && this.sessionStates[caller]?.agentType === agentType
+    if (isRetiredBuiltinGeneral(agent) && !inheritedLegacyCall && forkSource?.agentType !== agentType &&
+      !automation && !this.isManagedConversation(sessionId)) {
+      throw new Error(`Agent definition "${agentType}" is retired for new runs; use "general".`)
+    }
     const promptDraft = stateFields?.promptDraft === undefined ? undefined : parseAgentPromptDraft(stateFields.promptDraft)
     if (promptDraft && (stateFields?.subDraft || promptDraft.scope !== JSON.stringify(agentDraftScope(agent)))) {
       throw new Error('Pinned prompt draft does not match the selected role definition')
@@ -3745,11 +3751,12 @@ ${JSON.stringify(request)}`,
       ...sessionPromptLocality(state),
     }
 
-    const { systemPrompt, sections } = await this.deps.context.buildSystemPromptDetails(promptCtx)
     const tools = this.getToolDefinitions(opts.sessionId, {
       allowedTools,
       blockedTools,
     }, channel, promptCtx.mode)
+    promptCtx.offeredTools = new Set(tools.map(tool => tool.name))
+    const { systemPrompt, sections } = await this.deps.context.buildSystemPromptDetails(promptCtx)
 
     const decisions = opts.sessionId ? await this.decisionValidityPrompt(sessionId) : ''
     return { source: 'preview', promptIdentity: promptIdentity(promptCtx), ...(ownerWebPreview ? { rolePreview: 'owner-web' as const } : {}),
@@ -3975,10 +3982,6 @@ ${JSON.stringify(request)}`,
       } : {}),
       ...sessionPromptLocality(state),
     }
-    const basePrompt = this.runtimeSystemPrompt(sessionId, promptCtx, conversationPolicy, state)
-    const systemPrompt = state.channelBoundary && conversationPolicy
-      ? await basePrompt : await this.decisionSystemPrompt(sessionId, basePrompt)
-
     // Execution must retain unfinished tool calls; display/fork sanitization
     // would discard the very batch that Continue needs to finish.
     const continuing = input.kind === 'control' && (input.command.type === 'resume' || input.command.type === 'retry')
@@ -3993,11 +3996,6 @@ ${JSON.stringify(request)}`,
           : undefined,
       )
       : (await this.getHistory(sessionId, state.channelBoundary || state.serviceGeneration ? { shallow: true } : undefined)).messages
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...history,
-    ]
 
     const sessionTools = conversationPolicy
       ? this.calls.get(sessionId)?.tools ?? this.deps.conversationPolicies!.tools(conversationPolicy, sessionId, state)
@@ -4022,6 +4020,11 @@ ${JSON.stringify(request)}`,
     const executionPolicy = this.deps.tools.getExecutionPolicy()
     if (executionPolicy) sessionTools.setExecutionPolicy(executionPolicy)
     sessionTools.restrictChannelTools(msg.channel, sessionId)
+    if (!conversationPolicy) promptCtx.offeredTools = new Set(sessionTools.getDefinitions().map(def => def.function.name))
+    const basePrompt = this.runtimeSystemPrompt(sessionId, promptCtx, conversationPolicy, state)
+    const systemPrompt = state.channelBoundary && conversationPolicy
+      ? await basePrompt : await this.decisionSystemPrompt(sessionId, basePrompt)
+    const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...history]
 
     // Import tools specified by parent (e.g., subagent preload_tools param)
     if (state.preloadTools && Object.keys(state.preloadTools).length > 0) {

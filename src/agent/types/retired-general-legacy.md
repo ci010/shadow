@@ -134,3 +134,25 @@ Subagents can use `message(sessionId="...")` to send follow-up messages to other
 `read("v:bg")` lists your background work, local task/call and remote A2A executions. `read("v:bg/<executionId>")` shows status/output. Use the same `executionId` with `cancel({executionId})`; `v:sessions` retains conversation history. Background references start with `bg:`. Cancellation waits for local cleanup, does not delete conversations, and does not undo side effects.
 
 <!-- /capability -->
+
+<!-- behavior-v2 -->
+
+<!-- include: discovery -->
+
+<!-- include: channel-style -->
+
+<!-- include: general-tool-use -->
+
+<!-- include: javascript-tool-use -->
+
+<!-- include: questions -->
+
+<!-- include: project-conventions -->
+
+<!-- include: shared-work -->
+
+<!-- include: execution-coordination -->
+
+<!-- include: peer-coordination -->
+
+<!-- include: session-metadata -->

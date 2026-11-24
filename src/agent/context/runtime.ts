@@ -8,6 +8,7 @@ import { IdentityManager } from '../identity.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { getArch, getOs } from '../../utils/runtime.ts'
 import { capabilityDiscovery } from './capability-prompt.ts'
+import { usesBehaviorMarkdown } from './behavior-markdown.ts'
 import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
 import { LOCAL_NODE_ID } from '../../sessions/locality.ts'
@@ -56,7 +57,19 @@ export function channelCapabilityPrompt(
   canAsk: boolean,
   canMessage: boolean,
   compactWebRuntime = false,
+  factsOnly = false,
 ): string {
+  if (factsOnly) return [
+    '## Channel Capabilities', '',
+    `- Output format: ${capabilities.format}; code blocks: ${capabilities.codeBlocks ? 'supported' : 'not verified'}; tables: ${capabilities.tables ? 'supported' : 'not verified'}.`,
+    `- Outbound media: ${capabilities.outboundMedia.join(', ') || 'none verified'}.`,
+    `- Output updates: ${capabilities.updates}. The adapter sends replies and handles formatting, uploads, splitting and limits.`,
+    `- Structured questions: ${canAsk && channelSupportsAsk(channel) ? capabilities.decisions : 'unavailable'}.`,
+    ...(channel === 'wechat' ? ['- This adapter uses WeChat iLink, not WeCom or official accounts.'] : []),
+    ...(channel === 'qq' ? ['- QQ private, group and guild destinations have different capabilities; delayed delivery is subject to reply windows and quotas.'] : []),
+    ...(channel === 'feishu' ? ['- Ordinary reply ancestry is not a topic; topic visibility follows its containing chat.'] : []),
+    ...(channel === 'discord' ? ['- Archived threads are not deleted agent sessions.'] : []),
+  ].join('\n')
   const lines = [
     '## Channel Capabilities',
     '',
@@ -242,11 +255,12 @@ export function runtimeIdentityProvider(
         )
       }
 
+      const cleanBehavior = usesBehaviorMarkdown(ctx)
       lines.push('', channelCapabilityPrompt(
         ctx.channel, capabilities, false,
-        (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'ask'),
+        (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'ask') && (!cleanBehavior || !!ctx.offeredTools?.has('ask')),
         (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'message'),
-        compactWebRuntime,
+        compactWebRuntime, cleanBehavior,
       ))
 
       const identityInfo = await getIdentity(ctx, deps.identity)
