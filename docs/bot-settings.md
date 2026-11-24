@@ -4,10 +4,9 @@ Project settings separates two responsibilities:
 
 - **Connections** (`/projects/<projectId>/settings/connections`) manages platform
   selection, existing connection reuse, private credentials, connection status,
-  connect/disconnect and personal-owner pairing. Multiple BOT packages may refer
-  to one service connection; this does not merge or grant their permissions.
-  Connection roles and pairing retain their existing restrictions. Discord's
-  read-only saved access remains available on its service connection; group
+  connect/disconnect and WeChat QR login. Connections are transport only. Multiple
+  BOT packages may share one connection without merging or granting permissions.
+  Discord's read-only saved access remains available on Discord connections; group
   discovery remains platform-specific, not a universal Discord/QQ permission API.
 - **Bots** (`/projects/<projectId>/settings/bots`) shows registered source locations,
   deployment revisions, previous revision metadata and pending exact permission
@@ -16,10 +15,10 @@ Project settings separates two responsibilities:
   redirects to the Default Project's Connections page.
 
 The Connections page keeps configured connections visible as cards across all
-platforms, with their name, platform, role and reported health. Configure selects
+platforms, with their name, platform and reported health. Configure selects
 that exact connection and scrolls/focuses its detail form; credentials and
 connect/disconnect actions remain in the detail form, not on the cards. Create a
-new connection is a separate entry with explicit platform and role choices. The
+new connection is a separate entry with an explicit platform choice. The
 compact private card used during chat setup retains its platform/reuse selectors.
 
 Workflow Connection node details link to this page with the current Project and
@@ -60,10 +59,10 @@ settings pages.
 Enabled Project connections record platform-delivered message-create inputs into
 fixed `channel-inbox:` sessions before business sender admission,
 BOT selection, trigger evaluation, processors, attachment downloads or replies.
-This includes personal and unbound connections, not only assigned service BOTs.
+This includes unbound inboxes, not only inboxes assigned to a BOT.
 QQ, Feishu, supported Discord locations and WeChat use the existing receipt path;
-there is no collector BOT or additional message database. Existing owner pairing,
-BOT participant/tool/output restrictions, privileged platform intents and what the
+there is no collector BOT or additional message database. BOT
+participant/tool/output restrictions, privileged platform intents and what the
 platform chooses to deliver remain execution/transport boundaries. QQ messages
 not pushed by QQ cannot be recorded. Discord verifies the connected Bot's live
 visibility and public-thread ancestry without inventing sender or participant
@@ -130,19 +129,23 @@ The owner-only `bot_package` workflow now supports:
    required. Stale source/base revisions fail rather than replacing newer edits;
    live scope validation and publication exclusion still run.
 
-QQ/Feishu permission JSON explicitly chooses enabled/trigger/allowFrom/tools;
-`allowFrom: []` permits nobody. Discord explicitly chooses participants and its
-normal tool/read-domain/thread/manage restrictions. Target identity keys are
-rejected from policy JSON. Assignment targets are top-level groups/channels,
-not DMs or exact threads. A verified thread may only supply ancestry for an
+Assign admits the selected conversation by default, without a second sender
+list. QQ/Feishu omit `allowFrom`; Discord defaults to `participants.everyone`
+subject to normal platform and restricted-tool policies. Explicit legacy sender
+restrictions still apply until their binding is changed. Target identity keys
+are rejected from policy JSON. Owner Chat can link top-level groups/channels and
+existing QQ/Feishu private inboxes, and to existing WeChat private inboxes for a
+Personal BOT only. Private messages ignore the group trigger.
+Discord direct inboxes and exact
+threads are not assigned through this flow. A verified thread may only supply ancestry for an
 explicit `scope:parent` rule with `inheritThreads:true`.
 
 Disabling a binding stops inference/output, not common receipt. Transfer from
 BOT A to B requires publishing A's removal before B's link; single-owner
 validation remains enforced. All selectors stay in BOT.md/its companion, not
 session metadata, Connection config or a UI database. See
-[offline Connection policy migration](connection-migration.md) before deploying
-the v3-only reader over existing v2 Project files.
+[Connection storage](connection-migration.md) before starting with existing Project files.
+Older Connection documents are rejected, not migrated.
 
 Only new, nonduplicate arrivals eligible for the current assignment may reach a
 BOT. Arrival-time assignment generations are checked through policy selection,
@@ -163,13 +166,11 @@ revalidate live authority; queued output is checked again by the real delivery
 path and immediately before transport requests. Revocation cannot retract bytes
 already accepted by a platform, nor guarantee cancellation of a remote provider,
 but it prevents subsequent sends under the revoked assignment. Personal mode
-retains its quiescent publication, ordinary Project role tools and owner-pairing
-contract. Its responses and user questions also carry the original BOT activation
+retains its quiescent publication, ordinary Project Agent role tools and exact inbox assignment. Its responses and user questions also carry the original BOT activation
 plus Workflow execution generation. Pause/re-enable or redeploy (even back to the
 same source bytes) cannot revive queued output; adapters recheck immediately
 before network sends, including SDK/token/upload/per-chat-queue waits. New input
 retires a stale active Personal context rather than renewing that context's lease.
-Legacy owner-DM session IDs participate in publication retirement too.
 
 ## Discord parent-channel subscriptions
 

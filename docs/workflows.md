@@ -121,7 +121,7 @@ connection IDs, 1024 deployment directory entries and 5000 binding rows).
 
 Only IDs already present in SessionManager receive conversation links. QQ/Feishu
 and exact Discord channel bindings use the host channel-session identity helper,
-including legacy connection identities. Discord DM/observation/descendant-thread
+using exact connection identities. Discord DM/observation/descendant-thread
 sessions are not guessed. Personal BOTs show the host-owner ingress and selected
 ordinary Agent, using host Session listeners; private owner topics are omitted.
 No existing-session link prepares, restores or sends to a session. The BOT inspector

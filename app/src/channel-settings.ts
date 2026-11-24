@@ -61,8 +61,8 @@ export const channelDefinitions: Array<{
     ] },
   },
   {
-    id: 'wechat', label: 'WeChat', get description() { return t('WeChat supports personal Bots only. Scan with your own WeChat account, then verify the owner.') }, portal: '',
-    get instructions() { return [t('Save and connect, generate the WeChat login QR code, scan and confirm in WeChat, then check login and pair the owner.')] },
+    id: 'wechat', label: 'WeChat', get description() { return t('WeChat QR login connects the transport only. Assign a Personal BOT to an exact recorded private inbox to reply.') }, portal: '',
+    get instructions() { return [t('Scan the QR code with your own WeChat account and confirm, then check login.')] },
     get fields() { return accessFields.filter(field => field.key === 'allowFrom') },
   },
 ]

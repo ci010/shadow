@@ -142,7 +142,7 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
 
 test('QQ setup resumes server facts without mistaking saved credentials for connection or service authorization', async () => {
   const { qqSetupProgress, createBotSettingsClient } = await import('./bot-settings.ts')
-  const bot = parseBotStatus({ ...statuses()[0], id: 'existing-qq', projectId: 'project', platform: 'qq', displayName: 'Existing', purpose: 'personal' }, 'project')
+  const bot = parseBotStatus({ ...statuses()[0], id: 'existing-qq', projectId: 'project', platform: 'qq', displayName: 'Existing' }, 'project')
   assert.equal(qqSetupProgress(bot).step, 'credentials')
   const saved = { ...bot, configured: true, config: { appId: 'saved-id', sandbox: true, intents: 123 }, secrets: { secret: true } }
   assert.equal(qqSetupProgress(saved).step, 'connection')
@@ -151,9 +151,6 @@ test('QQ setup resumes server facts without mistaking saved credentials for conn
   }
   const connected = { ...saved, state: 'connected' as const }
   assert.equal(qqSetupProgress(connected).step, 'access')
-  assert.equal(qqSetupProgress(connected).ownerReady, false)
-  assert.equal(qqSetupProgress({ ...connected, ownerVerified: true }).ownerReady, true)
-  assert.equal(qqSetupProgress({ ...connected, purpose: 'service', ownerVerified: true }).ownerReady, false)
   const patch = botPatch(saved, botDraft(saved), true)
   assert.equal(patch.config.appId, 'saved-id')
   assert.equal(patch.config.sandbox, true)

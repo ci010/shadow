@@ -81,6 +81,8 @@ test('channel requires credentials, persists failed final/decision counts, merge
     await send()
     assert.equal(sent[0], 'new answer') // token alone is not an inbound recovery
     channel.setReceiver(async () => ({ status: 'accepted', sessionId: 'fixture', inputId: 'fixture' }))
+    channel.setPassiveCollector(async () => true)
+    channel.setReceivePolicy(async (_message, runPolicy) => runPolicy({ platform: 'wechat' }))
     await channel['_processMessage']({ message_type: 1, from_user_id: 'stranger', message_id: 1, context_token: 'foreign', item_list: [{ type: 1, text_item: { text: 'hi' } }] }, 'owner')
     await channel['_processMessage']({ message_type: 1, from_user_id: 'owner', message_id: 2, context_token: 'fresh', item_list: [{ type: 1, text_item: { text: 'hi' } }] }, 'owner')
     fail = true

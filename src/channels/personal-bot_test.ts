@@ -24,7 +24,7 @@ function qqMessage(sender: string, id: string) {
   return { id, author: { user_openid: sender }, content: 'personal bot audit' }
 }
 
-test('personal QQ: scoped Bot preserves DM admin and allowFrom rejects other users', async t => {
+test('scoped QQ adapter does not grant DM admin and rejects other allowlist senders', async t => {
   const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture', allowFrom: ['owner'] })
   t.after(() => channel.stop())
   channel.setBotScope({ projectId: 'fixture-project', botInstanceId: 'fixture-bot', platform: 'qq' })
@@ -32,7 +32,7 @@ test('personal QQ: scoped Bot preserves DM admin and allowFrom rejects other use
   await channel['handleDispatch']('C2C_MESSAGE_CREATE', qqMessage('owner', 'owner-message'))
   await assert.rejects(channel['handleDispatch']('C2C_MESSAGE_CREATE', qqMessage('stranger', 'stranger-message')), /not authorized/)
   assert.equal(received.length, 1)
-  assert.equal(received[0]!.admin, true)
+  assert.equal(received[0]!.admin, false)
   assert.equal(received[0]!.isGroup, false)
   assert.equal(received[0]!.channelAddress?.botInstanceId, 'fixture-bot')
 })
