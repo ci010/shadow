@@ -22,7 +22,7 @@ test('Chat mounts only compact private setup, keeps credentials out of ordinary 
   assert.match(card, /privateCredentialTransport\(props.apiBase\)/)
   assert.match(card, /next.projectId === props.projectId && next.sessionId === props.sessionId/)
   assert.match(card, /onBeforeUnmount\(stop\)/)
-  assert.match(editor, /window.confirm\(t\('Bind platform user/)
+  assert.doesNotMatch(editor, /Bind platform user|Start owner pairing/)
   assert.match(editor, /field.kind === 'password' \? 'new-password'/)
   assert.match(editor, /draft.value = platform.value \? botConnectionDraft/)
 })
@@ -35,7 +35,7 @@ test('Private setup rejects nonloopback cleartext and credential-bearing URLs', 
 })
 
 const invitation = (patch: Record<string, unknown> = {}) => ({ id: 'setup-p', projectId: 'p', sessionId: 'web:topic', expiresAt: Date.now() + 60_000, ...patch })
-const bot = { id: 'qq-bot', projectId: 'p', platform: 'qq', displayName: 'Existing connection', purpose: 'personal', ownerVerified: false, label: 'QQ', enabled: false, configured: false, state: 'disabled', config: {}, secrets: {} }
+const bot = { id: 'qq-bot', projectId: 'p', platform: 'qq', displayName: 'Existing connection', label: 'QQ', enabled: false, configured: false, state: 'disabled', config: {}, secrets: {} }
 function harness(t: TestContext, initial: unknown = null, start?: Ref<ConversationStartState>) {
   let pending = initial, closes = 0, failClose = false
   const observers: LiveObserver[] = [], disposers: Array<() => void> = []

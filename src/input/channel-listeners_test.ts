@@ -9,7 +9,6 @@ import { DirectoryBots } from '../bots/runtime.ts'
 import { deriveSessionId, type InboundMessage } from '../bus/events.ts'
 import { channelInputFixture } from '../testing/channel-input.ts'
 import { parseBot } from '../bots/sdk.ts'
-import { channelMessageEnvelope } from '../channels/input.ts'
 
 for (const platform of ['qq', 'feishu', 'discord'] as const) test(`${platform}: deployed subscriptions precede BOT filters and Session entry; no full-feature fallback`, async () => {
   await withTempWorkspace(async workspace => {
@@ -22,7 +21,7 @@ for (const platform of ['qq', 'feishu', 'discord'] as const) test(`${platform}: 
       : { platform, botInstanceId: bot.id, conversationId: 'group:one', tools: [], allowFrom: ['500'] }
     const received: InboundMessage[] = []
     const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => {
-      received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
+      received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId, ...(message.silent ? { delivery: 'silent' as const } : {}) }
     } })
     const chatId = platform === 'discord' ? '203' : 'group:one'
     const message: InboundMessage = { channel: platform, chatId, channelAddress: { projectId, botInstanceId: bot.id, platform, conversationId: chatId },
@@ -38,8 +37,8 @@ for (const platform of ['qq', 'feishu', 'discord'] as const) test(`${platform}: 
     await assert.rejects(inputs.receive(message), /subscription/)
     assert.equal(directory.discord().bindings.every(binding => !binding.enabled), true)
     await deploy() // Legacy omission preserves the old exact binding, no new authority.
-    assert.equal((await inputs.receive({ ...message, silent: true })).disposition, 'filtered')
-    assert.equal(received.length, 0)
+    assert.equal((await inputs.receive({ ...message, silent: true })).delivery, 'silent')
+    assert.equal(received.pop()?.silent, true, 'Authorized silent input keeps its policy at the Session boundary')
     if (platform !== 'discord') await assert.rejects(inputs.receive({ ...message, senderId: 'stranger' }), /not authorized/)
     await assert.rejects(inputs.receive({ ...message, channelAddress: { ...message.channelAddress!, projectId: 'other' } }), /Project/)
     assert.equal(received.length, 0)
@@ -57,46 +56,6 @@ for (const platform of ['qq', 'feishu', 'discord'] as const) test(`${platform}: 
     assert.equal(received.length, 2)
   })
 })
-
-for (const platform of ['qq', 'feishu', 'discord', 'wechat'] as const) test(`${platform}: personal listener requires exact current verified owner DM before ordinary Session delivery`, async () => {
-  await withTempWorkspace(async workspace => {
-    const projectId = 'p', bots = new BotInstanceStore({ projectId, path: join(workspace, 'bots.json') })
-    const config = platform === 'qq' ? { appId: 'test', secret: 'test' } : platform === 'feishu' ? { appId: 'test', appSecret: 'test' } : platform === 'discord' ? { token: 'test' } : {}
-    const bot = bots.create(platform, 'owner', { enabled: true, ...config }, undefined, 'personal')
-    bots.bindOwner(bot.id, 'owner', 'c2c:owner')
-    const directory = new DirectoryBots(new BotDeployments({ projectId, directory: join(workspace, 'deployments') }))
-    let received = 0
-    const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => { received++; return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
-    const message: InboundMessage = { channel: platform, chatId: 'c2c:owner', channelAddress: { projectId, platform, botInstanceId: bot.id, conversationId: 'c2c:owner' }, senderId: 'owner', isGroup: false, messageId: 'one', content: 'hello', timestamp: new Date().toISOString() }
-    let policies = 0
-    const policy = async () => { policies++ }
-    for (const changed of [{ senderId: 'stranger' }, { isGroup: true }, { chatId: 'another', channelAddress: { ...message.channelAddress!, conversationId: 'another' } }]) {
-      await assert.rejects(inputs.receive({ ...message, ...changed }), /owner/)
-      await assert.rejects(inputs.policy({ ...message, ...changed }, policy), /owner/)
-    }
-    assert.equal(received, 0); assert.equal(policies, 0)
-    await inputs.policy(message, async configuration => { assert.equal(configuration, undefined); policies++ })
-    assert.equal(policies, 1); assert.equal(received, 0, 'Personal strategy is selected before any normalized Session message')
-    await inputs.receive(message)
-    assert.equal(received, 1)
-    const admitted = channelMessageEnvelope(bots, message)
-    bots.bindOwner(bot.id)
-    assert.equal(await inputs.router.route(admitted), undefined, 'Revoked pairing removes the host listener without needing another message')
-    await assert.rejects(inputs.receive(message), /owner/)
-    bots.bindOwner(bot.id, 'new-owner', 'new-dm')
-    assert.equal(await inputs.router.route(admitted), undefined)
-    bots.bindOwner(bot.id, 'owner', 'c2c:owner')
-    bots.update(bot.id, { config: { enabled: false } })
-    assert.equal(await inputs.router.route(admitted), undefined)
-    await assert.rejects(inputs.receive(message), /connection/)
-    if (platform !== 'wechat') {
-      bots.update(bot.id, { purpose: 'service', config: { enabled: true } })
-      assert.equal(await inputs.router.route(admitted), undefined, 'A former Personal address is not a Service fallback')
-    }
-    assert.equal(received, 1)
-  })
-})
-
 
 test('Discord observation wakes use the same subscription router and never run an unsubscribed handler', async () => {
   await withTempWorkspace(async workspace => {

@@ -20,6 +20,9 @@ const desktopRequire = createRequire(new URL('../../desktop/package.json', impor
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 const ids = ['web:chat-one', 'web:chat-two', 'bot:fixture:readonly']
 const history = (transport: string, id: string) => [{ role: 'user', content: `${transport} snapshot ${id}` }]
+const followUp = (id: string) => id === 'web:chat-two'
+  ? { next: 'Review the fixture after the timer', after: 60, nextRun: null }
+  : null
 const details = (id: string) => ({ sessionId: id, name: id, workdir: { kind: 'local', displayPath: '/synthetic' },
   usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
 const chat = (transport: string, id: string) => ({ chatId: id.replace(/^web:/, ''), currentPhysicalId: 'physical-fixture', previousPhysicalId: null,
@@ -59,9 +62,9 @@ for (const transport of ['HTTP', 'Socket']) test(`real Electron App warm convers
   const sent: Array<{ type: string; conversations?: Array<{ sessionId: string }> }> = []
   const marks: Array<{ http: number; ws: number }> = []
   const hub = new RealtimeHub()
-  hub.registerProject('work', undefined, async id => ({ data: {
+  const publisher = hub.registerProject('work', undefined, async id => ({ data: {
     chat: chat('Socket', id), details: details(id), inputDelivery: [], work: { records: [], effects: [] }, botSetup: { pending: false },
-    backgroundTasks: { sessionId: id, total: 0, tasks: [] }, scheduledTasks: [], followUp: { scheduled: false },
+    backgroundTasks: { sessionId: id, total: 0, tasks: [] }, scheduledTasks: [], followUp: followUp(id),
   } }), () => {})
   t.after(() => hub.close())
   const server = await createServer({
@@ -76,6 +79,10 @@ for (const transport of ['HTTP', 'Socket']) test(`real Electron App warm convers
           const url = new URL(request.url!, 'http://fixture')
           const path = url.pathname.replace(/^\/projects\/[^/]+(?=\/api\/)/, '')
           if (path === '/__switch-mark') { marks.push({ http: requests.length, ws: sent.length }); response.end('ok'); return }
+          if (path === '/__follow-up-clear') {
+            publisher.chat('web:chat-two', { event: 'conversation_summary', data: { followUp: null } })
+            response.end('ok'); return
+          }
           if (path === '/__switch') {
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><div id="app"></div><script type="module" src="/conversation-switch-fixture.ts"></script>'); return
@@ -123,6 +130,7 @@ for (const transport of ['HTTP', 'Socket']) test(`real Electron App warm convers
               case 'details': return json(details(id))
               case 'work': return json({ records: [], effects: [] })
               case 'input-delivery': return json([])
+              case 'follow-up': return json({ sessionId: id, followUp: followUp(id) })
               case 'scheduled-tasks': return json({ sessionId: id, tasks: [] })
               case 'background-tasks': return json({ sessionId: id, total: 0, tasks: [] })
             }

@@ -20,6 +20,7 @@ export interface ChannelDecision {
   chatId: string
   senderId: string
   requestId: string
+  platformMessageId?: string
   option: 1 | 2 | 3 | 'cancel'
 }
 
@@ -74,7 +75,7 @@ export interface BaseChannel {
   setPassiveCollector?(collector: (message: PassiveChannelMessage) => Promise<PassiveAdmission>): void
   setReceiver(receiver: ReceiveChannelMessage): void
   /** Platform strategies are lazy: host listener selection precedes execution. */
-  setReceivePolicy?(receiver: ReceiveChannelPolicy, mode?: 'service' | 'personal'): void
+  setReceivePolicy?(receiver: ReceiveChannelPolicy): void
 
   setStatusListener?(listener: (state: ChannelState) => void): void
   getCapabilities?(chatId: string): ChannelCapabilities | Promise<ChannelCapabilities>
@@ -132,13 +133,10 @@ export abstract class AbstractChannel implements BaseChannel {
   }
   private inputContext = new AsyncLocalStorage<(() => void) | undefined>()
   private inputPolicy?: ReceiveChannelPolicy
-  private inputPolicyMode: 'service' | 'personal' = 'service'
-  setReceivePolicy(receiver: ReceiveChannelPolicy, mode: 'service' | 'personal' = 'service'): void {
-    this.inputPolicy = receiver; this.inputPolicyMode = mode
-  }
+  setReceivePolicy(receiver: ReceiveChannelPolicy): void { this.inputPolicy = receiver }
   protected get hasReceivePolicy(): boolean { return !!this.inputPolicy }
-  /** Normalize source metadata only. In production, the selected BOT or Personal
-   * Session handler starts the strategy; only standalone adapters run it locally. */
+  /** Normalize source metadata only. In production, the selected BOT
+   * handler starts the strategy; only standalone adapters run it locally. */
   protected async runReceivePolicy(input: Pick<InboundMessage, 'senderId' | 'chatId' | 'messageId' | 'content'> & Partial<InboundMessage>, runPolicy: RunChannelPolicy): Promise<void> {
     this.assertConnection()
     const channelInputGuard = input.channelInputGuard
@@ -146,10 +144,9 @@ export abstract class AbstractChannel implements BaseChannel {
     const message: InboundMessage = { ...input, channelInputGuard, channel: this.name, timestamp: input.timestamp ?? new Date().toISOString(),
       ...(this.address(input.chatId) ? { channelAddress: this.address(input.chatId) } : {}) }
     if (this.inputPolicy) await this.inputPolicy(message, async configuration => {
-      if (this.inputPolicyMode === 'service' && (!configuration || configuration.platform !== this.name ||
-        ((configuration.platform === 'qq' || configuration.platform === 'feishu') && !['mention', 'all'].includes(configuration.trigger))))
+      if (!configuration || configuration.platform !== this.name ||
+        ((configuration.platform === 'qq' || configuration.platform === 'feishu') && !['mention', 'all'].includes(configuration.trigger)))
         throw new ChannelAdmissionError('Selected BOT receive configuration required', 403)
-      if (this.inputPolicyMode === 'personal' && configuration !== undefined) throw new ChannelAdmissionError('Personal policy cannot use Service configuration', 403)
       channelInputGuard?.()
       await this.inputContext.run(channelInputGuard, () => runPolicy(configuration))
     })
@@ -427,7 +424,7 @@ export abstract class AbstractChannel implements BaseChannel {
       throw new ChannelAdmissionError(`[${this.name}] Message receiver is not configured`, 503)
     }
 
-    const admin = !fields?.channelAdmissionId && (this.alwaysAdmin || !fields?.isGroup ||
+    const admin = !this.botScope && !fields?.channelAdmissionId && (this.alwaysAdmin || !fields?.isGroup ||
       !!this.adminChats?.includes(chatId))
 
     this.chatActiveMessage.delete(chatId)

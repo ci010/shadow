@@ -11,7 +11,7 @@ import { localFolderWorkdirRef } from './locality.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { parseSessionFocus, parseSessionFollowUp, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
 import { isOwnerSession } from './owner-policy.ts'
-import { FOLLOW_UP_MAX_AGE, FOLLOW_UP_MAX_WAKES, FOLLOW_UP_SOURCE, followUpInput, followUpPhase, nextFollowUp } from './session-follow-up.ts'
+import { FOLLOW_UP_MAX_AGE, FOLLOW_UP_MAX_WAKES, FOLLOW_UP_SOURCE, followUpInput, followUpPhase, nextFollowUp, staleFollowUpNotice } from './session-follow-up.ts'
 import { UserPresence, resolveUserWaitPolicy, type UserWaitPolicy } from './presence.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
 import { parseTaskRecord, type TaskRecord } from './task-record.ts'
@@ -100,6 +100,7 @@ import {
   sessionReplyAddress,
   type DeliveryReceipt,
   type SessionInput,
+  type SessionMessageInput,
   type SessionTurnFact,
 } from './input.ts'
 
@@ -982,8 +983,10 @@ ${JSON.stringify(request)}`,
       content: [
         request.question,
         ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
-        `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
-        `Or write your own response: /reply ${request.id} text <your response>.`,
+        ...(channelAddress ? ['Open the conversation in authenticated Web to answer if no buttons are available.'] : [
+          `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
+          `Or write your own response: /reply ${request.id} text <your response>.`,
+        ]),
         request.deadline ? `At ${request.deadline}, the default will be used if unanswered.` : 'Waiting for your answer; no automatic default.',
       ].join('\n'),
       done: true,
@@ -1049,7 +1052,8 @@ ${JSON.stringify(request)}`,
       event: 'response', channel: channelAddress?.platform ?? request.sessionId.slice(0, separator),
       chatId: channelAddress?.conversationId ?? request.sessionId.slice(separator + 1),
       ...(channelAddress ? { channelAddress } : {}), replyTo: context.platformMessageId, done: true,
-      content: `${request.question}\nReply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.\nNo answer is chosen automatically.`,
+      content: [request.question, channelAddress ? 'Open the conversation in authenticated Web to answer.'
+        : `Reply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.`, 'No answer is chosen automatically.'].join('\n'),
     }
     const stamped = this.stampPersonalNotification(request.sessionId, message)
     if (this.deps.deliverInput) await this.deps.deliverInput(stamped)
@@ -1829,6 +1833,12 @@ ${JSON.stringify(request)}`,
           if (!(session instanceof Session)) throw new Error('Automatic kickoff requires a durable session loop')
           this.attachAutomaticWorkKickoff(session, deliveryInput, kickoff, beforeDispatch, verifyKickoff)
         }
+        if (session instanceof Session && deliveryInput.kind === 'message' && !this.sessionFollowUpInputs.has(input)
+          && !(deliveryInput.source.kind === 'event' && (deliveryInput.source.type === 'work-notification-wake'
+            || deliveryInput.source.type === 'work-notification'))) {
+          const notice = await this.supersedeScheduledSessionFollowUp(sessionId, deliveryInput)
+          if (notice) session.markStaleFollowUp(deliveryInput, notice)
+        }
         if (parentQuestion && session instanceof EphemeralSession) session.dispatchParentQuestion(deliveryInput, inference)
         else session.dispatch(deliveryInput, inference)
       } catch (error) {
@@ -2060,6 +2070,7 @@ ${JSON.stringify(request)}`,
       else if (this.canFollowUp(ctx.state)) {
         sess.onIdle = () => this.armSessionFollowUps()
         sess.prepareSessionFollowUp = input => this.claimSessionFollowUp(sessionId, input)
+        sess.supersedeFollowUpForWorkNotice = input => this.supersedeScheduledSessionFollowUp(sessionId, input)
         sess.settleFollowUpTurn = fact => this.settleSessionFollowUp(ctx.state, fact)
         sess.isFollowUpSettled = () => ctx.state.completed === true || !!ctx.state.followUp || this.hasFollowUpQuestion(sessionId)
       }
@@ -2108,8 +2119,10 @@ ${JSON.stringify(request)}`,
     const phase = followUpPhase(fact.source)
     const direct = fact.source.kind === 'user' && fact.source.sender.channel === 'web'
       && !fact.source.sender.isGroup && !fact.source.sender.channelAddress
-    if (!phase && !direct) return
     const prior = state.sessionFollowUp
+    // Non-user messages do not start a self-check on their own, but an explicit
+    // replacement follow-up written in that turn is a fresh scheduling decision.
+    if (!phase && !direct && (!state.followUp || prior)) return
     if (phase && prior?.inputId !== fact.inputId) return
     if (state.completed || state.followUp === null) {
       delete state.sessionFollowUp
@@ -2185,6 +2198,7 @@ ${JSON.stringify(request)}`,
       const entry = { ...state.sessionFollowUp, dueAt: 0 }
       await this.store.saveState(id, { ...state, sessionFollowUp: entry })
       state.sessionFollowUp = entry
+      this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
       return true
     })
     if (!paused || this.stopped) return
@@ -2206,12 +2220,40 @@ ${JSON.stringify(request)}`,
         const entry = { ...state.sessionFollowUp, dueAt: 0, wakes: state.sessionFollowUp.wakes + 1 }
         await this.store.saveState(id, { ...state, sessionFollowUp: entry })
         state.sessionFollowUp = entry
+        this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
         return true
       })
     } catch (error) {
       if (!this.stopped) await this.pauseSessionFollowUp(id, input.id, errMsg(error))
       return false
     } finally { this.queuedSessionFollowUps.delete(input.id) }
+  }
+
+  /** A real, admitted message wins over an unclaimed wake, even if its timer
+   * already queued an input. Claim uses the same lock and rechecks the ID. */
+  private supersedeScheduledSessionFollowUp(id: string, input: SessionMessageInput): Promise<SessionMessageInput | undefined> | undefined {
+    const current = this.sessionStates[id]
+    if (!current?.sessionFollowUp?.dueAt || !this.canFollowUp(current)) return undefined
+    return this.withStateCreation(id, async () => {
+      const state = this.sessionStates[id]
+      if (!state?.sessionFollowUp?.dueAt || !this.canFollowUp(state)) return undefined
+      const prior = state.followUp
+      await this.store.saveState(id, { ...state, followUp: undefined, sessionFollowUp: undefined })
+      delete state.followUp
+      delete state.sessionFollowUp
+      this.armSessionFollowUps()
+      this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
+      return prior ? staleFollowUpNotice(input, prior) : undefined
+    })
+  }
+
+  /** Purpose-built composer projection: never expose the internal wake receipt. */
+  sessionFollowUpView(id: string): { next: string; after: number; nextRun: string | null } | null {
+    const state = this.getSessionState(id)
+    if (!state || !this.canFollowUp(state) || state.completed || !state.followUp) return null
+    const entry = state.sessionFollowUp
+    const due = entry?.phase === 'follow_up' && entry.dueAt ? new Date(entry.dueAt) : null
+    return { ...state.followUp, nextRun: due && Number.isFinite(due.getTime()) ? due.toISOString() : null }
   }
 
   async cancelScheduledSessionFollowUp(id: string): Promise<void> {
@@ -2222,6 +2264,7 @@ ${JSON.stringify(request)}`,
       await this.store.saveState(id, { ...state, followUp: null, sessionFollowUp: undefined })
       state.followUp = null
       delete state.sessionFollowUp
+      this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
     })
     this.armSessionFollowUps()
   }
@@ -4485,6 +4528,7 @@ ${JSON.stringify(request)}`,
       }
     }
 
+    personal?.assertCurrent?.() // Tool preload may have awaited a publication change.
     return {
       behavior,
       state,

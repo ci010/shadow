@@ -8,7 +8,7 @@ const identifier = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
 
 
 export const ConversationBindingSchema = z.object({
-  botInstanceId: identifier, platform: z.enum(['qq', 'discord', 'feishu']),
+  botInstanceId: identifier, platform: z.enum(['qq', 'discord', 'feishu', 'wechat']),
   conversationId: identifier, enabled: z.boolean().default(true),
   agent: ResourceName, skills: z.array(ResourceName).max(32).default([]),
   allowFrom: z.array(identifier).max(1000).optional(),

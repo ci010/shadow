@@ -5,16 +5,17 @@ import { Hono } from 'hono'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { Bus } from '../bus/bus.ts'
 import type { InboundMessage } from '../bus/events.ts'
+import type { ChannelSource } from '../channels/passive-contract.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
 import { BotDeployments } from '../bots/deployments.ts'
 import { DirectoryBots } from '../bots/runtime.ts'
-import { handleBotInput } from '../bots/input.ts'
+import { handleBotInput, projectInputListeners } from '../bots/input.ts'
 import { ChannelManager } from '../channels/manager.ts'
 import { WebChannel } from '../channels/web.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import { InputRouter } from './router.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../channels/input.ts'
-import { handleSessionInput, sessionInputListeners } from '../sessions/input-listeners.ts'
+import { handleSessionInput } from '../sessions/input-listeners.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 
@@ -47,7 +48,7 @@ test('real Web/ChannelManager ingress authenticates before preparation and uses 
       return { status: 'accepted' as const, sessionId: `web:${message.chatId}`, inputId: message.messageId }
     } }
     const inputs = new InputRouter<ChannelInputPayload, ChannelInputResult>(projectId, {
-      listeners: () => { trace.push('listeners'); return routerOpen ? [...sessionInputListeners(projectId, sessions, bots), ...directory.inputListeners()] : [] },
+      listeners: () => { trace.push('listeners'); return routerOpen ? projectInputListeners(projectId, handlers) : [] },
       deliver: (target, input) => target.kind === 'session' ? handleSessionInput(target.id, input, handlers) : handleBotInput(target.id, input, handlers),
     })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions,
@@ -107,52 +108,95 @@ test('standalone Web denies input by default and body authority cannot install a
   } finally { await channel.stop() }
 })
 
-test('real Personal QQ strategy waits for its pairing listener; a pairing proof alone installs no listener', async () => {
+test('one QQ connector routes exact Personal and Service inboxes without pairing, and honors group triggers', async () => {
   const { QQChannel } = await import('../channels/qq.ts')
   const { channelInputFixture } = await import('../testing/channel-input.ts')
+  const { assignChannelSource } = await import('../bots/channel-assignment.ts')
+  const { parseChannelSource } = await import('../channels/passive-contract.ts')
   await withTempWorkspace(async workspace => {
-    const projectId = 'personal-policy', bots = new BotInstanceStore({ projectId, path: join(workspace, 'bots.json') })
-    const bot = bots.create('qq', 'owner', { enabled: true, appId: 'synthetic', secret: 'synthetic' }, undefined, 'personal')
-    const directory = new DirectoryBots(new BotDeployments({ projectId, directory: join(workspace, 'deployments') }))
-    const sessions = { listSessions: () => [], listRetiredSessions: () => [], getSessionState: () => null, assertFolderAccess() {},
-      async retireIdleConversationContexts() {} } as unknown as SessionManager
-    const trace: string[] = [], bus = new Bus()
-    const inputs = channelInputFixture({ projectId, bots, directory, sessions, receive: async message => {
-      trace.push('session'); return { status: 'accepted', sessionId: message.chatId, inputId: message.messageId }
+    const projectId = 'service-dm', bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
+    const bot = bots.create('qq', 'shared', { enabled: true, appId: 'synthetic', secret: 'synthetic' })
+    const directory = new DirectoryBots(new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } }))
+    const archived: ChannelSource[] = [], received: InboundMessage[] = []
+    const firstRecorded = Promise.withResolvers<void>(), finishFirstReceipt = Promise.withResolvers<void>()
+    const sessions = { async recordPassiveChannel(source: ChannelSource, message: InboundMessage) {
+      archived.push(source)
+      if (archived.length === 1) { firstRecorded.resolve(); await finishFirstReceipt.promise }
+      return { status: 'accepted', sessionId: 'inbox', inputId: message.messageId }
+    } } as unknown as SessionManager
+    const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => {
+      received.push(message); return { status: 'accepted', sessionId: message.chatId, inputId: message.messageId }
     } })
+    const bus = new Bus()
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions, inputs.receive, {
-      projectId, instanceStore: bots, routeInputPolicy: (message, run) => {
-        trace.push('route')
-        return inputs.policy(message, async config => { trace.push('policy'); await run(config) })
-      },
+      projectId, instanceStore: bots, serviceAssigned: directory.serviceAssigned,
+      personalInboxAssigned: address => directory.personalInbox(address)?.enabled === true,
+      serviceGeneration: address => directory.personalInbox(address)?.generation ?? directory.resolve(address)?.generation,
+      routeInputPolicy: inputs.policy,
     })
     try {
       await manager.init()
       const adapter = manager['channels'].get(bot.id)
       assert.ok(adapter instanceof QQChannel)
       let id = 0
-      const send = (sender: string, content: string) => adapter['handleDispatch']('C2C_MESSAGE_CREATE', {
-        id: String(++id), content, author: { user_openid: sender }, timestamp: new Date().toISOString(),
+      const send = (sender: string) => adapter['handleDispatch']('C2C_MESSAGE_CREATE', {
+        id: String(++id), content: 'plain message without a mention', author: { user_openid: sender }, timestamp: new Date().toISOString(),
       })
-      await assert.rejects(send('owner', 'before pairing'), /owner/)
-      assert.deepEqual(trace, ['route'])
-      trace.length = 0
-      const challenge = manager.createOwnerChallenge(bot.id).challenge
-      await send('owner', `/shadow-pair ${challenge}`)
-      assert.deepEqual(trace, [], 'Control-plane proof does not execute an Agent strategy')
-      assert.equal(manager.ownerCandidate(bot.id).candidate, 'owner')
-      assert.equal(bots.get(bot.id).verifiedOwner, undefined)
-      assert.deepEqual(sessionInputListeners(projectId, sessions, bots), [])
-      await manager.confirmOwner(bot.id, challenge)
-      assert.equal(sessionInputListeners(projectId, sessions, bots).length, 1)
-      await send('owner', 'after host confirmation')
-      assert.deepEqual(trace, ['route', 'policy', 'session'])
-      trace.length = 0
-      await assert.rejects(send('stranger', 'not the owner'), /owner/)
-      assert.deepEqual(trace, ['route'])
-      trace.length = 0; bots.bindOwner(bot.id)
-      await assert.rejects(send('owner', 'revoked'), /owner/)
-      assert.deepEqual(trace, ['route'])
-    } finally { await manager.stopAll(); bus.stopAll() }
+      const unassignedArrival = send('one')
+      await firstRecorded.promise
+      assert.equal(received.length, 0)
+      const source = parseChannelSource(archived[0], undefined, projectId)!
+      assert.equal(source.kind, 'direct')
+      const files = { 'BOT.md': '---\nid: support\nconfig: bot.json\nmode: service\n---\nSupport.',
+        'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }
+      const updated = assignChannelSource(files, source, { enabled: true, trigger: 'mention', tools: [] })
+      await directory.deployments.deploy({ id: 'support', ...directory.deployments.freeze(updated.files), source: { folderId: 'test', directory: 'support' } })
+      finishFirstReceipt.resolve()
+      await unassignedArrival
+      assert.equal(received.length, 0, 'Publishing during receipt cannot admit the older arrival')
+      await send('two')
+      assert.equal(received.length, 0, 'An unrelated private inbox is not bound')
+      await send('one')
+      assert.deepEqual(received.map(message => [message.messageId, message.chatId, message.admin]), [['3', 'c2c:one', false]])
+      assert.equal(archived.length, 3)
+      const personal = { ...files, 'BOT.md': '---\nid: assistant\nconfig: bot.json\nmode: personal\nagent: general\n---\nPrivate assistant.' }
+      const personalInbox = assignChannelSource(personal, archived[1]!, { enabled: true, trigger: 'mention', tools: [] })
+      const { parseBot } = await import('../bots/sdk.ts')
+      const { validateServiceAssignments } = await import('../bots/assignment-validation.ts')
+      const service = parseBot(updated.files)
+      await validateServiceAssignments(projectId, bots, parseBot(personalInbox.files), [service], async () => {})
+      const conflict = assignChannelSource(personal, source, { enabled: true, trigger: 'mention', tools: [] })
+      await assert.rejects(() => validateServiceAssignments(projectId, bots, parseBot(conflict.files), [service], async () => {}), /another BOT/)
+      await directory.deployments.deploy({ id: 'assistant', ...directory.deployments.freeze(personalInbox.files), source: { folderId: 'test', directory: 'assistant' } })
+      await send('two'); await send('one')
+      const { channelSessionId } = await import('../bus/events.ts')
+      const { botConversationPolicies } = await import('../channels/bot-policies.ts')
+      const policies = botConversationPolicies(bots, { resolve: () => undefined } as never, directory)
+      assert.equal(policies.personal?.(channelSessionId(received[1]!.channelAddress!))?.agent, 'general')
+      assert.equal(directory.resolve(received[2]!.channelAddress!)?.runtimeOrigin?.id, 'support')
+      assert.deepEqual(received.map(message => message.chatId), ['c2c:one', 'c2c:two', 'c2c:one'])
+      const sendGroup = (mentioned: boolean) => adapter['handleDispatch'](mentioned ? 'GROUP_AT_MESSAGE_CREATE' : 'GROUP_MESSAGE_CREATE', {
+        id: String(++id), content: 'group message', group_openid: 'team', author: { member_openid: 'any-member' }, timestamp: new Date().toISOString(),
+      })
+      await sendGroup(false)
+      assert.equal(received.length, 3)
+      const group = archived.at(-1)!
+      const deployPersonal = async (trigger: 'mention' | 'all') => {
+        const assigned = assignChannelSource(personalInbox.files, group, { enabled: true, trigger, tools: [] })
+        await directory.deployments.deploy({ id: 'assistant', ...directory.deployments.freeze(assigned.files), source: { folderId: 'test', directory: 'assistant' }, expectedRevision: directory.deployments.read('assistant')!.deployment.revision })
+      }
+      await deployPersonal('mention')
+      await sendGroup(false)
+      assert.equal(received.filter(message => !message.silent).length, 3)
+      await sendGroup(true)
+      assert.equal(received.at(-1)?.chatId, 'group:team')
+      assert.equal(received.at(-1)?.silent, false)
+      const guard = policies.personal?.(channelSessionId(received.at(-1)!.channelAddress!))?.assertCurrent
+      assert.ok(guard)
+      await deployPersonal('all')
+      assert.throws(guard, /execution changed/)
+      await sendGroup(false)
+      assert.equal(received.at(-1)?.silent, false)
+    } finally { finishFirstReceipt.resolve(); await manager.stopAll(); bus.stopAll() }
   })
 })

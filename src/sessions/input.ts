@@ -8,7 +8,7 @@ import { isOwnerSession } from './owner-policy.ts'
  * identity may supply the missing principal on an event or session continuation.
  * Never consult sender/origin/attributes or the reply projection for authority. */
 export function inputAdmin(sessionId: string, input: SessionInput, state?: SessionState): boolean {
-  if (input.source.kind === 'user') return input.source.sender.admin ?? false
+  if (input.source.kind === 'user') return !input.source.sender.channelAddress && (input.source.sender.admin ?? false)
   return (input.source.kind === 'event' || input.source.kind === 'session') && state?.sessionId === sessionId &&
     typeof state.projectId === 'string' && isOwnerSession(state, state.projectId) &&
     !state.channelBoundary && !state.serviceGeneration
@@ -125,9 +125,10 @@ export type ChannelReceiveConfiguration =
   | Readonly<{ platform: 'qq'; trigger: 'mention' | 'all' }>
   | Readonly<{ platform: 'feishu'; trigger: 'mention' | 'all' }>
   | Readonly<{ platform: 'discord' }>
-/** Undefined configuration is only for standalone/personal adapter compatibility. */
+  | Readonly<{ platform: 'wechat' }>
+/** Undefined configuration is only for standalone adapters. */
 export type RunChannelPolicy = (configuration?: ChannelReceiveConfiguration) => Promise<void>
-/** Host-owned lazy platform policy, invoked by the selected BOT or Personal Session handler, not the adapter entry. */
+/** Host-owned lazy platform policy, invoked by the selected BOT handler, not the adapter entry. */
 export type ReceiveChannelPolicy = (message: InboundMessage, runPolicy: RunChannelPolicy) => Promise<void>
 
 /** Compatibility belongs at the channel boundary, not in the mailbox. */

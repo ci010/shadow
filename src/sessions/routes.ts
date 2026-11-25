@@ -239,7 +239,7 @@ export function sessionsApiPlugin(
       }
       const suffix = c.req.path.slice('/api/sessions/'.length)
       if (sessions && (/\/(?:files|raw|preview|static|git)(?:\/|$)/.test(suffix) ||
-        c.req.method !== 'GET' || suffix.endsWith('/context'))) {
+        c.req.method !== 'GET' || suffix.endsWith('/context') || suffix.endsWith('/follow-up'))) {
         try { if (historicalRead) await sessions.assertHistoricalFolderAccess(key); else sessions.assertFolderAccess?.(key) }
         catch (error) {
           if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code, message: error.message }, error.status)
@@ -300,6 +300,13 @@ export function sessionsApiPlugin(
           nextRun: job.enabled === false ? null : options.cron?.nextJobRun?.(job.id) ?? null,
         }))
       return c.json({ sessionId, tasks })
+    })
+
+    app.get('/api/sessions/:sessionId/follow-up', c => {
+      c.header('Cache-Control', 'no-store')
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const sessionId = c.req.param('sessionId')
+      return c.json({ sessionId, followUp: sessions.sessionFollowUpView(sessionId) })
     })
 
     app.use('/api/sessions/summary', compress({ encoding: 'gzip' }))

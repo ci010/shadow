@@ -27,6 +27,7 @@ export interface ConversationPolicies {
   managed(sessionId: string): boolean
   resolve(sessionId: string): ResolvedConversationPolicy | undefined
   authorize(sessionId: string, input: SessionInput): void
+  assertInputAvailable?(sessionId: string): void
   tools(policy: ResolvedConversationPolicy, sessionId: string, state?: SessionState): SessionTools
   prompt(policy: ResolvedConversationPolicy, sessionId: string, state?: SessionState): { systemPrompt: string; sections: Array<{ name: string; content: string; characters: number }> }
   boundary?(policy: ResolvedConversationPolicy, sessionId: string, state: SessionState): ChannelBoundary | undefined
@@ -50,13 +51,12 @@ export class DirectoryBotService implements ConversationPolicies {
     folders: Pick<FolderRegistry, 'get' | 'requireAvailable' | 'acquireAccess'>
     knowledge?: ServiceReadBackend['knowledge']
     remoteExecutor?: Executor
-    legacyAddress?: (sessionId: string) => ChannelAddress | undefined
   }, private readonly bots: DirectoryBots) {}
 
   private get policyStore() { return this.bots }
 
   address(sessionId: string): ChannelAddress | undefined {
-    const address = channelAddressFromSessionId(sessionId) ?? this.options.legacyAddress?.(sessionId)
+    const address = channelAddressFromSessionId(sessionId)
     if (address && address.projectId !== this.options.projectId) throw new Error('Conversation policy belongs to another Project.')
     return address
   }
@@ -77,8 +77,12 @@ export class DirectoryBotService implements ConversationPolicies {
     return policy
   }
 
-  authorize(sessionId: string, input: SessionInput): void {
+  assertInputAvailable(sessionId: string): void {
     if (this.publishing && this.address(sessionId)) throw new Error('Conversation configuration is being published. Retry shortly.')
+  }
+
+  authorize(sessionId: string, input: SessionInput): void {
+    this.assertInputAvailable(sessionId)
     const policy = this.resolve(sessionId)
     if (!policy) return
     if (input.source.kind === 'user' && policy.binding.allowFrom !== undefined &&

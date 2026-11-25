@@ -45,7 +45,9 @@ Production composition in `runtime/main/project-runtime.ts` installs:
    unassigned-group discovery without evaluating a business trigger.
 2. `channels/input.ts` only validates/encodes admitted adapter data; it neither
    selects a recipient nor registers a listener. Project composition creates one
-   `InputRouter` with both `sessionInputListeners` and `DirectoryBots.inputListeners`.
+   `InputRouter`: Web targets its prepared Session; Personal and Service channel
+   inputs target a deployed BOT. The legacy Personal pairing still supplies the
+   exact conversation selector; Service uses `DirectoryBots.inputListeners`.
    `WebChannel` checks the injected real host Request authorization before fork,
    configuration, upload or Session preparation. It assigns the host `web-user`
    identity/admin state; client `senderId`, `admin`, `source` or `listeners` fields
@@ -112,12 +114,9 @@ See [BOT subscriptions](bots.md#external-input-subscriptions). Missing
 explicit `[]` closes input even when permission bindings remain configured.
 Deployment confirmation includes subscription and trigger changes. Original files
 are not silently rewritten; existing single-conversation ownership restrictions
-remain. QQ/Feishu binding `trigger` defaults to `mention`. Legacy QQ Service
-connection `triggerMode: all` is **not inherited**: preserving that broader behavior
-requires explicit `trigger: all` in the BOT binding and normal owner confirmation.
-This intentional compatibility narrowing never silently broadens a new BOT.
-Personal/standalone QQ keeps its legacy connection option; Feishu keeps its prior
-mention/reply/topic default unless the BOT explicitly selects `all`.
+remain. QQ/Feishu Personal and Service bindings default to `trigger: mention`;
+choose `trigger: all` explicitly to respond without a mention. Connection
+configuration does not set the trigger.
 
 `AgentApp` no longer republishes channel content as `channel.message` through
 `EventService`. Old persisted channel subscriptions are not deleted, but receive
