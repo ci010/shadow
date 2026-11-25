@@ -917,7 +917,11 @@ view uses the context-authorized host endpoint `GET /api/usage`.
 ### Daily usage pagination
 
 The summary endpoint returns only the latest 31 UTC calendar dates for charts,
-while cumulative totals still include historical source events. Daily history is
+while cumulative totals still include historical source events. Each overview
+`daily` row also includes `models`, an array of `{ name, usage }` entries using
+the same metrics as the day total. Empty days have no entries; calls without a
+model identifier still count toward the day total. Older overview payloads may
+omit `models`. Paginated history continues to return only day totals. Daily history is
 loaded only after **Load daily history**, via the context-authorized, Project-bound
 `GET /api/project/usage/daily?page=1` endpoint (10 dates per page, newest first).
 Completeness details use that same current page, never all history. Refresh and

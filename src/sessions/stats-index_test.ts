@@ -50,6 +50,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       assert.equal(usage.coverage, 'complete')
       assert.deepEqual(usage.total, { calls: 2, tokens: 12, unknownTokenCalls: 1, costs: [{ currency: 'USD', amount: 0.1 }], unknownCostCalls: 1, durationMs: 200, unknownDurationCalls: 0 })
       assert.equal(usage.today.tokens, null)
+      const trend = projectUsageSchema.parse(usage).daily
+      assert.deepEqual(trend[0]?.models, [{ name: 'fixture@account', usage: usage.today }])
+      assert.deepEqual(trend[1]?.models, [{ name: 'fixture@account', usage: trend[1]?.usage }])
+      assert.deepEqual(trend[2]?.models, [])
       assert.deepEqual(usage.firstText, { p50Ms: 40, p95Ms: 40, samples: 1 })
       assert.deepEqual(usage.activity.total.tools, [{ name: 'fixture.read', calls: 1 }])
       assert.deepEqual(usage.activity.total.models, [{ name: 'fixture@account', calls: 2, usage: usage.total }])
