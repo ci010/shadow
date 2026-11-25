@@ -28,10 +28,10 @@ type Options = {
   pending: Map<string, unknown>
   publish: <T>(id:string,change:()=>Promise<T>, candidate?:BotDefinition) => Promise<T>; changed: (ids:string[]) => void
 }
-const proposal = z.object({action:z.literal('propose'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),expectedRevision:z.string().optional(),sourceRevision:z.string().regex(/^[a-f0-9]{64}$/).optional(),summary:z.string().trim().min(1).max(800)}).strict()
+const reloadRequest = z.object({action:z.literal('reload'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),summary:z.string().trim().min(1).max(800)}).strict()
 const sourceRequest = z.object({action:z.literal('source'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),channelSessionId:z.string().max(8192).optional()}).strict()
 const createRequest = z.object({ action: z.literal('create'), folderId: z.string().min(1).max(128), directory: z.string().min(1).max(1024), id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/), prompt: z.string().trim().min(1).max(128000), summary: z.string().trim().min(1).max(800) }).strict()
-const assignment = proposal.extend({action:z.literal('assign'),scope:z.enum(['conversation','parent']).default('conversation'),channelSessionId:z.string().min(1).max(8192),sourceRevision:z.string().regex(/^[a-f0-9]{64}$/),bindingJson:z.string().max(128000)}).strict()
+const linkRequest = reloadRequest.extend({action:z.literal('link'),scope:z.enum(['conversation','parent']).default('conversation'),channelSessionId:z.string().min(1).max(8192),bindingJson:z.string().max(128000)}).strict()
 
 function location(binding: ReturnType<typeof parseBot>['bindings'][number]): string {
   return binding.platform === 'discord' ? `Discord ${binding.target.kind === 'dm' ? 'DM '+binding.target.userId : binding.target.guildId+'/'+binding.target.channelId}` : `${binding.platform} ${binding.botInstanceId}/${binding.conversationId}`
@@ -90,8 +90,8 @@ function disclosedBindings(bot: BotDefinition): unknown[] {
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel or QQ/Feishu private chat, with exact sourceRevision/expectedRevision. Neither copies selectors into Connection or Workflow. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then publishes the exact validated revision under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision to publish that exact source revision. All bindings inherit the BOT-wide read grant (companion JSON optional top-level readResources:{folders?,knowledge?,wiki?}); do not put read scope in bindingJson. QQ/Feishu Service policy: {enabled,trigger,allowFrom?,tools}. For a Personal BOT package, link an exact QQ/Feishu inbox with {enabled,trigger,tools:[]} and no sender list. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation and requires a top-level group/channel or a QQ/Feishu private chat. Assign admits the conversation without a sender allowlist by default: omit allowFrom (QQ/Feishu) and participants (Discord) unless explicitly preserving or requesting a restriction. QQ/Feishu private chats ignore the group trigger. Platform access checks remain in force. Exact thread and Discord DM assignment are not supported here; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
-    parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','link','assign','propose']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},sourceRevision:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
+    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel or QQ/Feishu private chat, using the source read during this operation. Neither copies selectors into Connection or Workflow. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployments and registered folders. reload snapshots a local registered source directory, validates data without executing code, then publishes the exact validated snapshot under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and reload again to update. source is optional read-only inspection of BOT identity, config path and inherited grants, and resolves a passive channelSessionId from trusted host metadata. link updates the existing companion using explicit bindingJson permissions (no target identity keys) and applies it directly. reload does not restart the host process. Later source edits are excluded from this operation; reload again to apply them. All bindings inherit the BOT-wide read grant (companion JSON optional top-level readResources:{folders?,knowledge?,wiki?}); do not put read scope in bindingJson. QQ/Feishu Service policy: {enabled,trigger,allowFrom?,tools}. For a Personal BOT package, link an exact QQ/Feishu inbox with {enabled,trigger,tools:[]} and no sender list. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. To disable a binding, link with enabled:false. scope defaults to conversation and requires a top-level group/channel or a QQ/Feishu private chat. Link admits the conversation without a sender allowlist by default: omit allowFrom (QQ/Feishu) and participants (Discord) unless explicitly preserving or requesting a restriction. QQ/Feishu private chats ignore the group trigger. Platform access checks remain in force. Exact thread and Discord DM assignment are not supported here; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
+    parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','link','reload']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()
       if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
@@ -102,7 +102,7 @@ export function botPackageTool(options: Options): Tool {
       if (raw.action === 'create') {
         const input = createRequest.parse(raw), parts = input.directory.split('/')
         if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT directory without traversal.')
-        if (options.deployments.read(input.id)) throw new Error('BOT already exists; use link or propose with its exact revision')
+        if (options.deployments.read(input.id)) throw new Error('BOT already exists; use link or reload')
         const files = { 'BOT.md': `---\n${stringify({ id: input.id, config: 'bot.json', mode: 'service' })}---\n${input.prompt}\n`,
           'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }, null, 2) + '\n' }
         parseBot(files); await options.validate(files, context.signal)
@@ -120,11 +120,11 @@ export function botPackageTool(options: Options): Tool {
         } finally { release() }
         // If publication fails the new private source remains for inspection/retry;
         // existing user files and active deployments have not been overwritten.
-        return botPackageTool(options).execute({ action: 'propose', folderId: input.folderId, directory: input.directory,
-          summary: input.summary, sourceRevision: options.deployments.freeze(files).revision }, context)
+        return botPackageTool(options).execute({ action: 'reload', folderId: input.folderId, directory: input.directory,
+          summary: input.summary }, context)
       }
       const linking = raw.action === 'link'
-      const input = raw.action === 'assign' || linking ? assignment.parse({ ...raw, action: 'assign' }) : raw.action === 'source' ? sourceRequest.parse(raw) : proposal.parse(raw)
+      const input = linking ? linkRequest.parse(raw) : raw.action === 'source' ? sourceRequest.parse(raw) : reloadRequest.parse(raw)
       const target = 'channelSessionId' in input && input.channelSessionId ? options.channelSource?.(input.channelSessionId) : undefined
       if ('channelSessionId' in input && input.channelSessionId && !target) throw new Error('Referenced passive channel session is unavailable in this Project')
       if (target) parseChannelSource(target, 'channelSessionId' in input ? input.channelSessionId : undefined, options.projectId)
@@ -141,43 +141,29 @@ export function botPackageTool(options: Options): Tool {
         frozen = options.deployments.freeze(snapshotBotDirectory(path))
         if (input.action === 'source') {
           const parsed = parseBotPackage(frozen.files)
-          return JSON.stringify({ sourceRevision: frozen.revision, bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, projectReadGrants: parsed.bot.mode === 'service' ? resourceFacts('Inherited BOT-wide read grant:', botReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. Source edits and publication retain optimistic revision and live authority checks; no extra approval is required.' })
+          return JSON.stringify({ bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, projectReadGrants: parsed.bot.mode === 'service' ? resourceFacts('Inherited BOT-wide read grant:', botReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. No revision preflight is required. Operations use the source snapshot read at execution; live authority checks remain in force.' })
         }
-        if (input.action === 'assign') {
-          if (frozen.revision !== input.sourceRevision) throw new Error('BOT source changed; inspect it again before assignment')
+        if (input.action === 'link') {
           const activeId = parseBot(frozen.files).id
-          if (options.deployments.read(activeId)?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before assigning.')
           if (linking && !options.deployments.read(activeId)) throw new Error('Link requires an existing BOT; use create first')
           const updated = assignChannelSource(frozen.files, target!, JSON.parse(input.bindingJson), input.scope)
           await options.validate(updated.files, context.signal)
           context.signal.throwIfAborted()
           if (linking) {
-            const active = options.deployments.read(activeId)
-            if (active?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before assigning.')
             // Edit only the existing BOT companion; no Workflow/Connection copy of
-            // its address, filter or binding is made. Revision guards stay exact.
-            if (options.deployments.freeze(snapshotBotDirectory(path)).revision !== frozen.revision) throw new Error('BOT source changed before link')
+            // its address, filter or binding is made. Use the snapshot read above.
             if (!options.canAuthor(context.sessionId)) throw new Error('BOT source owner authority changed.')
             writePrivateFile(join(path, updated.configPath), updated.content)
             frozen = options.deployments.freeze(updated.files)
             gitSource = sourceUsesGit(path)
-          } else {
-          return JSON.stringify({ status: 'assignment-prepared', scope: input.scope, source: { folderId: input.folderId, directory: input.directory }, channelSessionId: input.channelSessionId,
-            sourceRevision: frozen.revision, candidateRevision: options.deployments.freeze(updated.files).revision,
-            projectReadGrants: resourceFacts('Inherited BOT-wide read grant:', updated.readResources),
-            edit: { path: [...parts, updated.configPath].join('/'), match: frozen.files[updated.configPath], content: updated.content },
-            next: 'Use the ordinary authorized write tool for this registered source folder and exact match/content; then bot_package propose with sourceRevision=candidateRevision, the same expectedRevision and summary. Preparation is not a write, deployment, permission or history-replay grant.' })
+          }
         }
-        }
-        if (!linking && input.sourceRevision && frozen.revision !== input.sourceRevision) throw new Error('BOT source changed; inspect it again before proposing')
         gitSource = sourceUsesGit(path)
       } finally {release()}
       const bot = parseBot(frozen.files)
       const current = options.deployments.read(bot.id)?.deployment
-      if (current?.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before proposing.')
       await options.validate(frozen.files,context.signal)
       const active = options.deployments.read(bot.id)
-      if (active?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before proposing.')
       const baseline = active ? botProposalBaseline(active.files) : undefined
       const before = baseline?.bot
       if (before && before.id !== bot.id) throw new Error('BOT active identity mismatch.')
@@ -188,19 +174,19 @@ export function botPackageTool(options: Options): Tool {
         activeInvalid: true, reason: 'Retired binding.skills selectors or proposal-inbox grants; the active package fails the current strict schema. Removed proposal grants never grant Work authority.',
         removedBindingSkills: baseline.removedBindingSkills, removedProposalGrants: baseline.removedProposalGrants ?? [],
         effect: 'Deployment restores a valid BOT definition and its enabled input subscriptions/runtime; it is not only a format change.',
-        candidatePermissions: [...newAuthority], expectedRevision: current!.revision, exactContent: frozen.revision,
+        candidatePermissions: [...newAuthority], previousContent: current!.revision, exactContent: frozen.revision,
       } : undefined
       const added=[...newAuthority].filter(value=>!oldAuthority.has(value)),removed=[...oldAuthority].filter(value=>!newAuthority.has(value))
       const affected=[...new Set([...(before?.bindings ?? []),...bot.bindings].map(location))]
       const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,repair,
-        expectedRevision:current?.revision ?? null,exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
+        previousContent:current?.revision ?? null,exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
         affected,addedPermissions:added,removedPermissions:removed,candidatePermissions:[...newAuthority],
         credentialDisclosure:'Credential configuration is represented only by its presence; private references and header values are withheld. Origins, routes and body restrictions remain visible.',
         mode:bot.mode,agent:bot.agent,bindings:disclosedBindings(bot),subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
         hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],readResources:botReadResources(bot) ?? null,discordHistory:bot.discordHistory ?? null,
         storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
         execution:bot.mode === 'personal' ? 'Ordinary role tools/context and BOT prompt; no custom modules. Explicit inbox assignment does not establish owner identity.' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
-      // Direct authenticated authoring is the authorization. Exact revision,
+      // Direct authenticated authoring is the authorization. Snapshot integrity,
       // live scope validation and the publication fence remain technical checks;
       // no second native ask/approval or pending activation state is introduced.
       context.signal.throwIfAborted()
@@ -208,7 +194,7 @@ export function botPackageTool(options: Options): Tool {
         if (!options.canAuthor(context.sessionId)) throw new Error('BOT publication owner authority changed.')
         await options.validate(frozen.files,context.signal)
         if (!options.canAuthor(context.sessionId)) throw new Error('BOT publication owner authority changed.')
-        return options.deployments.deploy({id:bot.id,source:{folderId:input.folderId,directory:input.directory},files:frozen.files,revision:frozen.revision,expectedRevision:input.expectedRevision,signal:context.signal})
+        return options.deployments.deploy({id:bot.id,source:{folderId:input.folderId,directory:input.directory},files:frozen.files,revision:frozen.revision,expectedRevision:options.deployments.read(bot.id)?.deployment.revision,signal:context.signal})
       }, bot)
       options.changed([...new Set([...(before?.bindings ?? []),...bot.bindings].flatMap(binding=>binding.platform === 'discord' ? [binding.id] : []))])
       return JSON.stringify({status:'deployed',deployment,changes:facts})

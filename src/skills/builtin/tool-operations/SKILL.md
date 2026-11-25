@@ -195,7 +195,7 @@ Publish BOT mode and assignment independently of the Connection.
 
 For registered local BOT directories on QQ, Feishu and Discord, read
 `v:skills/project-administration`. Read `v:bots/overview` and its connection/deployment
-indexes for state; use `bot_package` propose for publication (legacy status remains
+indexes for state; use `bot_package` reload for publication (legacy status remains
 compatible). Read/search never connect, publish or execute source. All use
 `BOT.md` `{id, config, mode}` plus prompt body, with Service inference
 (`model`, `temperature`, `maxTokens`, `thinking`, `reasoningEffort`) or Personal
@@ -205,9 +205,10 @@ readable during transition; mixed/duplicate fields are rejected, never overridde
 Source format upgrades are not live deployments and require the same owner review.
 Declare permissions directly in bindings, subject to BOT-level ceilings; do not
 introduce `capabilityProfiles` or reuse grants inferred from old bindings.
-One exact-content native Deploy/Cancel confirmation publishes one BOT. There is
+Direct authenticated authoring applies one BOT source snapshot. No revision
+preflight or separate confirmation is required. There is
 no cross-BOT atomic publication. Development source and deployed files are
-independent: edit the registered source and propose again, without
+independent: edit the registered source and reload again, without
 source recovery or legacy adoption workflows.
 
 ### Credentials and other owner operations

@@ -194,7 +194,7 @@ strict in both formats. This compatibility does not adopt retired deployment
 layouts or revive invalid bindings.
 
 To upgrade an existing source, first verify it against its owning Project's active
-revision so unrelated unpublished edits cannot hitchhike. Keep a recoverable backup
+policy so unrelated unpublished edits cannot hitchhike. Keep a recoverable backup
 **outside** the BOT directory (everything inside may be frozen). The pure
 `migrateBotFrontmatter(files)` helper in `src/bots/format.ts` validates both formats,
 retains all raw JSON values other than the relocated fields, preserves the prompt
@@ -207,15 +207,10 @@ selector error, normal `bot_package` proposals can compare permissions against a
 in-memory baseline that removes only those selector keys. Selectors must be valid
 name arrays referencing retained top-level skill prompts, and the entire cleaned
 baseline must pass the normal strict parser. Any other validation error still
-blocks publication. Runtime parsing never uses this exception. The owner question
-discloses in Chinese that the old package cannot run and deployment restores
-already-authorized message reception and processing. Internal selector names and
-revision hashes do not appear in the question.
-The same-revision pending details list every removed selector and all candidate
-permissions, alongside complete added/removed scopes and affected locations.
-No active files change without the ordinary exact-content Deploy confirmation and
-post-confirmation live authorization. Use the owning Project's normal `bot_package`
-proposal with `expectedRevision`. Recheck the resulting current/previous hashes.
+blocks publication. Runtime parsing never uses this exception. Publication facts
+include removed selectors, candidate permissions and added/removed scopes.
+Use the owning Project's normal `bot_package` `reload` under current authenticated
+owner authority; there is no caller-managed revision or extra confirmation step.
 Deploy only after the active backend supports this format; editing repository
 code does not upgrade a running process. Publication is per BOT, not cross-Project
 or cross-BOT atomic. No automatic deployment migration or approval exemption exists.
@@ -453,39 +448,23 @@ are unchanged; they do not grant registered folders or Project views.
   remain distinct from Wiki paths. This legacy access does not extend to QQ or
   Feishu. Personal BOT sessions are unchanged.
 
-## Author and confirm
+## Author and apply
 
 In an authenticated owner Web conversation, the Agent calls `bot_package`:
 
-1. `{"action":"status"}` returns Project-bound deployments and registered Folders.
-2. Edit the registered source. Test realistic tool behavior using disposable data.
-3. `propose` takes `folderId`, a relative `directory` (empty means Folder root), a
-   concise Agent-authored `summary`, and the exact `expectedRevision` for an update.
-   Omit `expectedRevision` only for a new BOT identity.
-4. One native ask confirmation uses Chinese system text and preserves the user's
-   summary as supplied (including an English summary). It shows bounded message
-   reception/configuration counts, added/removed permission counts and short
-   business-impact notices. Options are `部署` and `取消`, with `取消` as default.
-   The question contains no revision hash, internal permission strings or English
-   navigation instructions, and does not require matching a hash on another page.
-   Complete frozen facts remain available in the existing owner-only deployment
-   details; they are not embedded in the question. The
-   owner-authorized expandable card contains all affected locations, added/removed
-   scopes, all candidate permissions, candidate bindings and any legacy-selector
-   repair facts. HTTP origins, routes and body restrictions are retained; credential
-   configuration is shown only as present, never private references or header values.
-   Details exist before the question opens and are cleared when it settles, including
-   cancellation/failure. They are transient, not a publication-history database.
-   A duplicate live proposal for the same candidate hash is rejected without
-   replacing or clearing the original confirmation's details.
-5. Shadow revalidates live authority after approval, retires affected idle contexts,
-   then deploys **exactly the frozen files**. Subsequent workspace edits are excluded.
-   Cancellation, non-approval/custom answers, stale revisions and validation failures
-   do not publish. Busy contexts must finish before publication can proceed. The native decision question
-   retains its 4000-character ceiling. BOT questions keep a bounded summary budget
-   independently of permission/target list size; full facts stay in the matching
-   pending detail view. Oversized questions elsewhere report their actual length
-   and the limit, rather than an unrelated options/default error.
+1. Read `v:bots/overview` for inventory (`status` remains compatible).
+2. Edit the registered local source. Test realistic behavior using disposable data.
+3. `reload` takes `folderId`, a relative `directory` (empty means Folder root),
+   and a concise `summary`. No `sourceRevision` or `expectedRevision` is accepted;
+   no source preflight is required, including updates to an existing BOT.
+4. Shadow snapshots the source once for this operation, validates live authority
+   and publishes exactly those files. Edits made after that read are excluded;
+   reload again to apply them. There is no separate approval/pending stage.
+   Validation, authorization and storage failures do not report success.
+5. `create` makes a new source directory without overwriting existing files and
+   applies it with no subscriptions. `link` updates and applies an existing BOT's
+   companion for a host-recorded receiver, preserving other bindings. Optional `source` is read-only inspection of identity, config
+   path, inherited read grants and channel origin, not a revision acquisition step.
 
 Directory BOT bindings declare their permissions directly, subject to BOT-level
 ceilings. They do not use `AGENT.md` capability profiles or copy authority
@@ -493,10 +472,11 @@ from old bindings. The old resource editing/review workflow is retired. Each pro
 publishes one BOT; there is no cross-BOT atomic publication.
 
 Source and deployment are separate. Update the registered development source and
-propose again; deployment history is not a development-source recovery workflow.
+reload again; deployment history is not a development-source recovery workflow.
 Runtime policy and custom tools read and verify
 files from the deployed directory, not the workspace or JSON-embedded source/history.
-The confirmation is bound to the exact content revision held by the host. An Agent
+Publication uses the exact source snapshot held by the host; internal deployment
+hashes retain integrity/history and are not caller-managed update tokens. An Agent
 summary is not a permission claim; the host computes actual scope changes.
 
 An actual read-only Git command detects whether the source is inside an external

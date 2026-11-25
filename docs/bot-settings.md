@@ -118,16 +118,17 @@ The owner-only `bot_package` workflow now supports:
 1. `create` can create a new Service BOT in a new registered local source
    directory and publish it with zero subscriptions. Existing directories are
    never overwritten. A failed publication leaves source for inspection/retry.
-2. `source` resolves `sourceRevision` and a host-recorded `channelSessionId`.
-   Target IDs never come from message text or policy JSON.
-3. `link` updates and publishes the **existing BOT companion** with that source
-   revision, active `expectedRevision` and explicit `bindingJson`. No bindings
-   are copied to Connection or Workflow. `assign` remains a pure exact-edit
-   preparation alternative for callers using the ordinary authorized write tool.
-4. `propose` validates and publishes the exact `sourceRevision` under current
-   authenticated owner authority. No separate native approval/activation ask is
-   required. Stale source/base revisions fail rather than replacing newer edits;
-   live scope validation and publication exclusion still run.
+2. Optional `source` inspects BOT identity, config path, inherited grants and a
+   host-recorded `channelSessionId`. It returns no source revision and is not a
+   preflight requirement. Target IDs never come from message text or policy JSON.
+3. `link` updates and applies the **existing BOT companion** using the source read
+   during this operation and explicit `bindingJson`. Other bindings are preserved;
+   none are copied to Connection or Workflow. No public `assign` action exists.
+4. `reload` reads current source, validates and applies that snapshot under current
+   authenticated owner authority. No revision arguments or separate native approval
+   are required. Edits after the read are excluded; reload again to apply them.
+   Live scope validation and publication exclusion still run. Reload does not mean
+   restarting the host process.
 
 Assign admits the selected conversation by default, without a second sender
 list. QQ/Feishu omit `allowFrom`; Discord defaults to `participants.everyone`
@@ -205,7 +206,7 @@ with **synthetic IDs only**:
 
 Use trusted directory/source metadata for actual IDs, not user message text. In
 owner chat, a reference to a received public thread can prepare the same rule with
-`bot_package.assign` and explicit `scope: "parent"`. Its parent ID comes from the
+`bot_package.link` and explicit `scope: "parent"`. Its parent ID comes from the
 host-verified thread metadata; permission JSON must explicitly say
 `inheritThreads: true`. The default `scope: "conversation"` accepts a top-level group/channel only;
 new exact thread assignments are rejected rather than promoted.
