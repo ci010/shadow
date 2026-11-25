@@ -26,8 +26,11 @@ content under current owner authority, without a separate approval. Stable BOT
 `id` identifies a package, not the source path. No source/revision preflight or
 revision arguments are needed for updates. Later source edits are excluded from
 the snapshot already read; reload again to apply them. Optional `source` inspects
-identity, config path, inherited grants and host-recorded channel origin. `link`
-edits and applies the current companion; Preserve other bindings. The old status action remains compatible for
+identity, config path, inherited grants and host-recorded channel origin, including
+binding/subscription addresses. Use ordinary `write` to edit BOT.md/its companion
+bindings, subscriptions and explicit permissions; preserve other listeners, then
+`reload`. No public `link` action exists. Reload centrally enforces Project and
+Connection identity, permissions and conflicts even when source was written directly. The old status action remains compatible for
 existing inventory callers. Source edits do not activate it.
 Never write private deployment storage or activate through general tools.
 

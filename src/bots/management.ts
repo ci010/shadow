@@ -1,7 +1,6 @@
 import { type ReadResources } from './read-scope.ts'
 import { stringify } from 'yaml'
-import { writePrivateFile } from '../utils/private-file.ts'
-import { assignChannelSource } from './channel-assignment.ts'
+import { channelSourceAddresses } from './channel-assignment.ts'
 import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
 import { lstatSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -31,7 +30,6 @@ type Options = {
 const reloadRequest = z.object({action:z.literal('reload'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),summary:z.string().trim().min(1).max(800)}).strict()
 const sourceRequest = z.object({action:z.literal('source'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),channelSessionId:z.string().max(8192).optional()}).strict()
 const createRequest = z.object({ action: z.literal('create'), folderId: z.string().min(1).max(128), directory: z.string().min(1).max(1024), id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/), prompt: z.string().trim().min(1).max(128000), summary: z.string().trim().min(1).max(800) }).strict()
-const linkRequest = reloadRequest.extend({action:z.literal('link'),scope:z.enum(['conversation','parent']).default('conversation'),channelSessionId:z.string().min(1).max(8192),bindingJson:z.string().max(128000)}).strict()
 
 function location(binding: ReturnType<typeof parseBot>['bindings'][number]): string {
   return binding.platform === 'discord' ? `Discord ${binding.target.kind === 'dm' ? 'DM '+binding.target.userId : binding.target.guildId+'/'+binding.target.channelId}` : `${binding.platform} ${binding.botInstanceId}/${binding.conversationId}`
@@ -90,8 +88,8 @@ function disclosedBindings(bot: BotDefinition): unknown[] {
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'create creates a new Service BOT source in a new directory and publishes it with no subscriptions; link edits and publishes an existing BOT companion for a host-recorded group/channel or QQ/Feishu private chat, using the source read during this operation. Neither copies selectors into Connection or Workflow. Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployments and registered folders. reload snapshots a local registered source directory, validates data without executing code, then publishes the exact validated snapshot under the current owner authority. Supply a concise user-facing summary. No secondary binding database or separate activation approval. Edit source and reload again to update. source is optional read-only inspection of BOT identity, config path and inherited grants, and resolves a passive channelSessionId from trusted host metadata. link updates the existing companion using explicit bindingJson permissions (no target identity keys) and applies it directly. reload does not restart the host process. Later source edits are excluded from this operation; reload again to apply them. All bindings inherit the BOT-wide read grant (companion JSON optional top-level readResources:{folders?,knowledge?,wiki?}); do not put read scope in bindingJson. QQ/Feishu Service policy: {enabled,trigger,allowFrom?,tools}. For a Personal BOT package, link an exact QQ/Feishu inbox with {enabled,trigger,tools:[]} and no sender list. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. To disable a binding, link with enabled:false. scope defaults to conversation and requires a top-level group/channel or a QQ/Feishu private chat. Link admits the conversation without a sender allowlist by default: omit allowFrom (QQ/Feishu) and participants (Discord) unless explicitly preserving or requesting a restriction. QQ/Feishu private chats ignore the group trigger. Platform access checks remain in force. Exact thread and Discord DM assignment are not supported here; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
-    parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','link','reload']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
+    description:'Manage directory BOT source and deployment from authenticated owner Web Chat. create creates and publishes a new Service BOT with zero subscriptions. Edit BOT.md and its companion JSON using ordinary write, preserving other bindings/subscriptions, then reload to validate and publish one frozen snapshot. reload centrally checks current Project/Connection identity, permissions and conflicts again inside publication; source inspection is not a prerequisite and no revision argument is required. source optionally resolves a trusted host-recorded channelSessionId and returns binding/subscription addresses, not permissions or authorization. Choose permissions explicitly in source, subject to BOT ceilings; readResources belongs at BOT level. status is compatibility inventory. Source edits alone never activate; reload does not restart the host or replay old inbox messages.',
+    parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','reload']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},summary:{type:'string'},channelSessionId:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()
       if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
@@ -102,7 +100,7 @@ export function botPackageTool(options: Options): Tool {
       if (raw.action === 'create') {
         const input = createRequest.parse(raw), parts = input.directory.split('/')
         if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT directory without traversal.')
-        if (options.deployments.read(input.id)) throw new Error('BOT already exists; use link or reload')
+        if (options.deployments.read(input.id)) throw new Error('BOT already exists; edit source and reload')
         const files = { 'BOT.md': `---\n${stringify({ id: input.id, config: 'bot.json', mode: 'service' })}---\n${input.prompt}\n`,
           'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }, null, 2) + '\n' }
         parseBot(files); await options.validate(files, context.signal)
@@ -123,8 +121,7 @@ export function botPackageTool(options: Options): Tool {
         return botPackageTool(options).execute({ action: 'reload', folderId: input.folderId, directory: input.directory,
           summary: input.summary }, context)
       }
-      const linking = raw.action === 'link'
-      const input = linking ? linkRequest.parse(raw) : raw.action === 'source' ? sourceRequest.parse(raw) : reloadRequest.parse(raw)
+      const input = raw.action === 'source' ? sourceRequest.parse(raw) : reloadRequest.parse(raw)
       const target = 'channelSessionId' in input && input.channelSessionId ? options.channelSource?.(input.channelSessionId) : undefined
       if ('channelSessionId' in input && input.channelSessionId && !target) throw new Error('Referenced passive channel session is unavailable in this Project')
       if (target) parseChannelSource(target, 'channelSessionId' in input ? input.channelSessionId : undefined, options.projectId)
@@ -141,22 +138,7 @@ export function botPackageTool(options: Options): Tool {
         frozen = options.deployments.freeze(snapshotBotDirectory(path))
         if (input.action === 'source') {
           const parsed = parseBotPackage(frozen.files)
-          return JSON.stringify({ bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, projectReadGrants: parsed.bot.mode === 'service' ? resourceFacts('Inherited BOT-wide read grant:', botReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. No revision preflight is required. Operations use the source snapshot read at execution; live authority checks remain in force.' })
-        }
-        if (input.action === 'link') {
-          const activeId = parseBot(frozen.files).id
-          if (linking && !options.deployments.read(activeId)) throw new Error('Link requires an existing BOT; use create first')
-          const updated = assignChannelSource(frozen.files, target!, JSON.parse(input.bindingJson), input.scope)
-          await options.validate(updated.files, context.signal)
-          context.signal.throwIfAborted()
-          if (linking) {
-            // Edit only the existing BOT companion; no Workflow/Connection copy of
-            // its address, filter or binding is made. Use the snapshot read above.
-            if (!options.canAuthor(context.sessionId)) throw new Error('BOT source owner authority changed.')
-            writePrivateFile(join(path, updated.configPath), updated.content)
-            frozen = options.deployments.freeze(updated.files)
-            gitSource = sourceUsesGit(path)
-          }
+          return JSON.stringify({ bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, addresses: target ? channelSourceAddresses(target, parsed.bot.bindings) : undefined, projectReadGrants: parsed.bot.mode === 'service' ? resourceFacts('Inherited BOT-wide read grant:', botReadResources(parsed.bot)) : undefined, note: 'Read-only origin evidence; choose permissions explicitly. No revision preflight is required. Operations use the source snapshot read at execution; live authority checks remain in force.' })
         }
         gitSource = sourceUsesGit(path)
       } finally {release()}

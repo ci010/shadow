@@ -78,34 +78,27 @@ test('create is explicit new source plus immediate exact publication, never over
   assert.deepEqual(bot.bindings, []); assert.deepEqual(bot.subscriptions, []); assert.deepEqual(bot.tools, [])
   await assert.rejects(() => f.tool.execute({ action: 'create', id: 'other', folderId: 'folder', directory: 'new-role', prompt: 'Other', summary: 'Create' }, f.context), /overwrite/)
 })
-test('link edits and publishes only the existing BOT companion; group receiver identity is host-owned', async t => {
-  const f = fixture(t), first = JSON.parse(await f.reload() as string).deployment.revision
+test('source resolves trusted addresses read-only; ordinary source edits reload without preflight', async t => {
+  const f = fixture(t)
   const { passiveChannelId } = await import('../channels/passive-contract.ts')
   const source = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
   const tool = botPackageTool({ ...f.options, channelSource: () => source })
-  const input = { action: 'link', folderId: 'folder', summary: 'Link existing BOT', channelSessionId: passiveChannelId(source), bindingJson: JSON.stringify({ enabled: true, trigger: 'all', allowFrom: ['owner'], tools: [] }) }
-  const result = JSON.parse(await tool.execute(input, f.context) as string)
-  assert.equal(result.status, 'deployed'); assert.equal(f.deployments.list().length, 1)
-  const { parseBot } = await import('./sdk.ts'), bot = parseBot(f.deployments.read('support')!.files)
-  assert.equal(bot.id, 'support'); assert.equal(bot.bindings.length, 2)
-  assert.equal(bot.bindings[1]?.platform === 'qq' && bot.bindings[1].conversationId, 'group:two')
-  assert.equal(JSON.parse(await tool.execute(input, f.context) as string).status, 'deployed')
-})
-test('link publishes an exact QQ private assignment and never trusts target keys from policy JSON', async t => {
-  const f = fixture(t), first = JSON.parse(await f.reload() as string).deployment.revision
-  const { passiveChannelId } = await import('../channels/passive-contract.ts')
-  const base = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'c2c:one', kind: 'direct' as const }
-  const tool = botPackageTool({ ...f.options, channelSource: () => base })
-  const input = { action: 'link', folderId: 'folder', summary: 'Link', channelSessionId: passiveChannelId(base), bindingJson: JSON.stringify({ enabled: true, trigger: 'mention', allowFrom: ['one'], tools: [] }) }
-  await assert.rejects(() => tool.execute({ ...input, channelSessionId: passiveChannelId({ ...base, conversationId: 'c2c:other' }) }, f.context), /origin mismatch/)
-  const result = JSON.parse(await tool.execute(input, f.context) as string)
-  assert.equal(result.status, 'deployed')
-  const { parseBot } = await import('./sdk.ts')
-  const binding = parseBot(f.deployments.read('support')!.files).bindings.at(-1)
-  assert.equal(binding?.platform === 'qq' && binding.conversationId, base.conversationId)
-  assert.deepEqual(binding?.platform === 'qq' && binding.allowFrom, ['one'])
-  const { assignChannelSource } = await import('./channel-assignment.ts')
-  assert.throws(() => assignChannelSource(f.deployments.read('support')!.files, { ...base, kind: 'group' }, { platform: 'qq' }), /targets/)
+  const request = { action: 'source', folderId: 'folder', channelSessionId: passiveChannelId(source) }
+  const result = JSON.parse(await tool.execute(request, f.context) as string)
+  assert.equal(f.deployments.list().length, 0)
+  assert.equal(result.sourceRevision, undefined)
+  assert.deepEqual(result.addresses.conversation.binding, { platform: 'qq', botInstanceId: 'bot', conversationId: 'group:two' })
+  await assert.rejects(() => tool.execute({ ...request, channelSessionId: passiveChannelId({ ...source, projectId: 'foreign' }) }, f.context), /origin mismatch/)
+  const config = JSON.parse(files()['bot.json'])
+  config.bindings.push({ ...result.addresses.conversation.binding, enabled: true, trigger: 'all', tools: [] })
+  config.subscriptions = [result.addresses.conversation.subscription]
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  const deployed = JSON.parse(await f.reload() as string)
+  assert.equal(deployed.changes.bindings.length, 2)
+  assert.deepEqual(deployed.changes.subscriptions, config.subscriptions)
+  await assert.rejects(() => tool.execute({ action: 'link', folderId: 'folder', summary: 'Removed' }, f.context))
+  assert.equal('bindingJson' in tool.parameters.properties!, false)
+  assert.equal('scope' in tool.parameters.properties!, false)
 })
 
 test('BOT prompt tab reads only the authorized exact deployed revision, never later source edits', async t => {
@@ -203,11 +196,9 @@ test('owner assignment and deployment receipts explicitly surface shared Knowled
   config.readResources = { knowledge: true, wiki: true }
   writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
   await f.reload()
-  const base = { action: 'link', folderId: 'folder', summary: 'Review binding resources', channelSessionId: passiveChannelId(source) }
-  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'] }
-  const prepared = JSON.parse(await tool.execute({ ...base, bindingJson: JSON.stringify(binding) }, f.context) as string)
-  assert.deepEqual(prepared.changes.readResources, { knowledge: true, wiki: true })
-  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /inherited from the BOT/)
+  const configSource = JSON.parse(await tool.execute({ action: 'source', folderId: 'folder', channelSessionId: passiveChannelId(source) }, f.context) as string)
+  config.bindings.push({ ...configSource.addresses.conversation.binding, enabled: true, trigger: 'all', tools: ['read', 'search'] })
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
   assert.equal(f.deployments.list().length, 1)
   const receipt = JSON.parse(await f.reload() as string)
   assert.deepEqual(receipt.changes.readResources, { knowledge: true, wiki: true })
@@ -236,9 +227,45 @@ test('reload uses current source without revision preflight and removed authorin
   const source = JSON.parse(await f.tool.execute({ action: 'source', folderId: 'folder' }, f.context) as string)
   assert.equal(source.bot, 'support')
   assert.equal(source.sourceRevision, undefined)
-  for (const action of ['assign', 'propose']) await assert.rejects(() => f.tool.execute({ action, folderId: 'folder', summary: 'Removed action' }, f.context))
+  for (const action of ['assign', 'propose', 'link']) await assert.rejects(() => f.tool.execute({ action, folderId: 'folder', summary: 'Removed action' }, f.context))
   for (const key of ['sourceRevision', 'expectedRevision']) await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'No revision input', [key]: first.deployment.revision }, f.context), /Unrecognized key/)
   const properties = f.tool.parameters.properties!
   assert.equal('sourceRevision' in properties, false)
   assert.equal('expectedRevision' in properties, false)
+})
+
+test('directly written source cannot bypass centralized live validation at either reload fence', async t => {
+  const f = fixture(t)
+  const first = JSON.parse(await f.reload() as string).deployment.revision
+  const { parseBot } = await import('./sdk.ts')
+  const { validateServiceAssignments } = await import('./assignment-validation.ts')
+  const config = JSON.parse(files()['bot.json'])
+  config.bindings[0].botInstanceId = 'foreign'
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  f.options.validate = async candidate => {
+    await validateServiceAssignments('p', { projectId: 'p', assertAccess: () => { throw Error('Connection not in Project') } } as never, parseBot(candidate), [], async () => {})
+  }
+  await assert.rejects(() => f.reload(), /Connection not in Project/)
+  assert.equal(f.deployments.read('support')!.deployment.revision, first)
+  f.save('Valid candidate')
+  let checks = 0
+  f.options.validate = async () => { if (++checks === 2) throw Error('Permissions revoked inside publication') }
+  await assert.rejects(() => f.reload(), /Permissions revoked inside publication/)
+  assert.equal(checks, 2)
+  assert.equal(f.deployments.read('support')!.deployment.revision, first)
+})
+
+test('Discord source address projections reuse ids and supply strict subscription references without permissions', async () => {
+  const { channelSourceAddresses } = await import('./channel-assignment.ts')
+  const { BotSubscriptionSchema, BotBindingSchema } = await import('./sdk.ts')
+  const source = { version: 1 as const, projectId: 'p', connectionId: 'connection', platform: 'discord' as const, conversationId: '200000000000000001', kind: 'channel' as const, guildId: '200000000000000002', botUserId: '200000000000000003' }
+  const first = channelSourceAddresses(source).conversation!
+  BotSubscriptionSchema.parse(first.subscription)
+  assert.equal('enabled' in first.binding, false)
+  const binding = BotBindingSchema.parse({ ...first.binding, enabled: true, trigger: 'mention', tools: [], participants: { everyone: true, userIds: [], roleIds: [] }, readDomains: [], inheritThreads: false, manage: false })
+  assert.deepEqual(channelSourceAddresses(source, [binding]).conversation, first)
+  const thread = channelSourceAddresses({ ...source, kind: 'thread', conversationId: '200000000000000004', parentId: source.conversationId }, [binding])
+  assert.equal(thread.conversation, undefined)
+  assert.deepEqual(thread.parent!.subscription, first.subscription)
+  assert.match(thread.parent!.requires, /Explicit inheritThreads:true/)
 })

@@ -47,3 +47,25 @@ export function assignChannelSource(files: Record<string, string>, source: Chann
   return { files: updated, configPath, content, binding, readResources }
 }
 
+
+/** Read-only address projection. Evidence supplies identity, never permissions.
+ * Source authors choose policy and reload performs all live authorization checks.
+ */
+export function channelSourceAddresses(source: ChannelSource, bindings: ReturnType<typeof parseBotPackage>['bot']['bindings'] = []) {
+  parseChannelSource(source)
+  if (source.platform !== 'discord') {
+    const address = { platform: source.platform, botInstanceId: source.connectionId, conversationId: source.conversationId }
+    return { conversation: { binding: address, subscription: address } }
+  }
+  const address = (channelId: string) => {
+    const target = { kind: 'channel' as const, guildId: source.guildId!, channelId }
+    const existing = bindings.find(binding => binding.platform === 'discord' && binding.botInstanceId === source.connectionId && binding.target.kind === 'channel' && binding.target.guildId === source.guildId && binding.target.channelId === channelId)
+    const id = existing?.platform === 'discord' ? existing.id : randomUUID()
+    return { binding: { id, platform: 'discord', botInstanceId: source.connectionId, botUserId: source.botUserId, target },
+      subscription: { platform: 'discord', bindingId: id } }
+  }
+  // Do not turn a thread reference into an implicit broad parent subscription.
+  if (source.kind === 'thread') return { parent: { ...address(source.parentId!), requires: 'Explicit inheritThreads:true; new child events only, no history replay or shared child context.' } }
+  if (source.kind === 'direct') return { unsupported: 'Discord DM assignment is not supported by this authoring guide.' }
+  return { conversation: address(source.conversationId), note: 'Choose a unique binding id and explicit policy; preserve existing binding ids when editing.' }
+}

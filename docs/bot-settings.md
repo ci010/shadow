@@ -120,10 +120,11 @@ The owner-only `bot_package` workflow now supports:
    never overwritten. A failed publication leaves source for inspection/retry.
 2. Optional `source` inspects BOT identity, config path, inherited grants and a
    host-recorded `channelSessionId`. It returns no source revision and is not a
-   preflight requirement. Target IDs never come from message text or policy JSON.
-3. `link` updates and applies the **existing BOT companion** using the source read
-   during this operation and explicit `bindingJson`. Other bindings are preserved;
-   none are copied to Connection or Workflow. No public `assign` action exists.
+   preflight requirement. It supplies binding/subscription addresses; never infer IDs from message text.
+3. Use ordinary `write` to edit the existing BOT's BOT.md/companion JSON bindings,
+   subscriptions and explicit permissions using the host-provided addresses.
+   Preserve other listeners; copy nothing to Connection or Workflow. There is no
+   public `link` or `assign` action.
 4. `reload` reads current source, validates and applies that snapshot under current
    authenticated owner authority. No revision arguments or separate native approval
    are required. Edits after the read are excluded; reload again to apply them.
@@ -133,16 +134,16 @@ The owner-only `bot_package` workflow now supports:
 Assign admits the selected conversation by default, without a second sender
 list. QQ/Feishu omit `allowFrom`; Discord defaults to `participants.everyone`
 subject to normal platform and restricted-tool policies. Explicit legacy sender
-restrictions still apply until their binding is changed. Target identity keys
-are rejected from policy JSON. Owner Chat can link top-level groups/channels and
+restrictions still apply until their binding is changed. Reload validates Project/Connection identity, permissions and conflicts even for
+direct source writes. Owner Chat can assign top-level groups/channels and
 existing QQ/Feishu private inboxes, and to existing WeChat private inboxes for a
 Personal BOT only. Private messages ignore the group trigger.
 Discord direct inboxes and exact
 threads are not assigned through this flow. A verified thread may only supply ancestry for an
-explicit `scope:parent` rule with `inheritThreads:true`.
+explicit parent-channel rule with `inheritThreads:true`.
 
 Disabling a binding stops inference/output, not common receipt. Transfer from
-BOT A to B requires publishing A's removal before B's link; single-owner
+BOT A to B requires publishing A's removal before B's reload; single-owner
 validation remains enforced. All selectors stay in BOT.md/its companion, not
 session metadata, Connection config or a UI database. See
 [Connection storage](connection-migration.md) before starting with existing Project files.
@@ -206,10 +207,9 @@ with **synthetic IDs only**:
 
 Use trusted directory/source metadata for actual IDs, not user message text. In
 owner chat, a reference to a received public thread can prepare the same rule with
-`bot_package.link` and explicit `scope: "parent"`. Its parent ID comes from the
-host-verified thread metadata; permission JSON must explicitly say
-`inheritThreads: true`. The default `scope: "conversation"` accepts a top-level group/channel only;
-new exact thread assignments are rejected rather than promoted.
+optional `bot_package` source inspection followed by ordinary `write` and `reload`.
+The parent address comes from host-verified metadata; source must explicitly say
+`inheritThreads: true`. Do not promote exact thread references silently.
 Existing child bindings are not silently promoted to
 parent rules, and repeating parent preparation from a sibling thread reuses the
 same parent binding rather than creating another per-thread entry.

@@ -203,7 +203,12 @@ compatible). Read/search never connect, publish or execute source. All use
 allowedModules, skills and read scopes. Whole legacy JSON-behavior packages remain
 readable during transition; mixed/duplicate fields are rejected, never overridden.
 Source format upgrades are not live deployments and require the same owner review.
-Declare permissions directly in bindings, subject to BOT-level ceilings; do not
+Use host-recorded group references for exact addresses; optional `bot_package` source
+returns binding/subscription addresses read-only, without revision or required preflight.
+Use ordinary `write` to edit BOT.md/companion bindings, subscriptions and permissions,
+preserving other listeners, then reload. There is no public link write action.
+Reload centrally validates Project/Connection identity, permissions and conflicts,
+including direct source edits. Declare permissions directly in bindings, subject to BOT-level ceilings; do not
 introduce `capabilityProfiles` or reuse grants inferred from old bindings.
 Direct authenticated authoring applies one BOT source snapshot. No revision
 preflight or separate confirmation is required. There is

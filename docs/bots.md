@@ -462,9 +462,13 @@ In an authenticated owner Web conversation, the Agent calls `bot_package`:
    reload again to apply them. There is no separate approval/pending stage.
    Validation, authorization and storage failures do not report success.
 5. `create` makes a new source directory without overwriting existing files and
-   applies it with no subscriptions. `link` updates and applies an existing BOT's
-   companion for a host-recorded receiver, preserving other bindings. Optional `source` is read-only inspection of identity, config
-   path, inherited read grants and channel origin, not a revision acquisition step.
+   applies it with no subscriptions. Optional `source` inspects identity, config
+   path, inherited read grants and trusted channel origin, returning exact
+   binding/subscription addresses. It is not a revision acquisition or required
+   preflight. Use ordinary `write` for bindings, subscriptions and permissions,
+   preserve other listeners, then reload. No public `link` action exists. Reload
+   centrally validates Project/Connection identity, permissions and conflicts;
+   manual source writes cannot bypass these checks.
 
 Directory BOT bindings declare their permissions directly, subject to BOT-level
 ceilings. They do not use `AGENT.md` capability profiles or copy authority
