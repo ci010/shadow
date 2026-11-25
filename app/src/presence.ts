@@ -1,9 +1,10 @@
+import type { PresenceReport } from '../../src/sessions/presence.ts'
 import { apiUrl } from './api-url.ts'
 import type { DesktopPresenceApi } from '../../desktop/src/presence.ts'
 
 /** A heartbeat is transport only, never evidence of actual input. */
 export function startPresence(base: string, window: Window, document: Document,
-  native?: DesktopPresenceApi, request: typeof fetch = fetch): () => void {
+  native?: DesktopPresenceApi, request: typeof fetch = fetch, sendSocket?: (report: PresenceReport) => boolean): () => void {
   const clientId = crypto.randomUUID()
   let lastInteraction: number | null = null
   let stopped = false
@@ -18,12 +19,14 @@ export function startPresence(base: string, window: Window, document: Document,
     try {
       const system = await native?.system().catch(() => null) ?? null
       if (stopped) return
+      const report = { clientId, visible: document.visibilityState === 'visible', focused: document.hasFocus(),
+        interactionAgeMs: lastInteraction === null ? null : Math.min(86_400_000, Math.floor(performance.now() - lastInteraction)), system }
+      if (sendSocket?.(report)) return
       const response = await request(apiUrl(base, '/api/chat/presence'), {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
         signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(10_000)]),
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId, visible: document.visibilityState === 'visible', focused: document.hasFocus(),
-          interactionAgeMs: lastInteraction === null ? null : Math.min(86_400_000, Math.floor(performance.now() - lastInteraction)), system }),
+        body: JSON.stringify(report),
       })
       // fetch resolves at headers. Drain even error/legacy JSON responses so the
       // request finishes before its timeout signal fires; presence has no payload.

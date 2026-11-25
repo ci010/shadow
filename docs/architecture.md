@@ -576,11 +576,26 @@ Only its readiness waits fail; healthy Projects keep receiving updates, and a
 successful retry resets/re-enables its topics on the existing connection.
 The server bounds its replay journal and client queues;
 slow consumers disconnect rather than growing an unbounded server queue.
-The renderer closes the old transport before replacing a subscription set,
-deduplicates replayed cursors, reconnects with bounded backoff, and detects
-half-open connections with a heartbeat watchdog. New subscriptions and
-unrecoverable cursors trigger authoritative snapshot reads. Snapshots and
-invalidations are coalesced; hidden idle chat panes do not render token updates
+The renderer updates subscriptions on a single live WebSocket when available.
+The Main owner socket requires owner authentication; the approved desktop
+Child uses its own loopback ticket and a separate, device-proof-authenticated
+socket to Main. Main checks each topic and closes the device socket when its
+approval ends. Older Main versions and mobile delegation retain SSE; on SSE,
+the renderer closes the old stream before replacing its subscription set.
+Both transports deduplicate replayed cursors, reconnect with bounded backoff,
+and detect half-open connections with a heartbeat watchdog. On a negotiated
+WebSocket, switching a current logical conversation uses one `openConversation`
+update on the shared socket. Its acknowledgement couples the recent display
+history and scoped resource summaries to a journal cursor before incremental
+chat events. Parallel panes keep independent subscriptions. Expired cursors
+request a fresh snapshot; older hosts and delegated mobile retain HTTP history
+and SSE recovery. Physical segment paging, Diagnosis, media, full task panels
+and mutations retain HTTP. Provider model catalogs are Project resources, not
+conversation snapshots. Presence uses the same negotiated socket where
+available; disconnected reports are not replayed and the existing freshness
+window still applies.
+
+Snapshots and invalidations are coalesced; hidden idle chat panes do not render token updates
 or retain individual network connections. A hidden submitted request can retain
 its shared subscription to observe completion.
 Execution cards also observe the owning project's sessions topic and

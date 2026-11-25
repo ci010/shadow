@@ -1,6 +1,6 @@
 <template>
   <header class="session-heading">
-    <ComposerPopover ref="detailsPopover" :label="t('Session details')" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="loadDetails" @closed="stopRename">
+    <ComposerPopover ref="detailsPopover" :label="t('Session details')" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="openDetails" @closed="closeDetails">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
         <span class="heading-separator" aria-hidden="true">&middot;</span>
@@ -99,11 +99,12 @@
 <script setup lang="ts">
 import { t, formatNumber } from '../i18n.ts'
 import { apiUrl } from '../api-url.ts'
-import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'
 import ComposerPopover from './ComposerPopover.vue'
 import CopyableId from './CopyableId.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
+import { conversationStartKey } from '../conversation-start-context.ts'
 import { chatContextName } from '../chat-draft.ts'
 import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, sessionDisplayFocus, type SessionDetails } from '../session-details.ts'
 
@@ -113,7 +114,23 @@ const mobile = useMobileChrome()
 const mobileLayout = computed(() => !!mobile?.enabled.value)
 const detailsPopover = ref<InstanceType<typeof ComposerPopover>>()
 defineExpose({ showDetails: () => detailsPopover.value?.show(), startRename })
-const details = ref<SessionDetails | null>(null)
+const start = inject(conversationStartKey, undefined)
+const scopedStart = computed(() => {
+  const state = start?.value
+  return !props.physicalId && state?.apiBase === props.apiBase && state.sessionId === props.sessionId ? state : undefined
+})
+const phase = computed(() => scopedStart.value?.phase ?? (start && !props.physicalId ? 'pending' : 'http'))
+const pushedDetails = computed(() => {
+  const state = scopedStart.value
+  return state?.phase === 'socket' ? state.data.details : undefined
+})
+const fetchedDetails = ref<SessionDetails | null>(null)
+const renamedName = ref<string>()
+const details = computed(() => {
+  const result = pushedDetails.value ?? fetchedDetails.value
+  return result && renamedName.value !== undefined ? { ...result, name: renamedName.value } : result
+})
+const expanded = ref(false)
 // Dedicated run outcomes belong to the timeline, not the heading/details preview.
 // Do not wait for the result/catalog: doing so flashes persisted focus on refresh.
 const currentFocus = computed(() => !props.hideFocus && details.value ? sessionDisplayFocus(details.value) : '')
@@ -174,7 +191,7 @@ async function saveName() {
     const result = await response.json()
     if (!result || result.sessionId !== props.sessionId || result.name !== nextName) throw new Error(t('Could not confirm the saved name. Retry.'))
     if (controller.signal.aborted) return
-    if (details.value) details.value = { ...details.value, name: nextName }
+    renamedName.value = nextName
     emit('renamed', nextName)
     editing.value = false
     void restoreRenameFocus()
@@ -189,7 +206,7 @@ const folder = computed(() => details.value?.workdir.kind === 'remote'
   ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || t('Remote device')} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : t('Remote folder'))}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
   : details.value?.workdir.displayPath
   ? chatContextName(details.value.workdir.displayPath)
-  : loading.value ? t('Loading folder...') : t('Folder unavailable'))
+  : loading.value || phase.value === 'pending' ? t('Loading folder...') : t('Folder unavailable'))
 const capacity = computed(() => contextCapacity(details.value?.context ?? { usedTokens: null, windowTokens: null }))
 const percent = computed(() => details.value ? contextPercent(details.value.context) : null)
 const tokenColumns = computed(() => [
@@ -200,7 +217,8 @@ const tokenColumns = computed(() => [
 let request: AbortController | undefined
 
 async function loadDetails() {
-  if (!props.active || !props.sessionId || request) return
+  if (!props.active || !props.sessionId || request || phase.value === 'pending'
+    || (phase.value === 'socket' && (!expanded.value || pushedDetails.value))) return
   const controller = new AbortController()
   request = controller
   loading.value = true
@@ -212,7 +230,7 @@ async function loadDetails() {
     })
     if (!response.ok) throw new Error(t('Session details are unavailable ({status}). Reopen the menu to retry.', { status: response.status }))
     const result = parseSessionDetails(await response.json(), props.sessionId)
-    if (!controller.signal.aborted) { details.value = result; emit('workdir', result.workdir) }
+    if (!controller.signal.aborted) { fetchedDetails.value = result; renamedName.value = undefined }
   } catch (cause) {
     if (!controller.signal.aborted) {
       error.value = cause instanceof Error ? cause.message : t('Session details are unavailable. Reopen the menu to retry.')
@@ -221,19 +239,42 @@ async function loadDetails() {
     if (request === controller) { request = undefined; loading.value = false }
   }
 }
+function openDetails() { expanded.value = true; void loadDetails() }
+function closeDetails() {
+  expanded.value = false
+  if (phase.value !== 'http') cancel()
+  stopRename()
+}
 function cancel() {
   request?.abort()
   request = undefined
   loading.value = false
 }
-watch(() => [props.apiBase, props.sessionId, props.physicalId, props.revision, props.active, props.name] as const, (next, previous) => {
+watch(() => [props.apiBase, props.sessionId, props.physicalId, props.active, phase.value, props.revision, props.name] as const, (next, previous) => {
+  const changedScope = !previous || next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]
+  const changedPhase = !previous || next[4] !== previous[4]
+  if (!changedScope && !changedPhase && next[3] === previous?.[3] && phase.value !== 'http') return
   cancel()
-  if (!props.active || previous && (next[0] !== previous[0] || next[1] !== previous[1])) stopRename()
-  if (!previous || next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]) {
-    details.value = null
+  if (!props.active || changedScope && previous) closeDetails()
+  if (changedScope || changedPhase) {
+    fetchedDetails.value = null
+    renamedName.value = undefined
     error.value = ''
   }
-  if (props.active && !saving.value) void loadDetails()
+  if (!saving.value) void loadDetails()
+}, { immediate: true })
+watch(pushedDetails, (value, previous) => {
+  if (!value) {
+    if (expanded.value && phase.value === 'socket') void loadDetails()
+    return
+  }
+  cancel()
+  fetchedDetails.value = null
+  if (!previous || value.name !== previous.name) renamedName.value = undefined
+  error.value = ''
+})
+watch(() => props.active ? details.value?.workdir : undefined, workdir => {
+  if (workdir) emit('workdir', workdir)
 }, { immediate: true })
 function stopRename() {
   renameRequest?.abort()
@@ -242,7 +283,7 @@ function stopRename() {
   editing.value = false
   renameError.value = ''
 }
-onDeactivated(() => { cancel(); stopRename() })
+onDeactivated(() => { cancel(); closeDetails() })
 onUnmounted(() => { cancel(); stopRename() })
 </script>
 
