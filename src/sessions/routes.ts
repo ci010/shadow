@@ -203,6 +203,8 @@ export function sessionsApiPlugin(
   options: {
     cron?: Pick<CronService, 'listJobs'> & Partial<Pick<CronService, 'nextJobRun'>>
     backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
+    /** Current configuration only; never inferred from persisted conversations. */
+    sidebarConnections?: () => ReadonlyArray<{ id: string; platform: string }>
     recall?: () => NonNullable<ProjectUsage['recall']>
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
@@ -214,6 +216,7 @@ export function sessionsApiPlugin(
   // Recreated logical IDs must not reuse titles from a deleted execution's log.
   const stateIdentities = new WeakMap<object, number>()
   let nextStateIdentity = 0
+  let sidebarConnections: ReturnType<NonNullable<typeof options.sidebarConnections>> | undefined
   return (app: Hono) => {
     const authorizeOwnerQuestion: Parameters<Hono['use']>[1] = async (c, next) => {
       if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && sessions?.yields.get(c.req.param('key') ?? '')?.ownerOnly &&
@@ -327,7 +330,21 @@ export function sessionsApiPlugin(
         } catch { return c.json({ error: 'invalid_graph_session_ids' }, 400) }
       }
       const selected = requestedIds ? new Set(requestedIds) : undefined
-      const states = summary ? (await sessions.listSummaryStates()).filter(state => !state.retirement && state.agentType !== 'work-observer'
+      // Only the sidebar navigation projection excludes removed connections.
+      // Explicit history/full graph reads remain available. On a transient
+      // catalog error retain the last successful snapshot, not an empty catalog.
+      const sidebar = summary && scope === 'navigation' && !selected
+      if (sidebar && options.sidebarConnections) {
+        try { sidebarConnections = options.sidebarConnections().map(bot => ({ ...bot })) }
+        catch { /* An unavailable catalog is not evidence of deletion. */ }
+      }
+      const includeSidebarSession = (sessionId: string) => {
+        if (!sidebar || !sidebarConnections) return true
+        const address = channelAddressFromSessionId(sessionId)
+        return !address || address.projectId !== sessions.projectId || sidebarConnections.some(bot =>
+          bot.id === address.botInstanceId && bot.platform === address.platform)
+      }
+      const states = summary ? (await sessions.listSummaryStates()).filter(state => includeSidebarSession(state.sessionId) && !state.retirement && state.agentType !== 'work-observer'
         && (!selected || selected.has(state.sessionId))) : []
       const list = summary ? states.map(state => sessions.historySessionSummary(state))
         : (await sessions.listHistorySessions()).filter(state => state.agentType !== 'work-observer' && (!selected || selected.has(state.sessionId)))

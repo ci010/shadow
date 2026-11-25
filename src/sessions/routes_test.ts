@@ -919,3 +919,39 @@ test('readonly logical, shallow, paginated and physical history share null omiss
   assert.equal(delta.historyRevision, fresh.historyRevision)
   assert.deepEqual(delta.delta.messages, [{ role: 'tool', content: [{ type: 'text', text: '', value: null }] }])
 })
+
+
+test('sidebar navigation excludes removed connections before enrichment but preserves explicit history and last-known catalog on errors', async () => {
+  const { channelSessionId } = await import('../bus/events.ts')
+  const botId = (id: string) => channelSessionId({ projectId: 'a', botInstanceId: id, platform: 'qq', conversationId: 'group:room' }).replace(/^channel-inbox:/, 'bot:')
+  const current = botId('current'), removed = botId('removed')
+  const states = [current, removed, 'web:normal'].map(sessionId => ({ sessionId, segmentIndex: 0, projectId: 'a', name: sessionId }))
+  const enriched: string[] = []
+  const manager = {
+    projectId: 'a',
+    listSummaryStates: async () => states,
+    historySessionSummary: (state: unknown) => state,
+    getSessionInferenceDefaults: (id: string) => { enriched.push(id); return { model: 'test' } },
+    getFirstUserMessage: async () => null,
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  let catalog = [{ id: 'current', platform: 'qq' }]
+  let unavailable = false
+  const app = new Hono()
+  sessionsApiPlugin(manager, { sidebarConnections: () => { if (unavailable) throw new Error('temporary'); return catalog } })(app)
+  const read = async (suffix = '?scope=navigation') => {
+    const response = await app.request('/api/sessions/summary' + suffix)
+    assert.equal(response.status, 200)
+    return (await response.json()).sessions.map((row: { sessionId: string }) => row.sessionId)
+  }
+  assert.deepEqual(await read(), [current, 'web:normal'])
+  assert.deepEqual(enriched, [current, 'web:normal'], 'Removed connections incur no row enrichment/history fallback work')
+  unavailable = true
+  assert.deepEqual(await read(), [current, 'web:normal'])
+  unavailable = false
+  catalog = []
+  assert.deepEqual(await read(), ['web:normal'])
+  assert.deepEqual(await read('?scope=full'), [current, removed, 'web:normal'])
+  assert.deepEqual(await read('?scope=navigation&sessionIds=' + encodeURIComponent(JSON.stringify([removed]))), [removed])
+  assert.equal(states.length, 3, 'Projection filtering never deletes persisted records')
+})

@@ -526,6 +526,13 @@ targets, not nested decorative cards.
 
 ### Connection and recovery
 
+Bot sidebar entries come only from the current Project connection catalog,
+including configured connections with no conversations yet. Persisted conversations
+and observed groups cannot resurrect a removed connection. Sidebar navigation
+summaries exclude those connections; explicit history remains available and no
+persisted history is deleted. A transient catalog failure retains the last known
+connection identities rather than treating the catalog as empty.
+
 Sidebar conversation rows use a (200ms) ease-out transform transition when keyed
 items reorder within a list. Initial rendering and entry/removal stay immediate;
 reduced-motion preferences disable the reorder transition. Sorting and selection

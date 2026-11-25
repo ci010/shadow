@@ -25,13 +25,13 @@ test('bot sections use exact decoded instance identity and retain conversation o
   const before = structuredClone(sessions)
   const groups = groupBotConversations(sessions, 'a', bots)
   assert.deepEqual(groups.bots.map(group => [group.id, group.label]), [
-    ['qq-two', 'Personal bot'], ['qq-one', 'Support bot'], ['qq-one:separate', 'QQ · qq-one:separate'],
+    ['qq-two', 'Personal bot'], ['qq-one', 'Support bot'],
   ])
   assert.deepEqual(groups.bots[1]!.sessions.map(session => session.label), ['Support room', 'Support DM'])
   assert.equal(groups.bots[1]!.sessions[0], sessions[1], 'Grouping preserves the existing row data and selection identity')
   assert.equal(groups.bots[1]!.sessions[0]!.waitingForCall, true)
   assert.deepEqual(groups.chats.map(session => session.label), ['Free chat', 'Legacy chat'])
-  assert.equal(groups.bots[2]!.sessions[0]!.label, 'New conversation', 'Untitled bot chats use the shared friendly fallback, not a platform ID')
+  assert.ok(!groups.bots.some(group => group.id === 'qq-one:separate'), 'Historical connections absent from the catalog stay hidden')
   assert.deepEqual(sessions, before)
 })
 
@@ -121,5 +121,6 @@ test('connection status belongs to the exact Project and bot, never to its conve
   }))
   const groups = groupBotConversations(sessions, 'a', catalog.toReversed())
   assert.deepEqual(groups.bots.map(bot => bot.connection.state), ['disconnected', 'disconnected'])
-  assert.equal(groupBotConversations(sessions, 'a').bots[0]!.connection.state, 'unknown')
+  assert.deepEqual(groupBotConversations(sessions, 'a').bots, [], 'Conversation history alone never supplies a connection catalog')
+  assert.deepEqual(groupBotConversations(sessions, 'a', [{ ...catalog[0]!, platform: 'discord' }]).bots[0]!.sessions, [], 'A reused ID on another platform must not inherit historical conversations')
 })

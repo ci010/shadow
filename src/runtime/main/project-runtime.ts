@@ -2233,6 +2233,7 @@ export async function createProjectRuntime(
     }),
     topicsPlugin(topics, dependencies.authorize),
     sessionsApiPlugin(sessions, { backgroundTasks, cron: cronService,
+      sidebarConnections: () => botStore.list(),
       recall: () => stats.recall.usageSummary(stats.complete),
       authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => organizationController.status(), (signal,mode) => organizationController.organize(signal,mode)),

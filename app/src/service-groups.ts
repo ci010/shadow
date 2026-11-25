@@ -40,10 +40,13 @@ export function observedGroupKey(id: string) { return id.startsWith(OBSERVED_GRO
 export function groupDisplayName(group: Pick<ServiceGroup, 'name' | 'platform' | 'conversationId'>) {
   return group.name?.trim() || t('{platform} group · {suffix}', { platform: group.platform === 'qq' ? 'QQ' : 'Feishu', suffix: group.conversationId.slice(-6) })
 }
-export function projectGroupConversations(sessions: import('./folders-sidebar.ts').SidebarSession[], groups: ServiceGroup[], projectId: string): import('./folders-sidebar.ts').SidebarSession[] {
-  const result = sessions.filter(s => (!s.projectId || s.projectId === projectId) && (!s.channelAddress || s.channelAddress.projectId === projectId)).map(s => ({ ...s }))
+export function projectGroupConversations(sessions: import('./folders-sidebar.ts').SidebarSession[], groups: ServiceGroup[], projectId: string, bots?: import('./bot-sidebar.ts').SidebarBot[]): import('./folders-sidebar.ts').SidebarSession[] {
+  const isCurrentConnection = (address: { botInstanceId: string; platform: string }) => !bots || bots.some(bot =>
+    bot.projectId === projectId && bot.id === address.botInstanceId && bot.platform === address.platform)
+  const result = sessions.filter(s => (!s.projectId || s.projectId === projectId) && (!s.channelAddress || s.channelAddress.projectId === projectId && isCurrentConnection(s.channelAddress))).map(s => ({ ...s }))
   const seen = new Set<string>()
   for (const group of groups) {
+    if (!isCurrentConnection(group)) continue
     const key = serviceGroupKey(group)
     if (seen.has(key)) continue
     seen.add(key)
