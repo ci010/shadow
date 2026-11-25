@@ -36,7 +36,8 @@
           <template #coverage><p v-if="usageGroup === 'model' && unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
         </UsageBreakdown>
         <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope" />
-        <UsageRecall :projects="diagnosticProjects" />
+        <UsageRecall kind="skills" :projects="diagnosticProjects" />
+        <UsageRecall kind="memory" :projects="diagnosticProjects" />
       </div>
       <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
       <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
@@ -250,7 +251,7 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .unavailable { color: var(--c-text-secondary); font-size: 20px; font-weight: 500; }
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
-.activity-grid { display: grid; gap: 18px; margin: 20px 0; align-items: start; }
+.activity-grid { display: grid; gap: 18px; margin: 20px 0; align-items: stretch; }
 @container usage (min-width: 800px) {
   .activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 }
