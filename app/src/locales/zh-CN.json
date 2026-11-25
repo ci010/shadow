@@ -1,4 +1,8 @@
 {
+  "No stacking": "不堆叠",
+  "Stack by project": "按项目堆叠",
+  "Stack by model": "按模型堆叠",
+  "Unattributed usage": "未归类用量",
   "Three.js Playground": "Three.js Playground",
   "3D model": "3D 模型",
   "Camera": "相机",

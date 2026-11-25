@@ -24,10 +24,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const child: SessionState = { sessionId: 'child', projectId: 'p', segmentIndex: 0, parentSessionId: state.sessionId }
       const foreign: SessionState = { sessionId: 'foreign', projectId: 'q', segmentIndex: 0 }
       const event = (id: string, timestamp: string, usage: unknown = tokens, durationMs?: number) => ({ type: 'model_usage', sessionId: state.sessionId, id, timestamp, usage, durationMs })
-      const duplicated = event('today', '2026-10-01T00:00:00Z', tokens, 1200)
+      const duplicated = { ...event('today', '2026-10-01T00:00:00Z', tokens, 1200), model: 'z-model' }
       try {
         await store.createSessionLog(physicalSessionId(state, 0), [event('old', '2026-09-24T23:59:59Z'), event('seven', '2026-09-25T00:00:00Z'), duplicated])
-        await store.createSessionLog(physicalSessionId(state, 1), [duplicated, event('missing', '2026-10-01T01:00:00Z', null), event('other-currency', '2026-10-01T02:00:00Z', { ...tokens, costIncomplete: true, costs: [{ currency: 'CNY', amount: 1 }] }, 0), event('future', '2026-10-01T12:00:00Z'), event('undated', 'invalid'), { role: 'assistant', timestamp: '2026-10-01T01:00:00Z', usage: tokens }])
+        await store.createSessionLog(physicalSessionId(state, 1), [duplicated, event('missing', '2026-10-01T01:00:00Z', null), { ...event('other-currency', '2026-10-01T02:00:00Z', { ...tokens, costIncomplete: true, costs: [{ currency: 'CNY', amount: 1 }] }, 0), model: 'a-model' }, event('future', '2026-10-01T12:00:00Z'), event('undated', 'invalid'), { role: 'assistant', timestamp: '2026-10-01T01:00:00Z', usage: tokens }])
         await store.createSessionLog(physicalSessionId(child), [{ ...duplicated, sessionId: child.sessionId }])
         await store.createSessionLog(physicalSessionId(foreign), [{ ...duplicated, sessionId: foreign.sessionId }])
         store.close?.(); store = new Store(join(workspace, 'sessions')); await store.init()
@@ -46,6 +46,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(result.untrackedSessions, 0)
         assert.deepEqual(result.daily.find(row => row.date === '2026-10-01')?.usage, result.today)
         assert.equal(result.daily.find(row => row.date === '2026-09-30')?.usage.calls, 0)
+        assert.deepEqual(result.daily[0]?.models, [
+          { name: 'a-model', usage: { calls: 1, tokens: 12, unknownTokenCalls: 0, costs: [{ currency: 'CNY', amount: 1 }], unknownCostCalls: 1, durationMs: 0, unknownDurationCalls: 0 } },
+          { name: 'z-model', usage: { calls: 2, tokens: 24, unknownTokenCalls: 0, costs: [{ currency: 'USD', amount: 0.4 }], unknownCostCalls: 0, durationMs: 2400, unknownDurationCalls: 0 } },
+        ])
       } finally { store.close?.() }
     })
   })
@@ -125,15 +129,20 @@ test('history pages are bounded, cached, Project-isolated and distinct from rece
   let scans = 0
   const store = { async *readSessionLog(id: string) {
     scans++
-    for (let i = 0; i < 46; i++) yield { type: 'model_usage', sessionId: id.startsWith('p-session') ? 'p-session' : 'q-session', id: String(i), timestamp: new Date(now - (i + 1) * 86400000).toISOString(), usage: tokens }
+    for (let i = 0; i < 46; i++) yield { type: 'model_usage', sessionId: id.startsWith('p-session') ? 'p-session' : 'q-session', id: String(i), timestamp: new Date(now - (i + 1) * 86400000).toISOString(), model: 'fixture', usage: tokens }
   } } as unknown as SessionStore
   const states = [{ sessionId: 'p-session', projectId: 'p', segmentIndex: 0 }, { sessionId: 'q-session', projectId: 'q', segmentIndex: 0 }]
   const summary = await readProjectUsage(store, states, 'p', now)
   assert.equal(summary.total.calls, 46)
   assert.equal(summary.daily.length, 31)
   assert.equal(summary.daily.at(-1)?.date, '2026-09-01')
+  assert.deepEqual(summary.daily[0]?.models, [])
+  assert.deepEqual(summary.daily.at(-1)?.models, [{ name: 'fixture', usage: summary.daily.at(-1)?.usage }])
+  const legacy = { ...summary, daily: summary.daily.map(({ date, usage }) => ({ date, usage })) }
+  assert.equal(projectUsageSchema.parse(legacy).daily[1]?.models, undefined)
   const first = await readProjectUsagePage(store, states, 'p', now, 1)
   assert.equal(first.daily.length, 10); assert.equal(first.total, 47); assert.equal(first.hasMore, true)
+  assert.ok(first.daily.every(day => !('models' in day)))
   const last = await readProjectUsagePage(store, states, 'p', now, 5)
   assert.equal(last.daily.length, 7); assert.equal(last.hasMore, false)
   assert.ok(last.daily.every(day => day.date < '2026-09-01'))
@@ -203,6 +212,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const result = await readProjectUsage(store, [state, child, state, foreign], 'p', now)
         assert.deepEqual(result.activity.total.models, [{ name: 'a-model', calls: 2 }, { name: 'z-model', calls: 2 }])
         assert.deepEqual(result.activity.today.models, [{ name: 'a-model', calls: 2 }])
+        assert.equal(result.daily[0]?.usage.calls, 3)
+        assert.deepEqual(result.daily[0]?.models?.map(({ name, usage }) => [name, usage.calls]), [['a-model', 2]])
         assert.deepEqual(result.activity.past7Days.models, [{ name: 'a-model', calls: 2 }, { name: 'z-model', calls: 1 }])
         assert.deepEqual(result.activity.total.tools, [{ name: 'read', calls: 4 }, { name: 'remote.search', calls: 3 }])
         assert.deepEqual(result.activity.past7Days.tools, [{ name: 'read', calls: 3 }, { name: 'remote.search', calls: 3 }])

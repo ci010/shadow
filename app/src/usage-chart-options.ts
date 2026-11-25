@@ -1,4 +1,7 @@
+import type { UsageStack } from './usage-trend-stacks.ts'
 import type { EChartsCoreOption } from 'echarts/core'
+
+export const usageStackColors = ['#6597ef', '#46a883', '#cb9144', '#a788db', '#4bafb7', '#cf82a8', '#8ca655', '#d17b62', '#8794b6', '#b69b76']
 
 export interface UsageChartDatum {
   date: string
@@ -14,7 +17,7 @@ export interface UsageChartColors {
 /** ECharts owns scales, hit testing, axes and tooltips; this adapter only describes data. */
 export function usageChartOption(
   title: string, kind: 'bar' | 'line', points: UsageChartDatum[], colors: UsageChartColors,
-  formatAxis: (value: number) => string, minInterval = 0, animate = false,
+  formatAxis: (value: number) => string, minInterval = 0, animate = false, stacks: UsageStack[] = [],
 ): EChartsCoreOption {
   return {
     animation: animate,
@@ -38,7 +41,11 @@ export function usageChartOption(
         if (!point) return ''
         // HTML is used for wrapped, viewport-confined tooltips. Never interpolate
         // labels as markup (the same component can receive future server labels).
-        return `${escapeTooltip(point.date)}<br/>${escapeTooltip(point.label.slice(point.date.length + 2))}`
+        const breakdown = stacks.flatMap(stack => {
+          const value = stack.values[index!]
+          return value == null ? [] : [`${escapeTooltip(stack.name)}: ${escapeTooltip(formatAxis(value))}`]
+        })
+        return [escapeTooltip(point.date), escapeTooltip(point.label.slice(point.date.length + 2)), ...breakdown].join('<br/>')
       },
     },
     xAxis: {
@@ -54,7 +61,12 @@ export function usageChartOption(
       axisLabel: { color: colors.muted, fontSize: 11, formatter: formatAxis },
       splitLine: { lineStyle: { color: colors.border, type: 'dashed' } },
     },
-    series: [{
+    series: stacks.length ? stacks.map((stack, index) => ({
+      id: stack.id, name: stack.name, type: kind, stack: 'usage-total',
+      ...(kind === 'bar' ? { barMaxWidth: 48 } : { areaStyle: { opacity: 0.22 }, showSymbol: false, connectNulls: false }),
+      itemStyle: { color: usageStackColors[index % usageStackColors.length] },
+      data: stack.values,
+    })) : [{
       id: 'usage', name: title, type: kind,
       ...(kind === 'bar' ? { barMaxWidth: 48, barMinHeight: 1 } : {
         connectNulls: false, showSymbol: true, symbolSize: 7, lineStyle: { width: 2, color: colors.primary },
