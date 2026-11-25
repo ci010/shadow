@@ -8,7 +8,7 @@
       </UiSelect>
     </div>
     <p v-if="allProjects && failedProjects && data" role="status">{{ t('Some projects could not be loaded ({count}). Totals include only available usage.', { count: failedProjects }) }}</p>
-    <p v-if="loading" role="status">{{ t('Loading usage…') }}</p>
+    <p v-if="loading && !data" role="status">{{ t('Loading usage…') }}</p>
     <p v-if="error" role="alert">{{ t(globalMode ? 'Could not load usage. Retry to load the latest statistics.' : 'Could not load Project usage. Retry to load the latest statistics.') }} <button class="btn btn-sm" @click="refresh">{{ t('Retry') }}</button></p>
     <template v-if="data">
       <div class="summary-toolbar"><h3>{{ t('Usage summary') }}</h3><div class="period-switch" role="group" :aria-label="t('Usage period')"><button class="btn btn-sm" v-for="period in periods" :key="period.key" type="button" :aria-pressed="selectedPeriod === period.key" @click="selectedPeriod = period.key">{{ t(period.label) }}</button></div></div>
