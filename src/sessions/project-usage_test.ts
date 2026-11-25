@@ -98,24 +98,26 @@ test('Project usage HTTP is context-authorized, Project-bound, no-store and forw
 })
 
 
-test('Recall is only read and returned for the separately authorized owner', async () => {
+test('Recall uses ordinary Project usage authorization', async () => {
   const manager = { projectId: 'p', getProjectUsage: async () => ({ projectId: 'p' }) } as unknown as SessionManager
   const app = new Hono()
   let reads = 0
   sessionsApiPlugin(manager, {
     authorizeContext: request => request.headers.has('authorization'),
-    recall: { authorize: request => request.headers.get('authorization') === 'Bearer owner', read: () => {
+    recall: () => {
       reads++
       return { coverage: 'complete', skills: [{ entry: 'private-skill', reads: 4 }], memory: [] }
-    } },
+    },
   })(app)
   assert.equal((await app.request('/api/project/usage?admin=true')).status, 401)
-  const scoped = await app.request('/api/project/usage?admin=true', { headers: { authorization: 'Bearer delegated' } })
-  assert.deepEqual(await scoped.json(), { projectId: 'p' })
   assert.equal(reads, 0)
+  const scoped = await app.request('/api/project/usage?admin=true', { headers: { authorization: 'Bearer delegated' } })
+  assert.equal(scoped.status, 200)
+  assert.match(await scoped.text(), /private-skill/)
+  assert.equal(reads, 1)
   const owner = await app.request('/api/project/usage', { headers: { authorization: 'Bearer owner' } })
   assert.match(await owner.text(), /private-skill/)
-  assert.equal(reads, 1)
+  assert.equal(reads, 2)
 })
 
 

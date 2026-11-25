@@ -28,9 +28,18 @@ export const requestQualitySchema = z.object({
   cache: z.object({ readTokens: amount.nullable(), writeTokens: amount.nullable(), inputTokens: amount.nullable(), outputTokens: amount.nullable(),
     requestsWithReadTokens: count, requestsWithWriteTokens: count, requestsWithInputTokens: count, requestsWithOutputTokens: count }),
   firstText: latency, queue: latency, duration: latency,
-  outputRate: z.object({ tokensPerSecond: amount.nullable(), samples: count }).optional(),
+  outputRate: z.object({ tokensPerSecond: amount.nullable(), samples: count, outputTokens: amount, activeDurationMs: amount }).optional(),
 })
 export type RequestQuality = z.infer<typeof requestQualitySchema>
+const requestQualityPeriodSchema = requestQualitySchema.extend({
+  models: z.array(z.object({ provider: z.string().nullable(), model: z.string().nullable(), quality: requestQualitySchema })),
+  providers: z.array(z.object({ provider: z.string().nullable(), quality: requestQualitySchema })),
+})
+export const requestQualityByPeriodSchema = z.object({
+  total: requestQualityPeriodSchema, today: requestQualityPeriodSchema,
+  past7Days: requestQualityPeriodSchema, month: requestQualityPeriodSchema,
+})
+export type RequestQualityByPeriod = z.infer<typeof requestQualityByPeriodSchema>
 const recallRow = z.object({ entry: z.string(), reads: count })
 export const usageRecallSchema = z.object({
   skills: z.array(recallRow).max(100),
@@ -42,6 +51,7 @@ export const USAGE_TREND_HISTORY_DAYS = 31
 
 export const projectUsageSchema = z.object({
   requestQuality: requestQualitySchema.optional(),
+  requestQualityByPeriod: requestQualityByPeriodSchema.optional(),
   recall: usageRecallSchema.optional(),
   activity: projectUsageActivitySchema.default((): ProjectUsageActivity => ({
     total: { models: [], tools: [] }, today: { models: [], tools: [] },

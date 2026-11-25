@@ -1,3 +1,4 @@
+import { AggregatedProvider, parseModelSpec } from '../providers/aggregated.ts'
 import { measureLogicalRequest, requestMeter } from '../providers/request-meter.ts'
 import { randomUUID } from 'node:crypto'
 import type { LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
@@ -74,11 +75,15 @@ export function usageProvider(
     ...(provider.listModelInfos ? { listModelInfos: () => provider.listModelInfos!() } : {}),
     async chat(...args) {
       const destination = owner()
+      const model = args[2]?.model
+      const providerId = provider instanceof AggregatedProvider
+        ? (model ? parseModelSpec(provider.qualifiedModelId(model)).provider : undefined)
+        : provider.name
       const meter = requestMeter()
       let last: (typeof meter.attempts)[number] | undefined
       const record = (usage: LLMResponseUsage | null, outcome: 'success' | 'failure' | 'cancelled', toolOnly = false) => store.appendRawEvents(destination.physicalId, [{
         type: 'model_usage', id: randomUUID(), sessionId: destination.sessionId,
-        timestamp: new Date().toISOString(), model: args[2]?.model, usage, outcome, durationMs: performance.now() - meter.started,
+        timestamp: new Date().toISOString(), model, provider: providerId, usage, outcome, durationMs: performance.now() - meter.started,
         firstDispatchMs: meter.firstDispatchMs, queueMs: meter.queueMs, attempts: meter.attempts.length ? meter.attempts : undefined,
         textObservation: toolOnly ? 'tool_only' : last?.firstTextMs !== undefined ? 'stream_text'
           : last?.mode === 'stream' ? 'stream_no_text' : last?.mode === 'nonstream' ? 'nonstream' : 'unknown',

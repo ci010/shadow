@@ -19,21 +19,18 @@
         <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div></article>
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
-      <p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p>
       <div class="activity-grid">
         <UsageBreakdown v-if="allProjects && projectRows.length" :title="t('Usage by project')" :category="t('Project')"
-          :description="t('Select a project to inspect its usage.')" :rows="projectRows" initial-metric="tokens" :scope="activityScope">
+          :rows="projectRows" initial-metric="tokens" :scope="activityScope">
           <template #entry="{ row }"><button class="btn btn-sm project-link" type="button" @click="filter = row.id; filterControl?.focus()">{{ row.name }}</button></template>
         </UsageBreakdown>
-        <UsageBreakdown :title="t('Model usage')" :category="t('Model')" initial-metric="calls" :rows="modelRows" :scope="activityScope"
-          :description="t('Recorded models in the selected period.')">
+        <UsageBreakdown :title="t('Model usage')" :category="t('Model')" initial-metric="calls" :rows="modelRows" :scope="activityScope">
           <template #entry="{ row, table }"><UsageModelLabel :name="row.name" :full="table" /></template>
           <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
         </UsageBreakdown>
       </div>
       <div class="tool-recall-grid">
-        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope"
-          :description="t('Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.')" />
+        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope" />
         <UsageRecall :projects="diagnosticProjects" />
       </div>
       <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
@@ -54,7 +51,7 @@
         <p v-else-if="!trendSeries.some(p => p.value !== null)" class="empty-chart">{{ t('No known values in this window.') }}</p>
         <UsageTrendChart v-else :title="trendTitle" :kind="trendView === 'column' ? 'bar' : 'line'" :points="trendSeries" :entrance-key="`${activityScope}:${trendMetric}:${trendMetric === 'cost' && currencyChosen ? costUnit : ''}`" :format-axis="axisFormat" :min-interval="['tokens', 'calls'].includes(trendMetric) ? 1 : 0" />
       </article>
-      <UsageDiagnostics :projects="diagnosticProjects" />
+      <UsageDiagnostics :projects="diagnosticProjects" :period="selectedPeriod" />
 
       <p v-if="allProjects">{{ t('Select a project to browse its daily history.') }}</p>
       <template v-else>
@@ -154,8 +151,6 @@ const diagnosticProjects = computed(() => allProjects.value
   : [{ id: selectedProjectId.value ?? '', name: rows.value?.find(row => row.project.id === selectedProjectId.value)?.project.name ?? '', usage: data.value }])
 const summaryCosts = computed(() => displayCosts(selectedUsage.value.costs))
 const incompleteIndex = computed(() => !!data.value && (data.value.coverage === 'partial' || data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0))
-const hasMissing = computed(() => incompleteIndex.value || !!data.value && [data.value.total, ...data.value.daily.map(d => d.usage)]
-  .some(u => u.calls > 0 && (u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
 function compactNumber(value: number | null) { return value === null ? t('Unavailable') : compactUsageNumber(value, formatNumber) }
 function compactCost(value: number) { return compactUsageCost(value, formatNumber) }
 function exactCost(cost: ProjectUsageMetrics['costs'][number]) { return `${formatNumber(cost.amount, { maximumSignificantDigits: 15 })} ${cost.currency}` }

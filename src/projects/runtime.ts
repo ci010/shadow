@@ -27,7 +27,6 @@ export interface ProjectRuntimeDependencies {
   accountHome?: string
   copilotAuth: CopilotAuthenticator
   authorizeViewerCapture?: import('../gateway/gltf-capture.ts').GltfCaptureOwner
-  authorizeRecall?: (request: Request) => boolean | Promise<boolean>
   authorize: (request: Request) => boolean | Promise<boolean>
   /** Host-attested display name of the sending device, if known. */
   webClientDeviceName?: (request: Request) => string | undefined

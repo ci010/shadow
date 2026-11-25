@@ -14,7 +14,7 @@
             : project.usage.recall.memory.map(row => ({ id: `${row.source}:${row.entry}`, name: `${row.entry} · ${t(row.source === 'active' ? 'Active Wiki read' : 'Automatic log brief')}`, calls: row.reads }))" />
       </details>
       <p v-else class="recall-status">
-        <template v-if="project.name">{{ project.name }} · </template>{{ t(project.usage ? 'Read statistics not available with current access' : 'Usage unavailable') }}
+        <template v-if="project.name">{{ project.name }} · </template>{{ t('Usage unavailable') }}
       </p>
     </template>
   </section>
