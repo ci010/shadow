@@ -15,6 +15,8 @@ import { projectUsageSchema, projectUsagePageSchema } from '../../../src/project
 /** App-owned read projections. Commands are never cached or replayed. */
 export function createCatalogResources(request: typeof fetch = fetch) {
   const views = resourceViews()
+  // Keep the last successful usage snapshot across tab releases, within registry TTL and memory limits.
+  const usageViews = resourceViews(12)
   const key = (base: string, projectId: string, resource: string, query?: unknown) => canonicalResourceKey({ host: apiUrl(base, '/').toString(),
     authGeneration: 0, projectId, resource, projection: 'v1', query })
   async function json(base: string, path: string, signal: AbortSignal) {
@@ -57,11 +59,12 @@ export function createCatalogResources(request: typeof fetch = fetch) {
       void lease.read(); return lease
     },
     usage(base: string, projectId: string) {
-      const lease = views.acquire(key(base, projectId, 'usage-summary'), signal => usageSummary(base, projectId, signal))
-      void lease.read(); return lease
+      const lease = usageViews.acquire(key(base, projectId, 'usage-summary'), signal => usageSummary(base, projectId, signal))
+      if (!lease.state.value.loading) void lease.refresh()
+      return lease
     },
     globalUsage(base: string) {
-      const lease = views.acquire(key(base, '', 'global-usage'), async signal => {
+      const lease = usageViews.acquire(key(base, '', 'global-usage'), async signal => {
         const payload = await json(base, '/api/usage', AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
         return {
           aggregate: payload.aggregate === null ? undefined : projectUsageSchema.parse(payload.aggregate),
@@ -74,17 +77,19 @@ export function createCatalogResources(request: typeof fetch = fetch) {
           }),
         }
       })
-      void lease.read(); return lease
+      if (!lease.state.value.loading) void lease.refresh()
+      return lease
     },
     usagePage(base: string, projectId: string, page: number) {
-      const lease = views.acquire(key(base, projectId, 'usage-daily', { page }), async signal => {
+      const lease = usageViews.acquire(key(base, projectId, 'usage-daily', { page }), async signal => {
         const result = projectUsagePageSchema.parse(await json(base, `/api/project/usage/daily?page=${page}`, signal))
         if (result.projectId !== projectId || result.page !== page) throw new Error('Usage page mismatch')
         return result
       })
-      void lease.read(); return lease
+      if (!lease.state.value.loading) void lease.refresh()
+      return lease
     },
-    dispose: views.dispose,
+    dispose() { views.dispose(); usageViews.dispose() },
   }
 }
 export const useCatalogResourceStore = defineStore('resource-catalog', () => {
