@@ -798,8 +798,12 @@ const modelSelection = useModelSelection()
 const modelOverride = ref<string>()
 const explicitModel = computed(() => modelOverride.value ?? activeSession.value?.config?.model ?? '')
 const channelConversation = computed(() => isChannelConversation(activeSession.value))
-const inheritedModel = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults?.model ?? '' : modelSelection?.current.value ?? '')
-const inheritedReasoning = computed(() => ({ ...(channelConversation.value ? activeSession.value?.inferenceDefaults ?? {} : modelSelection?.defaultReasoning?.value ?? {}), contextWindow: activeSession.value?.inferenceDefaults?.contextWindow ?? modelSelection?.defaultReasoning?.value.contextWindow }))
+const inheritedModel = computed(() => activeSession.value?.inferenceDefaults?.model ?? (channelConversation.value ? '' : modelSelection?.current.value ?? ''))
+const inheritedReasoning = computed(() => ({
+  ...(channelConversation.value ? {} : modelSelection?.defaultReasoning?.value ?? {}),
+  ...activeSession.value?.inferenceDefaults,
+  contextWindow: activeSession.value?.inferenceDefaults?.contextWindow ?? modelSelection?.defaultReasoning?.value.contextWindow,
+}))
 const conversationModel = computed(() => explicitModel.value || inheritedModel.value)
 const providerReadiness = useProviderReadiness()
 const providerNotice = computed(() => providerReadiness?.enabled.value

@@ -3749,7 +3749,12 @@ keys remain host-owned and bot credentials have their own project store.
 `/projects/<id>/api/config/model-defaults` manages project overrides. Responses
 include effective values, explicit `overrides`, and `inherited` values. A null
 patch field removes the override. Session overrides use the existing session
-config endpoint and persist in both JSONL and SQLite.
+config endpoint and persist in both JSONL and SQLite. Chat shows the current
+model and reasoning defaults without loading the complete model catalog. Opening
+the model selector loads the catalog on demand; conversations on the same Main
+and Project share that result until configuration invalidates it. A catalog
+failure is retryable in the selector and does not prevent sending with the
+current model.
 
 `ConfigStore` caches its first disk read and returns copied snapshots. App and
 project mutations share this mechanism: serialize updates, validate, atomically

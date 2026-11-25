@@ -54,7 +54,11 @@
           <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelCompactAccountLabel(model, selection.providers?.value) }}</small></span>
           <span v-if="!selection.inheriting?.value && model === selection.current.value" class="model-check i-lucide-check" aria-hidden="true" />
         </button>
-        <p v-if="!options.length" class="model-empty">{{ t('No matching models.') }}</p>
+        <p v-if="catalogLoading" class="model-empty" role="status">{{ t('Loading models...') }}</p>
+        <p v-else-if="catalogError" class="model-empty" role="alert">{{ catalogError }}
+          <button type="button" class="model-provider-tag" @click="catalogRetry++">{{ t('Retry models') }}</button>
+        </p>
+        <p v-else-if="!options.length" class="model-empty">{{ t('No matching models.') }}</p>
       </div>
       </template>
       <div v-else-if="page === 'context'" class="model-options" role="group" :aria-label="t('Context window')">
@@ -86,6 +90,24 @@ const props = defineProps<{ usageApiBase?: string; settings?: ReasoningSettings;
 const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const opened = ref(false)
+const catalogLoading = ref(false)
+const catalogError = ref('')
+const catalogRetry = ref(0)
+watch([opened, () => selection?.catalogRevision?.value, catalogRetry], async ([open], _previous, onCleanup) => {
+  catalogLoading.value = false
+  catalogError.value = ''
+  if (!open || !selection?.loadCatalog) return
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  catalogLoading.value = true
+  try {
+    await selection.loadCatalog(controller.signal)
+  } catch (cause) {
+    if (!controller.signal.aborted) catalogError.value = cause instanceof Error ? cause.message : t('Could not load project models. Retry.')
+  } finally {
+    if (!controller.signal.aborted) catalogLoading.value = false
+  }
+})
 const query = ref('')
 const MODELS_PER_PAGE = 60
 const resultPage = ref(0)
