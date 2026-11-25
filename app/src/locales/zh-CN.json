@@ -148,6 +148,7 @@
   "Other tools": "其他工具",
   "Shares are based on all recorded tool calls.": "占比以所有已记录的工具调用为基数。",
   "Full model identifier: {name}": "完整模型标识：{name}",
+  "Request quality details": "请求质量明细",
   "Read statistics not available with current access": "当前访问权限下无法查看读取统计",
   "Usage unavailable": "用量统计不可用",
   "The selected period is relative to each project’s snapshot date.": "所选时段以各项目的快照日期为准。",

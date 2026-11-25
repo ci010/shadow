@@ -102,6 +102,12 @@ export class MainDeviceUi {
     try { return this.cluster.registry.authenticate(authentication) } catch { return undefined }
   }
   authorize(request: Request): boolean { return !!this.approvedClient(request) }
+  /** Recall is granted only for the statistics read, not as a general owner credential. */
+  authorizeUsageRecall(request: Request): boolean {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return false
+    const bare = new URL(request.url).pathname.replace(/^\/projects\/[^/]+(?=\/)/, '')
+    return /^\/api\/project\/usage\/?$/.test(bare) && !!this.approvedClient(request)
+  }
   /** Capture-only, in-process principal from the actual proof-authenticated request.
    * Stable across request nonces; scoped to the approval epoch, and revocable. */
   viewerCaptureOwner(request: Request): AbortSignal | undefined {
