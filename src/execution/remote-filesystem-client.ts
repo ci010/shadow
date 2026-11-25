@@ -1,3 +1,4 @@
+import { MAX_IMAGE_DATA_URL_BYTES, validatedImageFromDataUrl } from '../utils/image-input.ts'
 import type { ExecutionReceiptV1 } from './contracts.ts'
 import type { Executor } from './executor.ts'
 
@@ -33,12 +34,20 @@ export function executeRemoteNodeText(target: RemoteNodeTarget, operation: strin
   return executeRemoteText(target, undefined, operation, args, maxOutputBytes)
 }
 
+/** Images use the existing filesystem.read grant and never enter text paging. */
+export async function executeRemoteFilesystemImage(target: RemoteFilesystemTarget, path: string) {
+  target.signal.throwIfAborted()
+  const output = await executeRemoteText(target, target.workdirId, 'filesystem.read', { path, kind: 'image' }, MAX_IMAGE_DATA_URL_BYTES, true)
+  return validatedImageFromDataUrl(output)
+}
+
 async function executeRemoteText(
   target: RemoteNodeTarget,
   workdirId: string | undefined,
   operation: string,
   args: unknown,
   maxOutputBytes: number,
+  stdoutOnly = false,
 ): Promise<string> {
   const createdAt = new Date()
   const jobId = crypto.randomUUID()
@@ -62,7 +71,7 @@ async function executeRemoteText(
       deadlineAt: new Date(createdAt.getTime() + 60_000).toISOString(),
     }, signal)
   ) {
-    if (event.type === 'stdout' || event.type === 'stderr') {
+    if (event.type === 'stdout' || (event.type === 'stderr' && !stdoutOnly)) {
       bytes += Buffer.byteLength(event.chunk)
       if (bytes > maxOutputBytes) {
         controller.abort()
@@ -72,6 +81,7 @@ async function executeRemoteText(
     }
     if ('receipt' in event) terminal = event.receipt
   }
+  if (stdoutOnly) target.signal.throwIfAborted()
   if (!terminal || terminal.state !== 'completed') {
     throw new RemoteFilesystemError(
       terminal?.reason?.code ?? 'remote-operation-incomplete',

@@ -603,3 +603,156 @@ test('new Child explicitly refuses an authenticated old Main rather than downgra
   assertEquals(executor.requests.length, 0)
   await Promise.allSettled([mainRun, childRun])
 })
+
+test('ordinary and managed MCP cross the authenticated Child protocol and release their bindings', async t => {
+  const { ChildMcpService, CHILD_MCP_OPERATION } = await import('../mcp/child-service.ts')
+  const { ManagedChildWorkdirs } = await import('../execution/managed-child-workdirs.ts')
+  const { RemoteExecutor } = await import('../execution/remote-executor.ts')
+  const { ProjectExecutor } = await import('../projects/executor.ts')
+  const { managedProjectScope } = await import('../execution/managed-workdir.ts')
+  const { SessionTools, Tools } = await import('../tools/registry.ts')
+  const { ImportTool } = await import('../tools/load-tool.ts')
+  const { InvokeTool } = await import('../tools/invoke-tool.ts')
+  const directory = await createTempWorkspace()
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const workdirId = 'mcp-workdir'
+  const storage = await createTempWorkspace()
+  t.after(() => rm(storage, { recursive: true, force: true }))
+  const workdirs = new ManagedChildWorkdirs(storage, auth.nodeId, [{ workdirId, rootPath: directory }], undefined, false, new Set([workdirId]))
+  await workdirs.init()
+  const { readChildMcpConfig, resolveChildMcpSource, resolveChildManagedMcpGrant } = await import('../mcp/child-config.ts')
+  const { join } = await import('node:path')
+  const { McpConnection } = await import('../mcp/client.ts')
+  const script = join(directory, 'fixture.mjs')
+  await writeFile(script, `
+    import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+    import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+    import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+    const server = new Server({name:'fixture',version:'1'},{capabilities:{tools:{}}});
+    server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[{name:'echo',description:'Echo',inputSchema:{type:'object',properties:{text:{type:'string'}},required:['text']}}]}));
+    server.setRequestHandler(CallToolRequestSchema,async request=>({content:[{type:'text',text:'Child says '+request.params.arguments.text}]}));
+    await server.connect(new StdioServerTransport());
+  `)
+  const { createServer } = await import('node:http')
+  const { Server } = await import('@modelcontextprotocol/sdk/server/index.js')
+  const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js')
+  const { ListToolsRequestSchema, CallToolRequestSchema } = await import('@modelcontextprotocol/sdk/types.js')
+  const http = createServer((req, res) => {
+    if (req.headers.authorization !== 'Bearer fixture-child-local') { res.writeHead(401).end(); return }
+    void (async () => {
+      const server = new Server({ name: 'network-fixture', version: '1' }, { capabilities: { tools: {} } })
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+      server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: 'ping', description: 'Ping', inputSchema: { type: 'object' } }] }))
+      server.setRequestHandler(CallToolRequestSchema, async () => ({ content: [{ type: 'text', text: 'Child network fixture' }] }))
+      res.on('close', () => { void server.close() })
+      await server.connect(transport)
+      await transport.handleRequest(req, res)
+    })().catch(() => { res.destroy() })
+  })
+  await new Promise<void>((resolve, reject) => { http.once('error', reject); http.listen(0, '127.0.0.1', resolve) })
+  t.after(() => new Promise<void>((resolve, reject) => { http.close(error => error ? reject(error) : resolve()); http.closeAllConnections() }))
+  const listen = http.address()
+  if (!listen || typeof listen === 'string') throw new Error('test server did not bind TCP')
+  const configPath = join(storage, 'child-mcp.json')
+  await writeFile(configPath, JSON.stringify([{ pairingId: auth.credentialId, projectScope: managedProjectScope('fixture'), workdirId,
+    desktop: true, browser: { browser: 'chrome', executablePath: script, userDataDir: directory, profileDirectory: 'Default' },
+    sources: { fixture: { command: process.execPath, args: [script] },
+      network: { type: 'streamable-http', url: `http://127.0.0.1:${listen.port}/mcp`, headers: { Authorization: 'Bearer fixture-child-local' } },
+    },
+  }]))
+  const grants = await readChildMcpConfig(configPath)
+  const actions: string[] = []
+  const managedCalls: string[] = []
+  const service = new ChildMcpService(async (job, source, action, signal) => {
+    await workdirs.assertCanExecute(job, signal)
+    if (source === 'chrome-devtools' || source === 'agent-desktop') {
+      resolveChildManagedMcpGrant(grants, auth.credentialId, job, source, [{ workdirId, rootPath: directory }])
+      const config = { name: source, transport: 'stdio' as const }
+      const browser = source === 'chrome-devtools'
+      return { config, managed: async () => ({ config, receipt: { status: 'ready' }, connection: {
+        connect: async () => { managedCalls.push(`${source}:connect`) },
+        disconnect: async () => { managedCalls.push(`${source}:disconnect`) },
+        listTools: async () => browser ? [
+          { name: 'list_pages', description: 'fixture', inputSchema: { type: 'object' } },
+          { name: 'select_page', description: 'must not be exposed', inputSchema: { type: 'object' } },
+          { name: 'snapshot', description: 'fixture', inputSchema: { type: 'object', properties: { pageId: { type: 'integer' } }, required: ['pageId'] } },
+        ] : [{ name: 'screenshot', description: 'fixture', inputSchema: { type: 'object' } }],
+        callTool: async name => {
+          managedCalls.push(`${source}:${name}`)
+          return browser ? 'Child pages' : { content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', detail: 'auto' } }] }
+        },
+      } }) }
+    }
+    const resolved = resolveChildMcpSource(grants, auth.credentialId, job, source, [{ workdirId, rootPath: directory }])
+    actions.push(action)
+    return resolved
+  }, (config, cwd) => {
+    const connection = new McpConnection(config, cwd, cwd)
+    return {
+      connect: signal => connection.connect(signal), listTools: signal => connection.listTools(signal),
+      callTool: (name, args, signal) => connection.callTool(name, args, signal),
+      disconnect: async () => { await connection.disconnect(); actions.push('disconnect') },
+    }
+  })
+  t.after(() => service.reset())
+  const registry = approvedRegistry()
+  const pair = createInMemoryNodeDuplexPair()
+  const listeners = new Map<string, Parameters<InstanceType<typeof RemoteExecutor>['dispatcher']['dispatchJob']>[1]>()
+  const main = new NodeConnectionSession(registry, pair.server, mainHello, { maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000, onJobEvent: event => { listeners.get(event.jobId)?.onEvent(event) } })
+  const child = childSession(pair.client, new LocalExecutor({ spawn: () => { throw new Error('unexpected shell') } }, auth.nodeId, [service], (job, signal) => workdirs.assertCanExecute(job, signal)))
+  const mainRun = main.run(), childRun = child.run()
+  t.after(() => closePair(child, childRun, mainRun))
+  await child.authenticated
+  for (const workdir of workdirs.workdirs) child.advertiseWorkdir(workdir)
+  await waitFor(() => registry.listWorkdirs(auth.nodeId).some(workdir => workdir.support.operations.includes(CHILD_MCP_OPERATION)))
+  const executor = new ProjectExecutor('fixture', new RemoteExecutor({
+    dispatchJob: (job, events) => {
+      assertEquals(JSON.stringify(job).includes('fixture-child-local'), false)
+      listeners.set(job.jobId, events); main.dispatchJob(job)
+    },
+    dispatchCancellation: (_node, job) => main.dispatchCancellation(job),
+  }), job => { if (job.workdirId !== workdirId || job.operation !== CHILD_MCP_OPERATION) throw new Error('not granted by Main') })
+  const { CoordinatorExecutionPolicy } = await import('../execution/coordinator-policy.ts')
+  const base = new Tools(directory)
+  const importer = new ImportTool(new Map(), directory, 'fixture')
+  let desktopApproved = false
+  importer.authorizeChildDesktop = () => { if (!desktopApproved) throw new Error('not approved') }
+  const gateway = new InvokeTool(importer)
+  base.register(gateway)
+  const policy = new CoordinatorExecutionPolicy()
+  policy.allow(gateway)
+  base.setExecutionPolicy(policy.check)
+  const tools = new SessionTools(base, directory)
+  const context = { tools, channel: 'web', chatId: 'session', senderId: 'owner', messageId: 'message', projectId: 'fixture', sessionId: 'session', physicalSessionId: 'segment', signal: AbortSignal.timeout(10_000), remoteWorkdir: { nodeId: auth.nodeId, workdirId, executor } } as import('../tools/context.ts').ExecutionContext
+  const invoke = (args: Record<string, unknown>) => tools.execute('invoke_tool', args, context)
+  assertEquals(String(await invoke({ source: 'not-granted', args: {} })).includes('unavailable'), true)
+  assertEquals(String(await invoke({ source: 'fixture', args: {} })).includes('fixture__echo'), true)
+  assertEquals(await invoke({ name: 'fixture__echo', args: { text: 'hello' } }), 'Child says hello')
+  await tools.resetDynamicAndWait()
+  assertEquals(actions, ['initialize', 'call', 'release', 'disconnect'])
+  assertEquals(String(await invoke({ source: 'network', args: {} })).includes('network__ping'), true)
+  assertEquals(await invoke({ name: 'network__ping', args: {} }), 'Child network fixture')
+  await tools.resetDynamicAndWait()
+  assertEquals(actions, ['initialize', 'call', 'release', 'disconnect', 'initialize', 'call', 'release', 'disconnect'])
+  assertEquals(String(await invoke({ source: 'chrome-devtools', args: {} })).includes('unavailable'), true)
+  const setup = (args: Record<string, unknown>) => invoke({ name: 'browser_setup', args })
+  assertEquals(JSON.parse(String(await setup({ action: 'discover' }))).profile, { approved: true, mode: 'managed' })
+  assertEquals(managedCalls.length, 0)
+  const opened = JSON.parse(String(await setup({ action: 'connect' })))
+  assertEquals(opened.ready, true)
+  assertEquals(opened.pages, 'Child pages')
+  assertEquals(opened.tools.map((tool: { name: string }) => tool.name), ['chrome-devtools__list_pages', 'chrome-devtools__snapshot'])
+  assertEquals(String(await invoke({ name: 'chrome-devtools__list_pages', instance: crypto.randomUUID(), args: {} })).includes('instance'), true)
+  assertEquals(await invoke({ name: 'chrome-devtools__snapshot', instance: opened.instance, args: { pageId: 1 } }), 'Child pages')
+  assertEquals(await invoke({ name: 'chrome-devtools__list_pages', instance: opened.instance, args: {} }), 'Child pages')
+  assertEquals(JSON.parse(String(await setup({ action: 'close', instance: opened.instance }))).closed, true)
+  assertEquals(String(await invoke({ source: 'agent-desktop', args: {} })).includes('unavailable'), true)
+  desktopApproved = true
+  assertEquals(String(await invoke({ source: 'agent-desktop', args: {} })).includes('agent-desktop__screenshot'), true)
+  const screenshot = await invoke({ name: 'agent-desktop__screenshot', args: {} })
+  assertEquals(typeof screenshot === 'object' && screenshot.content.some(part => part.type === 'image_url'), true)
+  desktopApproved = false
+  assertEquals(String(await invoke({ name: 'agent-desktop__screenshot', args: {} })).includes('not approved'), true)
+  await tools.resetDynamicAndWait()
+  assertEquals(managedCalls, ['chrome-devtools:connect', 'chrome-devtools:list_pages', 'chrome-devtools:snapshot', 'chrome-devtools:list_pages', 'chrome-devtools:disconnect', 'agent-desktop:connect', 'agent-desktop:screenshot', 'agent-desktop:disconnect'])
+})

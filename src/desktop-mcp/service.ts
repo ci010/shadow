@@ -143,3 +143,17 @@ export function managedDesktopSource(projectId: string, workspace: string,
     },
   }
 }
+
+/** Child-owned managed desktop launch; paired workdir admission is checked by the caller. */
+export async function createManagedDesktopConnection(root: string) {
+  const assetsRoot = fileURLToPath(new URL('../../', import.meta.url))
+  desktopDeviceGate.assertReady()
+  await verifyAgentDesktopAssets(assetsRoot)
+  const id = randomUUID()
+  const home = join(root, 'desktop-mcp', id)
+  await mkdir(home, { recursive: true, mode: 0o700 })
+  const command = join(agentDesktopDirectory(assetsRoot, process.platform, process.arch), process.platform === 'win32' ? 'agent-desktop.exe' : 'agent-desktop')
+  const config = { name: 'agent-desktop', transport: 'stdio' as const, command,
+    args: ['--session', id, 'mcp'], env: { AGENT_DESKTOP_HOME: home, AGENT_DESKTOP_AGENT_ID: id } }
+  return { config, connection: new DesktopConnection(config, desktopDeviceGate) }
+}

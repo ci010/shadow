@@ -67,14 +67,30 @@ chunks; Shadow can buffer the complete response before displaying it. The
 successful logical request's last attempt supplies the sample. Nonstreaming,
 tool-only, unsupported and historical requests without observations do not use
 total elapsed time as a substitute. Project first-text summaries use nearest-rank
-P50/P95 and a sample count. **Request quality** uses all dated indexed requests
-up to each Project snapshot, independent of the selected usage period. It
+P50/P95 and a sample count. **Request quality** uses dated indexed requests
+up to each Project snapshot within the selected UTC usage period. It
 includes outcome counts, observed attempts and the count of requests supplying
 attempt data, text-observation categories, input/output/cache tokens and
 reporting counts, and sampled latency. Global usage displays per-Project
 percentiles and samples, not averages of percentiles. `v:stats/model-requests` reports Project outcomes, observed attempt
 counts, cache-token coverage, and P50/P95/sample counts for first text, retry
-queue and total elapsed times.
+queue and total elapsed times. Both the usage page and `v:stats/model-requests`
+report estimated output speed (`tokens/s`) and its sample count per Project.
+The usage breakdown switches between Project and model in one chart. Skill and
+Memory reads are separate charts, always grouped by entry and scoped by the
+page’s Project filter. All Projects sums the returned entries across Projects.
+The usage page charts request outcomes, P50/P95 latency and estimated output
+speed by Project, model or provider. Rates across buckets use summed output
+tokens and elapsed time, not an average of rates. Latency groups stay separate
+per Project; percentiles are not averaged. Expand **Request quality details**
+for the underlying counts, observations, latency and token telemetry.
+The estimate divides the sum of provider-reported output tokens by the sum of
+seconds from the first observed streamed answer text to the end of the successful
+attempt. Requests with unknown or zero output tokens, missing stream timing, or a
+nonpositive interval are excluded; no samples means unavailable. Existing indexed
+records with these fields contribute without a rebuild. This is not a decoder
+benchmark or visible-text-only rate: provider token counts can include reasoning
+or tool output, and the measured interval can include stream finalization.
 
 ## Recall
 
@@ -82,12 +98,14 @@ queue and total elapsed times.
 `state/skill-recall.sqlite` is read-only as a legacy baseline during migration;
 old counts have no historical day attribution. New recalls are indexed in
 `stats.sqlite`. **Skill & Memory reads** appears beside Tool usage (below it on narrow panels).
-The data is owner-only and returns at most 100
-Skill entries or Memory entry/source pairs per Project. It is cumulative since
-tracking began, independent of the selected usage period. It uses the project-local
-index, not source logs or document bodies; delegated UI/mobile credentials do
-not gain Recall access from the usage route. The page distinguishes unavailable
-read statistics from authorized statistics with no entries. `v:stats/memory-recall` remains an
+The Main owner, approved Child workspace UI, and mobile clients can read the
+same Main Project usage and recall statistics when authorized for Project usage. Recall returns at most 100 Skill entries or Memory
+entry/source pairs per Project. It is cumulative since tracking began, independent
+of the selected usage period. It uses the Project-local index, not source logs or
+document bodies. Recall is included in the usage summary, not the daily history
+endpoint. Child workspace UI requests still require device proof; standalone
+Child bearers and unauthenticated requests cannot read Main Project usage. The
+page distinguishes unavailable read statistics from available statistics with no entries. `v:stats/memory-recall` remains an
 administrator view of the top 100
 entry/source pairs. The active source counts successful initial Wiki body reads
 under `v:memory`; listing, searches and continuation pages are excluded. The

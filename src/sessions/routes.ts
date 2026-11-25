@@ -8,6 +8,7 @@ import { navigationSummary } from './summary-navigation.ts'
 import { createSummaryResponder } from './summary-delta.ts'
 import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
+import { readLogicalConversationHistory } from './conversation-history.ts'
 import { projectHistoryMessages } from '../shared/history-wire.ts'
 import { projectUsagePageQuerySchema, type ProjectUsage } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
@@ -202,7 +203,9 @@ export function sessionsApiPlugin(
   options: {
     cron?: Pick<CronService, 'listJobs'> & Partial<Pick<CronService, 'nextJobRun'>>
     backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
-    recall?: { authorize(request: Request): boolean | Promise<boolean>; read(): NonNullable<ProjectUsage['recall']> }
+    /** Current configuration only; never inferred from persisted conversations. */
+    sidebarConnections?: () => ReadonlyArray<{ id: string; platform: string }>
+    recall?: () => NonNullable<ProjectUsage['recall']>
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
@@ -213,6 +216,7 @@ export function sessionsApiPlugin(
   // Recreated logical IDs must not reuse titles from a deleted execution's log.
   const stateIdentities = new WeakMap<object, number>()
   let nextStateIdentity = 0
+  let sidebarConnections: ReturnType<NonNullable<typeof options.sidebarConnections>> | undefined
   return (app: Hono) => {
     const authorizeOwnerQuestion: Parameters<Hono['use']>[1] = async (c, next) => {
       if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && sessions?.yields.get(c.req.param('key') ?? '')?.ownerOnly &&
@@ -238,7 +242,7 @@ export function sessionsApiPlugin(
       }
       const suffix = c.req.path.slice('/api/sessions/'.length)
       if (sessions && (/\/(?:files|raw|preview|static|git)(?:\/|$)/.test(suffix) ||
-        c.req.method !== 'GET' || suffix.endsWith('/context'))) {
+        c.req.method !== 'GET' || suffix.endsWith('/context') || suffix.endsWith('/follow-up'))) {
         try { if (historicalRead) await sessions.assertHistoricalFolderAccess(key); else sessions.assertFolderAccess?.(key) }
         catch (error) {
           if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code, message: error.message }, error.status)
@@ -301,6 +305,13 @@ export function sessionsApiPlugin(
       return c.json({ sessionId, tasks })
     })
 
+    app.get('/api/sessions/:sessionId/follow-up', c => {
+      c.header('Cache-Control', 'no-store')
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const sessionId = c.req.param('sessionId')
+      return c.json({ sessionId, followUp: sessions.sessionFollowUpView(sessionId) })
+    })
+
     app.use('/api/sessions/summary', compress({ encoding: 'gzip' }))
     for (const path of ['/api/sessions/summary', '/api/sessions/graph']) app.get(path, async (c) => {
       const summary = c.req.path.endsWith('/summary')
@@ -319,7 +330,21 @@ export function sessionsApiPlugin(
         } catch { return c.json({ error: 'invalid_graph_session_ids' }, 400) }
       }
       const selected = requestedIds ? new Set(requestedIds) : undefined
-      const states = summary ? (await sessions.listSummaryStates()).filter(state => !state.retirement && state.agentType !== 'work-observer'
+      // Only the sidebar navigation projection excludes removed connections.
+      // Explicit history/full graph reads remain available. On a transient
+      // catalog error retain the last successful snapshot, not an empty catalog.
+      const sidebar = summary && scope === 'navigation' && !selected
+      if (sidebar && options.sidebarConnections) {
+        try { sidebarConnections = options.sidebarConnections().map(bot => ({ ...bot })) }
+        catch { /* An unavailable catalog is not evidence of deletion. */ }
+      }
+      const includeSidebarSession = (sessionId: string) => {
+        if (!sidebar || !sidebarConnections) return true
+        const address = channelAddressFromSessionId(sessionId)
+        return !address || address.projectId !== sessions.projectId || sidebarConnections.some(bot =>
+          bot.id === address.botInstanceId && bot.platform === address.platform)
+      }
+      const states = summary ? (await sessions.listSummaryStates()).filter(state => includeSidebarSession(state.sessionId) && !state.retirement && state.agentType !== 'work-observer'
         && (!selected || selected.has(state.sessionId))) : []
       const list = summary ? states.map(state => sessions.historySessionSummary(state))
         : (await sessions.listHistorySessions()).filter(state => state.agentType !== 'work-observer' && (!selected || selected.has(state.sessionId)))
@@ -523,9 +548,9 @@ export function sessionsApiPlugin(
       if (!sessions?.projectId) return c.json({ error: 'project_not_found' }, 404)
       const usage = await sessions.getProjectUsage(c.req.raw.signal)
       const recall = options.recall
-      if (!recall || !await recall.authorize(c.req.raw)) return c.json(usage)
+      if (!recall) return c.json(usage)
       c.req.raw.signal.throwIfAborted()
-      return c.json({ ...usage, recall: recall.read() })
+      return c.json({ ...usage, recall: recall() })
     })
 
     app.get('/api/sessions/:key/profile', async c => {
@@ -558,11 +583,15 @@ export function sessionsApiPlugin(
         return c.json({ error: 'invalid_request' }, 400)
       }
       const active = sessions.getActiveSession(key)
-      if (!active || active.phase === 'idle') return c.json({ sessionId: key, status: 'idle' })
+      if (!active || active.phase === 'idle') {
+        if (!body.requestId) await sessions.cancelScheduledSessionFollowUp(key)
+        return c.json({ sessionId: key, status: 'idle' })
+      }
       if (body.requestId && (!('activeRequestId' in active) || active.activeRequestId !== body.requestId)) {
         return c.json({ error: 'request_not_active', sessionId: key }, 409)
       }
       active.cancel()
+      await sessions.cancelScheduledSessionFollowUp(key)
       return c.json({ sessionId: key, status: 'requested' })
     })
 
@@ -614,7 +643,7 @@ export function sessionsApiPlugin(
         const visible = sessions.alignment.records(id)
         if (body.action === 'create') {
           const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(),
-            notes: z.unknown().optional(), reason: z.string().optional() }).strict().parse(body.data)
+            kind: z.unknown().optional(), summary: z.unknown().optional(), artifacts: z.unknown().optional() }).strict().parse(body.data)
           if (data.parentKey && !visible.some(record => record.key === data.parentKey)) return c.json({ error: 'forbidden' }, 403)
           body.data = { ...data, assignee: id }
         } else if (!visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)
@@ -876,11 +905,15 @@ export function sessionsApiPlugin(
         if (!result) {
           return c.json({ error: 'session_not_found', key }, 404)
         }
+        const includeSummary = c.req.query('includeCompactionSummary') === 'true'
+        const summary = includeSummary
+          ? (await sessions.getHistory(key, { shallow: true, offset: 0, pageSize: 1 })).messages[0] : undefined
         return c.json({
           key,
           source: result.source,
           systemPrompt: result.systemPrompt,
           tools: result.tools,
+          ...(includeSummary ? { compactionSummary: summary?.name === '__compaction_summary__' && typeof summary.content === 'string' ? summary.content : '' } : {}),
           ...(result.sections ? { sections: result.sections } : {}),
           ...(result.promptIdentity ? { promptIdentity: result.promptIdentity } : {}),
           note: result.source === 'preview'
@@ -1197,39 +1230,10 @@ export function sessionsApiPlugin(
       const isLogicalKey = chain.some((s) => s.sessionId === key)
 
       if (isLogicalKey) {
-        const beforeState = await sessions.readSessionState(key)
-        const { messages, total } = await sessions.getHistory(
-          key,
-          { offset, pageSize, shallow },
-        )
-        // Include segment info so the UI can navigate to previous segments
-        const state = await sessions.readSessionState(key)
-        const segmentIndex = state?.segmentIndex ?? 0
-        const currentPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex })
-        let previousPhysicalId: string | null = null
-        if (segmentIndex > 0) {
-          previousPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex }, segmentIndex - 1)
-        }
-        const data = {
-          key,
-          total,
-          offset,
-          pageSize,
-          messages: projectHistoryMessages(messages),
-          commandResults: await sessions.getCommandResults(key),
-          decisionRecords: await sessions.getYieldRecords(key),
-          segmentIndex,
-          currentPhysicalId,
-          previousPhysicalId,
-        }
+        const result = await readLogicalConversationHistory(sessions, key, url.searchParams, { offset, pageSize, shallow })
+        if (!result.data) return c.json({ error: result.error, message: 'Session segment changed during history read. Retry.' }, 409)
+        const { data } = result
         if (shallow && pageSize === undefined && url.searchParams.has('snapshot')) {
-          // Do not label a history read with a segment that rolled over while
-          // messages/receipts were being fetched. The next read starts fresh.
-          const afterState = await sessions.readSessionState(key)
-          if (!beforeState || !afterState || physicalSessionId(beforeState) !== currentPhysicalId
-            || physicalSessionId(afterState) !== currentPhysicalId) {
-            return c.json({ error: 'history_conflict', message: 'Session segment changed during history read. Retry.' }, 409)
-          }
           c.header('Cache-Control', 'no-store')
           return c.json(readonlyHistorySnapshot(data, url.searchParams))
         }
@@ -1256,7 +1260,7 @@ export function sessionsApiPlugin(
           total,
           offset,
           pageSize,
-          messages: projectHistoryMessages(messages),
+          messages: projectHistoryMessages(messages, url.searchParams.get('display') === 'true'),
           commandResults: await sessions.getCommandResults(key, key),
           decisionRecords: owner ? await sessions.getYieldRecords(owner.sessionId, key) : [],
           previousPhysicalId,

@@ -38,7 +38,8 @@ import { reserveRemoteSessionWorkdirs, type StartupOwnershipStates } from '../..
 import { OtelStore } from '../../otel/store.ts'
 import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
-import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
+import { RealtimeHub, registerRealtimeRoute, REALTIME_SOCKET_PATH } from '../../realtime/hub.ts'
+import type { RealtimeTopic } from '../../realtime/protocol.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { privateLanAddresses } from '../../gateway/lan-browser.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
@@ -167,15 +168,14 @@ export async function startProjectHost(
   })
   cleanup.push(() => mobileAccess.shutdown())
   let deviceUi: MainDeviceUi | undefined
-  // Recall names are privileged metadata: a delegated device or mobile bearer alone is insufficient.
-  const authorizeRecall = (request: Request) => browserAuth.authorize(request)
+  const authorizeOwner = (request: Request) => browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
   const authorizeViewerCapture = createGltfCaptureOwner({ browser: browserAuth, clientAddresses, launchCredential,
     developmentUrl: process.env.VITE_DEV_URL,
     deviceViewer: request => deviceUi?.viewerCaptureOwner(request),
     delegated: request => !!deviceUi?.authorize(request) || mobileAccess.authorizeMain(request),
   })
-  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeRecall(request)
+  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeOwner(request)
   const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
@@ -215,7 +215,12 @@ export async function startProjectHost(
     clientKey: request => clientAddresses.resolve(request),
   }))
   cleanup.push(() => mainCluster.closeNodeConnections())
-  deviceUi = new MainDeviceUi(mainCluster, clientAddresses, request => Promise.resolve(app.fetch(request)), process.env.VITE_DEV_URL)
+  const authorizeLiveTopic = (topic: RealtimeTopic) => topic.kind === 'projects' ||
+    (!!catalog.get(topic.projectId) && !deletions.has(topic.projectId) && !catalog.isDeleting(topic.projectId))
+  deviceUi = new MainDeviceUi(mainCluster, clientAddresses, request => Promise.resolve(app.fetch(request)), process.env.VITE_DEV_URL, {
+    hub: realtimeHub,
+    authorizeTopic: authorizeLiveTopic,
+  })
   cleanup.push(() => deviceUi?.close())
   const deviceNetwork = new MainDeviceNetwork({
     uiPlugin: deviceUi.plugin(),
@@ -289,7 +294,7 @@ export async function startProjectHost(
           debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, authorizeViewerCapture, realtimeHub,
+          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeViewerCapture, realtimeHub,
           webClientDeviceName: request => deviceUi?.clientDeviceName(request),
           localExecutor: options.localExecutor !== false,
         }))
@@ -324,9 +329,19 @@ export async function startProjectHost(
       return projectId && !deletions.has(projectId) && !catalog.isDeleting(projectId)
         ? runtimes.get(projectId)?.authorizeA2a?.(request) ?? false : false
     },
-    launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
+    // The exact GET route checks either the owner credential or a one-use
+    // upgrade ticket issued by the non-exempt POST route.
+    localLiveSocketPath: REALTIME_SOCKET_PATH,
+    launchCredentialExemptions: [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, { method: 'GET', path: REALTIME_SOCKET_PATH }],
   })
-  registerRealtimeRoute(app, realtimeHub, authorize)
+  registerRealtimeRoute(app, realtimeHub, authorize, {
+    // Only the Main owner principal can upgrade. Its Project grants must be
+    // checked at update time; browser-session revocation is bound to the socket.
+    // Device UI has a separate proof-bound socket; delegated mobile stays on SSE.
+    authorize: authorizeOwner,
+    ownerSignal: request => browserAuth.session(request)?.controller.signal,
+    authorizeTopic: (_request, topic) => authorizeLiveTopic(topic),
+  })
   const hostDiagnostics = new Hono()
   otelPlugin(hostOtelStore)(hostDiagnostics)
   app.route('/host', hostDiagnostics)

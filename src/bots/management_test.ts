@@ -28,38 +28,38 @@ function fixture(t:TestContext) {
   const ask: Tool<ToolResult> = { name: 'ask', description: 'Forbidden extra approval', parameters: { type: 'object', properties: {} }, execute: async () => { asks++; throw new Error('No extra approval permitted') } }
   const options={pending:new Map<string,unknown>(),projectId:'p',deployments,runtime,folders:{acquireAccess:()=>()=>{},requireAvailable:async()=>({id:'folder',name:'source',path:source,createdAt:new Date().toISOString()}),list:()=>[]},ask,canAuthor:(id:string):boolean=>id==='web:owner',validate:async(_files:Record<string,string>,_signal:AbortSignal)=>{if(fail)throw new Error('live authority changed')},publish:async<T>(_id:string,change:()=>Promise<T>)=>change(),changed:(_ids:string[])=>{}}
   const tool=botPackageTool(options)
-  return {root,source,save,deployments,runtime,context,options,tool,get asks(){return asks},fail:()=>{fail=true},propose:(expectedRevision?:string)=>tool.execute({action:'propose',folderId:'folder',summary:'Update support instructions',...(expectedRevision?{expectedRevision}:{})},context)}
+  return {root,source,save,deployments,runtime,context,options,tool,get asks(){return asks},fail:()=>{fail=true},reload:()=>tool.execute({action:'reload',folderId:'folder',summary:'Update support instructions'},context)}
 }
 
 test('authenticated publication deploys exact frozen files with zero native asks and no pending activation', async t => {
   const f = fixture(t)
   f.options.ask.execute = async () => { throw Error('Must never ask for a second approval') }
   f.options.publish = async (_id, change) => { f.save('Later source edit'); return change() }
-  const result = JSON.parse(await f.propose() as string)
+  const result = JSON.parse(await f.reload() as string)
   assert.equal(result.status, 'deployed'); assert.equal(f.asks, 0); assert.equal(f.options.pending.size, 0)
   assert.match(f.deployments.read('support')!.files['BOT.md']!, /Frozen instructions/)
   assert.doesNotMatch(f.deployments.read('support')!.files['BOT.md']!, /Later source edit/)
   assert.ok(result.changes.exactContent)
 })
-test('owner-only publication, optimistic base, cancellation and live fence failure preserve active deployment', async t => {
+test('owner-only publication, cancellation and live fence failure preserve active deployment', async t => {
   const f = fixture(t)
-  for (const patch of [{ projectId: 'foreign' }, { channel: 'discord' }, { admin: false }, { inputSource: 'session' }, { sessionId: 'virtual:child' }, { remoteWorkdir: {} }, { isGroup: true }])
-    await assert.rejects(() => f.tool.execute({ action: 'status' }, { ...f.context, ...patch } as ExecutionContext), /authenticated owner/)
-  const first = JSON.parse(await f.propose() as string).deployment.revision
-  f.save('Candidate'); await assert.rejects(() => f.propose(), /revision changed/)
-  const signal = AbortSignal.abort(); await assert.rejects(() => f.tool.execute({ action: 'propose', folderId: 'folder', summary: 'Update', expectedRevision: first }, { ...f.context, signal }))
+  for (const patch of [{ projectId: 'foreign' }, { channel: 'discord' }, { sessionId: 'virtual:child' }, { remoteWorkdir: {} }, { isGroup: true }])
+    await assert.rejects(() => f.tool.execute({ action: 'status' }, { ...f.context, ...patch } as ExecutionContext), /Web execution/)
+  const first = JSON.parse(await f.reload() as string).deployment.revision
+  f.save('Candidate')
+  const signal = AbortSignal.abort(); await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'Update' }, { ...f.context, signal }))
   f.options.publish = async (_id, change) => { f.fail(); return change() }
-  await assert.rejects(() => f.propose(first), /live authority changed/)
+  await assert.rejects(() => f.reload(), /live authority changed/)
   assert.equal(f.deployments.read('support')!.deployment.revision, first)
 })
 test('authority loss inside exclusion cannot publish, and traversal/symlinks do not execute source', async t => {
   const f = fixture(t)
   f.options.publish = async (_id, change) => { f.options.canAuthor = () => false; return change() }
-  await assert.rejects(() => f.propose(), /owner authority changed/)
+  await assert.rejects(() => f.reload(), /owner authority changed/)
   f.options.canAuthor = () => true
-  await assert.rejects(() => f.tool.execute({ action: 'propose', folderId: 'folder', directory: '../escape', summary: 'Deploy' }, f.context), /traversal/)
+  await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', directory: '../escape', summary: 'Deploy' }, f.context), /traversal/)
   symlinkSync(join(f.source, 'BOT.md'), join(f.source, 'linked'))
-  await assert.rejects(() => f.propose(), /symlinks/)
+  await assert.rejects(() => f.reload(), /symlinks/)
   assert.equal(f.deployments.list().length, 0)
 })
 test('owner inventory has no approval endpoint or pending authority', async t => {
@@ -78,33 +78,34 @@ test('create is explicit new source plus immediate exact publication, never over
   assert.deepEqual(bot.bindings, []); assert.deepEqual(bot.subscriptions, []); assert.deepEqual(bot.tools, [])
   await assert.rejects(() => f.tool.execute({ action: 'create', id: 'other', folderId: 'folder', directory: 'new-role', prompt: 'Other', summary: 'Create' }, f.context), /overwrite/)
 })
-test('link edits and publishes only the existing BOT companion; group receiver identity is host-owned', async t => {
-  const f = fixture(t), first = JSON.parse(await f.propose() as string).deployment.revision
+test('source resolves trusted addresses read-only; ordinary source edits reload without preflight', async t => {
+  const f = fixture(t)
   const { passiveChannelId } = await import('../channels/passive-contract.ts')
   const source = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'group:two', kind: 'group' as const }
   const tool = botPackageTool({ ...f.options, channelSource: () => source })
-  const sourceRevision = f.deployments.freezeDirectory(f.source).revision
-  const input = { action: 'link', folderId: 'folder', summary: 'Link existing BOT', channelSessionId: passiveChannelId(source), expectedRevision: first, sourceRevision, bindingJson: JSON.stringify({ enabled: true, trigger: 'all', allowFrom: ['owner'], tools: [] }) }
-  const result = JSON.parse(await tool.execute(input, f.context) as string)
-  assert.equal(result.status, 'deployed'); assert.equal(f.deployments.list().length, 1)
-  const { parseBot } = await import('./sdk.ts'), bot = parseBot(f.deployments.read('support')!.files)
-  assert.equal(bot.id, 'support'); assert.equal(bot.bindings.length, 2)
-  assert.equal(bot.bindings[1]?.platform === 'qq' && bot.bindings[1].conversationId, 'group:two')
-  await assert.rejects(() => tool.execute(input, f.context), /source changed|revision changed/)
-})
-test('link never creates exact thread or DM assignment and never trusts target keys from policy JSON', async t => {
-  const f = fixture(t), first = JSON.parse(await f.propose() as string).deployment.revision
-  const { passiveChannelId } = await import('../channels/passive-contract.ts')
-  const base = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'dm:one', kind: 'direct' as const }
-  const tool = botPackageTool({ ...f.options, channelSource: () => base })
-  await assert.rejects(() => tool.execute({ action: 'link', folderId: 'folder', summary: 'Link', channelSessionId: passiveChannelId(base), expectedRevision: first, sourceRevision: f.deployments.freezeDirectory(f.source).revision, bindingJson: JSON.stringify({ enabled: true, trigger: 'all', allowFrom: [], tools: [] }) }, f.context), /top-level/)
-  const { assignChannelSource } = await import('./channel-assignment.ts')
-  assert.throws(() => assignChannelSource(f.deployments.read('support')!.files, { ...base, kind: 'group' }, { platform: 'qq' }), /targets/)
+  const request = { action: 'source', folderId: 'folder', channelSessionId: passiveChannelId(source) }
+  const result = JSON.parse(await tool.execute(request, f.context) as string)
+  assert.equal(f.deployments.list().length, 0)
+  const hostOnly = JSON.parse(await tool.execute({action:'source',channelSessionId:passiveChannelId(source)}, f.context) as string)
+  assert.deepEqual(hostOnly.addresses, result.addresses)
+  assert.equal(result.sourceRevision, undefined)
+  assert.deepEqual(result.addresses.conversation.binding, { platform: 'qq', botInstanceId: 'bot', conversationId: 'group:two' })
+  await assert.rejects(() => tool.execute({ ...request, channelSessionId: passiveChannelId({ ...source, projectId: 'foreign' }) }, f.context), /origin mismatch/)
+  const config = JSON.parse(files()['bot.json'])
+  config.bindings.push({ ...result.addresses.conversation.binding, enabled: true, trigger: 'all', tools: [] })
+  config.subscriptions = [result.addresses.conversation.subscription]
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  const deployed = JSON.parse(await f.reload() as string)
+  assert.equal(deployed.changes.bindings.length, 2)
+  assert.deepEqual(deployed.changes.subscriptions, config.subscriptions)
+  await assert.rejects(() => tool.execute({ action: 'link', folderId: 'folder', summary: 'Removed' }, f.context))
+  assert.equal('bindingJson' in tool.parameters.properties!, false)
+  assert.equal('scope' in tool.parameters.properties!, false)
 })
 
 test('BOT prompt tab reads only the authorized exact deployed revision, never later source edits', async t => {
   const f = fixture(t), app = new Hono()
-  const revision = JSON.parse(await f.propose() as string).deployment.revision
+  const revision = JSON.parse(await f.reload() as string).deployment.revision
   f.save('Unpublished source changes')
   botPackagePlugin(f.options, request => request.headers.get('x-owner') === 'yes')(app)
   const url = `/api/bot-package/support/prompt?revision=${revision}`
@@ -124,7 +125,7 @@ test('Knowledge lists and reads Markdown only from verified Project deployments'
   const f = fixture(t), app = new Hono(), headers = { 'x-owner': 'yes' }
   mkdirSync(join(f.source, 'docs'))
   writeFileSync(join(f.source, 'docs', 'README.MD'), '# Deployed companion')
-  const revision = JSON.parse(await f.propose() as string).deployment.revision
+  const revision = JSON.parse(await f.reload() as string).deployment.revision
   writeFileSync(join(f.source, 'docs', 'README.MD'), '# Not deployed')
   const other = new BotDeployments({directory:join(f.root,'other'),projectId:'other'})
   await other.deploy({ id: 'foreign', source: { folderId: 'folder', directory: 'foreign' }, ...other.freeze({ 'BOT.md': '# Other Project' }) })
@@ -158,7 +159,7 @@ test('Knowledge runtime endpoint is owner-only, revision-bound and derives scope
     subscriptions: [binding, { ...binding, conversationId: 'group:disabled' }].map(({ platform, botInstanceId, conversationId }) => ({ platform, botInstanceId, conversationId })),
   })
   writeFileSync(join(f.source, 'bot.json'), snapshot['bot.json'])
-  const revision = JSON.parse(await f.propose() as string).deployment.revision
+  const revision = JSON.parse(await f.reload() as string).deployment.revision
   const selected: unknown[] = []
   botPackagePlugin(f.options, request => request.headers.get('x-owner') === 'yes', (bot, rev, scope) => {
     assert.equal(bot.id, 'support')
@@ -196,26 +197,146 @@ test('owner assignment and deployment receipts explicitly surface shared Knowled
   const config = JSON.parse(files()['bot.json'])
   config.readResources = { knowledge: true, wiki: true }
   writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
-  const base = { action: 'assign', folderId: 'folder', summary: 'Review binding resources', channelSessionId: passiveChannelId(source), sourceRevision: f.deployments.freezeDirectory(f.source).revision }
-  const binding = { enabled: true, trigger: 'all', allowFrom: ['owner'], tools: ['read', 'search'] }
-  const prepared = JSON.parse(await tool.execute({ ...base, bindingJson: JSON.stringify(binding) }, f.context) as string)
-  assert.deepEqual(prepared.projectReadGrants, ['Inherited BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)', 'Inherited BOT-wide read grant: shared Project Wiki content (v:memory)'])
-  await assert.rejects(() => tool.execute({ ...base, bindingJson: JSON.stringify({ ...binding, readResources: { folders: [randomUUID()] } }) }, f.context), /inherited from the BOT/)
-  assert.equal(f.deployments.list().length, 0)
-  writeFileSync(join(f.source, prepared.edit.path), prepared.edit.content)
-  const receipt = JSON.parse(await f.propose() as string)
+  await f.reload()
+  const configSource = JSON.parse(await tool.execute({ action: 'source', folderId: 'folder', channelSessionId: passiveChannelId(source) }, f.context) as string)
+  config.bindings.push({ ...configSource.addresses.conversation.binding, enabled: true, trigger: 'all', tools: ['read', 'search'] })
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  assert.equal(f.deployments.list().length, 1)
+  const receipt = JSON.parse(await f.reload() as string)
   assert.deepEqual(receipt.changes.readResources, { knowledge: true, wiki: true })
-  assert(receipt.changes.addedPermissions.includes('BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)'))
-  assert(receipt.changes.addedPermissions.some((line: string) => line.includes('inherits BOT-wide read grant: shared Project Wiki content (v:memory)')))
+  assert(receipt.changes.candidatePermissions.includes('BOT-wide read grant: Project Knowledge metadata and scoped relations (v:knowledge)'))
+  assert(receipt.changes.candidatePermissions.some((line: string) => line.includes('inherits BOT-wide read grant: shared Project Wiki content (v:memory)')))
   assert.deepEqual(receipt.changes.bindings.at(-1).inheritedReadResources, { knowledge: true, wiki: true })
 })
 
 test('proposal rejects the removed marker without changing active read authority', async t => {
   const f = fixture(t)
   const config = JSON.parse(files()['bot.json'])
-  const active = JSON.parse(await f.propose() as string).deployment.revision
+  const active = JSON.parse(await f.reload() as string).deployment.revision
   writeFileSync(join(f.source, 'bot.json'), JSON.stringify({ ...config, readResourcesModel: 'bot-wide', readResources: { wiki: true } }))
-  await assert.rejects(() => f.propose(active), /Unrecognized key/)
+  await assert.rejects(() => f.reload(), /Unrecognized key/)
   assert.equal(f.deployments.read('support')?.deployment.revision, active)
   assert.equal(f.runtime.resolve(config.bindings[0])?.binding.readResources, undefined)
+})
+
+test('reload uses current source without revision preflight and removed authoring contracts fail closed', async t => {
+  const f = fixture(t)
+  const first = JSON.parse(await f.reload() as string)
+  f.save('Current source edit')
+  const second = JSON.parse(await f.reload() as string)
+  assert.notEqual(first.deployment.revision, second.deployment.revision)
+  assert.match(f.deployments.read('support')!.files['BOT.md']!, /Current source edit/)
+  const source = JSON.parse(await f.tool.execute({ action: 'source', folderId: 'folder' }, f.context) as string)
+  assert.equal(source.bot, 'support')
+  assert.equal(source.sourceRevision, undefined)
+  for (const action of ['assign', 'propose', 'link']) await assert.rejects(() => f.tool.execute({ action, folderId: 'folder', summary: 'Removed action' }, f.context))
+  for (const key of ['sourceRevision', 'expectedRevision']) await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'No revision input', [key]: first.deployment.revision }, f.context), /Unrecognized key/)
+  const properties = f.tool.parameters.properties!
+  assert.equal('sourceRevision' in properties, false)
+  assert.equal('expectedRevision' in properties, false)
+})
+
+test('directly written source cannot bypass centralized live validation at either reload fence', async t => {
+  const f = fixture(t)
+  const first = JSON.parse(await f.reload() as string).deployment.revision
+  const { parseBot } = await import('./sdk.ts')
+  const { validateServiceAssignments } = await import('./assignment-validation.ts')
+  const config = JSON.parse(files()['bot.json'])
+  config.bindings[0].botInstanceId = 'foreign'
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  f.options.validate = async candidate => {
+    await validateServiceAssignments('p', { projectId: 'p', assertAccess: () => { throw Error('Connection not in Project') } } as never, parseBot(candidate), [], async () => {})
+  }
+  await assert.rejects(() => f.reload(), /Connection not in Project/)
+  assert.equal(f.deployments.read('support')!.deployment.revision, first)
+  f.save('Valid candidate')
+  let checks = 0
+  f.options.validate = async () => { if (++checks === 2) throw Error('Permissions revoked inside publication') }
+  await assert.rejects(() => f.reload(), /Permissions revoked inside publication/)
+  assert.equal(checks, 2)
+  assert.equal(f.deployments.read('support')!.deployment.revision, first)
+})
+
+test('Discord source address projections reuse ids and supply strict subscription references without permissions', async () => {
+  const { channelSourceAddresses } = await import('./channel-assignment.ts')
+  const { BotSubscriptionSchema, BotBindingSchema } = await import('./sdk.ts')
+  const source = { version: 1 as const, projectId: 'p', connectionId: 'connection', platform: 'discord' as const, conversationId: '200000000000000001', kind: 'channel' as const, guildId: '200000000000000002', botUserId: '200000000000000003' }
+  const first = channelSourceAddresses(source).conversation!
+  BotSubscriptionSchema.parse(first.subscription)
+  assert.equal('enabled' in first.binding, false)
+  const binding = BotBindingSchema.parse({ ...first.binding, enabled: true, trigger: 'mention', tools: [], participants: { everyone: true, userIds: [], roleIds: [] }, readDomains: [], inheritThreads: false, manage: false })
+  assert.deepEqual(channelSourceAddresses(source, [binding]).conversation, first)
+  const thread = channelSourceAddresses({ ...source, kind: 'thread', conversationId: '200000000000000004', parentId: source.conversationId }, [binding])
+  assert.equal(thread.conversation, undefined)
+  assert.deepEqual(thread.parent!.subscription, first.subscription)
+  assert.match(thread.parent!.requires, /Explicit inheritThreads:true/)
+})
+
+// Stored bytes can be authentic yet no longer satisfy today's configuration schema.
+async function retiredReadFolders(t: TestContext) {
+  const f = fixture(t), old = files('Retired deployment')
+  const config = JSON.parse(old['bot.json'])
+  config.bindings[0].readFolders = ['must-not-be-inherited']
+  old['bot.json'] = JSON.stringify(config)
+  const deployment = await f.deployments.deploy({ id: 'support', source: { folderId: 'folder', directory: '' }, ...f.deployments.freeze(old) })
+  return { f, deployment }
+}
+
+test('reload replaces authentic obsolete readFolders deployment without inventing a permission baseline', async t => {
+  const { f, deployment } = await retiredReadFolders(t)
+  const result = JSON.parse(await f.reload() as string)
+  assert.equal(result.status, 'deployed')
+  assert.equal(result.changes.previousContent, deployment.revision)
+  assert.equal(result.changes.permissionBaseline, 'unknown')
+  assert.equal(result.changes.addedPermissions, null)
+  assert.equal(result.changes.removedPermissions, null)
+  assert.equal(result.changes.repair.activeInvalid, true)
+  assert.ok(result.changes.candidatePermissions.length)
+  assert.doesNotMatch(JSON.stringify(result), /must-not-be-inherited/)
+  assert.deepEqual(result.changes.readResources, null)
+  assert.deepEqual(f.deployments.read('support')!.files, f.deployments.freeze(files()).files)
+})
+
+test('obsolete active schema does not relax candidate schema, Project or live permission checks', async t => {
+  const { f, deployment } = await retiredReadFolders(t)
+  const config = JSON.parse(files()['bot.json'])
+  config.bindings[0].readFolders = ['forbidden']
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  await assert.rejects(() => f.reload(), /readFolders/)
+  f.save()
+  await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'Replace' }, { ...f.context, projectId: 'foreign' }), /Web execution/)
+  f.options.publish = async (_id, change) => { f.fail(); return change() }
+  await assert.rejects(() => f.reload(), /live authority changed/)
+  assert.equal(f.deployments.read('support')!.deployment.revision, deployment.revision)
+})
+
+test('obsolete schema never hides damaged deployment bytes or storage read failures', async t => {
+  const { f } = await retiredReadFolders(t)
+  writeFileSync(join(f.deployments.runtimeDirectory('support'), 'BOT.md'), '# Tampered')
+  await assert.rejects(() => f.reload(), /integrity|revision|hash|mismatch/i)
+  assert.throws(() => new BotDeployments({ directory: join(f.root, 'internal'), projectId: 'foreign' }), /Project ownership mismatch/)
+  const error = Object.assign(new Error('storage permission denied'), { code: 'EACCES' })
+  f.deployments.read = () => { throw error }
+  await assert.rejects(() => f.reload(), caught => caught === error)
+})
+
+test('BOT entry accepts Web continuations and host-owned delegated execution, not forged context authority', async t => {
+  const { botWebExecutionOwner } = await import('../sessions/owner-policy.ts')
+  const f = fixture(t)
+  const root = {sessionId:'web:owner',projectId:'p',segmentIndex:0}
+  const states = new Map<string, import('../sessions/session-store.ts').SessionState>([[root.sessionId, root]])
+  f.options.canAuthor = id => !!botWebExecutionOwner(id, 'p', key => states.get(key))
+  for (const inputSource of ['user','session','event'] as const) {
+    assert.ok(await f.tool.execute({action:'status'}, {...f.context,inputSource,admin:false}))
+  }
+  for (const mode of ['session','task','call'] as const) {
+    const id = `virtual:${mode}`
+    states.set(id, {...root,sessionId:id,mode,parentSessionId:root.sessionId})
+    assert.ok(await f.tool.execute({action:'status'}, {...f.context,sessionId:id,channel:'virtual',inputSource:'event',admin:false}))
+  }
+  for (const patch of [{projectId:'foreign'}, {sessionId:'qq:service'}, {serviceGeneration:'service'}, {parentSessionId:'missing'}]) {
+    const state = {...root,sessionId:'virtual:bad',mode:'task' as const,parentSessionId:root.sessionId,...patch}
+    states.set(state.sessionId,state)
+    await assert.rejects(() => f.tool.execute({action:'status'}, {...f.context,sessionId:state.sessionId}))
+  }
 })

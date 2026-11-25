@@ -12,9 +12,10 @@ export function observeSessionInvalidations(bus: Bus, realtime: Pick<RealtimePub
         topic === 'session.message.appended' ? ['history'] :
         topic === 'session.renamed' ? ['metadata'] :
         topic === 'session.changed' ? ('metadataOnly' in fact && fact.metadataOnly
-          ? ['metadata'] : ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks']) : undefined)))
+          ? ['metadata', 'follow-up'] : ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks', 'follow-up']) : undefined)))
   }
+  subscriptions.push(bus.on('session.follow-up.changed', fact => realtime.invalidateSessions(fact.sessionId, undefined, ['follow-up'])))
   subscriptions.push(bus.on('session.turn.finished', fact =>
-    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined, ['history', 'work', 'activity'])))
+    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined, ['history', 'work', 'activity', 'follow-up'])))
   return () => { for (const subscription of subscriptions) bus.off(subscription) }
 }

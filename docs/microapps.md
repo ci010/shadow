@@ -141,17 +141,17 @@ fail explicitly; they never become a fabricated reference or passing assessment.
 Complete references remain supported and are independently verified at report
 submission. Lookup does not write a report or consume app model allowance.
 
-Publication captures acceptance criteria from the focused or unambiguous linked
-goal path, including ancestors, with Work keys and semantic/assignment revisions.
-It validates that explicit basis independently of ordinary tool execution,
-without adoption or mandatory tracking. This is a version-bound audit snapshot, not a second
-task store; later Work edits do not rewrite the published baseline. The report's
-`requirements` must account for every captured criterion exactly once using
-`workKey`, `workRevision`, and a zero-based `criterion`, plus the same assessment,
-observations and evidence fields as lifecycle checks. `blocked` and `not_tested`
-are valid: unavailable hardware must not be fabricated as a pass. Legacy
-publications without captured Work criteria explicitly show incomplete coverage
-information rather than implying that lifecycle checks prove feature delivery.
+Publication snapshots the Markdown definitions on the focused or unambiguous
+linked Work path, including ancestors. Admission validates the current Work
+stamps, including applicable assignment revisions. Each immutable snapshot
+stores the Work key, semantic revision and definition; later edits do not rewrite
+it. Under `requirements`, report one assessment for each captured Work using
+`workKey` and `workRevision` and the same result, basis, summary, observations
+and evidence fields as lifecycle checks. Address the outcome and verification
+expectations in the definition, identifying any gaps in coverage. There is no
+parsed checklist or per-heading contract. `blocked` and `not_tested` are valid;
+never claim a pass for unavailable hardware. Publications without linked Work
+show that lifecycle checks alone do not prove feature coverage.
 Report validation is a no-effect rejection, allowing corrected evidence without
 settling a fictitious execution; persistence failures remain uncertain.
 Observation validation reports all unknown IDs and missing lifecycle citations

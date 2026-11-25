@@ -20,7 +20,7 @@ export function automationPresentation(source: string, input: boolean, id?: stri
   if (Array.isArray(value.manifest)) for (const topic of value.manifest) {
     const item = record(topic)
     add('Title', item?.title)
-    add('Objective', item?.objective)
+    add('Work definition', item?.definition)
     add('Summary', item?.summary)
   }
   add('Organization outcome', value.status)

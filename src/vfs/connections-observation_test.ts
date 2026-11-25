@@ -18,9 +18,9 @@ const source = { version: 1 as const, projectId: 'p', connectionId: 'PRIVATE_CON
 const sink = connectionSinkProjection({ projectId: 'p', connectionId: source.connectionId, platform: 'qq',
   histories: [{ sessionId: passiveChannelId(source), projectId: 'p', channelSource: source }], observations: [] })
 const snapshot: BotWorkflowProjection = { sinks: [sink], connections: [{ id: source.connectionId, displayName: 'PRIVATE_NAME', platform: 'qq',
-  purpose: 'personal', enabled: true, health: 'connected' }], deployments: [{ id: 'PRIVATE_BOT', state: 'valid', mode: 'personal', agent: 'general' }],
+  enabled: true, health: 'connected' }], deployments: [{ id: 'PRIVATE_BOT', state: 'valid', mode: 'personal', agent: 'general' }],
   bindings: [{ id: 'PRIVATE_BINDING', connectionId: source.connectionId, deploymentId: 'PRIVATE_BOT', platform: 'qq', topic: 'PRIVATE_TOPIC',
-    enabled: true, subscribed: true, listener: true, kind: 'host-owner-ingress', sessionIds: ['PRIVATE_SESSION'] }],
+    enabled: true, subscribed: true, listener: true, kind: 'message', sessionIds: ['PRIVATE_SESSION'] }],
   warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }
 
 test('read/list/glob/grep expose only redacted shared evidence to full and filtered QQ contexts', async () => withTempWorkspace(async home => {

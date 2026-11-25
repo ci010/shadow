@@ -274,7 +274,6 @@ export const IntegrationOverviewSchema = z.object({
   domains: z.array(MemoryDomainSchema), resources: z.array(MemoryResourceSchema),
   tools: z.array(z.enum(integrationToolNames)),
   templates: z.array(z.object({ name: z.string(), description: z.string(), prompt: z.string(), model: z.string().optional() }).strict()),
-  legacy: z.array(z.object({ botId: z.string(), legacySessionId: z.boolean(), adminChats: z.array(z.string()), notice: z.string() }).strict()),
   sessions: z.array(ChannelBoundarySchema.extend({ sessionId: z.string() })),
   learning: z.array(z.object({
     sessionId: z.string(), epoch: z.string().uuid(), domainId: z.string().uuid(), bindingId: z.string().uuid(),

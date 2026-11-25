@@ -4,14 +4,14 @@ import { parseExecutionInference } from '../agent/llm-config.ts'
 import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
-import { parseSessionFocus } from './session-metadata.ts'
+import { parseSessionFocus, parseStoredSessionFollowUp } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
 import { join } from 'node:path'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { readStatePool } from './state-read-pool.ts'
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { parseSessionName } from './session-name.ts'
 import type {
   SessionState,
@@ -69,7 +69,7 @@ function parseStoredState(raw: string): SessionState {
   if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
   if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
   Object.assign(state, parseTopicSessionFields(state))
-  return normalizeWorkExecutorMetadata(state)
+  return normalizeWorkExecutorMetadata({ ...state, ...parseStoredSessionFollowUp(state) })
 }
 
 /**
@@ -109,12 +109,13 @@ export class JsonlSessionStore implements SessionStore {
 
   async getState(sessionKey: string): Promise<SessionState | null> {
     const active = await this.fresh.getActive(sessionKey)
-    if (active) return active
+    if (active) return { ...active, ...parseStoredSessionFollowUp(active) }
     const raw = await readStateFile(this.statePath(sessionKey))
     return raw === undefined ? null : parseStoredState(raw)
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    state = { ...state, ...parseStoredSessionFollowUp(state) }
     if (state.statePersistence) {
       if (sessionKey !== state.sessionId) throw new Error('Fresh automation key mismatch')
       if (await readStateFile(this.statePath(sessionKey)) !== undefined) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
@@ -239,13 +240,26 @@ export class JsonlSessionStore implements SessionStore {
 
   async *readSessionLog(
     sessionId: string,
+    options?: { strict?: boolean },
   ): AsyncIterable<Record<string, unknown>> {
     const filePath = this.logPath(sessionId)
-    for await (
-      const obj of streamJsonlObjects<Record<string, unknown>>(filePath)
-    ) {
+    if (options?.strict) {
+      await using file = await open(filePath, 'r')
+      const info = await file.stat()
+      const tail = Buffer.alloc(1)
+      if (!info.isFile() || !info.size || (await file.read(tail, 0, 1, info.size - 1)).bytesRead !== 1 || tail[0] !== 10) {
+        throw new Error('Missing or torn session log; repair history before retrying')
+      }
+    }
+    let found = false
+    for await (const obj of streamJsonlObjects<Record<string, unknown>>(filePath, options?.strict ? {
+      onParseError: () => { throw new Error('Malformed or torn session log; repair history before retrying') },
+    } : undefined)) {
+      if (options?.strict && (!obj || typeof obj !== 'object' || Array.isArray(obj))) throw new Error('Invalid session log record')
+      found = true
       yield obj
     }
+    if (options?.strict && !found) throw new Error('Missing or empty session log')
   }
 
   async appendMessages(
@@ -256,7 +270,7 @@ export class JsonlSessionStore implements SessionStore {
     await mkdir(this.sessionsDir, { recursive: true })
     const filePath = this.logPath(sessionId)
     const lines = messages.map((m) => JSON.stringify(m)).join('\n')
-    await appendFile(filePath, `${lines}\n`)
+    await appendFile(filePath, `${lines}\n`, { flush: messages.some(message => message.work_kickoff) })
   }
 
   async createSessionLog(

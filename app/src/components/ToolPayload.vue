@@ -3,7 +3,12 @@
     <ToolSearchResults v-if="search" :result="search" />
     <pre v-else class="payload-source" :class="{ 'payload-code': filePath || searchResult }"><FileHighlightText v-if="fileLanguage(path) !== 'text'" ref="highlight" :source="highlightSource.code" :path="path" :active="true" :line-numbers="lineNumbers" @error="error = $event" /><template v-else>{{ highlightSource.code }}</template><span v-if="highlightSource.footer" class="payload-footer">{{ highlightSource.footer }}</span></pre>
     <figure v-for="(image, index) in images" :key="index" class="payload-image">
-      <img :src="image" :alt="t('Tool output image {value1}', { value1: index + 1 })" loading="lazy" @error="imageError = true" />
+      <component :is="previewImage ? 'button' : 'div'" :type="previewImage ? 'button' : undefined"
+        :class="{ 'payload-image-trigger': previewImage }" :aria-haspopup="previewImage ? 'dialog' : undefined"
+        :aria-label="previewImage ? t('View image: {name}', { name: imageName(index) }) : undefined"
+        @click="previewImage?.({ src: image, name: imageName(index), trigger: $event.currentTarget as HTMLButtonElement })">
+        <img :src="image" :alt="previewImage ? '' : imageName(index)" loading="lazy" @error="imageError = true" />
+      </component>
       <figcaption>{{ t('Tool output image') }} {{ index + 1 }}</figcaption>
     </figure>
     <p v-if="imageError" class="payload-error" role="status">{{ t('An image could not be displayed.') }}</p>
@@ -13,6 +18,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
+import type { ImagePreview } from '../image-viewer.ts'
 import { computed, ref, watch } from 'vue'
 import { toolPayloadPath } from '../tool-activity.ts'
 import { fileLanguage } from '../file-highlighting.ts'
@@ -21,7 +27,8 @@ import { parseToolSearchResult } from '../tool-search-results.ts'
 import FileHighlightText from './files/FileHighlightText.vue'
 import ToolSearchResults from './ToolSearchResults.vue'
 
-const props = defineProps<{ source: string; images?: string[]; filePath?: string; lineNumbers?: boolean; searchResult?: boolean; boxed?: boolean }>()
+const props = defineProps<{ source: string; images?: string[]; filePath?: string; lineNumbers?: boolean; searchResult?: boolean; boxed?: boolean; previewImage?: (image: ImagePreview) => void }>()
+const imageName = (index: number) => t('Tool output image {value1}', { value1: index + 1 })
 const highlightSource = computed(() => splitToolPayloadSource(props.source))
 const imageError = ref(false)
 watch(() => props.images, () => { imageError.value = false })
@@ -37,6 +44,8 @@ watch(() => [props.source, props.filePath, props.lineNumbers], () => { error.val
 .payload-source { margin: 0; white-space: inherit; overflow-wrap: inherit; font: inherit; }
 .payload-code { white-space: pre; overflow-wrap: normal; tab-size: 4; }
 .payload-image { margin: 12px 0 0; }
+.payload-image-trigger { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.payload-image-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .payload-image img { display: block; max-width: 100%; max-height: 600px; object-fit: contain; }
 .payload-image figcaption { margin-top: 4px; font: 12px/1.5 system-ui, sans-serif; color: var(--c-text-secondary); }
 .payload-error { margin: 8px 0 0; white-space: normal; color: var(--c-error); font: 12px/1.5 system-ui, sans-serif; }

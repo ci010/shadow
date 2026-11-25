@@ -9,7 +9,7 @@ metadata:
 
 Read/list/search via `v:works/overview` and its paginated index/key paths.
 Mutations use discoverable `v:tools/work_create`, `work_update`, `work_assign`,
-`work_review`, `work_link` through invoke_tool, with typed
+`work_review`, `work_link`, `work_note_create` through invoke_tool, with typed
 top-level fields (no action/data wrapper).
 
 Use Work when multiple owners, meaningful dependencies or durable recovery make
@@ -34,7 +34,7 @@ start or stop executions, or replace tool-enforced task review.
 
 ## Build the smallest useful goal map
 
-Start with the user outcome and observable acceptance criteria. Create branches
+Start with the user outcome and observable acceptance criteria in the Markdown definition. Include relevant boundaries and genuine source evidence, without templated headings or inferred permission. Create branches
 only for independently owned outcomes, consequential dependencies or assumptions.
 Explain why each branch supports or constrains the parent. Do not create a node
 for every tool call or mirror the execution tree into the goal map.
@@ -44,7 +44,10 @@ constraints, evidence requirements and stop condition rather than making them
 reconstruct their assignment from the whole tree. Do not turn implementation
 preferences into user requirements.
 
-Use the live Work schema for operations, required fields and version checks.
+Create with `work_create` (`title`, `definition`); include known prerequisite
+Work keys in `dependencies` on creation. Update with `work_update` (`key`,
+current `version` from `v:works`, and changed fields only). A supplied
+`dependencies` list replaces the old one; omit it to leave it unchanged.
 
 ## Responsibility and execution
 
@@ -63,24 +66,25 @@ dependencies and cross-branch consequences.
 Record results, evidence, artifacts, blockers and next steps when they materially
 change. Do not log every action or send routine acknowledgement loops.
 
-Keep routine progress silent. Use attention for a consequential change to a
-premise, dependency, scope or decision that requires the coordinator to act.
-Do not report the same finding through both Work attention and a duplicate
-message unless the recipient needs additional actionable context.
+Keep routine progress and comments silent. For a material coordination issue,
+post a Work comment with `notifyManager: true` if the current manager needs a
+notice. Use `ask` when a consequential choice needs an answer. Do not duplicate
+a routed notice with a message.
 
 Separate development progress from a consumable handoff: a commit existing does
 not mean its interface is stable or ready for integration. Record a fixed target,
 evidence and remaining limitations when it is ready; explicitly record withdrawal
 or replacement when it affects another owner's work. Do not mark the whole Work
-done merely to obtain a notification; use meaningful attention when appropriate.
+done merely to obtain a notification; use an opt-in comment when appropriate.
 
 ## State, matching and action notification
 
 These are runtime layers, not three manual agent steps. Write a meaningful state
 change once; the host selects applicable responsibility/context transitions and
-admits targeted notifications. Routine notes remain silent. Entering done/blocked
-or new unreviewed attention can notify the manager; a review may return waiting
-work to its assignee, and ancestor changes can prompt descendant reassessment.
+admits targeted notifications. Entering done/blocked can notify the manager, and
+ancestor changes can prompt descendant reassessment. Manager replies notify the
+original comment author, including after reassignment. Comments do not unblock
+Work or acknowledge a stale ancestor basis.
 Unchanged updates should not create fresh wake-ups. Historical association through
 `work_link` or a dependency edge is not a general peer subscription; do not assume
 every interested session will be notified. If a necessary recipient is outside

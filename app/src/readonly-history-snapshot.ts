@@ -1,3 +1,5 @@
+import { HISTORY_DELTA_PREPEND_LIMIT, historyWindowCacheKey } from '../../src/shared/history-wire.ts'
+
 type Body = Record<string, unknown> & { messages: unknown[] }
 type Snapshot = { revision: string; historyRevision: string; metadataRevision: string; body: Body; bytes: number }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -6,29 +8,36 @@ const revision = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9
 /** Authenticated-lifetime, bounded memory; never return stale data on access/network errors. */
 export function createReadonlyHistorySnapshots(request: typeof fetch = fetch, maxBytes = 16 * 1024 * 1024, maxEntries = 8) {
   const entries = new Map<string, Snapshot>()
+  const latest = new Map<string, object>()
   let bytes = 0
   let disposed = false
   const remove = (key: string) => { const old = entries.get(key); if (old) bytes -= old.bytes; entries.delete(key) }
   return {
     async read(url: string | URL, signal: AbortSignal): Promise<Response> {
-      const key = new URL(url).toString()
-      const cached = entries.get(key)
       const target = new URL(url)
+      const key = historyWindowCacheKey(target)
+      const cached = entries.get(key)
+      const token = {}
+      latest.set(key, token)
+      const current = () => latest.get(key) === token
       target.searchParams.set('snapshot', cached?.revision ?? '')
+      for (const name of ['historyCount', 'historyRevision', 'metadataRevision', 'baseHistoryStart']) target.searchParams.delete(name)
       if (cached) {
         target.searchParams.set('historyCount', String(cached.body.messages.length))
         target.searchParams.set('historyRevision', cached.historyRevision)
         target.searchParams.set('metadataRevision', cached.metadataRevision)
+        if (typeof cached.body.historyStart === 'number') target.searchParams.set('baseHistoryStart', String(cached.body.historyStart))
       }
       try {
         if (disposed || signal.aborted) throw new Error('History read cancelled')
         const response = await request(target, { signal, cache: 'no-store' })
-        if (!response.ok) { remove(key); return response }
+        if (!response.ok) { if (current()) remove(key); return response }
         const envelope: unknown = await response.json()
         if (disposed || signal.aborted) throw new Error('History read cancelled')
         // Physical/legacy routes remain complete responses and are not cached.
         if (record(envelope) && Array.isArray(envelope.messages) && !('revision' in envelope)) {
-          remove(key); return Response.json(envelope)
+          if (current()) remove(key)
+          return Response.json(envelope)
         }
         if (!record(envelope) || !revision(envelope.revision)) throw new Error('Invalid history snapshot')
         if (envelope.unchanged === true) {
@@ -39,17 +48,21 @@ export function createReadonlyHistorySnapshots(request: typeof fetch = fetch, ma
         let body: Body
         if ('delta' in envelope) {
           const delta = envelope.delta
+          const leading = record(delta) && 'leadingMessages' in delta ? delta.leadingMessages : []
           if (!cached || !record(delta) || 'data' in envelope
             || delta.baseRevision !== cached.revision || delta.baseHistoryRevision !== cached.historyRevision
             || delta.baseCount !== cached.body.messages.length || !Array.isArray(delta.messages)
-            || delta.count !== cached.body.messages.length + delta.messages.length) throw new Error('Invalid history delta')
+            || !Array.isArray(leading) || leading.length > HISTORY_DELTA_PREPEND_LIMIT
+            || delta.count !== leading.length + cached.body.messages.length + delta.messages.length) throw new Error('Invalid history delta')
           const { messages: _messages, ...oldMetadata } = cached.body
           const metadata = 'baseMetadataRevision' in delta ? oldMetadata : delta.metadata
           if ('baseMetadataRevision' in delta && ('metadata' in delta || delta.baseMetadataRevision !== cached.metadataRevision
             || delta.baseMetadataRevision !== envelope.metadataRevision)) throw new Error('Invalid metadata reference')
           if (!record(metadata) || 'messages' in metadata || metadata.key !== cached.body.key
-            || metadata.currentPhysicalId !== cached.body.currentPhysicalId || metadata.segmentIndex !== cached.body.segmentIndex) throw new Error('Invalid history identity')
-          body = { ...metadata, messages: [...cached.body.messages, ...delta.messages] }
+            || metadata.currentPhysicalId !== cached.body.currentPhysicalId || metadata.segmentIndex !== cached.body.segmentIndex
+            || (typeof metadata.historyStart === 'number' ? metadata.historyStart + leading.length !== cached.body.historyStart
+              : leading.length !== 0 || metadata.historyStart !== cached.body.historyStart)) throw new Error('Invalid history identity')
+          body = { ...metadata, messages: [...leading, ...cached.body.messages, ...delta.messages] }
         } else {
           if (!record(envelope.data) || !Array.isArray(envelope.data.messages)) throw new Error('Invalid history body')
           body = envelope.data as Body
@@ -57,18 +70,22 @@ export function createReadonlyHistorySnapshots(request: typeof fetch = fetch, ma
         const expectedKey = decodeURIComponent(target.pathname.split('/').at(-1)!)
         if (body.key !== expectedKey || typeof body.currentPhysicalId !== 'string' || !body.currentPhysicalId
           || !Number.isSafeInteger(body.segmentIndex) || (body.segmentIndex as number) < 0
+          || ('historyStart' in body && (!Number.isSafeInteger(body.historyStart) || (body.historyStart as number) < 0))
           || !Array.isArray(body.commandResults) || !Array.isArray(body.decisionRecords)
           || !body.messages.every(message => record(message) && typeof message.role === 'string')) throw new Error('Invalid history identity')
         const size = new TextEncoder().encode(JSON.stringify(body)).byteLength
-        remove(key)
-        if (size <= maxBytes && maxEntries > 0) {
-          entries.set(key, { revision: envelope.revision, historyRevision: envelope.historyRevision, metadataRevision: envelope.metadataRevision, body, bytes: size })
-          bytes += size
-          while (bytes > maxBytes || entries.size > maxEntries) remove(entries.keys().next().value!)
+        if (current()) {
+          remove(key)
+          if (size <= maxBytes && maxEntries > 0) {
+            entries.set(key, { revision: envelope.revision, historyRevision: envelope.historyRevision, metadataRevision: envelope.metadataRevision, body, bytes: size })
+            bytes += size
+            while (bytes > maxBytes || entries.size > maxEntries) remove(entries.keys().next().value!)
+          }
         }
         return Response.json(body)
-      } catch (error) { remove(key); throw error }
+      } catch (error) { if (current()) remove(key); throw error }
+      finally { if (current()) latest.delete(key) }
     },
-    dispose() { disposed = true; entries.clear(); bytes = 0 },
+    dispose() { disposed = true; entries.clear(); latest.clear(); bytes = 0 },
   }
 }

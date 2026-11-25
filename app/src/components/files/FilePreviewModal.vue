@@ -59,6 +59,7 @@
         <ImageAnnotationPreview v-else-if="kind === 'image'" :key="`image:${rawSource}`" :src="rawSource" :name="entry.name"
           :source-key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, path])" :context-key="contextKey"
           :active="active" :editable="canQuote && !entry.archive" :keyboard-active="selectionActive"
+          :bytes-only="!!remote && !!folderId && !sessionWorkspace && !attachmentUrl"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
         <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay @error="archiveMediaError" />
         <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" @error="archiveMediaError" />

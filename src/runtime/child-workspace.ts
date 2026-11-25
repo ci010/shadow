@@ -4,17 +4,24 @@ import { compress } from 'hono/compress'
 import { ChildMicroApps } from './child-microapps.ts'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
 import { bridgeSockets } from '../gateway/socket-bridge.ts'
-import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, DEVICE_UI_HMR, deviceUiHeaders, deviceUiRequestPath, deviceUiResourcePath } from '../cluster/device-ui.ts'
+import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, DEVICE_UI_HMR, DEVICE_UI_LIVE, DEVICE_UI_LIVE_CHALLENGE, deviceUiHeaders, deviceUiRequestPath, deviceUiResourcePath } from '../cluster/device-ui.ts'
 import { DeviceApprovalUnavailableError, DeviceChallengeRequestError } from '../cluster/device-challenge-client.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { previewContext } from '../gateway/html-preview.ts'
+import type { Hono } from 'hono'
+import { REALTIME_SOCKET_PROTOCOL, registerRealtimeSocketTicket } from '../realtime/socket-ticket.ts'
+
+export type ChildWorkspacePlugin = GatewayPlugin & {
+  close?(): Promise<void>
+  registerLive?(app: Hono, authorize: (request: Request) => Promise<boolean>): void
+}
 
 /** Loopback renderer admission is enforced by ChildLocalControl before this proxy. */
 export function childWorkspacePlugin(options: {
   endpoint: string
   proof: (signal: AbortSignal, path: string) => Promise<string>
   fetch?: typeof fetch
-}): GatewayPlugin & { close(): Promise<void> } {
+}): ChildWorkspacePlugin & { close(): Promise<void> } {
   const diagnostics = createForwardDiagnostics('child')
   const microApps = new ChildMicroApps()
   const compressHistory = compress({ encoding: 'gzip' })
@@ -124,5 +131,49 @@ export function childWorkspacePlugin(options: {
       return c.json({ error: code, stage }, 503, { 'Cache-Control': 'no-store' })
     }
   })
-  return Object.assign(plugin, { close: () => microApps.close() })
+  const serviceLifetime = new AbortController()
+  const liveEndpoint = () => {
+    const endpoint = new URL(options.endpoint)
+    endpoint.pathname = endpoint.pathname.replace(/\/+$/, '') + DEVICE_UI_LIVE
+    endpoint.search = ''; endpoint.hash = ''
+    return endpoint
+  }
+  return Object.assign(plugin, {
+    close: () => { serviceLifetime.abort(); return microApps.close() },
+    registerLive: (app: Hono, authorize: (request: Request) => Promise<boolean>) => {
+      registerRealtimeSocketTicket(app, {
+        authorize,
+        ownerSignal: () => serviceLifetime.signal,
+        probe: async request => {
+          const signal = AbortSignal.any([request.signal, serviceLifetime.signal, AbortSignal.timeout(2500)])
+          try {
+            const proof = await options.proof(signal, DEVICE_UI_LIVE_CHALLENGE)
+            const response = await (options.fetch ?? fetch)(liveEndpoint(), {
+              method: 'POST', headers: { 'X-Shadow-Device-Proof': proof }, redirect: 'error', signal,
+            })
+            await response.body?.cancel()
+            return response.status === 204
+          } catch { return false }
+        },
+        upgrade: async c => {
+          try {
+            const signal = AbortSignal.any([c.req.raw.signal, serviceLifetime.signal, AbortSignal.timeout(8000)])
+            const proof = await options.proof(signal, DEVICE_UI_LIVE_CHALLENGE)
+            const endpoint = liveEndpoint()
+            endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:'
+            return await upgradeGatewayWebSocket(app, c, socket => {
+              if (serviceLifetime.signal.aborted) { socket.terminate(); return }
+              const upstream = new WebSocket(endpoint, REALTIME_SOCKET_PROTOCOL, {
+                headers: { 'X-Shadow-Device-Proof': proof }, handshakeTimeout: 8000,
+              })
+              const stop = () => { socket.terminate(); upstream.terminate() }
+              serviceLifetime.signal.addEventListener('abort', stop, { once: true })
+              socket.once('close', () => serviceLifetime.signal.removeEventListener('abort', stop))
+              bridgeSockets(socket, upstream)
+            }, REALTIME_SOCKET_PROTOCOL)
+          } catch { return c.json({ error: 'live_unavailable' }, 503) }
+        },
+      })
+    },
+  })
 }

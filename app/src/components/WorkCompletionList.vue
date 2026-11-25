@@ -11,8 +11,8 @@
       <article v-for="row in group.rows" :key="row.item.key" :class="{ unread: row.completion?.unread }">
         <div class="result-heading"><button type="button" @click="emit('select', row.item.key)">{{ row.item.title }}</button><span v-if="row.completion?.unread" class="unread-label">{{ t('Unread') }}</span></div>
         <time v-if="row.completion?.completedAt" :datetime="row.completion.completedAt">{{ new Date(row.completion.completedAt).toLocaleString() }}</time>
-        <p v-if="row.item.result?.summary || row.item.notes?.summary">{{ row.item.result?.summary ?? row.item.notes?.summary }}</p>
-        <ul v-if="row.item.notes?.artifacts?.length"><li v-for="artifact in row.item.notes.artifacts" :key="artifact.href"><a :href="artifact.href.startsWith('/') ? apiUrl(apiBase, artifact.href).href : artifact.href" target="_blank" rel="noopener noreferrer">{{ artifact.label }}</a></li></ul>
+        <p v-if="row.item.summary">{{ row.item.summary }}</p>
+        <ul v-if="row.item.artifacts?.length"><li v-for="artifact in row.item.artifacts" :key="artifact.href"><a :href="artifact.href.startsWith('/') ? apiUrl(apiBase, artifact.href).href : artifact.href" target="_blank" rel="noopener noreferrer">{{ artifact.label }}</a></li></ul>
       </article>
     </section>
   </section>

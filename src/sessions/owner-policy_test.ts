@@ -10,3 +10,23 @@ test('owner session eligibility preserves non-default Project and legacy durable
     assert.equal(isOwnerSession({...state,...patch},'non-default'),false)
   }
 })
+
+test('BOT ownership follows only live same-Project Web execution lineage', async () => {
+  const { botWebExecutionOwner } = await import('./owner-policy.ts')
+  const root: SessionState = {sessionId:'web:root',projectId:'p',segmentIndex:0}
+  const states = new Map<string, SessionState>([[root.sessionId, root]])
+  const owner = (id: string) => botWebExecutionOwner(id, 'p', id => states.get(id))
+  assert.equal(owner('web:root'), 'web:root')
+  for (const mode of ['session','task','call'] as const) {
+    const id = `virtual:${mode}`
+    states.set(id, {...root,sessionId:id,mode,parentSessionId:'web:root'})
+    assert.equal(owner(id),'web:root')
+  }
+  states.set('virtual:nested',{...root,sessionId:'virtual:nested',mode:'call',parentSessionId:'virtual:task'})
+  assert.equal(owner('virtual:nested'),'web:root')
+  for (const patch of [{projectId:'foreign'}, {automation:{}}, {sessionId:'qq:service'}, {parentSessionId:'missing'}, {parentSessionId:'virtual:bad'}, {parentSessionId:undefined,workspaceRoot:'web:root'}, {parentSessionId:undefined,parent:{id:'web:root'}}]) {
+    const state = {...root,sessionId:'virtual:bad',mode:'task',parentSessionId:'web:root',...patch} as SessionState
+    states.set(state.sessionId,state)
+    assert.equal(owner(state.sessionId), undefined)
+  }
+})

@@ -11,9 +11,9 @@ import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 
 test('delegation uses a stable key rather than a revision/adoption handshake', () => {
-  assert.deepEqual(workBindingSchema.parse({ key: 'work:fixture' }), { key: 'work:fixture' })
+  assert.deepEqual(workBindingSchema.parse({ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39' }), { key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39' })
   assert.equal(workBindingSchema.safeParse({ key: '' }).success, false)
-  assert.equal(workBindingSchema.safeParse({ key: 'work:fixture', revision: 1 }).success, false)
+  assert.equal(workBindingSchema.safeParse({ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 1 }).success, false)
   assert.equal(parseWorkPolicy(undefined), undefined)
   assert.throws(() => parseWorkPolicy({ mode: 'required' }), /Invalid Work policy/)
 })
@@ -29,11 +29,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     ])
     const notes = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
     const alignment = new WorkAlignment(notes, {
-      state: id => states.get(id), evidence: async () => {}, changed: async () => {},
+      state: id => states.get(id),changed: async () => {},
     })
     try {
       const note = workRecordSchema.parse(await alignment.execute({ kind: 'session', sessionId: 'owner' }, 'create',
-        undefined, undefined, { title: 'Shared goal', definition: { objective: 'Gather one finding' } }))
+        undefined, undefined, { title: 'Shared goal', definition: 'Gather one finding' }))
       states.get('owner')!.workPolicy = { mode: 'required', keys: [note.key], controllerSessionId: 'owner' }
       for (const [id, state] of states) await store.saveState(id, state)
       alignment.linkExecution('task', 'owner', { key: note.key })

@@ -5,7 +5,7 @@ import { ConversationArchive } from './conversation-archive.ts'
 import { normalizeWorkExecutorMetadata } from './work-executor-metadata.ts'
 import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
-import { parseSessionFocus } from './session-metadata.ts'
+import { parseSessionFocus, parseStoredSessionFollowUp } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
@@ -58,6 +58,8 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'automaticWork',
   'name',
   'focus',
+  'followUp',
+  'sessionFollowUp',
   'generatedTitle',
   'chatName',
   'physicalIdVersion',
@@ -122,7 +124,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   value = normalizeStoredTopicSessionFields(normalizeInitiativeMetadata(validateOwnership(value)))
   if (!isRecord(value)) return null
 
-  const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }
+  const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value), ...parseStoredSessionFollowUp(value) }
   if (value.lastUserMessageAt !== undefined) metadata.lastUserMessageAt = parseContextResetAt(value.lastUserMessageAt)
   if (value.retirement !== undefined) metadata.retirement = retirementReceiptSchema.parse(value.retirement)
   if (value.serviceGeneration !== undefined) metadata.serviceGeneration = parseServiceGeneration(value.serviceGeneration)
@@ -409,7 +411,7 @@ export class SqliteSessionStore implements SessionStore {
 
   async getState(sessionKey: string): Promise<SessionState | null> {
     const active = await this.fresh.getActive(sessionKey)
-    if (active) return active
+    if (active) return { ...active, ...parseStoredSessionFollowUp(active) }
     const row = this.stmtGetState.get(sessionKey) as
       | {
         key: string
@@ -424,6 +426,7 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    state = { ...state, ...parseStoredSessionFollowUp(state) }
     if (state.statePersistence) {
       if (sessionKey !== state.sessionId) throw new Error('Fresh automation key mismatch')
       if (this.stmtGetState.get(sessionKey)) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
@@ -442,6 +445,8 @@ export class SqliteSessionStore implements SessionStore {
         name: state.name === undefined ? undefined : parseSessionName(state.name),
         completed: state.completed,
         completedAt: parseContextResetAt(state.completedAt),
+        followUp: state.followUp,
+        sessionFollowUp: state.sessionFollowUp,
         focus: state.focus === undefined ? undefined : parseSessionFocus(state.focus),
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
         serviceGeneration: parseServiceGeneration(state.serviceGeneration),
@@ -556,13 +561,19 @@ export class SqliteSessionStore implements SessionStore {
 
   async *readSessionLog(
     sessionId: string,
+    options?: { strict?: boolean },
   ): AsyncIterable<Record<string, unknown>> {
     const rows = this.db.prepare('SELECT data FROM session_logs WHERE session_id = ? ORDER BY seq ASC').iterate(sessionId) as Iterable<{ data: string }>
+    let found = false
     for (const row of rows) {
       try {
-        yield JSON.parse(row.data) as Record<string, unknown>
-      } catch { /* skip malformed */ }
+        const record = JSON.parse(row.data) as Record<string, unknown>
+        if (options?.strict && (!record || typeof record !== 'object' || Array.isArray(record))) throw new Error('Invalid session log record')
+        found = true
+        yield record
+      } catch (error) { if (options?.strict) throw error }
     }
+    if (options?.strict && !found) throw new Error('Missing or empty session log')
   }
 
   /** Archive admission is strict: never delete source rows that were silently skipped. */

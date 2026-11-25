@@ -1,10 +1,10 @@
 <template>
   <div v-if="record || state?.error" class="session-work-status">
     <p v-if="state?.error" role="alert">{{ t('Task status unavailable.') }} <button @click="snapshot?.refresh()">{{ t('Retry') }}</button></p>
-    <button v-if="record" type="button" class="current-task" :title="record.workflow?.title || record.definition.objective" @click="$emit('open', record.key)">
+    <button v-if="record" type="button" class="current-task" :title="record.title" @click="$emit('open', record.key)">
       <span class="i-lucide-workflow" aria-hidden="true" />
-      <span>{{ records.length > 1 ? t('{length} work items', { length: records.length }) : record.workflow?.title || record.definition.objective }}</span>
-      <span class="current-task-state">{{ record.paused ? t('Paused') : enumLabel(record.workflow?.status) || t('Review needed') }}</span>
+      <span>{{ records.length > 1 ? t('{length} work items', { length: records.length }) : record.title }}</span>
+      <span class="current-task-state">{{ enumLabel(record.status) || t('Review needed') }}</span>
       <span class="i-lucide-arrow-up-right" aria-hidden="true" />
     </button>
   </div>
@@ -13,9 +13,10 @@
 import { affectsSessionResource } from '../session-invalidation.ts'
 import { t } from '../i18n.ts'
 import { enumLabel } from '../display-labels.ts'
-import { computed, onUnmounted, shallowRef, watch } from 'vue'
+import { computed, inject, onUnmounted, shallowRef, watch } from 'vue'
 import { createInitialLiveSnapshot } from '../initial-live-snapshot.ts'
 import { isRecord } from '../folders-sidebar.ts'
+import { conversationStartKey } from '../conversation-start-context.ts'
 import { createSessionWorkStatus } from '../session-work-status.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; revision: number }>()
@@ -26,16 +27,26 @@ function create() {
   return createSessionWorkStatus(base, id)
 }
 const snapshot = shallowRef<ReturnType<typeof create>>()
-const state = computed(() => snapshot.value?.state)
-const records = computed(() => state.value?.value?.records.filter(record => !['done', 'cancelled'].includes(record.workflow?.status ?? '')
-  || state.value?.value?.effects.length) ?? [])
+const start = inject(conversationStartKey, undefined)
+const scopedStart = computed(() => {
+  const state = start?.value
+  return state?.apiBase === props.apiBase && state.sessionId === props.sessionId ? state : undefined
+})
+const legacy = computed(() => !start || scopedStart.value?.phase === 'http')
+const state = computed(() => legacy.value ? snapshot.value?.state : undefined)
+const work = computed(() => {
+  const source = scopedStart.value
+  return source?.phase === 'socket' ? source.data.work : state.value?.value
+})
+const records = computed(() => work.value?.records.filter(record => !['done', 'cancelled'].includes(record.status ?? '')
+  || work.value?.effects.length) ?? [])
 const record = computed(() => records.value[0])
-watch(() => [props.apiBase, props.sessionId], () => {
-  snapshot.value?.dispose(); snapshot.value = create()
+watch(() => [props.apiBase, props.sessionId, legacy.value], () => {
+  snapshot.value?.dispose(); snapshot.value = legacy.value ? create() : undefined
 }, { immediate: true })
-watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, id, active], _old, onCleanup) => {
+watch(() => [props.apiBase, props.sessionId, props.active, legacy.value] as const, ([base, id, active, useHttp], _old, onCleanup) => {
   const current = snapshot.value
-  if (!active || !id || !current) { current?.pause(); return }
+  if (!active || !id || !current || !useHttp) { current?.pause(); return }
   const gate = createInitialLiveSnapshot({ refresh: () => { void current.autoRefresh() } })
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {

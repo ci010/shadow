@@ -3,7 +3,8 @@ import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { cleanupTempFiles } from '../utils/paths.ts'
 import { physicalSessionId } from './session-identity.ts'
-import { inputContent, sessionReplyAddress, type SessionInput, type SessionMessageInput } from './input.ts'
+import { inputContent, sessionReplyAddress, type SessionInput, type SessionMessageInput, type SessionTurnFact } from './input.ts'
+import { followUpPhase } from './session-follow-up.ts'
 import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 import { Span } from '../otel/tracing.ts'
@@ -16,7 +17,7 @@ import { prepareNewMessageImages } from '../providers/new-message-images.ts'
 import type { SessionStore } from './session-store.ts'
 import type { SessionStartEvent, SessionState } from './session-store.ts'
 import type { SessionTools } from '../tools/registry.ts'
-import { BaseSession } from './base-session.ts'
+import { BaseSession, type AutomaticKickoffTurn } from './base-session.ts'
 import {
   resolveSessionLocations,
   type WorkdirLookup,
@@ -47,6 +48,8 @@ type LoopEvent =
 export class Session extends BaseSession {
   private running = false
   private inbox: LoopEvent[] = []
+  /** Host notification once the queue is actually waiting for input. */
+  onIdle?: () => void
   private inboxWaiter: ((event: LoopEvent) => void) | null = null
   private stopController = new AbortController()
   private readonly stopped: Promise<void>
@@ -99,10 +102,33 @@ export class Session extends BaseSession {
     )
   }
 
+  private readonly automaticKickoffs = new WeakMap<SessionInput, AutomaticKickoffTurn>()
+
+  attachAutomaticKickoff(input: SessionInput, turn: AutomaticKickoffTurn): void {
+    this.automaticKickoffs.set(input, turn)
+  }
+
   /** Work-only wake markers resolve against current durable facts at a safe boundary. */
+  workNotificationFinished?: (input: SessionInput) => void
   prepareWorkNotification?: (input: SessionMessageInput) => Promise<SessionMessageInput | null>
 
+  prepareSessionFollowUp?: (input: SessionInput) => Promise<boolean>
+  settleFollowUpTurn?: (fact: SessionTurnFact) => void
+  isFollowUpSettled?: () => boolean
+  supersedeFollowUpForWorkNotice?: (input: SessionMessageInput) => Promise<SessionMessageInput | undefined> | undefined
+
+  protected override beforeWorkNotificationPersisted(input: SessionMessageInput): Promise<SessionMessageInput | undefined> | undefined {
+    return this.supersedeFollowUpForWorkNotice?.(input)
+  }
+
+  protected override followUpFinalAllowed(): boolean { return this.isFollowUpSettled?.() ?? false }
+
+  protected override beforeTurnStateSaved(fact: SessionTurnFact): void {
+    this.settleFollowUpTurn?.(fact)
+  }
+
   private async prepareQueuedInput(input: SessionInput): Promise<SessionInput | null> {
+    if (followUpPhase(input.source) && !await this.prepareSessionFollowUp?.(input)) return null
     if (input.kind === 'message' && input.source.kind === 'event' && input.source.type === 'work-notification-wake') {
       return this.prepareWorkNotification ? this.prepareWorkNotification(input) : null
     }
@@ -429,6 +455,7 @@ export class Session extends BaseSession {
         } else if (event.type === 'compact') {
           await this.compact(event.llm)
         } else {
+          const kickoff = this.automaticKickoffs.get(event.msg)
           const prepared = await this.prepareQueuedInput(event.msg)
           if (!prepared) { this.scheduleSleepCheck(event.llm); continue }
           event.msg = prepared
@@ -439,7 +466,15 @@ export class Session extends BaseSession {
             this.turn.message,
             event.llm,
             this.turn.abortController.signal,
-          ).finally(() => {
+            kickoff,
+          ).catch(error => {
+            // A failed strict append may actually have reached disk. Drop the
+            // live instance so reconciliation/recovery uses the physical log.
+            if (kickoff) this.stop()
+            throw error
+          }).finally(() => {
+            kickoff?.finished()
+            this.workNotificationFinished?.(event.msg)
             const turn = this.turn
             turn?.finish()
             this.trackWebInput(event.msg, 'failed')
@@ -563,10 +598,11 @@ export class Session extends BaseSession {
           if (prepared?.kind === 'message') steerQueue.push(prepared)
         }
         await this.appendMessages(llm, ...await Promise.all(steerQueue.map(input => this.buildInputMessage(input, cwd))))
+        for (const input of steerQueue) this.notifyInputPersisted(input)
       } finally {
+        for (const input of steerQueue) this.workNotificationFinished?.(input)
         for (const input of queued) this.trackWebInput(input, 'failed')
       }
-      if (!this.messagePersistenceFailed) for (const input of steerQueue) this.inputPersisted?.(input)
       if (this.responseContext && steerQueue.some(input => input.source.kind === 'user')) {
         this.responseContext = { ...this.responseContext, userInvolved: true }
       }
@@ -648,6 +684,7 @@ export class Session extends BaseSession {
         resolve(event)
       }
       this.stopController.signal.addEventListener('abort', abort, { once: true })
+      this.onIdle?.()
     })
   }
 

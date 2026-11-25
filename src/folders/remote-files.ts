@@ -1,22 +1,38 @@
 import { extname } from 'node:path'
 import type { Context } from 'hono'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
-import { executeRemoteFilesystemText, RemoteFilesystemError, type RemoteFilesystemTarget } from '../execution/remote-filesystem-client.ts'
+import { executeRemoteFilesystemImage, executeRemoteFilesystemText, RemoteFilesystemError, type RemoteFilesystemTarget } from '../execution/remote-filesystem-client.ts'
 import { filePreviewLimit } from '../execution/filesystem/contracts.ts'
 import { isTextEncoding } from '../execution/filesystem/text-encoding.ts'
 import type { RemoteFolderRecord } from './contracts.ts'
 
 export async function serveRemoteFolderFiles(
   c: Context, target: RemoteFilesystemTarget, folder: RemoteFolderRecord,
-  operation: 'files' | 'raw' | 'preview', input: string,
+  operation: 'files' | 'raw' | 'preview' | 'static', input: string,
 ): Promise<Response> {
-  if (operation === 'raw') return c.json({
+  const rawImage = operation === 'raw' && /\.(png|jpe?g|gif|webp)$/i.test(extname(input.replaceAll('\\', '/')))
+  if (operation === 'static' || (operation === 'raw' && !rawImage)) return c.json({
     error: 'remote_raw_unavailable',
-    message: 'Raw media and static previews are not supported by this remote filesystem protocol. Text previews and file listings remain available.',
+    message: 'Remote raw previews support PNG, JPEG, GIF and WebP images only. Remote static files are unavailable.',
   }, 501)
   const path = input.replaceAll('\\', '/')
   if (path.startsWith('/') || /^[a-z]:/i.test(path) || /[\0\r\n]/.test(path) || path.split('/').includes('..')) {
     return c.json({ error: 'invalid_path' }, 400)
+  }
+  if (rawImage) {
+    try {
+      const image = await executeRemoteFilesystemImage(target, path)
+      // The client has validated both the encoded result and its raster MIME.
+      const url = image.part.image_url.url
+      const bytes = Buffer.from(url.slice(url.indexOf(',') + 1), 'base64')
+      return c.body(bytes, 200, {
+        'Content-Type': image.mime,
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+      })
+    } catch (error) {
+      return remoteFileError(c, error)
+    }
   }
   const encoding = c.req.query('encoding') ?? 'auto'
   if (!isTextEncoding(encoding)) return c.json({ error: 'invalid_text_encoding' }, 400)
@@ -38,8 +54,12 @@ export async function serveRemoteFolderFiles(
     return c.json({ folderId: folder.id, path, binary: false, encoding: 'utf-8', size: bytes.length,
       truncated: bytes.length > slice.length, content: new TextDecoder().decode(slice, { stream: bytes.length > slice.length }) })
   } catch (error) {
-    if (error instanceof RemoteFilesystemError) return c.json({ error: 'remote_filesystem_failed', code: error.code, message: error.message },
-      error.code === 'file-not-found' ? 404 : ['path-denied', 'invalid-filesystem-args', 'file-type-denied'].includes(error.code) ? 400 : 503)
-    return c.json({ error: 'remote_filesystem_failed', message: 'The device returned an invalid file result. No local folder was used.' }, 503)
+    return remoteFileError(c, error)
   }
+}
+
+function remoteFileError(c: Context, error: unknown): Response {
+  if (error instanceof RemoteFilesystemError) return c.json({ error: 'remote_filesystem_failed', code: error.code, message: error.message },
+    error.code === 'file-not-found' ? 404 : ['path-denied', 'invalid-filesystem-args', 'file-type-denied', 'invalid-image'].includes(error.code) ? 400 : 503)
+  return c.json({ error: 'remote_filesystem_failed', message: 'The device returned an invalid file result. No local folder was used.' }, 503)
 }

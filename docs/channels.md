@@ -1,6 +1,6 @@
 # Messaging channels
 
-Project settings → **Bots** configures QQ, Feishu, Discord, and personal-only WeChat/iLink instances.
+Project settings → **Connections** configures QQ, Feishu, Discord, and WeChat/iLink transport.
 Each Project may have several bots per platform, with separate credentials,
 sender policies, and runtime status. Providers and device pairing remain
 App-wide. A saved bot configuration is not proof of platform delivery or
@@ -29,7 +29,7 @@ admitted channel stream but are filtered before Session entry: no Session is
 created/woken and no model, compaction, acknowledgement reaction or automatic reply
 runs. They are not automatically added to Agent history. This separates passive
 collection from the BOT's receive policy; see [external input routing](input-routing.md).
-One InputRouter matches Web Session, verified Personal pairing and Service BOT
+One InputRouter matches Web Session, assigned Personal and Service BOT
 listeners from host state. An address or payload cannot register a listener or
 claim admin/source identity. Web authentication precedes new-Session preparation;
 Personal/Service lazy strategies run only after their listener is selected. No
@@ -37,39 +37,34 @@ matching listener means no execution; conflicting handlers are rejected, not
 broadcast or routed to another Agent.
 Mentions/replies and reviewed processors retain their trigger behavior. Edits/deletes and admitted thread discovery append local events.
 Other platforms currently contribute only through their existing admitted receive
-boundary, not a new universal history/edit feed. Unbound service chats and
-non-owner personal DMs remain denied. Trusted Web tools use explicit stable
+boundary, not a new universal history/edit feed. Unbound inboxes remain receipt-only. Trusted Web tools use explicit stable
 consumers and local positions, not platform timestamps; sending has an independent
 idempotency journal and authorization gate. See [channel message stream](channel-stream.md)
 for exact platform capabilities, bounded Discord catch-up, retention gaps and
 migration from `discord_patrol`.
 
-## WeChat personal entry (iLink)
+## WeChat connection (iLink)
 
-WeChat is available only for **personal** Bots, never service Bots. Both creation
-and role changes are validated by the backend, including persisted-record loading.
-Select Personal assistant → WeChat, add a Bot, then save and connect. Generate the
-login QR code, scan and confirm with your own WeChat account, and use **Check
-WeChat login** (repeat if still waiting; regenerate an expired code). Next generate
-an owner pairing challenge, send the exact `/shadow-pair …` command in the Bot's
-private chat, inspect the candidate ID in Web, and confirm. Until confirmation,
-business messages are blocked. Only verified-owner direct messages enter the
-existing Project session pipeline; no second agent/message loop is introduced.
+Select WeChat in Connections, create and enable a connection, then generate the
+login QR code. Scan and confirm in WeChat, and use **Check WeChat login** (repeat
+if still waiting; regenerate an expired code). QR login establishes transport
+only; it does not authorize an Agent or confer Shadow administrator access.
 
 Account tokens, login sessions, sync cursors, context tokens and downloaded media
-are isolated under the Project's `state/wechat/<bot-id>/` storage. Tokens are not
-returned by the Bots API. The authenticated, Project-local login endpoints are
-`POST /api/channels/:id/wechat/login` and `/wait`; legacy `/wechat/*` routes are
-not mounted by scoped Bots. Re-login requires revoking the owner first, which
-also disconnects the Bot. Revocation does not delete stored iLink credentials;
-reconnecting may resume them, but still requires fresh Web owner confirmation.
-Duplicate iLink account identities cannot run concurrently across Projects/Bots.
+are isolated under the Project's `state/wechat/<connection-id>/` storage. Tokens
+are not returned by the Connections API. The authenticated, Project-local login
+endpoints are `POST /api/channels/:id/wechat/login` and `/wait`. Duplicate iLink
+account identities cannot run concurrently across Projects or connections.
 
 This reuses the existing iLink API and polling adapter, not desktop automation.
 Availability depends on WeChat/iLink account eligibility, platform access and
 network connectivity. Live QR scan and real-account delivery are not covered by
-fixture tests. WeChat groups, service assignments, desktop WeChat, streaming
-updates and threads are not supported by this entry.
+fixture tests. To reply, reference an exact host-recorded private inbox in
+authenticated Web Chat and link a Personal BOT. QR login alone grants no BOT
+access, and linking never replays older receipts. If iLink supplies a linked
+peer, the adapter continues to enforce that platform constraint. To change to
+a different WeChat account, create a new Connection. Groups, Service BOTs,
+desktop WeChat, streaming updates and threads are not supported.
 
 Bot conversations display the last known group/channel name or, for direct
 messages, the other participant's display name. Names are persisted across
@@ -96,53 +91,27 @@ threads. Trust does not grant administrator or tool permissions. Changing a
 policy refreshes future reusable-conversation requests, but cannot retract
 an in-flight reply.
 
-## Choose a Bot's role
+## Assign a BOT to a conversation
 
-Create a connection with an explicit purpose rather than inferring its authority
-from a private message:
+A connection delivers platform events; it has no mode or owner binding. Inference
+requires a deployed BOT assigned to the exact Project, connection and conversation.
+Unassigned messages may be recorded but are not executed or replayed when a later
+assignment becomes active. An empty transport sender allowlist does not require
+enumerating senders; an explicitly configured allowlist still applies. Platform
+admission and participant checks remain in force where applicable.
 
-- **Connect my assistant (personal):** a channel entry point for this Project's
-  owner. Only the verified owner's direct messages enter ordinary Project
-  assistant inference. Group messages and other senders are rejected. The
-  assistant uses normal dynamic Skill discovery and activation, not a published
-  service Skill bundle. Existing role/tool limits and protected-operation review
-  still apply; this does not make Web-only management or computer tools available
-  on a messaging platform. QQ/Discord still use ordinary replies for questions.
-- **Create a service Bot (service):** a restricted employee with an explicitly
-  configured Agent, Skills, tools and resources. Owner DMs do not switch it to a
-  personal assistant. QQ/Feishu require a published authoring binding; Discord
-  requires an integration assignment. Unassigned conversations are rejected,
-  rather than falling back to ordinary Project assistant capabilities.
+- **Personal BOT:** uses an ordinary Project Agent role and its available skills,
+  tools and protected-operation review. Platform input does not confer Shadow
+  owner or administrator authority. QQ and Feishu support explicit Personal inboxes.
+- **Service BOT:** uses a restricted, published Agent with explicit skills, tools
+  and resource grants. QQ and Feishu use exact published bindings. Discord keeps
+  its Service access model and platform-specific admission and output proofs;
+  connection setup does not add Personal Discord assignment support.
 
-Existing version-2 connections without a purpose appear as legacy/unclassified
-and cannot handle business messages until explicitly configured. They are not
-silently converted into personal assistants. A Bot with conversation history
-cannot switch roles: create another Bot instead. A history-free Bot must be
-stopped before changing its role. Platform credential/identity uniqueness checks
-still apply when creating connections.
-
-### Verify the personal assistant's owner
-
-Save and connect the personal Bot, then start owner pairing from its authenticated
-Shadow settings page. Shadow generates a short-lived challenge. Send
-`/shadow-pair <challenge>` to that exact Bot in a private platform conversation,
-then return to Shadow, inspect the candidate platform sender ID, and explicitly
-confirm it. The platform message registers a candidate only; it does not grant
-admin access or enter model inference. Reject an unfamiliar candidate and restart
-pairing. Do not share the challenge or paste it into group chat.
-
-Challenges expire after five minutes and are held only in memory. Confirmation
-consumes the challenge; restarting, reconnecting or disabling the Bot invalidates
-pending pairing. Pairing is scoped to the exact Project and Bot. An allowlist,
-platform administrator role, display name or user-profile link is not verified
-Project ownership. Revoke the owner from Shadow to disable the personal entry.
-
-Disabling, deleting or revoking a Bot retires its idle conversation contexts and
-related descendants before reducing access. If a related context is active,
-queued or being prepared, the operation returns `bot_context_busy` (HTTP 409)
-instead of claiming it cancelled execution. Let the work finish or stop it through
-its supported execution controls, then retry; a failed operation is not proof
-that authorization was revoked.
+Disabling or deleting a connection retires related idle contexts. If a related
+context is active, queued or being prepared, the operation can return
+`bot_context_busy` (HTTP 409) instead of claiming cancellation. Let the work finish
+or stop it through its supported execution controls, then retry.
 
 ### Skills and permissions
 
@@ -157,20 +126,13 @@ every QQ, Feishu, and Discord binding. Raw native
 filesystem/network modules have host authority and are not sandboxed by
 `readResources` or grants.
 
-### Owner setup API
+### Connection setup API
 
-All routes below use the existing authenticated administrator boundary under
-`/api/channels`. Creating an instance requires `purpose: "personal" | "service"`;
-status returns its purpose and `ownerVerified`, not the stored owner record.
-
-- `POST /:id/owner-challenge`: start pairing; returns `challenge` and `expiresAt`.
-- `GET /:id/owner-candidate`: inspect the pending candidate and expiry.
-- `POST /:id/owner-confirm` with `{ "challenge": "..." }`: confirm the exact
-  candidate from the authenticated owner interface.
-- `DELETE /:id/owner`: revoke the owner and disable the connection.
-
-Saving configuration, pairing and passing synthetic tests are not proof of live
-platform message delivery. WeChat is supported only through the personal iLink entry described above.
+`GET /api/channels` lists redacted connection status. `POST /api/channels` accepts
+`platform`, `displayName` and `config`; `PATCH /api/channels/:id` updates name or
+configuration, and `DELETE /api/channels/:id` removes the connection. These routes
+require an authenticated Web administrator. Creation, a connected status and
+synthetic tests are not proof of live platform delivery or BOT assignment.
 
 ## Discord Agents and channel access
 
@@ -405,9 +367,8 @@ confirmation. Two BOTs can use the same connection for distinct conversations
 with different triggers; connection settings cannot override them.
 
 The legacy **Project settings > Bots > Configure > Trigger model on** connection
-field is retained for personal/standalone compatibility, not directory Service
-policy. Old Service packages without a binding `trigger` now default to `mention`,
-even if the connection stored `triggerMode: "all"`. Nothing is silently migrated
+field is not a Project Connection setting. BOT bindings without `trigger` default
+to `mention`, regardless of older transport settings. Nothing is silently migrated
 to `all`; explicitly configure the affected BOT binding to retain that behavior.
 See [BOT receive configuration](bots.md#external-input-subscriptions).
 
@@ -415,9 +376,9 @@ Reception and triggering are separate. In `mention` mode, ordinary admitted
 service-group messages can be collected in the bounded channel stream, but the
 BOT receive handler filters them before Session creation/history or inference.
 In `all` mode, every subscribed and authorized group message enters the configured
-service Agent turn/reply flow. Direct messages are trigger-eligible regardless of
-this setting, but still require the verified personal owner or an explicit service
-subscription; the trigger setting grants no access.
+BOT turn/reply flow. Direct messages are trigger-eligible regardless of this
+setting, but still require an exact active BOT subscription; the trigger grants
+no access. QQ/Feishu BOT questions must be answered in authenticated Web.
 The adapter recognizes the dedicated mention event and mentions of this Bot
 in the full-message event's structured `mentions` list, using QQ's boolean
 `is_you: true` marker or a matching Bot ID. Full-message mode can use a
@@ -586,33 +547,19 @@ from the overview alone.
 
 ## Bot setup from Web Chat
 
-The built-in `bot-setup` skill and lazy-loaded `bot_setup` tool provide a Chat-local setup entry. In an authenticated Main administrator Web chat, ask to add a Bot, choose personal/service, platform and name, and open the inline setup card. No Channels/settings-page navigation is needed for connection configuration.
+The built-in `bot-setup` skill and lazy-loaded `bot_setup` tool provide a Chat-local setup entry. In an authenticated Main administrator Web chat, ask to add a Bot, choose the platform and a name, and open the inline setup card. No Channels/settings-page navigation is needed for connection configuration.
 
 - `create` creates a disconnected Bot in the runtime-bound Project; `connection` toggles an already configured connection; `status` returns the existing redacted Bot status contract.
 - `open` waits while the administrator uses the trusted inline card. App IDs, tokens and secrets go from that card directly to the existing authorized Project channel API, not through tool arguments/results, the model, ordinary chat messages, an adhoc I/O socket or a readable temporary file. Use HTTPS or loopback HTTP; the Chat card refuses insecure non-loopback transport. Never paste a secret into ordinary chat.
-- The card reuses the existing Bot connection editor: WeChat personal-only QR login/check, connection status, owner challenge/candidate review and explicit human confirmation. Successful WeChat login alone is not owner verification. The tool deliberately has no owner-confirm operation.
+- The card reuses the connection editor for credentials, connection status and WeChat QR login. None of these actions grants BOT permissions.
 - The invitation is in memory, bound to Project and logical Web session, expires after ten minutes and is cleared on tool cancellation/runtime shutdown. Done/Cancel closes it. Changing Project/chat unmounts its private inputs; the old invitation expires or can be cancelled on return. Aborting a request cannot guarantee rollback of an already committed HTTP mutation: check status before retrying.
-- Only host-stamped Web administrator contexts may invoke the tool. A paired channel owner, group chat, cross-Project context, script invocation or remote workdir cannot use it. Every card HTTP operation still passes existing server management authorization; no HTTP credential is exposed to the agent.
+- Only host-stamped Web administrator contexts may invoke the tool. Messaging-platform input, a cross-Project context, script invocation or remote workdir cannot use it. Every card HTTP operation still passes existing server management authorization; no HTTP credential is exposed to the agent.
 
-**Current service boundary:** creating/configuring a service Bot connection is available inside Chat, but this card does not implement Agent creation/publication or grant a binding. Existing explicit published Agent/skill/tool/resource restrictions continue to apply. An unbound service Bot is not ready for business traffic. Do not report a complete service-publication setup based solely on connection status. This is a connection/personal-owner setup workflow, not a replacement for the separate authoring publication workflow.
-
-### Resume QQ setup in Settings
-
-Settings → Bots shows **Continue QQ setup** on each existing QQ Bot, including
-Bots created through chat. Use that Bot's entry rather than Add bot. The guide
-resumes from redacted saved credentials and current connection status: save App ID
-and App Secret, check QQ platform settings and connect, then configure role access.
-Saved App IDs and options are reused; leave a saved secret blank to retain it.
-The editor also supports Save without connecting for incomplete setup.
-
-QQ platform event approvals, sandbox testers, availability and end-to-end message
-delivery are not verified by this guide. Only a reported `connected` status marks
-the connection step complete; credentials saved or `running` does not. Personal
-Bots still require the existing private-chat owner challenge and explicit Web
-confirmation. QQ service Bots require an explicitly approved Agent setup. Open an observed
-group from the Project sidebar to select a published Agent and review its setup.
-Connection alone grants no permissions; Discord keeps its separate access UI. Refresh/reopening reconstructs progress from Main, not local
-completion flags. Unsaved edits and temporary owner challenges are not durable.
+The card configures transport only; it does not create or publish an Agent or
+assign a BOT. After connecting QQ or Feishu, select the exact intended inbox and
+use the separate BOT configuration and approval workflow. Saved credentials or
+`running` are not proof of verified connectivity; connection alone is not proof
+of execution. Refresh if an action's outcome is uncertain.
 
 ### Service groups (QQ / Feishu)
 
@@ -629,8 +576,7 @@ command is required. QQ `GROUP_ADD_ROBOT` and Feishu
 platform delivers them (enable the relevant Feishu event subscription). Shadow
 cannot list events the platform has not delivered. Sender allowlists still apply
 to message observations. Names may be unavailable; discovery does not fetch a
-platform directory or backfill history. Personal Bots, DMs and Discord's separate
-access workflow are not discovery targets.
+platform directory or backfill history. DMs and Discord's separate access workflow are not group discovery targets.
 
 Open the sidebar group to view received text in a chat layout. The compact
 header says **Quietly observing**; received messages are not proof of inference
@@ -662,7 +608,7 @@ as text. Do not post secrets to groups: this is not a general secret scanner.
 Message text is excluded from the model-visible BOT inventory. Persistence
 is sampled at most once per minute plus clean shutdown; a crash can lose the last
 sample. Expired content is filtered on reads and removed on the next flush.
-Deleted/non-service Bots are excluded. Enabled groups remain in the sidebar;
+Deleted connections are excluded. Enabled groups remain in the sidebar;
 the legacy Bot-settings pending list hides enabled bindings and links to the
 same group page.
 

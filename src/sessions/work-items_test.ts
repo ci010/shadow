@@ -8,7 +8,7 @@ import { WorkAlignment } from './work-alignment.ts'
 import type { SessionState } from './session-store.ts'
 import { parseYieldQuestion } from './yield-contract.ts'
 
-const definition = { objective: 'Deliver both protocols', acceptance: ['Inbound and outbound pass'], boundaries: ['No publication'], evidence: [] }
+const definition = 'Deliver both protocols\n\n- Inbound and outbound pass\n- No publication'
 const actor = (sessionId: string) => ({ kind: 'session' as const, sessionId })
 const retired = { adoption: { malformed: true }, checkpoint: false, transition: { strategy: 'successor' },
   answerReview: 'old', handoffFrom: null, successors: ['worker'], proposals: [{ status: 'pending' }] }
@@ -19,11 +19,11 @@ function setup(home: string) {
   states.set('temporary', { sessionId: 'temporary', segmentIndex: 0, mode: 'task' })
   const store = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
   let changed = 0
-  const alignment = new WorkAlignment(store, { state: id => states.get(id), evidence: async () => {},
+  const alignment = new WorkAlignment(store, { state: id => states.get(id),
     changed: async () => { changed++ }, })
   const create = async (title: string, assignee: string | null = 'owner', parentKey?: string) =>
-    await alignment.execute(actor('owner'), 'create', undefined, undefined, { title, assignee, parentKey, definition, reason: 'User requested both protocols',
-      notes: { kind: 'task', ...(parentKey ? { relation: { kind: 'supports', reason: 'Part of the shared outcome' } } : {}) } }) as WorkRecord
+    await alignment.execute(actor('owner'), 'create', undefined, undefined, { title, assignee, parentKey, definition,
+      kind: 'task' }) as WorkRecord
   return { store, alignment, create, states }
 }
 
@@ -42,7 +42,7 @@ test('work discovery pages compact indexes while exact context remains readable 
     assert.equal('definition' in page.items[0], false)
     const next = await f.alignment.execute(actor('peer'), 'tree', root.key, undefined, { limit: 2, offset: page.nextOffset }) as typeof page
     assert(!page.items.some(item => next.items.some(other => other.key === item.key)))
-    assert.equal(f.alignment.context('peer', root.key).records[0].definition.objective, definition.objective)
+    assert.equal(f.alignment.context('peer', root.key).records[0].definition, definition)
     await assert.rejects(f.alignment.execute(actor('peer'), 'list', undefined, undefined, { limit: 21 }))
   } finally { f.store.close() }
 }))
@@ -57,8 +57,8 @@ test('retired fields are storage-only omissions, never current schema or write i
     assert.deepEqual(Object.keys(parseStoredWorkRecord(legacy)).filter(key => key in retired), [])
     assert.throws(() => workRecordSchema.parse(legacy), /Unrecognized key/)
     assert.throws(() => f.store.saveWork({ ...legacy, sequence: 2 }, 1, 'owner', 'forged'), /Unrecognized key/)
-    for (const corrupt of [{ revision: 0 }, { workflow: { ...work.workflow, status: 'working' } },
-      { definition: { ...definition, objective: '' } }, { unexpectedFutureField: true }]) {
+    for (const corrupt of [{ revision: 0 }, { status: 'working' },
+      { definition: '' }, { unexpectedFutureField: true }]) {
       assert.throws(() => parseStoredWorkRecord({ ...legacy, ...corrupt }))
     }
     for (const action of ['adopt', 'checkpoint', 'transition', 'fresh', 'successor', 'propose', 'apply_proposal',
@@ -80,7 +80,7 @@ test('synthetic v6 rows ignore named retired fields without rewriting storage, p
   const work = await f.create('Legacy readable')
   f.store.close()
   const { projectStoragePath } = await import('../utils/data-paths.ts')
-  const path = projectStoragePath(home, 'initiatives.sqlite')
+  const path = projectStoragePath(home, 'work.sqlite')
   const db = new DatabaseSync(path)
   const serialized = JSON.stringify({ ...work, ...retired })
   db.prepare('UPDATE work_contracts SET data=? WHERE id=?').run(serialized, work.key)
@@ -93,7 +93,7 @@ test('synthetic v6 rows ignore named retired fields without rewriting storage, p
   try {
     assert.deepEqual(reopened.workRecords(), [JSON.parse(JSON.stringify(work))])
     assert.deepEqual(reopened.workEffects()[0].stamps, [{ key: work.key, revision: 1 }])
-    assert.equal(reopened.workAuthority(work.subject).executor, 'owner')
+    assert.equal(reopened.workAuthority(work.key).executor, 'owner')
     const audit = reopened.workHistory(work.key).find(event => event.kind === 'legacy')!.data as Record<string, unknown>
     assert.deepEqual(Object.keys(audit).filter(key => key in retired), [])
     assert.equal(audit.retainedAuditDetail, 'keep', 'Audit details are not blanket-stripped')
@@ -101,7 +101,7 @@ test('synthetic v6 rows ignore named retired fields without rewriting storage, p
   const untouched = new DatabaseSync(path)
   try {
     assert.equal(untouched.prepare('SELECT data FROM work_contracts WHERE id=?').get(work.key)!.data, serialized)
-    untouched.prepare('UPDATE work_contracts SET data=? WHERE id=?').run(JSON.stringify({ ...work, ...retired, workflow: { ...work.workflow, status: 'corrupt' } }), work.key)
+    untouched.prepare('UPDATE work_contracts SET data=? WHERE id=?').run(JSON.stringify({ ...work, ...retired, status: 'corrupt' }), work.key)
   } finally { untouched.close() }
   assert.throws(() => new InitiativeStore(home), /Invalid enum/)
   const corrupt = new DatabaseSync(path)
@@ -123,18 +123,18 @@ test('completion is atomic with unresolved effect checks for current and legacy 
   const f = setup(home)
   try {
     const work = await f.create('Reconcile external outcome')
-    const done = { ...work, sequence: 2, workflow: { ...work.workflow!, status: 'done' as const }, notes: { ...work.notes!, summary: 'Verified' } }
+    const done = { ...work, sequence: 2, status: 'done' as const, summary: 'Verified' }
     f.store.startWorkEffect('effect', 'owner', 'http', [{ key: work.key, revision: work.revision }])
     for (const uncertain of [false, true]) {
       if (uncertain) f.store.finishWorkEffect('effect', true)
       assert.throws(() => f.store.saveWork(done, 1, 'owner', 'legacy'), /unresolved external effects/)
       await assert.rejects(f.alignment.editNote(actor('owner'), work.key, 1,
-        { status: 'done', notes: { summary: 'Verified' } }), /unresolved external effects/)
+        { status: 'done', summary: 'Verified' }), /unresolved external effects/)
       assert.equal(f.alignment.get(work.key).sequence, 1)
       assert.equal(f.store.workHistory(work.key).length, 1)
     }
     f.store.finishWorkEffect('effect', false)
-    await f.alignment.editNote(actor('owner'), work.key, 1, { status: 'done', notes: { summary: 'Reconciled' } })
-    assert.equal(f.alignment.get(work.key).workflow?.status, 'done')
+    await f.alignment.editNote(actor('owner'), work.key, 1, { status: 'done', summary: 'Reconciled' })
+    assert.equal(f.alignment.get(work.key).status, 'done')
   } finally { f.store.close() }
 }))

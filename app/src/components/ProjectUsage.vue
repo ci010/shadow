@@ -2,13 +2,13 @@
   <section class="project-usage" :aria-label="t(globalMode ? 'Usage' : 'Project usage')">
     <header><h2>{{ t(globalMode ? 'Usage' : 'Project usage') }}</h2><button class="btn btn-sm" type="button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button></header>
     <div v-if="globalMode" class="project-filter"><span aria-hidden="true">{{ t('Project') }}</span>
-      <UiSelect ref="filterControl" v-model="filter" :aria-label="t('Project')" :disabled="!rows?.length">
+      <UiSelect v-model="filter" :aria-label="t('Project')" :disabled="!rows?.length">
         <option value="">{{ t('All projects') }}</option>
         <option v-for="row in rows" :key="row.project.id" :value="row.project.id">{{ row.project.name }}</option>
       </UiSelect>
     </div>
     <p v-if="allProjects && failedProjects && data" role="status">{{ t('Some projects could not be loaded ({count}). Totals include only available usage.', { count: failedProjects }) }}</p>
-    <p v-if="loading" role="status">{{ t('Loading usage…') }}</p>
+    <p v-if="loading && !data" role="status">{{ t('Loading usage…') }}</p>
     <p v-if="error" role="alert">{{ t(globalMode ? 'Could not load usage. Retry to load the latest statistics.' : 'Could not load Project usage. Retry to load the latest statistics.') }} <button class="btn btn-sm" @click="refresh">{{ t('Retry') }}</button></p>
     <template v-if="data">
       <div class="summary-toolbar"><h3>{{ t('Usage summary') }}</h3><div class="period-switch" role="group" :aria-label="t('Usage period')"><button class="btn btn-sm" v-for="period in periods" :key="period.key" type="button" :aria-pressed="selectedPeriod === period.key" @click="selectedPeriod = period.key">{{ t(period.label) }}</button></div></div>
@@ -19,30 +19,16 @@
         <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div></article>
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
-      <p v-if="hasMissing" class="notice" role="status">{{ t('Some usage is unavailable or partial; known subtotals may be lower. See data completeness.') }}</p>
-      <div class="activity-grid">
-        <UsageBreakdown v-if="allProjects && projectRows.length" :title="t('Usage by project')" :category="t('Project')"
-          :description="t('Select a project to inspect its usage.')" :rows="projectRows" initial-metric="tokens" :scope="activityScope">
-          <template #entry="{ row }"><button class="btn btn-sm project-link" type="button" @click="filter = row.id; filterControl?.focus()">{{ row.name }}</button></template>
-        </UsageBreakdown>
-        <UsageBreakdown :title="t('Model usage')" :category="t('Model')" initial-metric="calls" :rows="modelRows" :scope="activityScope"
-          :description="t('Recorded models in the selected period.')">
-          <template #entry="{ row, table }"><UsageModelLabel :name="row.name" :full="table" /></template>
-          <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
-        </UsageBreakdown>
-      </div>
-      <div class="tool-recall-grid">
-        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope"
-          :description="t('Calls by tool, regardless of arguments. invoke_tool is counted under its dynamic tool name.')" />
-        <UsageRecall :projects="diagnosticProjects" />
-      </div>
-      <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
-      <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
       <div class="chart-toolbar"><h3>{{ t('Usage trends') }}</h3></div>
       <p v-if="mixedSnapshotDates" class="trend-range">{{ t('Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.') }}</p>
       <p v-else class="trend-range"><template v-if="selectedPeriod === 'total'">{{ t('All-time trends show only the latest {days} UTC dates.', { days: windowDays }) }} · </template>{{ points[0]?.date }}<template v-if="points.length > 1"> — {{ points.at(-1)?.date }}</template> · UTC</p>
       <article v-if="!mixedSnapshotDates" class="chart-card" :aria-label="t('Usage trends')">
         <div class="cost-heading"><h3>{{ trendTitle }}</h3>
+          <UiSelect v-if="trendView !== 'table'" v-model="trendStack" :aria-label="t('Stack')">
+            <option value="none">{{ t('No stacking') }}</option>
+            <option value="project">{{ t('Stack by project') }}</option>
+            <option value="model" :disabled="!modelStackAvailable">{{ t('Stack by model') }}</option>
+          </UiSelect>
           <UsageViewControls v-model:metric="trendMetric" v-model:unit="costUnit" v-model:view="trendView" :views="['line', 'column', 'table']" />
         </div>
         <p>{{ t(trendMetric === 'time' ? 'Cumulative call time, not work duration; gaps are not interpolated.' : trendMetric === 'cost' ? 'Includes converted AI credits in USD.' : 'Missing telemetry is unavailable, not zero.') }}</p>
@@ -52,9 +38,21 @@
           </table>
         </div>
         <p v-else-if="!trendSeries.some(p => p.value !== null)" class="empty-chart">{{ t('No known values in this window.') }}</p>
-        <UsageTrendChart v-else :title="trendTitle" :kind="trendView === 'column' ? 'bar' : 'line'" :points="trendSeries" :entrance-key="`${activityScope}:${trendMetric}:${trendMetric === 'cost' && currencyChosen ? costUnit : ''}`" :format-axis="axisFormat" :min-interval="['tokens', 'calls'].includes(trendMetric) ? 1 : 0" />
+        <UsageTrendChart v-else :title="trendTitle" :kind="trendView === 'column' ? 'bar' : 'line'" :points="trendSeries" :stacks="trendStacks" :entrance-key="`${activityScope}:${trendStack}:${trendMetric}:${trendMetric === 'cost' && currencyChosen ? costUnit : ''}`" :format-axis="axisFormat" :min-interval="['tokens', 'calls'].includes(trendMetric) ? 1 : 0" />
       </article>
-      <UsageDiagnostics :projects="diagnosticProjects" />
+      <div class="activity-grid">
+        <UsageBreakdown :title="t('Model usage')" :category="t('Model')"
+          initial-metric="tokens" :rows="modelRows" :scope="activityScope" allow-column>
+          <template #entry="{ row, table }"><UsageModelLabel :name="row.name" :full="table" /></template>
+          <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
+        </UsageBreakdown>
+        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope" />
+        <UsageRecall kind="skills" :projects="diagnosticProjects" />
+        <UsageRecall kind="memory" :projects="diagnosticProjects" />
+      </div>
+      <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
+      <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
+      <UsageDiagnostics :projects="diagnosticProjects" :period="selectedPeriod" />
 
       <p v-if="allProjects">{{ t('Select a project to browse its daily history.') }}</p>
       <template v-else>
@@ -103,6 +101,7 @@ import UsageTrendChart from './UsageTrendChart.vue'
 import UsageBreakdown from './UsageBreakdown.vue'
 import UsageDiagnostics from './UsageDiagnostics.vue'
 import UsageViewControls from './UsageViewControls.vue'
+import { buildUsageStacks } from '../usage-trend-stacks.ts'
 import { measure, type UsageMetric } from '../usage-breakdown.ts'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { compactUsageNumber, compactUsageCost, durationParts, usageTrendDays, usageWindow, displayCosts, type CostUnit } from '../project-usage-charts.ts'
@@ -117,7 +116,6 @@ const owner = useCatalogResourceStore(requireResourcePinia()).owner
 const enabled = useCatalogVisibility(() => props.active)
 const globalMode = computed(() => props.projectId === undefined)
 const filter = ref('')
-const filterControl = ref<InstanceType<typeof UiSelect>>()
 const selectedProjectId = computed(() => props.projectId ?? filter.value)
 const allProjects = computed(() => globalMode.value && !filter.value)
 const scopedBase = computed(() => globalMode.value && filter.value ? projectBase(props.apiBase, filter.value) : props.apiBase)
@@ -145,7 +143,6 @@ const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
 const selectedActivity = computed(() => data.value!.activity[selectedPeriod.value])
 const activityScope = computed(() => `${selectedProjectId.value}:${selectedPeriod.value}`)
-const projectRows = computed(() => (rows.value ?? []).map(({ project, usage }) => ({ id: project.id, name: project.name, usage: usage?.[selectedPeriod.value] })))
 const modelRows = computed(() => selectedActivity.value.models.map(row => ({ id: row.name, ...row })))
 const unnamedCalls = computed(() => Math.max(0, selectedUsage.value.calls - modelRows.value.reduce((sum, row) => sum + row.calls, 0)))
 const toolRows = computed(() => selectedActivity.value.tools.map(row => ({ id: row.name, ...row })))
@@ -154,8 +151,6 @@ const diagnosticProjects = computed(() => allProjects.value
   : [{ id: selectedProjectId.value ?? '', name: rows.value?.find(row => row.project.id === selectedProjectId.value)?.project.name ?? '', usage: data.value }])
 const summaryCosts = computed(() => displayCosts(selectedUsage.value.costs))
 const incompleteIndex = computed(() => !!data.value && (data.value.coverage === 'partial' || data.value.scanLimitReached || data.value.untrackedSessions > 0 || data.value.undatedCalls > 0))
-const hasMissing = computed(() => incompleteIndex.value || !!data.value && [data.value.total, ...data.value.daily.map(d => d.usage)]
-  .some(u => u.calls > 0 && (u.tokens === null || u.durationMs === null || u.unknownTokenCalls || u.unknownCostCalls || u.unknownDurationCalls)))
 function compactNumber(value: number | null) { return value === null ? t('Unavailable') : compactUsageNumber(value, formatNumber) }
 function compactCost(value: number) { return compactUsageCost(value, formatNumber) }
 function exactCost(cost: ProjectUsageMetrics['costs'][number]) { return `${formatNumber(cost.amount, { maximumSignificantDigits: 15 })} ${cost.currency}` }
@@ -191,6 +186,14 @@ const trendSeries = computed<UsageChartDatum[]>(() => points.value.map(p => {
   const label = known === null ? exact : metric === 'cost' ? `${exact} ${costUnit.value}` : metric === 'time' ? t('{seconds} s', { seconds: exact }) : exact
   return { date: p.date, value: known, partial, label: `${p.date}: ${label}${partial && known !== null ? ` · ${t('Partial telemetry')}` : ''}` }
 }))
+const trendStack = ref<'none' | 'project' | 'model'>('none')
+const modelStackAvailable = computed(() => diagnosticProjects.value.some(project => project.usage?.daily.some(day => day.models !== undefined)))
+watch(modelStackAvailable, available => { if (!available && trendStack.value === 'model') trendStack.value = 'none' })
+const trendStacks = computed(() => {
+  if (trendStack.value === 'none') return []
+  return buildUsageStacks(diagnosticProjects.value, trendSeries.value.map(point => point.date), trendStack.value,
+    trendMetric.value, costUnit.value, { project: t('Selected project'), unnamed: t('Unattributed usage') })
+})
 function axisFormat(value: number) {
   return trendMetric.value === 'cost' ? compactCost(value) : trendMetric.value === 'time' ? compactDuration(value * 1000) : compactNumber(value)
 }
@@ -249,12 +252,10 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .unavailable { color: var(--c-text-secondary); font-size: 20px; font-weight: 500; }
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
-.activity-grid, .tool-recall-grid { display: grid; gap: 18px; margin: 20px 0; align-items: start; }
+.activity-grid { display: grid; gap: 18px; margin: 20px 0; align-items: stretch; }
 @container usage (min-width: 800px) {
-  .tool-recall-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+  .activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 }
-.project-link { min-height: 24px; padding-block: 2px; max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
-@media (pointer: coarse) { .project-link { min-height: 44px; } }
 .conversion-note { margin-top: 12px; }
 .scope-brief { margin: 4px 0; }
 .chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }

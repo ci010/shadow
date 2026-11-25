@@ -296,7 +296,7 @@ standalone callers fall back to `agent.workspace`. Pure helpers in
     memory/                          wiki, identities, logs and indexes
     state/
       sessions/                      JSONL and/or SQLite history
-      initiatives.sqlite  conventions.sqlite
+      work.sqlite  conventions.sqlite
       events/  cron/  learning/  io/  microapps/  browser/
       telemetry/otel.db
     workdirs/<safe-session-id>/      managed working directories and uploads
@@ -444,9 +444,12 @@ lightweight operation support, direct access checks and storage-only legacy adap
 restart of already-running Child processes.
 
 [`FolderService`](../src/folders/routes.ts) routes registered remote folder
-file listings, UTF-8 text previews, and Git status/diffs through Child, including
-folder browsing before a conversation exists. Remote raw/static media remains
-`501 remote_raw_unavailable` in
+file listings, UTF-8 text previews, bounded raster image previews, and Git
+status/diffs through Child, including folder browsing before a conversation
+exists. The folder `/raw` endpoint uses the existing `filesystem.read` image
+operation for PNG, JPEG, GIF, and WebP (at most 5 MiB and 25 million pixels) and
+serves the validated MIME type. Other raw formats and all remote `/static/*`
+requests remain `501 remote_raw_unavailable` in
 [`remote-files.ts`](../src/folders/remote-files.ts); alternate text encodings
 and remote cloning remain unsupported. Errors never select a Main-local folder.
 These changes do not alter pairing or add per-operation approvals, OS isolation,
@@ -573,11 +576,26 @@ Only its readiness waits fail; healthy Projects keep receiving updates, and a
 successful retry resets/re-enables its topics on the existing connection.
 The server bounds its replay journal and client queues;
 slow consumers disconnect rather than growing an unbounded server queue.
-The renderer closes the old transport before replacing a subscription set,
-deduplicates replayed cursors, reconnects with bounded backoff, and detects
-half-open connections with a heartbeat watchdog. New subscriptions and
-unrecoverable cursors trigger authoritative snapshot reads. Snapshots and
-invalidations are coalesced; hidden idle chat panes do not render token updates
+The renderer updates subscriptions on a single live WebSocket when available.
+The Main owner socket requires owner authentication; the approved desktop
+Child uses its own loopback ticket and a separate, device-proof-authenticated
+socket to Main. Main checks each topic and closes the device socket when its
+approval ends. Older Main versions and mobile delegation retain SSE; on SSE,
+the renderer closes the old stream before replacing its subscription set.
+Both transports deduplicate replayed cursors, reconnect with bounded backoff,
+and detect half-open connections with a heartbeat watchdog. On a negotiated
+WebSocket, switching a current logical conversation uses one `openConversation`
+update on the shared socket. Its acknowledgement couples the recent display
+history and scoped resource summaries to a journal cursor before incremental
+chat events. Parallel panes keep independent subscriptions. Expired cursors
+request a fresh snapshot; older hosts and delegated mobile retain HTTP history
+and SSE recovery. Physical segment paging, Diagnosis, media, full task panels
+and mutations retain HTTP. Provider model catalogs are Project resources, not
+conversation snapshots. Presence uses the same negotiated socket where
+available; disconnected reports are not replayed and the existing freshness
+window still applies.
+
+Snapshots and invalidations are coalesced; hidden idle chat panes do not render token updates
 or retain individual network connections. A hidden submitted request can retain
 its shared subscription to observe completion.
 Execution cards also observe the owning project's sessions topic and
@@ -669,8 +687,9 @@ Historical runs remain browsable through the existing automation catalog and
 Conversation history menu. `GET /api/automations/:id/runs?offset=0&limit=30`
 returns `{runs,total,offset}` (limit 1–100); the existing history reader loads pages
 on demand and locates deep-linked old runs without retargeting them. Quick Open
-acquires an independent full-summary lease only while its dialog is mounted. Blank
-queries retain ordinary-root results; nonempty title searches also include explicitly
+shares the live navigation snapshot on open. Blank queries retain ordinary-root
+results; a nonempty title search fetches full summary once per searched project
+per dialog (retryable on failure) and also includes explicitly
 labeled automation runs, opening their saved session with its automation owner.
 Unrelated task/call results remain excluded. Each Project keeps independent
 loading/errors/retry; close/project changes abort obsolete requests and full
@@ -797,7 +816,20 @@ to find its previous segment. `GET /api/sessions/:key` history pagination requir
 a positive integer `pageSize`; omitted `offset` defaults to zero, negative offsets
 count from the end, and offset-only or malformed numeric queries return 400.
 `shallow=true` selects the current physical segment; it is not a metadata-only
-or automatically small response. Direct-chat history and logical-summary responses negotiate gzip
+or automatically small response. The conversation pane opts into
+`historyWindow=recent` for direct chat and shallow readonly history. The first
+read returns the latest 40 non-system messages, extending backward when needed
+so a tool call and its results stay together. The returned `historyStart` and
+`currentPhysicalId` pin the loaded window during refresh; scrolling up moves the
+start back by one page, then reads older physical segments on demand. A stale
+physical ID selects a fresh recent window, never an offset in the wrong segment.
+For windowed snapshots, a matching cached block can be reused between an earlier
+page and concurrent appends. Full-history search and physical navigation remain
+on-demand paths. Conversation projections omit `provider_state`; persistence and
+legacy history responses are unchanged. The Prompt and Tools views in Diagnosis
+fetch the live context separately; opening the conversation does not build or
+transport it. Windowing limits the initial HTTP payload, not storage/log scans.
+Direct-chat history and logical-summary responses negotiate gzip
 through Hono's route-scoped compression middleware. Compressed responses vary on
 `Accept-Encoding` and use weak HTTP ETags; snapshot revisions continue to hash
 the uncompressed representation. Realtime streams and media/range routes are not
@@ -844,14 +876,16 @@ and segment navigation. Patch values replace whole fields (including `''`/`[]`);
 omitted fields reuse only the request's captured base with an equal field
 version. Missing or incorrect request field validators cause that field to be
 resent; missing/invalid response validators or mismatched bases fail closed.
-An exact history block may be reused with at most 16 prepended messages, also
-supporting an empty base. No historical server cache is retained. Receipt or
+An exact legacy history block may be reused with at most 16 prepended messages.
+Windowed reads send `baseHistoryStart` and can reuse the matching block with up to
+256 prepended messages. Larger moves or a mismatched block return a full window.
+No historical server cache is retained. Receipt or
 decision changes do not resend unchanged tool descriptions/schema or prompt.
 The loader rejects cross-identity deltas, keeps caller objects separate, and
 prevents late concurrent responses from regressing its cache. A segment rollover
 during the awaited server read returns 409 rather than mixing segment context.
-This is the direct-chat protocol, not an old-client negotiation branch;
-readonly `/api/sessions/:key` uses its separate loader/protocol unchanged.
+Readonly `/api/sessions/:key` keeps its own metadata revision; its windowed
+snapshot delta uses `leadingMessages` for the newly visible earlier page.
 Synthetic integration tests compare uncompressed JSON response bytes, not
 production bandwidth or end-to-end latency; serialization/hashing still occurs
 on the server for each validated read.
@@ -967,12 +1001,13 @@ normal save persists the current metadata. New requests still reject the retired
 kind and unknown kinds remain invalid.
 The **Project workbench** is a Project view, not a session.
 Its default canvas is an expandable causal outline of goals, approaches, tasks
-and findings, with current notes, optional read-only HTML exhibits and native
+and findings, with current Markdown summaries and native
 questions anchored at the affected goal. The lower technical origin stays
 available on demand. A Work-grouped board and parent/dependency graph
 remain alternate views. Discussing a premise opens an ordinary Web conversation
-with an editable draft, not an automatic message. Work details and GitHub use a
-resizable side panel.
+with an editable draft, not an automatic message. Each Work item opens in its
+own editor tab, including existing `/projects/:projectId/board?work=...` links.
+The Board remains a separate tab, and GitHub still uses a resizable side panel.
 On wide containers the side panel's left separator supports
 dragging and keyboard resizing (arrows, Home/End), retaining the preferred width
 across panel switches and temporary container shrinkage. It reserves at least
@@ -1617,7 +1652,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 
 ### Work coordination
 
-[`InitiativeStore`](../src/initiatives/store.ts) opens one `initiatives.sqlite`
+[`InitiativeStore`](../src/initiatives/store.ts) opens one `work.sqlite`
 per Project Home, independently of the selected JSONL/SQLite session backend.
 Current notes live in `work_contracts`, preserving keys, definitions, assignments,
 status, dependencies, audit history and effect references. Dynamic `work_*` tools
@@ -1628,7 +1663,7 @@ Work is an optional shared notebook of goals and related notes. Read
 `v:works/overview`, then `v:works/index` for compact receipts (20 per page;
 follow `next`) or `v:works/context` for the conversation's associated keys.
 `v:works/keys/<encodeURIComponent(key)>` returns the current definition, notes,
-authority, assignment delivery and ancestor path; append `/definition`, `/notes`
+authority, assignment delivery and ancestor path; append `/definition`, `/summary`
 or `/path` for focused reads. Search uses the existing VFS search interface;
 broad discovery includes only the first 20 records and reports incompleteness.
 Follow index pages or narrow to an exact key. No full history or retired fields
@@ -1854,7 +1889,7 @@ automatically replayed against that new request.
 
 `src/initiatives/work-notes.ts`, `work-contract.ts`, `InitiativeStore`, and
 `src/sessions/work-alignment.ts` keep a current shared notebook in the existing
-`initiatives.sqlite`, independently of the JSONL/SQLite session backend. There
+`work.sqlite`, independently of the JSONL/SQLite session backend. There
 is no separate canvas/task database. Legacy records remain readable; adoption,
 policy, checkpoint, settlement and proposal fields are historical/internal
 compatibility data, not the current public tool protocol.
@@ -1886,22 +1921,32 @@ schemas by default. Mutations return compact receipts. Inference gets a bounded
 goal-path/current-state index, not full notes, HTML, schema dumps or every event.
 Full detail is an explicit read. `list/tree` derive indexes and Work progress.
 
-Ordinary changes invalidate the Project live-state UI, without sending messages
-to agents. Material notes.attention wakes the controller once while impact review
-is pending. Goal/assignment changes notify affected durable assignees and retire
-stale questions. A newly created peer receives its linked note before kickoff
-without an extra assignment-triggered turn. These are post-save notifications,
-not an atomic distributed transaction: failure explicitly reports saved data and
-failed delivery, and no durable notification retry queue is provided.
+Ordinary Work updates invalidate the Project live-state UI without waking agents.
+Entering done or blocked can notify the manager; goal or assignment changes
+notify affected durable assignees and retire stale questions. Automatic host
+blockers retain their separate publisher-help delivery. An atomic automatic
+assignment and kickoff inbox prevents ordinary notices from overtaking the first
+accepted kickoff.
+
+`work_note_create` appends a separate Markdown comment, not a Work update. An
+original by the current assignee is silent unless explicitly sent to the current
+manager. A manager reply points to an original on the same Work and notifies
+that author, even after reassignment. The comment and any queued notice commit
+in one Project transaction. A changed manager expires an undelivered original
+notice, without forwarding it. Delivery rechecks pending facts and reconciles
+the stamped JSONL/SQLite history after restart. Notifications contain exact VFS
+links, not comment bodies. Read comments with bounded pages under the exact
+Work key. Posting, replying and delivery do not settle an Ask, unblock Work or
+grant permission.
 
 Host-owned ancestor revision snapshots leave a descendant **not yet reassessed**
 when an upstream premise changes. Local edits do not erase this marker. An
-explicit version-checked `review` records the controller/human conclusion and
+explicit version-checked `work_review` records the controller/human conclusion and
 the current ancestry. This is an impact assessment, never operation approval.
 No parent polling loop or required worker reporting cadence was introduced.
 
 `ask` can carry an originating workKey and ancestor decisionKey; the host resolves
-their root-to-origin path, titles, objectives, relation types and provenance.
+their root-to-origin path, titles, Markdown definitions and provenance.
 One unambiguous assignment/focus can supply a default path, but notes are not
 required to ask. The canvas positions native questions at decisionKey, exposing
 lower technical detail on demand. A user can change the ancestor rather than
@@ -1928,14 +1973,12 @@ The mounted overview retains its last snapshot while hidden, without keeping its
 live subscription. Visibility changes preserve same-question drafts; reopening
 must fetch the current question before an answer is enabled. A changed Project,
 session or question identity clears the old draft.
-The note editor pins its write version and retains a draft on conflict; reloading
-the latest note or review basis is explicit. HTML is sanitized and rendered in
-an opaque empty-sandbox iframe with CSP blocking scripts, network, forms and
-navigation, with no privileged bridge. It is a read-only exhibit, not a Micro App
-or another authorization surface.
+The impact review pins its write version and retains its draft on conflict.
+Work details show the definition and shared summary as sanitized Markdown, with
+raw HTML disabled. Transient planning stays in the conversation.
 
 Micro App publication separately captures the selected/unambiguous goal path's
-version-bound acceptance criteria; removal of general inference Work stamps
+version-bound Markdown definitions; removal of general inference Work stamps
 does not drop that report baseline. Explicit owner continuation for author testing
 and the owning integration's uncertain-operation recovery remain separate. Apps
 open directly after publication without a separate execution approval.
@@ -1967,8 +2010,8 @@ the local plan and never sends an ordinary chat message to impersonate an edit.
 These controls enforce provenance, version boundaries and answer authority,
 not semantic understanding. The regression provider is deterministic; passing
 tests does not establish live-model alignment reliability or autonomous remote
-job cancellation. Routine reports archive by default, while important attention
-events still wake their recipient; content classification remains a model duty.
+job cancellation. Routine progress and comments are silent by default. Targeted notices follow
+explicit comment options or the defined Work transitions.
 
 The `write` tool returns a compact receipt after the filesystem operation
 completes, with mode, line-change counts and an edit ID when recorded. Source
@@ -3736,7 +3779,12 @@ keys remain host-owned and bot credentials have their own project store.
 `/projects/<id>/api/config/model-defaults` manages project overrides. Responses
 include effective values, explicit `overrides`, and `inherited` values. A null
 patch field removes the override. Session overrides use the existing session
-config endpoint and persist in both JSONL and SQLite.
+config endpoint and persist in both JSONL and SQLite. Chat shows the current
+model and reasoning defaults without loading the complete model catalog. Opening
+the model selector loads the catalog on demand; conversations on the same Main
+and Project share that result until configuration invalidates it. A catalog
+failure is retryable in the selector and does not prevent sending with the
+current model.
 
 `ConfigStore` caches its first disk read and returns copied snapshots. App and
 project mutations share this mechanism: serialize updates, validate, atomically

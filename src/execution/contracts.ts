@@ -1,3 +1,4 @@
+import { CHILD_MCP_OPERATION, childMcpArgsSchema } from '../mcp/child-contract.ts'
 import { isExecutionIdentifier, NODE_OPERATIONS, IMPLEMENTED_OPERATIONS } from './workdir-contracts.ts'
 
 export interface ExecutionRequestV2 {
@@ -253,6 +254,7 @@ export function validateExecutionRequestV2(value: unknown): ValidationResult<Exe
   if (NODE_OPERATIONS.has(String(value.operation)) !== (value.workdirId === undefined)) errors.push('directory operations require workdirId; node services forbid it')
   if (!IMPLEMENTED_OPERATIONS.includes(value.operation as typeof IMPLEMENTED_OPERATIONS[number])) errors.push('operation is unsupported')
   if (!Object.hasOwn(value, 'args')) errors.push('args is required')
+  if (value.operation === CHILD_MCP_OPERATION && !childMcpArgsSchema.safeParse(value.args).success) errors.push('invalid Child MCP operation arguments')
   if (value.projectScope !== undefined && (typeof value.projectScope !== 'string' || !/^[0-9a-f]{32}$/.test(value.projectScope))) errors.push('projectScope must be a managed project scope')
   requireTimestamp(value, 'createdAt', errors)
   requireTimestamp(value, 'deadlineAt', errors)

@@ -1,3 +1,4 @@
+import { readImage } from '../utils/image-input.ts'
 import { parseFilesystemSearch, searchFilesystem, type FilesystemSearch } from './filesystem/search-text.ts'
 import { workdirIdOf } from './workdir-contracts.ts'
 import { isUtf8 } from 'node:buffer'
@@ -27,6 +28,7 @@ export type CapabilityFilesystemErrorCode =
   | 'path-denied'
   | 'file-not-found'
   | 'file-type-denied'
+  | 'invalid-image'
   | 'filesystem-result-too-large'
   | 'filesystem-io-failed'
   | 'file-search-unavailable'
@@ -114,6 +116,19 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
     try {
       signal.throwIfAborted()
       const info = await stat(target)
+      if (args.kind === 'image') {
+        if (!info.isFile()) throw new CapabilityFilesystemError('file-type-denied', 'Image input must be a regular file.')
+        try {
+          return (await readImage(target, signal)).part.image_url.url
+        } catch (error) {
+          signal.throwIfAborted()
+          // Do not expose Child absolute paths from native filesystem errors.
+          if (error instanceof Error && !('code' in error)) {
+            throw new CapabilityFilesystemError('invalid-image', error.message)
+          }
+          throw new CapabilityFilesystemError('filesystem-io-failed', 'Filesystem image read failed')
+        }
+      }
       if (args.kind === 'file' && !info.isFile()) throw new CapabilityFilesystemError('file-type-denied', 'Filesystem target must be a regular file')
       if (args.search !== undefined) {
         if (!info.isDirectory() && !info.isFile()) throw new CapabilityFilesystemError('file-type-denied', 'Search requires a file or directory')
@@ -164,6 +179,7 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
       if (bytes.length > this.#maxReadBytes) throw resultTooLarge('read')
       return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
     } catch (error) {
+      signal.throwIfAborted()
       if (error instanceof CapabilityFilesystemError) throw error
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw error
@@ -302,7 +318,7 @@ function pathDenied(): CapabilityFilesystemError {
   )
 }
 
-function parseReadArgs(value: unknown): { path: string; query?: string; within?: string; kind?: 'file'; search?: FilesystemSearch } {
+function parseReadArgs(value: unknown): { path: string; query?: string; within?: string; kind?: 'file' | 'image'; search?: FilesystemSearch } {
   const candidate = recordWithKeys(value, ['path', 'query', 'within', 'kind', 'search'])
   if (typeof candidate.path !== 'string' || candidate.path.length === 0) {
     throw invalidArgs()
@@ -313,9 +329,10 @@ function parseReadArgs(value: unknown): { path: string; query?: string; within?:
     try { search = parseFilesystemSearch(candidate.search) } catch { throw invalidArgs() }
   }
   if (candidate.query !== undefined && !validFileSearchQuery(candidate.query)) throw invalidArgs()
-  if (candidate.kind !== undefined && candidate.kind !== 'file') throw invalidArgs()
+  if (candidate.kind !== undefined && candidate.kind !== 'file' && candidate.kind !== 'image') throw invalidArgs()
+  if (candidate.kind === 'image' && (candidate.query !== undefined || candidate.search !== undefined)) throw invalidArgs()
   if (candidate.within !== undefined && (typeof candidate.within !== 'string' || !candidate.within)) throw invalidArgs()
-  return { path: candidate.path, ...(search ? { search } : {}), ...(candidate.kind === 'file' ? { kind: 'file' as const } : {}), ...(typeof candidate.within === 'string' ? { within: candidate.within } : {}), ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
+  return { path: candidate.path, ...(search ? { search } : {}), ...(candidate.kind === 'file' || candidate.kind === 'image' ? { kind: candidate.kind } : {}), ...(typeof candidate.within === 'string' ? { within: candidate.within } : {}), ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
 }
 
 function parseWriteArgs(value: unknown): {

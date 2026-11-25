@@ -51,10 +51,8 @@ or merging thread histories. Unknown Discord channel types remain unknown rather
 than being guessed from numeric IDs. Discovery-only stream entries without
 parent/type evidence do not invent graph receivers.
 
-Connection configuration and BOT admission changes use an explicit offline
-migration; receipt storage itself never migrates or replays history. See
-[Connection policy migration](connection-migration.md) for v2/v3 startup,
-backup/recovery and the still-unperformed real-Project rollout.
+[Connection storage](connection-migration.md) and BOT admission are separate
+from receipt storage. Assigning a BOT never replays recorded receipts.
 
 The stream contains bounded text and identities, not downloaded attachments or
 raw credential-bearing payloads. Platform content is untrusted data, never agent
@@ -151,8 +149,26 @@ gap**, never silently skip and ack missing events. For intentional recovery, cho
 a new consumer and pass `initialAfter` equal to an inspected directory floor (or
 another explicitly chosen position below `next`). This initializes a new scope
 only; it cannot reset existing progress. Record the lost range in your workflow.
-Journal conflicts/locks fail closed; do not delete live lock directories. New
-locks contain `owner.json` with the acquiring PID, hostname and acquisition time
+Event appends use one in-process FIFO per resolved `events.json` path, shared by
+all `ChannelMessageStream` instances. Each job reloads, deduplicates, assigns a
+position and atomically persists before resolving. A failed job rejects its caller
+without poisoning subsequent jobs. Callers must await append before treating an
+arrival as persisted; synchronous snapshots expose only completed writes. Channel
+shutdown drains admitted stream jobs after stopping adapters. Existing event lock
+directories are neither consulted nor modified; no lock cleanup is required for
+this path.
+
+**Ownership boundary:** one Main process must own a Project's data. This queue is
+not cross-process exclusion, and does not establish or verify that operational
+ownership. Do not run dev, packaged or CLI Main instances against the same Project
+storage simultaneously, nor alias the storage through different paths. Multiple
+writers can lose updates. Confirm single-writer deployment before enabling this
+path; multi-process writers need a single-owner persistence service, not another
+file lock. No live-process inspection or recovery is performed by this change.
+
+Consumer watermarks, Discord collection progress and send idempotency still use
+the existing Journal; their conflicts/locks fail closed. Do not delete live lock
+directories. Those locks contain `owner.json` with the acquiring PID, hostname and acquisition time
 for diagnosis. This is not a lease: neither age nor a PID alone authorizes stealing
 a lock. Legacy locks can be empty, and a crash between acquisition and ownership
 recording can also leave an empty lock. After a crash, stop all writers and

@@ -1,4 +1,5 @@
-import type { GatewayPlugin } from '../gateway/types.ts'
+import type { ChildWorkspacePlugin } from './child-workspace.ts'
+import { REALTIME_SOCKET_PATH } from '../realtime/socket-ticket.ts'
 import { Hono } from 'hono'
 import {
   type GatewayAddress,
@@ -17,7 +18,7 @@ export interface ChildLocalControlOptions {
   readonly requestShutdown: () => void | Promise<void>
   readonly nodeInventory?: () => NodeInventoryEntry | Promise<NodeInventoryEntry>
   readonly childStatus?: () => unknown
-  readonly workspace?: GatewayPlugin & { close?(): Promise<void> }
+  readonly workspace?: ChildWorkspacePlugin
 }
 
 export class ChildLocalControlService implements ChildRuntimeService {
@@ -60,7 +61,16 @@ export class ChildLocalControlService implements ChildRuntimeService {
           nodes: [await this.options.nodeInventory!()],
         }),
       })] : []),
-    ], { launchCredential: this.options.launchCredential })
+    ], {
+      launchCredential: this.options.launchCredential,
+      ...(this.options.workspace?.registerLive ? {
+        localLiveSocketPath: REALTIME_SOCKET_PATH,
+        launchCredentialExemptions: [{ method: 'GET', path: REALTIME_SOCKET_PATH }],
+      } : {}),
+    })
+    this.options.workspace?.registerLive?.(app, request => validateLaunchCredential(
+      request.headers.get('Authorization') ?? undefined, this.options.launchCredential,
+    ))
     if (this.options.childStatus) {
       app.get('/local/v1/child', (context) => context.json(this.options.childStatus!() as Record<string, unknown>, 200, { 'Cache-Control': 'no-store' }))
     }

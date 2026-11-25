@@ -45,9 +45,12 @@ export function groupBotConversations(sessions: SidebarSession[], projectId: str
     const address = session.channelAddress
     if (projectId && (session.projectId && session.projectId !== projectId || address && address.projectId !== projectId)) continue
     if (!projectId || !address) { chats.push(session); continue }
+    const bot = bots.find(bot => bot.projectId === projectId && bot.id === address.botInstanceId && bot.platform === address.platform)
+    // Historical addresses are not a connection catalog. Keep their persisted
+    // conversations available to history without resurrecting sidebar entries.
+    if (!bot) continue
     let group = groups.get(address.botInstanceId)
     if (!group) {
-      const bot = bots.find(bot => bot.projectId === projectId && bot.id === address.botInstanceId && bot.platform === address.platform)
       group = {
         id: address.botInstanceId, platform: address.platform,
         label: bot?.displayName || `${botPlatformLabel(address.platform)} · ${address.botInstanceId}`,
@@ -57,6 +60,15 @@ export function groupBotConversations(sessions: SidebarSession[], projectId: str
       groups.set(group.id, group)
     }
     group.sessions.push(session)
+  }
+  // Keep conversation-backed groups in their existing order, then show
+  // project connections that have not accumulated conversations yet.
+  for (const bot of bots) {
+    if (!projectId || bot.projectId !== projectId || groups.has(bot.id)) continue
+    groups.set(bot.id, {
+      id: bot.id, platform: bot.platform, label: bot.displayName,
+      connection: botConnectionIndicator(bot.connection), sessions: [],
+    })
   }
   return { chats, bots: [...groups.values()].map(group => ({ ...group, sessions: projectDiscordChannels(group.sessions) })) }
 }

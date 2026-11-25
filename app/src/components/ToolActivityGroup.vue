@@ -40,7 +40,7 @@
             </div>
             <details v-if="entry.result !== undefined" v-disclosure-motion class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
               <summary class="tool-result-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Result') }}</summary>
-              <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || t('(Empty result)')" :images="entry.images" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
+              <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || t('(Empty result)')" :images="entry.images" :preview-image="previewImage" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
             </details>
             <p v-if="entry.reasoning === undefined && entry.result === undefined" class="activity-status">{{ running ? t('Waiting for result…') : t('No result recorded') }}</p>
           </component>
@@ -53,6 +53,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
+import type { ImagePreview } from '../image-viewer.ts'
 import { computed, reactive, ref, watch } from 'vue'
 import { formatToolDuration, type ToolActivity, type ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
@@ -61,7 +62,7 @@ import LineChangeCounts from './LineChangeCounts.vue'
 import ReasoningItem from './ReasoningItem.vue'
 import ToolPayload from './ToolPayload.vue'
 import ToolFileDiffPreview from './ToolFileDiffPreview.vue'
-const props = defineProps<{ batch: ToolActivityBatch; renderContent?: (text: string) => string; defaultOpen?: boolean; running?: boolean; apiBase?: string; sessionId?: string }>()
+const props = defineProps<{ batch: ToolActivityBatch; renderContent?: (text: string) => string; defaultOpen?: boolean; running?: boolean; apiBase?: string; sessionId?: string; previewImage?: (image: ImagePreview) => void }>()
 const emit = defineEmits<{ interact: [] }>()
 const summaryTitle = computed(() => {
   const count = props.batch.entries.filter(entry => entry.reasoning === undefined).length

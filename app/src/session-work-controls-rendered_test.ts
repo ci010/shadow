@@ -30,14 +30,34 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
         if (id === '\0popup-entry') return `import '/src/styles.css'; import {createResourceApp as createApp} from '/src/stores/app.ts'; import Fixture from '/popup-fixture.vue'; createApp(Fixture).mount('#app');`
         if (id !== normalizePath(resolve(directory, 'fixture.vue'))) return
         return `<script setup>
+          import { provide, shallowRef } from 'vue';
+          import { conversationStartKey } from '/src/conversation-start-context.ts';
           import SessionWorkControls from '/src/components/SessionWorkControls.vue';
           import SessionActivity from '/src/components/SessionActivity.vue';
           Object.defineProperty(document, 'hidden', {get:()=>false});
           const apiBase = window.location.origin + '/projects/fixture';
+          const sessionId = 'web:inactive';
+          const scope = { apiBase, sessionId };
+          const start = shallowRef({ ...scope, phase: 'pending' });
+          provide(conversationStartKey, start);
+          provide(Symbol.for('shadow.live-client-pool'), {
+            client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }),
+            observeHost: (_base, observer) => { observer({ phase: 'live' }); return () => {} },
+          });
+          window.__taskReads = [];
+          const schedule = { id:'daily',name:'Daily reminder',task:'Check reports',schedule:'0 9 * * *',enabled:true,nextRun:'2027-01-02T09:00:00Z' };
+          const tasks = [1,2].map(n => ({ id:'process:test:'+n,sessionId,kind:'process',title:'Background fixture',status:'running',createdAt:'2027-01-01T00:00:00Z' }));
+          window.__taskSnapshot = (phase, total = 1) => {
+            start.value = { ...scope, phase, data: { scheduledTasks: [schedule], backgroundTasks: { sessionId, total, tasks: tasks.slice(0, total) } } };
+          };
           const originalFetch = window.fetch;
           window.fetch = (url, options) => {
-            if (String(url).includes('/scheduled-tasks')) return Promise.resolve(new Response(JSON.stringify({ sessionId:'web:inactive', tasks:[{id:'daily',name:'Daily reminder',task:'Check reports',schedule:'0 9 * * *',enabled:true,nextRun:'2027-01-02T09:00:00Z'}] }), {headers:{'Content-Type':'application/json'}}));
-            if (String(url).includes('/background-tasks')) return Promise.resolve(new Response(JSON.stringify({sessionId:'web:inactive',total:0,tasks:[]}), {headers:{'Content-Type':'application/json'}}));
+            if (String(url).includes('/scheduled-tasks')) {
+              window.__taskReads.push('scheduled'); return Promise.resolve(Response.json({ sessionId, tasks:[schedule] }));
+            }
+            if (String(url).includes('/background-tasks')) {
+              window.__taskReads.push('background'); return Promise.resolve(Response.json({ sessionId, total:tasks.length, tasks }));
+            }
             return originalFetch(url, options);
           };
           window.__inspected = null;
@@ -76,8 +96,13 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
       await win.loadURL(${JSON.stringify(new URL('__popup', server.resolvedUrls!.local[0]).href)});
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('[data-session-work="subagents"]')))break;await new Promise(r=>setTimeout(r,50));}
-      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('[data-session-work="scheduled"]')))break;await new Promise(r=>setTimeout(r,50));}
+      assert.deepEqual(await run(()=>window.__taskReads),[]);
+      assert.equal(await run(()=>!!document.querySelector('[data-session-work="scheduled"]')),false);
+      await run(()=>window.__taskSnapshot('socket'));
+      await run(()=>window.__taskSnapshot('socket',2));
+      assert.match(await run(()=>document.querySelector('[data-session-work="background"]').textContent),/2/);
       assert.equal(await run(()=>!!document.querySelector('[data-session-work="scheduled"]')),true);
+      assert.deepEqual(await run(()=>window.__taskReads),[]);
       await run(()=>document.querySelector('[data-session-work="scheduled"]').click());
       await new Promise(r=>setTimeout(r,250));
       const schedule=await run(()=>({text:document.querySelector('.scheduled-tasks').textContent,time:document.querySelector('.scheduled-tasks time')?.dateTime}));
@@ -86,6 +111,16 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
       await run(()=>document.querySelector('.session-work-panel').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
       await new Promise(r=>setTimeout(r,250));
       assert.equal(await run(()=>document.activeElement.matches('[data-session-work="scheduled"]')),true);
+      assert.deepEqual(await run(()=>window.__taskReads),['scheduled']);
+      await run(()=>document.querySelector('[data-session-work="background"]').click());
+      await new Promise(r=>setTimeout(r,250));
+      assert.match(await run(()=>document.querySelector('.background-tasks').textContent),/Background fixture/);
+      assert.deepEqual(await run(()=>window.__taskReads),['scheduled','background']);
+      await run(()=>document.querySelector('.session-work-panel').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
+      await new Promise(r=>setTimeout(r,250));
+      await run(()=>window.__taskSnapshot('http'));
+      await new Promise(r=>setTimeout(r,250));
+      assert.deepEqual((await run(()=>window.__taskReads)).slice(2).sort(),['background','scheduled']);
       const activities=await run(()=>[...document.querySelectorAll('#activity-fixture .session-activity')].map(item=>({
         wave:!!item.querySelector('.working-wave'),
         dot:getComputedStyle(item.querySelector('.activity-symbol'),'::after').content,

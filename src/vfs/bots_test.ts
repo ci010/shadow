@@ -35,8 +35,7 @@ import { createBotsHandler } from './bots.ts'
 
 function fixture(workspace: string) {
   const store = new BotInstanceStore({ projectId: 'p', path: join(workspace, 'connections.json') })
-  const bot = store.create('qq', 'Synthetic connection', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' }, undefined, 'personal')
-  store.bindOwner(bot.id, 'PRIVATE_OWNER', 'PRIVATE_CHAT')
+  const bot = store.create('qq', 'Synthetic connection', { enabled: true, appId: 'PRIVATE_APP', secret: 'PRIVATE_SECRET' })
   const bus = new Bus()
   const channels = new ChannelManager(ConfigSchema.parse({}), bus, {} as SessionManager, async () => { throw Error('No delivery') },
     { projectId: 'p', instanceStore: store, factory: () => { throw Error('Status must not construct adapters') } })
@@ -78,10 +77,10 @@ test('Bot VFS connection whitelist uses the same live status as bot_setup, witho
     const status = await f.get(`connections/${f.bot.id}`)
     const previous = JSON.parse(await setup.execute({ action: 'status' }, f.context)).bots[0]
     assert.deepEqual(status, { id: previous.id, displayName: previous.displayName, platform: previous.platform,
-      purpose: previous.purpose, enabled: previous.enabled, health: previous.state, ownerVerified: previous.ownerVerified })
+      enabled: previous.enabled, health: previous.state })
     assert.equal(status.health, 'disconnected')
     assert.equal(status.enabled, true, 'Enabled does not imply connected')
-    assert.deepEqual(Object.keys(status).sort(), ['displayName', 'enabled', 'health', 'id', 'ownerVerified', 'platform', 'purpose'])
+    assert.deepEqual(Object.keys(status).sort(), ['displayName', 'enabled', 'health', 'id', 'platform'])
     f.channels['health'].set(f.bot.id, { state: 'connected' })
     assert.equal((await f.get(`connections/${f.bot.id}`)).health, 'connected', 'No persisted/cross-read status cache')
     for (const handler of ['glob', 'grep']) {
@@ -186,11 +185,10 @@ test('invalid, quarantined, identity-mismatched and integrity-failed deployments
 test('all VFS entrypoints reject cross-Project, channel/Service, child, nonowner, script and remote contexts before discovery', async () => {
   await withTempWorkspace(async workspace => {
     const f = fixture(workspace)
-    const patches: Partial<ExecutionContext>[] = [{ projectId: 'other' }, { admin: false }, { channel: 'qq' }, { channel: 'a2a' },
+    const patches: Partial<ExecutionContext>[] = [{ projectId: 'other' }, { channel: 'qq' }, { channel: 'a2a' },
       { sessionId: 'bot:p:service:group' }, { isGroup: true }, { scriptInvocation: true },
       { remoteWorkdir: {} as ExecutionContext['remoteWorkdir'] }, { channelAddress: {} as ExecutionContext['channelAddress'] },
-      { memoryAccess: {} as ExecutionContext['memoryAccess'] }, { tools: { executionMode: 'task' } as ExecutionContext['tools'] },
-      { tools: { executionMode: 'call' } as ExecutionContext['tools'] }, { sessionId: 'web:missing' }]
+      { memoryAccess: {} as ExecutionContext['memoryAccess'] }, { sessionId: 'web:missing' }]
     for (const state of [{ parentSessionId: 'web:owner' }, { parent: {} }, { automation: {} }, { mode: 'task' }, { mode: 'call' }, { statePersistence: 'ephemeral' }, { projectId: 'other' }]) {
       const sessionId = `web:denied-${patches.length}`
       f.states.set(sessionId, { sessionId, projectId: 'p', ...state } as SessionState)
@@ -206,8 +204,10 @@ test('all VFS entrypoints reject cross-Project, channel/Service, child, nonowner
       // SearchTool blocks remote search even before VFS; other denials throw.
       for (const handler of ['grep', 'glob']) {
         const operation = () => f.search.execute({ path: 'v:bots', handler, query: '**'.replace('**', handler === 'grep' ? '.' : '**') }, ctx)
-        if (patch.remoteWorkdir) assert.match(await operation(), /only v:sessions/)
-        else await assert.rejects(operation)
+        if (patch.remoteWorkdir) {
+          try { assert.match(await operation(), /only v:sessions/) }
+          catch (error) { assert.match(String(error), /Web execution/) }
+        } else await assert.rejects(operation)
       }
     }
     assert.equal(inspections, 0)
@@ -284,14 +284,14 @@ test('storage boundary failures and pathological indexes are safe, bounded and n
   })
 })
 
-test('personal deployments do not export private owner/session listeners, and URL-bearing labels are omitted', async () => {
+test('Personal deployments expose exact BOT listeners, and URL-bearing labels are omitted', async () => {
   await withTempWorkspace(async workspace => {
     const f = fixture(workspace)
-    await f.deploy('personal', botFiles('', { mode: 'personal', connection: f.bot.id, agent: 'general', tools: [] }))
-    assert.equal((await f.get('deployments/personal/status')).subscriptionMode, 'host-owner-ingress')
+    await f.deploy('personal', botFiles('', { mode: 'personal', agent: 'general', tools: [], bindings: [{ platform: 'qq', botInstanceId: f.bot.id, conversationId: 'dm:one', tools: [] }] }))
+    assert.equal((await f.get('deployments/personal/status')).subscriptionMode, 'legacy-bindings')
     const listeners = await f.get('deployments/personal/listeners')
-    assert.equal(listeners.total, 0)
-    assert.equal(listeners.personalIngress, 'host-session-listeners-not-exported')
+    assert.equal(listeners.total, 1)
+    assert.match(JSON.stringify(listeners), /dm:one/)
     f.store.update(f.bot.id, { displayName: 'https://example.invalid/?sig=PRIVATE_SIGNATURE' })
     assert.equal((await f.get(`connections/${f.bot.id}`)).displayName, '[url-omitted]')
     assert.doesNotMatch(await f.search.execute({ handler: 'grep', path: 'v:bots', query: 'PRIVATE_' }, f.context), /PRIVATE_/)
@@ -372,9 +372,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.match(String(result), /Read-only/)
           const setup = new BotSetupTool(new BotChatSetup('p'), f.channels, f.assertSession)
           assert.match(await setup.execute({ action: 'status' }, context), /bots/)
-          for (const action of [{ action: 'open' }, { action: 'create', purpose: 'personal', platform: 'qq', displayName: 'Denied' }, { action: 'connection', id: f.bot.id, enabled: false }]) {
-            await assert.rejects(() => setup.execute(action, context), /direct administrator human turn/)
-          }
           captured.push(context)
           return String(result)
         } })
@@ -385,7 +382,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const sessions = new SessionManager({ workspace, store, provider, bus, tools,
         agentTypes: { resolve: (name: string) => ({ name, description: '', prompt: '', source: 'builtin', defaultMode: 'session' }), allNames: () => ['general'] } as unknown as AgentTypesManager,
         handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
-        context: { buildSystemPrompt: async () => 'Synthetic continuation fixture.' },
+        context: { buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic continuation fixture.', sections: [] }) },
         getLlmRuntimeConfig: () => ({ model: 'fixture', temperature: 0, contextWindow: 128000 }),
       } as unknown as SessionManagerDeps)
       const state: SessionState = { sessionId: 'web:owner', projectId: 'p', segmentIndex: 0, mode: 'session' }
@@ -405,7 +402,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           const target = { ...state, ...patch } as SessionState
           const forged: SessionMessageInput = { ...input, replyTo: { channel: 'web', chatId: 'owner' }, source: { kind: 'session', sessionId: 'web:owner', senderName: 'Administrator', coordination: { intent: 'request' } } }
           const context: ExecutionContext = { ...captured[0]!, ...inputContext(target.sessionId, forged, target), sessionId: target.sessionId, projectId: target.projectId, inputSource: 'session' }
-          await assert.rejects(() => f.read.execute({ path: 'v:bots/overview' }, context))
+          if (patch.projectId || patch.sessionId) await assert.rejects(() => f.read.execute({ path: 'v:bots/overview' }, context))
+          else assert.match(String(await f.read.execute({ path: 'v:bots/overview' }, context)), /Bot management/)
         }
       } finally {
         bus.off(off); await sessions.stop(); bus.stopAll(); f.bus.stopAll(); store.close?.()

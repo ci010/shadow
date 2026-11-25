@@ -155,6 +155,7 @@ export class CronService {
   private maintenance = new Map<string, { intervalMs: number; handler: (signal: AbortSignal) => Promise<void> }>()
   private intervals = new Map<string, ReturnType<typeof setInterval>>()
   private executing = new Map<string, Promise<void>>()
+  private executingSessionJobs = new Map<string, CronJob>()
   private onChanged?: (reason: 'inventory' | 'execution') => void
   private initializedDefaults = new Set<string>()
 
@@ -255,7 +256,7 @@ export class CronService {
           if (this.executing.has(raw.id)) output = await handler(raw, signal)
           else {
             // Recovered/retried Workflow runs still participate in cron cancellation/projection.
-            await this.runOwned(raw.id, async abort => { output = await handler(raw, abort) }, signal)
+            await this.runOwned(raw.id, async abort => { output = await handler(raw, abort) }, signal, raw)
           }
           if (raw.deleteAfterRun && !this.stopped) { this.removeJob(raw.id); await this.flush() }
           return output!
@@ -474,6 +475,16 @@ export class CronService {
     return structuredClone([...this.jobs.values(), ...[...this.managed.values()].map(m => m.job)])
   }
 
+  /** A linked schedule already owns a way to continue this Session. */
+  hasSessionJob(sessionId: string): boolean {
+    const matches = (job: CronJob) => job.target?.sessionId === sessionId
+      || job.originSessionId === sessionId || job.workspaceRoot === sessionId
+    for (const job of this.executingSessionJobs.values()) if (matches(job)) return true
+    for (const job of this.jobs.values()) if (job.enabled !== false && matches(job)) return true
+    for (const { job } of this.managed.values()) if (job.enabled !== false && matches(job)) return true
+    return false
+  }
+
   nextJobRun(id: string): string | null {
     return this.scheduledJobs.get(id)?.nextRun()?.toISOString() ?? null
   }
@@ -503,10 +514,10 @@ export class CronService {
   }
 
   private async runJob(job: CronJob, signal?: AbortSignal): Promise<void> {
-    return this.runOwned(job.id, abort => this.executeJob(structuredClone(job), abort), signal)
+    return this.runOwned(job.id, abort => this.executeJob(structuredClone(job), abort), signal, job)
   }
 
-  private async runOwned(id: string, execute: (signal: AbortSignal) => Promise<void>, signal?: AbortSignal): Promise<void> {
+  private async runOwned(id: string, execute: (signal: AbortSignal) => Promise<void>, signal?: AbortSignal, job?: CronJob): Promise<void> {
     if (this.stopped) return
     const existing = this.executing.get(id)
     if (existing) return existing
@@ -517,12 +528,14 @@ export class CronService {
     const pending = Promise.resolve().then(() => execute(controller.signal))
     this.running.set(pending, controller)
     this.executing.set(id, pending)
+    if (job) this.executingSessionJobs.set(id, job)
     if (!this.maintenance.has(id)) this.onChanged?.('execution')
     try {
       await pending
     } finally {
       this.running.delete(pending)
       this.executing.delete(id)
+      this.executingSessionJobs.delete(id)
       if (!this.maintenance.has(id)) this.onChanged?.('execution')
       signal?.removeEventListener('abort', abort)
     }

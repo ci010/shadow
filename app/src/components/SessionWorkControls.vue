@@ -1,5 +1,5 @@
 <template>
-  <section v-show="backgroundStatus.total || backgroundStatus.error || scheduledStatus.total || scheduledStatus.error || subagents?.length || expanded" ref="root" class="session-work-controls" :aria-label="t('Session controls')" @keydown.esc="closePanel">
+  <section v-show="backgroundStatus.total || backgroundStatus.error || scheduledStatus.total || scheduledStatus.error || subagents?.length || followUp || expanded" ref="root" class="session-work-controls" :aria-label="t('Session controls')" @keydown.esc="closePanel">
     <div class="session-work-triggers">
       <button v-if="backgroundStatus.total || backgroundStatus.error || expanded === 'background'" :id="`${id}-background`" ref="backgroundTrigger"
         type="button" data-session-work="background" :aria-expanded="expanded === 'background'" :aria-controls="`${id}-panel`"
@@ -17,6 +17,13 @@
         <span>{{ t('Scheduled tasks') }}</span><span>{{ scheduledStatus.error ? '!' : scheduledStatus.total }}</span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
       </button>
+      <button v-if="followUp" :id="`${id}-follow-up`" ref="followUpTrigger"
+        type="button" data-session-work="follow-up" :aria-expanded="expanded === 'follow-up'" :aria-controls="`${id}-panel`"
+        aria-haspopup="dialog" @click="toggle('follow-up')">
+        <span class="i-lucide-timer work-icon" aria-hidden="true" />
+        <span>{{ t('Follow-up') }}</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
+      </button>
       <button v-if="subagents?.length || expanded === 'subagents'" :id="`${id}-subagents`" ref="subagentsTrigger"
         type="button" :class="{ 'work-chip-active': subagentStatus.running > 0 }" data-session-work="subagents" :aria-expanded="expanded === 'subagents'" :aria-controls="`${id}-panel`"
         aria-haspopup="dialog" :title="subagentActivityLabel(subagentStatus)" @click="toggle('subagents')">
@@ -26,15 +33,28 @@
       </button>
     </div>
     <Teleport to="body">
-      <OverlayTransition @after-leave="shownPanel = null">
+      <OverlayTransition @after-leave="forgetClosedPanel">
       <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" :class="{ 'subagent-panel': shownPanel === 'subagents', 'work-chip-active work-popup-active': shownPanel === 'subagents' && subagentStatus.running > 0 }" role="dialog" tabindex="-1"
         :aria-labelledby="`${id}-${shownPanel || 'background'}`" :style="position" @keydown="popupKeydown">
         <div v-show="shownPanel === 'background'">
-          <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
+          <BackgroundTasks v-if="legacy || shownPanel === 'background'" :api-base="apiBase" :session-id="sessionId"
+            :active="active !== false && (legacy || phase === 'socket' && expanded === 'background')" embedded @status="httpBackgroundStatus = $event" />
         </div>
         <div v-show="shownPanel === 'scheduled'">
-          <ScheduledTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" @status="scheduledStatus = $event" />
+          <ScheduledTasks v-if="legacy || shownPanel === 'scheduled'" :api-base="apiBase" :session-id="sessionId"
+            :active="active !== false && (legacy || phase === 'socket' && expanded === 'scheduled')" @status="httpScheduledStatus = $event" />
         </div>
+        <dl v-if="shownPanel === 'follow-up' && followUp" class="follow-up-details">
+          <dt>{{ t('Next instruction') }}</dt>
+          <dd class="follow-up-instruction">{{ followUp.next }}</dd>
+          <dt>{{ t('Check interval') }}</dt>
+          <dd>{{ t('{seconds} s', { seconds: followUp.after }) }}</dd>
+          <dt>{{ t('Next check') }}</dt>
+          <dd>
+            <time v-if="followUp.nextRun" :datetime="followUp.nextRun">{{ formatDateTime(new Date(followUp.nextRun), { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }) }}</time>
+            <span v-else>{{ t('No scheduled check') }}</span>
+          </dd>
+        </dl>
         <div v-show="shownPanel === 'subagents'" class="subagent-list" :aria-label="t('Active subagents')">
           <p v-if="!subagents?.length">{{ t('No subagents active.') }}</p>
           <button v-for="agent in subagents" :key="agent.sessionId" type="button" class="subagent-inspect"
@@ -52,8 +72,10 @@
 
 <script setup lang="ts">
 import { isSelectPopupEventInside } from '../select-control.ts'
-import { t } from '../i18n.ts'
-import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import { formatDateTime, t } from '../i18n.ts'
+import { computed, inject, nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import { conversationStartKey } from '../conversation-start-context.ts'
+import { useSessionFollowUp } from '../composables/useSessionFollowUp.ts'
 import ScheduledTasks from './ScheduledTasks.vue'
 import BackgroundTasks from './BackgroundTasks.vue'
 import SessionActivity from './SessionActivity.vue'
@@ -64,12 +86,29 @@ import { executionDisplayStage, subagentActivityLabel, summarizeSubagents } from
 const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string> }>()
 const emit = defineEmits<{ inspect: [sessionId: string] }>()
 const id = useId()
-type Panel = 'background' | 'subagents' | 'scheduled'
+type Panel = 'background' | 'subagents' | 'scheduled' | 'follow-up'
 const expanded = ref<Panel | null>(null)
 const shownPanel = ref<Panel | null>(null)
-const scheduledStatus = ref({ total: 0, error: '' })
+const httpScheduledStatus = ref({ total: 0, error: '' })
+const followUpTrigger = ref<HTMLButtonElement>()
 const scheduledTrigger = ref<HTMLButtonElement>()
-const backgroundStatus = ref({ total: 0, loading: false, error: '' })
+const httpBackgroundStatus = ref({ total: 0, loading: false, error: '' })
+const start = inject(conversationStartKey, undefined)
+const scopedStart = computed(() => {
+  const state = start?.value
+  return state?.apiBase === props.apiBase && state.sessionId === props.sessionId ? state : undefined
+})
+const phase = computed(() => scopedStart.value?.phase ?? (start ? 'pending' : 'http'))
+const legacy = computed(() => phase.value === 'http')
+const pushed = computed(() => scopedStart.value?.phase === 'socket' ? scopedStart.value.data : undefined)
+const httpFollowUp = useSessionFollowUp(props, () => legacy.value)
+const followUp = computed(() => legacy.value ? httpFollowUp.value : pushed.value?.followUp ?? null)
+const scheduledStatus = computed(() => legacy.value ? httpScheduledStatus.value : {
+  total: pushed.value?.scheduledTasks?.length, error: '',
+})
+const backgroundStatus = computed(() => legacy.value ? httpBackgroundStatus.value : {
+  total: pushed.value?.backgroundTasks?.total, error: '',
+})
 const subagentStatus = computed(() => summarizeSubagents(props.subagents ?? [], props.stages ?? {}))
 const backgroundTrigger = ref<HTMLButtonElement>()
 const subagentsTrigger = ref<HTMLButtonElement>()
@@ -77,8 +116,11 @@ const root = ref<HTMLElement>()
 const popup = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
 
+function forgetClosedPanel() {
+  if (!expanded.value) shownPanel.value = null
+}
 function trigger(panel: Panel) {
-  return ({ background: backgroundTrigger, subagents: subagentsTrigger, scheduled: scheduledTrigger })[panel].value
+  return ({ background: backgroundTrigger, subagents: subagentsTrigger, scheduled: scheduledTrigger, 'follow-up': followUpTrigger })[panel].value
 }
 function toggle(panel: Panel) {
   if (props.active === false) return
@@ -88,9 +130,14 @@ function closePanel(event: KeyboardEvent) {
   if (!expanded.value || event.defaultPrevented) return
   event.preventDefault()
   event.stopPropagation()
-  const anchor = trigger(expanded.value)
+  dismissPanel(true)
+}
+function dismissPanel(restoreFocus: boolean) {
+  const anchor = expanded.value && trigger(expanded.value)
   expanded.value = null
+  if (!restoreFocus) return
   void nextTick(() => (anchor?.isConnected ? anchor : backgroundTrigger.value ?? subagentsTrigger.value
+    ?? scheduledTrigger.value ?? followUpTrigger.value
     ?? root.value?.closest('.conversation-dock')?.querySelector<HTMLTextAreaElement>('.composer-input textarea'))?.focus())
 }
 function inspect(sessionId: string) {
@@ -151,8 +198,13 @@ watch(expanded, async (panel, _previous, onCleanup) => {
 }, { flush: 'post' })
 watch(() => [props.apiBase, props.sessionId], () => {
   expanded.value = null
-  scheduledStatus.value = { total: 0, error: '' }
-  backgroundStatus.value = { total: 0, loading: false, error: '' }
+  httpScheduledStatus.value = { total: 0, error: '' }
+  httpBackgroundStatus.value = { total: 0, loading: false, error: '' }
+})
+watch(followUp, value => {
+  if (!value && expanded.value === 'follow-up') {
+    dismissPanel(document.activeElement === followUpTrigger.value || !!popup.value?.contains(document.activeElement))
+  }
 })
 watch(() => props.active, active => { if (active === false) expanded.value = null })
 onDeactivated(() => { expanded.value = null })
@@ -171,6 +223,11 @@ onDeactivated(() => { expanded.value = null })
 .session-work-triggers button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .session-work-triggers svg { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .session-work-triggers button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.follow-up-details { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.follow-up-details dt { font-weight: 500; }
+.follow-up-details dd { margin: 4px 0 10px; color: var(--c-text-secondary); }
+.follow-up-details dd:last-child { margin-bottom: 0; }
+.follow-up-instruction { white-space: pre-wrap; }
 .session-work-attention { color: var(--c-warn); }
 .work-icon { width: 14px; height: 14px; flex: 0 0 14px; }
 .subagent-list > p { margin: 8px 0; color: var(--c-text-secondary); }

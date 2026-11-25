@@ -6,11 +6,11 @@ import { messageAttachments } from './message-attachments.ts'
 import { serializeAttachmentReferences, parseAttachmentReferences } from '../../src/utils/attachment-references.ts'
 
 test('Work links use the Board route and escaped titles; session links share parsing', () => {
-  const link = workReference('project a', 'work:one', 'A [task] "title"')
+  const link = workReference('project a', 'work:688f598b-b124-5af7-9b75-38bd8046d293', 'A [task] "title"')
   const [chip] = composerReferences(link)
   assert.equal(chip?.kind, 'work')
   assert.equal(chip?.label, 'A [task] "title"')
-  assert.deepEqual(contentReference(chip!.href!), { kind: 'work', projectId: 'project a', id: 'work:one', href: '/projects/project%20a/board?work=work%3Aone' })
+  assert.deepEqual(contentReference(chip!.href!), { kind: 'work', projectId: 'project a', id: 'work:688f598b-b124-5af7-9b75-38bd8046d293', href: '/projects/project%20a/board?work=work%3A688f598b-b124-5af7-9b75-38bd8046d293' })
   assert.equal(contentReference('/projects/p/chat/web%3Aone')?.kind, 'session')
   for (const href of ['javascript:alert(1)', '//evil/projects/p/chat/s', '/projects/p/dashboard?work=x&launch=y', '/projects/p/chat/%2Fetc', '/projects/p/chat/%ZZ']) assert.equal(contentReference(href), undefined)
   assert.deepEqual(composerReferences('```md\n' + link + '\n```'), [])
@@ -63,10 +63,10 @@ test('conversation link handler routes Work, retains Session selection and leave
   const routes: unknown[] = [], sessions: string[] = []
   const click = new Function('Element', 'imagePreviewFromEvent', 'contentReference', 'conversationLinkSession', 'conversationMicroAppLink', 'discordReviewLink', 'conversationFileLink', 'props', 'router', 'requestSession', handler + ';return openConversationLink')(Anchor, () => undefined, contentReference, conversationLinkSession, conversationMicroAppLink, () => undefined, () => undefined, { projectId: 'p' }, { push: (route: unknown) => routes.push(route) }, (id: string) => sessions.push(id))
   const event = (href: string, extra = {}, download = false) => ({ target: new Anchor(href, download), button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true }, ...extra })
-  const work = event('/projects/p/dashboard?work=work%3Aa')
+  const work = event('/projects/p/dashboard?work=work%3Ac0a4d7f3-1966-50f2-8874-fea3c604b719')
   click(work)
   assert.equal(work.defaultPrevented, true)
-  assert.deepEqual(routes, ['/projects/p/dashboard?work=work%3Aa'])
+  assert.deepEqual(routes, ['/projects/p/dashboard?work=work%3Ac0a4d7f3-1966-50f2-8874-fea3c604b719'])
   const session = event('/projects/p/chat/web%3Aother')
   click(session)
   assert.deepEqual(sessions, ['web:other'])

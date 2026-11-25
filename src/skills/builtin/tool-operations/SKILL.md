@@ -148,36 +148,23 @@ access/TLS controls. Lazy-load failure does not authorize configuration, credent
 changes or new permissions. With `toolExecution: "unknown"`, execution may have
 started: inspect the outcome before any retry, especially writes.
 
-## Bot role selection and setup
+## Connection and BOT setup
 
-Before configuring a Bot, distinguish two purposes. Prefer **Connect my assistant**
-for a personal Project entry point and **Create a service Bot** for a dedicated
-employee. Private versus group chat alone does not determine the purpose. Inspect
-current setup/API capabilities before claiming either workflow is supported.
+A Connection is transport only. Configure it through authenticated Web setup,
+then publish a BOT with an exact verified inbox assignment. An unassigned inbox
+records receipts but does not execute or replay them. Personal and Service BOTs
+can share a Connection only on distinct inboxes; chat type and platform roles do
+not determine Shadow authority. A sender list is optional unless a binding's
+platform rules require it. Channel input does not grant owner or admin status.
 
-- **Personal assistant:** a separately created channel entry point for the
-  Project owner's assistant, not an authored service Agent. Require a trusted,
-  exact-Project/exact-Bot owner verification flow; a display name, platform
-  administrator role, first sender, `allowFrom`, or `userlink` profile assignment
-  is not proof of ownership. Only the verified owner's direct messages may enter
-  ordinary inference. Unbound identities, other people and group messages must
-  be rejected; never use an open or empty allowlist as a substitute. The personal
-  assistant follows the ordinary Project dynamic Skill discovery/activation path
-  and the owner's permitted capabilities, not a copied service Skill bundle.
-  Keep session/role/tool restrictions and protected-operation approvals. A private
-  channel is not permission to bypass Web-only operations or platform limits.
-- **Service Bot:** a dedicated role with explicitly selected instructions, Skills,
-  tools and authorized resources. Select the smallest useful set for its duty:
-  approved-document read/search for FAQ; a scoped read-only service grant for
-  status; separately reviewed write capabilities only when the job requires them.
-  Owner DMs remain service conversations, not personal-assistant sessions.
-  Unassigned conversations must not fall back to the ordinary Project assistant.
-  A service Bot must not acquire extra tools by dynamically reading `v:skills`.
-- One platform Bot instance must not silently serve both purposes. Do not infer
-  owner identity or convert a legacy connection into a personal entry point.
-  Unsupported setup paths are blockers to report, not permission to emulate a
-  personal assistant with a privileged service Agent or broad `adminChats`.
-  Project runtimes do not currently start legacy WeChat adapters.
+- **Personal:** exact QQ/Feishu inboxes and WeChat private inboxes use a named Project Session Agent
+  and ordinary Project dynamic Skill discovery/activation. Agent and channel
+  limits still apply, including Web-only operations or platform limits.
+- **Service:** select only the instructions, Skills, tools and authorized
+  resources needed for the duty. Unassigned conversations must not fall back
+  to a Project assistant. A Service BOT must not acquire extra tools by dynamically reading `v:skills`.
+  Discord Service bindings retain their platform visibility, identity and
+  participant checks. WeChat does not support Service BOTs or group bindings.
 
 ### Skill allocation is not blanket authorization
 
@@ -195,33 +182,38 @@ owner review, not a Skill read or chat acknowledgment. Raw native filesystem or
 network modules execute with host authority; `readResources` and named grants do
 not sandbox them. Prefer scoped capability interfaces.
 
-Validate setup against owner and non-owner DMs, group rejection for personal
-entries, unassigned service conversations, restart persistence, revoked owner or
-service authorization, and cross-Project/cross-Bot isolation. Preview and mocked
+Validate exact assigned and unassigned inboxes, optional sender restrictions,
+assignment revocation, restart persistence and cross-Project isolation. Preview and mocked
 tests are not proof of live platform delivery. Report unsupported capabilities
 and required Shadow owner-review steps explicitly.
 
 ## Directory BOT configuration
 
-The workflows below configure service Bots, not personal Project entry points.
+Publish BOT mode and assignment independently of the Connection.
 
 ### Directory BOTs
 
 For registered local BOT directories on QQ, Feishu and Discord, read
 `v:skills/project-administration`. Read `v:bots/overview` and its connection/deployment
-indexes for state; use `bot_package` propose for publication (legacy status remains
+indexes for state; use `bot_package` reload for publication (legacy status remains
 compatible). Read/search never connect, publish or execute source. All use
 `BOT.md` `{id, config, mode}` plus prompt body, with Service inference
 (`model`, `temperature`, `maxTokens`, `thinking`, `reasoningEffort`) or Personal
-`agent` in frontmatter. JSON retains connection, subscriptions, bindings, tools,
+`agent` in frontmatter. JSON retains subscriptions, bindings, tools,
 allowedModules, skills and read scopes. Whole legacy JSON-behavior packages remain
 readable during transition; mixed/duplicate fields are rejected, never overridden.
 Source format upgrades are not live deployments and require the same owner review.
-Declare permissions directly in bindings, subject to BOT-level ceilings; do not
+Use host-recorded group references for exact addresses; optional `bot_package` source
+returns binding/subscription addresses read-only, without revision or required preflight.
+Use ordinary `write` to edit BOT.md/companion bindings, subscriptions and permissions,
+preserving other listeners, then reload. There is no public link write action.
+Reload centrally validates Project/Connection identity, permissions and conflicts,
+including direct source edits. Declare permissions directly in bindings, subject to BOT-level ceilings; do not
 introduce `capabilityProfiles` or reuse grants inferred from old bindings.
-One exact-content native Deploy/Cancel confirmation publishes one BOT. There is
+Direct authenticated authoring applies one BOT source snapshot. No revision
+preflight or separate confirmation is required. There is
 no cross-BOT atomic publication. Development source and deployed files are
-independent: edit the registered source and propose again, without
+independent: edit the registered source and reload again, without
 source recovery or legacy adoption workflows.
 
 ### Credentials and other owner operations

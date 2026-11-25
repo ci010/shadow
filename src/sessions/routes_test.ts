@@ -114,12 +114,14 @@ test('file and Git routes distinguish offline nodes from unavailable capabilitie
 
 test('cancel route requires an existing authorized logical session and distinguishes idle from requested', async () => {
   let cancellations = 0
+  let followUpCancellations = 0
   let phase = 'idle'
   const key = 'web:chat-cancel'
   const app = new Hono()
   testSessionsApiPlugin({
     projectId: 'owned-org',
     getSessionState: (id: string) => id === key ? { sessionId: key } : undefined,
+    cancelScheduledSessionFollowUp: async (id: string) => { assert.equal(id, key); followUpCancellations++ },
     getActiveSession: () => ({ get phase() { return phase }, activeRequestId: 'current-request', cancel: () => { cancellations++ } }),
   } as unknown as SessionManager)(app)
   const endpoint = `/api/sessions/${encodeURIComponent(key)}/cancel`
@@ -145,6 +147,7 @@ test('cancel route requires an existing authorized logical session and distingui
     assert.equal((await app.request(`/api/sessions/${encodeURIComponent(unknown)}/cancel`, { method: 'POST' })).status, 404)
   }
   assert.equal(cancellations, 2)
+  assert.equal(followUpCancellations, 3)
   const missing = new Hono()
   testSessionsApiPlugin(undefined)(missing)
   assert.equal((await missing.request(endpoint, { method: 'POST' })).status, 501)
@@ -732,8 +735,12 @@ test('readonly shallow snapshots are opt-in and segment rollover is never mislab
   assert.ok(legacy.messages)
   const page = await (await app.request('/api/sessions/logical?shallow=true&pageSize=1&snapshot=')).json()
   assert.ok(page.messages)
+  const recent = await (await app.request('/api/sessions/logical?shallow=true&historyWindow=recent&snapshot=')).json()
+  assert.equal(recent.data.historyStart, 0)
+  assert.deepEqual(recent.data.messages, full.data.messages)
   rollover = true
   assert.equal((await app.request('/api/sessions/logical?shallow=true&snapshot=')).status, 409)
+  assert.equal((await app.request('/api/sessions/logical?shallow=true&historyWindow=recent')).status, 409)
 })
 
 for (const endpoint of ['graph', 'stages']) test(`${endpoint} GET revalidates fresh JSON without caching Project reads`, async () => {
@@ -911,4 +918,40 @@ test('readonly logical, shallow, paginated and physical history share null omiss
   assert.equal(delta.revision, fresh.revision)
   assert.equal(delta.historyRevision, fresh.historyRevision)
   assert.deepEqual(delta.delta.messages, [{ role: 'tool', content: [{ type: 'text', text: '', value: null }] }])
+})
+
+
+test('sidebar navigation excludes removed connections before enrichment but preserves explicit history and last-known catalog on errors', async () => {
+  const { channelSessionId } = await import('../bus/events.ts')
+  const botId = (id: string) => channelSessionId({ projectId: 'a', botInstanceId: id, platform: 'qq', conversationId: 'group:room' }).replace(/^channel-inbox:/, 'bot:')
+  const current = botId('current'), removed = botId('removed')
+  const states = [current, removed, 'web:normal'].map(sessionId => ({ sessionId, segmentIndex: 0, projectId: 'a', name: sessionId }))
+  const enriched: string[] = []
+  const manager = {
+    projectId: 'a',
+    listSummaryStates: async () => states,
+    historySessionSummary: (state: unknown) => state,
+    getSessionInferenceDefaults: (id: string) => { enriched.push(id); return { model: 'test' } },
+    getFirstUserMessage: async () => null,
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  let catalog = [{ id: 'current', platform: 'qq' }]
+  let unavailable = false
+  const app = new Hono()
+  sessionsApiPlugin(manager, { sidebarConnections: () => { if (unavailable) throw new Error('temporary'); return catalog } })(app)
+  const read = async (suffix = '?scope=navigation') => {
+    const response = await app.request('/api/sessions/summary' + suffix)
+    assert.equal(response.status, 200)
+    return (await response.json()).sessions.map((row: { sessionId: string }) => row.sessionId)
+  }
+  assert.deepEqual(await read(), [current, 'web:normal'])
+  assert.deepEqual(enriched, [current, 'web:normal'], 'Removed connections incur no row enrichment/history fallback work')
+  unavailable = true
+  assert.deepEqual(await read(), [current, 'web:normal'])
+  unavailable = false
+  catalog = []
+  assert.deepEqual(await read(), ['web:normal'])
+  assert.deepEqual(await read('?scope=full'), [current, removed, 'web:normal'])
+  assert.deepEqual(await read('?scope=navigation&sessionIds=' + encodeURIComponent(JSON.stringify([removed]))), [removed])
+  assert.equal(states.length, 3, 'Projection filtering never deletes persisted records')
 })

@@ -83,21 +83,22 @@ test('decision approvals bind exact operations, IDs, contents and revisions', as
 test('Work query snapshots follow the live authority, never persist, and cannot be modified through SQL', async () => {
   await withTempWorkspace(async root => {
     let work: WorkRecord[] = [{
-      key: 'work:one', subject: { kind: 'work', id: 'one' }, revision: 1, sequence: 1,
-      definition: { objective: 'Deliver the feature', acceptance: ['Tests pass'], boundaries: ['No deployment'], evidence: [] },
-      origin: 'agent_interpretation', changedBy: 'web:owner', changedAt: new Date().toISOString(), change: 'understanding', reason: 'fixture', paused: false,
-      workflow: { title: 'Feature', manager: 'web:owner', assignee: 'web:worker', assignmentRevision: 1, status: 'pending', dependencies: ['work:base'] },
+      key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', revision: 1, sequence: 1,
+      definition: 'Deliver the feature\n\n- Tests pass\n- No deployment',
+      origin: 'agent_interpretation', changedBy: 'web:owner', changedAt: new Date().toISOString(),
+      title: 'Feature', kind: 'task', artifacts: [], basis: [], summary: '', manager: 'web:owner', assignee: 'web:worker', assignmentRevision: 1, status: 'pending', dependencies: ['work:435d2fd1-b999-52a3-a76c-b4eafa08b9ab'],
     }]
     const store = new ProjectConventions(root, () => work)
     const other = new ProjectConventions(join(root, 'another-project'), () => [])
     try {
-      assert.deepEqual(store.query('SELECT key,status FROM work_items', 'web:reader').results[0].rows, [{ key: 'work:one', status: 'pending' }])
-      assert.deepEqual(store.query('SELECT * FROM work_dependencies', 'web:reader').results[0].rows, [{ work_key: 'work:one', depends_on_key: 'work:base' }])
-      work = [{ ...work[0], workflow: { ...work[0].workflow!, status: 'in_progress' } }]
+      assert.deepEqual(store.query('SELECT key,status,definition,kind,summary,artifacts FROM work_items', 'web:reader').results[0].rows,
+        [{ key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', status: 'pending', definition: work[0].definition, kind: 'task', summary: '', artifacts: '[]' }])
+      assert.deepEqual(store.query('SELECT * FROM work_dependencies', 'web:reader').results[0].rows, [{ work_key: 'work:688f598b-b124-5af7-9b75-38bd8046d293', depends_on_key: 'work:435d2fd1-b999-52a3-a76c-b4eafa08b9ab' }])
+      work = [{ ...work[0], status: 'in_progress' }]
       assert.equal(store.query('SELECT status FROM work_items', 'web:reader').results[0].rows[0].status, 'in_progress')
       assert.deepEqual(other.query('SELECT * FROM work_items', 'web:reader').results[0].rows, [])
       for (const sql of [
-        "UPDATE work_items SET status='done' WHERE key='work:one'",
+        "UPDATE work_items SET status='done' WHERE key='work:688f598b-b124-5af7-9b75-38bd8046d293'",
         "DELETE FROM convention_history WHERE id=1",
         "INSERT INTO work_dependencies (work_key,depends_on_key) VALUES ('one','two')",
         'SELECT * FROM sqlite_master', 'SELECT * FROM convention_records',

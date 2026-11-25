@@ -212,7 +212,7 @@ export class TopicService {
               policy: 'queue' as const, content: parsed.initialMessage,
             }
             if (parsed.work) {
-              const assignmentRevision = alignment!.get(parsed.work.key).workflow!.assignmentRevision
+              const assignmentRevision = alignment!.get(parsed.work.key).assignmentRevision
               await alignment!.deliverAssignment(createdBySessionId!, sessionId, { key: parsed.work.key, assignmentRevision }, input, (target, message) => this.options.sessions.deliver(target, message))
             } else await this.options.sessions.deliver(sessionId, input)
           } catch (error) {

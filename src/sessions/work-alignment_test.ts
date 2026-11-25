@@ -20,7 +20,7 @@ function fixture(home: string) {
   const store = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
   const changes: WorkRecord[] = []
   const alignment = new WorkAlignment(store, {
-    state: id => states.get(id), evidence: async source => { assert.equal(source.sessionId, owner) },
+    state: id => states.get(id),
     changed: async record => { changes.push(record) },
   })
   const base = new Tools(home), tools = new SessionTools(base, home)
@@ -31,22 +31,22 @@ function fixture(home: string) {
     senderId: 'fixture-user', messageId: 'owner-input', signal: new AbortController().signal, tools,
   })
   const create = async (data: Record<string, unknown> = {}) => workRecordSchema.parse(await alignment.execute(actor(owner), 'create', undefined, undefined, {
-    title: 'Token metrics', definition: { objective: 'Measure token use, not grader scores' }, notes: { kind: 'goal' }, ...data,
+    title: 'Token metrics', definition: 'Measure token use, not grader scores', kind: 'goal', ...data,
   }))
   return { store, states, changes, alignment, tool, tools, base, context, create }
 }
-const childNotes = { kind: 'task', relation: { kind: 'supports', reason: 'Collect usage evidence for the release decision' } }
+const childNotes = { kind: 'task' }
 
-test('work mutations are small receipts, schema is opt-in, and notes are current rather than repeated HTML history', async () => withTempWorkspace(async home => {
+test('work mutations are small receipts, schema is opt-in, and notes are current, not repeated in mutation receipts', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     const initial = JSON.parse(await f.tool.execute({ action: 'context' }, f.context()))
     assert.equal(initial.schema, undefined)
     const help = JSON.parse(await f.tool.execute({ action: 'context', data: { includeSchema: true } }, f.context()))
-    assert(help.schema.update.notes)
+    assert(help.schema.update.summary)
     const receipt = JSON.parse(await f.tool.execute({ action: 'create', data: {
-      title: 'A bounded report', definition: { objective: 'Compare release token use' },
-      notes: { kind: 'goal', html: `<p>${'exhibit '.repeat(4500)}</p>` },
+      title: 'A bounded report', definition: 'Compare release token use',
+      kind: 'goal',
     } }, f.context()))
     assert.equal(receipt.version, 1)
     assert.equal(receipt.goalRevision, 1)
@@ -54,25 +54,25 @@ test('work mutations are small receipts, schema is opt-in, and notes are current
     assert.equal(receipt.notes, undefined)
     assert(JSON.stringify(receipt).length < 400)
     const updated = JSON.parse(await f.tool.execute({ action: 'update', key: receipt.key, version: receipt.version,
-      data: { notes: { summary: 'Usage collected', plan: ['Compare models'], next: 'Read the comparison' }, status: 'in_progress' } }, f.context()))
+      data: { summary: '**Usage collected**', status: 'in_progress' } }, f.context()))
     assert.equal(updated.version, 2)
     assert.equal(updated.goalRevision, 1)
     const detail = JSON.parse(await f.tool.execute({ action: 'context', key: receipt.key }, f.context()))
-    assert.equal(detail.records[0].notes.summary, 'Usage collected')
-    assert.equal(detail.records[0].notes.html.length, 36007)
+    assert.equal(detail.records[0].summary, '**Usage collected**')
     assert.equal(detail.schema, undefined)
     assert.equal(detail.records[0].history, undefined)
     const listed = JSON.parse(await f.tool.execute({ action: 'list' }, f.context()))
     assert.equal(listed.items[0].version, 2)
     assert.equal(listed.items[0].goalRevision, 1)
     assert.equal(listed.items[0].notes, undefined)
-    assert(JSON.stringify(f.store.workHistory(receipt.key)).length < 2500, 'Large HTML is stored once, not copied into every work event')
-    assert.doesNotMatch(f.alignment.prompt(owner), /exhibit exhibit|Read-only HTML|schema/)
+    assert(JSON.stringify(f.store.workHistory(receipt.key)).length < 2500, 'Routine shared summaries are not repeated in work events')
+    assert.match(f.alignment.prompt(owner), /Usage collected/)
+    assert.doesNotMatch(f.alignment.prompt(owner), /schema/)
     for (const action of ['adopt', 'policy', 'checkpoint', 'settle', 'propose']) {
       await assert.rejects(f.tool.execute({ action }, f.context()), /Invalid enum/)
     }
-    await assert.rejects(f.tool.execute({ action: 'update', key: receipt.key, version: 1, data: { notes: { summary: 'lost update' } } }, f.context()), /note changed/)
-    assert.equal(f.alignment.get(receipt.key).notes?.summary, 'Usage collected')
+    await assert.rejects(f.tool.execute({ action: 'update', key: receipt.key, version: 1, data: { summary: 'lost update' } }, f.context()), /note changed/)
+    assert.equal(f.alignment.get(receipt.key).summary, '**Usage collected**')
   } finally { f.store.close() }
 }))
 
@@ -86,7 +86,6 @@ test('notes, blockers and previous required metadata never gate tools; actual to
     f.states.get(owner)!.workPolicy = { mode: 'required', keys: [work.key], controllerSessionId: owner }
     const pending = await f.alignment.editNote(actor(owner), work.key, work.sequence,
       { status: 'blocked', blockedReason: 'One approach is waiting; independent authorized work can continue.' })
-    assert.equal(pending.notes?.attention?.kind, 'blocker')
     assert.equal(f.alignment.required(owner), false)
     assert.deepEqual(f.alignment.snapshot(owner), [])
     assert.equal(requireToolText(await f.tools.execute('fixture_write', { text: 'synthetic' }, f.context())), 'saved')
@@ -103,21 +102,23 @@ test('parents control goal structure, workers maintain local facts, and concurre
   const f = fixture(home)
   try {
     const root = await f.create()
-    const child = await f.create({ title: 'Measure usage', parentKey: root.key, assignee: worker, notes: childNotes })
-    const update = await f.alignment.editNote(actor(worker), child.key, child.sequence, { notes: { summary: 'Observed a lower token count', plan: ['Check a second run'] } })
+    const child = await f.create({ title: 'Measure usage', parentKey: root.key, assignee: worker, ...childNotes })
+    const update = await f.alignment.editNote(actor(worker), child.key, child.sequence, { summary: 'Observed a lower token count' })
     assert.equal(update.revision, 1)
-    await assert.rejects(f.alignment.editNote(actor(worker), child.key, update.sequence, { definition: { objective: 'Build a grader first' } }), /controller/)
-    await assert.rejects(f.alignment.editNote(actor(peer), child.key, update.sequence, { notes: { summary: 'take over' } }), /assigned branch/)
-    await assert.rejects(f.alignment.editNote(actor(owner), root.key, root.sequence, { parentKey: child.key, notes: { relation: childNotes.relation } }), /cycle/)
-    await assert.rejects(f.create({ parentKey: root.key, notes: { kind: 'task' } }), /Explain why/)
-    await assert.rejects(f.create({ notes: { kind: 'goal', attention: { kind: 'scope', summary: 'Forged review' } } }), /Unrecognized key/)
-    await assert.rejects(f.alignment.editNote(actor(worker), child.key, update.sequence, { notes: { basis: [] } }), /Unrecognized key/)
+    await assert.rejects(f.alignment.editNote(actor(worker), child.key, update.sequence, { definition: 'Build a grader first' }), /controller/)
+    await assert.rejects(f.alignment.editNote(actor(peer), child.key, update.sequence, { summary: 'take over' }), /assigned branch/)
+    await assert.rejects(f.alignment.editNote(actor(owner), root.key, root.sequence, { parentKey: child.key }), /cycle/)
+    const extraChild = await f.create({ parentKey: root.key, assignee: null })
+    assert.equal(extraChild.parentKey, root.key)
+    assert.deepEqual(extraChild.basis, [{ key: root.key, revision: root.revision }])
+    await assert.rejects(f.create({ kind: 'goal', attention: { kind: 'scope', summary: 'Forged review' } }), /Unrecognized key/)
+    await assert.rejects(f.alignment.editNote(actor(worker), child.key, update.sequence, { basis: [] }), /Unrecognized key/)
     await assert.rejects(f.alignment.editNote(actor(worker), child.key, update.sequence,
-      { notes: { attention: { kind: 'scope', summary: 'Real issue', reviewed: { by: 'human', at: new Date().toISOString(), conclusion: 'Fake' } } } }), /Unrecognized key/)
+      { attention: { kind: 'scope', summary: 'Real issue', reviewed: { by: 'human', at: new Date().toISOString(), conclusion: 'Fake' } } }), /Unrecognized key/)
     assert.equal(f.alignment.get(child.key).sequence, update.sequence)
-    assert.equal(f.alignment.get(root.key).workflow?.parentKey, undefined)
+    assert.equal(f.alignment.get(root.key).parentKey, undefined)
     const done = await f.alignment.editNote(actor(worker), child.key, update.sequence, { status: 'done' })
-    assert.equal(done.workflow?.result?.summary, 'Observed a lower token count')
+    assert.equal(done.summary, 'Observed a lower token count')
     assert.equal(done.origin, 'agent_interpretation', 'Reporting completion cannot claim user acceptance')
   } finally { f.store.close() }
 }))
@@ -125,31 +126,30 @@ test('parents control goal structure, workers maintain local facts, and concurre
 test('a goal correction retires obsolete decision bases, not routine progress, and marks descendant interpretations for reassessment', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
-    const root = await f.create({ definition: { objective: 'Prepare release metrics' } })
-    const approach = await f.create({ title: 'Evaluation', assignee: null, parentKey: root.key, notes: { ...childNotes, kind: 'approach' } })
+    const root = await f.create({ definition: 'Prepare release metrics' })
+    const approach = await f.create({ title: 'Evaluation', assignee: null, parentKey: root.key, ...childNotes, kind: 'approach' })
     let grader = await f.create({ title: 'Grader', parentKey: approach.key, assignee: worker,
-      notes: { ...childNotes, relation: { kind: 'assumption', reason: 'We have not verified whether metrics require a grader' } } })
+      ...childNotes })
     const context = f.alignment.decisionContext(worker, grader.key, root.key)!
     assert.deepEqual(context.path.map(node => node.key), [root.key, approach.key, grader.key])
-    assert.equal(context.path[2].relation?.kind, 'assumption')
     const request: YieldRequest = { ...contextQuestion(), workContext: context }
-    grader = await f.alignment.editNote(actor(worker), grader.key, grader.sequence, { notes: { summary: 'Grader unavailable' } })
+    grader = await f.alignment.editNote(actor(worker), grader.key, grader.sequence, { summary: 'Grader unavailable' })
     assert.equal(f.alignment.currentDecision(request), true)
     assert.equal(f.alignment.contextChanged(grader), false)
     await f.alignment.editNote({ kind: 'user' }, root.key, root.sequence,
-      { definition: { objective: 'Release token metrics without a grader' } })
+      { definition: 'Release token metrics without a grader' })
     assert.equal(f.alignment.currentDecision(request), false)
     assert.equal(f.alignment.contextChanged(grader), true)
     assert.equal(f.alignment.decisionContext(worker, grader.key, root.key)?.path.at(-1)?.contextNeedsReview, true)
     assert.match(f.alignment.prompt(worker), /without a grader/)
     assert.match(f.alignment.prompt(worker), /"contextNeedsReview":true/)
-    grader = await f.alignment.editNote(actor(owner), grader.key, grader.sequence, { title: 'Optional scoring', notes: { kind: 'finding' } })
+    grader = await f.alignment.editNote(actor(owner), grader.key, grader.sequence, { title: 'Optional scoring', kind: 'finding' })
     assert.equal(f.alignment.contextChanged(grader), true, 'Editing a label or local interpretation does not assess changed ancestors')
     assert.equal(grader.revision, 2, 'A changed abstraction kind invalidates old decision context')
     await assert.rejects(f.alignment.reviewNote(actor(worker), grader.key, grader.sequence, 'I approve the new goal'), /controller/)
     const reviewed = await f.alignment.reviewNote(actor(owner), grader.key, grader.sequence, 'The grader is not a prerequisite; collect token counts directly.')
     assert.equal(f.alignment.contextChanged(reviewed), false)
-    assert.equal(reviewed.notes?.attention?.reviewed?.by, owner)
+    assert.equal(f.store.workHistory(reviewed.key).find(event => event.kind === 'context_review')?.actor, owner)
     const assessed = f.alignment.decisionContext(worker, grader.key, root.key)!.path.at(-1)!
     assert.equal(assessed.contextNeedsReview, undefined)
     assert.equal(assessed.assessment, 'The grader is not a prerequisite; collect token counts directly.')
@@ -174,7 +174,7 @@ test('many assignments remain discoverable and repeated progress does not grow i
     const lengths: number[] = []
     for (let i = 0; i < 40; i++) {
       note = await f.alignment.editNote(actor(worker), note.key, note.sequence,
-        { notes: { summary: `Sample ${String(i).padStart(2, '0')}`, next: 'Compare samples' } })
+        { summary: `Sample ${String(i).padStart(2, '0')}` })
       lengths.push(f.alignment.prompt(worker).length)
     }
     assert(Math.max(...lengths) - Math.min(...lengths) <= 1, 'Only the version counter grows')
@@ -195,16 +195,16 @@ test('repeated goal changes preserve unassessed provenance and invalidate earlie
   const f = fixture(home)
   try {
     let goal = await f.create()
-    const branch = await f.create({ parentKey: goal.key, assignee: worker, notes: childNotes })
+    const branch = await f.create({ parentKey: goal.key, assignee: worker, ...childNotes })
     goal = await f.alignment.editNote({ kind: 'user' }, goal.key, goal.sequence,
-      { definition: { objective: 'Collect counts without scoring' } })
+      { definition: 'Collect counts without scoring' })
     const unassessed = f.alignment.decisionContext(worker, branch.key, goal.key)!
     assert.equal(unassessed.path.at(-1)?.contextNeedsReview, true)
     assert.equal(f.alignment.currentContext(unassessed), true, 'Reassessment warnings do not gate tools or questions')
     const reviewed = await f.alignment.reviewNote(actor(owner), branch.key, branch.sequence, 'Scoring is optional')
     assert.equal(f.alignment.decisionContext(worker, branch.key)?.path.at(-1)?.assessment, 'Scoring is optional')
     await f.alignment.editNote({ kind: 'user' }, goal.key, goal.sequence,
-      { definition: { objective: 'Measure both quality and token use' } })
+      { definition: 'Measure both quality and token use' })
     const changedAgain = f.alignment.decisionContext(worker, branch.key)!
     assert.equal(changedAgain.path.at(-1)?.contextNeedsReview, true)
     assert.equal(changedAgain.path.at(-1)?.assessment, undefined, 'A prior assessment is not current after another correction')
@@ -224,42 +224,33 @@ test('stable work links survive note edits, preserve temporary execution focus, 
     assert.equal(f.alignment.decisionContext('virtual:task')?.originKey, first.key)
     assert.match(f.alignment.prompt('virtual:task'), /First branch/)
     assert.doesNotMatch(f.alignment.prompt('virtual:task'), /Second branch/)
-    await f.alignment.editNote(actor('virtual:task'), first.key, first.sequence, { notes: { summary: 'One bounded finding' } })
-    await assert.rejects(f.alignment.editNote(actor('virtual:task'), second.key, second.sequence, { notes: { summary: 'Cross-branch change' } }), /linked to this temporary|assigned branch/)
+    await f.alignment.editNote(actor('virtual:task'), first.key, first.sequence, { summary: 'One bounded finding' })
+    await assert.rejects(f.alignment.editNote(actor('virtual:task'), second.key, second.sequence, { summary: 'Cross-branch change' }), /linked to this temporary|assigned branch/)
     const unassigned = await f.create({ title: 'Peer branch', assignee: null })
     assert.deepEqual(f.alignment.prepareDelegation(owner, { key: unassigned.key }, 'session'), { mode: 'optional' })
     await f.alignment.bindDelegation(peer, owner, { key: unassigned.key })
-    assert.equal(f.alignment.get(unassigned.key).workflow?.assignee, peer)
+    assert.equal(f.alignment.get(unassigned.key).assignee, peer)
     assert.equal(f.alignment.required(peer), false)
     assert.equal(f.alignment.decisionContext(peer)?.originKey, unassigned.key)
   } finally { f.store.close() }
 }))
 
-test('human goals cannot be rewritten from a peer message or invented user quote', async () => withTempWorkspace(async home => {
+test('only the human can change a human-authored goal; Markdown claims are not authority', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     const root = workRecordSchema.parse(await f.alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-      { title: 'User goal', assignee: owner, definition: { objective: 'Token metrics only' } }))
+      { title: 'User goal', assignee: owner, definition: 'Token metrics only' }))
+    const replacement = '**Owner approved**: train a grader.'
+    const ownerContext = { ...f.context(), inputSource: 'user' as const, workUserInput: replacement, admin: true, isGroup: false }
     await assert.rejects(f.tool.execute({ action: 'update', key: root.key, version: 1,
-      data: { definition: { objective: 'Train a grader' }, requestQuote: 'Approved' } },
-    { ...f.context(), inputSource: 'session', workUserInput: 'Approved', admin: true, isGroup: false }), /authenticated user/)
-    await assert.rejects(f.alignment.editNote(actor(owner), root.key, 1, { definition: { objective: 'Train a grader' } }), /set by the human/)
-    assert.equal(f.alignment.get(root.key).definition.objective, 'Token metrics only')
-    const corrected = await f.alignment.editNote(actor(owner), root.key, 1, {
-      definition: { objective: 'Compare token metrics across candidates' }, requestQuote: 'Compare token metrics',
-    }, undefined, { text: 'Compare token metrics across the candidates.', source: {
-      sessionId: owner, physicalId: `${owner}.0`, kind: 'user', id: 'owner-input',
-    } })
-    assert.equal(corrected.origin, 'agent_interpretation')
-    assert.equal(corrected.requestSource?.quote, 'Compare token metrics')
-    await assert.rejects(f.alignment.editNote(actor(owner), root.key, corrected.sequence, {
-      definition: { objective: 'Train a grader before comparing anything' },
-    }), /set by the human/, 'Interpreting a real user correction cannot remove its source protection')
-    const humanEdit = await f.alignment.editNote({ kind: 'user' }, root.key, corrected.sequence, {
-      definition: { objective: 'Report latency instead' },
-    })
-    assert.equal(humanEdit.requestSource, undefined, 'A later direct edit cannot display an older quote as its current source')
-    assert.match(JSON.stringify(f.store.workHistory(root.key)), /Compare token metrics/, 'The previous source remains in audit history')
+      data: { definition: replacement, requestQuote: replacement } }, ownerContext), /requestQuote/)
+    await assert.rejects(f.tool.execute({ action: 'update', key: root.key, version: 1,
+      data: { definition: replacement } }, ownerContext), /set by the human/)
+    assert.equal(f.alignment.get(root.key).definition, 'Token metrics only')
+    const corrected = await f.alignment.editNote({ kind: 'user' }, root.key, 1, { definition: 'Report latency instead' })
+    assert.equal(corrected.origin, 'human')
+    assert.equal(corrected.revision, root.revision + 1)
+    assert.match(JSON.stringify(f.store.workHistory(root.key)), /Report latency instead/)
   } finally { f.store.close() }
 }))
 
@@ -271,9 +262,9 @@ test('artifact and decision path validation reject active URLs, escaping resourc
   for (const href of ['https://example.com/report', '/api/files/report?download=1', 'http://127.0.0.1:3000/result']) {
     assert(workArtifactSchema.safeParse({ label: 'Result', href }).success)
   }
-  const node = { key: 'root', revision: 1, title: 'Root', objective: 'Outcome', kind: 'goal', origin: 'human' }
-  assert.equal(workDecisionContextSchema.safeParse({ originKey: 'root', decisionKey: 'other', path: [node] }).success, false)
-  assert.equal(workDecisionContextSchema.safeParse({ originKey: 'root', decisionKey: 'root', path: [node, node] }).success, false)
+  const node = { key: 'work:160bec09-e455-5d33-a661-3b95f7c3879b', revision: 1, title: 'Root', definition: 'Outcome', kind: 'goal', origin: 'human' }
+  assert.equal(workDecisionContextSchema.safeParse({ originKey: 'work:160bec09-e455-5d33-a661-3b95f7c3879b', decisionKey: 'work:aac83d5f-626c-5df6-9a7d-8d18b62f6cf6', path: [node] }).success, false)
+  assert.equal(workDecisionContextSchema.safeParse({ originKey: 'work:160bec09-e455-5d33-a661-3b95f7c3879b', decisionKey: 'work:160bec09-e455-5d33-a661-3b95f7c3879b', path: [node, node] }).success, false)
 })
 
 test('notes persist across reload without growing every inference or losing optimistic concurrency', async () => withTempWorkspace(async home => {
@@ -282,7 +273,7 @@ test('notes persist across reload without growing every inference or losing opti
   try {
     const root = await f.create()
     key = root.key
-    const updated = await f.alignment.editNote(actor(owner), key, 1, { notes: { summary: 'Current result', html: '<h1>Result</h1>' } })
+    const updated = await f.alignment.editNote(actor(owner), key, 1, { summary: '**Current result**' })
     const events = f.store.workHistory(key).length
     for (let i = 0; i < 4; i++) {
       f.alignment.prompt(owner)
@@ -294,8 +285,8 @@ test('notes persist across reload without growing every inference or losing opti
   const reopened = new InitiativeStore(home)
   try {
     const record = reopened.workRecords().find(record => record.key === key)!
-    assert.equal(record.notes?.summary, 'Current result')
-    assert.equal(record.notes?.html, '<h1>Result</h1>')
+    assert.equal(record.summary, '**Current result**')
+    assert.equal(record.summary, '**Current result**')
     assert.equal(record.sequence, 2)
     assert.equal(reopened.workFocus(owner), key)
   } finally { reopened.close() }
@@ -315,8 +306,8 @@ test('creation retry keys survive concurrency, conflict, failed publication and 
   try {
     assert.equal((await f.create(request)).key, a.key)
     assert.equal(f.changes.length, 0)
-    const failing = new WorkAlignment(f.store, { state: id => f.states.get(id), evidence: async () => {}, changed: async () => { throw new Error('offline') }, })
-    const data = { assignee: null, title: 'Saved', definition: { objective: 'Saved before publication' }, idempotencyKey: 'failure' }
+    const failing = new WorkAlignment(f.store, { state: id => f.states.get(id),changed: async () => { throw new Error('offline') }, })
+    const data = { assignee: null, title: 'Saved', definition: 'Saved before publication', idempotencyKey: 'failure' }
     await assert.rejects(failing.execute(actor(owner), 'create', undefined, undefined, data), /saved/)
     const retry = workRecordSchema.parse(await failing.execute(actor(owner), 'create', undefined, undefined, data))
     assert.equal(retry.sequence, 1)
@@ -338,12 +329,12 @@ test('assignment delivery reserves once, keeps failed and old receipts, and does
   assert.equal((await f.alignment.deliverAssignment(owner, worker, reference, input(), deliver)).inputId, first.inputId)
   assert.equal(calls, 1)
   assert.equal(f.alignment.get(record.key).sequence, record.sequence)
-  assert.equal(f.alignment.get(record.key).workflow?.status, 'pending')
+  assert.equal(f.alignment.get(record.key).status, 'pending')
   await assert.rejects(f.alignment.deliverAssignment(peer, worker, reference, input(), deliver), /manager/)
   await assert.rejects(f.alignment.deliverAssignment(owner, worker, reference, { ...input(), content: 'Different' }, deliver), /different kickoff/)
   const reassigned = await f.alignment.assignNote(actor(owner), record.key, record.sequence, peer)
   await assert.rejects(f.alignment.deliverAssignment(owner, worker, reference, input(), deliver), /assignmentRevision/)
-  const next = { key: record.key, assignmentRevision: reassigned.workflow!.assignmentRevision }
+  const next = { key: record.key, assignmentRevision: reassigned.assignmentRevision }
   await assert.rejects(f.alignment.deliverAssignment(owner, peer, next, input(), async () => { throw new Error('network') }), /network/)
   assert.equal(f.store.assignmentDelivery(record.key, next.assignmentRevision)?.status, 'unconfirmed')
   f.store.close()
@@ -367,13 +358,13 @@ test('a late acceptance is recorded only against its old assignment revision', a
       source: { kind: 'session', sessionId: owner }, policy: 'queue', content: 'Kickoff',
     }, async (sessionId, message) => {
       const changed = await f.alignment.assignNote(actor(owner), record.key, record.sequence, peer)
-      nextRevision = changed.workflow!.assignmentRevision
+      nextRevision = changed.assignmentRevision
       return { status: 'accepted', sessionId, inputId: message.id }
     })
     assert.equal(f.store.assignmentDelivery(record.key, 1)?.status, 'accepted')
     assert.equal(f.store.assignmentDelivery(record.key, nextRevision), undefined)
-    assert.equal(f.alignment.get(record.key).workflow!.assignee, peer)
-    assert.equal(f.alignment.get(record.key).workflow!.status, 'pending')
+    assert.equal(f.alignment.get(record.key).assignee, peer)
+    assert.equal(f.alignment.get(record.key).status, 'pending')
   } finally { f.store.close() }
 }))
 
@@ -387,8 +378,8 @@ test('temporary binding survives owner reassignment and cannot widen to the next
     const next = await f.create({ title: 'Next branch' })
     assert.equal(f.alignment.decisionContext('task')?.originKey, first.key)
     assert.match(f.alignment.prompt('task'), /Token metrics/)
-    await assert.rejects(f.alignment.editNote(actor('task'), next.key, next.sequence, { notes: { summary: 'Wrong branch' } }), /linked to this temporary/)
-    await assert.rejects(f.alignment.editNote(actor('task'), first.key, f.alignment.get(first.key).sequence, { notes: { summary: 'Old branch' } }), /assigned branch/)
+    await assert.rejects(f.alignment.editNote(actor('task'), next.key, next.sequence, { summary: 'Wrong branch' }), /linked to this temporary/)
+    await assert.rejects(f.alignment.editNote(actor('task'), first.key, f.alignment.get(first.key).sequence, { summary: 'Old branch' }), /assigned branch/)
   } finally { f.store.close() }
 }))
 
@@ -400,7 +391,7 @@ test('legacy persisted temporary bindings restore without reviving durable selec
   await f.alignment.assignNote(actor(owner), first.key, first.sequence, peer)
   const next = await f.create()
   f.store.close()
-  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
   for (const id of [owner, 'task', 'call']) db.prepare('INSERT INTO work_focus (session_id,work_key) VALUES (?,?)').run(id, first.key)
   db.close()
   f = fixture(home)
@@ -413,46 +404,37 @@ test('legacy persisted temporary bindings restore without reviving durable selec
 }))
 
 
-test('attention retry preserves issue identity; review defaults to return only for an explicitly waiting executor', async () => withTempWorkspace(async home => {
+test('canonical Markdown changes are semantic, removed inputs are rejected, and completion reads only the reported summary', async () => withTempWorkspace(async home => {
   const f = fixture(home)
+  const definition = 'Deliver a report.\n\n- Compare both results.\n\nEvidence: [review notes](https://example.test/review)';
   try {
-    let work = await f.create({ assignee: worker })
-    const attention = { kind: 'decision', summary: 'Which supported format?', awaitingResponse: true }
-    work = await f.alignment.editNote(actor(worker), work.key, work.sequence, { notes: { attention } })
-    const issue = work.notes!.attention!
-    work = await f.alignment.editNote(actor(worker), work.key, work.sequence, { notes: { attention, next: 'Await coordinator' } })
-    assert.deepEqual(work.notes!.attention, issue)
-    const before = work
-    await assert.rejects(f.alignment.reviewNote(actor(owner), work.key, work.sequence - 1, 'Use JSON'), /changed/)
-    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Use JSON')
-    assert.equal(work.notes!.attention!.reviewed!.disposition, 'return_to_assignee')
-    assert.equal(work.notes!.attention!.reviewed!.assignmentRevision, before.workflow!.assignmentRevision)
-    assert.deepEqual(work.workflow, JSON.parse(JSON.stringify(before.workflow)))
-    assert.equal(work.revision, before.revision)
-    await assert.rejects(f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Use JSON'), /no pending/)
-    // A report after the review is a new issue, even if its text is unchanged.
-    work = await f.alignment.editNote(actor(worker), work.key, work.sequence, { notes: { attention } })
-    assert(work.notes!.attention!.version > issue.version)
-    assert.equal(work.notes!.attention!.reviewed, undefined)
-    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Logged; no response yet', undefined, 'record')
-    assert.equal(work.notes!.attention!.reviewed!.disposition, 'record')
-  } finally { f.store.close() }
-}))
-
-test('legacy nonwaiting attention defaults to record; explicit return records intent without changing blocked or terminal Work', async () => withTempWorkspace(async home => {
-  const f = fixture(home)
-  try {
-    let work = await f.create({ assignee: null })
-    work = await f.alignment.editNote(actor(owner), work.key, work.sequence, { status: 'blocked', blockedReason: 'Need fixture input' })
-    assert.equal(work.notes!.attention!.awaitingResponse, undefined)
-    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Recorded')
-    assert.equal(work.notes!.attention!.reviewed!.disposition, 'record')
-    assert.equal(work.workflow!.status, 'blocked')
-    work = await f.alignment.editNote(actor(owner), work.key, work.sequence, { status: 'done', notes: { summary: 'Fixture finished', attention: { kind: 'scope', summary: 'Result interpretation' } } })
-    const prior = work.workflow
-    work = await f.alignment.reviewNote(actor(owner), work.key, work.sequence, 'Return intent only', undefined, 'return_to_assignee')
-    assert.equal(work.notes!.attention!.reviewed!.disposition, 'return_to_assignee')
-    assert.deepEqual(work.workflow, JSON.parse(JSON.stringify(prior)))
-    assert.equal(work.workflow!.assignee, null)
+    const root = await f.create({ definition: `  ${definition.replace(/\n/g, '\r\n')}  ` })
+    assert.equal(root.definition, definition)
+    const same = await f.alignment.editNote(actor(owner), root.key, root.sequence, { definition: `\n${definition}\n` })
+    assert.equal(same.sequence, root.sequence + 1)
+    assert.equal(same.revision, root.revision)
+    const renamed = await f.alignment.editNote(actor(owner), root.key, same.sequence, { title: '  A shorter title  ' })
+    assert.equal(renamed.title, 'A shorter title')
+    assert.equal(renamed.sequence, same.sequence + 1)
+    assert.equal(renamed.revision, same.revision)
+    assert.equal(workRecordSchema.safeParse({ ...renamed, workflow: { title: 'Old model' } }).success, false)
+    const updated = await f.alignment.editNote(actor(owner), root.key, renamed.sequence, { definition: definition.replace('both', 'all') })
+    assert.equal(updated.revision, root.revision + 1)
+    const done = await f.alignment.editNote(actor(owner), root.key, updated.sequence, { status: 'done', summary: '**Results compared**.' })
+    assert.equal(done.revision, updated.revision)
+    assert.equal(done.summary, '**Results compared**.')
+    assert.equal(Object.hasOwn(done, 'result'), false)
+    await assert.rejects(f.alignment.editNote(actor(owner), done.key, done.sequence, { summary: '  ' }), /Summarize the outcome/)
+    assert.equal(workRecordSchema.safeParse({ ...done, workflow: { result: { summary: 'Duplicate', evidence: [] } } }).success, false)
+    assert.equal(workRecordSchema.safeParse({ ...done, summary: '' }).success, false)
+    assert.equal(workRecordSchema.safeParse({ ...done, blockedScope: 'step' }).success, false)
+    assert.equal(workRecordSchema.safeParse({ ...done, status: 'blocked', blockedReason: undefined }).success, false)
+    assert.equal(workRecordSchema.safeParse({ ...done, notes: { summary: done.summary } }).success, false)
+    for (const data of [{ definition: '  \n' }, { definition: 'x'.repeat(8001) }, { definition: { objective: 'Old format' } }, { reason: 'Obsolete' }, { requestQuote: 'Obsolete' }, { automaticDispatch: 'manual' }, { notes: { plan: ['Obsolete'] } }, { notes: { html: '<p>Obsolete</p>' } }, { notes: { relation: { kind: 'supports', reason: 'Obsolete' } } }]) {
+      await assert.rejects(f.create(data))
+    }
+    for (const removed of [{ subject: { kind: 'work', id: root.key.slice(5) } }, { paused: false }, { change: 'goal' }, { reason: 'Old' }, { requestSource: {} }, { creationRequest: {} }]) {
+      assert.equal(workRecordSchema.safeParse({ ...root, ...removed }).success, false)
+    }
   } finally { f.store.close() }
 }))

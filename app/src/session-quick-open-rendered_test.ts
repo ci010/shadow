@@ -69,16 +69,20 @@ test('quick open lazily searches full automation history independently of naviga
       await run(()=>window.open());
       for(let i=0;i<100;i++){if(await run(()=>document.querySelector('.failure') && document.querySelectorAll('[role="option"]').length))break;await wait()}
       assert.equal(await run(()=>document.querySelectorAll('[role="option"]').length),1,'empty search preserves ordinary defaults');
-      assert.ok(await run(()=>window.paths.includes('/projects/a/api/sessions/summary')));
+      assert.equal(await run(()=>window.paths.some(path=>path.endsWith('/summary'))),false,'opening does not fetch archives');
+      assert.equal(await run(()=>window.paths.filter(path=>path==='/projects/a/api/sessions/summary?scope=navigation').length),1,'shares the active navigation snapshot');
       assert.ok(await run(()=>document.querySelector('.failure').textContent.includes('Beta')),'one failed project does not hide Alpha');
-      await run(()=>{const input=document.querySelector('input[type="search"]');input.value='historical';input.dispatchEvent(new Event('input',{bubbles:true}))});await wait();
+      await run(()=>{const input=document.querySelector('input[type="search"]');input.value='historical';input.dispatchEvent(new Event('input',{bubbles:true}))});
+      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('[role="option"] .automation-label')))break;await wait()}
       assert.equal(await run(()=>document.querySelectorAll('[role="option"]').length),1);
-      assert.ok(await run(()=>document.querySelector('[role="option"]').textContent.includes('Automation')));
+      assert.ok(await run(()=>document.querySelector('[role="option"] .automation-label')?.textContent.includes('Scheduled review')));
       assert.ok(await run(()=>document.querySelector('[role="option"]').textContent.includes('Hidden historical match')));
       await run(()=>document.querySelector('[role="option"]').click());await wait();
       assert.deepEqual(await run(()=>window.selected),[['a','old','job']]);
       assert.equal(await run(()=>!!document.querySelector('dialog')),false);
       await run(()=>{window.pending=true;window.open()});
+      await wait();
+      await run(()=>{const input=document.querySelector('input[type="search"]');input.value='historical';input.dispatchEvent(new Event('input',{bubbles:true}))});
       for(let i=0;i<100;i++){if(await run(()=>!!window.pendingSignal))break;await wait()}
       await run(()=>document.querySelector('dialog').dispatchEvent(new Event('cancel',{cancelable:true})));await wait();
       assert.equal(await run(()=>window.pendingSignal.aborted),true,'closing cancels full-summary request');

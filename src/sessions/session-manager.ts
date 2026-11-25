@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+import type { WorkKickoff, WorkKickoffReceipt, WorkKickoffStamp } from '../initiatives/work-kickoff.ts'
 import { agentDraftScope, parseAgentPromptDraft } from '../agent/context/sub-override.ts'
 import { resolvePrompt, type PromptVersion } from '../agent/context/prompt-version.ts'
 import { builtinAgentVersion, type AgentVersionDefaults, type BuiltinAgentRole } from '../agent/types/versions.ts'
@@ -7,7 +9,9 @@ import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { parseChannelSource, passiveChannelId, PASSIVE_CHANNEL_PREFIX, type ChannelSource, type PassiveChannelMessage } from '../channels/passive-contract.ts'
 import { localFolderWorkdirRef } from './locality.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
-import { parseSessionFocus, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
+import { parseSessionFocus, parseSessionFollowUp, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
+import { isOwnerSession } from './owner-policy.ts'
+import { FOLLOW_UP_MAX_AGE, FOLLOW_UP_MAX_WAKES, FOLLOW_UP_SOURCE, followUpInput, followUpPhase, nextFollowUp, staleFollowUpNotice } from './session-follow-up.ts'
 import { UserPresence, resolveUserWaitPolicy, type UserWaitPolicy } from './presence.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
 import { parseTaskRecord, type TaskRecord } from './task-record.ts'
@@ -86,7 +90,7 @@ import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { WorkAlignment } from './work-alignment.ts'
-import { currentWorkNotification, workNotificationContent } from '../initiatives/work-notifications.ts'
+import { isWorkNoteNotification, workNotificationContent } from '../initiatives/work-notifications.ts'
 import { parseWorkPolicy, type WorkPolicy } from './work-policy.ts'
 import type { WorkRecord } from '../initiatives/work-contract.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
@@ -96,6 +100,7 @@ import {
   sessionReplyAddress,
   type DeliveryReceipt,
   type SessionInput,
+  type SessionMessageInput,
   type SessionTurnFact,
 } from './input.ts'
 
@@ -978,8 +983,10 @@ ${JSON.stringify(request)}`,
       content: [
         request.question,
         ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
-        `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
-        `Or write your own response: /reply ${request.id} text <your response>.`,
+        ...(channelAddress ? ['Open the conversation in authenticated Web to answer if no buttons are available.'] : [
+          `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
+          `Or write your own response: /reply ${request.id} text <your response>.`,
+        ]),
         request.deadline ? `At ${request.deadline}, the default will be used if unanswered.` : 'Waiting for your answer; no automatic default.',
       ].join('\n'),
       done: true,
@@ -1045,7 +1052,8 @@ ${JSON.stringify(request)}`,
       event: 'response', channel: channelAddress?.platform ?? request.sessionId.slice(0, separator),
       chatId: channelAddress?.conversationId ?? request.sessionId.slice(separator + 1),
       ...(channelAddress ? { channelAddress } : {}), replyTo: context.platformMessageId, done: true,
-      content: `${request.question}\nReply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.\nNo answer is chosen automatically.`,
+      content: [request.question, channelAddress ? 'Open the conversation in authenticated Web to answer.'
+        : `Reply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.`, 'No answer is chosen automatically.'].join('\n'),
     }
     const stamped = this.stampPersonalNotification(request.sessionId, message)
     if (this.deps.deliverInput) await this.deps.deliverInput(stamped)
@@ -1330,7 +1338,7 @@ ${JSON.stringify(request)}`,
     if (w.submission?.revision === task.revision) return
     const submission = { revision: task.revision, content: fact.content ?? '', artifactRef: task.submissions.at(-1)!.artifactRef }
     await this.saveReviewTask(state, { ...task, workflow: { ...w, submission } })
-    const prompt = `Review the fixed submission below against the original assignment and acceptance criteria. Do not edit worker artifacts. Use task(action=review, sessionId=${JSON.stringify(state.sessionId)}, revision=${task.revision}, outcome=pass|changes_requested|blocked, content=...) for a structured verdict; natural-language finals are not verdicts.\nOriginal assignment:\n${w.assignment}\nAcceptance criteria:\n${w.criteria}\nSubmission revision ${task.revision}; artifact: ${submission.artifactRef}\n${submission.content}`
+    const prompt = `Review the fixed submission below against the original assignment and acceptance criteria. Do not edit worker artifacts. Use task(action=review, sessionId=${JSON.stringify(state.sessionId)}, revision=${task.revision}, outcome=pass|changes_requested|blocked, content=...) for a structured verdict; natural-language finals are not verdicts.\nOriginal assignment:\n${w.assignment}\nAcceptance criteria:\n${w.criteria}\nIn the verdict content, address each original criterion separately: mark it passed, failed, or not verified, and give the actual evidence or describe the gap. Distinguish independently verified evidence from the worker's claims. Do not return pass if any required criterion failed or was not verified. Do not add acceptance criteria.\nSubmission revision ${task.revision}; artifact: ${submission.artifactRef}\n${submission.content}`
     if (w.mode === 'parent') { await this.emitReviewOutcome(state, 'review', prompt); return }
     const reviewerId = `virtual:review-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
     const owner = this.sessionStates[task.creatorSessionId]
@@ -1488,6 +1496,9 @@ ${JSON.stringify(request)}`,
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise
     this.stopped = true
+    clearTimeout(this.sessionFollowUpTimer)
+    clearTimeout(this.kickoffWakeTimer)
+    this.kickoffWakeTimer = undefined
     const discussionStop = this.yieldDiscussions.stop()
     if (this.reportSubscription) this.deps.bus.off(this.reportSubscription)
     this.reportSubscription = undefined
@@ -1500,6 +1511,8 @@ ${JSON.stringify(request)}`,
       // Admission errors belong to their deliver callers. Wait for them rather
       // than allowing an in-flight preparation to outlive shutdown.
       await Promise.allSettled(this.preparations.values())
+      await this.kickoffDrain
+      await this.sessionFollowUpDrain
       await Promise.allSettled(this.stateCreations.values())
       await discussionStop
       for (const session of Object.values(this.sessions)) {
@@ -1578,14 +1591,24 @@ ${JSON.stringify(request)}`,
     await this.deliver(deriveSessionId(msg), channelMessageInput(msg), llm)
   }
 
-  private automaticWorkAdmission?: (sessionId: string, input: SessionInput, admit: (beforeDispatch?: () => void) => Promise<DeliveryReceipt>) => Promise<DeliveryReceipt>
+  private automaticWorkAdmission?: (sessionId: string, input: SessionInput, admit: (beforeDispatch?: () => void, verifyKickoff?: (signal: AbortSignal) => Promise<void>) => Promise<DeliveryReceipt>) => Promise<DeliveryReceipt>
+  private automaticKickoffReconciled?: (entry: WorkKickoff, inspectReason?: string) => Promise<void>
   /** Host controller owns all automatic executor admissions, including ordinary resume/replies. */
-  setAutomaticWorkAdmission(handler: NonNullable<SessionManager['automaticWorkAdmission']>): void {
+  setAutomaticWorkAdmission(handler: NonNullable<SessionManager['automaticWorkAdmission']>,
+    reconciled?: (entry: WorkKickoff, inspectReason?: string) => Promise<void>): void {
     this.automaticWorkAdmission = handler
+    this.automaticKickoffReconciled = reconciled
   }
   /** Resolves after preparation and admission, never after model completion. */
   deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
     sessionId = this.resolveSessionIdentity(sessionId)
+    if (input.source.kind === 'event' && input.source.source === FOLLOW_UP_SOURCE && !this.sessionFollowUpInputs.has(input)) {
+      return Promise.reject(new Error('Session follow-up delivery is host-owned'))
+    }
+    if (input.id.startsWith('work-start:')) return Promise.reject(new Error('Automatic kickoff requires the Project inbox drain'))
+    if (sessionId.startsWith('work-executor:') && !this.sessionStates[sessionId]?.automaticWork) {
+      return Promise.reject(new Error('Canonical automatic executor is unavailable; delivery cannot recreate it'))
+    }
     const admit = (beforeDispatch?: () => void) => this.deliverOwned(sessionId, input, llm, beforeDispatch)
     if (this.sessionStates[sessionId]?.automaticWork) {
       if (!this.automaticWorkAdmission) return Promise.reject(new Error('Automatic Work admission controller is unavailable'))
@@ -1597,7 +1620,7 @@ ${JSON.stringify(request)}`,
     }
     return delivery
   }
-  private deliverOwned(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig, beforeDispatch?: () => void): Promise<DeliveryReceipt> {
+  private deliverOwned(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig, beforeDispatch?: () => void, kickoff?: WorkKickoffReceipt, verifyKickoff?: (signal: AbortSignal) => Promise<void>): Promise<DeliveryReceipt> {
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
       if (input.source.kind === 'user' && input.source.sender.channel === 'web') this.assertChannelInput(sessionId, input)
       if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
@@ -1617,6 +1640,12 @@ ${JSON.stringify(request)}`,
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
+      if (input.kind === 'control' && input.command.type === 'cancel') await this.cancelScheduledSessionFollowUp(sessionId)
+      if (kickoff) {
+        this.assertKickoffAvailable(kickoff)
+        const active = this.sessions[sessionId]
+        if (active && (!(active instanceof Session) || !active.quiescent)) throw new Error('Kickoff executor is no longer idle')
+      }
       if (state?.task && state.executionStatus === 'pending' && state.task.version > 0 && !this.taskRunInputs.has(input)) throw new Error('Use the structured task run action; messages cannot restart a task')
       if (state?.agentType === 'work-observer' || state?.automation?.jobId === 'system:work-observer') throw new Error('Automatic work observation has been retired')
       if (state?.retirement) {
@@ -1767,6 +1796,7 @@ ${JSON.stringify(request)}`,
           if (input.kind === 'message') {
             const current = this.sessionStates[sessionId]
             current.lastUserMessageAt = new Date().toISOString()
+            if (current.followUp === null && this.canFollowUp(current) && !input.source.sender.isGroup) delete current.followUp
             await this.store.saveState(sessionId, current)
           }
         }
@@ -1789,16 +1819,26 @@ ${JSON.stringify(request)}`,
         }
         if (state?.automaticWork && !(deliveryInput.kind === 'control' && deliveryInput.command.type === 'cancel')) {
           const record = this.alignment?.get(state.automaticWork.key)
-          if (!record || record.paused || ['done', 'cancelled'].includes(record.workflow?.status ?? '')
-            || record.workflow?.assignee !== sessionId || record.automaticExecution?.sessionId !== sessionId
-            || record.workflow.assignmentRevision !== record.automaticExecution.assignmentRevision) {
-            throw new Error('Automatic Work changed, paused, cancelled or reassigned before admission')
+          if (!record || ['done', 'cancelled'].includes(record.status ?? '')
+            || record.assignee !== sessionId || record.automaticExecution?.sessionId !== sessionId
+            || record.assignmentRevision !== record.automaticExecution.assignmentRevision) {
+            throw new Error('Automatic Work changed, cancelled or reassigned before admission')
           }
         }
         beforeDispatch?.()
         const inference = resolveInferenceSettings(
           config, this.deps.conversationPolicies?.resolve(sessionId)?.agent ?? (personal ? this.deps.agentTypes.resolve(personal.agent) : undefined), state?.config,
         )
+        if (kickoff) {
+          if (!(session instanceof Session)) throw new Error('Automatic kickoff requires a durable session loop')
+          this.attachAutomaticWorkKickoff(session, deliveryInput, kickoff, beforeDispatch, verifyKickoff)
+        }
+        if (session instanceof Session && deliveryInput.kind === 'message' && !this.sessionFollowUpInputs.has(input)
+          && !(deliveryInput.source.kind === 'event' && (deliveryInput.source.type === 'work-notification-wake'
+            || deliveryInput.source.type === 'work-notification'))) {
+          const notice = await this.supersedeScheduledSessionFollowUp(sessionId, deliveryInput)
+          if (notice) session.markStaleFollowUp(deliveryInput, notice)
+        }
         if (parentQuestion && session instanceof EphemeralSession) session.dispatchParentQuestion(deliveryInput, inference)
         else session.dispatch(deliveryInput, inference)
       } catch (error) {
@@ -1970,6 +2010,11 @@ ${JSON.stringify(request)}`,
       delete this.sessions[id]
       this.promptProvenance.delete(id)
       this.scheduledWorkNotifications.delete(id)
+      this.scheduledAutomaticKickoffs.delete(id)
+      for (const [inputId, target] of this.queuedSessionFollowUps) {
+        if (target === id) this.queuedSessionFollowUps.delete(inputId)
+      }
+      this.armSessionFollowUps()
       this.executionLimits.delete(id)
       if (ctx.state.mode !== 'session') {
         this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
@@ -2021,9 +2066,207 @@ ${JSON.stringify(request)}`,
         this.deps.promptCaptures,
       )
       if (ctx.personalGuard) this.personalContextGuards.set(sess, ctx.personalGuard)
+      if (ctx.state.automaticWork) sess.onIdle = () => this.wakeAutomaticWorkKickoffs()
+      else if (this.canFollowUp(ctx.state)) {
+        sess.onIdle = () => this.armSessionFollowUps()
+        sess.prepareSessionFollowUp = input => this.claimSessionFollowUp(sessionId, input)
+        sess.supersedeFollowUpForWorkNotice = input => this.supersedeScheduledSessionFollowUp(sessionId, input)
+        sess.settleFollowUpTurn = fact => this.settleSessionFollowUp(ctx.state, fact)
+        sess.isFollowUpSettled = () => ctx.state.completed === true || !!ctx.state.followUp || this.hasFollowUpQuestion(sessionId)
+      }
       this.sessions[sessionId] = sess
       return sess
     }
+  }
+
+  private sessionFollowUpsStarted = false
+  private sessionHasCronJob?: (id: string) => boolean
+  private sessionFollowUpTimer?: ReturnType<typeof setTimeout>
+  private sessionFollowUpDrain?: Promise<void>
+  private readonly sessionFollowUpInputs = new WeakSet<SessionInput>()
+  private readonly queuedSessionFollowUps = new Map<string, string>()
+
+  /** Start only after explicit recovery; never scan old conversations for missing metadata. */
+  startSessionFollowUps(hasCronJob?: (id: string) => boolean): void {
+    this.sessionHasCronJob = hasCronJob
+    this.sessionFollowUpsStarted = true
+    this.armSessionFollowUps()
+  }
+
+  /** Cron inventory/operation changes can unblock an already scheduled follow-up. */
+  wakeSessionFollowUps(): void { this.armSessionFollowUps() }
+
+  private canFollowUp(state: SessionState): boolean {
+    return !!this.deps.projectId && isOwnerSession(state, this.deps.projectId)
+      && !state.channelBoundary && !state.automaticWork && !this.isManagedConversation(state.sessionId)
+  }
+
+  private hasFollowUpQuestion(id: string): boolean {
+    return !!this.inputs.get(id, true) || !!this.yields.get(id)
+  }
+
+  private hasFollowUpAsyncWork(id: string): boolean {
+    if (this.sessionHasCronJob?.(id) || this.isWaitingForExternalExecution(id) || this.isWaitingForCall(id) || this.ownedCreations.get(id)?.size) return true
+    return Object.values(this.sessionStates).some(child => {
+      if (delegationOwner(child) !== id || child.mode !== 'task') return false
+      if (child.task?.workflow) return !child.task.workflow.terminal || !child.task.workflow.delivered
+      return !['completed', 'failed', 'cancelled'].includes(child.executionStatus ?? '') || !!child.reportTo && !child.completionReported
+    })
+  }
+
+  private settleSessionFollowUp(state: SessionState, fact: SessionTurnFact): void {
+    if (!this.sessionFollowUpsStarted || this.stopped || !this.canFollowUp(state) || fact.status !== 'completed') return
+    const phase = followUpPhase(fact.source)
+    const direct = fact.source.kind === 'user' && fact.source.sender.channel === 'web'
+      && !fact.source.sender.isGroup && !fact.source.sender.channelAddress
+    const prior = state.sessionFollowUp
+    // Non-user messages do not start a self-check on their own, but an explicit
+    // replacement follow-up written in that turn is a fresh scheduling decision.
+    if (!phase && !direct && (!state.followUp || prior)) return
+    if (phase && prior?.inputId !== fact.inputId) return
+    if (state.completed || state.followUp === null) {
+      delete state.sessionFollowUp
+      return
+    }
+    if (this.hasFollowUpQuestion(state.sessionId)) {
+      if (prior) state.sessionFollowUp = { ...prior, dueAt: 0 }
+      return
+    }
+    // Existing async work already has its own continuation path. Do not invent a
+    // self-check to compete with it; keep an explicitly saved follow-up dormant.
+    if (!state.followUp && this.hasFollowUpAsyncWork(state.sessionId)) {
+      delete state.sessionFollowUp
+      return
+    }
+    state.sessionFollowUp = nextFollowUp(state, phase || state.followUp ? prior : undefined, Date.now(), crypto.randomUUID())
+  }
+
+  private runnableSessionFollowUp(state: SessionState): boolean {
+    const entry = state.sessionFollowUp
+    return !!entry?.dueAt && this.canFollowUp(state) && !this.sessionHasCronJob?.(state.sessionId) && !state.completed && !state.recovery && !state.retirement
+      && !this.deleting.has(state.sessionId) && !this.historyConflict(state.sessionId)
+      && (entry.phase === 'self_check' ? state.followUp === undefined : !!state.followUp)
+  }
+
+  private armSessionFollowUps(): void {
+    if (!this.sessionFollowUpsStarted || this.stopped || this.sessionFollowUpDrain) return
+    clearTimeout(this.sessionFollowUpTimer)
+    const now = Date.now()
+    let next = Infinity
+    for (const state of Object.values(this.sessionStates)) {
+      if (!this.runnableSessionFollowUp(state) || this.queuedSessionFollowUps.has(state.sessionFollowUp!.inputId)) continue
+      const dueAt = state.sessionFollowUp!.dueAt
+      next = Math.min(next, Math.max(dueAt, this.isSessionBusy(state.sessionId) || this.hasFollowUpAsyncWork(state.sessionId) ? now + 5_000 : now))
+    }
+    if (!Number.isFinite(next)) return
+    this.sessionFollowUpTimer = setTimeout(() => {
+      this.sessionFollowUpDrain = this.drainSessionFollowUps().catch(error => console.warn(`[session-follow-up] ${errMsg(error)}`)).finally(() => {
+        this.sessionFollowUpDrain = undefined
+        this.armSessionFollowUps()
+      })
+    }, Math.min(2_147_483_647, next - now))
+    this.sessionFollowUpTimer.unref()
+  }
+
+  private async drainSessionFollowUps(): Promise<void> {
+    for (const state of Object.values(this.sessionStates)) {
+      if (this.stopped) return
+      if (!this.runnableSessionFollowUp(state) || this.isSessionBusy(state.sessionId) || this.hasFollowUpAsyncWork(state.sessionId)) continue
+      const entry = state.sessionFollowUp!
+      if (this.queuedSessionFollowUps.has(entry.inputId) || entry.dueAt > Date.now()) continue
+      const expired = entry.wakes >= FOLLOW_UP_MAX_WAKES || Date.now() >= entry.startedAt + FOLLOW_UP_MAX_AGE
+      if (expired) {
+        await this.pauseSessionFollowUp(state.sessionId, entry.inputId, 'the automatic check limit was reached')
+        continue
+      }
+      const input = followUpInput(entry, state.followUp)
+      this.sessionFollowUpInputs.add(input)
+      this.queuedSessionFollowUps.set(input.id, state.sessionId)
+      try {
+        await this.deliver(state.sessionId, input)
+      } catch (error) {
+        this.queuedSessionFollowUps.delete(input.id)
+        if (!this.stopped) await this.pauseSessionFollowUp(state.sessionId, entry.inputId, errMsg(error))
+      }
+    }
+  }
+
+  private async pauseSessionFollowUp(id: string, inputId: string, reason: string): Promise<void> {
+    const paused = await this.withStateCreation(id, async () => {
+      const state = this.sessionStates[id]
+      if (!state?.sessionFollowUp?.dueAt || state.sessionFollowUp.inputId !== inputId) return false
+      const entry = { ...state.sessionFollowUp, dueAt: 0 }
+      await this.store.saveState(id, { ...state, sessionFollowUp: entry })
+      state.sessionFollowUp = entry
+      this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
+      return true
+    })
+    if (!paused || this.stopped) return
+    const reply = sessionReplyAddress(id)
+    if (reply) this.deps.bus.emit('message.outbound', { ...reply, event: 'response', done: true,
+      content: `Automatic Session follow-up paused: ${reason}. The conversation is not marked complete.` })
+  }
+
+  private async claimSessionFollowUp(id: string, input: SessionInput): Promise<boolean> {
+    try {
+      if (!this.sessionFollowUpInputs.has(input)) return false
+      return await this.withStateCreation(id, async () => {
+        const state = this.sessionStates[id]
+        if (this.stopped || !state || !this.runnableSessionFollowUp(state) || this.hasFollowUpQuestion(id)
+          || this.hasFollowUpAsyncWork(id) || state.sessionFollowUp?.inputId !== input.id) return false
+        this.assertFolderAccess(id)
+        this.assertHistoryWritable(id)
+        // Claim before any inference. A crash after this boundary never blindly replays the check.
+        const entry = { ...state.sessionFollowUp, dueAt: 0, wakes: state.sessionFollowUp.wakes + 1 }
+        await this.store.saveState(id, { ...state, sessionFollowUp: entry })
+        state.sessionFollowUp = entry
+        this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
+        return true
+      })
+    } catch (error) {
+      if (!this.stopped) await this.pauseSessionFollowUp(id, input.id, errMsg(error))
+      return false
+    } finally { this.queuedSessionFollowUps.delete(input.id) }
+  }
+
+  /** A real, admitted message wins over an unclaimed wake, even if its timer
+   * already queued an input. Claim uses the same lock and rechecks the ID. */
+  private supersedeScheduledSessionFollowUp(id: string, input: SessionMessageInput): Promise<SessionMessageInput | undefined> | undefined {
+    const current = this.sessionStates[id]
+    if (!current?.sessionFollowUp?.dueAt || !this.canFollowUp(current)) return undefined
+    return this.withStateCreation(id, async () => {
+      const state = this.sessionStates[id]
+      if (!state?.sessionFollowUp?.dueAt || !this.canFollowUp(state)) return undefined
+      const prior = state.followUp
+      await this.store.saveState(id, { ...state, followUp: undefined, sessionFollowUp: undefined })
+      delete state.followUp
+      delete state.sessionFollowUp
+      this.armSessionFollowUps()
+      this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
+      return prior ? staleFollowUpNotice(input, prior) : undefined
+    })
+  }
+
+  /** Purpose-built composer projection: never expose the internal wake receipt. */
+  sessionFollowUpView(id: string): { next: string; after: number; nextRun: string | null } | null {
+    const state = this.getSessionState(id)
+    if (!state || !this.canFollowUp(state) || state.completed || !state.followUp) return null
+    const entry = state.sessionFollowUp
+    const due = entry?.phase === 'follow_up' && entry.dueAt ? new Date(entry.dueAt) : null
+    return { ...state.followUp, nextRun: due && Number.isFinite(due.getTime()) ? due.toISOString() : null }
+  }
+
+  async cancelScheduledSessionFollowUp(id: string): Promise<void> {
+    id = this.resolveSessionIdentity(id)
+    await this.withStateCreation(id, async () => {
+      const state = this.sessionStates[id]
+      if (!state || !this.canFollowUp(state) || !state.sessionFollowUp && !state.followUp) return
+      await this.store.saveState(id, { ...state, followUp: null, sessionFollowUp: undefined })
+      state.followUp = null
+      delete state.sessionFollowUp
+      this.deps.bus.emit('session.follow-up.changed', { sessionId: id })
+    })
+    this.armSessionFollowUps()
   }
 
   /** Mark interrupted histories for explicit continuation; startup never resumes them. */
@@ -2528,10 +2771,11 @@ ${JSON.stringify(request)}`,
     sessionId = this.resolveSessionIdentity(sessionId)
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
-    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['topic', 'focus', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
+    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['topic', 'focus', 'completed', 'followUp'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
     const changes: Partial<SessionState> = {}
     if ('topic' in patch && typeof patch.topic !== 'string') throw new TypeError('Topic must be text')
     if ('focus' in patch) changes.focus = parseSessionFocus(patch.focus)
+    if ('followUp' in patch) changes.followUp = parseSessionFollowUp(patch.followUp)
     if ('completed' in patch) {
       if (typeof patch.completed !== 'boolean') throw new TypeError('completed must be boolean')
       changes.completed = patch.completed
@@ -2544,6 +2788,14 @@ ${JSON.stringify(request)}`,
       if (state.mode === 'task' && 'topic' in patch && patch.topic !== sessionTopic(state)) throw new Error('Task topic is adapted from its parent-owned title; preserve it unchanged or omit it.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')
       if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      if ('followUp' in patch && !this.canFollowUp(state)) throw new Error('Follow-up is available only in ordinary owner Web sessions')
+      if (changes.followUp && changes.completed === undefined && state.completed) {
+        throw new Error('Reopen the session with completed: false before scheduling follow-up')
+      }
+      if (changes.completed === true || changes.followUp === null) {
+        changes.sessionFollowUp = undefined
+        if (changes.completed === true) changes.followUp = undefined
+      }
       if ('completed' in patch) changes.completedAt = patch.completed ? new Date().toISOString() : undefined
       const currentTopic = sessionTopic(state)
       if ('topic' in patch && patch.topic !== currentTopic) changes.topic = parseSessionName(patch.topic as string)
@@ -3208,103 +3460,320 @@ ${JSON.stringify(request)}`,
     })
   }
 
-  private readonly scheduledWorkNotifications = new Set<string>()
+  /** Verify the exact canonical inert target exists on disk before Work can claim it. */
+  async validateAutomaticWorkTarget(target: string): Promise<void> {
+    const state = this.sessionStates[target], durable = await this.store.getState(target)
+    if (!state || !durable || this.resolveSessionIdentity(target) !== target || durable.sessionId !== target
+      || durable.projectId !== this.deps.projectId || state.projectId !== this.deps.projectId || durable.mode !== 'session'
+      || durable.agentType !== 'general' || durable.parentSessionId || durable.parent || durable.channelBoundary
+      || durable.channelSource || durable.automation || durable.statePersistence
+      || !durable.automaticWork || durable.executionStatus !== 'pending' || durable.recovery || durable.retirement
+      || durable.folderId !== state.folderId || !isDeepStrictEqual(durable.workdir, state.workdir)
+      || !isDeepStrictEqual(durable.automaticWork, state.automaticWork) || this.isSessionBusy(target)) {
+      throw new Error('Automatic target is not a canonical, durable inert executor in this Project')
+    }
+    this.assertFolderAccess(target)
+    this.assertHistoryWritable(target)
+    if (await this.store.isConversationArchived?.(target)) throw new Error('Automatic target is archived')
+    for await (const row of this.store.readSessionLog(SessionManager.currentPhysicalId(durable), { strict: true })) {
+      if (row.role || row.sessionId !== target) throw new Error('Automatic target history is not inert')
+    }
+  }
+
+  private readonly scheduledAutomaticKickoffs = new Set<string>()
+  private kickoffWakeTimer?: ReturnType<typeof setTimeout>
+  private kickoffWakeAt = 0
+  private kickoffDrain?: Promise<void>
+  private kickoffWakeRequested = false
+  private readonly kickoffRetry = new Map<string, { attempts: number; nextAt: number }>()
+
+  /** A finite burst for transient errors; after exhaustion wait for an external wake. */
+  private deferAutomaticWorkKickoff(inputId: string): void {
+    if (this.stopped || this.alignment?.store.workKickoff(inputId)?.state !== 'pending') return
+    const attempts = (this.kickoffRetry.get(inputId)?.attempts ?? 0) + 1
+    const delay = [250, 1000, 4000, 16000][attempts - 1]
+    this.kickoffRetry.set(inputId, { attempts: Math.min(attempts, 5), nextAt: delay === undefined ? 0 : Date.now() + delay })
+    if (delay !== undefined) this.wakeAutomaticWorkKickoffs(delay)
+  }
+
+  /** A timer crosses the dispatcher's admission lock/context; do not await wake while claiming. */
+  wakeAutomaticWorkKickoffs(delay = 0): void {
+    if (this.stopped || !this.alignment || this.kickoffWakeTimer && this.kickoffWakeAt <= Date.now() + delay) return
+    clearTimeout(this.kickoffWakeTimer)
+    this.kickoffWakeAt = Date.now() + delay
+    this.kickoffWakeTimer = setTimeout(() => {
+      this.kickoffWakeTimer = undefined
+      if (this.kickoffDrain) { this.kickoffWakeRequested = true; return }
+      this.kickoffDrain = this.drainAutomaticWorkKickoffs().catch(error => {
+        console.warn(`[work-kickoffs] Drain deferred: ${errMsg(error)}`)
+      }).finally(() => {
+        this.kickoffDrain = undefined
+        if (this.kickoffWakeRequested) {
+          this.kickoffWakeRequested = false
+          this.wakeAutomaticWorkKickoffs()
+        }
+      })
+    }, delay)
+    this.kickoffWakeTimer.unref?.()
+  }
+
+  /** Reconcile the append/ack crash window before the dispatcher checks for interrupted turns. */
+  async recoverAutomaticWorkKickoffs(): Promise<void> {
+    for (const entry of this.alignment?.store.pendingWorkKickoffs() ?? []) {
+      try { await this.reconcileAutomaticWorkKickoff(entry) }
+      catch (error) { console.warn(`[work-kickoffs] Reconciliation could not finish for ${entry.target}: ${errMsg(error)}`) }
+    }
+  }
+
+  private async drainAutomaticWorkKickoffs(): Promise<void> {
+    if (this.stopped || !this.alignment || !this.automaticWorkAdmission) return
+    const pending = this.alignment.store.pendingWorkKickoffs()
+    const ids = new Set(pending.map(entry => entry.input.id))
+    for (const id of this.kickoffRetry.keys()) if (!ids.has(id)) this.kickoffRetry.delete(id)
+    for (const entry of pending) {
+      if (this.stopped) return
+      const delay = (this.kickoffRetry.get(entry.input.id)?.nextAt ?? 0) - Date.now()
+      if (delay > 0) { this.wakeAutomaticWorkKickoffs(delay); continue }
+      if (this.scheduledAutomaticKickoffs.has(entry.target) || this.isSessionBusy(entry.target)) continue
+      this.scheduledAutomaticKickoffs.add(entry.target)
+      let queued = false
+      try {
+        if (await this.reconcileAutomaticWorkKickoff(entry, undefined, true)) continue
+        this.assertKickoffAvailable(entry)
+        const input = Object.freeze({ ...entry.input, source: Object.freeze(entry.input.source) })
+        const receipt = await this.automaticWorkAdmission(entry.target, input,
+          (check, verify) => this.deliverOwned(entry.target, input, undefined, check, entry, verify))
+        queued = receipt.status === 'accepted' && receipt.disposition !== 'filtered'
+      } catch (error) {
+        console.warn(`[work-kickoffs] Admission deferred for ${entry.target}: ${errMsg(error)}`)
+      } finally {
+        if (!queued) {
+          this.scheduledAutomaticKickoffs.delete(entry.target)
+          this.deferAutomaticWorkKickoff(entry.input.id)
+        }
+      }
+    }
+  }
+
+  private assertKickoffAvailable(entry: WorkKickoff, phase: 'pending' | 'recorded' = 'pending'): void {
+    const state = this.sessionStates[entry.target], work = this.alignment?.get(entry.key)
+    if (this.stopped || !state || this.resolveSessionIdentity(entry.target) !== entry.target || state.projectId !== this.deps.projectId
+      || state.mode !== 'session' || state.agentType !== 'general' || state.parentSessionId || state.parent || state.channelBoundary
+      || state.channelSource || state.automation || state.statePersistence
+      || state.automaticWork?.key !== entry.key || state.retirement || state.recovery
+      || this.inputs.get(entry.target) || this.yields.get(entry.target) || this.isWaitingForCall(entry.target)
+      || this.isWaitingForExternalExecution(entry.target) || !work || work.assignee !== entry.target
+      || work.assignmentRevision !== entry.revision || work.automaticExecution?.inputId !== entry.input.id
+      || ['done', 'cancelled'].includes(work.status) || this.alignment?.store.workKickoff(entry.input.id)?.state !== phase) {
+      throw new Error('Kickoff target or assignment is unavailable, waiting, or changed')
+    }
+    this.assertFolderAccess(entry.target)
+    this.assertHistoryWritable(entry.target)
+  }
+
+  private async reconcileAutomaticWorkKickoff(entry: WorkKickoffReceipt, actualPhysicalId?: string, recoverInterrupted = false): Promise<boolean> {
+    const state = this.sessionStates[entry.target]
+    let found: string | undefined
+    try {
+      if (!state || this.resolveSessionIdentity(entry.target) !== entry.target || state.sessionId !== entry.target
+        || state.projectId !== this.deps.projectId || state.retirement || state.mode !== 'session' || state.automaticWork?.key !== entry.key) {
+        throw new Error('Canonical Project executor is missing or changed; verify the saved Session state')
+      }
+      const current = actualPhysicalId ?? SessionManager.currentPhysicalId(state)
+      for (const id of new Set([entry.physicalId ?? current, current])) {
+        for await (const row of this.store.readSessionLog(id, { strict: true })) {
+          if (row.work_kickoff === undefined) continue
+          const stamp = row.work_kickoff as WorkKickoffStamp | null
+          if (found || !stamp || stamp.id !== entry.input.id || stamp.target !== entry.target || stamp.key !== entry.key || stamp.revision !== entry.revision
+            || row.role !== 'user' || row.timestamp !== entry.input.timestamp || !Array.isArray(row.content)
+            || row.content.length !== 2 || row.content[1]?.type !== 'text' || row.content[1]?.text !== entry.input.content) {
+            throw new Error('Ambiguous automatic kickoff history; no replay')
+          }
+          found = id
+        }
+      }
+    } catch (error) {
+      if (this.stopped) return true
+      const code = (error as NodeJS.ErrnoException | undefined)?.code
+      if (code && ['EAGAIN', 'EBUSY', 'EMFILE', 'ENFILE', 'EINTR'].includes(code)) throw error
+      const reason = `Automatic kickoff ${entry.input.id} requires inspection: ${errMsg(error)}. Accepted input is retained; inspect the target and stamped physical history. Do not retry or resume this assignment; release/reassign only after reconciling possible effects.`
+      this.alignment!.store.inspectWorkKickoff(entry.input.id, reason)
+      await this.automaticKickoffReconciled?.(entry, reason)
+      return true
+    }
+    if (!found) return false
+    if (recoverInterrupted && !this.sessions[entry.target]) await prepareSessionRecovery(this.store, state!)
+    this.alignment!.store.recordWorkKickoff(entry.input.id, found)
+    if (recoverInterrupted) await this.automaticKickoffReconciled?.(entry)
+    return true
+  }
+
+  private attachAutomaticWorkKickoff(session: Session, input: SessionInput, entry: WorkKickoffReceipt,
+    check?: () => void, verify?: (signal: AbortSignal) => Promise<void>): void {
+    const store = this.alignment!.store
+    let appendedPhysicalId: string | undefined
+    session.attachAutomaticKickoff(input, {
+      append: async (physicalId, message, signal) => {
+        const latest = store.workKickoff(entry.input.id)
+        if (!latest || latest.state !== 'pending') return false
+        if (await this.reconcileAutomaticWorkKickoff(latest, physicalId)) return false
+        if (!verify) throw new Error('Automatic kickoff isolation verifier is unavailable')
+        await verify(signal)
+        signal.throwIfAborted()
+        this.assertKickoffAvailable(latest)
+        check?.()
+        store.stampWorkKickoff(input.id, physicalId, latest.physicalId)
+        const stamp = { id: input.id, key: entry.key, target: entry.target, revision: entry.revision }
+        await this.store.appendMessages(physicalId, [{ ...message, timestamp: latest.input.timestamp, work_kickoff: stamp }])
+        this.assertKickoffAvailable(entry)
+        appendedPhysicalId = physicalId
+        return true
+      },
+      settle: () => {
+        if (!appendedPhysicalId) throw new Error('Automatic kickoff append was not confirmed')
+        this.assertKickoffAvailable(entry)
+        store.recordWorkKickoff(input.id, appendedPhysicalId)
+      },
+      verifyBeforeInference: async signal => {
+        if (!verify) throw new Error('Automatic kickoff isolation verifier is unavailable')
+        await verify(signal)
+      },
+      beforeInference: () => {
+        this.assertKickoffAvailable(entry, 'recorded')
+        check?.()
+        store.beginWorkKickoff(entry)
+      },
+      finished: () => {
+        this.scheduledAutomaticKickoffs.delete(entry.target)
+        this.deferAutomaticWorkKickoff(entry.input.id)
+        // Retry ordinary notices deferred by automatic admission, never as kickoff input.
+        if (appendedPhysicalId) void this.recoverWorkNotifications().catch(error => console.warn(`[work-notifications] Recovery deferred: ${errMsg(error)}`))
+      },
+    })
+  }
+
+  private readonly scheduledWorkNotifications = new Map<string, string>()
+
+  private workNotificationRecipient(target: string): SessionState | undefined {
+    const state = this.getSessionState(target)
+    if (state?.sessionId === target && state.projectId === this.deps.projectId
+      && (state.mode ?? 'session') === 'session' && !state.retirement && !state.recovery) return state
+  }
 
   /** Recover durable routing facts, also used after each mutation. One marker per recipient. */
   async recoverWorkNotifications(): Promise<void> {
     if (!this.alignment || this.stopped) return
     const pending = this.alignment.store.pendingWorkNotifications()
     for (const target of new Set(pending.map(notice => notice.target))) {
-      const state = this.getSessionState(target)
-      // A Work manager is not necessarily a parent. Never invent or reopen an execution.
-      if (!state || (state.mode ?? 'session') !== 'session' || state.retirement || state.recovery
-        || this.scheduledWorkNotifications.has(target)) continue
+      const state = this.workNotificationRecipient(target)
+      // Do not bypass automatic admission or revive temporary/retired sessions.
+      if (!state || this.scheduledWorkNotifications.has(target)) continue
       if (!state.lastActivityAt && state.topicRequestHash && state.executionStatus === 'pending') continue
-      this.scheduledWorkNotifications.add(target)
+      const id = `work-wake:${target}:${crypto.randomUUID()}`
+      this.scheduledWorkNotifications.set(target, id)
       try {
-        await this.deliver(target, {
-          kind: 'message', id: `work-wake:${target}:${crypto.randomUUID()}`, timestamp: new Date().toISOString(), policy: 'next-step',
+        const receipt = await this.deliver(target, {
+          kind: 'message', id, timestamp: new Date().toISOString(), policy: 'next-step',
           source: { kind: 'event', eventId: target, type: 'work-notification-wake', source: 'work-notebook' }, content: '',
         })
+        if (receipt.status !== 'accepted' || receipt.disposition === 'filtered') this.releaseWorkNotification(target, id)
       } catch (error) {
-        this.scheduledWorkNotifications.delete(target)
+        this.releaseWorkNotification(target, id)
         // Facts remain pending, including when a coordinator has no usable runtime/folder.
         console.warn(`[work-notifications] Admission deferred for ${target}: ${errMsg(error)}`)
       }
     }
   }
 
+  private releaseWorkNotification(target: string, id: string): boolean {
+    if (this.scheduledWorkNotifications.get(target) !== id) return false
+    return this.scheduledWorkNotifications.delete(target)
+  }
+
   private configureWorkNotifications(session: Session, target: string): void {
+    const wake = () => {
+      void this.recoverWorkNotifications().catch(error => console.warn(`[work-notifications] Recovery deferred: ${errMsg(error)}`))
+    }
     session.prepareWorkNotification = async marker => {
-      this.scheduledWorkNotifications.delete(target)
-      if (!this.alignment) return null
-      const store = this.alignment.store
-      const pending = store.pendingWorkNotifications(target)
-      if (!pending.length) return null
-      // A crash between history append and receipt settlement must not duplicate a handoff.
-      const recorded = new Set<string>()
-      const state = this.getSessionState(target)
-      if (!state || state.retirement) return null
-      const physicalIds = new Set([SessionManager.currentPhysicalId(state), ...pending.flatMap(notice => notice.deliveryPhysicalIds ?? [])])
-      for (const physicalId of physicalIds) for await (const row of this.store.readSessionLog(physicalId)) {
-        if (row.role !== 'user' || row.name !== '__work_notification__' || !Array.isArray(row.content)) continue
-        const first = row.content[0] as { type?: string; text?: string } | undefined
-        if (first?.type !== 'text' || !first.text?.startsWith('<event type="work-notification" source="work-notebook"')) continue
-        const text = JSON.stringify(row.content)
-        for (const notice of pending) if (text.includes(`[work-notification:${notice.id}]`)) recorded.add(notice.id)
+      if (this.scheduledWorkNotifications.get(target) !== marker.id) return null
+      let prepared = false
+      try {
+        const store = this.alignment?.store
+        const state = this.workNotificationRecipient(target)
+        const pending = store?.pendingWorkNotifications(target)
+        if (!store || !state || !pending?.length) return null
+        // A crash between history append and receipt settlement must not duplicate a handoff.
+        const recorded = new Set<string>()
+        const physicalId = SessionManager.currentPhysicalId(state)
+        const physicalIds = new Set([physicalId, ...pending.flatMap(notice => notice.deliveryPhysicalIds ?? [])])
+        for (const stampedId of physicalIds) for await (const row of this.store.readSessionLog(stampedId)) {
+          if (row.role !== 'user' || row.name !== '__work_notification__' || !Array.isArray(row.content)) continue
+          const first = row.content[0] as { type?: string; text?: string } | undefined
+          if (first?.type !== 'text' || !first.text?.startsWith('<event type="work-notification" source="work-notebook"')) continue
+          const text = JSON.stringify(row.content)
+          // New comment receipts are read only from the host event tag, never its prose.
+          const stampedIds = new Set(/ workNotificationIds="([^"]*)"/.exec(first.text)?.[1]?.split(','))
+          for (const notice of pending) {
+            if (isWorkNoteNotification(notice) ? stampedIds.has(notice.id) : text.includes(`[work-notification:${notice.id}]`)) recorded.add(notice.id)
+          }
+        }
+        const current = this.workNotificationRecipient(target)
+        if (this.scheduledWorkNotifications.get(target) !== marker.id || !current
+          || SessionManager.currentPhysicalId(current) !== physicalId) return null
+        const { notices, records } = store.prepareWorkNotificationDelivery(target, pending.map(notice => notice.id), recorded)
+        if (!notices.length) {
+          if (this.releaseWorkNotification(target, marker.id) && store.pendingWorkNotifications(target).length) wake()
+          return null
+        }
+        const content = workNotificationContent(notices, records)
+        prepared = true
+        return { ...marker, source: { kind: 'event', eventId: marker.id, type: 'work-notification', source: 'work-notebook',
+          senderName: '__work_notification__', attributes: { workNotificationIds: notices.map(notice => notice.id) } }, content }
+      } finally {
+        if (!prepared) this.releaseWorkNotification(target, marker.id)
       }
-      const records = store.workRecords()
-      const valid = pending.filter(notice => !recorded.has(notice.id) && currentWorkNotification(notice, records))
-      store.settleWorkNotifications(pending.filter(notice => recorded.has(notice.id) || !currentWorkNotification(notice, records)).map(notice => notice.id))
-      if (!valid.length) return null
-      store.stampWorkNotificationDelivery(valid.map(notice => notice.id), SessionManager.currentPhysicalId(state))
-      return { ...marker, source: { kind: 'event', eventId: marker.id, type: 'work-notification', source: 'work-notebook',
-        senderName: '__work_notification__', attributes: { workNotificationIds: valid.map(notice => notice.id) } },
-        content: workNotificationContent(valid, records) }
+    }
+    session.revalidateWorkNotification = (input, physicalId) => {
+      if (input.source.kind !== 'event') return null
+      const store = this.alignment?.store
+      const ids = input.source.attributes?.workNotificationIds
+      if (!store || !this.workNotificationRecipient(target) || this.scheduledWorkNotifications.get(target) !== input.id
+        || !Array.isArray(ids) || !ids.every(id => typeof id === 'string')) return null
+      const { notices, records } = store.prepareWorkNotificationDelivery(target, ids, new Set(), physicalId)
+      if (notices.length) return { ...input, content: workNotificationContent(notices, records),
+        source: { ...input.source, attributes: { workNotificationIds: notices.map(notice => notice.id) } } }
+      if (this.releaseWorkNotification(target, input.id) && store.pendingWorkNotifications(target).length) wake()
+      return null
+    }
+    session.workNotificationFinished = input => {
+      if (input.source.kind === 'event' && input.source.type === 'work-notification') this.releaseWorkNotification(target, input.id)
     }
     session.inputPersisted = input => {
       if (input.source.kind !== 'event' || input.source.type !== 'work-notification') return
       const ids = input.source.attributes?.workNotificationIds
       if (Array.isArray(ids) && ids.every(id => typeof id === 'string')) this.alignment?.store.settleWorkNotifications(ids)
+      if (this.releaseWorkNotification(target, input.id)
+        && this.alignment?.store.pendingWorkNotifications(target).some(notice => !Array.isArray(ids) || !ids.includes(notice.id))) wake()
     }
   }
 
   async notifyWorkChange(record: WorkRecord, previous?: WorkRecord): Promise<void> {
     if (!this.alignment) throw new Error('Work alignment is not configured.')
+    this.wakeAutomaticWorkKickoffs()
     for (const sessionId of Object.keys(this.sessionStates)) {
       const input = this.inputs.get(sessionId, true)
       if (input?.workContext && !this.alignment.currentContext(input.workContext)) {
-        await this.inputs.invalidatePending(sessionId, input.id, `The goal path changed at ${record.workflow?.title ?? record.key}. Re-evaluate the missing information in its new context.`)
+        await this.inputs.invalidatePending(sessionId, input.id, `The goal path changed at ${record.title}. Re-evaluate the missing information in its new context.`)
       }
       const pending = this.yields.get(sessionId)
       if (pending?.origin && (pending.workContext || pending.workStamps?.length) && !this.alignment.currentDecision(pending)) {
         await this.yields.invalidatePending({
           sessionId, physicalId: pending.origin.physicalId, requestId: pending.id,
-        }, `The goal path changed at ${record.workflow?.title ?? record.key}. Re-evaluate the choice rather than answering the old premise.`)
+        }, `The goal path changed at ${record.title}. Re-evaluate the choice rather than answering the old premise.`)
       }
     }
-    if (record.notes) {
-      await this.recoverWorkNotifications()
-      return
-    }
-    if (previous && previous.revision === record.revision
-      && previous.workflow?.assignmentRevision === record.workflow?.assignmentRevision
-      && JSON.stringify(previous.workflow?.dependencies) === JSON.stringify(record.workflow?.dependencies)) return
-    const authority = this.alignment.store.workAuthority(record.subject)
-    for (const executor of new Set([authority.executor, previous?.workflow?.assignee])) {
-      if (!executor || !this.getSessionState(executor)) continue
-      const state = this.getSessionState(executor)!
-      if (!this.alignment.required(executor)) continue
-      if (!previous?.workflow?.assignee && state.workPolicy?.mode === 'required'
-        && state.topicRequestHash && state.executionStatus === 'pending' && !state.lastActivityAt) continue
-      this.assertFolderAccess(executor)
-      await this.deliver(executor, {
-        kind: 'message', id: `work:${record.key}:${record.sequence}`, timestamp: new Date().toISOString(), policy: 'steering',
-        source: { kind: 'event', eventId: record.key, type: 'work-realignment', source: 'work-contract' },
-        content: `Work ${record.key} changed. Read its current context and assignment; reconsider obsolete plans. No permission or acceptance is implied.\n` +
-          JSON.stringify({ key: record.key, revision: record.revision, assignee: authority.executor }),
-      })
-    }
+    await this.recoverWorkNotifications()
+
   }
 
   /** Start a fresh context without summarizing, deleting history, or changing identity. */
@@ -4059,6 +4528,7 @@ ${JSON.stringify(request)}`,
       }
     }
 
+    personal?.assertCurrent?.() // Tool preload may have awaited a publication change.
     return {
       behavior,
       state,

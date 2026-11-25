@@ -87,3 +87,18 @@ test('active subscribers share reads in one app; scope, visibility, auth and unm
  requests[6].resolve(Response.json({ revision: 'late', groups: [], agents: [] }))
  await nextTick(); assert.notEqual(values[1].revision.value, 'late')
 })
+
+
+test('sidebar catalog excludes removed connections from persisted and observed rows without mutating either history', () => {
+ const catalog = [{ id: group.botInstanceId, projectId: 'p', platform: 'qq', displayName: 'Current connection' }]
+ const removedGroup = { ...group, botInstanceId: 'removed' }
+ const removedSession = { ...session, sessionId: 'removed-history', channelAddress: { ...session.channelAddress!, botInstanceId: 'removed' } }
+ const web = { ...session, sessionId: 'web:chat', channelAddress: undefined }
+ const history = [session, removedSession, web]
+ const observations = [group, removedGroup]
+ const before = structuredClone({ history, observations })
+ assert.deepEqual(projectGroupConversations(history, observations, 'p', catalog).map(row => row.sessionId), [session.sessionId, web.sessionId])
+ assert.deepEqual(projectGroupConversations(history, observations, 'p', []).map(row => row.sessionId), [web.sessionId])
+ assert.deepEqual(projectGroupConversations(history, observations, 'p', catalog.map(bot => ({ ...bot, platform: 'discord' }))).map(row => row.sessionId), [web.sessionId])
+ assert.deepEqual({ history, observations }, before)
+})

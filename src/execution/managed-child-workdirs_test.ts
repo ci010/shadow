@@ -1,18 +1,20 @@
 import { fixtureProjectExecutor } from './test-fixtures.ts'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { test } from 'node:test'
 import { folderFixture } from '../folders/test-fixtures.ts'
 import { ManagedChildWorkdirs } from './managed-child-workdirs.ts'
-import { DEVICE_HOME_WORKDIR, deviceHomeNode } from './device-home.ts'
+import { DEVICE_HOME_WORKDIR, deviceHomeNode, deviceHomeReadArgs } from './device-home.ts'
 import { LocalExecutor } from './local-executor.ts'
 import { ProcessManager } from './processes/manager.ts'
 import { ProjectExecutor } from '../projects/executor.ts'
 import { allocateRemoteSessionWorkdir } from './remote-managed-workdir-client.ts'
 import { managedProjectScope, managedSessionWorkdirId, LEGACY_MANAGED_SERVICE_ID, MANAGED_SESSION_OPERATION, projectExecutionKey } from './managed-workdir.ts'
-import { executeRemoteFilesystemText } from './remote-filesystem-client.ts'
+import { pngFixture } from '../testing/image.ts'
+import { executeRemoteFilesystemImage, executeRemoteFilesystemSearch, executeRemoteFilesystemText } from './remote-filesystem-client.ts'
 import { validateExecutionRequestV2, type ExecutionRequestV2 } from './contracts.ts'
 import type { Executor } from './executor.ts'
 
@@ -78,6 +80,18 @@ test('opted-in Child home is a reserved read and shell root without a registered
   const home = join(folders, 'child-home')
   await mkdir(home)
   await writeFile(join(home, 'fixture.txt'), 'from Child home')
+  const temp = join(home, 'AppData', 'Local', 'Temp')
+  await mkdir(temp, { recursive: true })
+  const textPath = join(temp, 'capture.txt')
+  const imagePath = join(temp, 'capture.png')
+  const bytes = pngFixture(16, 16)
+  const outside = join(folders, 'child-home-other')
+  await mkdir(outside)
+  await Promise.all([
+    writeFile(textPath, 'Child temporary file'), writeFile(imagePath, bytes),
+    writeFile(join(outside, 'capture.txt'), 'outside'), writeFile(join(outside, 'capture.png'), bytes),
+    symlink(outside, join(home, 'escape'), 'junction'),
+  ])
   const storage = join(home, 'shadow-metadata')
   const signal = new AbortController().signal
   const access = request({ workdirId: DEVICE_HOME_WORKDIR, operation: 'filesystem.read', args: { path: '~/fixture.txt' } })
@@ -105,10 +119,37 @@ test('opted-in Child home is a reserved read and shell root without a registered
   const target = { executor: local, nodeId: 'child', workdirId: DEVICE_HOME_WORKDIR, sessionId: 'web:chat-fixture', turnId: randomUUID(), signal }
   assert.match(await executeRemoteFilesystemText(target, 'filesystem.read', { path: '~' }), /fixture\.txt/)
   assert.equal(await executeRemoteFilesystemText(target, 'filesystem.read', access.args), 'from Child home')
+  assert.equal(await executeRemoteFilesystemText(target, 'filesystem.read', { path: textPath }), 'Child temporary file')
+  const image = await executeRemoteFilesystemImage(target, imagePath)
+  assert.equal(image.part.image_url.url, `data:image/png;base64,${bytes.toString('base64')}`)
+  for (const root of [outside, join(home, 'escape')]) {
+    await assert.rejects(executeRemoteFilesystemText(target, 'filesystem.read', { path: join(root, 'capture.txt') }), /outside/i)
+    await assert.rejects(executeRemoteFilesystemImage(target, join(root, 'capture.png')), /outside/i)
+  }
   await assert.rejects(executeRemoteFilesystemText(target, 'filesystem.read', { path: '~/../outside' }), /outside|escape|relative/i)
+  await t.test('Child search accepts both home aliases and rejects an escaping root', async searchTest => {
+    const search = { handler: 'glob', query: 'capture.txt' } as const
+    await assert.rejects(executeRemoteFilesystemSearch(target, '~/escape', search), /outside/i)
+    if (spawnSync('rg', ['--version']).status !== 0) {
+      searchTest.skip('ripgrep is unavailable')
+      return
+    }
+    for (const path of ['~', '~/AppData/Local/Temp', temp]) {
+      assert.match(await executeRemoteFilesystemSearch(target, path, search), /AppData[\\/]Local[\\/]Temp[\\/]capture\.txt/)
+    }
+  })
   const disabledAgain = new ManagedChildWorkdirs(storage, 'child', [])
   await disabledAgain.init()
   assert.equal(disabledAgain.workdirs.some(dir => dir.workdirId === DEVICE_HOME_WORKDIR), false)
+})
+
+test('Child home absolute path routing follows Windows drive and separator rules', () => {
+  const map = (path: string) => deviceHomeReadArgs({ workdirId: DEVICE_HOME_WORKDIR, args: { path } }, 'C:\\Users\\Child', win32).args.path
+  assert.equal(map('c:\\USERS\\child\\AppData\\Local\\Temp\\capture.png'), 'AppData\\Local\\Temp\\capture.png')
+  assert.equal(map('C:/Users/Child'), '.')
+  for (const path of ['D:\\Users\\Child\\capture.png', '\\Users\\Child\\capture.png', 'C:\\Users\\Child-other\\capture.png', 'C:/Users/Child/../capture.png']) {
+    assert.throws(() => map(path), /outside/)
+  }
 })
 
 test('managed allocation client rejects malformed, oversized and foreign Child results', async () => {

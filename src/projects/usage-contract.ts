@@ -28,8 +28,18 @@ export const requestQualitySchema = z.object({
   cache: z.object({ readTokens: amount.nullable(), writeTokens: amount.nullable(), inputTokens: amount.nullable(), outputTokens: amount.nullable(),
     requestsWithReadTokens: count, requestsWithWriteTokens: count, requestsWithInputTokens: count, requestsWithOutputTokens: count }),
   firstText: latency, queue: latency, duration: latency,
+  outputRate: z.object({ tokensPerSecond: amount.nullable(), samples: count, outputTokens: amount, activeDurationMs: amount }).optional(),
 })
 export type RequestQuality = z.infer<typeof requestQualitySchema>
+const requestQualityPeriodSchema = requestQualitySchema.extend({
+  models: z.array(z.object({ provider: z.string().nullable(), model: z.string().nullable(), quality: requestQualitySchema })),
+  providers: z.array(z.object({ provider: z.string().nullable(), quality: requestQualitySchema })),
+})
+export const requestQualityByPeriodSchema = z.object({
+  total: requestQualityPeriodSchema, today: requestQualityPeriodSchema,
+  past7Days: requestQualityPeriodSchema, month: requestQualityPeriodSchema,
+})
+export type RequestQualityByPeriod = z.infer<typeof requestQualityByPeriodSchema>
 const recallRow = z.object({ entry: z.string(), reads: count })
 export const usageRecallSchema = z.object({
   skills: z.array(recallRow).max(100),
@@ -39,8 +49,11 @@ export const usageRecallSchema = z.object({
 /** Latest UTC dates included in the overview response, including the snapshot day. */
 export const USAGE_TREND_HISTORY_DAYS = 31
 
+const dailyUsageSchema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), usage: projectUsageMetricsSchema })
+
 export const projectUsageSchema = z.object({
   requestQuality: requestQualitySchema.optional(),
+  requestQualityByPeriod: requestQualityByPeriodSchema.optional(),
   recall: usageRecallSchema.optional(),
   activity: projectUsageActivitySchema.default((): ProjectUsageActivity => ({
     total: { models: [], tools: [] }, today: { models: [], tools: [] },
@@ -49,7 +62,9 @@ export const projectUsageSchema = z.object({
   projectId: z.string(), asOf: z.string().datetime(), timeZone: z.literal('UTC'),
   total: projectUsageMetricsSchema, today: projectUsageMetricsSchema,
   past7Days: projectUsageMetricsSchema, month: projectUsageMetricsSchema,
-  daily: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), usage: projectUsageMetricsSchema })),
+  daily: z.array(dailyUsageSchema.extend({
+    models: z.array(z.object({ name: z.string(), usage: projectUsageMetricsSchema })).optional(),
+  })),
   firstText: latency.optional(),
   coverage: z.enum(['complete', 'partial']).optional(),
   scanLimitReached: z.boolean(), untrackedSessions: z.number().int().nonnegative(),
@@ -66,6 +81,6 @@ export const projectUsagePageSchema = z.object({
   projectId: z.string(), asOf: z.string().datetime(),
   page: z.number().int().positive(), pageSize: z.literal(10),
   total: z.number().int().nonnegative(), hasMore: z.boolean(),
-  daily: projectUsageSchema.shape.daily.max(10),
+  daily: z.array(dailyUsageSchema).max(10),
 })
 export type ProjectUsagePage = z.infer<typeof projectUsagePageSchema>

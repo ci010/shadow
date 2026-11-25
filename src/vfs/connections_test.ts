@@ -18,8 +18,8 @@ const context = { projectId: 'p', channel: 'web', sessionId: 'web:owner', admin:
 test('canonical Connection mount is bounded read-only inspection with receiver paths', async () => {
   const calls: string[] = []
   const handler = createConnectionsHandler({ projectId: 'p', observation: () => ({ connections: [], deployments: [], bindings: [], sinks: [], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }), assertSession: id => { assert.equal(id, 'web:owner') },
-    index: () => ({ ids: ['conn'] }), overview: id => ({ id, displayName: 'Connection', platform: 'qq', purpose: 'service',
-      enabled: true, health: 'connected', ownerVerified: true, config: 'PRIVATE' }),
+    index: () => ({ ids: ['conn'] }), overview: id => ({ id, displayName: 'Connection', platform: 'qq',
+      enabled: true, health: 'connected', config: 'PRIVATE' }),
     sink: id => { calls.push(id); assert.equal(id, 'conn'); return projection() } })
   const vfs = new VirtualFs(); vfs.mount('v:connections', 'Connections', handler.read, handler.list, undefined, handler.directory)
   const overview = await vfs.resolve('v:connections/conn/overview.json', context)
@@ -32,7 +32,7 @@ test('canonical Connection mount is bounded read-only inspection with receiver p
   const sink = JSON.parse((await vfs.resolve('v:connections/conn/sink.json', context))!)
   assert.deepEqual(sink.receivers[0].evidence, JSON.parse(receiver).evidence)
   assert.throws(() => vfs.write('v:connections/conn/sink.json', { content: '{}' }, context), /read-only/)
-  for (const patch of [{ projectId: 'other' }, { admin: false }, { remoteWorkdir: {} }, { scriptInvocation: true }, { tools: { executionMode: 'call', has: () => true } }])
+  for (const patch of [{ projectId: 'other' }, { remoteWorkdir: {} }, { scriptInvocation: true }])
     assert.throws(() => handler.read('conn/sink.json', { ...context, ...patch } as ExecutionContext), /management|Project mismatch/)
   assert(calls.every(id => id === 'conn'))
 })

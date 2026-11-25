@@ -103,11 +103,10 @@ test('background chips and sidebar delegated activity update without making an i
             json({ sessionId, total: tasks.length, tasks })
           } else if (path.endsWith('/work')) json({
             records: path.includes('web%3Achat-owner') || path.includes('web:chat-owner') ? [{
-              key: 'topic:web:chat-owner', subject: { kind: 'topic', sessionId: 'web:chat-owner' }, revision: 1,
-              definition: { objective: 'Review a long assignment title that must fit beside the activity chips', acceptance: [], boundaries: [], evidence: [] },
-              origin: 'human', reason: 'Fixture', paused: false,
-              sequence: 1, changedBy: 'user', changedAt: '2026-09-23T00:00:00Z', change: 'goal',
-              authority: { manager: 'web:chat-owner', executor: 'web:chat-owner', active: true }, history: [],
+              key: 'work:75d5ba46-c5a3-5e3f-88ea-8406202b0718', revision: 1,
+              definition: 'Review a long assignment title that must fit beside the activity chips',
+              origin: 'human',
+              sequence: 1, changedBy: 'user', changedAt: '2026-09-23T00:00:00Z', authority: { manager: 'web:chat-owner', executor: 'web:chat-owner', active: true }, history: [],
             }] : [], effects: [],
           })
           else if (path.endsWith('/api/folders')) json({ folders: [] })

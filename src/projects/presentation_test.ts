@@ -12,9 +12,10 @@ import { readFile } from 'node:fs/promises'
 import { OrganizationController } from './organization-controller.ts'
 import { projectFocusSnapshotSchema } from './focus-contract.ts'
 
-const work = workRecordSchema.parse({ key: 'topic:web:chat-voice', subject: { kind: 'topic', sessionId: 'web:chat-voice' }, sequence: 1, revision: 1,
-  definition: { objective: 'Current: local ASR only', acceptance: [], boundaries: [], evidence: [] }, origin: 'agent_interpretation',
-  changedBy: 'work-observer', changedAt: '2026-10-11T00:00:00Z', change: 'understanding', reason: 'fixture', paused: false,
+const work = workRecordSchema.parse({ key: 'work:642d1eb0-0d13-5665-b8b3-96935bc5c5c7', sequence: 1, revision: 1,
+  definition: 'Current: local ASR only', origin: 'agent_interpretation',
+  changedBy: 'work-observer', changedAt: '2026-10-11T00:00:00Z',
+  title: 'Observed Work', manager: null, assignee: null, assignmentRevision: 1, status: 'pending', dependencies: [],
   observation: { sessionId: 'web:chat-voice', observedAt: '2026-10-11T00:00:00Z', sources: [{ id: 'record:0', physicalId: 'voice.1' }] } })
 
 test('semantic organization recovers discarded human discussion, splits outcomes and persists presentation separately', async () => withTempWorkspace(async home => {
@@ -29,7 +30,7 @@ test('semantic organization recovers discarded human discussion, splits outcomes
       const ctx={sessionId:'fixture:organizer',physicalSessionId:'physical',projectId:'fixture',signal,tools:new SessionTools(new Tools(home),home)} as ExecutionContext
       const input=JSON.parse(organizer.begin(ctx.sessionId,runMode,signal))
       try{
-        assert.match(input.manifest[0].objective,/local ASR only/)
+        assert.match(input.manifest[0].definition,/local ASR only/)
         let offset:number|null=0,seen:typeof voiceEvidence=[]
         while(offset!==null){const page=JSON.parse(await organizer.read({key:work.key,offset},ctx));seen.push(...page.sources);offset=page.next}
         assert.match(seen[2]!.text,/先放弃/)
@@ -54,11 +55,13 @@ test('semantic organization recovers discarded human discussion, splits outcomes
     for (const invalid of ['invented', 'stale', 'deleted']) {
       mode = invalid
       await assert.rejects(controller.organize(new AbortController().signal))
-      assert.deepEqual(store.projectFocus(), snapshot)
+      assert.deepEqual({ ...store.projectFocus(), organizerAdmission: snapshot.organizerAdmission }, snapshot,
+        'A failed attempt can update admission backoff but never replace the saved presentation')
     }
+    const beforeReopen = store.projectFocus()
     await controller.stop(); store.close()
     store = new InitiativeStore(home)
-    assert.deepEqual(store.projectFocus(), snapshot, 'SQLite safe reopen retains evidence snapshot')
+    assert.deepEqual(store.projectFocus(), beforeReopen, 'SQLite safe reopen retains evidence snapshot')
     assert.deepEqual(projectFocusSnapshotSchema.parse(JSON.parse(JSON.stringify(snapshot))), snapshot, 'JSON roundtrip retains optional presentation')
   } finally { await controller.stop(); store.close(); scope.close() }
 }))

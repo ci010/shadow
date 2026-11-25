@@ -114,7 +114,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.start()
         await f.cron.start()
         const workdir = { version: 2 as const, nodeId: 'remote-a', workdirId: 'folder-a', displayPathSnapshot: 'Z:\\not-on-main' }
-        await f.manager.buildSession('web:origin', undefined, { folderId: 'folder-a', initiativeId: 'work:fixture', workdir })
+        await f.manager.buildSession('web:origin', undefined, { folderId: 'folder-a', initiativeId: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', workdir })
         await f.manager.deliver('web:origin', input('PARENT TRANSCRIPT SENTINEL'))
         await until(() => f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
         await f.manager.buildSession('web:peer', undefined, { agentType: 'reader' })

@@ -2,8 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
 import { InitiativeStore, automaticWorkEligible } from '../initiatives/store.ts'
-import { workKey, type WorkRecord } from '../initiatives/work-contract.ts'
-import { workNotesSchema } from '../initiatives/work-notes.ts'
+import { type WorkRecord } from '../initiatives/work-contract.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import type { SessionInput } from '../sessions/input.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -20,8 +19,12 @@ function fixture(home: string, projectId = 'a') {
   const store = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
   const delivered: Array<{ id: string; input: SessionInput }> = []
   let creates = 0, prepares = 0, changed = 0, preparationFails = false, deliveryFails = false, targetFails = false, replay = false
+  let admit: Parameters<WorkDispatcherDeps['sessions']['setAutomaticWorkAdmission']>[0]
+  let beforeDrainDispatch: (() => void) | undefined
   const sessions = {
-    setAutomaticWorkAdmission: () => {},
+    setAutomaticWorkAdmission: (handler: typeof admit) => { admit = handler },
+    validateAutomaticWorkTarget: async () => {},
+    wakeAutomaticWorkKickoffs: () => {},
     getSessionState: (id: string) => states.get(id) ?? null,
     isSessionBusy: (id: string) => active.has(id) || waiting.has(id),
     buildSession: async (id: string, _parent: unknown, fields: Partial<SessionState>) => {
@@ -48,25 +51,41 @@ function fixture(home: string, projectId = 'a') {
     verify: async () => {},
     changed: async () => { changed++ },
   }
+  const drain = async () => {
+    for (const entry of store.pendingWorkKickoffs()) {
+      try {
+        await admit(entry.target, entry.input, async check => {
+          beforeDrainDispatch?.()
+          check?.()
+          const receipt = await sessions.deliver(entry.target, entry.input)
+          store.recordWorkKickoff(entry.input.id, 'fixture-segment')
+          return receipt
+        })
+      } catch { /* Failed admission retains the exact pending row. */ }
+    }
+  }
   const bindRunner = (dispatcher: WorkDispatcher) => {
     dispatcher.setRunner(async (round, signal) => {
       const candidate = store.workRecords().find(record => automaticWorkEligible(record, store.workRecords()))
-      if (candidate) await dispatcher.dispatchWork(round, candidate.key, candidate.sequence, {}, signal)
+      if (candidate) {
+        await dispatcher.dispatchWork(round, candidate.key, candidate.sequence, {}, signal)
+        await drain()
+      }
     })
     return dispatcher
   }
   const dispatcher = bindRunner(new WorkDispatcher(deps))
-  const create = (overrides: Partial<NonNullable<WorkRecord['workflow']>> = {}) => {
-    const subject = { kind: 'work' as const, id: randomUUID() }
-    const work: WorkRecord = { subject, key: workKey(subject), revision: 1, sequence: 1,
-      definition: { objective: 'Deliver fixture', acceptance: [], boundaries: [], evidence: [] }, origin: 'human', changedBy: 'user',
-      changedAt: new Date().toISOString(), change: 'goal', reason: 'Synthetic fixture', paused: false, notes: workNotesSchema.parse({}),
-      workflow: { title: 'Fixture', manager: null, assignee: null, assignmentRevision: 1, status: 'pending', dependencies: [], ...overrides } }
+  const create = (overrides: Partial<Pick<WorkRecord, 'status' | 'assignee' | 'manager' | 'parentKey' | 'dependencies' | 'blockedReason' | 'assignmentRevision' | 'assignmentStarted'>> = {}) => {
+    const work: WorkRecord = { key: `work:${randomUUID()}`, revision: 1, sequence: 1,
+      definition: 'Deliver fixture', origin: 'human', changedBy: 'user',
+      changedAt: new Date().toISOString(),
+      title: 'Fixture', kind: 'task', artifacts: [], basis: [], summary: '', manager: null, assignee: null, assignmentRevision: 1, status: 'pending', dependencies: [], ...overrides }
     store.saveWork(work, 0, 'user', 'created')
     return work
   }
   const get = (work: WorkRecord) => store.workRecords().find(item => item.key === work.key)!
-  return { store, states, active, waiting, dispatcher, bindRunner, deps, create, get, delivered,
+  return { store, states, active, waiting, dispatcher, bindRunner, deps, create, get, delivered, drain,
+    beforeDrain: (fn?: () => void) => { beforeDrainDispatch = fn },
     counts: () => ({ creates, prepares, changed }), failPreparation: (v = true) => { preparationFails = v },
     failDelivery: (v = true) => { deliveryFails = v }, failTarget: () => { targetFails = true }, replay: () => { replay = true } }
 }
@@ -79,7 +98,7 @@ test('idle program scans do not create or deliver sessions; invalid target fails
     assert.deepEqual(f.delivered, [])
     const work = f.create(); f.failTarget()
     await assert.rejects(f.dispatcher.dispatch(job, abort()), /Workspace unavailable/)
-    assert.equal(f.get(work).workflow?.assignee, null)
+    assert.equal(f.get(work).assignee, null)
     assert.equal(f.counts().creates, 0)
   } finally { f.store.close() }
 }))
@@ -89,77 +108,76 @@ test('bounded admission, claim competition, durable same-assignee restart, and u
   try {
     const first = f.create(), second = f.create()
     await Promise.all([f.dispatcher.dispatch(job, abort()), f.dispatcher.dispatch(job, abort())])
-    const assigned = f.store.workRecords().find(record => record.workflow?.assignee)!
+    const assigned = f.store.workRecords().find(record => record.assignee)!
     const remaining = assigned.key === first.key ? second : first
-    assert.equal(f.get(remaining).workflow?.assignee, null)
+    assert.equal(f.get(remaining).assignee, null)
     assert.equal(f.delivered.length, 1)
-    const id = assigned.workflow!.assignee!
+    const id = assigned.assignee!
     assert.equal(f.states.get(id)?.folderId, 'isolated')
     assert.equal(f.states.get(id)?.automaticWork?.limits.inferenceRequests, 100)
     await f.dispatcher.dispatch(job, abort())
     assert.equal(f.counts().creates, 1)
-    const stale = { ...first, sequence: 2, workflow: { ...first.workflow!, assignee: 'racer', assignmentRevision: 2 }, automaticExecution: assigned.automaticExecution }
-    assert.throws(() => f.store.claimAutomaticWork(stale, 1), /changed|assignee/)
+    const { state: _state, physicalId: _physical, inspectReason: _inspect, ...kickoff } = f.store.workKickoff(assigned.automaticExecution!.inputId)!
+    const stale = { ...first, sequence: 2, assignee: 'racer', assignmentRevision: 2, automaticExecution: assigned.automaticExecution }
+    assert.throws(() => f.store.claimAutomaticWork(stale, 1, kickoff), /changed|assignee/)
     f.active.clear()
     const restarted = f.bindRunner(new WorkDispatcher(f.deps))
     await restarted.recover()
-    assert.equal(f.get(assigned).workflow?.status, 'blocked')
-    assert.equal(f.get(assigned).workflow?.assignee, id)
+    assert.equal(f.get(assigned).status, 'blocked')
+    assert.equal(f.get(assigned).assignee, id)
     assert.equal(f.delivered.length, 1)
     // Blocked work is not claimable, even if a future tick picks up another item.
     assert.equal(automaticWorkEligible(f.get(assigned), f.store.workRecords()), false)
     f.failDelivery()
     await restarted.dispatch(job, abort())
     const failure = f.get(remaining)
-    assert.equal(failure.workflow?.status, 'blocked')
-    assert.match(failure.workflow!.blockedReason!, /unknown outcome/)
+    assert.equal(failure.status, 'pending')
+    assert.equal(f.store.workKickoff(failure.automaticExecution!.inputId)?.state, 'pending')
     const delivered = f.delivered.length
     await restarted.dispatch(job, abort())
     assert.equal(f.delivered.length, delivered)
-    assert.equal(f.get(remaining).workflow?.assignee, failure.workflow?.assignee)
+    assert.equal(f.get(remaining).assignee, failure.assignee)
   } finally { f.store.close() }
 }))
 
-test('eligibility excludes paused/terminal/assigned work and reuses dependency/ancestor checks', async () => withTempWorkspace(async home => {
+test('eligibility excludes terminal/assigned work and reuses dependency/ancestor checks', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     const root = f.create(), dependent = f.create({ dependencies: [root.key] })
     assert.equal(automaticWorkEligible(dependent, f.store.workRecords()), false)
     for (const status of ['done', 'cancelled'] as const) {
-      const record = { ...root, workflow: { ...root.workflow!, status } }
+      const record = { ...root, status }
       assert.equal(automaticWorkEligible(record, [record]), false)
     }
-    assert.equal(automaticWorkEligible({ ...root, paused: true }, [root]), false)
-    assert.equal(automaticWorkEligible({ ...root, workflow: { ...root.workflow!, assignee: 'someone' } }, [root]), false)
-    const child = { ...dependent, workflow: { ...dependent.workflow!, dependencies: [], parentKey: root.key } }
-    assert.equal(automaticWorkEligible(child, [{ ...root, paused: true }, child]), false)
-    const done = { ...root, workflow: { ...root.workflow!, status: 'done' as const } }
+    assert.equal(automaticWorkEligible({ ...root, assignee: 'someone' }, [root]), false)
+    const child = { ...dependent, dependencies: [], parentKey: root.key }
+    const done = { ...root, status: 'done' as const }
     assert.equal(automaticWorkEligible(dependent, [done, dependent]), true)
   } finally { f.store.close() }
 }))
 
-test('isolation failure keeps responsibility blocked without admission, then explicit recovery binds same executor', async () => withTempWorkspace(async home => {
+test('pre-commit isolation or grant failure leaves Work unassigned; only a verified inert target may be reused', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     const work = f.create(); f.failPreparation()
-    await f.dispatcher.dispatch(job, abort())
-    let blocked = f.get(work)
-    const id = blocked.workflow!.assignee!
-    assert.equal(blocked.workflow?.status, 'blocked')
-    assert.equal(f.delivered.length, 0)
-    assert.equal(f.states.get(id)?.folderId, undefined)
-    assert.match(blocked.notes!.attention!.summary, /Isolation preparation failed/)
-    await f.dispatcher.dispatch(job, abort())
-    assert.equal(f.counts().creates, 1)
+    await assert.rejects(f.dispatcher.dispatch(job, abort()), /worktree unavailable/)
+    assert.equal(f.get(work).assignee, null)
+    assert.deepEqual(f.store.pendingWorkKickoffs(), [])
+    assert.equal(f.counts().creates, 0)
     f.failPreparation(false)
-    await assert.rejects(f.dispatcher.resume(work.key, 1, abort()), /current/)
-    await f.dispatcher.resume(work.key, blocked.sequence, abort())
-    blocked = f.get(work)
-    assert.equal(blocked.workflow?.assignee, id)
-    assert.equal(f.states.get(id)?.folderId, 'isolated')
+    await assert.rejects(f.dispatcher.dispatchWork(job, work.key, work.sequence, {}, abort(), () => { throw new Error('grant expired') }), /grant expired/)
+    const orphan = [...f.states.values()][0]
+    assert.equal(f.get(work).assignee, null)
+    await f.drain()
+    assert.equal(f.delivered.length, 0)
+    orphan.projectId = 'wrong-project'
+    await assert.rejects(f.dispatcher.dispatch(job, abort()), /identity/)
+    assert.equal(f.get(work).assignee, null)
+    orphan.projectId = 'a'
+    await f.dispatcher.dispatch(job, abort())
+    assert.equal(f.get(work).assignee, orphan.sessionId)
     assert.equal(f.counts().creates, 1)
     assert.equal(f.delivered.length, 1)
-    assert.equal(blocked.automaticExecution?.stage, 'running')
   } finally { f.store.close() }
 }))
 
@@ -168,38 +186,38 @@ test('normal waits are not failures; abnormal budget/cancel/end states block wit
   try {
     const work = f.create()
     await f.dispatcher.dispatch(job, abort())
-    let record = f.get(work), id = record.workflow!.assignee!
+    let record = f.get(work), id = record.assignee!
     const fact = { sessionId: id, turnId: 'turn', inputId: 'input', source: { kind: 'event' as const, eventId: 'event', type: 'test', source: 'test' }, status: 'failed' as const, content: '', error: 'Session turn exceeded the maximum number of iterations' }
     f.active.clear(); f.waiting.set(id, {})
     await f.dispatcher.finished(fact)
-    assert.equal(f.get(work).workflow?.status, 'pending')
+    assert.equal(f.get(work).status, 'pending')
     await new WorkDispatcher(f.deps).recover()
-    assert.equal(f.get(work).workflow?.status, 'pending')
+    assert.equal(f.get(work).status, 'pending')
     f.waiting.clear()
     f.deps.sessions.isWaitingForExternalExecution = () => true
     await f.dispatcher.finished(fact)
-    assert.equal(f.get(work).workflow?.status, 'pending')
+    assert.equal(f.get(work).status, 'pending')
     f.deps.sessions.isWaitingForExternalExecution = () => false
     await f.dispatcher.finished(fact)
     record = f.get(work)
-    assert.equal(record.workflow?.status, 'blocked')
-    assert.match(record.workflow!.blockedReason!, /maximum number/)
-    assert.equal(record.workflow?.assignee, id)
+    assert.equal(record.status, 'blocked')
+    assert.match(record.blockedReason!, /maximum number/)
+    assert.equal(record.assignee, id)
     f.replay()
     await assert.rejects(f.dispatcher.resume(work.key, record.sequence, abort()), /acknowledgeToolReplay/)
     await f.dispatcher.resume(work.key, record.sequence, abort(), true)
     f.active.clear()
     await f.dispatcher.finished({ ...fact, status: 'cancelled', error: 'explicit stop' })
-    assert.equal(f.get(work).workflow?.status, 'blocked')
+    assert.equal(f.get(work).status, 'blocked')
     await f.dispatcher.resume(work.key, f.get(work).sequence, abort(), true)
     f.active.clear()
     await f.dispatcher.finished({ ...fact, status: 'completed', error: undefined })
-    assert.equal(f.get(work).workflow?.status, 'blocked')
-    assert.match(f.get(work).workflow!.blockedReason!, /without recording/)
+    assert.equal(f.get(work).status, 'blocked')
+    assert.match(f.get(work).blockedReason!, /without recording/)
     record = f.get(work)
-    f.store.saveWork({ ...record, sequence: record.sequence + 1, workflow: { ...record.workflow!, status: 'cancelled', blockedReason: undefined, blockedScope: undefined } }, record.sequence, 'user', 'cancelled')
+    f.store.saveWork({ ...record, sequence: record.sequence + 1, status: 'cancelled', blockedReason: undefined }, record.sequence, 'user', 'cancelled')
     await f.dispatcher.finished(fact)
-    assert.equal(f.get(work).workflow?.status, 'cancelled')
+    assert.equal(f.get(work).status, 'cancelled')
   } finally { f.store.close() }
 }))
 
@@ -208,7 +226,7 @@ test('Project-local stores do not claim each other, and stable identities are sc
   try {
     const work = a.create()
     await b.dispatcher.dispatch(job, abort())
-    assert.equal(a.get(work).workflow?.assignee, null)
+    assert.equal(a.get(work).assignee, null)
     assert.equal(b.counts().creates, 0)
     await a.dispatcher.dispatch(job, abort())
     assert.equal(a.delivered.length, 1)
@@ -234,24 +252,25 @@ test('recovery and scanning share capacity; identity tampering fails before a ne
     f.deps.verify = async () => { throw new Error('branch or git common-dir changed') }
     await assert.rejects(f.dispatcher.resume(first.key, f.get(first).sequence, abort()), /common-dir changed/)
     assert.equal(f.delivered.length, before)
-    assert.equal(f.get(first).workflow?.status, 'blocked')
-    assert.equal(f.get(first).workflow?.assignee, blocked.workflow?.assignee)
+    assert.equal(f.get(first).status, 'blocked')
+    assert.equal(f.get(first).assignee, blocked.assignee)
   } finally { f.store.close() }
 }))
 
-test('host blocker always notifies publisher despite older unresolved attention, with deterministic notification identity', async () => withTempWorkspace(async home => {
+test('host blocker uses publisher-help only, with deterministic notification identity', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     f.states.set('publisher', { sessionId: 'publisher', projectId: 'a', segmentIndex: 0, mode: 'session' })
     const work = f.create({ manager: 'publisher' })
     const old = f.get(work)
-    f.store.saveWork({ ...old, sequence: 2, notes: { ...old.notes!, attention: { kind: 'dependency', summary: 'Old unresolved attention', at: new Date().toISOString(), by: 'publisher', version: 2 } } }, 1, 'user', 'note')
+    f.store.saveWork({ ...old, sequence: 2, summary: 'Older routine update' }, 1, 'user', 'note')
     await f.dispatcher.dispatch(job, abort())
     f.active.clear()
     await f.dispatcher.recover()
     const notification = f.delivered.find(item => item.id === 'publisher')!
     assert.ok(notification)
     assert.match(notification.input.id, /^work-blocked:/)
+    assert.deepEqual(f.store.pendingWorkNotifications('publisher'), [], 'no duplicate ordinary blocker notice')
     assert.match(notification.input.kind === 'message' ? notification.input.content : '', /needs publisher help/)
     const length = f.delivered.length
     await f.dispatcher.recover()
@@ -262,13 +281,13 @@ test('host blocker always notifies publisher despite older unresolved attention,
 test('unassigned blocked Work is claimed once for clarification without silently clearing the blocker', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
-    const work = f.create({ status: 'blocked', blockedReason: 'Publisher must supply the missing input', blockedScope: 'work' })
+    const work = f.create({ status: 'blocked', blockedReason: 'Publisher must supply the missing input' })
     assert.equal(automaticWorkEligible(work, f.store.workRecords()), true)
     await f.dispatcher.dispatch(job, abort())
-    const claimed = f.get(work), id = claimed.workflow!.assignee!
+    const claimed = f.get(work), id = claimed.assignee!
     assert.ok(id)
-    assert.equal(claimed.workflow?.status, 'blocked')
-    assert.equal(claimed.workflow?.blockedReason, work.workflow?.blockedReason)
+    assert.equal(claimed.status, 'blocked')
+    assert.equal(claimed.blockedReason, work.blockedReason)
     assert.equal(f.delivered.length, 1)
     assert.match(f.delivered[0].input.kind === 'message' ? f.delivered[0].input.content : '', /blocker clarification/)
     f.active.clear()
@@ -276,8 +295,8 @@ test('unassigned blocked Work is claimed once for clarification without silently
       source: { kind: 'event', type: 'test', source: 'test', eventId: 'test' } })
     await f.dispatcher.dispatch(job, abort())
     assert.equal(f.delivered.length, 1)
-    assert.equal(f.get(work).workflow?.assignee, id)
-    assert.equal(f.get(work).workflow?.status, 'blocked')
+    assert.equal(f.get(work).assignee, id)
+    assert.equal(f.get(work).status, 'blocked')
   } finally { f.store.close() }
 }))
 
@@ -290,50 +309,52 @@ test('two SQLite claimants see one atomic winner and retain the same persisted e
     const competingSnapshot = competing.workRecords().find(item => item.key === original.key)!
     await f.dispatcher.dispatch(job, abort())
     const winner = f.get(original)
+    const { state: _state, physicalId: _physical, inspectReason: _inspect, ...kickoff } = competing.workKickoff(winner.automaticExecution!.inputId)!
     const loser: WorkRecord = { ...competingSnapshot, sequence: competingSnapshot.sequence + 1,
-      workflow: { ...competingSnapshot.workflow!, assignee: 'racing-session', assignmentRevision: 2 },
-      automaticExecution: { ...winner.automaticExecution!, sessionId: 'racing-session' } }
-    assert.throws(() => competing!.claimAutomaticWork(loser, competingSnapshot.sequence), /changed/)
-    assert.equal(competing.workRecords()[0].workflow?.assignee, winner.workflow?.assignee)
+      assignee: winner.assignee, assignmentRevision: winner.assignmentRevision, automaticExecution: winner.automaticExecution }
+    assert.throws(() => competing!.claimAutomaticWork(loser, competingSnapshot.sequence,
+      { ...kickoff, input: { ...kickoff.input, content: 'Competing changed payload' } }), /changed|conflicts/)
+    assert.equal(competing.claimAutomaticWork(loser, competingSnapshot.sequence, kickoff), false)
+    assert.equal(competing.workRecords()[0].assignee, winner.assignee)
     assert.equal(competing.workRecords()[0].automaticExecution?.inputId, winner.automaticExecution?.inputId)
     assert.equal(f.delivered.length, 1)
   } finally { competing?.close(); f.store.close() }
 }))
 
-test('post-barrier cancellation/pause cannot start inference, and terminal claimed receipts do not starve pending Work', async () => withTempWorkspace(async home => {
+test('post-barrier cancellation cannot start inference, and terminal claimed receipts do not starve pending Work', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     const first = f.create()
     let mutated = false
     f.deps.changed = async record => {
-      if (record.key === first.key && record.automaticExecution?.stage === 'delivering' && !mutated) {
+      if (record.key === first.key && record.automaticExecution?.stage === 'claimed' && !mutated) {
         mutated = true
         const current = f.get(first)
-        f.store.saveWork({ ...current, sequence: current.sequence + 1, workflow: { ...current.workflow!, status: 'cancelled' } }, current.sequence, 'user', 'cancelled')
+        f.store.saveWork({ ...current, sequence: current.sequence + 1, status: 'cancelled' }, current.sequence, 'user', 'cancelled')
       }
     }
     await f.dispatcher.dispatch(job, abort())
     assert.equal(f.delivered.length, 0)
-    assert.equal(f.get(first).workflow?.status, 'cancelled')
+    assert.equal(f.get(first).status, 'cancelled')
     // Reproduce a terminal record left specifically at claimed, then recover it.
     let current = f.get(first)
     f.store.saveWork({ ...current, sequence: current.sequence + 1, automaticExecution: { ...current.automaticExecution!, stage: 'claimed' } }, current.sequence, 'user', 'fixture_receipt')
     const second = f.create()
     f.deps.changed = async record => {
-      if (record.key === second.key && record.automaticExecution?.stage === 'delivering') {
+      if (record.key === second.key && record.automaticExecution?.stage === 'claimed') {
         const value = f.get(second)
-        f.store.saveWork({ ...value, sequence: value.sequence + 1, paused: true }, value.sequence, 'user', 'paused')
+        f.store.saveWork({ ...value, sequence: value.sequence + 1, status: 'cancelled' }, value.sequence, 'user', 'cancelled')
       }
     }
     await f.dispatcher.dispatch(job, abort())
     assert.equal(f.get(first).automaticExecution?.stage, 'settled')
     assert.equal(f.delivered.length, 0)
-    assert.equal(f.get(second).paused, true)
+    assert.equal(f.get(second).status, 'cancelled')
     f.deps.changed = async () => {}
     const third = f.create()
     await f.dispatcher.dispatch(job, abort())
     assert.equal(f.delivered.length, 1)
-    assert.ok(f.get(third).workflow?.assignee)
+    assert.ok(f.get(third).assignee)
   } finally { f.store.close() }
 }))
 
@@ -342,10 +363,12 @@ test('publisher help survives a crash after blocker save and transport failures 
   try {
     f.states.set('publisher', { sessionId: 'publisher', projectId: 'a', segmentIndex: 0, mode: 'session' })
     const work = f.create({ manager: 'publisher' })
-    f.failPreparation()
+    await f.dispatcher.dispatch(job, abort())
+    f.active.clear()
+    f.delivered.length = 0
     f.deps.changed = async record => { if (record.automaticExecution?.stage === 'blocked') throw new Error('simulated crash after durable blocker save') }
-    await assert.rejects(f.dispatcher.dispatch(job, abort()), /simulated crash/)
-    const blocked = f.get(work), id = blocked.workflow!.assignee
+    await assert.rejects(f.dispatcher.block(work.key, 'Synthetic interrupted turn'), /simulated crash/)
+    const blocked = f.get(work), id = blocked.assignee
     assert.equal(blocked.automaticExecution?.help?.attempts, 0)
     assert.equal(blocked.automaticExecution?.help?.delivered, false)
     f.deps.changed = async () => {}; f.failDelivery()
@@ -356,8 +379,8 @@ test('publisher help survives a crash after blocker save and transport failures 
     assert.match(f.get(work).automaticExecution!.help!.lastError!, /transport failure/)
     assert.equal(f.delivered.length, 3)
     assert.equal(new Set(f.delivered.map(item => item.input.id)).size, 1)
-    assert.equal(f.get(work).workflow?.assignee, id)
-    assert.equal(f.get(work).workflow?.status, 'blocked')
+    assert.equal(f.get(work).assignee, id)
+    assert.equal(f.get(work).status, 'blocked')
     f.failDelivery(false)
     await restarted.recover()
     assert.equal(f.delivered.length, 3)
@@ -377,11 +400,14 @@ test('parallel selections have independent workers/workspaces, model/location ov
       f.dispatcher.dispatchWork(parallel, first.key, first.sequence, {}, abort()),
       f.dispatcher.dispatchWork(parallel, second.key, second.sequence, { folderId: 'alternate', model: 'selected-model', reasoningEffort: 'max' }, abort()),
     ])
+    assert.equal(f.delivered.length, 0)
+    assert.equal(f.store.pendingWorkKickoffs().length, 2)
+    await f.drain()
     assert.equal(f.delivered.length, 2)
-    assert.equal(new Set(results.map(record => record.workflow!.assignee)).size, 2)
+    assert.equal(new Set(results.map(record => record.assignee)).size, 2)
     assert.equal(new Set(results.map(record => record.automaticExecution!.folderId)).size, 2)
     assert.equal(new Set(results.map(record => record.automaticExecution!.path)).size, 2)
-    const [a, b] = results.map(record => f.states.get(record.workflow!.assignee!)!)
+    const [a, b] = results.map(record => f.states.get(record.assignee!)!)
     assert.deepEqual(a.config, { model: 'default-model', reasoningEffort: 'high' })
     assert.deepEqual(b.config, { model: 'selected-model', reasoningEffort: 'max' })
     assert.equal(a.agentType, 'general')
@@ -390,7 +416,7 @@ test('parallel selections have independent workers/workspaces, model/location ov
     assert.deepEqual(checked, ['source', 'alternate'])
     await assert.rejects(f.dispatcher.dispatchWork(parallel, first.key, first.sequence, {}, abort()), /changed|eligible/)
     await assert.rejects(f.dispatcher.dispatchWork(parallel, third.key, third.sequence, {}, abort()), /device.*capacity/)
-    assert.equal(f.get(third).workflow?.assignee, null)
+    assert.equal(f.get(third).assignee, null)
     assert.equal(f.delivered.length, 2)
     const snapshot = f.dispatcher.snapshot(parallel.program)
     assert.equal(snapshot.capacity.active, 2)
@@ -404,8 +430,8 @@ test('parallel selections have independent workers/workspaces, model/location ov
     f.active.clear()
     await new WorkDispatcher(f.deps).recover()
     for (const result of results) {
-      assert.equal(f.get(result).workflow?.status, 'blocked')
-      assert.equal(f.get(result).workflow?.assignee, result.workflow?.assignee)
+      assert.equal(f.get(result).status, 'blocked')
+      assert.equal(f.get(result).assignee, result.assignee)
     }
     assert.equal(f.delivered.length, 2, 'restart must not replay either admission')
   } finally { f.store.close() }
@@ -433,13 +459,15 @@ test('recovery uses current host capacity, not the executor stored capacity from
     const earlier = { ...job, program: workDispatchConfigSchema.parse({ ...config, maxConcurrent: 4, maxConcurrentPerDevice: 4 }) }
     const first = f.create()
     await f.dispatcher.dispatchWork(earlier, first.key, first.sequence, {}, abort())
+    await f.drain()
     f.active.clear()
     await f.dispatcher.recover()
     const second = f.create()
     await f.dispatcher.dispatchWork(earlier, second.key, second.sequence, {}, abort())
+    await f.drain()
     f.deps.capacityPolicy = () => ({ maxConcurrent: 1, maxConcurrentPerDevice: 1 })
     const blocked = f.get(first)
-    assert.equal(f.states.get(blocked.workflow!.assignee!)?.automaticWork?.limits.maxConcurrent, 4)
+    assert.equal(f.states.get(blocked.assignee!)?.automaticWork?.limits.maxConcurrent, 4)
     await assert.rejects(f.dispatcher.resume(first.key, blocked.sequence, abort()), /capacity is occupied/)
     assert.equal(f.delivered.length, 2)
   } finally { f.store.close() }
@@ -454,7 +482,7 @@ test('remote isolation binds its exact Child workdir without leaking addressing 
     f.deps.prepare = async () => ({ folderId: 'remote-isolated', path: 'C:\\work\\isolated', branch: 'shadow-derived-fixture', workdir })
     const work = f.create()
     const claimed = await f.dispatcher.dispatchWork(job, work.key, work.sequence, {}, abort())
-    const state = f.states.get(claimed.workflow!.assignee!)!
+    const state = f.states.get(claimed.assignee!)!
     assert.deepEqual(state.workdir, workdir)
     assert.equal(state.folderId, 'remote-isolated')
     assert.equal(claimed.automaticExecution?.path, 'C:\\work\\isolated')
@@ -477,16 +505,17 @@ test('bootstrap rechecks and reserves exact-device capacity before binding; fail
     const first = f.create(), second = f.create()
     const occupied = await dispatcher.dispatchWork(round, first.key, first.sequence, { folderId: 'remote' }, abort())
     const bootstrap = await dispatcher.dispatchWork(round, second.key, second.sequence, {}, abort())
-    const id = bootstrap.workflow!.assignee!
+    await f.drain()
+    const id = bootstrap.assignee!
     assert.equal(f.states.get(id)?.automaticWork?.phase, 'bootstrap')
     await assert.rejects(dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/main', abort()), /capacity is occupied/)
-    assert.equal(f.get(second).workflow?.assignee, id)
+    assert.equal(f.get(second).assignee, id)
     assert.equal(f.states.get(id)?.folderId, undefined)
     const controller = new AbortController(); controller.abort()
     await assert.rejects(dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/main', controller.signal), /abort/i)
-    f.active.delete(occupied.workflow!.assignee!)
+    f.active.delete(occupied.assignee!)
     const current = f.get(first)
-    f.store.saveWork({ ...current, sequence: current.sequence + 1, workflow: { ...current.workflow!, status: 'done' } }, current.sequence, 'user', 'fixture_done')
+    f.store.saveWork({ ...current, sequence: current.sequence + 1, status: 'done', summary: 'Finished fixture Work.' }, current.sequence, 'user', 'fixture_done')
     await dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/main', abort())
     assert.equal(f.states.get(id)?.automaticWork?.prepared?.nodeId, 'child')
     assert.equal(f.states.get(id)?.folderId, undefined, 'preparation is not binding')
@@ -496,32 +525,28 @@ test('bootstrap rechecks and reserves exact-device capacity before binding; fail
     await assert.rejects(dispatcher.prepareBootstrap(id, 'remote', 'refs/heads/another', abort()), /same base/)
     f.active.delete(id)
     await dispatcher.recover()
-    assert.equal(f.get(second).workflow?.assignee, id)
-    assert.equal(f.get(second).workflow?.status, 'blocked', 'restart retains effects rather than replaying admission')
+    assert.equal(f.get(second).assignee, id)
+    assert.equal(f.get(second).status, 'blocked', 'restart retains effects rather than replaying admission')
     assert.equal(f.states.get(id)?.automaticWork?.phase, 'bootstrap')
     assert.equal(f.states.get(id)?.automaticWork?.prepared?.folderId, preparedId)
   } finally { f.store.close() }
 }))
 
 
-test('manual/tracking-only Work stays idle; stopped blocked owners can request review without capacity or reassignment', async () => withTempWorkspace(async home => {
+test('stopped blocked owners can request review without capacity or reassignment', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
-    const mirror = f.create()
-    f.store.saveWork({ ...mirror, sequence: 2, notes: workNotesSchema.parse({ kind: 'finding', html: 'large source mirror' }) }, 1, 'user', 'mirror')
     let rounds = 0
     f.dispatcher.setRunner(async () => { rounds++ })
     await f.dispatcher.dispatch(job, abort())
     assert.equal(rounds, 0)
-    assert.equal(f.dispatcher.snapshot(config).records[0].eligible, false)
-    assert.equal('html' in f.dispatcher.snapshot(config).records[0].notes, false)
     f.states.set('manager', { sessionId: 'manager', projectId: 'a', mode: 'session', segmentIndex: 0 })
     f.states.set('owner', { sessionId: 'owner', projectId: 'a', mode: 'session', segmentIndex: 0, executionStatus: 'completed' })
     const blocked = f.create({ manager: 'manager', assignee: 'owner', status: 'blocked', blockedReason: 'Needs route proof' })
     await f.dispatcher.dispatch(job, abort())
     assert.equal(rounds, 1)
     assert.equal(f.dispatcher.reviewTarget(blocked.key, blocked.sequence).recipient, 'manager')
-    assert.equal(f.get(blocked).workflow?.assignee, 'owner')
+    assert.equal(f.get(blocked).assignee, 'owner')
     assert.equal(f.counts().creates, 0)
     f.waiting.set('owner', {})
     await f.dispatcher.dispatch(job, abort())
@@ -530,7 +555,7 @@ test('manual/tracking-only Work stays idle; stopped blocked owners can request r
   } finally { f.store.close() }
 }))
 
-test('review target rejects missing/cross-Project coordinators, stale versions and manual or paused ancestors', async () => withTempWorkspace(async home => {
+test('review target rejects missing/cross-Project coordinators, stale versions and terminal ancestors', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     const root = f.create(), work = f.create({ manager: 'manager', parentKey: root.key })
@@ -540,9 +565,7 @@ test('review target rejects missing/cross-Project coordinators, stale versions a
     f.states.get('manager')!.projectId = 'a'
     assert.equal(f.dispatcher.reviewTarget(work.key, 1).recipient, 'manager')
     assert.throws(() => f.dispatcher.reviewTarget(work.key, 2), /changed/)
-    f.store.saveWork({ ...root, sequence: 2, paused: true }, 1, 'user', 'pause')
-    assert.throws(() => f.dispatcher.reviewTarget(work.key, 1), /not eligible/)
-    f.store.saveWork({ ...root, sequence: 3, workflow: { ...root.workflow!, automaticDispatch: 'manual' } }, 2, 'human', 'manual')
+    f.store.saveWork({ ...root, sequence: 2, status: 'cancelled' }, 1, 'human', 'cancelled')
     assert.throws(() => f.dispatcher.reviewTarget(work.key, 1), /not eligible/)
     f.states.set('owner', { sessionId: 'owner', projectId: 'a', mode: 'session', segmentIndex: 0, executionStatus: 'completed' })
     const blocked = f.create({ manager: 'manager', parentKey: root.key, assignee: 'owner', status: 'blocked', blockedReason: 'Stopped' })
@@ -561,7 +584,7 @@ test('first worker and explicit recovery deliveries carry current supplementary 
     if (input.kind !== 'message') throw new Error('Expected worker assignment')
     assert.match(input.content, /draft PR and comment/)
     assert.match(input.content, /not new authority/)
-    assert.equal(f.get(work).automaticExecution?.stage, 'running')
+    assert.equal(f.store.workKickoff(input.id)?.state, 'recorded')
     f.active.clear()
     await f.dispatcher.block(work.key, 'Synthetic stopped worker')
     f.deps.workerInstructions = async () => 'Updated requirement: retain draft status and report remaining verification limits.'
@@ -575,49 +598,40 @@ test('first worker and explicit recovery deliveries carry current supplementary 
 }))
 
 
-test('tracking-only assigned blocked findings do not wake stopped-owner review without explicit readiness', async () => withTempWorkspace(async home => {
+test('assigned blocked findings are eligible for stopped-owner review, not reassignment', async () => withTempWorkspace(async home => {
   const f = fixture(home)
   try {
     f.states.set('manager', { sessionId: 'manager', projectId: 'a', mode: 'session', segmentIndex: 0 })
     f.states.set('owner', { sessionId: 'owner', projectId: 'a', mode: 'session', segmentIndex: 0, executionStatus: 'completed' })
-    const work = f.create({ manager: 'manager', assignee: 'owner', status: 'blocked', blockedReason: 'Tracking only' })
-    f.store.saveWork({ ...work, sequence: 2, notes: workNotesSchema.parse({ kind: 'finding' }) }, 1, 'human', 'finding')
+    const work = f.create({ manager: 'manager', assignee: 'owner', status: 'blocked', blockedReason: 'Needs clarification' })
+    f.store.saveWork({ ...work, sequence: 2, kind: 'finding' }, 1, 'human', 'finding')
     let rounds = 0
     f.dispatcher.setRunner(async () => { rounds++ })
     await f.dispatcher.dispatch(job, abort())
-    assert.equal(rounds, 0)
+    assert.equal(rounds, 1)
     const snapshot = f.dispatcher.snapshot(config).records[0]
     assert.equal(snapshot.eligible, false)
-    assert.equal(snapshot.needsReview, false)
-    assert.throws(() => f.dispatcher.reviewTarget(work.key, 2), /not eligible/)
-    const finding = f.get(work)
-    f.store.saveWork({ ...finding, sequence: 3, workflow: { ...finding.workflow!, automaticDispatch: 'ready' } }, 2, 'human', 'ready')
-    await f.dispatcher.dispatch(job, abort())
-    assert.equal(rounds, 1)
+    assert.equal(snapshot.needsReview, true)
+    assert.equal(f.dispatcher.reviewTarget(work.key, 2).recipient, 'manager')
+    assert.equal(f.get(work).assignee, 'owner')
   } finally { f.store.close() }
 }))
 
 for (const phase of ['after-claim', 'final-admission'] as const) {
   for (const ancestor of [false, true]) {
-    test(`readiness changed to manual ${phase} on ${ancestor ? 'ancestor' : 'candidate'} prevents first admission but retains claimed ownership`, async () => withTempWorkspace(async home => {
+    test(`a new unmet dependency ${phase} on ${ancestor ? 'ancestor' : 'candidate'} prevents first admission but retains claimed ownership`, async () => withTempWorkspace(async home => {
       const f = fixture(home)
       try {
         const root = ancestor ? f.create() : undefined
+        const prerequisite = f.create({ assignee: 'prerequisite-owner' })
         const work = f.create(root ? { parentKey: root.key } : {})
-        // The root is not itself a dispatch candidate; only its scheduling intent is checked.
-        if (root) f.store.saveWork({ ...root, sequence: 2, workflow: { ...root.workflow!, assignee: 'root-owner' } }, 1, 'human', 'assign')
+        // The root is not itself a dispatch candidate; only its dependency boundary is checked.
+        if (root) f.store.saveWork({ ...root, sequence: 2, assignee: 'root-owner' }, 1, 'human', 'assign')
         const revoke = () => {
           const target = f.get(root ?? work)
-          f.store.saveWork({ ...target, sequence: target.sequence + 1, workflow: { ...target.workflow!, automaticDispatch: 'manual' } }, target.sequence, 'human', 'manual')
+          f.store.saveWork({ ...target, sequence: target.sequence + 1, dependencies: [prerequisite.key] }, target.sequence, 'human', 'dependencies')
         }
-        let gate: Parameters<WorkDispatcherDeps['sessions']['setAutomaticWorkAdmission']>[0] | undefined
-        f.deps.sessions.setAutomaticWorkAdmission = value => { gate = value }
-        const originalDeliver = f.deps.sessions.deliver.bind(f.deps.sessions)
-        f.deps.sessions.deliver = async (id, input) => gate!(id, input, async before => {
-          if (phase === 'final-admission') revoke()
-          before?.()
-          return originalDeliver(id, input)
-        })
+        if (phase === 'final-admission') f.beforeDrain(revoke)
         const changed = f.deps.changed
         f.deps.changed = async (record, previous) => {
           await changed(record, previous)
@@ -625,15 +639,18 @@ for (const phase of ['after-claim', 'final-admission'] as const) {
         }
         const dispatcher = new WorkDispatcher(f.deps)
         const claimed = await dispatcher.dispatchWork(job, work.key, work.sequence, {}, abort())
+        await f.drain()
         assert.equal(f.delivered.length, 0)
-        assert.ok(claimed.workflow?.assignee)
-        assert.equal(claimed.workflow.status, 'blocked')
-        assert.equal(claimed.automaticExecution?.stage, 'blocked')
-        assert.match(claimed.workflow.blockedReason!, /readiness changed/)
-        // Explicit human recovery is a separate control, not an automatic first kickoff.
-        await dispatcher.resume(work.key, f.get(work).sequence, abort())
+        assert.ok(claimed.assignee)
+        assert.equal(claimed.status, 'pending')
+        assert.equal(f.store.workKickoff(claimed.automaticExecution!.inputId)?.state, 'pending')
+        // Satisfy the prerequisite; the exact already accepted payload can drain.
+        f.beforeDrain()
+        f.store.saveWork({ ...prerequisite, sequence: 2, status: 'done',
+          summary: 'Prerequisite satisfied' }, 1, 'human', 'done')
+        await f.drain()
         assert.equal(f.delivered.length, 1)
-        assert.equal(f.get(work).workflow?.assignee, claimed.workflow.assignee)
+        assert.equal(f.get(work).assignee, claimed.assignee)
       } finally { f.store.close() }
     }))
   }

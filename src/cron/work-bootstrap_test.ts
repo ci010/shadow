@@ -98,12 +98,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       workdirLookup: (ref: any) => folders.lookupWorkdir(ref) ?? { node: 'missing' },
       backgroundTasks: { listTasks: () => [] },
       agentTypes: { resolve: (name: string) => ({ name, description: '', prompt: '', source: 'builtin', defaultMode: 'session' }) },
-      context: { buildSystemPrompt: async () => 'Synthetic system prompt' },
+      context: { buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic system prompt', sections: [] }) },
       handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
       getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128000, temperature: 0 }),
     } as unknown as SessionManagerDeps)
     const initiatives = new InitiativeStore(home, { isSessionKnown: id => !!manager.getSessionState(id) })
-    const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), evidence: async () => {}, changed: (r, p) => manager.notifyWorkChange(r, p) })
+    const alignment = new WorkAlignment(initiatives, { state: id => manager.getSessionState(id), changed: (r, p) => manager.notifyWorkChange(r, p) })
     manager.alignment = alignment
     const dispatcher = new WorkDispatcher({ projectId: 'fixture', store: initiatives, sessions: manager,
       validateProgram: async () => {}, targets: () => [],
@@ -125,7 +125,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       scans++
       const work = initiatives.workRecords()[0]
       const record = await dispatcher.dispatchWork(job, work.key, work.sequence, {}, signal)
-      workerId = record.workflow!.assignee!
+      workerId = record.assignee!
     })
     // Capture identity before the first inference, not after async dispatch returns.
     bus.on('session.changed', fact => { if (manager.getSessionState(fact.sessionId)?.automaticWork) workerId = fact.sessionId })
@@ -134,13 +134,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await manager.start()
       await dispatcher.dispatch(job, signal); assert.equal(scans, 0); assert.equal(inferences, 0)
       const work = await alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
-        { title: 'Bootstrap fixture', definition: { objective: 'Use authorized disposable source' }, assignee: null }) as WorkRecord
+        { title: 'Bootstrap fixture', definition: 'Use authorized disposable source', assignee: null }) as WorkRecord
       await dispatcher.dispatch(job, signal)
       const deadline = Date.now() + 10000
       while (!completed && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
       assert.equal(completed, true, JSON.stringify(receipts))
       assert.equal(scans, 1); assert.equal(inferences, 7)
-      assert.equal(alignment.get(work.key).workflow?.assignee, workerId)
+      assert.equal(alignment.get(work.key).assignee, workerId)
       assert.equal(await readFile(join(source, 'tracked'), 'utf8'), 'private dirty source')
       assert.equal(await readFile(join(folders.get(isolated)!.path, 'tracked'), 'utf8'), 'committed')
       const ctx = { projectId: 'fixture', sessionId: workerId, signal, toolCallName: 'invoke_tool' } as ExecutionContext

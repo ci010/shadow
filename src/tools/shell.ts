@@ -698,7 +698,7 @@ export class ExecTool implements Tool<ToolResult> {
             const path = input.path
             if (typeof path !== 'string' || !path || path.startsWith('~') || /[:\\\0]/.test(path) || path.startsWith('/') ||
               path.split('/').some(part => part === '..' || part === '.tmp') ||
-              input.handler === 'web' || name === 'search' && input.handler === 'glob' && String(input.query).includes(':')) {
+              (input.handler === 'web' || typeof input.handler === 'string' && input.handler.startsWith('web:')) || name === 'search' && input.handler === 'glob' && String(input.query).includes(':')) {
               throw new ToolNoEffectError('JavaScript filesystem tools require a relative path on the bound target.')
             }
           }

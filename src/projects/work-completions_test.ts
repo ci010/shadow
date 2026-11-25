@@ -11,11 +11,12 @@ test('completion endpoints authorize both verbs, reject forged identity and mark
   await withTempWorkspace(async home => {
     const store = new InitiativeStore(home)
     const record: WorkRecord = {
-      key: 'work:11111111-1111-4111-8111-111111111111', subject: { kind: 'work', id: '11111111-1111-4111-8111-111111111111' },
-      revision: 1, sequence: 1, definition: { objective: 'A result', acceptance: [], boundaries: [], evidence: [] },
+      key: 'work:11111111-1111-4111-8111-111111111111',
+      revision: 1, sequence: 1, definition: 'A result',
       origin: 'human', changedBy: 'web:owner', changedAt: '2020-01-01T00:00:00.000Z',
-      change: 'understanding', reason: 'Fixture', paused: false,
-      workflow: { title: 'Result', manager: null, assignee: null, assignmentRevision: 1, status: 'done', dependencies: [], result: { summary: 'Actual result', evidence: [] } },
+
+      title: 'Result', kind: 'task', artifacts: [], basis: [], summary: '**Actual result**',
+      manager: null, assignee: null, assignmentRevision: 1, status: 'done', dependencies: [],
     }
     try {
       store.saveWork(record, 0, 'fixture', 'created')
@@ -41,7 +42,7 @@ test('completion endpoints authorize both verbs, reject forged identity and mark
       assert.equal(store.workCompletions('bob')[0]!.unread, true)
       assert.deepEqual(store.workRecords(), [record])
       assert.equal(store.workHistory(record.key).length, 1)
-      assert.deepEqual((await projectWorkOverview(sessions)).items[0]!.result, record.workflow!.result)
+      assert.deepEqual((await projectWorkOverview(sessions)).items[0]!.summary, record.summary)
       assert.equal((await app.request(url, { method: 'POST', headers, body: '{broken' })).status, 400)
     } finally { store.close() }
   })

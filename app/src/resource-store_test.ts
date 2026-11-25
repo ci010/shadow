@@ -88,7 +88,7 @@ test('one resource plugin cannot install its auth-scoped Pinia into another app'
 })
 
 test('completion read recovery clears an older command error without replaying POST or hiding a newer failure', async t => {
-  const item = { key: 'topic:web:done', completionId: 'done-1', sequence: 1, completedAt: '2026-01-01T00:00:00Z', unread: true }
+  const item = { key: 'work:e3359114-1432-5d52-97f5-be58a6456acd', completionId: 'done-1', sequence: 1, completedAt: '2026-01-01T00:00:00Z', unread: true }
   let posts = 0, failRead = false, holdRead = false
   let finish!: (response: Response) => void, started!: () => void
   t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {

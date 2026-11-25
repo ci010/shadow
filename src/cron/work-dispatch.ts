@@ -1,7 +1,8 @@
+import { isDeepStrictEqual } from 'node:util'
+import type { WorkKickoff } from '../initiatives/work-kickoff.ts'
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { automaticWorkEligible, workDependenciesSatisfied, type InitiativeStore } from '../initiatives/store.ts'
-import { workNotesSchema } from '../initiatives/work-notes.ts'
 import { WorkConflict, type WorkRecord } from '../initiatives/work-contract.ts'
 import { LOCAL_NODE_ID, localFolderWorkdirRef, type WorkdirRefV2 } from '../sessions/locality.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -12,7 +13,7 @@ import { WORK_DISPATCH_ID, workDispatchConfigSchema, AUTOMATIC_WORK_GUIDANCE, AU
 export interface WorkDispatcherDeps {
   projectId: string
   store: InitiativeStore
-  sessions: Pick<SessionManager, 'getSessionState' | 'isSessionBusy' | 'setAutomaticWorkAdmission' | 'buildSession' | 'deliver' | 'inputs' | 'yields' | 'isWaitingForCall' | 'isWaitingForExternalExecution' | 'getSessionRecovery' | 'resumeSession' | 'bindAutomaticWorkWorkspace' | 'prepareAutomaticWorkWorkspace'>
+  sessions: Pick<SessionManager, 'getSessionState' | 'isSessionBusy' | 'setAutomaticWorkAdmission' | 'buildSession' | 'validateAutomaticWorkTarget' | 'wakeAutomaticWorkKickoffs' | 'deliver' | 'inputs' | 'yields' | 'isWaitingForCall' | 'isWaitingForExternalExecution' | 'getSessionRecovery' | 'resumeSession' | 'bindAutomaticWorkWorkspace' | 'prepareAutomaticWorkWorkspace'>
   validateProgram?(config: WorkDispatchConfig, signal: AbortSignal): Promise<void>
   validateTarget(config: WorkDispatchConfig, signal: AbortSignal): Promise<void>
   nodeForTarget?(config: WorkDispatchConfig): string
@@ -32,15 +33,18 @@ export class WorkDispatcher {
   setRunner(runner: (job: CronJob, signal: AbortSignal) => Promise<void>): void { this.runner = runner }
 
   private occupies(record: WorkRecord): boolean {
-    return this.owned(record) && (this.busy(record.workflow!.assignee!) || !record.paused
-      && !['done', 'cancelled'].includes(record.workflow!.status)
-      && (record.automaticExecution!.stage === 'claimed' || record.workflow!.status !== 'blocked'))
+    return this.owned(record) && (this.busy(record.assignee!) || !['done', 'cancelled'].includes(record.status)
+      && (record.automaticExecution!.stage === 'claimed' || record.status !== 'blocked'))
   }
-  private capacity(config: WorkDispatchConfig, excluding?: string) {
-    const active = this.deps.store.workRecords().filter(record => record.key !== excluding && this.occupies(record))
+  private capacity(config: WorkDispatchConfig, excluding?: string, draining = false) {
+    // Claims reserve capacity. At drain, idle inbox entries must not deadlock
+    // each other if the live capacity policy shrank since acceptance.
+    const pending = draining ? new Set(this.deps.store.pendingWorkKickoffs().map(entry => entry.input.id)) : undefined
+    const active = this.deps.store.workRecords().filter(record => record.key !== excluding && this.occupies(record)
+      && (!pending?.has(record.automaticExecution!.inputId) || this.busy(record.assignee!)))
     const nodeId = this.deps.nodeForTarget?.(config) ?? LOCAL_NODE_ID
     const onDevice = active.filter(record => {
-      const state = this.deps.sessions.getSessionState(record.workflow!.assignee!)
+      const state = this.deps.sessions.getSessionState(record.assignee!)
       return (state?.automaticWork?.prepared?.nodeId ?? state?.workdir?.nodeId ?? LOCAL_NODE_ID) === nodeId
     }).length
     // Recovery retains the worker's budgets/model/source, not a stale Project capacity.
@@ -57,15 +61,14 @@ export class WorkDispatcher {
     }) ?? [], total: records.length,
       next: offset + limit < records.length ? offset + limit : undefined,
       records: records.slice(offset, offset + limit).map(record => {
-        const owner = record.workflow?.assignee ? this.deps.sessions.getSessionState(record.workflow.assignee) : undefined
-        // Keep all boundaries, but not large mirrored HTML/intake/history payloads.
-        const { botSource: _bot, creationRequest: _creation, observation: _observation, notes, ...current } = record
-        const { html: _html, ...summary } = notes ?? {}
-        return { ...current, notes: summary, detailsPath: `v:works/keys/${encodeURIComponent(record.key)}`,
+        const owner = record.assignee ? this.deps.sessions.getSessionState(record.assignee) : undefined
+        // Keep the definition and notes, not mirrored intake or observations.
+        const { botSource: _bot, observation: _observation, ...current } = record
+        return { ...current, detailsPath: `v:works/keys/${encodeURIComponent(record.key)}`,
           eligible: automaticWorkEligible(record, records), needsReview: this.needsReview(record),
-          ownerState: record.workflow?.assignee ? { available: !!owner, executionStatus: owner?.executionStatus,
-            busy: this.busy(record.workflow.assignee), waiting: this.waiting(record.workflow.assignee) } : undefined,
-          dependencies: record.workflow?.dependencies.map(key => ({ key, status: records.find(item => item.key === key)?.workflow?.status ?? 'missing' })) }
+          ownerState: record.assignee ? { available: !!owner, executionStatus: owner?.executionStatus,
+            busy: this.busy(record.assignee), waiting: this.waiting(record.assignee) } : undefined,
+          dependencies: record.dependencies.map(key => ({ key, status: records.find(item => item.key === key)?.status ?? 'missing' })) }
       }) }
   }
 
@@ -73,10 +76,8 @@ export class WorkDispatcher {
    * Pending input/external waits and live executions are not stalled work.
    */
   private needsReview(record: WorkRecord): boolean {
-    return !!record.workflow?.assignee && !!record.workflow.manager && record.workflow.status === 'blocked'
-      && (record.notes?.kind !== 'finding' || record.workflow.automaticDispatch === 'ready')
-      && !record.paused && record.workflow.automaticDispatch !== 'manual'
-      && !this.busy(record.workflow.assignee)
+    return !!record.assignee && !!record.manager && record.status === 'blocked'
+      && !this.busy(record.assignee)
       && this.reviewAncestorsPermit(record)
   }
 
@@ -84,10 +85,10 @@ export class WorkDispatcher {
     const records = this.deps.store.workRecords(), seen = new Set<string>()
     let current: WorkRecord | undefined = record
     while (current) {
-      if (seen.has(current.key) || current.paused || current.workflow?.automaticDispatch === 'manual'
-        || ['done', 'cancelled'].includes(current.workflow?.status ?? '')) return false
+      if (seen.has(current.key)
+        || ['done', 'cancelled'].includes(current.status ?? '')) return false
       seen.add(current.key)
-      const parent: string | undefined = current.workflow?.parentKey
+      const parent: string | undefined = current.parentKey
       if (!parent) return true
       current = records.find(item => item.key === parent)
       if (!current) return false
@@ -100,7 +101,7 @@ export class WorkDispatcher {
     const record = this.current(key), records = this.deps.store.workRecords()
     if (!record || record.sequence !== version) throw new WorkConflict('Work changed; read the current sequence before requesting review.')
     if (!automaticWorkEligible(record, records) && !this.needsReview(record)) throw new WorkConflict('Work is not eligible for dispatch or stopped-owner review.')
-    const recipient = record.workflow?.manager
+    const recipient = record.manager
     const manager = recipient ? this.deps.sessions.getSessionState(recipient) : undefined
     if (!recipient || !manager || manager.mode !== 'session' || manager.projectId !== this.deps.projectId) {
       throw new WorkConflict('An available durable coordinator in this Project is required; no arbitrary recipient fallback.')
@@ -119,7 +120,12 @@ export class WorkDispatcher {
     return pending
   }
   constructor(private readonly deps: WorkDispatcherDeps) {
-    deps.sessions.setAutomaticWorkAdmission((id, input, admit) => this.admit(id, input, admit))
+    deps.sessions.setAutomaticWorkAdmission((id, input, admit) => this.admit(id, input, admit), async (kickoff, inspectReason) => {
+      const record = this.current(kickoff.key)
+      if (!record || !this.owned(record) || record.assignee !== kickoff.target || record.assignmentRevision !== kickoff.revision
+        || record.automaticExecution!.inputId !== kickoff.input.id || record.automaticExecution!.stage !== 'claimed') return
+      await this.block(record.key, inspectReason ?? 'Automatic kickoff was recorded but its turn was interrupted or not confirmed. Inspect history before explicit recovery; no tools were replayed.')
+    })
   }
 
   private assertBoundaries(record: WorkRecord): void {
@@ -127,54 +133,87 @@ export class WorkDispatcher {
     const seen = new Set<string>()
     let current: WorkRecord | undefined = record
     while (current) {
-      if (seen.has(current.key) || current.paused || ['done', 'cancelled'].includes(current.workflow?.status ?? '')
+      if (seen.has(current.key) || ['done', 'cancelled'].includes(current.status ?? '')
         || !workDependenciesSatisfied(current, records)) throw new WorkConflict('Work dependency or ancestor boundary prevents automatic admission.')
       seen.add(current.key)
-      const parent: string | undefined = current.workflow?.parentKey
+      const parent: string | undefined = current.parentKey
       if (parent && !byKey.has(parent)) throw new WorkConflict('Work ancestor is unavailable.')
       current = parent ? byKey.get(parent) : undefined
     }
   }
 
-  private assertInitialReadiness(record: WorkRecord): void {
+  private assertInitialEligibility(record: WorkRecord): void {
     // The claim already owns an assignee; reconsider all other scheduling gates.
-    const candidate = { ...record, workflow: { ...record.workflow!, assignee: null } }
+    const candidate = { ...record, assignee: null }
     if (!automaticWorkEligible(candidate, this.deps.store.workRecords())) {
-      throw new WorkConflict('Automatic first-admission readiness changed; retain the claimed owner for coordinator review.')
+      throw new WorkConflict('Automatic first-admission eligibility changed; check dependencies and ancestors, and retain the claimed owner for coordinator review.')
     }
   }
 
-  private async admit(sessionId: string, input: SessionInput, admit: (beforeDispatch?: () => void) => Promise<DeliveryReceipt>): Promise<DeliveryReceipt> {
+  private async admit(sessionId: string, input: SessionInput, admit: (beforeDispatch?: () => void, verifyKickoff?: (signal: AbortSignal) => Promise<void>) => Promise<DeliveryReceipt>): Promise<DeliveryReceipt> {
     if (input.kind === 'control' && input.command.type === 'cancel') return admit()
     const run = async () => {
       const signal = this.admissionContext.getStore()?.signal ?? new AbortController().signal
       signal.throwIfAborted()
       const state = this.deps.sessions.getSessionState(sessionId)
       const record = state?.automaticWork && this.current(state.automaticWork.key)
-      if (!record || !this.owned(record) || record.workflow!.assignee !== sessionId || record.paused
-        || ['done', 'cancelled'].includes(record.workflow!.status)) throw new WorkConflict('Automatic Work is no longer admissible.')
+      if (!record || !this.owned(record) || record.assignee !== sessionId
+        || ['done', 'cancelled'].includes(record.status)) throw new WorkConflict('Automatic Work is no longer admissible.')
+      const execution = record.automaticExecution!
+      const kickoff = input.id === execution.inputId
+      const inbox = this.deps.store.workKickoff(execution.inputId)
+      if (inbox?.state === 'inspect') throw new WorkConflict('Automatic kickoff requires inspection; this assignment cannot be replayed or resumed.')
+      if (!kickoff && inbox?.state === 'pending') {
+        throw new WorkConflict('Automatic kickoff is still pending; other turns cannot overtake the accepted input.')
+      }
+      const prepared = structuredClone({ folderId: state!.folderId, workdir: state!.workdir, work: state!.automaticWork })
       const check = () => {
         signal.throwIfAborted()
         const latest = this.current(record.key)
-        if (!latest || !this.owned(latest) || latest.workflow!.assignee !== sessionId || latest.paused
-          || ['done', 'cancelled'].includes(latest.workflow!.status)) throw new WorkConflict('Automatic Work is no longer admissible.')
+        if (!latest || !this.owned(latest) || latest.assignee !== sessionId
+          || ['done', 'cancelled'].includes(latest.status)) throw new WorkConflict('Automatic Work is no longer admissible.')
         this.assertBoundaries(latest)
-        if (input.id === latest.automaticExecution!.inputId) this.assertInitialReadiness(latest)
-        if (!this.capacity(state!.automaticWork!.limits, record.key).available) throw new WorkConflict('Project or device automatic execution capacity is occupied.')
+        if (kickoff) {
+          const target = this.deps.sessions.getSessionState(sessionId)
+          const currentExecution = latest.automaticExecution!
+          if (currentExecution.inputId !== input.id || currentExecution.folderId !== execution.folderId
+            || currentExecution.path !== execution.path || currentExecution.branch !== execution.branch
+            || !target || target.sessionId !== sessionId || target.projectId !== this.deps.projectId
+            || !isDeepStrictEqual({ folderId: target.folderId, workdir: target.workdir, work: target.automaticWork }, prepared)) {
+            throw new WorkConflict('Automatic kickoff identity or isolated Workspace changed.')
+          }
+          this.assertInitialEligibility(latest)
+        }
+        if (!this.capacity(state!.automaticWork!.limits, record.key, kickoff).available) throw new WorkConflict('Project or device automatic execution capacity is occupied.')
       }
-      check()
-      if (state!.automaticWork!.phase !== 'bootstrap') await this.deps.verify(state!.automaticWork!.limits, sessionId, record.automaticExecution!, signal)
-      check()
+      const verify = async (turnSignal: AbortSignal) => {
+        const activeSignal = AbortSignal.any([signal, turnSignal])
+        activeSignal.throwIfAborted()
+        check()
+        if (prepared.work!.phase !== 'bootstrap') {
+          const latest = this.current(record.key)!
+          await this.deps.verify(prepared.work!.limits, sessionId, latest.automaticExecution!, activeSignal)
+        }
+        activeSignal.throwIfAborted()
+        check()
+      }
+      if (kickoff) {
+        check() // The queue re-verifies actual isolation before append and first inference.
+        return admit(check, verify)
+      }
+      await verify(signal)
       return admit(check) // Recheck after async Session preparation, immediately before dispatch().
     }
-    return this.admissionContext.getStore()?.active ? run() : this.exclusive(run)
+    // Inbox wakes are never a nested operation, even if a Session timer
+    // inherited an active AsyncLocalStorage admission token.
+    return !input.id.startsWith('work-start:') && this.admissionContext.getStore()?.active ? run() : this.exclusive(run)
   }
 
   private current(key: string) { return this.deps.store.workRecords().find(record => record.key === key) }
   private owned(record: WorkRecord) {
     const execution = record.automaticExecution
-    return !!execution && execution.jobId === WORK_DISPATCH_ID && record.workflow?.assignee === execution.sessionId
-      && record.workflow.assignmentRevision === execution.assignmentRevision
+    return !!execution && execution.jobId === WORK_DISPATCH_ID && record.assignee === execution.sessionId
+      && record.assignmentRevision === execution.assignmentRevision
   }
   private waiting(id: string) {
     return !!this.deps.sessions.inputs.get(id) || !!this.deps.sessions.yields.get(id) || this.deps.sessions.isWaitingForCall(id)
@@ -185,7 +224,7 @@ export class WorkDispatcher {
   }
   private async save(previous: WorkRecord, patch: Partial<WorkRecord>, kind: string) {
     const record = { ...previous, ...patch, sequence: previous.sequence + 1, changedAt: new Date().toISOString() }
-    this.deps.store.saveWork(record, previous.sequence, previous.workflow!.assignee!, kind)
+    this.deps.store.saveWork(record, previous.sequence, previous.assignee!, kind)
     await this.deps.changed(record, previous)
     return record
   }
@@ -193,17 +232,14 @@ export class WorkDispatcher {
   /** A host failure is never proof of done, release, cancellation or rollback. */
   async block(key: string, reason: string): Promise<void> {
     const record = this.current(key)
-    if (!record || !this.owned(record) || ['done', 'cancelled'].includes(record.workflow!.status)
-      || record.automaticExecution!.stage === 'blocked' || this.waiting(record.workflow!.assignee!)) return
+    if (!record || !this.owned(record) || ['done', 'cancelled'].includes(record.status)
+      || record.automaticExecution!.stage === 'blocked' || this.waiting(record.assignee!)) return
     const execution = record.automaticExecution!
-    const detail = `${record.workflow!.status === 'blocked' ? `Existing blocker: ${record.workflow!.blockedReason?.slice(0, 500)}. Host execution: ` : ''}${reason} Responsibility and artifacts are retained. Inspect Work notes, session history, branch ${execution.branch ?? '(not prepared)'} and recovery before continuing; ask the publisher for the specific missing input/authority.`.slice(0, 2000)
-    const notes = record.notes ?? workNotesSchema.parse({})
-    const publisher = record.workflow!.manager ?? record.botSource?.sessionId
+    const detail = `${record.status === 'blocked' ? `Existing blocker: ${record.blockedReason?.slice(0, 400)}. Host execution: ` : ''}${reason.slice(0, 950)} Responsibility and artifacts are retained. Inspect Work, session history and branch ${execution.branch?.slice(0, 160) ?? '(not prepared)'}. Ask the publisher for specific missing input or authority, or use explicit recovery.`.slice(0, 2000)
+    const publisher = record.manager ?? record.botSource?.sessionId
     const help = publisher && publisher !== execution.sessionId
       ? { id: `work-blocked:${record.key}:${record.sequence + 1}`, recipient: publisher, attempts: 0, delivered: false } : undefined
-    await this.save(record, { workflow: { ...record.workflow!, status: 'blocked', blockedScope: record.workflow!.status === 'blocked' ? record.workflow!.blockedScope ?? 'work' : 'step', blockedReason: detail },
-      notes: { ...notes, next: 'Publisher/coordinator: inspect retained evidence and supply the specific missing input or use explicit recovery.',
-        attention: { kind: 'blocker', summary: detail, version: record.sequence + 1, at: new Date().toISOString(), by: execution.sessionId } },
+    await this.save(record, { status: 'blocked', blockedReason: detail,
       automaticExecution: { ...execution, stage: 'blocked', lastError: detail, help } }, 'automatic_blocked')
     await this.deliverHelp(record.key)
   }
@@ -214,7 +250,7 @@ export class WorkDispatcher {
     if (this.notifying.has(key)) return
     let record = this.current(key)
     const help = record?.automaticExecution?.help
-    if (!record || !this.owned(record) || record.workflow!.status !== 'blocked' || record.paused || !help || help.delivered || help.attempts >= 3) return
+    if (!record || !this.owned(record) || record.status !== 'blocked' || !help || help.delivered || help.attempts >= 3) return
     this.notifying.add(key)
     try {
       record = await this.save(record, { automaticExecution: { ...record.automaticExecution!, help: { ...help, attempts: help.attempts + 1 } } }, 'automatic_help_attempt')
@@ -223,7 +259,7 @@ export class WorkDispatcher {
         if (!this.deps.sessions.getSessionState(help.recipient)) throw new Error('Publisher session is unavailable in this Project')
         const receipt = await this.deps.sessions.deliver(help.recipient, { id: help.id, kind: 'message', timestamp: new Date().toISOString(), policy: 'queue',
           source: { kind: 'event', eventId: help.id, type: 'work-blocked', source: 'work-dispatch' },
-          content: `Assigned Work ${record.key} needs publisher help: ${record.workflow!.blockedReason}\nRead its retained notes and history. Notification ${help.id} may be retried after interruption; do not duplicate actions. It is not authorization to change scope or repeat external actions.` })
+          content: `Assigned Work ${record.key} needs publisher help: ${record.blockedReason}\nRead its retained notes and history. Notification ${help.id} may be retried after interruption; do not duplicate actions. It is not authorization to change scope or repeat external actions.` })
         if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.inputId !== help.id || receipt.sessionId !== help.recipient) throw new Error('Publisher help admission was unconfirmed')
       } catch (failure) { error = failure }
       const current = this.current(key)
@@ -240,24 +276,30 @@ export class WorkDispatcher {
       if (!this.owned(record)) continue
       await this.deliverHelp(record.key)
       record = this.current(record.key)!
-      if (!this.owned(record) || this.busy(record.workflow!.assignee!)) continue
-      if (['done', 'cancelled'].includes(record.workflow!.status)) {
+      if (!this.owned(record) || this.busy(record.assignee!)) continue
+      if (['done', 'cancelled'].includes(record.status)) {
         if (record.automaticExecution!.stage !== 'settled') await this.save(record,
           { automaticExecution: { ...record.automaticExecution!, stage: 'settled' } }, 'automatic_settled')
         continue
       }
-      if (record.paused) continue
-      if (record.workflow!.status === 'blocked' && this.deps.sessions.getSessionState(record.workflow!.assignee!)?.executionStatus === 'completed') continue
-      if (['delivering', 'running'].includes(record.automaticExecution!.stage)) {
+      if (record.status === 'blocked' && this.deps.sessions.getSessionState(record.assignee!)?.executionStatus === 'completed') continue
+      const execution = record.automaticExecution!
+      const inbox = this.deps.store.workKickoff(execution.inputId)
+      if (inbox?.state === 'pending') continue
+      if (inbox?.state === 'inspect') {
+        await this.block(record.key, inbox.inspectReason ?? 'Automatic kickoff requires inspection; no replay is permitted.')
+        continue
+      }
+      if (['claimed', 'delivering', 'running'].includes(execution.stage)) {
         await this.block(record.key, 'Automatic execution interrupted or admission unconfirmed after restart; no write replay was attempted.')
       }
     }
   }
 
   async finished(fact: SessionTurnFact): Promise<void> {
-    for (const record of this.deps.store.workRecords().filter(record => this.owned(record) && record.workflow!.assignee === fact.sessionId)) {
-      if (this.waiting(fact.sessionId) || record.paused) continue
-      if (record.workflow!.status === 'blocked' && fact.status === 'completed') {
+    for (const record of this.deps.store.workRecords().filter(record => this.owned(record) && record.assignee === fact.sessionId)) {
+      if (this.waiting(fact.sessionId) || fact.inputId.startsWith('work-start:') && fact.inputId !== record.automaticExecution!.inputId) continue
+      if (record.status === 'blocked' && fact.status === 'completed') {
         if (record.automaticExecution!.stage !== 'blocked') await this.save(record,
           { automaticExecution: { ...record.automaticExecution!, stage: 'blocked' } }, 'automatic_blocker_reported')
         continue
@@ -283,9 +325,6 @@ export class WorkDispatcher {
     const ready = await this.exclusive(async () => {
       await (this.deps.validateProgram ?? this.deps.validateTarget)(config, signal)
       await this.recover()
-      for (const record of this.deps.store.workRecords()) {
-        if (this.occupies(record) && record.automaticExecution!.stage === 'claimed') await this.launch(record, signal)
-      }
       const records = this.deps.store.workRecords()
       // A full default device must not prevent considering another supported device,
       // but all-full/unsupported inventories do not spend a fresh inference every tick.
@@ -301,11 +340,18 @@ export class WorkDispatcher {
     await this.runner(job, signal)
   }
 
-  dispatchWork(job: CronJob, key: string, version: number, selection: WorkDispatchSelection, signal: AbortSignal): Promise<WorkRecord> {
-    return this.exclusive(() => this.claim(job, key, version, selection, signal), signal)
+  async dispatchWork(job: CronJob, key: string, version: number, selection: WorkDispatchSelection, signal: AbortSignal,
+    assertGrant?: () => void): Promise<WorkRecord> {
+    const claimed = await this.exclusive(() => this.claim(job, key, version, selection, signal, assertGrant), signal)
+    this.deps.sessions.wakeAutomaticWorkKickoffs()
+    // Work and the inbox already committed. Notification failure cannot undo acceptance.
+    try { await this.deps.changed(claimed.record, claimed.previous) }
+    catch (error) { console.warn(`[work-dispatch] Accepted ${key}; change notification deferred: ${String(error)}`) }
+    return claimed.record
   }
 
-  private async claim(job: CronJob, key: string, version: number, selection: WorkDispatchSelection, signal: AbortSignal): Promise<WorkRecord> {
+  private async claim(job: CronJob, key: string, version: number, selection: WorkDispatchSelection, signal: AbortSignal,
+    assertGrant?: () => void): Promise<{ record: WorkRecord; previous: WorkRecord }> {
     if (job.id !== WORK_DISPATCH_ID) throw new Error('Unknown Work dispatcher')
     const config = workDispatchConfigSchema.parse({ ...workDispatchConfigSchema.parse(job.program), ...workDispatchSelectionSchema.parse(selection) })
     signal.throwIfAborted()
@@ -315,85 +361,65 @@ export class WorkDispatcher {
     if (!candidate || candidate.sequence !== version || !automaticWorkEligible(candidate, records)) throw new WorkConflict('Work changed or is not eligible; dependencies and ancestor boundaries must be satisfied.')
     if (!this.capacity(config).available) throw new WorkConflict('Project or device automatic execution capacity is occupied.')
     signal.throwIfAborted()
-    const assignmentRevision = candidate.workflow!.assignmentRevision + 1
+    const assignmentRevision = candidate.assignmentRevision + 1
     const token = createHash('sha256').update(`${this.deps.projectId}\0${candidate.key}\0${assignmentRevision}`).digest('hex').slice(0, 40)
     const sessionId = `work-executor:${token}`
-    let prepared: Awaited<ReturnType<WorkDispatcherDeps['prepare']>> | undefined
-    let preparationError: unknown
-    try { if (config.folderId) prepared = await this.deps.prepare(config, sessionId, signal) }
-    catch (error) { preparationError = error }
+    const prepared = config.folderId ? await this.deps.prepare(config, sessionId, signal) : undefined
+    if (config.folderId && (!prepared || prepared.folderId === config.folderId)) throw new WorkConflict('Isolation preparation did not return a separate Workspace.')
+    const workdir = prepared ? prepared.workdir ?? localFolderWorkdirRef(prepared.folderId) : undefined
     signal.throwIfAborted()
-    let state = this.deps.sessions.getSessionState(sessionId)
-    if (!state) {
+    if (!this.deps.sessions.getSessionState(sessionId)) {
       // Only the dispatcher round is an automation run. Its Work executor is an
       // ordinary root conversation; automaticWork retains host admission/budgets.
       await this.deps.sessions.buildSession(sessionId, undefined, { mode: 'session', agentType: 'general',
         config: { ...(config.model ? { model: config.model } : {}), ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}) },
-        folderId: prepared?.folderId, workdir: prepared ? prepared.workdir ?? localFolderWorkdirRef(prepared.folderId) : undefined, automaticWork: { key: candidate.key, jobId: WORK_DISPATCH_ID, limits: config, ...(!config.folderId ? { phase: 'bootstrap' as const } : {}) },
+        folderId: prepared?.folderId, workdir, automaticWork: { key: candidate.key, jobId: WORK_DISPATCH_ID, limits: config, ...(!config.folderId ? { phase: 'bootstrap' as const } : {}) },
       })
-      state = this.deps.sessions.getSessionState(sessionId)
     }
-    if (!state || state.projectId && state.projectId !== this.deps.projectId || state.automaticWork?.key !== candidate.key) throw new WorkConflict('Automatic session identity conflict.')
-    const claimed: WorkRecord = { ...candidate, sequence: candidate.sequence + 1, changedAt: new Date().toISOString(),
-      workflow: { ...candidate.workflow!, assignee: sessionId, assignmentRevision, assignmentStarted: false },
-      automaticExecution: { jobId: WORK_DISPATCH_ID, sessionId, assignmentRevision, inputId: `work-start:${token}`, stage: 'claimed',
+    const checkTarget = () => {
+      const target = this.deps.sessions.getSessionState(sessionId)
+      if (!target || target.sessionId !== sessionId || target.projectId !== this.deps.projectId || target.mode !== 'session'
+        || target.automaticWork?.key !== candidate.key || target.automaticWork.jobId !== WORK_DISPATCH_ID
+        || !isDeepStrictEqual(target.automaticWork.limits, config) || target.automaticWork.prepared
+        || config.model && target.config?.model !== config.model || config.reasoningEffort && target.config?.reasoningEffort !== config.reasoningEffort
+        || target.folderId !== prepared?.folderId || (workdir ? target.workdir?.nodeId !== workdir.nodeId || target.workdir.workdirId !== workdir.workdirId : !!target.workdir)
+        || (prepared ? target.automaticWork.phase === 'bootstrap' : target.automaticWork.phase !== 'bootstrap')
+        || this.busy(sessionId)) throw new WorkConflict('Automatic session identity or isolation conflict.')
+    }
+    checkTarget()
+    const inputId = `work-start:${token}`
+    const timestamp = new Date().toISOString()
+    const claimed: WorkRecord = { ...candidate, sequence: candidate.sequence + 1, changedAt: timestamp,
+      assignee: sessionId, assignmentRevision, assignmentStarted: false,
+      automaticExecution: { jobId: WORK_DISPATCH_ID, sessionId, assignmentRevision, inputId, stage: 'claimed',
         ...(prepared ? { folderId: prepared.folderId, path: prepared.path, branch: prepared.branch } : {}) } }
-    this.deps.store.claimAutomaticWork(claimed, candidate.sequence)
-    await this.deps.changed(claimed, candidate)
-    if (preparationError) { await this.block(candidate.key, `Isolation preparation failed: ${String(preparationError).slice(0, 800)}. No source-directory execution occurred.`); return this.current(key)! }
-    try { await this.launch(claimed, signal) }
-    catch (error) { await this.block(claimed.key, `Automatic admission interrupted after claim: ${String(error).slice(0, 800)}`); throw error }
-    return this.current(key)!
-  }
-
-  private async launch(record: WorkRecord, signal: AbortSignal): Promise<void> {
+    const instructions = (await this.deps.workerInstructions?.())?.trim()
+    const kickoff: WorkKickoff = { key: candidate.key, target: sessionId, revision: assignmentRevision, input: {
+      id: inputId, kind: 'message', timestamp, policy: 'queue',
+      source: { kind: 'event', eventId: inputId, type: 'work-assignment', source: 'system' },
+      content: `${prepared ? '' : AUTOMATIC_WORK_BOOTSTRAP_GUIDANCE + '\n\n'}${AUTOMATIC_WORK_GUIDANCE}` +
+        (instructions ? `\n\nSupplementary Project dispatch requirements (not new authority; current Work boundaries still apply):\n${instructions}` : '') +
+        `\n\nAssigned Work key: ${candidate.key}. Read v:works/keys/${encodeURIComponent(candidate.key)}. Isolated branch: ${prepared?.branch ?? '(unbound bootstrap)'}.` +
+        (candidate.status === 'blocked' ? `\nExisting blocker is retained: ${candidate.blockedReason}. This first assignment is for blocker clarification and publisher help, not permission to clear the blocker or execute blocked actions.` : ''),
+    } }
+    if (prepared) await this.deps.verify(config, sessionId, claimed.automaticExecution!, signal)
+    else await (this.deps.validateProgram ?? this.deps.validateTarget)(config, signal)
+    await this.deps.sessions.validateAutomaticWorkTarget(sessionId)
     signal.throwIfAborted()
-    record = this.current(record.key)!
-    if (!this.owned(record) || record.paused || ['done', 'cancelled'].includes(record.workflow!.status)
-      || record.workflow!.status === 'blocked' && record.automaticExecution!.stage !== 'claimed') return
-    try { this.assertInitialReadiness(record) }
-    catch (error) { await this.block(record.key, String(error)); return }
-    const execution = record.automaticExecution!
-    const bootstrap = this.deps.sessions.getSessionState(execution.sessionId)?.automaticWork?.phase === 'bootstrap'
-    if (!bootstrap && (!execution.folderId || this.deps.sessions.getSessionState(execution.sessionId)?.folderId !== execution.folderId)) {
-      await this.block(record.key, 'No verified isolated Workspace is bound to this executor.'); return
-    }
-    const state = this.deps.sessions.getSessionState(execution.sessionId)
-    try {
-      if (!state?.automaticWork) throw new Error('Automatic executor configuration missing')
-      if (!bootstrap) await this.deps.verify(state.automaticWork.limits, execution.sessionId, execution, signal)
-    } catch (error) { await this.block(record.key, `Isolation identity verification failed: ${String(error).slice(0, 800)}`); return }
-    // Write-ahead admission barrier: a crash here is blocked, never blindly resent.
-    record = await this.save(record, { automaticExecution: { ...execution, stage: 'delivering' } }, 'automatic_delivery')
-    try {
-      const instructions = (await this.deps.workerInstructions?.())?.trim()
-      signal.throwIfAborted()
-      const latest = this.current(record.key)
-      if (!latest || !this.owned(latest) || latest.paused || ['done', 'cancelled'].includes(latest.workflow!.status)
-        || latest.automaticExecution!.inputId !== execution.inputId) return
-      this.assertInitialReadiness(latest)
-      const receipt = await this.deps.sessions.deliver(execution.sessionId, {
-        id: execution.inputId, kind: 'message', timestamp: new Date().toISOString(), policy: 'queue',
-        source: { kind: 'event', eventId: execution.inputId, type: 'work-assignment', source: 'system' },
-        content: `${bootstrap ? AUTOMATIC_WORK_BOOTSTRAP_GUIDANCE + '\n\n' : ''}${AUTOMATIC_WORK_GUIDANCE}` +
-          (instructions ? `\n\nSupplementary Project dispatch requirements (not new authority; current Work boundaries still apply):\n${instructions}` : '') +
-          `\n\nAssigned Work key: ${record.key}. Read v:works/keys/${encodeURIComponent(record.key)}. Isolated branch: ${execution.branch}.` +
-          (record.workflow!.status === 'blocked' ? `\nExisting blocker is retained: ${record.workflow!.blockedReason}. This first assignment is for blocker clarification and publisher help, not permission to clear the blocker or execute blocked actions.` : ''),
-      })
-      if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.inputId !== execution.inputId || receipt.sessionId !== execution.sessionId) throw new Error('Unconfirmed Work admission')
-      const current = this.current(record.key)!
-      if (this.owned(current) && current.automaticExecution!.stage === 'delivering') await this.save(current,
-        { automaticExecution: { ...current.automaticExecution!, stage: 'running' } }, 'automatic_admitted')
-    } catch (error) { await this.block(record.key, `Work delivery failed or has an unknown outcome: ${String(error).slice(0, 800)}. Inspect admission before explicit recovery.`) }
+    assertGrant?.()
+    checkTarget()
+    if (!this.capacity(config).available) throw new WorkConflict('Project or device automatic execution capacity is occupied.')
+    this.deps.store.claimAutomaticWork(claimed, candidate.sequence, kickoff)
+    return { record: claimed, previous: candidate }
   }
 
-  /** Narrow host grant: only the current, unpaused bootstrap assignee, never Work text. */
+  /** Narrow host grant: only the current bootstrap assignee, never Work text. */
   assertBootstrap(sessionId: string): WorkRecord {
     const state = this.deps.sessions.getSessionState(sessionId)
     const record = state?.automaticWork && this.current(state.automaticWork.key)
     if (!state || state.projectId !== this.deps.projectId || state.mode !== 'session' || state.automaticWork?.phase !== 'bootstrap'
-      || state.folderId || state.workdir || !record || !this.owned(record) || record.workflow!.assignee !== sessionId || record.paused
-      || ['done', 'cancelled'].includes(record.workflow!.status)) throw new WorkConflict('Requires the current unbound automatic bootstrap assignee in this Project.')
+      || state.folderId || state.workdir || !record || !this.owned(record) || record.assignee !== sessionId
+      || ['done', 'cancelled'].includes(record.status)) throw new WorkConflict('Requires the current unbound automatic bootstrap assignee in this Project.')
     this.assertBoundaries(record)
     return record
   }
@@ -432,16 +458,16 @@ export class WorkDispatcher {
   }
 
   isRunning(): boolean {
-    return this.deps.store.workRecords().some(record => this.owned(record) && this.busy(record.workflow!.assignee!))
+    return this.deps.store.workRecords().some(record => this.owned(record) && this.busy(record.assignee!))
   }
 
   /** Stop the admitted executor, not just the short program scan. Work ownership is unchanged. */
   async cancel(): Promise<boolean> {
     let cancelled = false
     for (const record of this.deps.store.workRecords()) {
-      if (!this.owned(record) || !this.busy(record.workflow!.assignee!)) continue
+      if (!this.owned(record) || !this.busy(record.assignee!)) continue
       const id = crypto.randomUUID()
-      await this.deps.sessions.deliver(record.workflow!.assignee!, { id, kind: 'control', command: { type: 'cancel' }, timestamp: new Date().toISOString(),
+      await this.deps.sessions.deliver(record.assignee!, { id, kind: 'control', command: { type: 'cancel' }, timestamp: new Date().toISOString(),
         source: { kind: 'event', eventId: id, type: 'work-execution-stop', source: 'user' } })
       cancelled = true
     }
@@ -454,9 +480,12 @@ export class WorkDispatcher {
   }
   private async resumeOwned(key: string, version: number, signal: AbortSignal, acknowledgeToolReplay: boolean): Promise<void> {
     let record = this.current(key)
-    if (!record || !this.owned(record) || record.sequence !== version || record.paused || record.workflow!.status !== 'blocked') throw new WorkConflict('Recovery requires current, unpaused blocked automatic Work.')
+    if (!record || !this.owned(record) || record.sequence !== version || record.status !== 'blocked') throw new WorkConflict('Recovery requires current blocked automatic Work.')
     const execution = record.automaticExecution!
     if (this.busy(execution.sessionId)) throw new WorkConflict('Executor is running or normally waiting; answer its pending request instead.')
+    const inbox = this.deps.store.workKickoff(execution.inputId)
+    if (inbox?.state === 'inspect') throw new WorkConflict('Inspect the quarantined kickoff and its saved history; this assignment cannot be replayed or resumed. Release or reassign only after inspection.')
+    if (inbox?.state === 'pending') throw new WorkConflict('The exact kickoff is still pending. Inspect its inbox/history or release the assignment; explicit resume cannot bypass pending delivery.')
     const state = this.deps.sessions.getSessionState(execution.sessionId)
     if (!state?.automaticWork) throw new WorkConflict('Original executor is unavailable; explicit reassignment is required.')
     if (!this.capacity(state.automaticWork.limits, key).available) throw new WorkConflict('Project or device automatic execution capacity is occupied; finish or stop an executor first.')
@@ -475,12 +504,12 @@ export class WorkDispatcher {
     const instructions = !recovery ? (await this.deps.workerInstructions?.())?.trim() : undefined
     signal.throwIfAborted()
     if (recovery?.pendingToolCalls && !acknowledgeToolReplay) throw new WorkConflict('Unfinished tools require explicit acknowledgeToolReplay after inspection.')
-    record = await this.save(record, { workflow: { ...record.workflow!, status: 'in_progress', blockedReason: undefined, blockedScope: undefined },
+    record = await this.save(record, { status: 'in_progress', blockedReason: undefined,
       automaticExecution: { ...record.automaticExecution!, stage: 'delivering', lastError: undefined } }, 'automatic_resume')
     try {
       signal.throwIfAborted()
       const latest = this.current(key)
-      if (!latest || !this.owned(latest) || latest.paused || ['done', 'cancelled'].includes(latest.workflow!.status)) return
+      if (!latest || !this.owned(latest) || ['done', 'cancelled'].includes(latest.status)) return
       if (recovery) await this.deps.sessions.resumeSession(execution.sessionId, recovery.id, acknowledgeToolReplay)
       else await this.deps.sessions.deliver(execution.sessionId, { id: crypto.randomUUID(), kind: 'message', timestamp: new Date().toISOString(), policy: 'queue',
         source: { kind: 'event', eventId: crypto.randomUUID(), type: 'work-resume', source: 'user' },

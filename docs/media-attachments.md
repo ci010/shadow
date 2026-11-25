@@ -1,4 +1,11 @@
-# Web attachment downloads
+# Web media previews and attachment downloads
+
+In the conversation, expand a `read` call under **Execution process** to see its
+result. Click the image, or focus it and press Enter or Space, to open the same
+image viewer used for message attachments. Escape closes the viewer and returns
+focus to the preview button.
+
+## Attachment downloads
 
 `MEDIA:<path-or-url>` is parsed by `src/utils/media-parse.ts`. The web renderer
 creates an authenticated `/api/media?chatId=...&path=...` request for local files;

@@ -21,14 +21,14 @@ export const BotSourcePathSchema = z.string().min(1).max(256).refine(s =>
 // Service receive policy is package-owned. Missing legacy fields narrow to the
 // platform's mention/reply/topic default; connection-level `all` is never imported.
 const binding = ConversationBindingSchema.omit({ agent: true, skills: true, readResources: true }).extend({
-  platform: z.enum(['qq', 'feishu']), tools: names,
+  platform: z.enum(['qq', 'feishu', 'wechat']), tools: names,
   trigger: z.enum(['mention', 'all']).default('mention'),
 }).strict()
 const discord = DiscordBindingSchema.omit({ agentId: true, epochRevision: true, readResources: true, sourceFolders: true }).extend({ platform: z.literal('discord'), tools: names }).strict()
 export const BotBindingSchema = z.discriminatedUnion('platform', [binding, discord])
 /** Subscription references select existing authority; they never supply grants or filters. */
 export const BotSubscriptionSchema = z.discriminatedUnion('platform', [
-  z.object({ platform: z.enum(['qq', 'feishu']), botInstanceId: z.string().min(1).max(512), conversationId: z.string().min(1).max(512) }).strict(),
+  z.object({ platform: z.enum(['qq', 'feishu', 'wechat']), botInstanceId: z.string().min(1).max(512), conversationId: z.string().min(1).max(512) }).strict(),
   z.object({ platform: z.literal('discord'), bindingId: z.string().uuid() }).strict(),
 ])
 export type BotSubscription = z.infer<typeof BotSubscriptionSchema>
@@ -65,14 +65,17 @@ const baseDefinition = z.object({
   skills: z.array(z.object({ name: ResourceName, content: z.string().min(1).max(64_000) }).strict()).max(32).optional(),
 }).strict()
 const definition = z.discriminatedUnion('mode', [
-  baseDefinition.extend({ ...agentInferenceSchema.shape, mode: z.literal('service'), connection: z.never().optional(), agent: z.never().optional() }),
-  baseDefinition.extend({ mode: z.literal('personal'), connection: z.union([z.string().uuid(), z.enum(['legacy-qq', 'legacy-feishu', 'legacy-discord', 'legacy-wechat'])]), agent: ResourceName }),
+  baseDefinition.extend({ ...agentInferenceSchema.shape, mode: z.literal('service'), agent: z.never().optional() }),
+  baseDefinition.extend({ mode: z.literal('personal'), agent: ResourceName }),
 ]).superRefine((bot, ctx) => {
+  if (bot.mode !== 'personal' && bot.bindings.some(binding => binding.platform === 'wechat'))
+    ctx.addIssue({ code: 'custom', message: 'WeChat inboxes require a Personal BOT' })
   if (bot.mode === 'personal') {
-    if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })
-    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResources || bot.discordHistory || bot.skills)
-      ctx.addIssue({ code: 'custom', message: 'Personal BOT uses ordinary role tools/context; custom tools, service bindings and scopes are not supported' })
-  } else if (bot.connection || bot.agent) ctx.addIssue({ code: 'custom', message: 'Service BOT cannot select a personal connection or role' })
+    if (bot.bindings.some(binding => binding.platform === 'wechat' && binding.trigger !== 'mention'))
+      ctx.addIssue({ code: 'custom', message: 'WeChat only supports direct inboxes; omit trigger or use the default' })
+    if (bot.bindings.some(binding => binding.platform === 'discord' || binding.tools.length || binding.grants.length || binding.allowFrom !== undefined || Object.keys(binding.parameters).length) || bot.connectionPolicies || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.readResources || bot.discordHistory || bot.skills)
+      ctx.addIssue({ code: 'custom', message: 'Personal BOT supports exact QQ/Feishu inboxes or WeChat direct inboxes with ordinary role tools/context only' })
+  }
   const bindingKeys = bot.bindings.map(value => botSubscriptionKey(bindingSubscription(value)))
   if (new Set(bindingKeys).size !== bindingKeys.length) ctx.addIssue({ code: 'custom', message: 'Duplicate binding subscription identity' })
   const subscriptionKeys = (bot.subscriptions ?? []).map(botSubscriptionKey)
@@ -94,7 +97,6 @@ export function botReadResources(bot: BotDefinition): ReadResources | undefined 
 }
 
 export function subscribedBindings(bot: BotDefinition): BotDefinition['bindings'] {
-  if (bot.mode !== 'service') return []
   const keys = bot.subscriptions && new Set(bot.subscriptions.map(botSubscriptionKey))
   return bot.bindings.filter(binding => !keys || keys.has(botSubscriptionKey(bindingSubscription(binding))))
 }
@@ -153,7 +155,7 @@ const botHeader = z.union([
 ])
 
 /** BOT.md owns id/config, mode, Service inference or Personal agent, then the prompt.
- * JSON owns connection, subscriptions, bindings, modules, tools and scopes/skills.
+ * JSON owns subscriptions, bindings, modules, tools and scopes/skills.
  * Whole legacy packages are still read without rewriting frozen deployment bytes.
  * Split/duplicate behavior fields are rejected; neither file overrides the other.
  * No module is imported, evaluated or compiled by this pure parser.

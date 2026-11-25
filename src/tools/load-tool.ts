@@ -1,3 +1,4 @@
+import { initializeChildMcp } from '../mcp/remote-client.ts'
 import { isWorkTool } from './work-names.ts'
 import { discoverFolderMcp, type FolderMcpSource } from '../mcp/folder.ts'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
@@ -960,9 +961,24 @@ export class ImportTool implements Tool {
       !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
   }
 
+  authorizeChildDesktop?: (context: ExecutionContext) => void
+
   /** Explicit source initialization returns contracts, never executes an MCP tool. */
   async initializeSource(name: string, args: Record<string, unknown>, context: ExecutionContext, explicit = false): Promise<string | undefined> {
-    if (context.remoteWorkdir && (name !== 'layerfs' || !this.canInvokeFromRemote(name))) return undefined
+    if (context.remoteWorkdir && name !== 'layerfs') {
+      if (!explicit) return undefined
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(name) || ['chrome-devtools', 'browser_setup'].includes(name)) return 'Error: this managed source is unavailable for remote workdirs.'
+      if (!context.tools.canUseDynamic(name) || Object.keys(args).length) return 'Error: Child MCP source initialization denied.'
+      try {
+        const authorize = name === 'agent-desktop' ? this.authorizeChildDesktop : undefined
+        if (name === 'agent-desktop' && !authorize) return 'Error: Child desktop authorization unavailable.'
+        const tools = await initializeChildMcp(name, context, authorize)
+        return `Initialized Child MCP source ${name}; no tool executed.\n${toolInvocationContract(tools)}`
+      } catch {
+        return 'Error: Child MCP source unavailable; check the selected device and local source grant. No Main fallback.'
+      }
+    }
+    if (context.remoteWorkdir && !this.canInvokeFromRemote(name)) return undefined
     if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const entry = this.catalogFor(context.tools).get(name)
     if (!entry || (!isMcpLoadable(entry) && !(explicit && isFactoryLoadable(entry)))) return undefined

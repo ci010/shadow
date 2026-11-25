@@ -4,17 +4,12 @@ import { writeFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { app, BrowserWindow } from 'electron'
 
-interface DomNode { nodeId: number; nodeName: string; children?: DomNode[]; contentDocument?: DomNode }
-function nodes(node: DomNode): DomNode[] {
-  return [node, ...(node.children ?? []).flatMap(nodes), ...(node.contentDocument ? nodes(node.contentDocument) : [])]
-}
-
 app.setPath('userData', join(process.cwd(), 'profile'))
 app.on('window-all-closed', () => {})
 async function main() {
   await app.whenReady()
   const window = new BrowserWindow({ show: false, width: 1440, height: 900,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } })
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
   const failures: string[] = []
   window.webContents.debugger.attach('1.3')
   window.webContents.debugger.on('message', (_event, method, params) => {
@@ -24,10 +19,21 @@ async function main() {
   const execute = (code: string) => window.webContents.executeJavaScript(code).catch(error => {
     throw new Error(`Fixture expression failed: ${code}\nRenderer failures: ${failures.join('\n')}`, { cause: error })
   })
+  const diagnostics: string[] = []
+  window.webContents.debugger.on('message', (_event, method, params) => {
+    if (method === 'Network.requestWillBeSent' && params.request.url.includes('/api/')) diagnostics.push(`request ${params.request.method} ${params.request.url}`)
+  })
+  window.webContents.on('console-message', event => diagnostics.push(`${event.level}: ${event.message} (${event.sourceId}:${event.lineNumber})`))
+  window.webContents.session.webRequest.onErrorOccurred({ urls: ['http://127.0.0.1:*/*'] }, event => {
+    diagnostics.push(`${event.error} ${event.url}`)
+  })
+  window.webContents.session.webRequest.onCompleted({ urls: ['http://127.0.0.1:*/*'] }, event => {
+    if (event.statusCode >= 400 || event.url.includes('/api/')) diagnostics.push(`${event.method} ${event.statusCode} ${event.url}`)
+  })
   const wait = async (code: string) => {
     const deadline = Date.now() + 10000
     while (Date.now() < deadline) { if (await execute(`Boolean(${code})`)) return; await delay(30) }
-    throw new Error(`Timed out: ${code}\nRenderer failures: ${failures.join('\n')}\n${await execute('document.body.innerText')}`)
+    throw new Error(`Timed out: ${code}\nRenderer failures: ${failures.join('\n')}\nDiagnostics: ${diagnostics.slice(-35).join('\n')}\n${await execute('JSON.stringify({ url:location.href, ready:document.readyState, mount:document.querySelector("#app")?.innerHTML.slice(0,2000), route:window.fixtureRoute ?? window.fixtureStage, stage:window.fixtureStage, fixture:window.fixture?.error })')}`)
   }
   const click = (text: string, scope = '') => execute(`(() => {
     const button = [...document.querySelectorAll(${JSON.stringify(`${scope ? scope + ' ' : ''}button`)})].find(button => button.getClientRects().length && button.textContent.trim() === ${JSON.stringify(text)});
@@ -49,7 +55,7 @@ async function main() {
         await delay(150)
         assert.equal(await execute('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true, `${state} has no page overflow`)
         if (state === 'detail') {
-          const geometry = await execute(`(() => { const el=document.querySelector('.coordination-panel'), rect=el.getBoundingClientRect(); return {x:rect.x,width:rect.width,right:rect.right,viewport:innerWidth,root:document.querySelector('.project-workbench').className,body:document.querySelector('.workbench-body').getBoundingClientRect().width,css:getComputedStyle(el).width}; })()`)
+          const geometry = await execute(`(() => { const el=document.querySelector('.coordination-panel'), rect=el.getBoundingClientRect(); return {x:rect.x,width:rect.width,right:rect.right,viewport:innerWidth}; })()`)
           assert.ok(geometry.width >= 300 && geometry.x >= 0 && geometry.right <= geometry.viewport + 1, JSON.stringify(geometry))
         }
         if (process.env.WORK_SCREENSHOTS) await writeFile(join(process.env.WORK_SCREENSHOTS,
@@ -65,6 +71,7 @@ async function main() {
   try {
     const loading = window.loadURL(new URL('__work', process.env.WORK_SMOKE_URL).href)
     await window.webContents.debugger.sendCommand('Runtime.enable')
+    await window.webContents.debugger.sendCommand('Network.enable')
     await loading
     await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
     await wait(`document.querySelector('${question} .yield-prompt') && document.querySelector('${input} textarea')`)
@@ -97,37 +104,7 @@ async function main() {
 
     const goal = `[data-work-key="${await execute('window.fixtureKeys.root')}"]`
     await click('Inspect notes', goal)
-    await execute(`document.querySelector('${goal} .work-exhibit').open = true`)
-    await wait(`document.querySelector('${goal} iframe')`)
-    assert.equal(await execute(`document.querySelector('${goal} iframe').getAttribute('sandbox')`), '')
-    let frame = window.webContents.mainFrame.frames.find(frame => frame.url === 'about:srcdoc')
-    const frameDeadline = Date.now() + 10000
-    while (!frame && Date.now() < frameDeadline) { await delay(30); frame = window.webContents.mainFrame.frames.find(frame => frame.url === 'about:srcdoc') }
-    assert.ok(frame, 'The HTML exhibit has a separate frame')
-    await assert.rejects(frame.executeJavaScript('window.__exhibitScriptRan = true'), error => String(error).includes('Script not run'))
-    assert.equal(await execute(`document.querySelector('${goal} iframe').contentDocument === null`), true)
-    const targets: { targetInfos: { type: string; url: string; targetId: string }[] } = await window.webContents.debugger.sendCommand('Target.getTargets')
-    const target = targets.targetInfos.find(target => target.type === 'iframe' && target.url === 'about:srcdoc')
-    assert.ok(target)
-    const { sessionId } = await window.webContents.debugger.sendCommand('Target.attachToTarget', { targetId: target.targetId, flatten: true })
-    await window.webContents.debugger.sendCommand('DOM.enable', {}, sessionId)
-    await window.webContents.debugger.sendCommand('CSS.enable', {}, sessionId)
-    const document: { root: DomNode } = await window.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1 }, sessionId)
-    const exhibitNodes = nodes(document.root)
-    assert.equal(exhibitNodes.some(node => ['SCRIPT', 'FORM', 'INPUT', 'BUTTON', 'A', 'IFRAME', 'OBJECT', 'EMBED', 'foreignObject'].includes(node.nodeName)), false)
-    const body = exhibitNodes.find(node => node.nodeName === 'BODY')
-    assert.ok(body)
-    const colors: string[] = []
-    for (const dark of [false, true]) {
-      await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
-      await delay(100)
-      const styles: { computedStyle: { name: string; value: string }[] } = await window.webContents.debugger.sendCommand('CSS.getComputedStyleForNode', { nodeId: body.nodeId }, sessionId)
-      colors.push(styles.computedStyle.find(style => style.name === 'background-color')!.value)
-      assert.equal(await execute(`getComputedStyle(document.querySelector('${goal} iframe')).colorScheme`), dark ? 'dark' : 'light')
-    }
-    assert.notEqual(colors[0], colors[1])
-    assert.equal(await execute('window.__exhibitEscaped'), undefined)
-    await execute(`document.querySelector('${goal} .work-exhibit').open = false`)
+    await wait(`document.querySelector('${goal} .note-summary .markdown-body')`)
     await click('Less detail', goal)
     await execute(`document.querySelector('${question} form').requestSubmit()`)
     await wait(`!document.querySelector('${question}')`)
@@ -139,7 +116,7 @@ async function main() {
     assert.equal(await execute('!!document.querySelector(".note-editor")'), false)
     assert.equal(await execute('[...document.querySelectorAll(".work-alignment button")].some(button=>button.textContent.trim()==="Edit note")'), false)
     await click('Discuss in a new chat', '.coordination-panel-heading')
-    assert.match(await execute('document.querySelector("#fixture-composer").value'), /Keep my unsent draft[\s\S]*\/projects\/p\/board\?work=topic%3Aweb%3Afixture/)
+    assert.match(await execute('document.querySelector("#fixture-composer").value'), /Keep my unsent draft[\s\S]*\/projects\/p\/board\?work=work%3A1d7572b8-f94a-50e1-bb3d-a1679fb67b80/)
     assert.match(await execute('document.querySelector("#fixture-composer").value'), /Work reference only; no assignment or notification/)
     assert.equal(await execute('window.fixture.navigated'), '', 'Discussion must not open the assignee conversation')
     assert.equal(await execute('document.querySelectorAll(".project-work-detail .person-row").length'), 2)

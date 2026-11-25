@@ -60,13 +60,13 @@
             {{ t('Author started') }} {{ selected.acceptance.authorTurn.startedAt }}<span v-if="selected.acceptance.authorTurn.finishedAt"> {{ t('· Finished') }} {{ selected.acceptance.authorTurn.finishedAt }} ({{ selected.acceptance.authorTurn.outcome }})</span>{{ t('. A finished turn is not a passing report.') }}
           </p>
           <details v-if="selected.acceptance.work?.length">
-            <summary>{{ t('Published Work acceptance criteria') }}</summary>
+            <summary>{{ t('Published Work definitions') }}</summary>
             <div v-for="work in selected.acceptance.work" :key="work.key">
               <p><code>{{ work.key }}</code> {{ t('· revision') }} {{ work.revision }} {{ t('at publication') }}</p>
-              <ol><li v-for="(criterion, index) in work.acceptance" :key="index">{{ criterion }}</li></ol>
+              <WorkMarkdownContent :text="work.definition" />
             </div>
           </details>
-          <p v-else>{{ t('No Work acceptance criteria were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.') }}</p>
+          <p v-else>{{ t('No Work definitions were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.') }}</p>
           <YieldQuestion v-if="selected.acceptance.status === 'asking' && selected.acceptance.decisionSessionId && selected.acceptance.decisionRequestId"
             :key="selected.acceptance.id" :api-base="apiBase" :session-id="selected.acceptance.decisionSessionId"
             :active="active" stage="waiting" :can-answer="canWrite" :expected-request-id="selected.acceptance.decisionRequestId"
@@ -118,6 +118,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { microAppIconUrl, microAppRequest, microAppReview, microAppStatus, microAppTestingStatus, microAppView, nativeAppIdentity, validAppLaunch, type MicroAppReview, type MicroAppView } from '../microapps.ts'
 import { z } from 'zod'
+import WorkMarkdownContent from './WorkMarkdownContent.vue'
 import YieldQuestion from './YieldQuestion.vue'
 const props = defineProps<{ apiBase: string; active: boolean; canWrite: boolean }>()
 defineEmits<{ compose: [text: string] }>()
@@ -134,9 +135,8 @@ const reportChecks = computed(() => {
   return [
     ...(report?.checks ?? []).map(check => ({ ...check, key: check.category, title: check.category })),
     ...(report?.requirements ?? []).map(check => ({
-      ...check, key: `${check.workKey}:${check.workRevision}:${check.criterion}`,
-      title: acceptance?.work?.find(work => work.key === check.workKey && work.revision === check.workRevision)?.acceptance[check.criterion]
-        ?? t('{workKey} v{workRevision} criterion {value3}', { workKey: check.workKey, workRevision: check.workRevision, value3: check.criterion + 1 }),
+      ...check, key: `${check.workKey}:${check.workRevision}`,
+      title: `${check.workKey} · ${t('Revision {revision}', { revision: check.workRevision })}`,
     })),
   ]
 })

@@ -37,13 +37,13 @@ the saved file and summarize the change. Virtual writes support overwrite and
 exact replacement, not `flag: "a"` append.
 
 Each admitted model round creates a fresh dispatcher context and loads the latest
-instructions. Tracking-only findings are excluded by default; optional Work
-`automaticDispatch: manual|ready` is controller-owned scheduling intent, never
-new execution authority. Unchanged rounds are suppressed in host receipts across
+instructions. Unassigned Work can be considered regardless of note kind; intake
+text is not authority. Terminal states, unmet dependencies, assignment, capacity
+and isolation checks still apply. Unchanged rounds are suppressed in host receipts across
 restart, with a 30-minute periodic recheck (five minutes after failure/interruption).
 Work, instruction, configuration, owner-state or target/capacity changes invalidate
 the suppression. Manual runs use the same checks. Changes apply to the next dispatch run,
-not workers already started, and do not themselves enable or
+not kickoffs already accepted, and do not themselves enable or
 immediately run the automation. First worker deliveries also receive the current
 supplementary requirements; textual restrictions and human authority still apply.
 

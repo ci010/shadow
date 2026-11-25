@@ -123,11 +123,7 @@ function buildEventTag(source: EventInputSource): string {
  * Provenance chooses the label; neither sender names nor payload metadata grant
  * a different provider role or carry internal scheduling instructions.
  */
-export async function buildUserChatMessage(
-  msg: SessionMessageInput,
-  workspace: string,
-  cwd: string,
-): Promise<ChatMessage> {
+export function buildTextInputMessage(msg: SessionMessageInput): ChatMessage & { content: ContentPart[] } {
   const senderName = inputSender(msg).name
   const metaTag = msg.source.kind === 'event'
     ? buildEventTag(msg.source)
@@ -139,20 +135,24 @@ export async function buildUserChatMessage(
     { type: 'text', text: msg.content },
   ]
 
+  return { role: 'user', content: parts, name: senderName }
+}
+
+export async function buildUserChatMessage(
+  msg: SessionMessageInput,
+  workspace: string,
+  cwd: string,
+): Promise<ChatMessage> {
+  const message = buildTextInputMessage(msg)
   if (msg.media && msg.media.length > 0) {
     const media = await buildMediaParts(msg.media, workspace, cwd)
     const sender = msg.source.kind === 'user' ? msg.source.sender : undefined
-    parts.push(...media.map((part, index) => part.type === 'image_url' && sender?.channel === 'qq'
+    message.content.push(...media.map((part, index) => part.type === 'image_url' && sender?.channel === 'qq'
       ? { ...part, displayOnly: sender.displayMetadata?.attachments?.some(
         attachment => attachment.path === msg.media![index] && attachment.sticker === true,
       ) ?? false } : part))
   }
-
-  return {
-    role: 'user',
-    content: parts,
-    name: senderName,
-  }
+  return message
 }
 
 /**

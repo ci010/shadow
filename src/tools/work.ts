@@ -1,12 +1,13 @@
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { z } from 'zod'
 import type { Tool, ToolParameters } from './tool.ts'
-import { currentOwnerWorkInput, type ExecutionContext } from './context.ts'
+import type { ExecutionContext } from './context.ts'
 import { WORK_HELP, type WorkAlignment } from '../sessions/work-alignment.ts'
 import { WorkConflict, workRecordSchema, type WorkRecord } from '../initiatives/work-contract.ts'
 
 const request = z.object({
   action: z.enum(['context', 'list', 'tree', 'create', 'update', 'assign', 'review', 'link']),
-  key: z.string().min(1).max(600).optional(),
+  key: workKeySchema.optional(),
   version: z.number().int().positive().optional(),
   data: z.unknown().optional(),
 }).strict()
@@ -14,11 +15,9 @@ const request = z.object({
 export function workReceipt(record: WorkRecord) {
   return {
     key: record.key, version: record.sequence, goalRevision: record.revision,
-    title: record.workflow?.title, status: record.workflow?.status,
-    parentKey: record.workflow?.parentKey, assignee: record.workflow?.assignee,
-    assignmentRevision: record.workflow?.assignmentRevision,
-    automaticDispatch: record.workflow?.automaticDispatch,
-    impactPending: !!record.notes?.attention && !record.notes.attention.reviewed,
+    title: record.title, status: record.status,
+    parentKey: record.parentKey, assignee: record.assignee,
+    assignmentRevision: record.assignmentRevision,
   }
 }
 
@@ -27,12 +26,12 @@ export class WorkTool implements Tool {
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) => ['context', 'list', 'tree'].includes(String(args.action))
-  readonly description = 'Shared coordination facts and Project goal map for durable deliverables, dependencies, blockers and responsibility. Reuse relevant Work; one-off discussion belongs in message and observation in read. Never a prerequisite for tools. create associates the current session automatically. link key associates this conversation with existing Work without changing focus or assignment. Current scope is the unique unfinished assignment. Session completion never completes Work. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Entering done/blocked or new attention can notify the manager; routine notes stay silent. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'
+  readonly description = 'Shared coordination facts and Project goal map for durable deliverables, dependencies, blockers and responsibility. Reuse relevant Work; one-off discussion belongs in message and observation in read. Never a prerequisite for tools. create associates the current session automatically. link key associates this conversation with existing Work without changing focus or assignment. Current scope is the unique unfinished assignment. Session completion never completes Work. create needs data={title,definition:Markdown string,kind?}; use parentKey for child Work and dependencies for prerequisites. update needs key, version and only changed fields; keep planning in the session. Use Markdown for shared state or results in summary. Other update fields include artifacts, status and blockedReason. Workers update their branch; coordinators maintain goals, parentage and dependencies. Report meaningful findings once here, not again by message. Entering done/blocked can notify the manager; routine updates stay silent. Use work_note_create for shared comments. context returns current Work fields and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
       action: { type: 'string', enum: request.shape.action.options },
       key: { type: 'string', description: 'Stable work key.' },
-      version: { type: 'integer', description: 'Current note version for update, assign or review; returned by reads and writes.' },
+      version: { type: 'integer', description: 'Current Work version for update, assign or review; returned by reads and writes.' },
       data: { type: 'object', description: 'Only action-specific fields. create accepts optional idempotencyKey: same creator/Project and normalized request returns existing Work; conflicting parameters reject. context data.includeSchema=true returns help.' },
     }, required: ['action'], additionalProperties: false,
   }
@@ -54,8 +53,8 @@ export class WorkTool implements Tool {
         associated: this.alignment.store.workSessionKeys(context.sessionId),
         records: view.records.map(record => ({
           ...workReceipt(record), definition: record.definition, origin: record.origin,
-          assignmentDelivery: record.workflow ? this.alignment.store.assignmentDelivery(record.key, record.workflow.assignmentRevision) ?? null : null,
-          userQuote: record.requestSource?.quote, notes: record.notes, authority: record.authority,
+          assignmentDelivery: this.alignment.store.assignmentDelivery(record.key, record.assignmentRevision) ?? null,
+          kind: record.kind, summary: record.summary, artifacts: record.artifacts, basis: record.basis, authority: record.authority,
           contextNeedsReview: record.contextChanged,
           path: this.alignment.decisionContext(context.sessionId, record.key)?.path,
         })),
@@ -71,20 +70,19 @@ export class WorkTool implements Tool {
     }
     let record: WorkRecord
     if (action === 'create') {
-      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new WorkConflict('Create needs a title and definition.objective.')
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new WorkConflict('Create needs a title and a Markdown definition.')
       record = workRecordSchema.parse(await this.alignment.execute(actor, 'create', undefined, undefined,
-        data, context.signal, currentOwnerWorkInput(context)))
+        data, context.signal))
     } else {
-      if (!key || version === undefined) throw new WorkConflict('Read the note first and provide its key and version.')
+      if (!key || version === undefined) throw new WorkConflict('Read Work first and provide its key and version.')
       if (action === 'update') {
-        record = await this.alignment.editNote(actor, key, version, data, context.signal, currentOwnerWorkInput(context))
+        record = await this.alignment.editNote(actor, key, version, data, context.signal)
       } else if (action === 'assign') {
         const input = z.object({ assignee: z.string().min(1).max(512).nullable() }).strict().parse(data)
         record = await this.alignment.assignNote(actor, key, version, input.assignee, context.signal)
       } else {
-        const input = z.object({ conclusion: z.string().trim().min(1).max(2000),
-          disposition: z.enum(['record', 'return_to_assignee']).optional() }).strict().parse(data)
-        record = await this.alignment.reviewNote(actor, key, version, input.conclusion, context.signal, input.disposition)
+        const input = z.object({ conclusion: z.string().trim().min(1).max(2000) }).strict().parse(data)
+        record = await this.alignment.reviewNote(actor, key, version, input.conclusion, context.signal)
       }
     }
     return JSON.stringify(workReceipt(record))

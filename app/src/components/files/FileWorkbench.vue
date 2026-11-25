@@ -112,7 +112,7 @@
         <slot name="actions" />
       </div>
       <div class="workbench-content" :class="{ 'draft-document': draft && tabs.selected === '' }">
-        <EditorViewHost :descriptor="descriptor('', primaryLabel || conversationTitle || t('Conversation'), primaryIcon)" :selected="tabs.selected === '' && (!groups || route.name === 'chat' && !route.query.panel && (route.params.sessionId || '') === sessionId)" :active="active">
+        <EditorViewHost :descriptor="descriptor('', primaryLabel || conversationTitle || t('Conversation'), primaryIcon)" :selected="primarySelected" :active="active">
         <div ref="viewRoot" class="workbench-view-layout">
     <button v-if="expanded && !wide" class="explorer-backdrop" :aria-label="t('Dismiss files')" @click="collapseExplorer" />
     <aside v-if="!groups && (explorerAvailable || (tabs.knowledge && knowledgeEnabled))" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? t('Knowledge explorer') : t('File explorer')" @keydown.esc.stop.prevent="collapseExplorer">
@@ -255,6 +255,12 @@ const tabs = computed<FileTabs>({
     if (projectDocuments.value) projectDocuments.value.tabs = value.projectTabs ?? []
     localTabs.value = value
   },
+})
+// An automation route without a session ID belongs to the pending editor, not a draft.
+const primarySelected = computed(() => {
+  const pendingAutomation = !props.sessionId && typeof route?.query.automation === 'string' && !!route.query.automation.trim()
+  return tabs.value.selected === '' && (!groups || (route.name === 'chat' && !route.query.panel
+    && !pendingAutomation && (route.params.sessionId || '') === props.sessionId))
 })
 function editorId(key: string) {
   if (key === KNOWLEDGE_TAB_KEY || knowledgeEntryId(key)) return JSON.stringify([props.projectId, 'knowledge', key])

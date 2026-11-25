@@ -1,7 +1,8 @@
+import { workKeySchema } from '../initiatives/work-key.ts'
 import { z } from 'zod'
 
 export const workBindingSchema = z.object({
-  key: z.string().trim().min(1).max(600),
+  key: workKeySchema,
 }).strict()
 
 const policySchema = z.discriminatedUnion('mode', [

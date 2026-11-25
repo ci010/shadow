@@ -20,7 +20,7 @@ export class DiscordPatrolTool implements Tool {
   readonly parameters: ToolParameters = { type:'object', properties: {
     consumer:{type:'string'},action:{type:'string',enum:['bots','directory','threads','read','context','ack','retry','reply','inspect']}, bot:{type:'string'},guild:{type:'string'},channel:{type:'string'},after:{type:'string'},before:{type:'string'},archived:{type:'boolean'},limit:{type:'number'},batch:{type:'string'},attempt:{type:'string'},error:{type:'string'},message:{type:'string'},content:{type:'string'},key:{type:'string'},
   }, required:['action'] }
-  constructor(private workspace:string, private projectId:string, private deps:{ authorized:(session:string)=>boolean; bots:()=>unknown; api:(bot:string)=>DiscordApi; discover?:(bot:string,parent:string,threads:string[])=>void; stream?:(action:'read'|'send',args:Record<string,unknown>,context:ExecutionContext)=>Promise<string> }) {}
+  constructor(private workspace:string, private projectId:string, private deps:{ authorized:(session:string)=>boolean; bots:()=>unknown; api:(bot:string)=>DiscordApi; discover?:(bot:string,parent:string,threads:string[])=>void|Promise<void>; stream?:(action:'read'|'send',args:Record<string,unknown>,context:ExecutionContext)=>Promise<string> }) {}
   async execute(args:Record<string,unknown>, context?:ExecutionContext):Promise<string> {
     if (!context || context.projectId !== this.projectId || context.remoteWorkdir || !this.deps.authorized(context.sessionId)) throw new Error('Trusted persistent Web session in this Project required')
     const a=request.parse(args), signal=context.signal
@@ -38,7 +38,7 @@ export class DiscordPatrolTool implements Tool {
     let result:unknown
     if(a.action==='directory') {
       const directory=await discordDirectory(api,signal,a.guild,a.after)
-      for(const channel of directory.channels)if(channel.parentId && channel.supported && channel.canView)this.deps.discover?.(bot,channel.parentId,[channel.id])
+      for(const channel of directory.channels)if(channel.parentId && channel.supported && channel.canView)await this.deps.discover?.(bot,channel.parentId,[channel.id])
       result=directory
     }
     else if(a.action==='inspect') result=store.inspect()
@@ -52,7 +52,7 @@ export class DiscordPatrolTool implements Tool {
           if(page.threads.some(t=>t.parent_id!==channel)) throw new Error('Thread parent mismatch')
           const next=page.threads.at(-1)?.thread_metadata.archive_timestamp
           if(page.has_more && (!next || (a.before && next>=a.before))) throw new Error('Thread pagination did not advance')
-          this.deps.discover?.(bot,channel,page.threads.map(t=>t.id))
+          await this.deps.discover?.(bot,channel,page.threads.map(t=>t.id))
           result={...page,nextBefore:page.has_more?next:null,notice:'Public archived threads only; API permission errors propagate. Use directory for active threads. Track every discovered thread with read.'}
         } else {
           const directory=await discordDirectory(api,signal,id.parse(a.guild))

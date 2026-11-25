@@ -4,7 +4,7 @@ import { measuredOffsets, measuredRange, workBoardColumns } from './work-board.t
 import { filterWork } from './project-work.ts'
 import type { ProjectWorkItem } from '../../src/projects/work-overview.ts'
 const item = (key: string, extra: Partial<ProjectWorkItem> = {}): ProjectWorkItem => ({ key, title: key, revision: 1, sequence: 1,
-  status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false,
+  status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null,
   changedAt: '', ...extra })
 test('board includes finished roots and descendants with consistent search and assignee filters', () => {
   const all = [item('finished'), item('child', { parentKey: 'finished', assignee: 'worker' }), item('active', { status: 'in_progress' })]

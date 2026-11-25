@@ -25,7 +25,7 @@ test('self metadata exposes plain topic and temporary sessions remain excluded',
 test('ordinary no-Work sessions are globally rendered; persisted associations survive focus clearing without duplicate roots or Work completion', async () => withTempWorkspace(async home => {
   const states = [state('web:question', { focus: 'A normal question', completed: true }), state('web:work'), state('internal:task', { mode: 'task', parentSessionId: 'web:work' }), state('internal:call', { mode: 'call', parentSessionId: 'web:work' }), state('organizer', { agentType: 'work-organizer' })]
   const store = new InitiativeStore(home, { isSessionKnown: id => states.some(s => s.sessionId === id) })
-  const alignment = new WorkAlignment(store, { state: id => states.find(s => s.sessionId === id), evidence: async () => {}, changed: async () => {}, })
+  const alignment = new WorkAlignment(store, { state: id => states.find(s => s.sessionId === id),changed: async () => {}, })
   const sessions = { alignment, listHistoryStates: async () => states, inputs: new Map(), yields: new Map(), isWaitingForCall: () => false, getActiveSession: () => undefined } as unknown as SessionManager
   try {
     let overview = await projectWorkOverview(sessions)
@@ -37,14 +37,14 @@ test('ordinary no-Work sessions are globally rendered; persisted associations su
     assert.equal(question.status, 'completed')
     assert.equal(question.sessionId, 'web:question', 'graph retains conversation navigation')
     const actor = { kind: 'session' as const, sessionId: 'web:work' }
-    const created = await alignment.execute(actor, 'create', undefined, undefined, { title: 'A work goal', definition: { objective: 'Track an outcome' }, notes: { kind: 'goal' } }) as { key: string }
+    const created = await alignment.execute(actor, 'create', undefined, undefined, { title: 'A work goal', definition: 'Track an outcome', kind: 'goal' }) as { key: string }
     assert(store.workSessionKeys('web:work').includes(created.key))
     assert.equal(store.workFocus('web:work'), created.key)
     assert(store.workSessionKeys('web:work').includes(created.key))
     await alignment.execute({ kind: 'session', sessionId: 'web:question' }, 'link', created.key, undefined, undefined)
     assert.equal(store.workFocus('web:question'), undefined)
-    assert.equal(alignment.get(created.key).workflow?.assignee, 'web:work')
-    assert.equal(alignment.get(created.key).workflow?.status, 'pending')
+    assert.equal(alignment.get(created.key).assignee, 'web:work')
+    assert.equal(alignment.get(created.key).status, 'pending')
     overview = await projectWorkOverview(sessions)
     assert.equal(projectTopics(overview).length, 1)
     assert.equal(projectTopics(overview)[0].sessions.filter(s => s.assignable).length, 2)
@@ -62,7 +62,7 @@ test('organizer accepts lightweight conversation identities without creating Wor
   const organizer = new WorkOrganizer(store, { projectId: 'p', activity: () => conversation.lastActivityAt!, evidence: async () => ({ sources: [], partial: false }), changed() {} })
   const ctx = { projectId: 'p', sessionId: 'organizer', physicalSessionId: 'organizer.0', signal: new AbortController().signal } as ExecutionContext
   const key = sessionTopicKey(conversation.sessionId)
-  const topic = () => ({ key, sequence: sessionTopicSequence(conversation), changedAt: conversation.lastActivityAt!, workflow: { title: 'Explain concept' }, definition: { objective: conversation.focus! }, observation: { sessionId: conversation.sessionId } })
+  const topic = () => ({ key, sequence: sessionTopicSequence(conversation), changedAt: conversation.lastActivityAt!, title: 'Explain concept', definition: conversation.focus!, observation: { sessionId: conversation.sessionId } })
   const patch = (id: string) => ({ patchId: id, expectedRevision: 0, groups: [{ id: 'concept', category: 'Concepts', purpose: 'Understand', motivation: 'Question', topicKeys: [key], cards: [] }], hierarchy: [{ id: 'learning', title: 'Learning', purpose: 'Understand', groupIds: ['concept'] }] })
   try {
     const manifest = organizer.begin(ctx.sessionId, 'full', ctx.signal, [topic()])
@@ -88,7 +88,7 @@ test('organizer accepts lightweight conversation identities without creating Wor
 
 
 test('saved standalone presentation does not duplicate a subsequently associated conversation', () => {
-  const data = projectWorkOverviewSchema.parse({ items: [{ key: 'work:existing', title: 'Work', revision: 1, sequence: 1, status: 'pending', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-16T00:00:00Z' }], sessions: [{ sessionId: 'web:linked', title: 'Linked', assignable: true, workKey: 'work:existing' }, { sessionId: 'web:free', title: 'Free', assignable: true }], requests: [], effects: [], focus: {
+  const data = projectWorkOverviewSchema.parse({ items: [{ key: 'work:45bfb8be-6f67-51df-8d3f-20f99744b27e', title: 'Work', revision: 1, sequence: 1, status: 'pending', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, changedAt: '2026-10-16T00:00:00Z' }], sessions: [{ sessionId: 'web:linked', title: 'Linked', assignable: true, workKey: 'work:45bfb8be-6f67-51df-8d3f-20f99744b27e' }, { sessionId: 'web:free', title: 'Free', assignable: true }], requests: [], effects: [], focus: {
     origin: 'model_interpretation', inferredAt: '2026-10-16T00:00:00Z', inputCount: 2, omittedCount: 0,
     sources: [{ key: 'session:web:linked', sequence: 1 }, { key: 'session:web:free', sequence: 1 }], result: {
       groups: ['linked', 'free'].map(id => ({ category: id, purpose: id, motivation: id, topicKeys: ['session:web:' + id] })),

@@ -86,6 +86,8 @@ const props = withDefaults(defineProps<{
   contextKey: string
   active: boolean
   editable: boolean
+  /** Remote folder reads return authorized image bytes, not a Main filesystem path. */
+  bytesOnly?: boolean
   keyboardActive?: boolean
   /** A frozen review frame is staged here and attached only on explicit confirmation. */
   staged?: boolean
@@ -192,7 +194,11 @@ let identity = { sourceKey: props.sourceKey, contextKey: props.contextKey }
 let releaseDrag: (() => void) | undefined
 
 function updateContext(file: File | null) {
-  if (!disposed) emit('image-context', { ...identity, file, ...(file && originalPath ? { source: imageSource(true) } : {}) })
+  if (!disposed) emit('image-context', {
+    ...identity, file,
+    ...(file && originalPath ? { source: imageSource(true) } : {}),
+    ...(file && props.bytesOnly ? { bytesOnly: true } : {}),
+  })
 }
 function imageSource(modified: boolean) {
   if (!originalPath) throw new Error(t('The image source is unavailable. Reopen the image to retry.'))
@@ -257,7 +263,7 @@ async function loadImage() {
       const response = await fetch(props.src, { signal: abort.signal })
       if (disposed || generation !== loadGeneration || abort.signal.aborted) return
       if (!response.ok) throw new AnnotationLoadError(t('Image request failed (HTTP {status}). Retry or open the raw image.', { status: response.status }))
-      try {
+      if (!props.bytesOnly) try {
         sourcePath = imageSourcePath(response.headers)
       } catch (error) {
         sourceError.value = error instanceof Error ? error.message : t('The image source could not be read. Reload the image source to retry.')
@@ -456,14 +462,14 @@ function retry() {
   else if (canEdit.value) exportMarkedImage()
 }
 function dragStart(event: DragEvent) {
-  if (!event.ctrlKey || !props.active || !loaded.value || busy.value || exportError.value || sourceError.value || !originalPath || !event.dataTransfer) {
+  if (!event.ctrlKey || !props.active || !loaded.value || busy.value || exportError.value || sourceError.value || props.localFile || (!originalPath && !props.bytesOnly) || !event.dataTransfer) {
     event.preventDefault()
     return
   }
   const file = hasMarks.value ? markedFile : originalFile
   if (!file) { event.preventDefault(); return }
   dragEnd()
-  releaseDrag = startImageReferenceDrag(event.dataTransfer, { sourceKey: props.sourceKey, file, source: imageSource(hasMarks.value) })
+  releaseDrag = startImageReferenceDrag(event.dataTransfer, { sourceKey: props.sourceKey, file, ...(originalPath ? { source: imageSource(hasMarks.value) } : {}) })
 }
 function dragEnd() { releaseDrag?.(); releaseDrag = undefined }
 function contextMenu(event: MouseEvent) { if (drawing.value) event.preventDefault() }
@@ -499,7 +505,7 @@ function windowBlur() {
   controlHeld.value = false
   if (pointer.active) cancelPending(t('Drawing was interrupted. Retry marked image to attach the visible marks.'))
 }
-watch(() => [props.src, props.localFile, props.sourceKey, props.contextKey], () => {
+watch(() => [props.src, props.localFile, props.bytesOnly, props.sourceKey, props.contextKey], () => {
   cancelPending()
   identity = { sourceKey: props.sourceKey, contextKey: props.contextKey }
   void loadImage()

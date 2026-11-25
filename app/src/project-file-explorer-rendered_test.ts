@@ -86,11 +86,15 @@ test('Project explorer roots stay left, expand independently and show the curren
     assert.equal(await run('document.querySelectorAll(\'[data-root-id^="session:"]\').length'),1,'only the current session is an explorer root');
     await run('window.groups.move("B","right");window.groups.focus("p","right")');await delay(80);
     assert.equal(await run('document.querySelectorAll(".explorer-root").length'),3,'split focus replaces the session root without adding a second one');
-    assert.equal(await expanded('session:web:B'),'true');
+    assert.equal(await expanded('session:web:B'),'false','session data starts collapsed when a workspace is bound');
+    assert.equal(await expanded('folder:two'),'true','the focused conversation workspace is revealed');
     await run('window.groups.move("B","left")');await delay(80);
     for(const id of ['folder:one','folder:two']){const root='document.querySelector('+JSON.stringify('[data-root-id="'+id+'"]')+')';if(await expanded(id)==='false')await run(root+'.querySelector(".root-toggle").click()');await wait(root+'.textContent.includes("same.md")');}
     await run('window.groups.toggleExplorer("p");window.groups.activate("A");window.groups.toggleExplorer("p")');await delay(80);
     assert.equal(await expanded('folder:one'),'true','manual folder expansion survives reopen');
+    assert.equal(await expanded('session:web:A'),'false','reopening does not reveal session data alongside a workspace');
+    await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').click()');
+    await wait('document.querySelector(\'[data-root-id="session:web:A"]\')?.textContent.includes("same.md")');
     assert.equal(await run('document.querySelectorAll(".root-toggle[aria-expanded=true]").length'),3);
     // Real layout/scroll regression: every dynamic resource heading stays visible,
     // not just the first sticky row. Exercise both desktop and narrow panes.
@@ -146,6 +150,7 @@ test('Project explorer roots stay left, expand independently and show the curren
     assert.equal(await run('document.querySelectorAll(\'[data-root-id^="folder:"]\').length'),0,'project-only tabs never expose the catalog');
     await run('window.groups.close("project-only");window.groups.descriptors.set("A",{...window.groups.descriptors.get("A"),conversation:{sessionId:"web:A",editable:true,folderId:"one"}});void 0');
     await wait('!!document.querySelector(\'[data-root-id="folder:one"]\')');
+    if (await expanded('session:web:A') === 'false') await run('document.querySelector(\'[data-root-id="session:web:A"] .root-toggle\').click()');
     const openTimeline = async name => {
       const selector = 'document.querySelector('+JSON.stringify('[data-root-id="session:web:A"] .tree-row[data-path="'+name+'.otio"]')+')';
       await wait(selector); await run(selector+'.click()');

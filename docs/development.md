@@ -75,10 +75,8 @@ sidebar reports a failed Project, check its authenticated
 `GET /api/projects/<id>/status` response and confirm that startup diagnostics
 include that Project's own `ready` phase before changing registries or resetting
 data. Project folders, conversations, Micro Apps and audio endpoints all return
-503 while their owning Project is unavailable. Legacy version-2 Connection
-documents require the explicit `scripts/migrate-connections.ts` offline
-plan/apply workflow with all owning runtimes stopped; startup does not migrate
-them automatically. Keep its private recovery journal for rollback.
+503 while their owning Project is unavailable. [Connection documents](connection-migration.md)
+require version 4; startup rejects and does not rewrite older documents.
 
 `pnpm start` runs the backend without Electron or a development watcher; an
 optional argument selects another bot config: `pnpm start path-to-bot-config.json`.
@@ -499,7 +497,8 @@ IDs without building physical nodes; delegation parents retain their own field.
 
 The shared Project live reader owns one conditional summary and one activity
 snapshot per scope. Full/unparameterized summary access remains compatible;
-Quick Open loads that full scope on demand, while automation history uses its
+Quick Open shares navigation on open and reads full history only after a nonempty
+search, while the automation history menu uses its
 existing paginated run endpoint and history expansion control. Navigation omits
 only terminal historical fresh-automation branches, preserving the newest run
 per job, active/waiting work and context/delegation ancestors. Ordinary chat,

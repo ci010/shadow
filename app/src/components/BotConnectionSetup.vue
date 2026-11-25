@@ -2,10 +2,11 @@
   <section class="bot-connection" :aria-label="t('Platform connection')">
     <p v-if="!enabled" role="status">{{ t('Private connection setup requires an authorized Main administrator and HTTPS or loopback access.') }}</p>
     <template v-else>
+      <p v-if="!compact && legacyConnectionsDetected" class="legacy-notice" role="status">{{ t('Legacy connections were not imported. Select “Create a new connection” to set them up again, then review and republish any BOT inbox bindings you still need.') }}</p>
       <div v-if="!compact && channels.length" class="connection-cards" :aria-label="t('Configured connections')">
         <article v-for="bot in channels" :key="bot.id" class="connection-card" :data-connection-id="bot.id" :data-selected="selected?.id === bot.id">
           <header><h3>{{ bot.displayName }}</h3><span v-if="selected?.id === bot.id">{{ t('Selected') }}</span></header>
-          <p>{{ channelDefinitions.find(item => item.id === bot.platform)?.label ?? bot.platform }} · {{ purposeLabel(bot.purpose) }}</p>
+          <p>{{ channelDefinitions.find(item => item.id === bot.platform)?.label ?? bot.platform }}</p>
           <p class="muted">{{ bot.id }}</p>
           <footer><span class="connection-state" :data-state="bot.state">{{ channelStateLabel(botChannel(bot)) }}</span>
             <button type="button" :aria-label="t('Configure {value1}', { value1: bot.displayName })" :aria-pressed="selected?.id === bot.id" :disabled="locked" @click="chooseConnection(bot)">{{ t('Configure') }}</button>
@@ -15,7 +16,7 @@
       <div v-if="!compact" class="actions"><button type="button" :disabled="locked" @click="startNewConnection">{{ t('Create a new connection') }}</button><button type="button" :disabled="busy || loading" @click="refresh">{{ t('Refresh status') }}</button></div>
       <div v-if="compact || selection === 'new'" class="connection-selectors">
         <label>{{ t('Platform') }}<UiSelect v-model="platform" :disabled="busy"><option value="" disabled>{{ t('Choose a platform') }}</option><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></UiSelect></label>
-        <label v-if="compact && platform">{{ t('Connection in this Project') }}<UiSelect v-model="selection" :disabled="busy || loading || !!listError"><option value="" disabled>{{ t('Choose an existing connection or create one') }}</option><option v-for="bot in matching" :key="bot.id" :value="`connection:${bot.id}`">{{ bot.displayName }} · {{ purposeLabel(bot.purpose) }} · {{ bot.id }}</option><option value="new">{{ t('Create a new connection') }}</option></UiSelect></label>
+        <label v-if="compact && platform">{{ t('Connection in this Project') }}<UiSelect v-model="selection" :disabled="busy || loading || !!listError"><option value="" disabled>{{ t('Choose an existing connection or create one') }}</option><option v-for="bot in matching" :key="bot.id" :value="`connection:${bot.id}`">{{ bot.displayName }} · {{ bot.id }}</option><option value="new">{{ t('Create a new connection') }}</option></UiSelect></label>
         <button type="button" :disabled="busy || loading" @click="refresh">{{ t('Refresh status') }}</button>
       </div>
       <p v-if="loading" role="status">{{ t('Loading channel connections...') }}</p>
@@ -23,18 +24,15 @@
       <p v-if="listError" class="error" role="alert">{{ listError }}</p>
       <p v-if="platform && !loading && !listError && !matching.length" class="muted">{{ t('No connections for this platform in this Project. Create one to continue.') }}</p>
       <form v-if="selection === 'new'" class="new-connection" @submit.prevent="createConnection">
-        <label>{{ t('Role') }}<UiSelect v-model="purpose" :disabled="locked" required><option value="" disabled>{{ t('Select a role') }}</option><option value="personal">{{ t('Personal — verified owner only') }}</option><option v-if="platform !== 'wechat'" value="service">{{ t('Service — explicit BOT permissions') }}</option></UiSelect></label>
-        <p class="muted">{{ t('Personal connections require owner pairing. Service connections stay restricted to deployed BOT permissions. Reusing a connection never changes its role or owner.') }}</p>
-        <button type="submit" class="btn-primary" :disabled="locked || !platform || !purpose">{{ t('Create connection') }}</button>
+        <button type="submit" class="btn-primary" :disabled="locked || !platform">{{ t('Create connection') }}</button>
       </form>
       <article v-if="selected" :key="selected.id" ref="connectionDetail" tabindex="-1" class="selected-connection">
         <header><strong>{{ selected.displayName }}</strong><span class="connection-state" :data-state="selected.state">{{ channelStateLabel(botChannel(selected)) }}</span></header>
-        <p class="muted">{{ purposeLabel(selected.purpose) }} · <span class="connection-id">{{ selected.id }}</span></p>
-        <p v-if="selected.purpose === 'legacy'" role="status">{{ t('Legacy / unclassified: business requests blocked until explicitly configured.') }}</p>
+        <p class="muted"><span class="connection-id">{{ selected.id }}</span></p>
         <p v-if="selected.message" class="muted">{{ selected.message }}</p>
         <div class="actions">
           <button v-if="selected.enabled" type="button" :disabled="locked" @click="setConnection(false)">{{ t('Disconnect') }}</button>
-          <button v-else-if="selected.configured || selected.platform === 'wechat'" type="button" class="btn-primary" :disabled="locked || selected.purpose === 'legacy'" @click="setConnection(true)">{{ t('Connect') }}</button>
+          <button v-else-if="selected.configured || selected.platform === 'wechat'" type="button" class="btn-primary" :disabled="locked" @click="setConnection(true)">{{ t('Connect') }}</button>
           <button v-if="fields.length && selected.configured && !editing" type="button" :disabled="locked" @click="editing = true">{{ t('Update private credentials') }}</button>
         </div>
         <form v-if="fields.length && (!selected.configured || editing)" class="private-fields" @submit.prevent="saveCredentials(true)">
@@ -44,42 +42,29 @@
             <label v-for="field in fields" :key="field.key">{{ field.label }}
               <UiInput :model-value="String(draft[field.key] ?? '')" @update:model-value="draft[field.key] = $event" :name="field.key" :type="field.kind === 'password' ? 'password' : 'text'" :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false" :placeholder="hasSaved(field.key) ? t('Saved — leave blank to keep') : undefined" />
             </label>
-            <div class="actions"><button class="btn-primary" type="submit" :disabled="selected.purpose === 'legacy'">{{ selected.enabled ? t('Save and reconnect') : t('Save and connect') }}</button><button v-if="!selected.enabled" type="button" @click="saveCredentials(false)">{{ t('Save without connecting') }}</button><button type="button" @click="clearCredentials">{{ t('Cancel') }}</button></div>
+            <div class="actions"><button class="btn-primary" type="submit">{{ selected.enabled ? t('Save and reconnect') : t('Save and connect') }}</button><button v-if="!selected.enabled" type="button" @click="saveCredentials(false)">{{ t('Save without connecting') }}</button><button type="button" @click="clearCredentials">{{ t('Cancel') }}</button></div>
           </fieldset>
         </form>
-        <template v-if="selected.platform === 'wechat' && selected.enabled && !selected.ownerVerified">
+        <template v-if="selected.platform === 'wechat' && selected.enabled && (selected.state !== 'connected' || qr)">
           <div class="actions"><button type="button" :disabled="locked" @click="wechat('login')">{{ t('Generate WeChat login QR code') }}</button><button type="button" :disabled="locked" @click="wechat('wait')">{{ t('Check WeChat login') }}</button></div>
           <img v-if="qr" :src="qr" :alt="t('WeChat login QR code')" width="240" referrerpolicy="no-referrer" />
         </template>
-        <section v-if="selected.purpose === 'personal'" class="owner-pairing" :aria-label="t('Pair your account')">
-          <p v-if="selected.ownerVerified" role="status">{{ selected.state === 'connected' ? t('Ready for your messages') : t('Owner paired. Connect the platform to chat.') }}</p>
-          <p v-else-if="selected.state !== 'connected'" class="muted">{{ t('Connect this Bot, then pair your own account here before using private chat.') }}</p>
-          <template v-else>
-            <p class="muted">{{ t('Generate a temporary command, send it to this Bot in your own private chat, then return here to confirm your account.') }}</p>
-            <button v-if="!challenge" type="button" class="btn-primary" :disabled="locked" @click="pairOwner">{{ t('Start owner pairing') }}</button>
-            <template v-else>
-              <BotPairingCommand :challenge="challenge" />
-              <div class="actions"><button type="button" class="btn-primary" :disabled="locked" @click="confirmOwner">{{ t('I sent it — verify my account') }}</button><button type="button" :disabled="locked" @click="pairOwner">{{ t('Generate a new command') }}</button></div>
-              <small>{{ t('You will review the platform user ID before binding. Only confirm your own account.') }}</small>
-            </template>
-          </template>
-          <button v-if="selected.ownerVerified && !compact" type="button" :disabled="locked" @click="revokeOwner">{{ t('Revoke owner and disconnect') }}</button>
-        </section>
-        <p v-if="selected.purpose === 'service'" class="muted">{{ t('Connection does not grant service access. Ask in chat to configure BOT files, audience and permissions, then review the exact deployment confirmation. Owner pairing is only for personal Bots.') }}</p>
+        <p v-if="selected.platform === 'wechat'" class="muted">{{ t('WeChat QR login connects the transport only. Assign a Personal BOT to an exact recorded private inbox to reply.') }}</p>
+        <p v-else class="muted">{{ t('A connection receives messages. To run a BOT, assign it to the exact conversation in your Project.') }}</p>
         <details v-if="definition?.portal" class="platform-help">
           <summary>{{ t('Platform help') }}</summary>
           <p>{{ t('Platform installation and permissions are not verified by connection status. Ask in chat for the platform steps; never share a token in chat or an invite URL.') }}</p>
           <p v-if="platform === 'discord'">{{ t('In Discord Developer Portal, use the application’s Guild Install link with only the required channel permissions. Do not select Administrator. Guilds, channels, participants and grants belong in BOT files, not this connection form.') }}</p>
           <button type="button" @click="openPortal">{{ t('Open developer portal') }}</button>
         </details>
-        <details v-if="!compact && selected.purpose === 'service' && ['qq', 'feishu'].includes(selected.platform)" class="platform-help">
+        <details v-if="!compact && ['qq', 'feishu'].includes(selected.platform)" class="platform-help">
           <summary>{{ t('Pending group authorization') }}</summary>
           <p>{{ t('Discovery is not authorization. Received text is shown here without running an Agent. At most 20 messages per group are kept for 7 days; attachments are not downloaded and old messages are not backfilled.') }}</p>
           <button type="button" :disabled="busy" @click="loadGroups">{{ t('Refresh pending groups') }}</button>
           <p v-if="groups?.length === 0">{{ t('No groups observed yet. Shadow can only show events delivered by the platform. Ordinary delivered group messages can discover a group; no mention or command is required. Platform permissions and sender allowlists still apply.') }}</p>
           <ul><li v-for="group in groups" :key="group.conversationId"><RouterLink :to="{ name: 'chat', params: { projectId }, query: { serviceGroup: JSON.stringify([selected.id, group.conversationId]) } }">{{ group.name || t('Unnamed group') }}</RouterLink></li></ul>
         </details>
-        <details v-if="!compact && selected.purpose === 'service' && selected.platform === 'discord'" class="platform-help" @toggle="serviceStatusOpen = ($event.target as HTMLDetailsElement).open">
+        <details v-if="!compact && selected.platform === 'discord'" class="platform-help" @toggle="serviceStatusOpen = ($event.target as HTMLDetailsElement).open">
           <summary>{{ t('Saved service access') }}</summary>
           <BotServiceStatus v-if="serviceStatusOpen" :key="selected.id" :api-base="apiBase" :project-id="projectId" :bot-id="selected.id" />
         </details>
@@ -98,7 +83,6 @@ import UiInput from './UiInput.vue'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import UiSelect from './UiSelect.vue'
-import BotPairingCommand from './BotPairingCommand.vue'
 import BotServiceStatus from './BotServiceStatus.vue'
 import { t } from '../i18n.ts'
 import { privateCredentialTransport } from '../credential-requests.ts'
@@ -111,7 +95,6 @@ const enabled = computed(() => props.active && props.available && !!props.projec
 const channels = ref<BotInstanceStatus[]>([])
 const platform = ref<ChannelId | ''>('')
 const selection = ref('')
-const purpose = ref<'' | 'personal' | 'service'>('')
 const matching = computed(() => channels.value.filter(bot => bot.platform === platform.value))
 const selected = computed(() => matching.value.find(bot => `connection:${bot.id}` === selection.value))
 const definition = computed(() => channelDefinitions.find(item => item.id === platform.value))
@@ -123,16 +106,16 @@ const busy = ref(false)
 const needsRefresh = ref(false)
 const locked = computed(() => busy.value || loading.value || needsRefresh.value || !!listError.value)
 const listError = ref(''), error = ref(''), notice = ref('')
-const challenge = ref(''), qr = ref('')
+const legacyConnectionsDetected = ref(false)
+const qr = ref('')
 const groups = ref<Awaited<ReturnType<ReturnType<typeof createBotSettingsClient>['pendingGroups']>>>()
 let read: AbortController | undefined, mutation: AbortController | undefined
 let generation = 0
-const purposeLabel = (value: BotInstanceStatus['purpose']) => value === 'personal' ? t('Personal — verified owner only') : value === 'service' ? t('Service — explicit BOT permissions') : t('Legacy / unclassified')
 function hasSaved(key: string) { return selected.value?.secrets[key] === true || !!selected.value?.config[key] }
 function clearCredentials() { draft.value = platform.value ? botConnectionDraft(platform.value) : {}; editing.value = false }
-function resetSelection() { clearCredentials(); challenge.value = ''; qr.value = ''; groups.value = undefined; serviceStatusOpen.value = false; error.value = ''; notice.value = '' }
-watch(platform, () => { selection.value = !props.compact && selection.value === 'new' ? 'new' : ''; purpose.value = ''; resetSelection() }, { flush: 'sync' })
-watch(selection, () => { purpose.value = ''; resetSelection() }, { flush: 'sync' })
+function resetSelection() { clearCredentials(); qr.value = ''; groups.value = undefined; serviceStatusOpen.value = false; error.value = ''; notice.value = '' }
+watch(platform, () => { selection.value = !props.compact && selection.value === 'new' ? 'new' : ''; resetSelection() }, { flush: 'sync' })
+watch(selection, () => { resetSelection() }, { flush: 'sync' })
 const connectionDetail = ref<HTMLElement>()
 function locateConnection() { void nextTick(() => { connectionDetail.value?.scrollIntoView?.({ block: 'nearest' }); connectionDetail.value?.focus?.({ preventScroll: true }) }) }
 function chooseConnection(bot: BotInstanceStatus) { platform.value = bot.platform; selection.value = `connection:${bot.id}`; locateConnection() }
@@ -155,17 +138,19 @@ watch(() => props.requestedConnectionId, () => {
 })
 function stop() {
   generation++; read?.abort(); mutation?.abort(); read = mutation = undefined
-  channels.value = []; platform.value = ''; selection.value = ''; purpose.value = ''; resetSelection()
+  legacyConnectionsDetected.value = false
+  channels.value = []; platform.value = ''; selection.value = ''; resetSelection()
   loading.value = busy.value = needsRefresh.value = false; listError.value = ''
 }
 async function refresh() {
   if (!enabled.value || busy.value) return
   read?.abort(); const controller = new AbortController(); read = controller; loading.value = true
   try {
-    const result = await createBotSettingsClient(props.apiBase, props.projectId).list(controller.signal)
+    const result = await createBotSettingsClient(props.apiBase, props.projectId).listWithStatus(controller.signal)
     if (controller.signal.aborted) return
     const uncertainCreation = needsRefresh.value && selection.value === 'new'
-    channels.value = result; listError.value = ''; needsRefresh.value = false; error.value = ''
+    legacyConnectionsDetected.value = result.legacyConnectionsDetected
+    channels.value = result.channels; listError.value = ''; needsRefresh.value = false; error.value = ''
     // A lost create response may already have created a connection. Require a
     // fresh choice from the authoritative list, never replay creation blindly.
     if (uncertainCreation || (selection.value && selection.value !== 'new' && !selected.value)) selection.value = ''
@@ -185,16 +170,16 @@ async function run(action: (client: Client, signal: AbortSignal, current: () => 
 }
 function accept(bot: BotInstanceStatus) { channels.value = channels.value.map(item => item.id === bot.id ? bot : item); notice.value = t('Connection status updated. This does not approve a BOT deployment.') }
 async function createConnection() {
-  if (!platform.value || !purpose.value || (platform.value === 'wechat' && purpose.value !== 'personal')) return
-  const id = platform.value, role = purpose.value, name = definition.value!.label
+  if (!platform.value) return
+  const id = platform.value, name = definition.value!.label
   await run(async (client, signal, current) => {
-    const bot = await client.create(id, name, signal, role)
+    const bot = await client.create(id, name, signal)
     if (current()) { channels.value.push(bot); selection.value = `connection:${bot.id}` }
   })
 }
 async function setConnection(value: boolean) {
   const bot = selected.value; if (!bot) return
-  await run(async (client, signal, current) => { const result = await client.save(bot.id, { config: { enabled: value } }, signal); if (current()) accept(result) })
+  await run(async (client, signal, current) => { const result = await client.save(bot.id, { config: { enabled: value } }, signal); if (current()) { if (!value) qr.value = ''; accept(result) } })
 }
 async function saveCredentials(value: boolean) {
   const bot = selected.value; if (!bot) return
@@ -202,25 +187,6 @@ async function saveCredentials(value: boolean) {
   try { patch = botConnectionPatch(bot, draft.value, value) }
   catch (cause) { error.value = cause instanceof Error ? cause.message : t('Check the channel settings.'); return }
   await run(async (client, signal, current) => { const result = await client.save(bot.id, patch, signal); if (current()) accept(result) })
-}
-async function pairOwner() {
-  const bot = selected.value; if (!bot || bot.purpose !== 'personal') return
-  await run(async (client, signal, current) => { const result = await client.challenge(bot.id, signal); if (current()) challenge.value = result.challenge })
-}
-async function confirmOwner() {
-  const bot = selected.value, command = challenge.value; if (!bot || !command || bot.purpose !== 'personal') return
-  await run(async (client, signal, current) => {
-    const { candidate } = await client.candidate(bot.id, signal)
-    if (!current()) return
-    if (!candidate) { error.value = t('No private-chat candidate yet, or challenge expired.'); return }
-    if (!window.confirm(t('Bind platform user {candidate} as the sole owner? Verify this is your own platform account.', { candidate }))) return
-    await client.confirm(bot.id, command, signal)
-    if (current()) { challenge.value = ''; const result = await client.list(signal); if (current()) channels.value = result }
-  })
-}
-async function revokeOwner() {
-  const bot = selected.value; if (!bot || !window.confirm(t('Revoke owner and disconnect? Existing conversations are retained.'))) return
-  await run(async (client, signal, current) => { await client.revoke(bot.id, signal); const result = await client.list(signal); if (current()) { channels.value = result; challenge.value = '' } })
 }
 async function wechat(operation: 'login' | 'wait') {
   const bot = selected.value; if (!bot) return
@@ -259,12 +225,12 @@ onBeforeUnmount(stop)
 .connection-selectors label { flex: 1 1 180px; }
 label { display: grid; gap: 6px; min-width: 0; }
 .new-connection, .selected-connection { margin-top: 16px; }
-.new-connection label { max-width: 400px; }
 .selected-connection { border-top: 1px solid var(--c-border); padding-top: 12px; }
 header, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 header { justify-content: space-between; }
 p { margin: 8px 0; }
-.muted, small, .connection-state { color: var(--c-text-secondary); }
+.muted, .connection-state { color: var(--c-text-secondary); }
+.legacy-notice { padding: 8px 12px; color: var(--c-warn); background: var(--c-warn-bg); }
 .connection-id { font-family: monospace; }
 .connection-state[data-state="connected"] { color: var(--c-success); }
 .connection-state[data-state="error"], .error { color: var(--c-error); }
@@ -280,7 +246,7 @@ button.btn-primary { background: var(--c-primary-bg); color: var(--c-text-on-pri
 button.btn-primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 button:disabled { opacity: .6; cursor: not-allowed; }
 button:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.owner-pairing, .platform-help { margin-top: 12px; }
+.platform-help { margin-top: 12px; }
 summary { cursor: pointer; padding-block: 8px; }
 .platform-help { color: var(--c-text-secondary); }
 .platform-help summary { color: var(--c-text); }

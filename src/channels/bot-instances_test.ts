@@ -56,7 +56,17 @@ class BotChannel extends AbstractChannel {
   override async presentDecision(_chat: string, request: YieldRequest) { this.decisions.push(request) }
   click(decision: ChannelDecision) { return this.answerDecision(decision) }
   groupAllowed(chatId: string, name?: string, message?: import('./service-discovery.ts').GroupObservation) { return this.admitGroup(chatId, name, message) }
-  incoming(chatId = 'same-chat-id') { return this.handleIncoming('alice', chatId, 'Hello', 'same-message-id', { isGroup: true }) }
+  async incoming(chatId = 'same-chat-id') {
+    const input = { senderId: 'alice', chatId, content: 'Hello', messageId: 'same-message-id', isGroup: true }
+    const arrival = await this.collectPassive(input)
+    if (!arrival?.eligible) throw new Error('Explicit BOT assignment required')
+    let receipt: Awaited<ReturnType<ReceiveChannelMessage>> | undefined
+    await this.runReceivePolicy({ ...input, channelInputGuard: arrival.assertCurrent }, async () => {
+      receipt = await this.handleIncoming(input.senderId, chatId, input.content, input.messageId, { isGroup: true })
+    })
+    assert.ok(receipt)
+    return receipt
+  }
   state(state: ChannelState) { this.reportState(state) }
   reconnect() { this.setAccepting(false); this.setAccepting(true); this.reportState('connected') }
   async lateIncoming(gate: Promise<void>) {
@@ -65,7 +75,7 @@ class BotChannel extends AbstractChannel {
   sessionId(chatId: string) { return this.logicalSessionId(chatId) }
 }
 
-async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: ProjectScope, assigned: boolean | ((address: ChannelAddress) => boolean) = true, observeCatalog = false) {
+async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'qq', actualIdentity?: string, scope?: ProjectScope, assigned: boolean | ((address: ChannelAddress) => boolean) = true, observeCatalog = false) {
   const bus = new Bus()
   const store = new BotInstanceStore({ projectId, path: join(root, projectId, 'bots.json') })
   const instances = Array.from({ length: bots }, (_, index) => store.create(platform, `Bot ${index}`, platform === 'discord'
@@ -92,7 +102,11 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     receivedScopes.push(getProjectScope()?.projectId)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
   }, { projectId, instanceStore: store, realtime: observeCatalog ? { chat() {}, invalidateSessions() {}, invalidateActivity() {}, close() {},
-    invalidateResource(resource) { channelInvalidations.push(resource) } } : undefined, serviceAssigned: address => typeof assigned === 'function' ? assigned(address) : assigned, serviceDiscovery: discovery, scope, factory: (id, _config, bot) => {
+    invalidateResource(resource) { channelInvalidations.push(resource) } } : undefined, serviceAssigned: address => typeof assigned === 'function' ? assigned(address) : assigned, serviceGeneration: () => 'test-generation',
+    routeInputPolicy: async (message, run) => {
+      assert.ok(message.channel === 'qq' || message.channel === 'feishu')
+      await run({ platform: message.channel, trigger: 'all' })
+    }, serviceDiscovery: discovery, scope, factory: (id, _config, bot) => {
     assert.ok(bot)
     const channel = new BotChannel(id, bus, bot, actualIdentity)
     created.push(channel)
@@ -118,73 +132,36 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     channelInvalidations, promptInvalidations: () => promptInvalidations }
 }
 
-test('QQ connection trigger compatibility values persist but do not configure Service receive policy', async t => {
+test('Connection rejects trigger configuration and assignment alone is not a receive listener', async t => {
   const root = directory(t)
-  const path = join(root, 'bots.json')
-  const store = new BotInstanceStore({ projectId: 'A', path })
+  const store = new BotInstanceStore({ projectId: 'A', path: join(root, 'bots.json') })
   const credentials = { appId: 'synthetic-app', secret: 'synthetic-secret', enabled: true }
-  const mention = store.create('qq', 'Mention bot', credentials)
-  const all = store.create('qq', 'All messages bot', { ...credentials, triggerMode: 'all' })
-  assert.equal(store.status(mention.id).config.triggerMode, 'mention')
-  assert.equal(new BotInstanceStore({ projectId: 'A', path }).status(all.id).config.triggerMode, 'all')
-  assert.throws(() => store.update(all.id, { config: { triggerMode: 'invalid' } }), /invalid_channel_config/)
-  const received: InboundMessage[] = []
-  const manager = new ChannelManager(ConfigSchema.parse({}), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, async message => {
-    received.push(message)
-    return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-  }, { projectId: 'A', instanceStore: store, serviceAssigned: () => true })
+  assert.throws(() => store.create('qq', 'Not transport', { ...credentials, triggerMode: 'all' }), /bot_policy_belongs_in_bot_package/)
+  const connection = store.create('qq', 'Transport', credentials)
+  const manager = new ChannelManager(ConfigSchema.parse({}), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager,
+    async () => { throw new Error('must not execute') }, { projectId: 'A', instanceStore: store, serviceAssigned: () => true, serviceGeneration: () => 'generation' })
   await manager.init()
   t.after(() => manager.stopAll())
-  const incoming = async (connectionId: string) => {
-    const channel = manager['channels'].get(connectionId)
-    assert.ok(channel instanceof QQChannel)
-    await channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
-      id: 'source', content: 'Context without a mention', group_openid: 'group',
-      author: { member_openid: 'sender' }, timestamp: new Date().toISOString(),
-    })
+  const channel = manager['channels'].get(connection.id)
+  assert.ok(channel instanceof QQChannel)
+  await assert.rejects(channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
+    id: 'source', content: 'Context without a mention', group_openid: 'group',
+    author: { member_openid: 'sender' }, timestamp: new Date().toISOString(),
+  }), /listener unavailable/)
+})
+
+test('trusted audiences depend on explicit host policy, not Connection configuration', async t => {
+  const f = await runtime(t, directory(t), 'A', 1)
+  const [connection] = f.instances
+  const address = f.address(connection)
+  for (const field of ['trustedChats', 'adminChats', 'allowFrom']) {
+    await assert.rejects(f.manager.updateBot(connection.id, { config: { [field]: ['same-chat-id'] } }), /bot_policy_belongs_in_bot_package/)
   }
-  await assert.rejects(incoming(mention.id), /listener unavailable/)
-  await assert.rejects(incoming(all.id), /listener unavailable/)
-  assert.deepEqual(received, [], 'Stored connection settings and serviceAssigned cannot replace a Service input listener')
-  const saved = await manager.updateBot(all.id, { config: { triggerMode: 'mention' } })
-  assert.equal(saved.config.triggerMode, 'mention')
-  await assert.rejects(incoming(all.id), /listener unavailable/)
-  assert.equal(received.length, 0)
-  assert.equal(new BotInstanceStore({ projectId: 'A', path }).status(all.id).config.triggerMode, 'mention')
+  assert.equal(f.manager.isTrustedConversation('qq', 'same-chat-id', address), false)
+  assert.equal(f.promptInvalidations(), 0)
 })
 
-test('trusted audiences are scoped to exact project, bot and conversation, never sender or admin status', async t => {
-  const root = directory(t)
-  const a = await runtime(t, root, 'A', 2)
-  const b = await runtime(t, root, 'B', 1)
-  const bot = a.instances[0]
-  await a.manager.updateBot(bot.id, { config: { adminChats: ['same-chat-id'], allowFrom: ['alice'] } })
-  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), false)
-  assert.equal(a.promptInvalidations(), 0)
-  const saved = await a.manager.updateBot(bot.id, { config: { trustedChats: ['same-chat-id'] } })
-  assert.deepEqual(saved.config.trustedChats, ['same-chat-id'])
-  assert.equal(a.promptInvalidations(), 1)
-  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), true)
-  for (const address of [
-    a.address(a.instances[1]), b.address(b.instances[0]),
-    { ...a.address(bot), conversationId: 'different' },
-    { ...a.address(bot), platform: 'qq' },
-    { ...a.address(bot), legacySessionId: true },
-  ]) assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', address), false)
-  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id'), false)
-  assert.equal(a.manager.isTrustedConversation('discord', 'same-thread-id', a.address(bot, 'same-thread-id')), false)
-  const loaded = new BotInstanceStore({ projectId: 'A', path: join(root, 'A', 'bots.json') })
-  assert.deepEqual(loaded.get(bot.id).config.trustedChats, ['same-chat-id'])
-  await a.manager.updateBot(bot.id, { config: { trustedChats: [] } })
-  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), false)
-  assert.equal(a.promptInvalidations(), 2)
-  await a.manager.updateBot(bot.id, { config: { trustedChats: ['same-chat-id'] } })
-  await a.manager.deleteBot(bot.id)
-  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), false)
-  assert.equal(a.promptInvalidations(), 4)
-})
-
-for (const platform of ['discord', 'qq', 'feishu'] as const) {
+for (const platform of ['qq', 'feishu'] as const) {
   test(`${platform}: two bots in A and one in B preserve identical conversation/message/media IDs without collisions`, async t => {
     const root = directory(t)
     const a = await runtime(t, root, 'A', 2, platform)
@@ -217,7 +194,7 @@ for (const platform of ['discord', 'qq', 'feishu'] as const) {
 test('bot manager scope injection owns callbacks and reconfiguration regardless of caller scope', async t => {
   const scope = createProjectScope('A')
   const foreign = createProjectScope('B')
-  const f = await runtime(t, directory(t), 'A', 2, 'discord', undefined, scope)
+  const f = await runtime(t, directory(t), 'A', 2, 'qq', undefined, scope)
   assert.throws(() => new ChannelManager(ConfigSchema.parse({}), new Bus(), {} as SessionManager,
     async () => ({ status: 'accepted', sessionId: 'unused', inputId: 'unused' }),
     { projectId: 'A', instanceStore: f.store, scope: foreign }), /scope mismatch/)
@@ -282,7 +259,7 @@ test('reconnect fences late callbacks and source-bot disable never falls back to
   f.bus.emit('message.outbound', f.outbound(f.instances[0]))
   const event = await failure.promise
   assert.deepEqual(event, {
-    projectId: 'A', channelAddress: f.address(f.instances[0]), channel: 'discord',
+    projectId: 'A', channelAddress: f.address(f.instances[0]), channel: 'qq',
     chatId: 'same-chat-id', error: 'source_bot_unavailable',
   })
 })
@@ -305,7 +282,7 @@ test('a reconnected bot rejects an in-flight media send and thread result from i
   const threadGate = Promise.withResolvers<string>()
   const entered = Promise.withResolvers<void>()
   t.mock.method(channel, 'createThread', () => { entered.resolve(); return threadGate.promise })
-  const thread = f.manager.createThread('discord', 'same-chat-id', 'Child', f.address(f.instances[0]))
+  const thread = f.manager.createThread('qq', 'same-chat-id', 'Child', f.address(f.instances[0]))
   const rejectedThread = assert.rejects(thread, /connection has changed/)
   await entered.promise
   channel.reconnect()
@@ -317,44 +294,26 @@ test('a reconnected bot rejects an in-flight media send and thread result from i
 
 test('project shutdown drains queued bot replies before disconnecting their exact source', async t => {
   const f = await runtime(t, directory(t), 'A', 2)
-  f.bus.emit('message.outbound', { ...f.outbound(f.instances[0]), content: 'First' })
-  f.bus.emit('message.outbound', { ...f.outbound(f.instances[1]), content: 'Second' })
+  f.bus.emit('message.outbound', stampServiceOutput({ ...f.outbound(f.instances[0]), content: 'First' }, () => {}))
+  f.bus.emit('message.outbound', stampServiceOutput({ ...f.outbound(f.instances[1]), content: 'Second' }, () => {}))
   await f.manager.stopAll()
   assert.deepEqual(f.created.map(channel => channel.sent.map(message => message.content)), [['First'], ['Second']])
   await assert.rejects(f.manager.deliver(f.outbound(f.instances[0])), /unavailable/)
-  await assert.rejects(f.created[0].incoming(), /disconnected/)
+  await assert.rejects(f.created[0].incoming(), /connection has changed|disconnected/)
 })
 
-test('yield answers stay with their source bot, user, project and generation', async t => {
-  const root = directory(t)
-  const a = await runtime(t, root, 'A', 2)
-  const b = await runtime(t, root, 'B', 1)
-  const ask = (f: typeof a, index: number) => {
-    const sessionId = channelSessionId(f.address(f.instances[index]))
-    const waiting = f.yields.ask(sessionId, {
-      question: 'Proceed?', options: ['Yes', 'Change', 'Stop'], defaultOption: 'Yes',
-    }, new AbortController().signal, { channel: 'discord', senderId: 'alice' })
-    const request = f.yields.get(sessionId)!
-    const click: ChannelDecision = { chatId: 'same-chat-id', senderId: 'alice', requestId: request.id, option: 2 }
-    return { waiting, request, click }
-  }
-  const first = ask(a, 0)
-  const second = ask(a, 1)
-  const third = ask(b, 0)
-  await a.manager.deliverDecision({ ...a.outbound(a.instances[0]), yieldRequest: first.request })
-  assert.equal(a.created[0].decisions[0].id, first.request.id)
-  assert.equal(a.created[1].decisions.length, 0)
-  await assert.rejects(a.created[1].click(first.click), /no longer pending/)
-  await assert.rejects(b.created[0].click(first.click), /no longer pending/)
-  await assert.rejects(a.created[0].click({ ...first.click, senderId: 'mallory' }), /not authorized/)
-  await a.created[0].click(first.click)
-  assert.equal((await first.waiting).option, 'Change')
-  await a.manager.updateBot(a.instances[1].id, { config: { enabled: true } })
-  await assert.rejects(a.created[1].click(second.click), /disconnected/)
-  await a.created[2].click(second.click)
-  await b.created[0].click(third.click)
-  assert.equal((await second.waiting).option, 'Change')
-  assert.equal((await third.waiting).option, 'Change')
+test('scoped Connection rejects non-Discord platform decisions and unstamped notification', async t => {
+  const f = await runtime(t, directory(t), 'A', 1)
+  const [connection] = f.instances
+  const sessionId = channelSessionId(f.address(connection))
+  const controller = new AbortController()
+  const waiting = f.yields.ask(sessionId, { question: 'Continue?', options: ['Yes', 'Wait', 'No'], defaultOption: 'No' }, controller.signal, { channel: 'qq', senderId: 'alice' })
+  void waiting.catch(() => {})
+  const request = f.yields.get(sessionId)!
+  try {
+    await assert.rejects(f.manager.deliverDecision({ ...f.outbound(connection), yieldRequest: request }), /lease required/)
+    await assert.rejects(f.created[0].click({ chatId: 'same-chat-id', senderId: 'alice', requestId: request.id, option: 1 }), /Native decision callbacks are unavailable/)
+  } finally { controller.abort(); await waiting.catch(() => {}) }
 })
 
 test('actual platform identity cannot be bound concurrently, including in another project', async t => {
@@ -383,58 +342,6 @@ test('failed source cleanup blocks replacement and does not change sibling readi
   await assert.rejects(f.created[0].incoming(), /unavailable/)
 })
 
-test('default-org legacy migration preserves old logical IDs and disk secrets without cloning environment bootstrap', t => {
-  const root = directory(t)
-  const path = join(root, 'default', 'bots.json')
-  const config = ConfigSchema.parse({ channels: {
-    qq: { appId: 'qq-app', secret: 'synthetic-file-secret', enabled: true },
-    discord: { token: 'synthetic-environment-token', enabled: true },
-  } })
-  const options = {
-    projectId: 'default', path, legacyConfig: config,
-    legacyRawChannels: { qq: config.channels.qq },
-  }
-  const store = new BotInstanceStore(options)
-  assert.deepEqual(store.list().map(bot => bot.id), ['legacy-qq', 'legacy-discord'])
-  assert.equal(store.get('legacy-discord').enabled, true)
-  assert.equal(store.status('legacy-discord').secrets.token, true)
-  assert.match(readFileSync(path, 'utf8'), /synthetic-file-secret/)
-  assert.doesNotMatch(readFileSync(path, 'utf8'), /synthetic-environment-token/)
-  store.update('legacy-discord', { config: { token: '', triggerMode: 'all' } })
-  assert.equal(store.status('legacy-discord').secrets.token, true)
-  assert.doesNotMatch(readFileSync(path, 'utf8'), /synthetic-environment-token/)
-  assert.equal(new BotInstanceStore(options).get('legacy-discord').enabled, true)
-  const bot = store.get('legacy-qq')
-  assert.equal(channelSessionId({
-    projectId: bot.projectId, botInstanceId: bot.id, platform: bot.platform,
-    conversationId: 'group:historical-chat', legacySessionId: bot.legacySessionId,
-  }), 'qq:group:historical-chat')
-  const newOrg = new BotInstanceStore({ projectId: 'new', path: join(root, 'new', 'bots.json') })
-  assert.deepEqual(newOrg.list(), [])
-  assert.throws(() => new BotInstanceStore({ projectId: 'wrong', path }), /ownership/)
-})
-
-test('pristine default project has no legacy placeholders while explicit disabled settings are retained', t => {
-  const root = directory(t)
-  const freshOptions = {
-    projectId: 'default', path: join(root, 'fresh', 'bots.json'),
-    legacyConfig: ConfigSchema.parse({}), legacyRawChannels: {},
-  }
-  assert.deepEqual(new BotInstanceStore(freshOptions).list(), [])
-  assert.deepEqual(new BotInstanceStore(freshOptions).list(), [])
-  const configuredOptions = {
-    projectId: 'default', path: join(root, 'configured', 'bots.json'),
-    legacyConfig: ConfigSchema.parse({ channels: { feishu: { enabled: false, allowFrom: ['alice'] } } }),
-    legacyRawChannels: { feishu: { enabled: false, allowFrom: ['alice'] } },
-  }
-  const configured = new BotInstanceStore(configuredOptions)
-  assert.deepEqual(configured.list().map(bot => bot.id), ['legacy-feishu'])
-  assert.equal(configured.get('legacy-feishu').enabled, false)
-  assert.deepEqual(configured.get('legacy-feishu').config.allowFrom, ['alice'])
-  configured.delete('legacy-feishu')
-  assert.deepEqual(new BotInstanceStore(configuredOptions).list(), [])
-})
-
 test('org settings API validates ownership, redacts secrets, retains blanks and persists independent same-platform bots', async t => {
   const root = directory(t)
   const f = await runtime(t, root, 'A', 0)
@@ -444,7 +351,7 @@ test('org settings API validates ownership, redacts secrets, retains blanks and 
   assert.equal((await post({ projectId: 'B', platform: 'qq', displayName: 'Bad', config: {} })).status, 400)
   assert.equal((await post({ platform: 'qq', displayName: 'Bad', config: { enabled: true } })).status, 400)
   const responses = await Promise.all(['One', 'Two'].map((displayName, index) => post({
-    purpose: 'service', platform: 'qq', displayName, config: { appId: `app-${index}`, secret: 'synthetic-secret', enabled: true },
+    platform: 'qq', displayName, config: { appId: `app-${index}`, secret: 'synthetic-secret', enabled: true },
   })))
   assert.deepEqual(responses.map(response => response.status), [201, 201])
   const bodies = await Promise.all(responses.map(response => response.json()))
@@ -578,10 +485,9 @@ test('unbound QQ service groups are display-only discoveries, isolated and prote
   let assigned = false
   const f = await runtime(t, root, 'discovery-A', 1, 'qq', undefined, undefined, () => assigned)
   const bot = f.instances[0]!
-  await f.manager.updateBot(bot.id, { purpose: 'service' })
   const channel = f.created.at(-1)!
   assert.equal(channel.groupAllowed('same-chat-id', 'Available name'), false)
-  for (let i = 0; i < 2; i++) await assert.rejects(channel.incoming(), /Explicit service assignment/)
+  for (let i = 0; i < 2; i++) await assert.rejects(channel.incoming(), /Explicit BOT assignment/)
   assert.equal(f.received.length, 0)
   assert.equal(channel.sent.length, 0)
   assert.equal(f.manager.pendingServiceGroups(bot.id).length, 1)
@@ -597,11 +503,7 @@ test('unbound QQ service groups are display-only discoveries, isolated and prote
   assert.equal(channel.groupAllowed('same-chat-id'), true)
   await channel.incoming()
   assert.equal(f.received.length, 1)
-  f.store.update(bot.id, { config: { enabled: false } })
-  f.store.update(bot.id, { purpose: 'personal' })
-  f.store.update(bot.id, { config: { enabled: true } })
   assert.deepEqual(f.manager.pendingServiceGroups(bot.id), [])
-  await assert.rejects(f.created.at(-1)!.incoming('private-not-discovered'), /Verified owner/)
   assert.equal(f.discovery.list().length, 1)
   assert.doesNotMatch(readFileSync(join(root, 'discovery-A', 'discovery.json'), 'utf8'), /Hello|alice|content|senderId/)
 })
@@ -628,7 +530,7 @@ test('disabled, revoked and never-bound service groups are discoverable without 
   for (const chatId of ['disabled', 'revoked']) assert.equal(resources.isManaged(f.address(bot, chatId)), true)
   for (const chatId of ['disabled', 'revoked', 'never-bound']) {
     assert.equal(channel.groupAllowed(chatId), false)
-    await assert.rejects(channel.incoming(chatId), /Explicit service assignment/)
+    await assert.rejects(channel.incoming(chatId), /Explicit BOT assignment/)
   }
   assert.equal(f.received.length, 0)
   assert.equal(channel.sent.length, 0)
@@ -664,7 +566,6 @@ test('group observations distinguish not enabled and not triggered without infer
 test('service bot inference failures remain observable but are not delivered to the platform', async t => {
   const f = await runtime(t, directory(t), 'inference-errors', 1, 'qq')
   const bot = f.instances[0]
-  await f.manager.updateBot(bot.id, { purpose: 'service' })
   const observed: OutboundMessage[] = []
   f.bus.on('message.outbound', msg => { observed.push(msg) })
   const failure = { ...f.outbound(bot), inferenceError: true, content: '⚠️ Request failed: synthetic provider error' }
@@ -712,7 +613,7 @@ test('directory-deployed QQ service assignment gates real ingress independently 
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), new Bus(), { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager,
     inputs.receive,
     { projectId, instanceStore: store, serviceAssigned: directoryBots.serviceAssigned, serviceDiscovery: discovery,
-      routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
+      serviceGeneration: address => { const policy = directoryBots.resolve(address); return policy?.generation ?? policy?.revision }, routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
   await manager.init()
   t.after(() => manager.stopAll())
   const incoming = async (id: string, group: string, mention = true) => {

@@ -57,7 +57,7 @@ test('GitHub typed signal admission recovers after restart with one Workflow out
     assert.equal(f.delivered.length, 1); assert.equal(f.delivered[0].targetSessionId, 'worker')
     assert.deepEqual(f.delivered[0].audienceSessionIds, ['worker']); assert.equal(f.delivered[0].delivery?.urgency, 'silent')
     assert.equal(runtime.inspect().runs[0].status, 'completed')
-    assert.equal(f.alignment.get(f.work.key).workflow?.status, 'pending')
+    assert.equal(f.alignment.get(f.work.key).status, 'pending')
   } finally { await restored?.stop(); await runtime?.stop(); await f.close() }
 }))
 
@@ -150,7 +150,7 @@ test('historical Workflow namespace collision rejects GitHub subscription before
     const subscription = { resourceId: 'PR_2', workKey: f.work.key, sessionId: 'worker', enabled: true, mode: 'silent' as const, events: ['ci' as const] }
     const { digest } = await import('../projects/github/client.ts')
     const { githubSubscriptionSchema } = await import('../projects/github/contracts.ts')
-    const id = `github:${digest(githubSubscriptionSchema.parse({ ...subscription, assignmentRevision: f.alignment.get(f.work.key).workflow!.assignmentRevision }))}`
+    const id = `github:${digest(githubSubscriptionSchema.parse({ ...subscription, assignmentRevision: f.alignment.get(f.work.key).assignmentRevision }))}`
     f.workflows.define({ id, owner: 'owner', source: { kind: 'external', id: 'unrelated' }, enabled: true, gate: { kind: 'revision-dedupe', first: 'emit' }, nodes: [{ kind: 'record' }] })
     await assert.rejects(f.service.subscribe(subscription), /identity is occupied/)
     assert.equal(f.store.read().subscriptions.length, 0)

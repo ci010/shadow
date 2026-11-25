@@ -42,6 +42,35 @@ async function main() {
   }
   try {
     await window.loadURL(new URL('__media', process.env.MEDIA_SMOKE_URL).href)
+    if (process.env.MEDIA_SMOKE_TOOL_IMAGE === '1') {
+      await wait(`!!document.querySelector('.tool-activity-summary')`)
+      await execute(`document.querySelector('.tool-activity-summary').click()`)
+      await wait(`document.querySelector('.tool-group').open && !!document.querySelector('.tool-call-header')`)
+      await execute(`document.querySelector('.tool-call-header').click()`)
+      const toolImage = `document.querySelector('.tool-result button[aria-haspopup="dialog"]')`
+      await wait(`${toolImage}?.querySelector('img')?.naturalWidth === 1`)
+      assert.equal(await execute(`${toolImage}.getAttribute('aria-label')`), 'View image: Tool output image 1')
+      for (const keyCode of [undefined, 'Enter', 'Space']) {
+        await execute(`${toolImage}.focus()`)
+        if (keyCode) {
+          window.webContents.sendInputEvent({ type: 'keyDown', keyCode })
+          if (keyCode === 'Enter') window.webContents.sendInputEvent({ type: 'char', keyCode: '\r' })
+          window.webContents.sendInputEvent({ type: 'keyUp', keyCode })
+        } else {
+          await execute(`${toolImage}.querySelector('img').click()`)
+        }
+        try {
+          await wait(`document.querySelector('.image-viewer[open] img')?.naturalWidth === 1`)
+        } catch (cause) {
+          throw new Error(`Tool image did not open via ${keyCode ?? 'click'}`, { cause })
+        }
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+        window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+        await wait(`!document.querySelector('.image-viewer') && document.activeElement === ${toolImage}`)
+      }
+      console.log('MEDIA_SMOKE_OK')
+      return
+    }
     await wait(`document.querySelector('video') && document.querySelector('img')?.naturalWidth > 0`)
     assert.equal(await execute(`document.querySelector('video').preload`), 'none')
     assert.equal(await execute(`fetch('/fixture-count').then(r => r.text())`), '0', 'Video bytes must not be fetched until playback')

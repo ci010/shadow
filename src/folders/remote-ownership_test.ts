@@ -140,6 +140,38 @@ test('two projects share a node, but identical, alias and ancestor roots have on
   await assert.rejects(f.two.registry.requireAvailable(a.id), { code: 'folder_not_found' })
 })
 
+test('remote folder raw images are bounded Child reads, not static or Main resources', async t => {
+  const f = await fixture(t)
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf2sAAAAASUVORK5CYII=', 'base64')
+  const child = join(f.root, 'folders', 'a')
+  await writeFile(join(child, 'child.PNG'), png)
+  await writeFile(join(child, 'invalid.png'), '<svg/>')
+  await writeFile(join(child, 'large.png'), Buffer.alloc(5 * 1024 * 1024 + 1))
+  await writeFile(join(f.workspace, 'main.png'), png)
+  await symlink(f.workspace, join(child, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+  const folder = await f.one.registry.registerRemote(ref('a'), signal())
+  const app = new Hono()
+  new FolderService({ ...f.one, remoteExecutor: f.one.executor, createSession: async () => { throw new Error('Unexpected session') } }).plugin(app)
+  const base = `/api/folders/${folder.id}`
+  const raw = (path: string) => app.request(`${base}/raw?path=${encodeURIComponent(path)}`)
+  const image = await raw('child.PNG')
+  assert.equal(image.status, 200)
+  assert.equal(image.headers.get('content-type'), 'image/png')
+  assert.equal(image.headers.get('x-content-type-options'), 'nosniff')
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), png)
+  assert.equal((await raw('main.png')).status, 404)
+  for (const path of ['../main.png', '/main.png', 'C:\\main.png', 'escape/main.png', 'invalid.png', 'large.png']) {
+    assert.equal((await raw(path)).status, 400, path)
+  }
+  assert.equal((await raw('file.svg')).status, 501)
+  assert.equal((await app.request(`${base}/static/child.PNG`)).status, 501)
+  const foreign = new Hono()
+  new FolderService({ ...f.two, remoteExecutor: f.two.executor, createSession: async () => { throw new Error('Unexpected session') } }).plugin(foreign)
+  assert.equal((await foreign.request(`${base}/raw?path=child.PNG`)).status, 404)
+  f.setOnline(false)
+  assert.equal((await raw('child.PNG')).status, 503)
+})
+
 test('remote folder resources branch to Child only and reject foreign folder access', async t => {
   const f = await fixture(t)
   await promisify(execFile)('git', ['init', '--quiet', join(f.root, 'folders', 'a')])

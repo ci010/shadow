@@ -11,17 +11,23 @@ import type { DeviceAuthenticationV1 } from './registry.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import type { ApprovedNodeV1 } from './contracts.ts'
 import { GLTF_CAPTURE_HEADER, GLTF_CAPTURE_PATH } from '../gltf-capture-contract.ts'
+import { REALTIME_SOCKET_PROTOCOL } from '../realtime/socket-ticket.ts'
+import type { RealtimeHub } from '../realtime/hub.ts'
+import type { RealtimeTopic } from '../realtime/protocol.ts'
 
 export const DEVICE_UI_CHALLENGE = '/cluster/v1/ui/challenges'
 export const DEVICE_UI_HMR = '/cluster/v1/ui/hmr'
 export const DEVICE_UI_REQUEST = '/cluster/v1/ui/request'
+export const DEVICE_UI_LIVE = '/cluster/v1/ui/live'
+export const DEVICE_UI_LIVE_CHALLENGE = '/cluster/v1/ui/live-challenges'
 export const DEVICE_UI_ROUTES = [
   { method: 'POST', path: DEVICE_UI_CHALLENGE }, { method: 'POST', path: DEVICE_UI_REQUEST }, { method: 'GET', path: DEVICE_UI_HMR },
+  { method: 'POST', path: DEVICE_UI_LIVE_CHALLENGE }, { method: 'POST', path: DEVICE_UI_LIVE }, { method: 'GET', path: DEVICE_UI_LIVE },
 ] as const
-export function deviceUiAudience(value: string): string {
+export function deviceUiAudience(value: string, path: string = DEVICE_UI_REQUEST): string {
   const url = new URL(value)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  url.pathname = DEVICE_UI_REQUEST; url.search = ''; url.hash = ''
+  url.pathname = path; url.search = ''; url.hash = ''
   return url.toString()
 }
 /** UI business APIs only. Control/device/credential ingress never becomes tunnelable. */
@@ -77,16 +83,20 @@ const captureCredentialEpoch = (node: ApprovedNodeV1) => JSON.stringify([
 /** Authenticated identity is attached to a Request object, never exposed as an admin bearer. */
 export class MainDeviceUi {
   private readonly identities = new Map<string, DeviceAuthenticationV1>()
-  private readonly active = new Map<AbortController, DeviceAuthenticationV1>()
+  private readonly active = new Map<AbortController, { authentication: DeviceAuthenticationV1; epoch?: string }>()
   private readonly captureOwners = new Map<string, { controller: AbortController; authentication: DeviceAuthenticationV1; epoch: string }>()
   private readonly diagnostics = createForwardDiagnostics('main')
   private closed = false
   private timer: ReturnType<typeof setInterval>
-  constructor(private readonly cluster: MainCluster, private readonly clientAddresses: GatewayClientAddressRegistry, private readonly forward: (request: Request) => Promise<Response>, private readonly developmentUrl?: string) {
+  constructor(private readonly cluster: MainCluster, private readonly clientAddresses: GatewayClientAddressRegistry, private readonly forward: (request: Request) => Promise<Response>, private readonly developmentUrl?: string, private readonly live?: {
+    hub: RealtimeHub
+    authorizeTopic(topic: RealtimeTopic): boolean
+  }) {
     this.timer = setInterval(() => {
-      for (const [controller, authentication] of this.active) {
-        try { cluster.registry.authenticate(authentication) }
-        catch { controller.abort(); this.active.delete(controller) }
+      for (const [controller, { authentication, epoch }] of this.active) {
+        if (this.isApproved(authentication, epoch)) continue
+        controller.abort()
+        this.active.delete(controller)
       }
       for (const [key, owner] of this.captureOwners) {
         try { if (captureCredentialEpoch(cluster.registry.authenticate(owner.authentication)) === owner.epoch) continue } catch { /* revoked */ }
@@ -95,6 +105,12 @@ export class MainDeviceUi {
       }
     }, 500)
     this.timer.unref()
+  }
+  private isApproved(authentication: DeviceAuthenticationV1, epoch?: string) {
+    try {
+      const node = this.cluster.registry.authenticate(authentication)
+      return epoch === undefined || captureCredentialEpoch(node) === epoch
+    } catch { return false }
   }
   private approvedClient(request: Request) {
     const authentication = this.identities.get(this.clientAddresses.resolve(request))
@@ -137,6 +153,46 @@ export class MainDeviceUi {
       })
       deviceChallengeApiPlugin({ authority: this.cluster.authority, path: DEVICE_UI_CHALLENGE,
         audience: deviceUiAudience, requestsPerMinute: 600, clientKey: request => new URL(request.url).host })(app)
+      if (this.live) {
+        const live = this.live
+        const audience = (url: string) => deviceUiAudience(url, DEVICE_UI_LIVE)
+        deviceChallengeApiPlugin({ authority: this.cluster.authority, path: DEVICE_UI_LIVE_CHALLENGE,
+          audience, requestsPerMinute: 600, clientKey: request => new URL(request.url).host })(app)
+        app.on(['POST', 'GET'], DEVICE_UI_LIVE, async c => {
+          const upgrade = c.req.method === 'GET'
+          if (upgrade && (c.req.header('Upgrade')?.toLowerCase() !== 'websocket' ||
+            c.req.header('Sec-WebSocket-Protocol') !== REALTIME_SOCKET_PROTOCOL)) return c.notFound()
+          const proof = decodeDeviceChallengeProtocol(c.req.header('X-Shadow-Device-Proof') ?? '')
+          const authentication = proof && await this.cluster.authority.verify(proof, audience(c.req.url))
+          if (!authentication) return c.json({ error: 'device_ui_unauthorized' }, 401)
+          // Probe only: old Main versions and revoked approvals leave Child on SSE.
+          if (!upgrade) return c.body(null, 204)
+          if (this.closed || this.active.size >= 128) return c.json({ error: 'device_ui_unavailable' }, 503)
+          let epoch: string
+          try { epoch = captureCredentialEpoch(this.cluster.registry.authenticate(authentication)) }
+          catch { return c.json({ error: 'device_ui_unauthorized' }, 401) }
+          const controller = new AbortController()
+          this.active.set(controller, { authentication, epoch })
+          const isApproved = () => !controller.signal.aborted && this.isApproved(authentication, epoch)
+          // Release the quota even if the HTTP upgrade disappears before onOpen.
+          const expiration = setTimeout(() => { controller.abort(); this.active.delete(controller) }, 8000)
+          expiration.unref()
+          try {
+            return await upgradeGatewayWebSocket(app, c, socket => {
+              clearTimeout(expiration)
+              const stop = () => socket.close(1008, 'Device approval ended')
+              socket.once('close', () => { this.active.delete(controller); controller.signal.removeEventListener('abort', stop) })
+              if (!isApproved()) { stop(); return }
+              controller.signal.addEventListener('abort', stop, { once: true })
+              live.hub.connectSocket(socket, topic => isApproved() && live.authorizeTopic(topic))
+            }, REALTIME_SOCKET_PROTOCOL)
+          } catch {
+            clearTimeout(expiration)
+            this.active.delete(controller)
+            return c.json({ error: 'device_ui_live_unavailable' }, 502)
+          }
+        })
+      }
       app.get(DEVICE_UI_HMR, async c => {
         if (!this.developmentUrl || c.req.header('upgrade')?.toLowerCase() !== 'websocket') return c.notFound()
         const proof = decodeDeviceChallengeProtocol(c.req.header('X-Shadow-Device-Proof') ?? '')
@@ -147,7 +203,7 @@ export class MainDeviceUi {
         const target = new URL(path, this.developmentUrl)
         target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:'
         const controller = new AbortController()
-        this.active.set(controller, authentication)
+        this.active.set(controller, { authentication })
         try {
           return await upgradeGatewayWebSocket(app, c, socket => {
             const upstream = new WebSocket(target, 'vite-hmr', { handshakeTimeout: 8000 })
@@ -166,7 +222,7 @@ export class MainDeviceUi {
         const method = c.req.header('X-Shadow-Ui-Method') ?? ''
         if (!deviceUiRequestPath(path, method) || !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return c.json({ error: 'device_ui_path_forbidden' }, 403)
         const controller = new AbortController()
-        this.active.set(controller, authentication)
+        this.active.set(controller, { authentication })
         const signal = AbortSignal.any([c.req.raw.signal, controller.signal])
         const headers = deviceUiHeaders(c.req.raw.headers, path, method)
         // Encoding is not authority. This explicit compatibility signal keeps old Child

@@ -1,52 +1,14 @@
+import { workKeySchema } from './work-key.ts'
 import { z } from 'zod'
 import { workDispatchExecutionSchema } from '../cron/work-dispatch-contract.ts'
-import { decisionEvidenceSchema, parseDecisionEvidence } from '../sessions/decision-brief.ts'
-import { workNotesSchema } from './work-notes.ts'
+import { workDefinitionSchema } from './work-definition.ts'
+import { workReportFields, workBasisSchema } from './work-notes.ts'
 
 const text = z.string().trim().min(1).max(2000)
-const longText = z.string().trim().min(1).max(4000)
-export const workSubjectSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('work'), id: z.string().uuid() }).strict(),
-  z.object({ kind: z.literal('initiative'), initiativeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/) }).strict(),
-  z.object({ kind: z.literal('topic'), sessionId: z.string().min(1).max(512) }).strict(),
-  z.object({ kind: z.literal('item'), initiativeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
-    itemId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/) }).strict(),
-])
-export type WorkSubject = z.infer<typeof workSubjectSchema>
 export type WorkActor = { kind: 'user' } | { kind: 'session'; sessionId: string }
-export const workDefinitionSchema = z.object({
-  objective: longText,
-  acceptance: z.array(longText).max(12).default([]), boundaries: z.array(longText).max(12).default([]),
-  evidence: z.array(z.unknown().transform((value, ctx) => {
-    try { return parseDecisionEvidence(value, ctx.path.join('.')) }
-    catch (error) {
-      if (!(error instanceof TypeError)) throw error
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error.message })
-      return z.NEVER
-    }
-  })).max(8).default([]),
-}).strict()
+export { workDefinitionSchema } from './work-definition.ts'
 export type WorkDefinition = z.infer<typeof workDefinitionSchema>
 export const workProgressSchema = z.enum(['pending', 'in_progress', 'blocked', 'done', 'cancelled'])
-/** Scheduling intent only; ready never grants external-action authority. Omission preserves legacy task eligibility. */
-export const workAutomaticDispatchSchema = z.enum(['manual', 'ready'])
-export const workWorkflowSchema = z.object({
-  automaticDispatch: workAutomaticDispatchSchema.optional(),
-  title: z.string().trim().min(1).max(160),
-  parentKey: z.string().min(1).max(600).optional(),
-  manager: z.string().min(1).max(512).nullable(),
-  assignee: z.string().min(1).max(512).nullable(),
-  assignmentRevision: z.number().int().positive(),
-  assignmentStarted: z.boolean().optional(),
-  status: workProgressSchema,
-  blockedReason: text.optional(),
-  blockedScope: z.enum(['step', 'work']).optional(),
-  dependencies: z.array(z.string().min(1).max(600)).max(100),
-  result: z.object({ summary: text, evidence: workDefinitionSchema.shape.evidence }).strict().optional(),
-}).strict().refine(value => (value.status === 'blocked') === !!value.blockedReason,
-  'Blocked work needs a reason; clear it when leaving blocked.')
-  .refine(value => value.blockedScope === undefined || value.status === 'blocked',
-    'A blocked scope requires blocked progress.')
 /** Display-only model interpretation. Never execution authority or a user quotation. */
 export const workFocusInferenceSchema = z.object({
   category: z.string().trim().min(1).max(120),
@@ -67,22 +29,28 @@ export const botWorkSourceSchema = z.object({
     sessionId: z.string().min(1).max(512), sourceInputId: z.string().min(1).max(512), at: z.string().datetime(),
   }).strict()).max(100),
 }).strict()
-export const workRecordSchema = z.object({
+export const workRecordObjectSchema = z.object({
   /** Host-owned automatic execution receipt; never an authorization grant. */
   automaticExecution: workDispatchExecutionSchema.optional(),
   /** Host-stamped external intake, never an assignment or owner authorization. */
   botSource: botWorkSourceSchema.optional(),
-  key: z.string().min(1).max(600), subject: workSubjectSchema,
+  key: workKeySchema, title: z.string().trim().min(1).max(160),
   revision: z.number().int().positive(), sequence: z.number().int().positive(),
   definition: workDefinitionSchema,
   origin: z.enum(['human', 'agent_interpretation']),
   changedBy: z.string().min(1), changedAt: z.string().datetime(),
-  change: z.enum(['understanding', 'goal', 'authorization', 'pause']), reason: text, paused: z.boolean(),
-  /** Immutable creation request identity; scoped by the owning Project database. */
-  creationRequest: z.object({ creator: z.string().min(1), key: z.string().min(1).max(200), fingerprint: z.string().length(64) }).strict().optional(),
-  requestSource: decisionEvidenceSchema.extend({ kind: z.literal('user') }).optional(),
-  workflow: workWorkflowSchema.optional(),
-  notes: workNotesSchema.optional(),
+  parentKey: workKeySchema.optional(),
+  manager: z.string().min(1).max(512).nullable(),
+  assignee: z.string().min(1).max(512).nullable(),
+  assignmentRevision: z.number().int().positive(),
+  assignmentStarted: z.boolean().optional(),
+  status: workProgressSchema,
+  blockedReason: text.optional(),
+  dependencies: z.array(workKeySchema).max(100),
+  ...workReportFields,
+  basis: workBasisSchema.default([]),
+  /** Host-recorded conclusion for the accepted ancestor basis. */
+  contextAssessment: text.optional(),
   observation: z.object({
     sessionId: z.string().min(1).max(512),
     sources: z.array(z.object({
@@ -97,6 +65,15 @@ export const workRecordSchema = z.object({
     }
   }).optional(),
 }).strict()
+export const workCompletionSummaryIssue = { path: ['summary'], message: 'Summarize the outcome before reporting completion. Completion is not human acceptance.' }
+export function validateWorkReport(record: { status: string; summary: string; blockedReason?: string }, ctx: z.RefinementCtx) {
+  if ((record.status === 'blocked') !== !!record.blockedReason) {
+    ctx.addIssue({ code: 'custom', path: ['blockedReason'], message: 'Blocked work needs a reason; clear it when leaving blocked.' })
+  }
+  if (record.status === 'done' && !record.summary.trim()) ctx.addIssue({ code: 'custom', ...workCompletionSummaryIssue })
+}
+export const workRecordSchema = workRecordObjectSchema.superRefine(validateWorkReport)
+
 /** Storage-only compatibility: discard only named retired fields, validate everything else strictly.
  * Do not use for current writes or wire input. Historical proposals confer no authority.
  */
@@ -115,7 +92,7 @@ export function omitRetiredStoredWorkFields(value: unknown): unknown {
 export type WorkRecord = z.infer<typeof workRecordSchema>
 export interface WorkStamp { key: string; revision: number; assignmentRevision?: number }
 export const workStampsSchema = z.array(z.object({
-  key: z.string().min(1).max(600), revision: z.number().int().positive(),
+  key: workKeySchema, revision: z.number().int().positive(),
   assignmentRevision: z.number().int().positive().optional(),
 }).strict()).max(100)
 
@@ -128,11 +105,18 @@ export function parseStoredWorkStamps(value: unknown): WorkStamp[] {
   }) : value)
 }
 export interface WorkAuthority { manager: string | null; executor: string | null; active: boolean }
-export function workKey(subject: WorkSubject): string {
-  if (subject.kind === 'work') return `work:${subject.id}`
-  if (subject.kind === 'initiative') return `initiative:${subject.initiativeId}`
-  return subject.kind === 'topic' ? `topic:${subject.sessionId}` : `item:${subject.itemId}`
-}
+export const workCreationRequestSchema = z.object({
+  creator: z.string().min(1).max(520), idempotencyKey: z.string().min(1).max(200),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+}).strict()
+export type WorkCreationRequest = z.infer<typeof workCreationRequestSchema>
+export const WORK_CREATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS work_creation_receipts (
+ creator TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+ work_key TEXT NOT NULL UNIQUE REFERENCES work_contracts(id), fingerprint TEXT NOT NULL,
+ PRIMARY KEY(creator, idempotency_key)
+) STRICT;
+`
 
 export const WORK_SCHEMA = `
 CREATE TABLE IF NOT EXISTS work_contracts (
@@ -152,7 +136,7 @@ CREATE TABLE IF NOT EXISTS work_focus (
 ) STRICT;
 `
 export const workCompletionReferenceSchema = z.object({
-  key: z.string().min(1).max(600), completionId: z.string().min(1).max(700),
+  key: workKeySchema, completionId: z.string().min(1).max(700),
 }).strict()
 export const workCompletionReadSchema = z.object({
   items: z.array(workCompletionReferenceSchema).max(5000),

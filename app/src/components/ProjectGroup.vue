@@ -63,15 +63,8 @@ const error = ref('')
 const runtimeState = ref<ProjectRuntimeStatus['state']>()
 const retrying = ref(false)
 const { groups: observedGroups } = useServiceGroups(() => ({ apiBase: scope.value, projectId: props.project.id, active: runtimeState.value === 'ready' }))
-const displayBots = computed(() => {
-  const catalog = [...bots.value]
-  for (const group of observedGroups.value) {
-    if (!catalog.some(bot => bot.id === group.botInstanceId && bot.projectId === props.project.id))
-      catalog.push({ id: group.botInstanceId, projectId: props.project.id, platform: group.platform, displayName: group.botName })
-  }
-  return catalog
-})
-const displaySessions = computed(() => projectGroupConversations(sessions.value, observedGroups.value, props.project.id))
+const displayBots = computed(() => bots.value)
+const displaySessions = computed(() => projectGroupConversations(sessions.value, observedGroups.value, props.project.id, bots.value))
 const deletion = ref<SessionDeletionTarget>()
 watch(() => [displaySessions.value, props.selectedSessionId, props.selectedProjectId], () => {
   if (props.selectedProjectId !== props.project.id) return

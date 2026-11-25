@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { createServer, type ViteDevServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
+import { projectWorkLiveOverviewSchema } from '../../src/projects/work-overview.ts'
 import { createGitHubFixture } from '../../src/testing/github.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
@@ -34,41 +36,51 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
   f.remote.issue.title = 'Review an externally reported correction with a verylongunbrokentopicnamethatmustwrapratherthanoverflowtheprojectsidebar'
   let reads = 0
   server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'), optimizeDeps: { entries: [] },
-    plugins: [vue(), {
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'), optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'vue-i18n', 'pinia', 'zod', 'dompurify'] },
+    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app/unocss.config.ts') }), {
       name: 'github-ui-fixture',
       resolveId: id => id === '/github-fixture.ts' ? '\0github-fixture' : undefined,
       load: id => id !== '\0github-fixture' ? undefined : `
-        import '/src/styles.css';
+        import '/src/styles.css'; import 'uno.css';
         import {createResourceApp as createApp} from '/src/stores/app.ts'; import {useProjectResourceStore} from '/src/stores/project.ts'; import {h, reactive} from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
-        import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
+        import ProjectWorkbench from '/src/components/ProjectWorkbench.vue';
+        import ProjectGitHub from '/src/components/ProjectGitHub.vue';
         import { createProjectLiveState } from '/src/project-live-state.ts';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         import { createLocalMainAdminContext } from '/src/installation-context.ts';
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
         const state = reactive({ visible: true, draft: 'Retained admin draft' });
         const installation = reactive(createLocalMainAdminContext(location.origin));
-        window.setAdmin = value => { installation.uiScopes = value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read']; };
-        let observer;
-        const live = createProjectLiveState({ client: () => ({ subscribe: (_topic, value) => {
-          observer = value; return { ready: async () => {}, close: () => {} };
-        } }) });
-        window.invalidateWork = () => observer?.event({ payload: { event: 'invalidate' } });
-        const router = createRouter({ history: createMemoryHistory(), routes: [{ name: 'chat', path: '/', component: { render: () => null } }] });
-        await router.push('/'); await router.isReady();
-        const app = createApp({ render: () => h(ProjectWorkbench, {
+        window.setAdmin = value => { state.visible = value; installation.uiScopes = value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read']; };
+        const observers = new Set();
+        const pool = { observeHost: (_base, observe) => { observe({ phase: 'live' }); return () => {}; }, client: () => ({ subscribe: (_topic, value) => {
+          observers.add(value); return { ready: async () => {}, close: () => observers.delete(value) };
+        } }) };
+        const live = createProjectLiveState(pool);
+        window.invalidateWork = () => { for (const observer of observers) observer.event({ payload: { event: 'invalidate' } }); };
+        const router = createRouter({ history: createMemoryHistory(), routes: [{ name: 'project-board', path: '/projects/:projectId/board', component: { render: () => null } }] });
+        await router.push('/projects/p/board'); await router.isReady();
+        window.fixtureStage = router.currentRoute.value.fullPath;
+        const app = createApp({ render: () => state.visible ? h(ProjectWorkbench, {
           apiBase: location.origin + '/projects/p', projectId: 'p', projectName: 'Delivery project', visible: state.visible,
           style: 'height:100vh', onCompose: text => { state.draft += '\\n\\n' + text; },
-        }, { default: () => h('textarea', { value: state.draft }) }) });
+        }, { default: () => h('textarea', { value: state.draft }) }) : h(ProjectGitHub, {
+          apiBase: location.origin + '/projects/p', projectId:'p', active:true, canWrite:false, works:[], sessions:[]
+        }) });
         useProjectResourceStore(app.config.globalProperties.$pinia).owner=live;
         app.onUnmount(()=>live.dispose());
+        app.provide(Symbol.for('shadow.live-client-pool'), pool);
         app.use(router); app.use(createInstallationContextProvider(installation)); app.mount('#app');`,
       configureServer(server) {
         server.middlewares.use(async (request, response, next) => {
           try {
             const path = new URL(request.url!, 'http://127.0.0.1').pathname
             const json = (value: unknown) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)) }
-            if (path === '/__github') {
+            if (path === '/projects/p/api/work/completions') json({ items: [] })
+            else if (path === '/projects/p/api/actions') json({ actions: [] })
+            else if (path === '/projects/p/api/actions/runs') json({ runs: [] })
+            else if (path === '/__github') {
               response.setHeader('Content-Type', 'text/html')
               response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/github-fixture.ts"></script></body></html>')
             } else if (path === '/__stats') {
@@ -79,6 +91,12 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
               const command = JSON.parse(body).command
               if (command === 'source') f.remote.issue.body += '\nAdditional external detail.'
               else if (command === 'uncertain') f.remote.failAfterWrite = true
+              else if (command === 'assign-import') {
+                const imported = f.works.workRecords().find(work => work.key !== f.work.key)
+                assert.ok(imported)
+                assert.equal(imported.assignee, null)
+                await f.alignment.assignNote({ kind: 'user' }, imported.key, imported.sequence, 'manager')
+              }
               else if (command === 'offline') f.remote.failReads = true
               else if (command === 'online') { f.remote.failReads = false; f.remote.failAfterWrite = false }
               else throw new Error('Unknown fixture command')
@@ -98,16 +116,16 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
             else if (path.endsWith('/api/sessions/stages')) json({ activity: {} })
             else if (path === '/projects/p/api/work') {
               const references = f.service.references()
-              json({ items: f.works.workRecords().map(work => ({
-                key: work.key, title: work.workflow!.title, status: work.workflow!.status, assignee: work.workflow!.assignee,
-                manager: work.workflow!.manager, parentKey: work.workflow!.parentKey ?? null, dependencies: work.workflow!.dependencies,
-                revision: work.revision, sequence: work.sequence, paused: work.paused, blockedReason: null, changedAt: work.changedAt, github: references[work.key],
-              })), sessions: [...f.states.keys()].map(sessionId => ({ sessionId, title: sessionId, assignable: true })), requests: [], effects: [] })
+              json(projectWorkLiveOverviewSchema.parse({ items: f.works.workRecords().map(work => ({
+                key: work.key, title: work.title, status: work.status, assignee: work.assignee,
+                manager: work.manager, parentKey: work.parentKey ?? null, dependencies: work.dependencies,
+                revision: work.revision, sequence: work.sequence, blockedReason: null, changedAt: work.changedAt, github: references[work.key],
+              })), sessions: [...f.states.keys()].map(sessionId => ({ sessionId, title: sessionId, assignable: true })), requests: [], effects: [] }))
             } else next()
           } catch (error) { next(error) }
         })
       },
-    }], server: { host: '127.0.0.1', port: 0 },
+    }], server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
   })
   await server.listen()
   const url = server.resolvedUrls?.local[0]
@@ -136,5 +154,8 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
   assert.equal(f.delivered.length, 1)
   assert.equal(f.delivered[0].delivery?.urgency, 'queue')
   assert.equal(f.works.workRecords().length, 2)
-  assert.equal(f.works.workRecords().find(work => work.key !== f.work.key)?.workflow?.assignee, null)
+  const imported = f.works.workRecords().find(work => work.key !== f.work.key)
+  assert.ok(imported)
+  assert.equal(imported.assignee, 'manager', 'Only the explicit fixture assignment sets an assignee after import')
+  assert.equal(imported.definition, 'Correct the reviewed behavior.\n\n- The focused regression passes.\n- Do not publish changes.')
 })

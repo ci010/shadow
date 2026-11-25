@@ -3,10 +3,10 @@
     <SidebarResizer v-if="active && open && !mobile?.enabled.value && resizeBounds.max > resizeBounds.min"
       class="file-explorer-resizer" :model-value="explorerWidth" :bounds="resizeBounds"
       :label="t('Resize files')" :controls="explorerId" @update:model-value="preferredWidth = $event" />
-    <ProjectExplorerRoot v-if="sessionId" :key="`session:${sessionId}`" :root-id="`session:${sessionId}`" :api-base="apiBase" :session-id="sessionId" :label="t('Session files')" :hint="`${t('Session files')}: ${sessionEditor?.label}`" :reveal="active && open" :active="active && open" @open="openFile" />
+    <ProjectExplorerRoot v-if="sessionId" :key="`session:${sessionId}`" :root-id="`session:${sessionId}`" :api-base="apiBase" :session-id="sessionId" :label="t('Session files')" :hint="`${t('Session files')}: ${sessionEditor?.label}`" :reveal="active && open && !sessionEditor?.conversation?.folderId && !preferredFolderId" :active="active && open" @open="openFile" />
     <p v-if="!sessionId && !relatedFolders.length && !error" class="catalog-empty">{{ t('Choose a workspace in navigation or start a conversation to browse its files.') }}</p>
     <p v-if="error" class="catalog-error" role="alert">{{ error }} <button @click="load">{{ t('Retry folders') }}</button></p>
-    <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :active="active && open" @open="openFile" />
+    <ProjectExplorerRoot v-for="folder in relatedFolders" :key="`folder:${folder.id}`" :root-id="`folder:${folder.id}`" :api-base="apiBase" session-id="" :folder="folder" :label="folder.name" :source="folderSource(folder)" :hint="folderHint(folder)" :reveal="active && open && folder.id === preferredFolderId" :active="active && open" @open="openFile" />
     <GltfOutlineDock v-if="active && open" :project-id="projectId" />
     <div ref="outlineHost" class="outline-host" />
   </aside>
@@ -120,6 +120,12 @@ const sessionEditor = computed(() => {
     : groups.referenceTarget(props.projectId)
 })
 const sessionId = computed(() => sessionEditor.value?.conversation?.sessionId)
+const preferredFolderId = computed(() => {
+  const boundId = sessionEditor.value?.conversation?.folderId
+  const boundFolder = folders.value.find(folder => folder.id === boundId)
+  const identity = boundFolder && resourceIdentity(boundFolder)
+  return (relatedFolders.value.find(folder => resourceIdentity(folder) === identity) ?? relatedFolders.value[0])?.id
+})
 function editorId(file: OpenFile) { return JSON.stringify([props.projectId, 'explorer-file', fileTabKey(file)]) }
 function close(file: OpenFile) { descriptors.delete(editorId(file)); files.value = files.value.filter(item => fileTabKey(item) !== fileTabKey(file)) }
 const descriptors = new Map<string, EditorDescriptor>()

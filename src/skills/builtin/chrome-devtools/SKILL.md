@@ -15,6 +15,17 @@ For recordings, microphone, camera and interactive input panels use `v:skills/io
 unless the user explicitly wants a separate web application. Do not build a
 standalone recorder merely to collect missing task input.
 
+## When the workdir is on Child
+
+Use `invoke_tool` with `name: "browser_setup"` and `args: {action: "discover"}`
+to check the selected Child's managed-profile grant, then `connect` to bind and
+verify pages. The Child operator must explicitly provision the approved profile
+before connecting; the profile copy and browser run on Child. Do not request
+Main paths, remote path overrides, `attach`, or `autoConnect`. Use the returned
+Chrome tool names, the `instance` when specified, and explicit `pageId` for
+page tools. `close` with that instance disconnects the session adapter. Never
+fall back to Main, shell, or an unapproved profile.
+
 ## Route the task before searching
 
 One source, `v:tools/chrome-devtools`, covers interactions, diagnostics, and

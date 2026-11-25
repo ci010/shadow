@@ -40,7 +40,7 @@ import { AgentApp, type AgentOptions } from '../agent/app.ts'
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated of [false, true]) test(`real QQ passive ingress -> trusted owner source assignment -> exact deployment -> new inputs only (${Store.name}, migrated=${migrated})`, async t => {
   await withTempWorkspace(async workspace => {
     const projectId = 'p', bus = new Bus(), bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
-    const connection = bots.create('qq', 'Shared QQ', { appId: 'synthetic', secret: 'synthetic', enabled: true }, undefined, 'service')
+    const connection = bots.create('qq', 'Shared QQ', { appId: 'synthetic', secret: 'synthetic', enabled: true })
     const stream = new ChannelMessageStream(workspace, projectId)
     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } }), directory = new DirectoryBots(deployments)
     const sourcePath = join(workspace, 'source'); mkdirSync(sourcePath)
@@ -81,13 +81,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       return parseChannelSource(state.channelSource, id, projectId)!
     } })
     const inspect = async () => JSON.parse(await packageTool.execute({ action: 'source', folderId: 'folder', channelSessionId: inboxId }, owner) as string)
-    const assign = async (enabled: boolean, sourceRevision: string, expectedRevision?: string) => {
-      const prepared = JSON.parse(await packageTool.execute({ action: 'assign', folderId: 'folder', channelSessionId: inboxId, sourceRevision, expectedRevision, summary: 'Assign the referenced Support inbox', bindingJson: JSON.stringify({ enabled, trigger: 'mention', allowFrom: ['owner'], tools: [] }) }, owner) as string)
-      assert.equal(prepared.status, 'assignment-prepared')
-      const writer = new WriteTool(sourcePath, true)
-      const receipt = await writer.execute(prepared.edit, owner)
-      assert.doesNotMatch(receipt, /^Error:/)
-      const result = JSON.parse(await packageTool.execute({ action: 'propose', folderId: 'folder', expectedRevision, sourceRevision: prepared.candidateRevision, summary: 'Deploy the exact referenced inbox assignment' }, owner) as string)
+    const assign = async (enabled: boolean) => {
+      if (!deployments.read(parseBot({ 'BOT.md': readFileSync(join(sourcePath, 'BOT.md'), 'utf8'), 'bot.json': readFileSync(join(sourcePath, 'bot.json'), 'utf8') }).id)) await packageTool.execute({ action: 'reload', folderId: 'folder', summary: 'Load source before linking' }, owner)
+      const result = JSON.parse(await packageTool.execute({ action: 'link', folderId: 'folder', channelSessionId: inboxId, summary: 'Link the referenced Support inbox', bindingJson: JSON.stringify({ enabled, trigger: 'mention', allowFrom: ['owner'], tools: [] }) }, owner) as string)
       return { ...result, sourceUpdated: true }
     }
     try {
@@ -131,7 +127,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       const racing = send('assignment-race', 'ARRIVED_BEFORE_ASSIGNMENT', 'one', true)
       await archiveStarted.promise
       approve = true
-      const deployed = await assign(true, (await inspect()).sourceRevision); assert.equal(deployed.status, 'deployed'); assert.equal(asks, 0)
+      const deployed = await assign(true); assert.equal(deployed.status, 'deployed'); assert.equal(asks, 0)
       archiveRelease.resolve(); await racing; assert.equal(prompts.length, 0)
       await assert.rejects(send('denied-after-binding', 'RECORD_DENIED_AFTER_BINDING', 'one', true, 'stranger'), /sender is not authorized|outside BOT/)
       assert.equal(SessionManager.currentPhysicalId(sessions.getSessionState(inboxId)!), physical, 'BOT binding does not change inbox identity or move history')
@@ -157,8 +153,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       const completed = Promise.withResolvers<void>(); bus.on('session.turn.finished', fact => { if (fact.inputId === 'inflight') completed.resolve() })
       await send('inflight', 'INFLIGHT', 'one', true); await started.promise
       const beforeRevokeOutput = outbound
-      // Unassign through the same file + exact approval path; receipt continues, inference does not.
-      await assign(false, (await inspect()).sourceRevision, deployments.read('support')!.deployment.revision)
+      // Unassign through the same direct link path; receipt continues, inference does not.
+      await assign(false)
       block.resolve(); block = undefined; await completed.promise
       assert.equal(outbound, beforeRevokeOutput, 'Revoked in-flight inference cannot emit a reply')
       await send('after-unassign', 'AFTER_UNASSIGN', 'one', true)
@@ -166,7 +162,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       assert.match(JSON.stringify((await sessions.getHistory(inboxId)).messages), /AFTER_UNASSIGN/)
       const executionId = channelSessionId({ projectId, botInstanceId: connection.id, platform: 'qq', conversationId: 'group:one' })
       const oldGeneration = sessions.getSessionState(executionId)!.serviceGeneration
-      await assign(true, (await inspect()).sourceRevision, deployments.read('support')!.deployment.revision)
+      await assign(true)
       const reenabled = Promise.withResolvers<void>(); bus.on('session.turn.finished', fact => { if (fact.inputId === 'reenabled') reenabled.resolve() })
       await send('reenabled', 'REENABLED_ONLY', 'one', true); await reenabled.promise
       assert.equal(prompts.length, 4); assert.doesNotMatch(prompts[3]!, /NEW_TRIGGER|AFTER_RESTART|INFLIGHT|AFTER_UNASSIGN/)
@@ -179,12 +175,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) for (const migrated
       })
       const transferRace = send('transfer-race', 'ARRIVED_UNDER_A', 'one', true)
       await transferStarted.promise
-      // Transfer ownership: remove A's binding with exact approval, then assign B from the same trusted inbox.
+      // Transfer ownership: remove A's binding with reload, then link B from the same trusted inbox.
       const writer = new WriteTool(sourcePath, true), configPath = join(sourcePath, 'bot.json')
       await writer.execute({ path: 'bot.json', match: readFileSync(configPath, 'utf8'), content: JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }, owner)
-      await packageTool.execute({ action: 'propose', folderId: 'folder', expectedRevision: deployments.read('support')!.deployment.revision, summary: 'Remove A binding before transferring ownership' }, owner)
+      await packageTool.execute({ action: 'reload', folderId: 'folder', summary: 'Remove A binding before transferring ownership' }, owner)
       await writer.execute({ path: 'BOT.md', match: 'id: support', content: 'id: beta' }, owner)
-      await assign(true, (await inspect()).sourceRevision)
+      await assign(true)
       transferRelease.resolve(); await assert.rejects(transferRace, /assignment changed/)
       assert.equal(prompts.length, 4)
       const transferred = Promise.withResolvers<void>(); bus.on('session.turn.finished', fact => { if (fact.inputId === 'beta') transferred.resolve() })

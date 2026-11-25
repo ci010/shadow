@@ -26,6 +26,7 @@ export interface ImageContextUpdate {
   sourceKey: string
   file: File | null
   source?: ImageSource
+  bytesOnly?: true
 }
 
 export interface ImageContextBusy {
@@ -37,7 +38,7 @@ export interface ImageContextBusy {
 export interface ImageReference {
   sourceKey: string
   file: File
-  source: ImageSource
+  source?: ImageSource
 }
 
 export const IMAGE_REFERENCE_MIME = 'application/x-shadow-image-reference'

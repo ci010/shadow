@@ -7,11 +7,11 @@ import { InitiativeStore } from './store.ts'
 import type { WorkRecord } from './work-contract.ts'
 
 const completionFixture = (): WorkRecord => ({
-  key: 'work:11111111-1111-4111-8111-111111111111', subject: { kind: 'work', id: '11111111-1111-4111-8111-111111111111' },
-  revision: 1, sequence: 1, definition: { objective: 'A result', acceptance: [], boundaries: [], evidence: [] },
+  key: 'work:11111111-1111-4111-8111-111111111111',
+  revision: 1, sequence: 1, definition: 'A result',
   origin: 'human', changedBy: 'web:owner', changedAt: '2020-01-01T00:00:00.000Z',
-  change: 'understanding', reason: 'Fixture', paused: false,
-  workflow: { title: 'Result', manager: null, assignee: null, assignmentRevision: 1, status: 'pending', dependencies: [] },
+
+  title: 'Result', kind: 'task', artifacts: [], basis: [], summary: 'The result was measured.', manager: null, assignee: null, assignmentRevision: 1, status: 'pending', dependencies: [],
 })
 
 test('completion receipts survive reopen, isolate principals and repeat only on a new done transition', async () => {
@@ -19,7 +19,7 @@ test('completion receipts survive reopen, isolate principals and repeat only on 
     let store = new InitiativeStore(home)
     let record = completionFixture()
     const save = (status: 'pending' | 'done', kind = 'progress') => {
-      record = { ...record, sequence: record.sequence + 1, workflow: { ...record.workflow!, status } }
+      record = { ...record, sequence: record.sequence + 1, status }
       store.saveWork(record, record.sequence - 1, 'fixture', kind)
     }
     try {
@@ -45,7 +45,7 @@ test('completion receipts survive reopen, isolate principals and repeat only on 
       const second = store.workCompletions('alice')[0]!
       assert.notEqual(second.completionId, first.completionId)
       assert(second.unread)
-      store.markWorkCompletionsRead('alice', { items: [{ key: first.key, completionId: first.completionId }, { key: 'foreign', completionId: second.completionId }] })
+      store.markWorkCompletionsRead('alice', { items: [{ key: first.key, completionId: first.completionId }, { key: 'work:22222222-2222-4222-8222-222222222222', completionId: second.completionId }] })
       assert.equal(store.workCompletions('alice')[0]!.unread, true)
       assert.throws(() => store.markWorkCompletionsRead('alice', { principal: 'bob', items: [] }))
       assert.throws(() => store.workCompletions(''))
@@ -56,13 +56,13 @@ test('completion receipts survive reopen, isolate principals and repeat only on 
 test('v6 migration retains legacy events, uses actual transition time or null, and is stable on reopen', async () => {
   for (const withHistory of [true, false]) await withTempWorkspace(async home => {
     const initial = new InitiativeStore(home); initial.close()
-    const record = completionFixture(); record.sequence = 4; record.workflow!.status = 'done'
-    const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+    const record = completionFixture(); record.sequence = 4; record.status = 'done'
+    const db = new DatabaseSync(projectStoragePath(home, 'work.sqlite'))
     db.prepare('INSERT INTO work_contracts (id,sequence,data) VALUES (?,?,?)').run(record.key, record.sequence, JSON.stringify(record))
     if (withHistory) {
       const insert = db.prepare('INSERT INTO work_contract_events (id,work_key,actor,kind,created_at,data) VALUES (?,?,?,?,?,?)')
       for (const [sequence, status, at] of [[2, 'pending', '2025-01-01T00:00:00.000Z'], [3, 'done', '2025-02-01T00:00:00.000Z'], [4, 'done', '2025-03-01T00:00:00.000Z']] as const)
-        insert.run(String(sequence), record.key, 'fixture', 'progress', at, JSON.stringify({ sequence, workflow: { status } }))
+        insert.run(String(sequence), record.key, 'fixture', 'progress', at, JSON.stringify({ sequence, status }))
     }
     db.close()
     let store = new InitiativeStore(home)
@@ -84,7 +84,7 @@ test('read receipts are Project-local even for identical Work keys and principal
   await withTempWorkspace(async a => withTempWorkspace(async b => {
     const first = new InitiativeStore(a), second = new InitiativeStore(b)
     try {
-      const record = completionFixture(); record.workflow!.status = 'done'
+      const record = completionFixture(); record.status = 'done'
       for (const store of [first, second]) store.saveWork(record, 0, 'fixture', 'created')
       const item = first.workCompletions('alice')[0]!
       first.markWorkCompletionsRead('alice', { items: [{ key: item.key, completionId: item.completionId }] })

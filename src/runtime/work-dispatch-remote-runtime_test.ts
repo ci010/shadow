@@ -132,8 +132,8 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
         } else {
           const result = JSON.parse(text(toolMessages.at(-1)!.content)) as WorkRecord
           assert(result.automaticExecution?.folderId, JSON.stringify(result))
-          assert.notEqual(result.workflow?.status, 'blocked', JSON.stringify(result))
-          assert(result.workflow?.assignee?.startsWith('work-executor:'))
+          assert.notEqual(result.status, 'blocked', JSON.stringify(result))
+          assert(result.assignee?.startsWith('work-executor:'))
           message = { content: 'PRIOR_ROUND_SENTINEL: admitted exactly one independent Child executor.' }
         }
       } else if (body.model === 'fixture') {
@@ -145,7 +145,7 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
         const lastUser = body.messages.findLastIndex(message => message.role === 'user' && text(message.content).includes('CREATE_UNASSIGNED: '))
         const result = body.messages.slice(lastUser + 1).find(message => message.role === 'tool')
         if (!result) message = call(`create-${randomUUID()}`, 'invoke_tool', { name: 'work_create', args: { title, assignee: null,
-          definition: { objective: 'Write remote-evidence.txt and branch-evidence.txt only in the independently derived Child worktree.' } } })
+          definition: 'Write remote-evidence.txt and branch-evidence.txt only in the independently derived Child worktree.' } })
         else {
           assert.match(text(result.content), /^\{/, text(result.content))
           const receipt = JSON.parse(text(result.content))
@@ -180,7 +180,7 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
           const current = JSON.parse(text(toolMessages.at(-1)!.content)).records[0]
           assert.equal(current.key, key)
           message = call(id, 'invoke_tool', { name: 'work_update', args: { key, version: current.version, status: 'done',
-            notes: { summary: `Verified Child write and shell evidence for ${key}`, next: 'Result retained in isolated Child worktree; not publisher acceptance.' } } })
+            summary: `Verified Child write and shell evidence for ${key}` } })
         } else {
           assert.equal(step, 5, 'no hidden retries or duplicate tool effects')
           const result = JSON.parse(text(toolMessages.at(-1)!.content))
@@ -245,11 +245,11 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
     assert.equal((await summary()).enabled, false, 'configuration is not enablement')
     const createUnassigned = async (title: string) => {
       await json('/api/chat/send', 'POST', { chatId: publisher.chatId, content: `CREATE_UNASSIGNED: ${title}`, stream: false })
-      await wait(async () => createdTitles.has(title) && (await records()).some(record => record.workflow?.title === title),
+      await wait(async () => createdTitles.has(title) && (await records()).some(record => record.title === title),
         'ordinary model session did not create Work through real dynamic work_create')
-      const unassigned = (await records()).find(record => record.workflow?.title === title)!
+      const unassigned = (await records()).find(record => record.title === title)!
       assert(unassigned)
-      assert.equal(unassigned.workflow?.assignee, null)
+      assert.equal(unassigned.assignee, null)
       return unassigned
     }
     const first = await createUnassigned('First independent Child evidence')
@@ -259,16 +259,16 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
     assert(overlapping.every(result => result.accepted))
     assert.equal(rounds.size, 1, 'overlapping manual scans do not create another dispatcher')
     releaseDispatcher.resolve()
-    await wait(async () => (await records()).find(record => record.key === first.key)?.workflow?.status === 'done' && !(await summary()).running,
+    await wait(async () => (await records()).find(record => record.key === first.key)?.status === 'done' && !(await summary()).running,
       'first real remote executor did not finish')
     const second = await createUnassigned('Second fresh independent Child evidence')
     await json(`${automationPath}/run`, 'POST', undefined, 202)
-    await wait(async () => (await records()).find(record => record.key === second.key)?.workflow?.status === 'done' && !(await summary()).running,
+    await wait(async () => (await records()).find(record => record.key === second.key)?.status === 'done' && !(await summary()).running,
       'second fresh remote executor did not finish')
     assert.equal(rounds.size, 2, 'new eligible Work gets a genuinely fresh dispatcher transcript')
     assert.deepEqual([...workerRequests.values()], [6, 6])
     const settled = await records()
-    const assignments = settled.map(record => record.workflow!.assignee!)
+    const assignments = settled.map(record => record.assignee!)
     assert.equal(new Set(assignments).size, 2)
     const executionInferences = () => wire.filter(request => request.model !== 'fixture').length
     const automationInferenceCount = executionInferences()
@@ -287,7 +287,7 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
     assert.equal(retained.length, 2)
     for (const record of settled) {
       const execution = record.automaticExecution!
-      const state = await store.getState(record.workflow!.assignee!)
+      const state = await store.getState(record.assignee!)
       assert(state)
       assert.equal(state.agentType, 'general'); assert.equal(state.folderId, execution.folderId)
       const isolated = runtime.folders.get(execution.folderId!)!

@@ -10,6 +10,7 @@ import { t } from '../i18n.ts'
 import type { ProjectRecord } from '../projects.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
+import { createSessionSummaryLoader } from '../session-summary-snapshot.ts'
 import { isQuickOpenBackdropPoint, searchQuickOpenSessions } from '../session-quick-open.ts'
 
 const props = defineProps<{ apiBase: string; projects: ProjectRecord[] }>()
@@ -26,10 +27,13 @@ function entryFor(projectId: string) { return leases.value.find(entry => entry.p
 function stageFor(session: SidebarSession & { projectId: string }) {
   return entryFor(session.projectId)?.lease.activity.state.value?.stages[session.sessionId]
 }
+const delegatedByProject = computed(() => new Map(filteredLeases.value.map(({ projectId, lease }) => {
+  const stages = lease.activity.state.value?.stages ?? {}
+  const owners = activeSubagentsByOwner(lease.sessions.state.value ?? [], stages)
+  return [projectId, new Map([...owners].map(([id, executions]) => [id, summarizeSubagents(executions, stages)]))]
+})))
 function delegatedFor(session: SidebarSession & { projectId: string }) {
-  const lease = entryFor(session.projectId)?.lease
-  const stages = lease?.activity.state.value?.stages ?? {}
-  return summarizeSubagents(activeSubagentsByOwner(lease?.sessions.state.value ?? [], stages).get(session.sessionId) ?? [], stages)
+  return delegatedByProject.value.get(session.projectId)?.get(session.sessionId)
 }
 function metadataFor(session: SidebarSession & { projectId: string }) {
   return sessionListMetadata(session, folderCatalogs.value[session.projectId] ?? [], [], now.value)
@@ -50,7 +54,7 @@ watch(() => [props.apiBase, ...props.projects.map(project => project.id)], (_, _
   folderCatalogs.value = {}
   for (const { lease } of leases.value) lease.release()
   leases.value = [...new Set(props.projects.map(project => project.id))].map(projectId => ({
-    projectId, lease: live.acquireProject(props.apiBase, projectId, undefined, false, 'full'),
+    projectId, lease: live.acquireProject(props.apiBase, projectId),
   }))
   for (const { projectId, lease } of leases.value) {
     void lease.read()
@@ -59,10 +63,51 @@ watch(() => [props.apiBase, ...props.projects.map(project => project.id)], (_, _
     }).catch(() => { /* Folder IDs remain truthful fallbacks when the catalog is unavailable. */ })
   }
 }, { immediate: true })
-const results = computed(() => searchQuickOpenSessions(filteredLeases.value.flatMap(({ projectId, lease }) =>
-  (lease.sessions.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id), projectFilter.value))
-const loading = computed(() => filteredLeases.value.some(({ lease }) => lease.sessions.state.loading))
-const failures = computed(() => filteredLeases.value.filter(({ lease }) => lease.sessions.state.error))
+// Keep the heavy archive off the open path. Scope it to the searched projects,
+// retain only automation rows and prefer live rows when merging.
+const archives = shallowRef(new Map<string, SidebarSession[]>())
+const archiveErrors = shallowRef(new Set<string>())
+const archiveRetry = ref(0)
+const archivePending = ref(false)
+watch(() => [props.apiBase, leases.value], () => {
+  archives.value = new Map()
+  archiveErrors.value = new Set()
+}, { flush: 'sync' })
+const searchingArchive = computed(() => !!query.value.trim())
+watch([searchingArchive, filteredLeases, archiveRetry], ([searching, entries], _, onCleanup) => {
+  archivePending.value = false
+  if (!searching) return
+  const missing = entries.filter(({ projectId }) => !archives.value.has(projectId))
+  if (!missing.length) return
+  archivePending.value = true
+  const controller = new AbortController()
+  const timer = setTimeout(async () => {
+    await Promise.all(missing.map(async ({ projectId }) => {
+      try {
+        const rows = await createSessionSummaryLoader(projectBase(hostBase(props.apiBase), projectId), projectId).load(controller.signal)
+        if (controller.signal.aborted) return
+        archives.value = new Map(archives.value).set(projectId, rows.filter(row => row.automation))
+        const errors = new Set(archiveErrors.value)
+        errors.delete(projectId)
+        archiveErrors.value = errors
+      } catch {
+        if (!controller.signal.aborted) archiveErrors.value = new Set(archiveErrors.value).add(projectId)
+      }
+    }))
+    if (!controller.signal.aborted) archivePending.value = false
+  }, 200)
+  onCleanup(() => { clearTimeout(timer); controller.abort() })
+})
+const candidates = computed(() => filteredLeases.value.flatMap(({ projectId, lease }) => {
+  const current = lease.sessions.state.value ?? []
+  const history = searchingArchive.value ? archives.value.get(projectId) : undefined
+  const ids = history && new Set(current.map(row => row.sessionId))
+  return [...current, ...history?.filter(row => !ids?.has(row.sessionId)) ?? []].map(session => ({ ...session, projectId }))
+}))
+const results = computed(() => searchQuickOpenSessions(candidates.value, query.value, props.projects.map(project => project.id), projectFilter.value))
+const loading = computed(() => archivePending.value || filteredLeases.value.some(({ lease }) => lease.sessions.state.loading))
+const failures = computed(() => filteredLeases.value.filter(({ projectId, lease }) =>
+  lease.sessions.state.error || (!!query.value.trim() && archiveErrors.value.has(projectId))))
 const projectLabel = (projectId: string) => props.projects.find(project => project.id === projectId)?.name ?? projectId
 const optionId = (index: number) => `${id}-option-${index}`
 watch([query, results], () => { selected.value = 0 })
@@ -114,7 +159,8 @@ function keydown(event: KeyboardEvent) {
 }
 function retry(projectId: string) {
   const entry = leases.value.find(entry => entry.projectId === projectId)
-  if (entry) void entry.lease.sessions.refresh()
+  if (entry?.lease.sessions.state.error) void entry.lease.sessions.refresh()
+  if (archiveErrors.value.has(projectId)) archiveRetry.value++
 }
 onMounted(() => {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null

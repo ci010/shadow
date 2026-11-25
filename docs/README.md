@@ -9,7 +9,6 @@ Start with the [project README](../README.md) for installation and commands,
 - [Projects, folders and conversations](using-shadow.md)
 - [Browser access and pairing](browser-access.md)
 - [Messaging channels](channels.md), [WeChat delivery](wechat-delivery.md),
-  and [QQ owner questions](qq-owner-questions.md)
 - [Tools, skills and automations](tools-and-automations.md)
 - [Client presence and unattended Ask](presence-and-unattended-ask.md)
 - [Project channel message stream](channel-stream.md), [Discord patrol compatibility](discord-patrol.md)

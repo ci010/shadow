@@ -1,8 +1,8 @@
+import { readConversationSnapshot } from '../../sessions/conversation-snapshot.ts'
 import { StatsIndex } from '../../sessions/stats-index.ts'
 import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR } from '../../execution/device-home.ts'
 import { SkillRecallStore } from '../../skills/recall.ts'
 import { readChannelSessionAliases, withChannelSessionAliases } from '../../sessions/channel-session-aliases.ts'
-import { assertConnectionMigrationSettled } from '../../bots/connection-migration.ts'
 import { workflowReferenceResolver } from '../../workflows/references.ts'
 import { scheduleAuthoring } from '../../workflows/schedule-authoring.ts'
 import { workMapper } from '../../workflows/work-mapping.ts'
@@ -20,8 +20,8 @@ import { createConnectionsHandler } from '../../vfs/connections.ts'
 import { createDevicesHandler } from '../../vfs/devices.ts'
 import { connectionSinkProjection } from '../../channels/sink-projection.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
-import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
-import { handleBotInput } from '../../bots/input.ts'
+import { handleSessionInput } from '../../sessions/input-listeners.ts'
+import { handleBotInput, projectInputListeners } from '../../bots/input.ts'
 import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
 import { BotWakes } from '../../bots/wake.ts'
@@ -48,7 +48,7 @@ import { BotSend } from '../../bots/send.ts'
 import { BotMessages } from '../../bots/messages.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService, publishedBotIntegrationId } from '../../bots/runtime.ts'
-import { isDirectOwnerTurn, isOwnerSession } from '../../sessions/owner-policy.ts'
+import { botWebExecutionOwner, isDirectOwnerTurn, isOwnerSession } from '../../sessions/owner-policy.ts'
 import { GltfCaptureBridge } from '../../gateway/gltf-capture.ts'
 import { CaptureViewTool } from '../../tools/capture-view.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
@@ -65,7 +65,7 @@ import { createSelfSessionHandler, withSelfSession } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
 import { TaskTool } from '../../tools/task.ts'
 import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicFocus } from '../../sessions/lightweight-topic.ts'
-import { botConversationPolicies, isPersonalConnectionSession } from '../../channels/bot-policies.ts'
+import { botConversationPolicies } from '../../channels/bot-policies.ts'
 import { channelSessionId, channelAddressFromSessionId } from '../../bus/events.ts'
 import { automationModelSettings, automationDispatchModel, automationCatalogConfigChanged } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
@@ -226,7 +226,7 @@ import { SignalProviderRuntime } from '../../signals/providers/runtime.ts'
 import { SignalProviderTool } from '../../tools/signal-provider.ts'
 import { registerSignalTools } from '../../tools/signal-tools.ts'
 import { watchAutomationSessions } from '../../cron/notifications.ts'
-import { CronService } from '../../cron/service.ts'
+import { CronService, cronContextMode } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
 import { registerAutomationRoutes } from '../../cron/routes.ts'
 import { systemAutomationRef } from '../../cron/contracts.ts'
@@ -321,7 +321,6 @@ export async function createProjectRuntime(
   const { scope, project, mainCluster, copilotAuth, configStore } = dependencies
   const startup = new StartupTimings('project', project.id)
   const workspace = config.agent.workspace
-  assertConnectionMigrationSettled(workspace, project.id)
   const cleanup: Array<() => unknown> = []
   const promptCaptures = createPromptCaptureStore(project.id, process.env, projectStoragePath(workspace, '.learning', 'audit'))
   if (promptCaptures) cleanup.push(() => promptCaptures.close())
@@ -346,12 +345,23 @@ export async function createProjectRuntime(
   // Reuse UI telemetry, but never export historical rows from an earlier runtime.
   const runtimeLogStartId = otelStore.getLatestLogId()
   const realtimeHub = dependencies.realtimeHub ?? new RealtimeHub()
+  let activitySource: SessionManager | undefined
+  let readConversationSummary: ((sessionId: string) => object) | undefined
+  let publishActiveConversationSummaries: (sessionId?: string, details?: boolean) => void = () => {}
   const realtime = realtimeHub.registerProject(project.id, {
     latest: kind => kind === 'spans' ? otelStore.getLatestSpanId() : otelStore.getLatestLogId(),
     query: (kind, afterId, limit) => (kind === 'spans'
       ? otelStore.querySpans({ afterId, limit, ascending: true })
       : otelStore.queryLogs({ afterId, limit, ascending: true }))
       .filter((row): row is { id: number } => typeof row === 'object' && row !== null && 'id' in row && Number.isSafeInteger(row.id)),
+  }, async sessionId => {
+    if (!activitySource) return { error: 'conversation_unavailable' }
+    const result = await readConversationSnapshot(activitySource, sessionId)
+    if (!result.data || !('chat' in result.data)) return result
+    return { data: { ...result.data, ...readConversationSummary?.(sessionId) } }
+  }, report => {
+    const allowed = config.channels.web?.allowFrom
+    if (!allowed?.length || allowed.includes('web-user')) activitySource?.presence.report('web:web-user', report)
   })
   const closeRealtime = () => {
     realtime.close()
@@ -365,7 +375,6 @@ export async function createProjectRuntime(
     realtime.chat(sessionId, { event: 'input_delivery_changed' })
   })
   cleanup.push(() => bus.off(deliverySubscription))
-  let activitySource: SessionManager | undefined
   const activityInvalidator = createActivityInvalidator(id => {
     if (!activitySource) throw new Error('Session activity source is initializing')
     return sessionActivityFingerprint(activitySource, id)
@@ -793,7 +802,6 @@ export async function createProjectRuntime(
     changed: () => { realtime.invalidateResource?.('service-groups'); realtime.invalidateResource?.('channels') },
     projectId: project.id,
     path: resolve(workspace, 'config', 'bots.v1.json'),
-    ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
   const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'), Date.now, () => realtime.invalidateResource?.('service-groups'))
   // Compatibility location: retain credentials, grant idempotency and inbox state.
@@ -900,17 +908,26 @@ export async function createProjectRuntime(
     changed: () => realtime.invalidateResource?.('automations'),
   }))
   activitySource = sessions
-  const assertComputerSession = (sessionId: string) => {
+  const assertComputerSession = (sessionId: string, remote = false) => {
     const state = sessions.getSessionState(sessionId)
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
-      || state.parentSessionId || state.automation) {
-      throw new Error('Desktop MCP requires a local, user-owned web conversation.')
+      || state.parentSessionId || state.parentToolCallId || state.automation) {
+      throw new Error('Desktop MCP requires an owning, user-controlled Web conversation.')
     }
     sessions.assertFolderAccess(sessionId)
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
-    if (!locations.workdir.available || locations.workdir.locality === 'remote') {
-      throw new Error('Desktop MCP is not available in a remote or unavailable workdir.')
+    if (!locations.workdir.available || (locations.workdir.locality === 'remote') !== remote) {
+      throw new Error('Desktop MCP requires an available workdir on the selected execution device.')
     }
+  }
+  importTool.authorizeChildDesktop = context => {
+    context.signal.throwIfAborted()
+    if (!context.remoteWorkdir || context.projectId !== project.id || context.channel !== 'web' ||
+      context.tools.dynamicOwner !== context.tools || context.tools.executionMode !== 'session' || !context.tools.canUseDynamic('agent-desktop')) throw new Error('Child desktop requires an authorized owning Web session')
+    assertComputerSession(context.sessionId, true)
+    const location = resolveSessionLocations(workspace, sessions.getSessionState(context.sessionId)!, undefined, sessions.workdirLookup).workdir
+    if (!location.available || location.locality !== 'remote' || location.workdir.nodeId !== context.remoteWorkdir.nodeId ||
+      location.workdir.workdirId !== context.remoteWorkdir.workdirId) throw new Error('Child desktop target changed')
   }
   importTool.registerBuiltin('agent-desktop', managedDesktopSource(project.id, workspace, assertComputerSession, !coordinator))
   const a2a = createA2aRuntime({ projectId: project.id, workspace, config: config.a2a, app, sessions, bus, agentTypes })
@@ -977,7 +994,7 @@ export async function createProjectRuntime(
       alignment.assertCurrent(stamps, sessionId)
       return stamps.map(stamp => {
         const record = alignment.get(stamp.key)
-        return { key: record.key, revision: record.revision, acceptance: record.definition.acceptance }
+        return { key: record.key, revision: record.revision, definition: record.definition }
       })
     },
     blocker: record => {
@@ -986,9 +1003,8 @@ export async function createProjectRuntime(
       return (record.acceptance?.work ?? []).map(scope => {
         const work = records.find(item => item.key === scope.key)
         if (!work || work.revision !== scope.revision) return `${scope.key} changed since publication`
-        if (work.paused) return `${work.key} is paused`
-        if (work.workflow?.status === 'blocked') return work.workflow.blockedReason
-        if (work.workflow?.status === 'done' || work.workflow?.status === 'cancelled') return `${work.key} is ${work.workflow.status}`
+        if (work.status === 'blocked') return work.blockedReason
+        if (work.status === 'done' || work.status === 'cancelled') return `${work.key} is ${work.status}`
         return undefined
       }).find(Boolean)
     },
@@ -1003,7 +1019,7 @@ export async function createProjectRuntime(
           'Read micro_app get and current Work before acting; stale or already reported requests must not restart testing. ' +
           'Use micro_app test to open this version in your isolated browser. Exercise startup/preparation, SDK state across reopening, failure/cancel recovery, and stop/reopen. ' +
           'Use get for host observations and evidence with recorded tool IDs/exact excerpts for canonical references, then report. Separate fixtures from actual runtime behavior and mark untested devices explicitly. ' +
-          'Account for every get.acceptance.work criterion in report.requirements, including blocked/not_tested items. ' +
+          'Assess each published Work definition in report.requirements, including blocked/not_tested scopes. ' +
           'Do not install, capture, play or transmit beyond existing authorization. A fixed new revision requires a new owner review. Stop the app and close your test browser when finished.',
       })
     },
@@ -1066,10 +1082,12 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
   initiatives.recoverWorkEffects()
   const alignment: WorkAlignment = new WorkAlignment(initiatives, {
+    projectId: project.id,
+    wakeWorkNotifications: () => sessions.recoverWorkNotifications(),
     state: id => sessions.getSessionState(id),
-    evidence: source => sessions.validateWorkEvidence(source),
     changed: async (record, previous) => {
       realtime.invalidateSessions()
+      publishActiveConversationSummaries()
       await sessions.notifyWorkChange(record, previous)
     },
   })
@@ -1083,7 +1101,7 @@ export async function createProjectRuntime(
     // Presentation commits do not mutate source sessions or their lineage.
     // Keep Work readers notified, but probe only the owning run's graph row;
     // unknown/new runs still recover the complete inventory in the reader.
-    changed:id=>realtime.invalidateSessions(id, undefined, ['work'])})
+    changed:id=>{ realtime.invalidateSessions(id, undefined, ['work']); publishActiveConversationSummaries(id) }})
   for(const tool of workOrganizer.tools()) { tools.register(tool); coordinator?.allow(tool) }
   // Build admission and execution from the same current store view. Session topic
   // sequences already fingerprint metadata/completion; no new metadata log is needed.
@@ -1095,7 +1113,7 @@ export async function createProjectRuntime(
     for (const state of topicStates) for (const key of associations.get(state.sessionId)!) if (!organizationSessionsByWork.has(key)) organizationSessionsByWork.set(key, state.sessionId)
     const topics = topicStates.filter(state => !associations.get(state.sessionId)!.length).map(state => ({
       key: sessionTopicKey(state.sessionId), sessionCompleted: state.completed ?? false, sequence: sessionTopicSequence(state), changedAt: state.lastActivityAt ?? '',
-      definition: { objective: sessionTopicFocus(state) || sessionTopicTitle(state) }, workflow: { title: sessionTopicTitle(state) },
+      title: sessionTopicTitle(state), definition: sessionTopicFocus(state) || sessionTopicTitle(state),
       observation: { sessionId: state.sessionId },
     }))
     return topics
@@ -1433,7 +1451,7 @@ export async function createProjectRuntime(
     models: provider.listModelInfos ? await provider.listModelInfos() : (await provider.listModels()).map(id => ({ id })),
   })
   const botInventory = () => ({
-      bots: botStore.list().map(({ id, platform, displayName, enabled, legacySessionId }) => ({ id, platform, displayName, enabled, legacySessionId })),
+      bots: botStore.list().map(({ id, platform, displayName, enabled }) => ({ id, platform, displayName, enabled })),
       conversations: sessions.listSessions().map(session => ({
         sessionId: session.sessionId, address: botPolicies.address(session.sessionId),
         inferenceOverrides: inferenceSettings(sessions.getSessionState(session.sessionId)?.config),
@@ -1648,14 +1666,17 @@ export async function createProjectRuntime(
         if (resolve(isolated.path) !== resolve(verified.path) || execution.path !== verified.path || execution.branch !== verified.branch) throw new Error('Isolated Workspace/branch receipt mismatch')
       }
     },
-    changed: async (record, previous) => { realtime.invalidateSessions(); await sessions.notifyWorkChange(record, previous) },
+    changed: async (record, previous) => { realtime.invalidateSessions(); publishActiveConversationSummaries(); await sessions.notifyWorkChange(record, previous) },
   })
   const workBootstrap = new WorkBootstrapTool(project.id, workDispatcher,
     (nodeId, path, signal) => topics.registerFolder(path, signal, undefined, nodeId))
   importTool.registerBuiltin(workBootstrap.name, workBootstrap)
   coordinator?.allow(workBootstrap)
   const workFinished = bus.on('session.turn.finished', scope.bind(fact => workDispatcher.finished(fact)))
-  cleanup.push(() => { bus.off(workFinished) })
+  const kickoffAvailability = bus.on('session.activity.changed', scope.bind(({ sessionId }) => {
+    if (sessions.getSessionState(sessionId)?.automaticWork && !sessions.isSessionBusy(sessionId)) sessions.wakeAutomaticWorkKickoffs()
+  }))
+  cleanup.push(() => { bus.off(workFinished); bus.off(kickoffAvailability) })
   const assertBotWake = (scope: BotHostScope) => {
     directoryBots.assertHostScope(scope, 'wake')
     channels.assertStreamAccess(scope.address.botInstanceId, scope.address.conversationId)
@@ -1712,7 +1733,7 @@ export async function createProjectRuntime(
         schedule: job.schedule,
       },
     })
-  }, sessionId => realtime.invalidateSessions(sessionId))
+  }, sessionId => { realtime.invalidateSessions(sessionId); publishActiveConversationSummaries(sessionId) })
   const workDispatchAgent = new WorkDispatchAgent(workDispatcher, sessions, cronDispatcher,
     dispatchFiles, () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID), new WorkDispatchRoundState(workspace))
   tools.register(workDispatchAgent)
@@ -1731,8 +1752,9 @@ export async function createProjectRuntime(
     return { sessionId: await cronDispatcher.dispatch(job, signal) }
   })
   cronService.setOnChanged(reason => {
-    if (reason === 'inventory') realtime.invalidateSessions()
+    if (reason === 'inventory') { realtime.invalidateSessions(); publishActiveConversationSummaries() }
     realtime.invalidateResource?.('automations')
+    sessions.wakeSessionFollowUps()
   })
   const automationProfiles = new AutomationProfileService(cronService, sessions, project.id, id => {
     if (id === 'system:work-organizer') return { kind: 'event', scope: 'current_runtime',
@@ -1789,7 +1811,7 @@ export async function createProjectRuntime(
   const botSnapshot = () => botWorkflowProjection({
     projectId: project.id, store: botStore, channels, directory: directoryBots,
     sessionIds: sessions.listSessions().map(session => session.sessionId),
-    personalListeners: sessionInputListeners(project.id, sessions, botStore, directoryBots), sinkLookup: connectionSink,
+    sinkLookup: connectionSink,
   })
   registerWorkflowRoutes(app, workflows, dependencies.authorize, setWorkflowFeatureEnabled, botSnapshot)
   function learningPipeline(id: string): Pipeline {
@@ -1860,7 +1882,7 @@ export async function createProjectRuntime(
   const inputHandlers = { sessions, bots: botStore, directory: directoryBots,
     receive: (message: import('../../bus/events.ts').InboundMessage) => agent.receiveChannelMessage(message) }
   const inputs = new InputRouter<ChannelInputPayload, ChannelInputResult>(project.id, {
-    listeners: () => [...sessionInputListeners(project.id, sessions, botStore, directoryBots), ...directoryBots.inputListeners()],
+    listeners: () => projectInputListeners(project.id, inputHandlers),
     deliver: (target, input) => target.kind === 'session'
       ? handleSessionInput(target.id, input, inputHandlers) : handleBotInput(target.id, input, inputHandlers),
   })
@@ -1892,17 +1914,89 @@ export async function createProjectRuntime(
     routeObservation: async (connection, bindingId, runPolicy) => requirePolicyReceipt(await inputs.route(observationEnvelope(botStore, connection, bindingId, runPolicy))),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     trustedConversation: (connectionId, chatId) => directoryBots.definitions().some(({ bot }) => bot.connectionPolicies?.[connectionId]?.trustedChats?.includes(chatId)),
-    personalGeneration: connectionId => directoryBots.personalGeneration(connectionId),
+    personalInboxAssigned: address => directoryBots.personalInbox(address)?.enabled === true,
     serviceAssigned: directoryBots.serviceAssigned,
-    serviceGeneration: address => { const policy = directoryBots.resolve(address); return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined },
+    serviceGeneration: address => {
+      const personal = directoryBots.personalInbox(address)
+      if (personal?.enabled) return personal.generation
+      const policy = directoryBots.resolve(address)
+      return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined
+    },
   })
-  const botChatSetup = new BotChatSetup(project.id, () => realtime.invalidateResource?.('interactions'))
+  const botChatSetup = new BotChatSetup(project.id, sessionId => {
+    realtime.invalidateResource?.('interactions')
+    realtime.chat(sessionId, { event: 'conversation_summary', data: { botSetup: { pending: !!botChatSetup.get(sessionId) } } })
+  })
+  function conversationSummary(sessionId: string) {
+    const active = backgroundTasks.listTasks(sessionId).filter(task => task.status === 'running' || task.status === 'cancelling')
+    return {
+      work: sessions.getSessionState(sessionId) ? sessions.alignment?.context(sessionId) : undefined,
+      backgroundTasks: { sessionId, total: active.length, tasks: active.slice(0, 100).map(task => ({
+        id: task.id, sessionId, kind: task.kind, title: task.title.slice(0, 512), status: task.status, createdAt: task.createdAt,
+      })) },
+      scheduledTasks: cronService.listJobs().filter(job => cronContextMode(job) === 'existing' && job.target?.sessionId === sessionId)
+        .map(job => ({ id: job.id, name: job.name ?? job.task ?? job.id, task: job.task ?? '', schedule: job.schedule,
+          enabled: job.enabled !== false, nextRun: job.enabled === false ? null : cronService.nextJobRun(job.id),
+        })),
+      followUp: sessions.sessionFollowUpView(sessionId),
+      botSetup: { pending: !!botChatSetup.get(sessionId) },
+    }
+  }
+  readConversationSummary = conversationSummary
+  const dirtyConversationSummaries = new Map<string, boolean>()
+  let flushingConversationSummaries = false
+  publishActiveConversationSummaries = (only, details = false) => {
+    for (const id of realtime.activeChatSessions?.() ?? []) {
+      if (!only || id === only) {
+        dirtyConversationSummaries.set(id, details || dirtyConversationSummaries.get(id) === true)
+      }
+    }
+    if (flushingConversationSummaries || !dirtyConversationSummaries.size) return
+    flushingConversationSummaries = true
+    queueMicrotask(() => { void flushConversationSummaries() })
+  }
+  async function flushConversationSummaries() {
+    try {
+      while (dirtyConversationSummaries.size && activitySource) {
+        const entries = [...dirtyConversationSummaries]
+        dirtyConversationSummaries.clear()
+        for (const [id, details] of entries) {
+          try {
+            await sessions.assertHistoricalFolderAccess(id)
+            if (!sessions.getSessionState(id)) continue
+            const detail = details ? await sessions.getSessionDetails(id) : undefined
+            if (dirtyConversationSummaries.has(id)) {
+              if (details) dirtyConversationSummaries.set(id, true)
+              continue
+            }
+            realtime.chat(id, { event: 'conversation_summary', data: { ...conversationSummary(id), ...(detail ? { details: detail } : {}) } })
+          } catch { /* Missing or revoked session: never publish its summary. */ }
+        }
+      }
+    } finally { flushingConversationSummaries = false }
+  }
+  for (const kind of ['background.task.changed', 'session.changed', 'session.renamed', 'session.turn.finished', 'session.follow-up.changed'] as const) {
+    const subscription = bus.on(kind, ({ sessionId }) => publishActiveConversationSummaries(sessionId,
+      kind !== 'background.task.changed' && kind !== 'session.follow-up.changed'))
+    cleanup.push(() => bus.off(subscription))
+  }
+  for (const kind of ['session.message.appended', 'session.handoff'] as const) {
+    const subscription = bus.on(kind, ({ sessionId }) => {
+      if (!sessionId.startsWith('web:chat-') || kind === 'session.handoff') {
+        realtime.chat(sessionId, { event: 'conversation_history_changed' })
+      }
+    })
+    cleanup.push(() => bus.off(subscription))
+  }
   cleanup.push(() => botChatSetup.stop())
   botChatSetupPlugin(botChatSetup, dependencies.authorize)(app)
   const assertBotSession = (sessionId: string) => {
-    const state = sessions.getSessionState(sessionId)
-    if (!isOwnerSession(state, project.id) || !canAuthor(sessionId)) throw new Error('Bot management requires a user-owned Web conversation.')
+    const owner = botWebExecutionOwner(sessionId, project.id, id => sessions.isManagedConversation(id) ? undefined : sessions.getSessionState(id))
+    if (!owner || sessions.isManagedConversation(sessionId) || !canAuthor(owner)) throw new Error('Bot management requires a user-owned Web execution.')
     sessions.assertFolderAccess(sessionId)
+  }
+  const canAuthorBot = (id: string): boolean => {
+    try { assertBotSession(id); return true } catch { return false }
   }
   importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, assertBotSession))
   function connectionSink(connectionId: string) {
@@ -1913,7 +2007,7 @@ export async function createProjectRuntime(
       let item
       try { item = directoryBots.inspect(id) } catch { continue } // A corrupt BOT cannot hide transport receipts.
       const bot = item?.bot
-      if (!bot || !(bot.mode === 'personal' ? bot.connection === connectionId : bot.bindings.some(binding => binding.botInstanceId === connectionId))) continue
+      if (!bot || !bot.bindings.some(binding => binding.botInstanceId === connectionId)) continue
       bots.push({ botId: bot.id, path: `v:bots/deployments/${encodeURIComponent(bot.id)}/status`, workflowIds: workflows.inspect().definitions.filter(flow => flow.source.kind === 'bot' && flow.source.id === bot.id).map(flow => flow.id) })
     }
     return connectionSinkProjection({ projectId: project.id, connectionId, platform: connection.platform, bots,
@@ -1926,7 +2020,7 @@ export async function createProjectRuntime(
   const connectionsVfs = createConnectionsHandler({ projectId: project.id, assertSession: assertBotSession, observation: botSnapshot,
     index: () => { const result = botStore.ids(1000); return { ids: result.ids, ...(result.truncated ? { warning: 'connection-index-limit' } : {}) } },
     overview: id => { const status = channels.botStatus(id); return { id: status.id, displayName: status.displayName,
-      platform: status.platform, purpose: status.purpose ?? 'unknown', enabled: status.enabled, health: status.state, ownerVerified: status.ownerVerified === true } },
+      platform: status.platform, enabled: status.enabled, health: status.state } },
     sink: connectionSink,
   })
   vfs.mount('v:connections', 'read-only current Project transport Connections and common receipt sinks; read v:connections/overview', connectionsVfs.read, connectionsVfs.list, undefined, connectionsVfs.directory)
@@ -1962,11 +2056,11 @@ export async function createProjectRuntime(
   for (const tool of [new ChannelStreamTool('channel_directory', workspace, project.id, channelStreamDeps),channelStreamRead,channelStreamSend]) importTool.registerBuiltin(tool.name,tool)
   importTool.registerBuiltin('discord_patrol', new DiscordPatrolTool(workspace, project.id, {
     authorized: id => canAuthor(id) && !sessions.getSessionState(id)?.parentSessionId,
-    bots: () => botStore.list().filter(bot => bot.platform === 'discord').map(bot => ({ id: bot.id, platform: bot.platform, purpose: bot.purpose })),
+    bots: () => botStore.list().filter(bot => bot.platform === 'discord').map(bot => ({ id: bot.id, platform: bot.platform })),
     api: bot => (path, init) => { const conversation=/^\/channels\/(\d+)/.exec(path)?.[1]; channels.assertStreamAccess(bot,conversation); return channels.trustedDiscordRequest(bot, path, init ?? {}) },
-    discover: (bot,parent,threads) => {
+    discover: async (bot,parent,threads) => {
       const stream=new ChannelMessageStream(workspace,project.id)
-      for(const conversation of threads)if(discordIntegration.streamAssigned(bot,conversation,parent))stream.append({connection:bot,platform:'discord',conversation,parent,kind:'discovered'})
+      for(const conversation of threads)if(discordIntegration.streamAssigned(bot,conversation,parent))await stream.append({connection:bot,platform:'discord',conversation,parent,kind:'discovered'})
     },
     stream: (action,args,context) => (action==='send'?channelStreamSend:channelStreamRead).execute(args,context),
   }))
@@ -1997,7 +2091,7 @@ export async function createProjectRuntime(
   })
   const botPackageOptions = {
     projectId:project.id,deployments:botDeployments,runtime:directoryBots,folders:folderRegistry,
-    ask:tools.get('ask')!,canAuthor,inventory:botInventory,pending:new Map<string,unknown>(),
+    ask:tools.get('ask')!,canAuthor:canAuthorBot,inventory:botInventory,pending:new Map<string,unknown>(),
     channelSource: (sessionId: string) => {
       const state = sessions.getSessionState(sessionId)
       if (!state || state.projectId !== project.id) throw new Error('Channel session must belong to this Project')
@@ -2005,7 +2099,7 @@ export async function createProjectRuntime(
       if (!source) throw new Error('Reference a passive channel inbox session')
       botStore.assertAccess(source.connectionId)
       const connection = botStore.get(source.connectionId)
-      if (connection.purpose !== 'service' || connection.platform !== source.platform) throw new Error('Channel source connection is no longer a matching service connection')
+      if (connection.platform !== source.platform) throw new Error('Channel source connection is no longer a matching connection')
       return source
     },
     validate:async (files:Record<string,string>,signal:AbortSignal) => {
@@ -2016,27 +2110,25 @@ export async function createProjectRuntime(
         validateBotInference(bot, catalog.defaults, catalog.models, id => provider.qualifiedModelId(id))
       }
       if (bot.mode === 'personal') {
-        const connection = botStore.get(bot.connection!)
-        botStore.assertAccess(connection.id)
-        if (!connection.enabled || connection.purpose !== 'personal' || !connection.verifiedOwner) throw new Error('Personal BOT requires an enabled verified-owner personal connection.')
         const role = agentTypes.resolve(bot.agent!)
         if (!role || role.defaultMode !== 'session') throw new Error('Personal BOT requires an existing session agent role.')
-        if (directoryBots.definitions().some(item => item.bot.id !== bot.id && item.bot.mode === 'personal' && item.bot.connection === bot.connection)) throw new Error('Personal connection already assigned.')
       }
       const candidate = directoryBots.discord([{bot,files,deployment:{id:bot.id,revision:botDeployments.freeze(files).revision,source:{folderId:'validation',directory:''},mode:'bounded'}}])
       await channelIntegrations.validateBotDeployment(candidate.agents,candidate.bindings,signal)
       const other = directoryBots.definitions().filter(item => item.bot.id !== bot.id)
       directoryBots.discord([...other,{bot,files,deployment:{id:bot.id,revision:botDeployments.freeze(files).revision,source:{folderId:'validation',directory:''},mode:'bounded'}}])
-      await validateServiceAssignments(project.id, botStore, bot, other.map(item => item.bot), id => folderRegistry.requireAvailable(id))
+      await validateServiceAssignments(project.id, botStore, bot, other.map(item => item.bot), id => folderRegistry.requireAvailable(id), sessionId => {
+        const state = sessions.getSessionState(sessionId)
+        return state?.projectId === project.id ? parseChannelSource(state.channelSource, sessionId, project.id) : undefined
+      })
     },
     publish:async <T>(id:string,change:()=>Promise<T>,candidate?:BotDefinition):Promise<T> => {
       const definitions = directoryBots.definitions().filter(item=>item.bot.id===id)
-      const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
-      const bindings = definitions.flatMap(item=>item.bot.bindings)
+      const bindings = [...definitions.flatMap(item=>item.bot.bindings), ...(candidate?.bindings ?? [])]
       const beforeRevision = botDeployments.read(id)?.deployment.revision
-      const result = await publishBotChange(sessions, botPolicies, sessionId => personalConnections.some(id => isPersonalConnectionSession(botStore, sessionId, id)) || bindings.some(binding => binding.platform === 'discord'
+      const result = await publishBotChange(sessions, botPolicies, sessionId => bindings.some(binding => binding.platform === 'discord'
         ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
-        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId,...(botStore.get(binding.botInstanceId).legacySessionId ? {legacySessionId:true} : {})})), personalConnections.length > 0, async () => {
+        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId})), definitions.some(item => item.bot.mode === 'personal') || candidate?.mode === 'personal', async () => {
         channelIntegrations.setBotPublication(true)
         try{return await change()}finally{channelIntegrations.setBotPublication(false)}
       })
@@ -2107,20 +2199,11 @@ export async function createProjectRuntime(
     credentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     botPackagePlugin(botPackageOptions, dependencies.authorize, (bot, revision, binding) => {
       if (!directoryBots.executionState(bot.id).enabled) return
-      if (bot.mode === 'personal') {
-        const connection = botStore.get(bot.connection!)
-        botStore.assertAccess(connection.id)
-        if (!connection.enabled || connection.purpose !== 'personal' || !connection.verifiedOwner ||
-            directoryBots.personal(connection.id)?.id !== bot.id || agentTypes.resolve(bot.agent!)?.defaultMode !== 'session') return
-        const sessionId = channelSessionId({ projectId: project.id, botInstanceId: connection.id, platform: connection.platform,
-          conversationId: connection.verifiedOwner.chatId, legacySessionId: connection.legacySessionId })
-        return sessions.inspectBotContext(sessionId, { personalAgent: bot.agent })
-      }
       if (!binding?.enabled) return
       const connection = botStore.get(binding.botInstanceId)
       botStore.assertAccess(connection.id)
-      if (!connection.enabled || connection.purpose !== 'service' || connection.platform !== binding.platform) return
-      const address = { projectId: project.id, botInstanceId: connection.id, platform: binding.platform, legacySessionId: connection.legacySessionId }
+      if (!connection.enabled || connection.platform !== binding.platform) return
+      const address = { projectId: project.id, botInstanceId: connection.id, platform: binding.platform }
       if (binding.platform === 'discord') {
         if (binding.target.kind !== 'channel') return
         const sessionId = binding.observation?.enabled ? `discord-observation:${project.id}:${binding.id}`
@@ -2128,6 +2211,12 @@ export async function createProjectRuntime(
         return sessions.inspectBotContext(sessionId, {
           service: { kind: 'channel-integration', id: publishedBotIntegrationId(bot.id), revision }, integrationBindingId: binding.id,
         })
+      }
+      if (bot.mode === 'personal') {
+        const inbox = { ...address, conversationId: binding.conversationId }
+        const assigned = directoryBots.personalInbox(inbox)
+        if (!assigned?.enabled || assigned.bot.id !== bot.id || agentTypes.resolve(bot.agent)?.defaultMode !== 'session') return
+        return sessions.inspectBotContext(channelSessionId(inbox), { personalAgent: bot.agent })
       }
       return sessions.inspectBotContext(channelSessionId({ ...address, conversationId: binding.conversationId }), {
         service: { kind: 'bot', id: bot.id, revision },
@@ -2147,7 +2236,8 @@ export async function createProjectRuntime(
     }),
     topicsPlugin(topics, dependencies.authorize),
     sessionsApiPlugin(sessions, { backgroundTasks, cron: cronService,
-      recall: dependencies.authorizeRecall && { authorize: dependencies.authorizeRecall, read: () => stats.recall.usageSummary(stats.complete) },
+      sidebarConnections: () => botStore.list(),
+      recall: () => stats.recall.usageSummary(stats.complete),
       authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => organizationController.status(), (signal,mode) => organizationController.organize(signal,mode)),
     githubPlugin(github, dependencies.authorize),
@@ -2277,7 +2367,9 @@ export async function createProjectRuntime(
   await cronService.ensureDefaultJob(REFLECTION_DIARY_DEFAULT_KEY, REFLECTION_DIARY_AUTOMATION)
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   await cronService.ensureDefaultJob(WORK_DISPATCH_DEFAULT_KEY, WORK_DISPATCH_AUTOMATION)
+  await sessions.recoverAutomaticWorkKickoffs()
   await workDispatcher.recover()
+  sessions.wakeAutomaticWorkKickoffs()
   await sessions.recoverWorkNotifications()
   workDispatchReady = true
   signalProviders.start()
@@ -2291,6 +2383,7 @@ export async function createProjectRuntime(
   // Local readiness must not wait for external platform authentication or networking.
   // Admission starts only after the session runtime can receive channel messages.
   await channels.startAll(app, { waitForConnections: false })
+  sessions.startSessionFollowUps(id => cronService.hasSessionJob(id))
   startup.ready()
   console.info('[main] All services started')
   return { app, folders: folderRegistry, ready, shutdown, updateConfig, authorizeA2a: a2a.authorize, debugRead }

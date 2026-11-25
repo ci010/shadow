@@ -19,7 +19,7 @@ import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 import { isImagePath, readImage } from '../utils/image-input.ts'
 import { isVirtualPath, type VirtualFs } from '../vfs/virtual-fs.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
-import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
+import { executeRemoteFilesystemImage, executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
 import { decodeReadText } from './read-text.ts'
 import { isTextEncoding, textEncodings, type TextEncoding } from '../execution/filesystem/text-encoding.ts'
 import { isSkillRootPath } from '../skills/paths.ts'
@@ -187,6 +187,19 @@ const nhm = new NodeHtmlMarkdown({
 
 // ── ReadTool ────────────────────────────────────────────────────────────────
 
+function checkImagePaging(args: Record<string, unknown>) {
+  if (args.offset !== undefined || args.limit !== undefined || args.flag) {
+    throw new Error('Images do not support line paging or flags. Read the image without offset, limit or flag.')
+  }
+}
+
+function imageResult(path: string, image: Awaited<ReturnType<typeof readImage>>): ToolResult {
+  return { content: [
+    { type: 'text', text: `Image from ${JSON.stringify(path)} (${image.mime}, ${image.width} x ${image.height}).` },
+    image.part,
+  ] }
+}
+
 export class ReadTool implements Tool<ToolResult> {
   private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
@@ -196,7 +209,7 @@ export class ReadTool implements Tool<ToolResult> {
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
-    'Text supports offset/limit, including URLs and virtual text. Local session paths default to /overview, which includes bounded collaboration previews and links exact /c/<message>.<call> details via short physical references (legacy /calls/<id> paths still work); /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
+    'Text supports offset/limit, including URLs and virtual text. Local session paths default to /overview, which includes bounded collaboration previews and links exact /c/<message>.<call> details via short physical references (legacy /calls/<id> paths still work); /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. PNG, JPEG, GIF and WebP files on local or approved Child workspaces return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -320,7 +333,17 @@ export class ReadTool implements Tool<ToolResult> {
 
     if (context.remoteWorkdir) {
       if (args.encoding !== undefined) throw new Error('Remote read encoding is not supported by this executor. No Main filesystem fallback is allowed.')
-      if (isImagePath(raw)) throw new Error('Remote image reads are not supported by this executor. No Main filesystem fallback is allowed.')
+      if (isImagePath(raw)) {
+        if (context.javascriptInvocation) throw new Error('JavaScript read accepts text only. Call read directly for images.')
+        checkImagePaging(args)
+        const image = await executeRemoteFilesystemImage({
+          ...context.remoteWorkdir,
+          sessionId: context.sessionId,
+          turnId: context.messageId,
+          signal: context.signal,
+        }, raw)
+        return imageResult(raw, image)
+      }
       return await this.readRemoteFile(
         raw,
         args,
@@ -336,14 +359,8 @@ export class ReadTool implements Tool<ToolResult> {
     if (stat.isDirectory()) return this.pageText(await this.listDir(resolved), args, showLineNumbers)
     if (!stat.isFile()) throw new Error('Read requires a regular file or directory.')
     if (isImagePath(resolved)) {
-      if (args.offset !== undefined || args.limit !== undefined || flags) {
-        throw new Error('Images do not support line paging or flags. Read the image without offset, limit or flag.')
-      }
-      const image = await readImage(resolved, context.signal)
-      return { content: [
-        { type: 'text', text: `Image from ${JSON.stringify(resolved)} (${image.mime}, ${image.width} x ${image.height}).` },
-        image.part,
-      ] }
+      checkImagePaging(args)
+      return imageResult(resolved, await readImage(resolved, context.signal))
     }
 
     // ── Dedup check: same file + same range + unchanged mtime? ──

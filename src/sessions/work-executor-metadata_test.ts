@@ -16,7 +16,7 @@ function legacy(): SessionState {
   const sessionId = 'work-executor:historical'
   return { sessionId, segmentIndex: 2, mode: 'session', agentType: 'general', projectId: 'fixture',
     folderId: 'isolated', workdir: { version: 2, nodeId: 'remote', workdirId: 'isolated' },
-    automaticWork: { key: 'work:fixture', jobId: WORK_DISPATCH_ID, limits: workDispatchConfigSchema.parse({ kind: 'work-dispatch' }) },
+    automaticWork: { key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', jobId: WORK_DISPATCH_ID, limits: workDispatchConfigSchema.parse({ kind: 'work-dispatch' }) },
     automation: { jobId: WORK_DISPATCH_ID, name: 'Work auto-dispatch', runId: sessionId, startedAt: '2026-11-12T00:00:00.000Z', contextMode: 'fresh' },
     recovery: { id: 'recovery', reason: 'interrupted', pendingToolCalls: 1 },
   }

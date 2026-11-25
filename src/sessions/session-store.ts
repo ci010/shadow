@@ -1,3 +1,4 @@
+import type { WorkKickoffStamp } from '../initiatives/work-kickoff.ts'
 import type { AgentPromptDraft } from '../agent/context/sub-override.ts'
 import type { PromptVersion } from '../agent/context/prompt-version.ts'
 import type { TaskRecord } from './task-record.ts'
@@ -123,6 +124,31 @@ export interface ConversationArchivePage { items: ConversationArchiveSummary[]; 
 export interface ConversationArchiveRange { nextOffset?: number; records: Record<string, unknown>[]; total: number }
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
+export interface SessionFollowUp {
+  next: string
+  after: number
+}
+
+export interface SessionFollowUpState {
+  dueAt: number
+  wakes: number
+  startedAt: number
+  phase: 'self_check' | 'follow_up'
+  inputId: string
+}
+
+/** Validate persisted recovery data without coercion or inventing defaults. */
+export function parseSessionFollowUpState(value: unknown): SessionFollowUpState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid session follow-up state')
+  const { dueAt, wakes, startedAt, phase, inputId } = value as Record<string, unknown>
+  const nonnegativeInteger = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
+  if (!nonnegativeInteger(dueAt) || !nonnegativeInteger(wakes) || !nonnegativeInteger(startedAt) ||
+    (phase !== 'self_check' && phase !== 'follow_up') || typeof inputId !== 'string' || !inputId.trim()) {
+    throw new TypeError('Invalid session follow-up state')
+  }
+  return { dueAt, wakes, startedAt, phase, inputId }
+}
+
 export interface SessionState {
   /** Assembly pin, independent of definition ID and draft revision. */
   promptVersion?: PromptVersion
@@ -154,6 +180,10 @@ export interface SessionState {
   name?: string
   /** Optional current step. Never inferred from legacy description. */
   focus?: string
+  /** Explicit null opts out; absence leaves the default policy in effect. */
+  followUp?: SessionFollowUp | null
+  /** Internal recovery data; never exposed through self metadata. */
+  sessionFollowUp?: SessionFollowUpState
   /** Explicit current-goal completion; independent of inferred runtime activity. Absent means open. */
   completed?: boolean
   /** Host-stamped self completion freshness; absent on legacy records. Not a public self patch. */
@@ -249,6 +279,8 @@ export interface SessionStartEvent {
 }
 
 export interface StoredMessage {
+  /** Only the durable automatic kickoff drain may write this stamp. */
+  work_kickoff?: WorkKickoffStamp
   /** Host provenance, assigned only when admitting direct user input. */
   direct_input?: { sessionId: string; id: string; text: string; at: string; profileSource?: import('../agent/identity.ts').ReflectionProfileSource }
   /** Atomic history-only channel input marker, scoped to this physical context. */
@@ -320,7 +352,7 @@ export interface SessionStore {
   // ── Session log operations ────────────────────────────────────────────
 
   /** Read all raw records from a physical session log, in order. */
-  readSessionLog(sessionId: string): AsyncIterable<Record<string, unknown>>
+  readSessionLog(sessionId: string, options?: { strict?: boolean }): AsyncIterable<Record<string, unknown>>
   /** Append messages to a physical session log. */
   appendMessages(sessionId: string, messages: StoredMessage[]): Promise<void>
   /** Write the initial records for a new physical session (start + optional init). */

@@ -51,6 +51,7 @@ export class BrowserSetupTool implements Tool {
     return request.success && request.data.action === 'close' ? 'cleanup' : undefined
   }
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+    if (context.remoteWorkdir) return 'Error: browser_setup is unavailable for Child workspaces; no Main browser fallback.'
     const result = requestSchema.safeParse(args)
     if (!result.success) return `Error: invalid browser_setup arguments: ${result.error.message}`
     const request = result.data

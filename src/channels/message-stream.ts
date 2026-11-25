@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
-import { Journal } from '../watermarks/journal.ts'
+import { StreamDocument, enqueueStreamWrite, drainStreamWrites } from './message-stream-queue.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 const text = z.string().min(1).max(512)
 const event = z.object({ position:z.number().int().positive(), connection:text, conversation:text, parent:text.optional(), platform:text,
@@ -11,8 +11,15 @@ export type StreamInput=Omit<ChannelStreamEvent,'position'|'time'|'fingerprint'>
 /** Bounded Project-owned append log. Local positions, never platform timestamps, are consumption cursors. */
 export class ChannelMessageStream {
   constructor(private home:string,readonly project:string,private maxEvents=10000) {}
-  private load(){const journal=new Journal(projectStoragePath(this.home,'.channel-stream','events.json'),v=>schema.parse(v));const state=journal.read({version:1,project:this.project,next:1,floor:0,events:[]});if(state.project!==this.project)throw new Error('Channel stream Project mismatch');return {journal,state}}
-  append(input:StreamInput){
+  private file(){return projectStoragePath(this.home,'.channel-stream','events.json')}
+  drain(){return drainStreamWrites(this.file())}
+  private load(){const journal=new StreamDocument(this.file(),v=>schema.parse(v));const state=journal.read({version:1,project:this.project,next:1,floor:0,events:[]});if(state.project!==this.project)throw new Error('Channel stream Project mismatch');return {journal,state}}
+  append(input:StreamInput):Promise<ChannelStreamEvent>{
+    // Capture caller-owned input now; reload and dedupe inside the FIFO job.
+    const captured=structuredClone(input)
+    return enqueueStreamWrite(this.file(),()=>this.appendNow(captured))
+  }
+  private appendNow(input:StreamInput){
     const {journal,state}=this.load()
     const fingerprint=createHash('sha256').update(JSON.stringify([input.connection,input.conversation,input.kind,input.message,input.kind==='created'?null:input.content,input.kind==='created'?null:input.parent,input.kind==='gap'?randomUUID():input.detail])).digest('hex')
     const related = state.events.filter(e => e.connection === input.connection &&

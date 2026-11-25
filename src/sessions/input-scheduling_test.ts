@@ -1218,6 +1218,7 @@ for (const phase of ['provider', 'tool'] as const) {
       listSessions: async () => [f.state],
       yields: { get: () => null },
       getActiveSession: (id: string) => id === f.state.sessionId ? f.session : { cancel: () => { unrelatedCancellations++ } },
+      cancelScheduledSessionFollowUp: async (id: string) => { assert.equal(id, f.state.sessionId) },
     } as unknown as SessionManager)(app)
     try {
       f.session.dispatch({ ...input('first'), replyTo: { channel: 'web', chatId: 'fixture', platformMessageId: 'request-first' } }, llm)

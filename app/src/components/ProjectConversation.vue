@@ -25,6 +25,8 @@ import type { LabeledInputReference, AttachReferenceResult } from '../workflow-i
 import { computed, onMounted, onUnmounted, provide, ref } from 'vue'
 import ChatWorkspace from './ChatWorkspace.vue'
 import { createProjectSettingsClient, configReasoning } from '../project-settings.ts'
+import { scopedModelCatalog } from '../model-catalog.ts'
+import { isRecord } from '../folders-sidebar.ts'
 import type { ReasoningSettings } from '../session-settings.ts'
 import { provideModelSelection, type ProviderInstanceLabel } from '../model-selection.ts'
 import type { FolderRecord } from '../folders-client.ts'
@@ -42,14 +44,22 @@ provide(EditorOwnerKey, props.resourceKey ?? `${props.projectId}:${props.session
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})
-const options = ref<string[]>([])
-const providers = ref<ProviderInstanceLabel[]>([])
+const catalog = scopedModelCatalog(props.apiBase, livePool)
+const options = computed(() => catalog.value.value?.models ?? [])
+const configuredProviders = ref<ProviderInstanceLabel[]>([])
+const providers = computed(() => {
+  const labels = new Map(configuredProviders.value.map(provider => [provider.id, provider]))
+  for (const provider of catalog.value.value?.providers ?? []) labels.set(provider.id, provider)
+  return [...labels.values()]
+})
 const error = ref('')
 const loading = ref(false)
 let request: AbortController | undefined
 let previousDefault: string | undefined
 provideModelSelection({
   current, defaultReasoning, options, providers, error, loading, disabled: computed(() => loading.value),
+  catalogRevision: catalog.revision,
+  async loadCatalog(signal) { await catalog.read(signal) },
   async select(model) {
     if (!model.trim()) { error.value = t('Choose a model for this conversation.'); return }
     current.value = model
@@ -64,13 +74,14 @@ async function load() {
   error.value = ''
   const client = createProjectSettingsClient(props.apiBase, fetch, livePool)
   try {
-    const [config, models] = await Promise.all([client.load(controller.signal), client.catalog(controller.signal)])
+    const config = await client.load(controller.signal)
     if (controller.signal.aborted) return
     if (!current.value || current.value === previousDefault) current.value = config.agent.model
     previousDefault = config.agent.model
     defaultReasoning.value = configReasoning(config)
-    options.value = models.models
-    providers.value = models.providers
+    configuredProviders.value = Object.entries(isRecord(config.providers) ? config.providers : {}).flatMap(([id, provider]) =>
+      isRecord(provider) ? [{ id, type: typeof provider.type === 'string' ? provider.type : id,
+        name: typeof provider.name === 'string' ? provider.name : undefined }] : [])
   } catch (cause) {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load project models. Retry.')
   } finally { if (request === controller) loading.value = false }

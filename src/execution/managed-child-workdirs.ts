@@ -1,4 +1,4 @@
-import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_SHELL_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs } from './device-home.ts'
+import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_SHELL_OPERATIONS, DEVICE_HOME_WORKDIR, deviceHomeArgs, deviceHomeReadArgs } from './device-home.ts'
 import { normalizeStoredWorkdirIdentity } from './workdir-storage.ts'
 import { DERIVED_WORKSPACE_OPERATION, parseDerivedWorkspaceArgs } from './derived-workspace-contract.ts'
 import { DERIVED_WORKSPACE_DIRECTORY, executeChildDerivedWorkspace, validateChildDerivedWorkspaceDirectory } from './child-derived-workspace.ts'
@@ -63,6 +63,7 @@ export class ManagedChildWorkdirs {
     readonly staticWorkdirs: readonly (WorkdirBinding & { displayName?: string })[],
     readonly deviceHomePath?: string,
     readonly allowDeviceHomeRead = false,
+    readonly mcpWorkdirs: ReadonlySet<string> = new Set(),
   ) {
     if (!isAbsolute(rootPath) || (deviceHomePath !== undefined && !isAbsolute(deviceHomePath))) throw new TypeError('Managed storage and device home must be absolute')
     const ids = new Set<string>()
@@ -222,7 +223,9 @@ export class ManagedChildWorkdirs {
         if (request.operation === DERIVED_WORKSPACE_OPERATION) return this.#derive(request, signal)
         const bindings = await this.#bindings(request, signal)
         const handlers = [new CapabilityFilesystem(bindings), new CapabilityGit(bindings), new CapabilityWorkdirIdentity(bindings)]
-        return handlers.find(handler => handler.handles(request.operation))!.execute(deviceHomeArgs(request), signal)
+        const scopedRequest = request.operation === 'filesystem.read' && request.workdirId === DEVICE_HOME_WORKDIR
+          ? deviceHomeReadArgs(request, bindings[0]!.rootPath) : deviceHomeArgs(request)
+        return handlers.find(handler => handler.handles(request.operation))!.execute(scopedRequest, signal)
       },
     }, {
       handles: operation => operation === WORKDIR_PROCESS_EXECUTE_OPERATION || operation === 'workdir.process.execute-once',
@@ -247,7 +250,7 @@ export class ManagedChildWorkdirs {
   #descriptor(binding: WorkdirBinding & { displayName?: string }): WorkdirAdvertisement {
     return {
       version: 2, workdirId: binding.workdirId, nodeId: this.nodeId,
-      support: { operations: [...MANAGED_WORKDIR_OPERATIONS], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000, untilExit: true } },
+      support: { operations: [...MANAGED_WORKDIR_OPERATIONS, ...(this.mcpWorkdirs.has(binding.workdirId) ? ['workdir.mcp'] : [])], shell: { shells: this.#shells, maxInputBytes: 32 * 1024, maxDeadlineMs: 120_000, untilExit: true } },
       displayName: binding.displayName ?? binding.workdirId, displayPath: binding.rootPath, platform: process.platform,
       online: !this.#unavailable.has(binding.workdirId),
     }

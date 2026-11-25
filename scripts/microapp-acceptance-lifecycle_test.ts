@@ -12,22 +12,13 @@ import { CopilotProvider } from '../src/providers/copilot.ts'
 import { appId, revisionId, appRecordSchema, appWorkScopeSchema } from '../src/microapps/contracts.ts'
 import { MicroApps } from '../src/microapps/service.ts'
 import { microAppReceipt } from '../src/tools/micro-app.ts'
-import { workDefinitionSchema } from '../src/initiatives/work-contract.ts'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { runAcceptance, writeAcceptanceArtifact } from './microapp-a2a.ts'
 
-const fixtureDefinition = {
-  objective: 'Publish inert fixture',
-  acceptance: ['Publish the inert Timeline fixture without claiming runtime verification.'],
-}
+const fixtureDefinition = 'Publish the inert **Timeline** fixture without claiming runtime verification.'
 
-// Work permits empty criteria, but publication snapshots require at least one per selected goal.
-// Keep the synthetic provider's input compatible with both contracts.
 test('timeline fixture Work can be snapshotted for app publication', async () => withTempWorkspace(async home => {
-  const scope = (definition: unknown) => ({ key: 'fixture', revision: 1,
-    acceptance: workDefinitionSchema.parse(definition).acceptance })
-  let work = scope({ objective: fixtureDefinition.objective })
-  assert.equal(appWorkScopeSchema.safeParse(work).success, false)
+  const work = appWorkScopeSchema.parse({ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 1, definition: fixtureDefinition })
   const service = new MicroApps('fixture', home, () => { throw new Error('No model expected') }, () => 'fixture', {
     ownerSession: id => id, ask: async () => { throw new Error('No approval expected') },
     notify: async () => {}, evidence: async () => {}, work: () => [work],
@@ -39,9 +30,6 @@ test('timeline fixture Work can be snapshotted for app publication', async () =>
     await writeFile(join(source, 'index.html'), '<!doctype html><title>Fixture</title>')
     const publish = () => service.publish(source, { version: 1, name: 'Timeline fixture', description: 'Inert fixture',
       entry: 'index.html', files: ['index.html'] }, 'fixture-author', new AbortController().signal)
-    await assert.rejects(publish(), /acceptance/)
-    assert.deepEqual(service.list(), [], 'The old fixture leaves apps.json empty, even when its author turn completes')
-    work = scope(fixtureDefinition)
     const record = await publish()
     assert.deepEqual(record.work, [work])
     const receipt = microAppReceipt(record)
@@ -56,7 +44,7 @@ function publishedReceipt(messages: ChatMessage[]) {
   const text = result ? contentText(result.content) : '<missing invoke_tool result>'
   try {
     return z.object({ id: appId, revision: revisionId,
-      workRefs: z.array(z.object({ acceptanceCount: z.literal(fixtureDefinition.acceptance.length) })).length(1),
+      workRefs: z.array(z.object({ key: z.string().min(1), revision: z.number().int().positive() })).length(1),
     }).parse(JSON.parse(text))
   } catch (error) {
     assert.fail(`Fixture publication failed; invoke_tool result: ${text.slice(0, 4000)}\n${String(error)}`)
@@ -65,7 +53,7 @@ function publishedReceipt(messages: ChatMessage[]) {
 
 test('timeline provider rejects failed publication instead of claiming success', () => {
   const receipt = { id: '11111111-1111-4111-8111-111111111111', revision: 'a'.repeat(64),
-    workRefs: [{ acceptanceCount: 1 }] }
+    workRefs: [{ key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', revision: 1 }] }
   assert.deepEqual(publishedReceipt([{ role: 'tool', name: 'invoke_tool', content: JSON.stringify(receipt) }]), receipt)
   assert.throws(() => publishedReceipt([]), /missing invoke_tool result/)
   assert.throws(() => publishedReceipt([{ role: 'tool', name: 'invoke_tool', content: 'Error: invalid acceptance criteria' }]),
@@ -111,7 +99,7 @@ test('isolated JavaScript-only fixture reaches separate review and explicit owne
       assert.ok(messages.some(message => message.role === 'user' &&
         contentText(message.content).includes('Publish only the inert synthetic fixture.')))
       if (calls === 1) return tools({ name: 'invoke_tool', arguments: { name: 'work_create', args: {
-        title: 'Timeline fixture', definition: fixtureDefinition, notes: { kind: 'task' },
+        title: 'Timeline fixture', definition: fixtureDefinition, kind: 'task',
       } } })
       if (calls === 2) {
         const value = messages.findLast(message => message.role === 'tool' && message.name === 'invoke_tool')?.content
@@ -121,7 +109,7 @@ test('isolated JavaScript-only fixture reaches separate review and explicit owne
         assert.equal(typeof record.key, 'string')
         assert.equal(typeof record.version, 'number')
         return tools({ name: 'invoke_tool', arguments: { name: 'work_update', args: { key: record.key, version: record.version,
-          notes: { summary: 'Publish inert fixture only', next: 'Publish source' } } } })
+          summary: 'Publish inert fixture only' } } })
       }
       if (calls === 3) {
         const value = messages.findLast(message => message.role === 'tool' && message.name === 'invoke_tool')?.content

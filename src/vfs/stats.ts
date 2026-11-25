@@ -21,7 +21,7 @@ export function createStatsHandler(sessions: SessionManager, topics: () => Topic
     list: async (context) => {
       authorize(context)
       const rows = await entries()
-      if (indexed) rows.push({ name: 'model-requests', content: 'Logical model requests, observed attempts and latency samples.' })
+      if (indexed) rows.push({ name: 'model-requests', content: 'Logical model requests, observed attempts, latency samples and estimated streamed output speed.' })
       if (context.admin && indexed) rows.push({ name: 'memory-recall', content: 'Top successful Memory reads, split by source.' })
       return rows
     },

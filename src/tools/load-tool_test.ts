@@ -56,7 +56,7 @@ test('adapter defense rejects selected-page tools and missing/malformed page IDs
   validateChromeCall({ ...config, name: 'generic' }, { ...page, name: 'select_page' }, {})
 })
 
-test('remote invocation admits only the exact host-owned typed LayerFS factory, never general factories or MCP', async () => withTempWorkspace(async home => {
+test('remote invocation admits the exact host-owned LayerFS factory without initializing Main factories', async () => withTempWorkspace(async home => {
   let loads = 0, effects = 0, forbidden = 0
   const contract = { name: 'layerfs_doctor', description: 'fixture typed service', supportsRemoteWorkdir: true, supportsLayerFSWorkdir: true, parameters: { type: 'object' as const, properties: {}, additionalProperties: false }, execute: async () => { effects++; return 'target fixture' } }
   const entries = new Map<string, LoadableEntry>([

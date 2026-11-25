@@ -62,7 +62,9 @@ export async function prepareRequestBody(
     for (const key of ['messages', 'input']) {
       const messages = serialized[key]
       if (Array.isArray(messages)) for (const message of messages) {
-        if (message && typeof message === 'object' && typeof message.role === 'string') content(message.content)
+        if (!message || typeof message !== 'object') continue
+        if (key === 'input' && message.type === 'function_call_output') content(message.output)
+        else if (typeof message.role === 'string') content(message.content)
       }
     }
   }

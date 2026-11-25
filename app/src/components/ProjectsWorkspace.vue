@@ -74,7 +74,7 @@
       <EditorGroupHost v-if="appDocuments.length" v-show="appEditorActive" :project-id="APP_EDITOR_SCOPE"
         project-name="Shadow" :active="appEditorActive" :other-project-tabs="projectOnlyTabGroups"
         @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" />
-      <AutomationDetail v-show="!appTab" :enabled="!!automation && !workflowProjectId" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible && !appTab" :selected-session-id="selected?.sessionId" @open="openAutomationRun">
+      <AutomationDetail v-show="!appTab" :enabled="!!automation && route.name === 'chat'" :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible && !appTab" :selected-session-id="selected?.sessionId" :pending-editor="pendingAutomationEditor" :pending-side="pendingAutomationSide" @open="openAutomationRun">
       <EditorGroupHost :project-name="project.name" :other-project-tabs="otherProjectTabGroups" @activate-project-tab="activateTopTab" @close-project-tab="editorGroups.close" @quote="quoteExplorer(project.id, $event)" :api-base="projectBase(apiBase, project.id)" :folder-revision="folderRevision" v-for="project in projects" v-show="visible && !appTab && selectedProjectId === project.id" :key="project.id" :project-id="project.id" :active="visible && !appTab && selectedProjectId === project.id" />
       </AutomationDetail>
       <!-- Controllers stay mounted here; EditorViewHost owns their sole visible views. -->
@@ -125,7 +125,8 @@
 
 <script setup lang="ts">
 import { closePreviousSidebarConversation } from '../sidebar-conversation-tabs.ts'
-import { APP_EDITOR_SCOPE, createEditorGroups, EditorGroupsKey, type EditorDescriptor } from '../editor-groups.ts'
+import { APP_EDITOR_SCOPE, createEditorGroups, EditorGroupsKey, type EditorDescriptor, type EditorSide } from '../editor-groups.ts'
+import { automationChatLocation } from '../automations.ts'
 import ProjectEditorTabs from './ProjectEditorTabs.vue'
 import { projectTopTabGroups } from '../project-top-tabs.ts'
 import EditorGroupHost from './EditorGroupHost.vue'
@@ -299,10 +300,30 @@ provide(WorkflowInputReferencesKey, {
 })
 const selected = shallowRef<ConversationResource>()
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
-  route, router, selected,
-  openSession: session => publish(registry.session(session)),
-  closeSidebar,
+  route, router, selected, closeSidebar,
 })
+const pendingAutomationEditor = shallowRef<EditorDescriptor>()
+const pendingAutomationSide = ref<EditorSide>('left')
+function openPendingAutomation(projectId: string, automationId: string) {
+  const id = JSON.stringify([projectId, 'automation-pending', automationId])
+  if (pendingAutomationEditor.value?.id === id) return
+  const group = editorGroups.state(projectId)
+  pendingAutomationSide.value = group[group.active].length ? group.active : 'left'
+  pendingAutomationEditor.value = {
+    id, projectId, owner: id, label: t('Automation'), icon: 'i-lucide-message-square', closable: true,
+    select() {},
+    close() {
+      if (pendingAutomationEditor.value?.id !== id) return
+      // The shared tab controller activates a surviving tab after close.
+      // If there is no route-owning tab, leave the pending URL explicitly.
+      const survivor = editorGroups.active(projectId)
+      if (!survivor?.conversation && !survivor?.explorer
+        && !(['board', 'workflows', 'settings'] as const).some(tab => survivor?.id === projectEditorId(projectId, tab))) {
+        void router.replace(projectChatLocation(projectWorkbenches.get(projectId) ?? { projectId, sessionId: '' }))
+      }
+    },
+  }
+}
 const workflowProjectId = computed(() => route.name === 'project-workflows' && typeof route.params.projectId === 'string' ? route.params.projectId : '')
 const selectedProjectId = computed(() => workflowProjectId.value || (automation.value?.projectId ?? selected.value?.projectId ?? ''))
 const selectedProjectName = computed(() => appTab.value ? '' : projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
@@ -369,21 +390,20 @@ function openSessionSearch() { sessionSearchOpen.value = true }
 function quickOpenSession(projectId: string, sessionId: string, automationId?: string) {
   sessionSearchOpen.value = false
   if (automationId) {
-    automation.value = { projectId, id: automationId }
-    openAutomationRun(sessionId)
+    void router.push(automationChatLocation(projectId, automationId, sessionId))
   } else selectSession(projectId, sessionId)
 }
 // Native desktop input also reaches us when focus belongs to an embedded frame.
 function nativeSessionSearch(event: Event) {
   if ((event as CustomEvent).detail !== 'search-sessions' || !props.visible || !keyboardActive.value) return
-  if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+  if (hasVisibleNewConversationOverlay(document.querySelectorAll('dialog[open], [aria-modal="true"]:not(dialog)'))) return
   openSessionSearch()
 }
 function sessionSearchKeydown(event: KeyboardEvent) {
   if (!props.visible || !keyboardActive.value || !isSessionQuickOpenShortcut(event)) return
   event.preventDefault()
   // Reserve the chord without stealing focus from an existing modal workflow.
-  if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+  if (hasVisibleNewConversationOverlay(document.querySelectorAll('dialog[open], [aria-modal="true"]:not(dialog)'))) return
   openSessionSearch()
 }
 const creating = ref(false)
@@ -519,6 +539,7 @@ function syncRoute() {
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
     automation.value = undefined
+    pendingAutomationEditor.value = undefined
     if (projectId && !loading.value) error.value = t('This project is unavailable. Refresh the catalog or choose another project.')
     return
   }
@@ -540,7 +561,13 @@ function syncRoute() {
     const link = JSON.stringify([projectId, sessionId, child])
     if (child && child !== sessionId && !consumedInspectionLinks.has(link)) { consumedInspectionLinks.add(link); openInspection(projectId, child) }
   }
-  else if (automationId) { selected.value = undefined; closeSidebar(); return }
+  else if (automationId && route.name === 'chat') {
+    incomingDocument = undefined
+    selected.value = undefined
+    openPendingAutomation(projectId, automationId)
+    closeSidebar()
+    return
+  }
   else if (route.name !== 'chat') resource = projectWorkbench(projectId)
   else resource = selected.value?.projectId === projectId && !selected.value.sessionId ? selected.value : registry.draft(projectId)
   resource.knowledgeRequest = route.query.panel === 'knowledge'
@@ -549,18 +576,22 @@ function syncRoute() {
     const { panel, entry, ...query } = route.query
     conversationQueries.set(resource.key, query)
   }
-  const activation = incomingDocument = tab ? Symbol() : undefined
+  const editorId = tab ? projectEditorId(projectId, tab)
+    : pendingAutomationEditor.value && !route.query.panel ? `${resource.key}:` : undefined
+  const activation = incomingDocument = editorId ? Symbol() : undefined
+  pendingAutomationEditor.value = undefined
   publish(resource)
   if (tab) {
     const state = projectDocuments.get(projectId)
     if (!state.tabs.includes(tab)) state.tabs = [...state.tabs, tab]
     state.selected = projectTabKey(tab)
+  }
+  if (editorId) {
+    const path = route.fullPath
     void nextTick(() => {
       if (incomingDocument !== activation) return
       incomingDocument = undefined
-      if (props.visible && `${String(route.name)}:${String(route.params.projectId)}` === nextDocumentRoute) {
-        editorGroups.activate(projectEditorId(projectId, tab))
-      }
+      if (props.visible && route.fullPath === path) editorGroups.activate(editorId)
     })
   }
 }

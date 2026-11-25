@@ -4,10 +4,13 @@ import { voiceEvidence, voiceGroups } from '../../src/testing/voice-presentation
 import { overviewGraph, overviewLayout } from './project-overview-graph.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 import { projectTopics, projectFocusGroups } from './project-topic-history.ts'
+const delegateKey = 'work:b0e8ae0b-f758-5c9c-b320-e4eaed4df62c'
+const olderKey = 'work:9052d974-7b53-549b-898e-841f844b1ba2'
+
 
 test('semantic voice cards replace execution hierarchy, preserve discussed option and render disclosure regions', () => {
-  const item = { key: 'topic:web:chat-voice', title: 'Local ASR', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-11T00:00:00Z' }
-  const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'delegate', title: 'Inspect ASR flags', parentKey: item.key, assignee: 'sub-worker' }], sessions: [{ sessionId: 'web:chat-voice', title: 'Voice', assignable: true }, { sessionId: 'sub-worker', title: 'ASR helper', assignable: false, parentSessionId: 'web:chat-voice' }], requests: [], effects: [], focus: { origin: 'model_interpretation', inferredAt: '2026-10-11T00:00:00Z', inputCount: 1, omittedCount: 0, sources: [{ key: item.key, sequence: 1 }], evidence: voiceEvidence, result: { groups: voiceGroups } } })
+  const item = { key: 'work:642d1eb0-0d13-5665-b8b3-96935bc5c5c7', title: 'Local ASR', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, changedAt: '2026-10-11T00:00:00Z' }
+  const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: delegateKey, title: 'Inspect ASR flags', parentKey: item.key, assignee: 'sub-worker' }], sessions: [{ sessionId: 'web:chat-voice', title: 'Voice', assignable: true }, { sessionId: 'sub-worker', title: 'ASR helper', assignable: false, parentSessionId: 'web:chat-voice' }], requests: [], effects: [], focus: { origin: 'model_interpretation', inferredAt: '2026-10-11T00:00:00Z', inputCount: 1, omittedCount: 0, sources: [{ key: item.key, sequence: 1 }], evidence: voiceEvidence, result: { groups: voiceGroups } } })
   const graph = overviewGraph(data)
   assert.equal(graph.nodes.length, 3)
   assert(!graph.nodes.some(node => node.title.includes('flags') || node.title.includes('helper')))
@@ -26,25 +29,25 @@ test('semantic voice cards replace execution hierarchy, preserve discussed optio
   data.items[0]!.sequence++
   assert.equal(projectFocusGroups(projectTopics(data), data.focus)[0]!.stale, true)
   delete data.focus
-  assert(!overviewGraph(data).nodes.some(node => node.id === 'delegate' || node.sessionId === 'sub-worker'))
+  assert(!overviewGraph(data).nodes.some(node => node.id === delegateKey || node.sessionId === 'sub-worker'))
 })
 
 
 test('saved abstract hierarchy is sole ownership truth; bounded leftovers stay behind one unorganized root', () => {
-  const item = { key: 'topic:web:chat-voice', title: 'Voice', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, paused: false, changedAt: '2026-10-11T00:00:00Z' }
-  const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: 'older', title: 'Older unorganized topic', changedAt: '2026-09-01T00:00:00Z' }], sessions: [], requests: [], effects: [], focus: { origin: 'model_interpretation', inferredAt: '2026-10-12T00:00:00Z', inputCount: 1, omittedCount: 1, sources: [{ key: item.key, sequence: 1 }], evidence: voiceEvidence, result: { groups: voiceGroups, hierarchy: [{ id: 'experience', title: 'Improve local experience', purpose: 'Inferred purpose', groupIndexes: [] }, { id: 'voice', title: 'Voice interaction', purpose: 'Voice subgroup', parentId: 'experience', groupIndexes: [0] }] } } })
+  const item = { key: 'work:642d1eb0-0d13-5665-b8b3-96935bc5c5c7', title: 'Voice', revision: 1, sequence: 1, status: 'done', parentKey: null, dependencies: [], blockedReason: null, manager: null, assignee: null, changedAt: '2026-10-11T00:00:00Z' }
+  const data = projectWorkOverviewSchema.parse({ items: [item, { ...item, key: olderKey, title: 'Older unorganized topic', changedAt: '2026-09-01T00:00:00Z' }], sessions: [], requests: [], effects: [], focus: { origin: 'model_interpretation', inferredAt: '2026-10-12T00:00:00Z', inputCount: 1, omittedCount: 1, sources: [{ key: item.key, sequence: 1 }], evidence: voiceEvidence, result: { groups: voiceGroups, hierarchy: [{ id: 'experience', title: 'Improve local experience', purpose: 'Inferred purpose', groupIndexes: [] }, { id: 'voice', title: 'Voice interaction', purpose: 'Voice subgroup', parentId: 'experience', groupIndexes: [0] }] } } })
   const graph = overviewGraph(data)
   assert.deepEqual(overviewLayout(graph, new Set()).nodes.map(node => node.id), ['organized-hierarchy:experience', 'organized:unclassified'])
   assert.equal(graph.nodes.find(node => node.id === 'presentation:0')?.parentId, 'organized-hierarchy:voice')
-  assert.equal(graph.nodes.find(node => node.id === 'older')?.parentId, 'organized:unclassified')
+  assert.equal(graph.nodes.find(node => node.id === olderKey)?.parentId, 'organized:unclassified')
   assert.equal(graph.nodes.find(node => node.id === 'organized-hierarchy:experience')?.status, 'mixed')
   assert.equal(graph.nodes.find(node => node.id === 'organized-hierarchy:experience')?.at, item.changedAt)
   const expanded = overviewLayout(graph, new Set(['organized-hierarchy:experience', 'organized-hierarchy:voice', 'presentation:0', 'organized:unclassified']))
   assert.equal(new Set(expanded.nodes.map(node => node.id)).size, expanded.nodes.length)
-  assert(expanded.nodes.some(node => node.id === 'older'))
+  assert(expanded.nodes.some(node => node.id === olderKey))
   assert(expanded.nodes.some(node => node.detail === voiceGroups[0]!.cards![1]!.markdown))
   const filters = projectFocusGroups(projectTopics(data), data.focus)
   assert.deepEqual(filters.map(group => group.key), ['organized-hierarchy:experience', 'organized:unclassified'])
   assert.equal(filters[0]!.topics.length, 1)
-  assert.equal(filters[1]!.topics[0]!.key, 'older')
+  assert.equal(filters[1]!.topics[0]!.key, olderKey)
 })

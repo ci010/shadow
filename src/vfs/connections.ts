@@ -10,8 +10,8 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/
 const serialize = (value: unknown) => JSON.stringify(value, (_key, field: unknown) => typeof field === 'string'
   ? field.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, '[url-omitted]') : field, 2)
 const overviewSchema = z.object({ id: z.string().regex(ID), displayName: z.string().max(512),
-  platform: z.enum(['qq', 'feishu', 'discord', 'wechat']), purpose: z.string().max(512),
-  enabled: z.boolean(), health: z.string().max(64), ownerVerified: z.boolean() })
+  platform: z.enum(['qq', 'feishu', 'discord', 'wechat']),
+  enabled: z.boolean(), health: z.string().max(64) })
 const GUIDE = `Read-only current Project transport Connections and their common durable receipt sinks.
 Canonical paths: v:connections/index.json, v:connections/<id>/overview.json, v:connections/<id>/sink.json.
 A Connection is transport, not a BOT role. The common receipt sink records received/discovered conversations without model reactions. Linking a BOT does not change receipt addresses.

@@ -62,23 +62,35 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
   const month = Date.UTC(new Date(asOf).getUTCFullYear(), new Date(asOf).getUTCMonth(), 1)
   const result: ProjectUsage = { activity: emptyActivity(), projectId, asOf: new Date(asOf).toISOString(), timeZone: 'UTC', total: empty(), today: empty(), past7Days: empty(), month: empty(), daily: [], scanLimitReached: false, untrackedSessions: 0, undatedCalls: 0 }
   const daily = new Map<string, ProjectUsageMetrics>()
+  const recentModels = new Map<string, Map<string, ProjectUsageMetrics>>()
   // Include zero-activity days in the recent trend; older active days remain available.
-  for (let time = today - (USAGE_TREND_HISTORY_DAYS - 1) * DAY; time <= today; time += DAY) daily.set(new Date(time).toISOString().slice(0, 10), empty())
+  for (let time = today - (USAGE_TREND_HISTORY_DAYS - 1) * DAY; time <= today; time += DAY) {
+    const date = new Date(time).toISOString().slice(0, 10)
+    daily.set(date, empty())
+    recentModels.set(date, new Map())
+  }
+  const accumulate = (time: number, model: unknown, usage: ProjectUsageMetrics, includeActivityMetrics = true) => {
+    merge(result.total, usage)
+    if (time >= today) merge(result.today, usage)
+    if (time >= today - 6 * DAY) merge(result.past7Days, usage)
+    if (time >= month) merge(result.month, usage)
+    const date = new Date(time).toISOString().slice(0, 10)
+    const bucket = daily.get(date) ?? empty()
+    merge(bucket, usage); daily.set(date, bucket)
+    if (typeof model !== 'string' || !model.trim()) return
+    addActivity(result.activity, 'models', [model], time, today, month, usage.calls, includeActivityMetrics ? usage : undefined)
+    const models = recentModels.get(date)
+    if (models) {
+      const modelUsage = models.get(model) ?? empty()
+      merge(modelUsage, usage)
+      models.set(model, modelUsage)
+    }
+  }
   const seen = new Set<string>(), physical = new Set<string>(), logical = new Set<string>()
   const stats = statsIndex(store)
   let scanned = 0
   const selected = states.filter(state => state.projectId === projectId && !logical.has(state.sessionId) && !!logical.add(state.sessionId))
   if (stats) {
-    const accumulate = (time: number, model: unknown, usage: ProjectUsageMetrics) => {
-      if (typeof model === 'string' && model.trim()) addActivity(result.activity, 'models', [model], time, today, month, usage.calls, usage)
-      merge(result.total, usage)
-      if (time >= today) merge(result.today, usage)
-      if (time >= today - 6 * DAY) merge(result.past7Days, usage)
-      if (time >= month) merge(result.month, usage)
-      const date = new Date(time).toISOString().slice(0, 10)
-      const bucket = daily.get(date) ?? empty()
-      merge(bucket, usage); daily.set(date, bucket)
-    }
     for (const row of stats.days(today)) { signal?.throwIfAborted(); accumulate(row.day, row.model, row.usage) }
     for (const record of stats.records(undefined, today)) {
       signal?.throwIfAborted()
@@ -136,14 +148,7 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
         const time = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
         if (!Number.isFinite(time)) { result.undatedCalls++; continue }
         if (time >= asOf) continue
-        if (typeof record.model === 'string' && record.model.trim()) addActivity(result.activity, 'models', [record.model], time, today, month)
-        add(result.total, record)
-        if (time >= today) add(result.today, record)
-        if (time >= today - 6 * DAY) add(result.past7Days, record)
-        if (time >= month) add(result.month, record)
-        const date = new Date(time).toISOString().slice(0, 10)
-        const bucket = daily.get(date) ?? empty()
-        add(bucket, record); daily.set(date, bucket)
+        const usage = empty(); add(usage, record); accumulate(time, record.model, usage, false)
       }
     }
     if (!tracked) result.untrackedSessions++
@@ -152,7 +157,10 @@ async function scanProjectUsage(store: SessionStore, states: SessionState[], pro
   for (const period of Object.values(result.activity)) {
     for (const entries of [period.models, period.tools]) entries.sort((a, b) => b.calls - a.calls || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   }
-  result.daily = [...daily].sort(([a], [b]) => b.localeCompare(a)).map(([date, usage]) => ({ date, usage }))
+  result.daily = [...daily].sort(([a], [b]) => b.localeCompare(a)).map(([date, usage]) => {
+    const models = recentModels.get(date)
+    return models ? { date, usage, models: [...models].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, usage]) => ({ name, usage })) } : { date, usage }
+  })
   return result
 }
 
@@ -174,13 +182,17 @@ export async function readProjectUsage(store: SessionStore, states: SessionState
   const value = await snapshot(store, states, projectId, asOf, signal, true)
   const from = new Date(Math.floor(asOf / DAY) * DAY - (USAGE_TREND_HISTORY_DAYS - 1) * DAY).toISOString().slice(0, 10)
   signal?.throwIfAborted()
-  const requestQuality = statsIndex(store)?.requestSummary(asOf)
-  return { ...value, ...(requestQuality ? { firstText: requestQuality.firstText, requestQuality } : {}),
-    daily: value.daily.filter(day => day.date >= from) }
+  const today = Math.floor(asOf / DAY) * DAY
+  const month = Date.UTC(new Date(asOf).getUTCFullYear(), new Date(asOf).getUTCMonth(), 1)
+  const requestQualityByPeriod = statsIndex(store)?.requestProjections(asOf, today, today - 6 * DAY, month, signal)
+  const daily = value.daily.filter(day => day.date >= from)
+  if (!requestQualityByPeriod) return { ...value, daily }
+  const { models: _models, providers: _providers, ...requestQuality } = requestQualityByPeriod.total
+  return { ...value, daily, firstText: requestQuality.firstText, requestQuality, requestQualityByPeriod }
 }
 export async function readProjectUsagePage(store: SessionStore, states: SessionState[], projectId: string, asOf: number, page: number, signal?: AbortSignal) {
   if (!Number.isSafeInteger(page) || page < 1 || page > 100000) throw new Error('Invalid usage page')
   const value = await snapshot(store, states, projectId, asOf, signal)
   const offset = (page - 1) * 10
-  return { projectId, asOf: value.asOf, page, pageSize: 10 as const, total: value.daily.length, hasMore: offset + 10 < value.daily.length, daily: value.daily.slice(offset, offset + 10) }
+  return { projectId, asOf: value.asOf, page, pageSize: 10 as const, total: value.daily.length, hasMore: offset + 10 < value.daily.length, daily: value.daily.slice(offset, offset + 10).map(({ date, usage }) => ({ date, usage })) }
 }

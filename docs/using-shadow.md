@@ -56,8 +56,9 @@ runtime command must be updated; setup does not silently skip the connection.
 
 ## Desktop applications
 
-In an authorized local Main conversation, the assistant can initialize the built-in
-`agent-desktop` source and use the complete official MCP catalog. This grants broad
+In an authorized owning Web conversation, the assistant can initialize the built-in
+`agent-desktop` source on Main (if local execution is enabled), or on a selected
+Child workdir with an explicit Child-local desktop grant. This grants broad
 logged-in-user desktop capability within OS permissions: applications, screenshots,
 input, clipboard and application launch, not access isolated to a bound window.
 Shadow and browser windows are not excluded. Consequential actions still need
@@ -391,7 +392,7 @@ In the **Knowledge** explorer, published Bot runtime roles are not Agent
 source documents. Open the **Bots** folder for the deployed `BOT.md` and any
 companion Markdown, including nested files. `BOT.md` has an overview, Tools,
 System prompt, and Original Markdown. Tools and prompt belong to the selected
-published binding (or the verified owner session for a Personal Bot), not to
+published exact inbox binding, not to
 all bindings combined. The view identifies in-memory session context separately
 from a rebuilt binding preview. Previews never admit input, reproduce
 per-message permissions, or capture model requests. If no eligible scope or
@@ -916,7 +917,11 @@ view uses the context-authorized host endpoint `GET /api/usage`.
 ### Daily usage pagination
 
 The summary endpoint returns only the latest 31 UTC calendar dates for charts,
-while cumulative totals still include historical source events. Daily history is
+while cumulative totals still include historical source events. Each overview
+`daily` row also includes `models`, an array of `{ name, usage }` entries using
+the same metrics as the day total. Empty days have no entries; calls without a
+model identifier still count toward the day total. Older overview payloads may
+omit `models`. Paginated history continues to return only day totals. Daily history is
 loaded only after **Load daily history**, via the context-authorized, Project-bound
 `GET /api/project/usage/daily?page=1` endpoint (10 dates per page, newest first).
 Completeness details use that same current page, never all history. Refresh and

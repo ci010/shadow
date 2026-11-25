@@ -20,11 +20,17 @@ owner-only, bounded, read-only projections; no connection or source runs. Read
 `v:project/workspaces` for registered source Folder IDs. Do not guess IDs or equate a
 configured binding/healthy connection with successful processing. Invalid packages
 remain visible and fail closed; processing success is unknown.
-Use `bot_package` propose through `invoke_tool` in an authenticated owner Web
-conversation. Propose freezes one registered local directory and requests one
-native Deploy/Cancel confirmation. Stable BOT `id` identifies an independently
-versioned package, not the source path. Read its status for the exact
-expectedRevision before updates. The old status action remains compatible for
+Use `bot_package` reload through `invoke_tool` in an authenticated owner Web
+conversation. Reload snapshots one registered local directory, validates and applies that
+content under current owner authority, without a separate approval. Stable BOT
+`id` identifies a package, not the source path. No source/revision preflight or
+revision arguments are needed for updates. Later source edits are excluded from
+the snapshot already read; reload again to apply them. Optional `source` inspects
+identity, config path, inherited grants and host-recorded channel origin, including
+binding/subscription addresses. Use ordinary `write` to edit BOT.md/its companion
+bindings, subscriptions and explicit permissions; preserve other listeners, then
+`reload`. No public `link` action exists. Reload centrally enforces Project and
+Connection identity, permissions and conflicts even when source was written directly. The old status action remains compatible for
 existing inventory callers. Source edits do not activate it.
 Never write private deployment storage or activate through general tools.
 
@@ -37,8 +43,8 @@ Data-only JSON retains `connection`, `subscriptions`, `bindings`, `tools`,
 Whole legacy packages (header only `id/config`, all behavior fields in JSON) remain
 readable temporarily. Never mix formats or duplicate fields, even identical values:
 there is no priority/override rule. Format upgrades preserve all raw policy values,
-require a source/active-revision comparison and backup outside the package, and
-still use the owning Project's exact-content deployment confirmation. Do not
+require comparing source and active policy plus a backup outside the package, and
+still use the owning Project's authorized publication path. Do not
 rewrite private deployment slots/hashes or repair invalid policy as a format change.
 Permissions are declared directly in each binding (tools, folders/domains, grants
 and participants as applicable), subject to BOT-level ceilings. Do not introduce
@@ -46,7 +52,7 @@ and participants as applicable), subject to BOT-level ceilings. Do not introduce
 sessions. Internal session events/cron are not external BOT subscriptions.
 
 Development source and the deployment copy are independent. Edit the registered
-source and propose again; do not reconstruct source from deployment history.
+source and reload again; do not reconstruct source from deployment history.
 Each proposal deploys one BOT only, not an atomic release across BOTs. Legacy
 resource editing, Change/check/scenario/run/profile publication and source
 recovery are retired, not alternate BOT configuration paths. Old resource and

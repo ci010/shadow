@@ -146,7 +146,9 @@ const liveError = computed(() => liveStatuses.value.find(status => status.error)
 const resolvedBase = computed(() => installationContext.value.apiBase)
 {
   const stop = watch(resolvedBase, (base, _previous, cleanup) => {
-    cleanup(startPresence(base, window, document, window.shadowDesktop?.presence))
+    const live = livePool.client(base)
+    cleanup(startPresence(base, window, document, window.shadowDesktop?.presence, fetch, report =>
+      live.reportPresence?.(typeof route.params.projectId === 'string' ? route.params.projectId : 'default', report) ?? false))
   }, { immediate: true })
   onUnmounted(stop)
 }

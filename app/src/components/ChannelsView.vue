@@ -2,7 +2,7 @@
   <section class="channels-view" :aria-label="section === 'connections' ? t('Connections') : t('Bots')">
     <header>
       <h2>{{ section === 'connections' ? t('Connections') : t('Bots') }}</h2>
-      <p>{{ section === 'connections' ? t('Manage platform credentials, connection status and owner pairing here. Multiple BOTs can reuse one service connection without sharing their permissions.') : t('Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.') }}</p>
+      <p>{{ section === 'connections' ? t('Manage platform credentials and connection status here. Multiple BOTs can reuse one connection without sharing their permissions.') : t('Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.') }}</p>
       <RouterLink class="chat-entry" :to="{ name: 'chat', params: { projectId } }">{{ t('Configure BOTs in chat') }}</RouterLink>
       <p>{{ t('In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.') }}</p>
       <RouterLink v-if="section === 'bots'" class="related-entry" :to="{ name: 'project-settings', params: { projectId, section: 'connections' } }">{{ t('Manage platform connections') }}</RouterLink>

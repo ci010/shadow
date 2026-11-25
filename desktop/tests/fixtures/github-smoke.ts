@@ -11,10 +11,18 @@ async function main() {
   const window = new BrowserWindow({ show: false, width: 1440, height: 900,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
   const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const diagnostics: string[] = []
+  window.webContents.on('console-message', event => diagnostics.push(`${event.level}: ${event.message} (${event.sourceId}:${event.lineNumber})`))
+  window.webContents.session.webRequest.onErrorOccurred({ urls: ['http://127.0.0.1:*/*'] }, event => {
+    diagnostics.push(`${event.error} ${event.url}`)
+  })
+  window.webContents.session.webRequest.onCompleted({ urls: ['http://127.0.0.1:*/*'] }, event => {
+    if (event.statusCode >= 400 || event.url.includes('/api/')) diagnostics.push(`${event.method} ${event.statusCode} ${event.url}`)
+  })
   const wait = async (code: string) => {
     const deadline = Date.now() + 10000
     while (Date.now() < deadline) { if (await execute(`Boolean(${code})`)) return; await delay(30) }
-    throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}`)
+    throw new Error(`Timed out: ${code}\nDiagnostics: ${diagnostics.slice(-35).join('\n')}\n${await execute('JSON.stringify({ url:location.href, ready:document.readyState, mount:document.querySelector("#app")?.innerHTML.slice(0,2000), route:window.fixtureRoute ?? window.fixtureStage, stage:window.fixtureStage, fixture:window.fixture?.error })')}`)
   }
   const button = (text: string) => `[...document.querySelectorAll('button')].find(button => button.getClientRects().length && button.textContent.trim() === ${JSON.stringify(text)})`
   const click = async (text: string) => {
@@ -52,15 +60,10 @@ async function main() {
     await window.loadURL(new URL('__github', process.env.GITHUB_SMOKE_URL).href)
     await wait('document.querySelectorAll(".work-board .work-item-card").length === 1')
     assert.equal((await stats()).reads, 0, 'Hidden GitHub panel does not load')
-    assert.equal(await execute('!!document.querySelector(".project-dashboard-tabs [role=tab]")'), true)
     await click('GitHub')
     await wait('document.querySelector(".project-github").textContent.includes("No linked GitHub resources")')
     await execute(`document.querySelector('.coordination-panel > [role="separator"]').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft', bubbles:true, cancelable:true}))`)
     await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 424')
-    await click('Coordinator')
-    assert.equal(await execute('document.querySelector(".coordination-panel").getBoundingClientRect().width'), 424)
-    assert.equal(await execute('document.querySelector(".project-github").getClientRects().length > 0'), true, 'Coordinator is independent of GitHub details')
-    assert.equal(await execute('document.querySelector(".coordination-panel").getBoundingClientRect().width'), 424)
     await fill('Repository', 'octo/demo')
     await fill('Allow individually confirmed GitHub writes', true)
     await click('Save repository access')
@@ -69,11 +72,11 @@ async function main() {
     await click('Load / link resource')
     await wait('document.querySelector(".github-resource")')
     await expand('Import as unassigned Work')
-    await fill('Accepted outcome', 'Correct the reviewed behavior')
-    await fill('Acceptance, one per line', 'Regression reproduces the original failure\nThe focused regression passes')
+    const definition = 'Correct the reviewed behavior.\n\n- The focused regression passes.\n- Do not publish changes.'
+    await fill('Work definition', definition)
     await command('source'); await click('Refresh from GitHub')
     await wait('document.querySelector(".github-resource").textContent.includes("Issue text changed while you were editing")')
-    assert.equal(await execute(`${field('Accepted outcome')}.value`), 'Correct the reviewed behavior')
+    assert.equal(await execute(`${field('Work definition')}.value`), definition)
     assert.equal(await execute(`${button('Confirm and create Work')}.disabled`), true)
     await click('Use this reviewed source')
     await click('Confirm and create Work')
@@ -105,7 +108,9 @@ async function main() {
     await wait('document.querySelector(".project-github").textContent.includes("reconciled")')
     assert.equal((await stats()).writes, 2, 'Reconciliation never republishes')
     await command('online')
+    await command('assign-import'); await execute('window.invalidateWork()')
     await expand('Automatic follow-up')
+    await wait(`${field('Recipient')}?.querySelector('option[value=manager]')`)
     await fill('Recipient', 'manager'); await fill('Delivery', 'queue'); await fill('source', true)
     await click('Enable / update subscription')
     await wait('document.querySelector(".project-github").textContent.includes("Current: queue")')
@@ -113,7 +118,7 @@ async function main() {
     await click('Reload integration'); await wait(`!${button('Reload integration')}.disabled`)
     assert.equal(await execute(`${field('Delivery')}.value`), 'silent', 'Refresh does not discard unsaved subscription edits')
     await command('source'); await click('Refresh from GitHub')
-    await wait('document.querySelector(".project-github").textContent.includes("Follow-up deliveries · 1")')
+    await wait(`!${button('Refresh from GitHub')}.disabled`)
     assert.equal((await stats()).deliveries, 1)
     await command('offline'); await click('Refresh from GitHub')
     await wait('document.querySelector(".github-resource").textContent.includes("Last snapshot retained")')
@@ -124,8 +129,10 @@ async function main() {
     await execute('window.invalidateWork()'); await delay(200)
     assert.equal((await stats()).reads, before, 'Hidden panel releases its snapshot listener')
     await execute('window.setAdmin(false)')
-    await click('GitHub')
     await wait(`!${button('Reload integration')}.disabled`)
+    await wait(`${field('Resource')}?.querySelector('option[value=I_1]')`)
+    await fill('Resource', 'I_1')
+    await wait(`${button('Refresh from GitHub')}`)
     assert.equal(await execute(`${button('Refresh from GitHub')}.disabled`), true)
     assert.equal(await execute('document.querySelectorAll(".project-github form").length'), 0)
     assert.equal((await stats()).writes, 2)

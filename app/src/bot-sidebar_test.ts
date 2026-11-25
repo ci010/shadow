@@ -5,7 +5,7 @@ import { groupFolderSessions, parseSessionGraph } from './folders-sidebar.ts'
 import { botConnectionIndicator, botSidebarStorageKey, groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from './bot-sidebar.ts'
 
 const id = (botInstanceId: string, conversationId: string, projectId = 'a', platform = 'qq') =>
-  channelSessionId({ projectId, botInstanceId, platform, conversationId })
+  channelSessionId({ projectId, botInstanceId, platform, conversationId }).replace(/^channel-inbox:/, 'bot:')
 const bots: SidebarBot[] = [
   { id: 'qq-one', projectId: 'a', platform: 'qq', displayName: 'Support bot' },
   { id: 'qq-two', projectId: 'a', platform: 'qq', displayName: 'Personal bot' },
@@ -25,13 +25,13 @@ test('bot sections use exact decoded instance identity and retain conversation o
   const before = structuredClone(sessions)
   const groups = groupBotConversations(sessions, 'a', bots)
   assert.deepEqual(groups.bots.map(group => [group.id, group.label]), [
-    ['qq-two', 'Personal bot'], ['qq-one', 'Support bot'], ['qq-one:separate', 'QQ · qq-one:separate'],
+    ['qq-two', 'Personal bot'], ['qq-one', 'Support bot'],
   ])
   assert.deepEqual(groups.bots[1]!.sessions.map(session => session.label), ['Support room', 'Support DM'])
   assert.equal(groups.bots[1]!.sessions[0], sessions[1], 'Grouping preserves the existing row data and selection identity')
   assert.equal(groups.bots[1]!.sessions[0]!.waitingForCall, true)
   assert.deepEqual(groups.chats.map(session => session.label), ['Free chat', 'Legacy chat'])
-  assert.equal(groups.bots[2]!.sessions[0]!.label, 'New conversation', 'Untitled bot chats use the shared friendly fallback, not a platform ID')
+  assert.ok(!groups.bots.some(group => group.id === 'qq-one:separate'), 'Historical connections absent from the catalog stay hidden')
   assert.deepEqual(sessions, before)
 })
 
@@ -42,7 +42,7 @@ test('foreign Project sessions and bot names never appear in an owning Project s
     { sessionId: 'web:foreign', projectId: 'b', title: 'Foreign web chat' },
   ] })
   const groups = groupBotConversations(sessions, 'a', [...bots].reverse())
-  assert.equal(groups.bots.length, 1)
+  assert.equal(groups.bots.length, 2)
   assert.equal(groups.bots[0]!.label, 'Support bot')
   assert.deepEqual(groups.bots[0]!.sessions.map(session => session.sessionId), [id('qq-one', 'dm:own')])
   assert.deepEqual(groups.chats, [])
@@ -51,7 +51,7 @@ test('foreign Project sessions and bot names never appear in an owning Project s
   assert.throws(() => parseSessionGraph({ nodes: [], sessions: [{ sessionId: 'bot:a:bad%:qq:room' }] }), /Cannot read/)
 })
 
-test('folder and automation ownership take precedence without duplicating bot conversations or adding empty bot sections', () => {
+test('folder and automation ownership take precedence without duplicating bot conversations while retaining configured connections', () => {
   const folder = { id: 'folder', name: 'Code', path: 'C:\\synthetic\\code', createdAt: '' }
   const sessions = parseSessionGraph({ nodes: [], sessions: [
     { sessionId: id('qq-one', 'group:folder'), folderId: folder.id },
@@ -63,11 +63,24 @@ test('folder and automation ownership take precedence without duplicating bot co
   const folders = groupFolderSessions([folder], sessions)
   const groups = groupBotConversations(folders.chats, 'a', bots)
   assert.deepEqual(folders.folders[0]!.sessions.map(session => session.sessionId), [id('qq-one', 'group:folder'), 'web:normal'])
-  assert.deepEqual(groups.bots.map(group => group.id), ['qq-two'])
+  assert.deepEqual(groups.bots.map(group => group.id), ['qq-two', 'qq-one'])
+  assert.deepEqual(groups.bots[1]!.sessions, [])
   assert.deepEqual(folders.automations[0]!.sessions.map(session => session.sessionId), [id('qq-one', 'group:automation')])
   assert.deepEqual(groups.chats, [])
-  assert.deepEqual(groupBotConversations([], 'a', bots), { chats: [], bots: [] })
   assert.equal(groupBotConversations(sessions, undefined, bots).chats.length, sessions.length, 'Unscoped legacy sidebars do not guess a Project')
+})
+
+test('a configured connection is visible before its first conversation', () => {
+  const connection = { configured: true, state: 'connected' } as const
+  const groups = groupBotConversations([], 'a', [...bots, {
+    id: 'foreign-only', projectId: 'b', platform: 'qq', displayName: 'Foreign',
+  }].map(bot => ({ ...bot, connection })))
+  assert.deepEqual(groups.chats, [])
+  assert.deepEqual(groups.bots.map(bot => [bot.id, bot.label, bot.connection.state, bot.sessions]), [
+    ['qq-one', 'Support bot', 'connected', []],
+    ['qq-two', 'Personal bot', 'connected', []],
+  ])
+  assert.deepEqual(groupBotConversations([], undefined, bots).bots, [])
 })
 
 test('bot disclosure preferences persist independently per server, Project and exact bot ID', () => {
@@ -108,5 +121,6 @@ test('connection status belongs to the exact Project and bot, never to its conve
   }))
   const groups = groupBotConversations(sessions, 'a', catalog.toReversed())
   assert.deepEqual(groups.bots.map(bot => bot.connection.state), ['disconnected', 'disconnected'])
-  assert.equal(groupBotConversations(sessions, 'a').bots[0]!.connection.state, 'unknown')
+  assert.deepEqual(groupBotConversations(sessions, 'a').bots, [], 'Conversation history alone never supplies a connection catalog')
+  assert.deepEqual(groupBotConversations(sessions, 'a', [{ ...catalog[0]!, platform: 'discord' }]).bots[0]!.sessions, [], 'A reused ID on another platform must not inherit historical conversations')
 })
