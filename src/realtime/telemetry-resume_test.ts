@@ -21,11 +21,16 @@ for (const kind of ['logs', 'spans'] as const) {
     rows.push({ id: 1 })
     assert.equal(hub.cursor, cursor, 'unsubscribed telemetry writes are not in the transport journal')
 
+    // A different subscriber may already have restarted the tail when we reconnect.
+    const restarted = hub.connect(topics, new AbortController().signal).body!.getReader()
+    await restarted.read()
+    await restarted.read()
     const resumed = hub.connect(topics, new AbortController().signal, cursor).body!.getReader()
     const frame = new TextDecoder().decode((await resumed.read()).value)
     const envelope = JSON.parse(frame.match(/^data: (.+)$/m)![1])
     assert.equal(envelope.type, 'reset', 'ready alone would silently lose the unobserved row')
     assert.equal(envelope.reason, 'expired')
     await resumed.cancel()
+    await restarted.cancel()
   })
 }

@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { Hono } from 'hono'
+import WebSocket from 'ws'
 import { ConfigSchema } from '../../config/schema.ts'
 import { FolderRegistry } from '../../folders/registry.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
@@ -68,6 +69,32 @@ test('Main composes isolated mobile access, scoped authorization and revocable r
       assert.deepEqual(await scoped.json(), { project: 'default', data: { value: 1 } })
       for (const path of ['/local/v1/readiness', '/nodes/v1/network', '/pair/v1/offers']) {
         assert.equal((await fetch(mobileBase + path, { headers })).status, 403)
+      }
+      const ownerLive = new WebSocket(`${mainBase.replace('http:', 'ws:')}/api/live/ws`, {
+        headers: { ...ownerHeaders, Origin: mainBase }, handshakeTimeout: 3000,
+      })
+      try {
+        await once(ownerLive, 'open')
+        const reply = once(ownerLive, 'message', { signal: AbortSignal.timeout(3000) })
+        ownerLive.send(JSON.stringify({ type: 'subscribe', id: 1, subscriptions: [
+          { topic: { kind: 'sessions', projectId: 'default' } },
+          { topic: { kind: 'sessions', projectId: 'missing' } },
+        ] }))
+        const [message] = await reply
+        const ack = JSON.parse(message.toString())
+        assert.equal(ack.type, 'subscribed')
+        assert.deepEqual(ack.added, [{ topic: { kind: 'sessions', projectId: 'default' }, reason: 'initial' }])
+        assert.deepEqual(ack.rejected, [{ kind: 'sessions', projectId: 'missing' }])
+      } finally { ownerLive.terminate() }
+      assert.ok([401, 403].includes((await fetch(`${mobileBase}/api/live/ws`, { method: 'POST', headers })).status))
+      const mobileLive = new WebSocket(`${mobileBase.replace('http:', 'ws:')}/api/live/ws`, { headers, handshakeTimeout: 3000 })
+      try {
+        const [, rejected] = await once(mobileLive, 'unexpected-response', { signal: AbortSignal.timeout(3000) })
+        assert.equal(rejected.statusCode, 403)
+        rejected.resume()
+      } finally {
+        mobileLive.on('error', () => {})
+        mobileLive.terminate()
       }
       const topics = encodeURIComponent(JSON.stringify([{ kind: 'sessions', projectId: 'default' }]))
       const live = await fetch(`${mobileBase}/api/live?topics=${topics}`, { headers, signal: AbortSignal.timeout(5000) })

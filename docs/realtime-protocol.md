@@ -1,5 +1,50 @@
 # Shared live transport
 
+## Dynamic Main WebSocket
+
+The Web and Electron clients share one socket per Main host. They first request
+an upgrade ticket via authenticated `POST /api/live/ws`, then offer the returned
+`protocol` and `proof` as WebSocket subprotocols on `GET /api/live/ws`. The
+server selects only `shadow.live.v1`. The ticket is single-use, expires after
+15 seconds, and is bound to the gateway audience and request origin. Do not put
+it in URLs or logs. This lets Electron prove authorization through its existing
+trusted main-frame HTTP credential path rather than trusting an unverified
+WebSocket frame. A revoked browser session closes the socket. Delegated mobile
+clients use SSE directly; Child/device and older hosts that cannot issue a ticket
+use the existing SSE endpoint. Neither transport starts a Project by subscribing.
+
+Send a JSON text command with a strictly increasing safe integer `id` per
+connection and the full desired set, for example:
+
+```json
+{"type":"subscribe","id":1,"subscriptions":[{"topic":{"kind":"projects"}},{"topic":{"kind":"chat","projectId":"default","sessionId":"web:123"}}]}
+```
+
+Each entry accepts an optional resume `cursor`. The server validates and
+reauthorizes every requested topic, but retains approved unchanged topics
+without reset or replay. It sends replay `event` frames for additions first,
+then `{type:"subscribed", id, cursor, added, removed, rejected}`. `added`
+contains `{topic, reason?, unavailable?}`; `removed` and `rejected` contain
+topics. A reset reason requires an authoritative HTTP snapshot; `unavailable`
+means the topic is not ready. An absent cursor gives `initial`. Even with
+successful replay, a newly observed subscription needs an authoritative
+baseline if the client has none. Removed topics stop receiving events at the
+update boundary; rejected topics never receive replay. An empty set unsubscribes
+without closing the connection.
+
+Live events and heartbeats reuse the SSE JSON envelopes (without SSE framing).
+Keep resume state per topic: an added topic can replay events older than events
+already received for unchanged topics. The acknowledgement cursor is a
+watermark only for accepted and available topics in the acknowledged set; do
+not use it for rejected or inactive topics. Runtime changes send scoped
+`{type:"topic-reset", cursor, topics, reason, unavailable}` messages without
+resetting other Projects. If the Project is deleted, its topics are removed.
+Commands are limited to 128 distinct topics, 32 KiB of topic JSON, and 64 KiB
+per frame. Invalid commands close the socket; clients can reconnect with
+per-topic cursors or recover through snapshots.
+
+## SSE endpoint
+
 `GET /api/live?topics=<JSON array>&cursor=<optional epoch:sequence>` is a
 host-origin endpoint, not a project-prefixed endpoint. It uses the existing
 Main authorization: launch bearer credential or a valid local browser session

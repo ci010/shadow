@@ -386,7 +386,8 @@ test('telemetry query failures disconnect affected subscribers and recover with 
     latest = 1
     const recovered = read(hub.connect([logs], new AbortController().signal, cursor))
     try {
-      assert.deepEqual(await recovered.next(), { type: 'reset', reason: 'expired', cursor })
+      assert.notEqual(hub.cursor, cursor, 'restarted telemetry tails establish a fresh replay boundary')
+      assert.deepEqual(await recovered.next(), { type: 'reset', reason: 'expired', cursor: hub.cursor })
       assert.equal((await recovered.next()).type, 'ready')
       latest = 2
       const [event] = await Promise.all([recovered.next(), delay(20)])
