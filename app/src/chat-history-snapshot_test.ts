@@ -13,6 +13,58 @@ function data(result: ChatHistorySnapshotResult): Record<string, unknown> {
   return result.data
 }
 
+test('recent direct history keeps a tool pair intact and prepends alongside live appends', async () => {
+  const app = new Hono()
+  let segmentIndex = 0
+  let contextReads = 0
+  let history = Array.from({ length: 85 }, (_, i) => ({
+    role: i === 44 ? 'assistant' : i === 45 ? 'tool' : 'user', content: `row-${i}`, provider_state: { private: i },
+    ...(i === 44 ? { tool_calls: [{ id: 'tool-1' }] } : i === 45 ? { tool_call_id: 'tool-1' } : {}),
+  }))
+  const wire: Record<string, any>[] = []
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:recent', segmentIndex }),
+    getContext: async () => { contextReads++; return { systemPrompt: 'Prompt', tools: [] } },
+    getHistory: async () => ({ messages: [{ role: 'system', content: 'Do not send on the first screen' }, ...history] }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const cache = createChatHistorySnapshots((async url => {
+    const response = await app.request(String(url))
+    wire.push(await response.clone().json())
+    return response
+  }) as typeof fetch)
+  const url = 'http://localhost/api/chat/session?chatId=recent&historyWindow=recent'
+  const read = async (target = url) => data(await cache.read(target, new AbortController().signal))
+  try {
+    const first = await read()
+    assert.equal(first.historyStart, 44)
+    assert.equal(contextReads, 0)
+    assert.equal(first.systemPrompt, '')
+    assert.deepEqual(first.tools, [])
+    const expected = () => history.map(({ provider_state: _state, ...row }) => row)
+    assert.deepEqual(first.history, expected().slice(44))
+    const pinned = `${url}&historyPhysicalId=${encodeURIComponent(String(first.currentPhysicalId))}`
+    history.push({ role: 'assistant', content: 'during older read', provider_state: { private: 85 } })
+    const expanded = await read(`${pinned}&historyFrom=4`)
+    assert.equal(expanded.historyStart, 4)
+    assert.deepEqual(expanded.history, expected().slice(4))
+    assert.deepEqual(wire.at(-1)?.delta.leadingHistory, expected().slice(4, 44))
+    assert.deepEqual(wire.at(-1)?.delta.history, expected().slice(85))
+    assert.deepEqual(await read(`${pinned}&historyFrom=4`), expanded)
+    assert.equal(wire.at(-1)?.unchanged, true)
+    history[50] = { ...history[50]!, content: 'rewritten' }
+    assert.deepEqual((await read(`${pinned}&historyFrom=4`)).history, expected().slice(4))
+    assert.ok(wire.at(-1)?.data)
+    segmentIndex++
+    history = Array.from({ length: 41 }, (_, i) => ({ role: 'user', content: `new-${i}`, provider_state: { private: i } }))
+    const rolled = await read(`${pinned}&historyFrom=4`)
+    assert.equal(rolled.historyStart, 1)
+    assert.deepEqual(rolled.history, expected().slice(1))
+    assert.ok(wire.at(-1)?.data)
+  } finally { cache.dispose(); await channel.stop() }
+})
+
 test('history revalidation works through gateway no-store without readable ETag headers', async () => {
   const app = new Hono()
   let content = 'Initial history'

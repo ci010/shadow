@@ -735,8 +735,12 @@ test('readonly shallow snapshots are opt-in and segment rollover is never mislab
   assert.ok(legacy.messages)
   const page = await (await app.request('/api/sessions/logical?shallow=true&pageSize=1&snapshot=')).json()
   assert.ok(page.messages)
+  const recent = await (await app.request('/api/sessions/logical?shallow=true&historyWindow=recent&snapshot=')).json()
+  assert.equal(recent.data.historyStart, 0)
+  assert.deepEqual(recent.data.messages, full.data.messages)
   rollover = true
   assert.equal((await app.request('/api/sessions/logical?shallow=true&snapshot=')).status, 409)
+  assert.equal((await app.request('/api/sessions/logical?shallow=true&historyWindow=recent')).status, 409)
 })
 
 for (const endpoint of ['graph', 'stages']) test(`${endpoint} GET revalidates fresh JSON without caching Project reads`, async () => {

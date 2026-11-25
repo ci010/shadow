@@ -46,7 +46,7 @@ export async function loadConversationSearchHistory(base: string, sessionId: str
     signal.throwIfAborted()
     if (visited.has(key)) throw new Error(t('Conversation history contains a segment cycle. Reopen the conversation and retry.'))
     visited.add(key)
-    const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(key)}`, { shallow: 'true' }), {
+    const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(key)}`, { shallow: 'true', display: 'true' }), {
       signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
     })
     if (!response.ok) throw new Error(t('Could not load conversation history for search ({status}). Retry search.', { status: response.status }))

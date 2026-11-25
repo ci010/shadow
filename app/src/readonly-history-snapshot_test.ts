@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createReadonlyHistorySnapshots } from './readonly-history-snapshot.ts'
 import { readonlyHistorySnapshot } from '../../src/sessions/history-snapshot.ts'
+import { recentHistoryWindow } from '../../src/shared/history-wire.ts'
 
 const url = new URL('http://localhost/api/sessions/logical?shallow=true')
 const signal = () => new AbortController().signal
@@ -35,6 +36,30 @@ test('readonly snapshot validates unchanged, append, receipts/decisions, rewrite
   data = { ...initial(), currentPhysicalId: 'physical-1', segmentIndex: 1, previousPhysicalId: 'physical-0' }
   assert.deepEqual(await read(), data)
   assert.ok(envelopes.at(-1)!.data)
+})
+
+test('recent readonly snapshots merge one earlier page plus concurrently appended rows', async () => {
+  const history = Array.from({ length: 82 }, (_, i) => ({ role: 'user', content: `row-${i}` }))
+  const envelopes: Record<string, any>[] = []
+  const cache = createReadonlyHistorySnapshots((async target => {
+    const query = new URL(String(target)).searchParams
+    const window = recentHistoryWindow(history, query, 'physical-0')
+    const envelope = readonlyHistorySnapshot({ ...initial(), total: history.length, messages: window.messages, historyStart: window.start }, query)
+    envelopes.push(envelope)
+    return Response.json(envelope)
+  }) as typeof fetch)
+  const recent = `${url}&historyWindow=recent`
+  const read = async (target: string) => (await cache.read(target, signal())).json()
+  assert.deepEqual((await read(recent)).messages, history.slice(42))
+  history.push({ role: 'assistant', content: 'new' })
+  const expanded = `${recent}&historyFrom=2&historyPhysicalId=physical-0`
+  const data = await read(expanded)
+  assert.equal(data.historyStart, 2)
+  assert.deepEqual(data.messages, history.slice(2))
+  assert.deepEqual(envelopes.at(-1)?.delta.leadingMessages, history.slice(2, 42))
+  assert.deepEqual(envelopes.at(-1)?.delta.messages, history.slice(82))
+  assert.deepEqual(await read(expanded), data)
+  assert.equal(envelopes.at(-1)?.unchanged, true)
 })
 
 test('failed access/network, eviction, disposal and abort never serve stale history', async () => {

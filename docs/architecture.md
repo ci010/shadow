@@ -801,7 +801,20 @@ to find its previous segment. `GET /api/sessions/:key` history pagination requir
 a positive integer `pageSize`; omitted `offset` defaults to zero, negative offsets
 count from the end, and offset-only or malformed numeric queries return 400.
 `shallow=true` selects the current physical segment; it is not a metadata-only
-or automatically small response. Direct-chat history and logical-summary responses negotiate gzip
+or automatically small response. The conversation pane opts into
+`historyWindow=recent` for direct chat and shallow readonly history. The first
+read returns the latest 40 non-system messages, extending backward when needed
+so a tool call and its results stay together. The returned `historyStart` and
+`currentPhysicalId` pin the loaded window during refresh; scrolling up moves the
+start back by one page, then reads older physical segments on demand. A stale
+physical ID selects a fresh recent window, never an offset in the wrong segment.
+For windowed snapshots, a matching cached block can be reused between an earlier
+page and concurrent appends. Full-history search and physical navigation remain
+on-demand paths. Conversation projections omit `provider_state`; persistence and
+legacy history responses are unchanged. The Prompt and Tools views in Diagnosis
+fetch the live context separately; opening the conversation does not build or
+transport it. Windowing limits the initial HTTP payload, not storage/log scans.
+Direct-chat history and logical-summary responses negotiate gzip
 through Hono's route-scoped compression middleware. Compressed responses vary on
 `Accept-Encoding` and use weak HTTP ETags; snapshot revisions continue to hash
 the uncompressed representation. Realtime streams and media/range routes are not
@@ -848,14 +861,16 @@ and segment navigation. Patch values replace whole fields (including `''`/`[]`);
 omitted fields reuse only the request's captured base with an equal field
 version. Missing or incorrect request field validators cause that field to be
 resent; missing/invalid response validators or mismatched bases fail closed.
-An exact history block may be reused with at most 16 prepended messages, also
-supporting an empty base. No historical server cache is retained. Receipt or
+An exact legacy history block may be reused with at most 16 prepended messages.
+Windowed reads send `baseHistoryStart` and can reuse the matching block with up to
+256 prepended messages. Larger moves or a mismatched block return a full window.
+No historical server cache is retained. Receipt or
 decision changes do not resend unchanged tool descriptions/schema or prompt.
 The loader rejects cross-identity deltas, keeps caller objects separate, and
 prevents late concurrent responses from regressing its cache. A segment rollover
 during the awaited server read returns 409 rather than mixing segment context.
-This is the direct-chat protocol, not an old-client negotiation branch;
-readonly `/api/sessions/:key` uses its separate loader/protocol unchanged.
+Readonly `/api/sessions/:key` keeps its own metadata revision; its windowed
+snapshot delta uses `leadingMessages` for the newly visible earlier page.
 Synthetic integration tests compare uncompressed JSON response bytes, not
 production bandwidth or end-to-end latency; serialization/hashing still occurs
 on the server for each validated read.

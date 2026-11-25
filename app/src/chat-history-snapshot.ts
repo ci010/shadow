@@ -1,4 +1,5 @@
 import { chatMetadataFields, isChatMetadataVersions, isRecord, isRevision, validChatMetadata, type ChatMetadataVersions } from '../../src/shared/chat-snapshot.ts'
+import { HISTORY_DELTA_PREPEND_LIMIT, historyWindowCacheKey } from '../../src/shared/history-wire.ts'
 
 /** Successful reads transfer an independently owned parsed body to the caller.
  * Non-2xx responses are not parsed and never fall back to a cached body. */
@@ -82,16 +83,17 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
     async read(url: string | URL, signal: AbortSignal): Promise<ChatHistorySnapshotResult> {
       if (disposed || signal.aborted) throw new Error('History read cancelled or disposed')
       const target = new URL(url)
-      const key = target.toString()
+      const key = historyWindowCacheKey(target)
       const cached = entries.get(key)
       const token = {}
       latest.set(key, token)
       const current = () => latest.get(key) === token
       target.searchParams.set('snapshot', cached?.revision ?? '')
-      for (const name of ['historyCount', 'historyRevision', ...chatMetadataFields.map(field => `${field}Revision`)]) target.searchParams.delete(name)
+      for (const name of ['historyCount', 'historyRevision', 'baseHistoryStart', ...chatMetadataFields.map(field => `${field}Revision`)]) target.searchParams.delete(name)
       if (cached) {
         target.searchParams.set('historyCount', String((cached.body.history as unknown[]).length))
         target.searchParams.set('historyRevision', cached.historyRevision)
+        if (typeof cached.body.historyStart === 'number') target.searchParams.set('baseHistoryStart', String(cached.body.historyStart))
         for (const field of chatMetadataFields) target.searchParams.set(`${field}Revision`, cached.metadataVersions[field])
       }
       try {
@@ -116,11 +118,15 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
           if (!cached || !isRecord(delta) || 'data' in envelope
             || delta.baseRevision !== cached.revision || delta.baseHistoryRevision !== cached.historyRevision
             || !Array.isArray(cached.body.history) || delta.baseCount !== cached.body.history.length
-            || !messages(delta.history) || !messages(delta.leadingHistory) || delta.leadingHistory.length > 16
+            || !messages(delta.history) || !messages(delta.leadingHistory)
+            || delta.leadingHistory.length > (typeof cached.body.historyStart === 'number' ? HISTORY_DELTA_PREPEND_LIMIT : 16)
             || delta.historyOffset !== delta.leadingHistory.length
             || delta.count !== cached.body.history.length + delta.leadingHistory.length + delta.history.length
-            || !isRecord(identity) || Object.keys(identity).length !== identityFields.length
+            || !isRecord(identity) || Object.keys(identity).length !== identityFields.length + Number(Object.hasOwn(cached.body, 'historyStart'))
             || !identityFields.every(field => identity[field] === cached.body[field])
+            || (typeof identity.historyStart === 'number'
+              ? identity.historyStart + delta.leadingHistory.length !== cached.body.historyStart
+              : identity.historyStart !== cached.body.historyStart)
             || !isRecord(delta.metadataPatch)
             || Object.keys(delta.metadataPatch).some(field => !(chatMetadataFields as readonly string[]).includes(field))) throw new Error('Invalid history delta')
           // Omission is a reference to the captured base, never deletion. Every
@@ -142,6 +148,7 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
           || (target.searchParams.has('chatId') && body.chatId !== target.searchParams.get('chatId'))
           || typeof body.currentPhysicalId !== 'string' || !body.currentPhysicalId
           || (body.previousPhysicalId !== null && typeof body.previousPhysicalId !== 'string')
+          || ('historyStart' in body && (!Number.isSafeInteger(body.historyStart) || (body.historyStart as number) < 0))
           || !Number.isSafeInteger(body.segmentIndex) || (body.segmentIndex as number) < 0) throw new Error('Invalid history identity or metadata')
         const size = maxEntries > 0 ? jsonBytes(body, maxBytes) : Infinity
         if (current()) {
