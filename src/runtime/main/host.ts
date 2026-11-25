@@ -167,15 +167,16 @@ export async function startProjectHost(
   })
   cleanup.push(() => mobileAccess.shutdown())
   let deviceUi: MainDeviceUi | undefined
-  // Recall names are privileged metadata: a delegated device or mobile bearer alone is insufficient.
-  const authorizeRecall = (request: Request) => browserAuth.authorize(request)
+  const authorizeOwner = (request: Request) => browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
+  // An approved Child renderer can read usage recall without becoming a general owner.
+  const authorizeRecall = (request: Request) => authorizeOwner(request) || !!deviceUi?.authorizeUsageRecall(request)
   const authorizeViewerCapture = createGltfCaptureOwner({ browser: browserAuth, clientAddresses, launchCredential,
     developmentUrl: process.env.VITE_DEV_URL,
     deviceViewer: request => deviceUi?.viewerCaptureOwner(request),
     delegated: request => !!deviceUi?.authorize(request) || mobileAccess.authorizeMain(request),
   })
-  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeRecall(request)
+  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeOwner(request)
   const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
