@@ -224,7 +224,15 @@ export class ChannelManager {
         // transport callbacks or prevent health updates and lifecycle cleanup.
         try {
           const stream = this.options.messageStream
-          for (const entry of stream.directory().filter(e=>e.connection===bot.id)) stream.append({connection:bot.id,conversation:entry.conversation,platform:bot.platform,kind:'gap',detail:`Transport ${state}; messages may be missing. Offline edits/deletes are not recoverable.`,...(entry.parent?{parent:entry.parent}:{})})
+          for (const entry of stream.directory().filter(e=>e.connection===bot.id)) void stream.append({connection:bot.id,conversation:entry.conversation,platform:bot.platform,kind:'gap',detail:`Transport ${state}; messages may be missing. Offline edits/deletes are not recoverable.`,...(entry.parent?{parent:entry.parent}:{})}).catch(error => {
+            streamDegraded = true
+            this.logLifecycleFailure(bot.id, 'stream-gap', error)
+            if (this.channels.get(bot.id) === channel) {
+              const health = this.health.get(bot.id)
+              if (health) this.health.set(bot.id, { ...health, message: 'Channel event stream degraded: transport gap could not be recorded; messages may be missing.' })
+              this.options?.realtime?.invalidateResource?.('channels')
+            }
+          })
         } catch (error) {
           streamDegraded = true
           this.logLifecycleFailure(bot.id, 'stream-gap', error)
@@ -428,7 +436,7 @@ export class ChannelManager {
       // allowFrom/trigger/participant check; keep the arrival assignment frozen
       // so binding an inbox later never replays old messages into execution.
       try {
-        this.options?.messageStream?.append({ connection: bot.id, platform: bot.platform, conversation: source.conversationId,
+        await this.options?.messageStream?.append({ connection: bot.id, platform: bot.platform, conversation: source.conversationId,
           ...(source.parentId ? { parent: source.parentId } : {}), kind: 'created', message: message.platformMessageId ?? message.messageId,
           sender: message.senderId, content: message.content.slice(0, 32000) })
       } catch (error) { markIngressFailure(error, 'stream'); throw error }
@@ -523,7 +531,7 @@ export class ChannelManager {
       guard?.()
       // Actual transport events, including unbound discoveries and deletions
       // without a cached sender, are records only. No BOT processing is invoked.
-      stream.append({...event,parent,sender,connection:bot.id,platform:bot.platform})
+      await stream.append({...event,parent,sender,connection:bot.id,platform:bot.platform})
     })
     channel.setReceiver(async message => {
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) {
@@ -1077,6 +1085,7 @@ export class ChannelManager {
         console.error(`[channel-manager] Channel cleanup failed: ${ch.name}`)
       }
     }
+    await this.options?.messageStream?.drain()
     try { this.options?.serviceDiscovery?.flush() }
     catch { console.error('[channel-manager] Service discovery metadata could not be saved') }
   }

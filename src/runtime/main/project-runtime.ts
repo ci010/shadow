@@ -2055,9 +2055,9 @@ export async function createProjectRuntime(
     authorized: id => canAuthor(id) && !sessions.getSessionState(id)?.parentSessionId,
     bots: () => botStore.list().filter(bot => bot.platform === 'discord').map(bot => ({ id: bot.id, platform: bot.platform })),
     api: bot => (path, init) => { const conversation=/^\/channels\/(\d+)/.exec(path)?.[1]; channels.assertStreamAccess(bot,conversation); return channels.trustedDiscordRequest(bot, path, init ?? {}) },
-    discover: (bot,parent,threads) => {
+    discover: async (bot,parent,threads) => {
       const stream=new ChannelMessageStream(workspace,project.id)
-      for(const conversation of threads)if(discordIntegration.streamAssigned(bot,conversation,parent))stream.append({connection:bot,platform:'discord',conversation,parent,kind:'discovered'})
+      for(const conversation of threads)if(discordIntegration.streamAssigned(bot,conversation,parent))await stream.append({connection:bot,platform:'discord',conversation,parent,kind:'discovered'})
     },
     stream: (action,args,context) => (action==='send'?channelStreamSend:channelStreamRead).execute(args,context),
   }))

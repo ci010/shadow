@@ -58,10 +58,10 @@ test('common stream records unbound and revoked transport events without grantin
  assert.equal(f.stream.snapshot().events.length,5)
  assert.equal(f.received,1, 'Recording never dispatches unbound/revoked messages')
  assert.throws(()=>f.manager.assertStreamAccess(f.bot.id,'10'),/assignment/)
- f.adapter.lost();assert.equal(f.stream.snapshot().events.at(-1)?.kind,'gap')
+ f.adapter.lost();await f.stream.drain();assert.equal(f.stream.snapshot().events.at(-1)?.kind,'gap')
  assert.equal(existsSync(f.defaultHome),false)
 })
-for(const failure of ['directory','append'] as const)test(`transport ${failure} failure is diagnostic only during start, status and stop`,async t=>{
+for(const failure of ['directory','append','append-async'] as const)test(`transport ${failure} failure is diagnostic only during start, status and stop`,async t=>{
  const logs:string[]=[]
  t.mock.method(console,'error',(...args:unknown[])=>{logs.push(args.map(String).join(' '))})
  const f=await fixture(t,true,(stream,botId)=>{
@@ -70,12 +70,14 @@ for(const failure of ['directory','append'] as const)test(`transport ${failure} 
    return [{connection:botId,conversation:'10',parent:'parent',platform:'qq',capabilities:{received:true,history:false,changes:false,send:false},notice:''}]
   })
   if(failure==='append')t.mock.method(stream,'append',()=>{throw new Error('synthetic journal write failure')})
+  if(failure==='append-async')t.mock.method(stream,'append',async()=>{throw new Error('synthetic queued write failure')})
  })
  assert.ok(logs.some(line=>line.includes('phase=stream-gap')), 'startup gap failure must be logged')
  assert.equal(f.manager.botStatuses()[0].state,'connected')
  assert.match(f.manager.botStatuses()[0].message??'',/event stream degraded/)
  const startupLogs=logs.length
  assert.doesNotThrow(()=>f.adapter.lost())
+ await f.stream.drain()
  assert.equal(f.manager.botStatuses()[0].state,'disconnected')
  assert.match(f.manager.botStatuses()[0].message??'',/event stream degraded/)
  const beforeStop=logs.length
@@ -111,8 +113,8 @@ test('partial changes retain message identity and durable dedupe without a fabri
  await f.adapter.passive({conversation:'unbound',kind:'deleted',message:'original',revision:'delete-one'})
  await f.adapter.passive({conversation:'unbound',kind:'deleted',message:'unknown-message',revision:'delete-unknown'})
  const restarted=new ChannelMessageStream(f.home,'p')
- restarted.append({connection:f.bot.id,platform:'qq',conversation:'unbound',kind:'updated',message:'original',content:'after',revision:'edit-one'})
- restarted.append({connection:f.bot.id,platform:'qq',conversation:'unbound',kind:'deleted',message:'original',revision:'delete-one'})
+ await restarted.append({connection:f.bot.id,platform:'qq',conversation:'unbound',kind:'updated',message:'original',content:'after',revision:'edit-one'})
+ await restarted.append({connection:f.bot.id,platform:'qq',conversation:'unbound',kind:'deleted',message:'original',revision:'delete-one'})
  const rows=restarted.snapshot().events
  assert.equal(rows.length,4)
  assert.deepEqual(rows.slice(0,3).map(row=>[row.conversation,row.message,row.sender]),[
@@ -176,4 +178,15 @@ test('Discord manager receipts distinguish category ancestry from public thread 
  await assert.rejects(adapter['collectPassive']({senderId:'500',chatId:'303',content:'Private thread',messageId:'private',isGroup:true}),/visibility denied/)
  await assert.rejects(adapter['collectStream']({conversation:'303',kind:'discovered',parent:'201'},true),/visibility denied/)
  assert.equal(sources.length,5);assert.equal(stream.snapshot().events.length,10);assert.equal(received,0)
+})
+
+test('shutdown waits for admitted stream writes and transport stop gaps', async t => {
+ const f=await fixture(t,true)
+ await f.adapter.push()
+ const pending=f.stream.append({connection:f.bot.id,platform:'qq',conversation:'10',kind:'updated',message:'1',content:'queued before shutdown'})
+ await f.manager.stopAll()
+ await pending
+ const rows=new ChannelMessageStream(f.home,'p').snapshot().events
+ assert.ok(rows.some(row=>row.content==='queued before shutdown'))
+ assert.equal(rows.at(-1)?.kind,'gap')
 })

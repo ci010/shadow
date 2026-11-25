@@ -14,13 +14,13 @@ test('incremental Bot messages reuse fixed-range watermark batches; retries/rest
   await withTempWorkspace(async workspace => {
     const stream = new ChannelMessageStream(workspace, 'p')
     const append = (message: string, conversation = 'group:one', kind = 'created' as 'created' | 'updated') => stream.append({ connection: 'connection', platform: 'qq', conversation, kind, message, content: message })
-    append('one'); append('private-other', 'group:two'); append('two')
+    await append('one'); await append('private-other', 'group:two'); await append('two')
     let allowed = true, reader = new BotMessages(workspace, 'p', () => { if (!allowed) throw new Error('revoked') })
     const call = (input: Record<string, unknown>, ctx = context()) => reader.execute(scope, input, ctx) as Promise<any>
     const first = await call({ action: 'read', limit: 1, attempt: 'a1' })
     assert.deepEqual(first.events.map((event: any) => event.message), ['one'])
     assert.equal(first.batch.state, 'running')
-    append('three')
+    await append('three')
     reader = new BotMessages(workspace, 'p', () => { if (!allowed) throw new Error('revoked') })
     const replay = await call({ action: 'read', limit: 100 })
     assert.equal(replay.batch.id, first.batch.id)
@@ -34,7 +34,7 @@ test('incremental Bot messages reuse fixed-range watermark batches; retries/rest
     const next = await call({ action: 'read', attempt: 'a3' })
     assert.deepEqual(next.events.map((event: any) => event.message), ['two', 'three'])
     await call({ action: 'ack', batch: next.batch.id, attempt: 'a3' })
-    append('one', 'group:one', 'updated')
+    await append('one', 'group:one', 'updated')
     assert.deepEqual((await call({ action: 'read' })).events.map((event: any) => event.kind), ['updated'])
     for (const selector of ['consumer', 'connection', 'conversation', 'conversations', 'includeChildren', 'initialAfter']) await assert.rejects(call({ action: 'read', [selector]: 'other' }))
     await assert.rejects(reader.execute({ ...scope, bindingKey: 'two' }, { action: 'ack', batch: first.batch.id, attempt: 'a2' }, context()), /Unknown/)
@@ -46,7 +46,7 @@ test('incremental Bot messages reuse fixed-range watermark batches; retries/rest
 test('Bot message byte-bounded pages preserve unread data and explicitly fail retention gaps', async () => {
   await withTempWorkspace(async workspace => {
     const stream = new ChannelMessageStream(workspace, 'p')
-    for (let i = 0; i < 10; i++) stream.append({ connection: 'connection', platform: 'qq', conversation: 'group:one', kind: 'created', message: String(i), content: '\u0000'.repeat(32000) })
+    for (let i = 0; i < 10; i++) await stream.append({ connection: 'connection', platform: 'qq', conversation: 'group:one', kind: 'created', message: String(i), content: '\u0000'.repeat(32000) })
     const reader = new BotMessages(workspace, 'p', () => {})
     const page = await reader.execute(scope, { action: 'read', limit: 100, attempt: 'one' }, context()) as any
     assert.equal(page.events.length, 1)
@@ -56,7 +56,7 @@ test('Bot message byte-bounded pages preserve unread data and explicitly fail re
     const next = await reader.execute(scope, { action: 'read' }, context()) as any
     assert.equal(next.events[0].message, '1')
     const tiny = new ChannelMessageStream(workspace, 'p', 1)
-    tiny.append({ connection: 'connection', platform: 'qq', conversation: 'group:one', kind: 'created', message: 'new' })
+    await tiny.append({ connection: 'connection', platform: 'qq', conversation: 'group:one', kind: 'created', message: 'new' })
     await assert.rejects(reader.execute(scope, { action: 'read' }, context()), /expired|retention gap/)
   })
 })

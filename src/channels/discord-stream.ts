@@ -14,9 +14,9 @@ export async function collectDiscordHistory(home:string,project:string,connectio
  const messages=raw.map(m=>discordReadMessage(m,conversation)).sort((a,b)=>BigInt(a.id)<BigInt(b.id)?-1:1)
  if(new Set(messages.map(m=>m.id)).size!==messages.length||messages.some(m=>old&&BigInt(m.id)<=BigInt(old.after)))throw new Error('Discord history pagination failed to advance')
  const stream=new ChannelMessageStream(home,project)
- if(!old)stream.append({connection,conversation,platform:'discord',kind:'gap',detail:'Initial bounded latest-100 history baseline; older messages and offline edits/deletes may be absent.',...(parent?{parent}:{})})
+ if(!old)await stream.append({connection,conversation,platform:'discord',kind:'gap',detail:'Initial bounded latest-100 history baseline; older messages and offline edits/deletes may be absent.',...(parent?{parent}:{})})
  let skipped=0
- for(const m of messages) { if(admit && !await admit(m.author.id,m.id)) {skipped++;continue}; stream.append({connection,conversation,platform:'discord',kind:'created',historical:true,message:m.id,sender:m.author.id,content:(m.content ?? '').slice(0,32000),...(parent?{parent}:{})}) }
+ for(const m of messages) { if(admit && !await admit(m.author.id,m.id)) {skipped++;continue}; await stream.append({connection,conversation,platform:'discord',kind:'created',historical:true,message:m.id,sender:m.author.id,content:(m.content ?? '').slice(0,32000),...(parent?{parent}:{})}) }
  state[key]={after:messages.at(-1)?.id ?? old?.after ?? '0',initial:true};journal.save(state)
  return {hasMore:messages.length===100,skippedUnauthorized:skipped,notice:'Only message creations can be backfilled; offline edits/deletes cannot be reconstructed. Continue bounded reads while hasMore. Gateway receipt and consumer watermarks are independent.'}
 }

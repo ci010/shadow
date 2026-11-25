@@ -15,9 +15,9 @@ function fixture(t:{after(fn:()=>void):void}){
  return {home,stream,ctx,run,append,deps,get sends(){return sends},fail(){fail=true}}
 }
 test('stable consumers survive sessions and restart, fixed batches, independent readers, fencing and no implicit ack',async t=>{
- const f=fixture(t);f.append('1');f.append('2')
+ const f=fixture(t);await f.append('1');await f.append('2')
  const first=await f.run({limit:1,attempt:'a'});assert.equal(first.hasMore,true)
- f.append('3');const replay=await f.run({limit:100},{...f.ctx,sessionId:'web:rebuilt'})
+ await f.append('3');const replay=await f.run({limit:100},{...f.ctx,sessionId:'web:rebuilt'})
  assert.deepEqual(replay.events.map((e:any)=>e.message),['1']);assert.equal(replay.batch.id,first.batch.id)
  const independent=await f.run({consumer:'other'});assert.equal(independent.events.length,3)
  await f.run({action:'retry',batch:first.batch.id,attempt:'a',error:'restart'})
@@ -26,10 +26,10 @@ test('stable consumers survive sessions and restart, fixed batches, independent 
  assert.deepEqual((await f.run({})).events.map((e:any)=>e.message),['2','3'])
 })
 test('late updates, deletes, children, dedupe and explicit retention gaps',async t=>{
- const f=fixture(t);f.append('1');f.append('1');f.append('old','created','20','10');f.append('1','updated');f.append('1','deleted')
+ const f=fixture(t);await f.append('1');await f.append('1');await f.append('old','created','20','10');await f.append('1','updated');await f.append('1','deleted')
  const result=await f.run({includeChildren:true});assert.deepEqual(result.events.map((e:any)=>e.kind),['created','created','updated','deleted'])
  assert.equal(result.events[1].parent,'10')
- const bounded=new ChannelMessageStream(f.home,'p',2);bounded.append({connection:'bot',conversation:'10',platform:'discord',kind:'created',message:'new'})
+ const bounded=new ChannelMessageStream(f.home,'p',2);await bounded.append({connection:'bot',conversation:'10',platform:'discord',kind:'created',message:'new'})
  await assert.rejects(f.run({consumer:'expired'}),/retention gap/)
  const floor=bounded.snapshot().floor;assert.ok((await f.run({consumer:'reset',initialAfter:floor})).events.length)
 })
@@ -44,23 +44,23 @@ test('Project and untrusted access denied; idempotent send and uncertain result 
  f.fail();await assert.rejects(send('two'),/network/);await assert.rejects(send('two'),/uncertain/);assert.equal(f.sends,2)
 })
 test('unfinished includeChildren payload is fixed even when later discovery changes directory membership',async t=>{
- const f=fixture(t);f.append('hidden','created','20');f.append('parent')
+ const f=fixture(t);await f.append('hidden','created','20');await f.append('parent')
  const first=await f.run({includeChildren:true,attempt:'a'});assert.deepEqual(first.events.map((e:any)=>e.message),['parent'])
- f.stream.append({connection:'bot',platform:'discord',conversation:'20',parent:'10',kind:'discovered'})
+ await f.stream.append({connection:'bot',platform:'discord',conversation:'20',parent:'10',kind:'discovered'})
  const replay=await f.run({includeChildren:true});assert.deepEqual(replay.events,first.events)
  assert.throws(()=>new ChannelMessageStream(f.home,'other').snapshot(),/Project mismatch/)
 })
 test('concurrent readers cannot replace or duplicate pending batch',async t=>{
- const f=fixture(t);f.append('one')
+ const f=fixture(t);await f.append('one')
  const results=await Promise.allSettled([f.run({attempt:'a'}),f.run({attempt:'b'})])
  assert.equal(results.filter(r=>r.status==='fulfilled').length,1)
  const replay=await f.run({});assert.equal(replay.batch.attempts.at(-1),'a')
  await assert.rejects(f.run({action:'ack',batch:replay.batch.id,attempt:'b'}),/Stale/)
 })
 test('late platform IDs append after acknowledged local progress rather than falling behind a timestamp/ID cursor',async t=>{
- const f=fixture(t);f.append('1000');const first=await f.run({attempt:'first'})
+ const f=fixture(t);await f.append('1000');const first=await f.run({attempt:'first'})
  await f.run({action:'ack',batch:first.batch.id,attempt:'first'})
- f.append('1')
+ await f.append('1')
  const late=await f.run({});assert.deepEqual(late.events.map((e:any)=>e.message),['1'])
  assert.ok(late.events[0].position>first.events[0].position)
 })

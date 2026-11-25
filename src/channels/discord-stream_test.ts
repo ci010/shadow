@@ -38,7 +38,7 @@ test('gateway collection also admits ordinary messages silently to conversation 
 })
 test('history overlap dedupes platform IDs and admission filters unauthorized senders without widening collection',async t=>{
  const home=mkdtempSync(join(process.cwd(),'.channel-overlap-test-'));t.after(()=>rmSync(home,{recursive:true,force:true}))
- const stream=new ChannelMessageStream(home,'p');stream.append({connection:'bot',conversation:'10',platform:'discord',kind:'created',message:'1',sender:'8',content:'gateway'})
+ const stream=new ChannelMessageStream(home,'p');await stream.append({connection:'bot',conversation:'10',platform:'discord',kind:'created',message:'1',sender:'8',content:'gateway'})
  const raw=(id:string,sender:string)=>({id,channel_id:'10',type:0,author:{id:sender,username:'human'},content:'history',timestamp:'2026-01-01T00:00:00Z'})
  const signal=new AbortController().signal
  await collectDiscordHistory(home,'p','bot','10',async()=>[raw('1','8'),raw('2','9')],signal,undefined,async sender=>sender==='8')
