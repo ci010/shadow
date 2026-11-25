@@ -18,10 +18,10 @@
     </div>
     <details class="raw-data" v-if="scopedProjects.some(project => project.quality)">
       <summary>{{ t('Request quality details') }}</summary>
-      <details v-for="project in scopedProjects" :key="project.id" :open="scopedProjects.length === 1">
-        <summary>{{ project.name || t('Selected project') }}<template v-if="!project.quality"> · {{ t('Unavailable') }}</template></summary>
-        <template v-if="project.quality">
-
+      <UiSelect v-model="detailProject" :aria-label="t('Project')">
+        <option v-for="entry in scopedProjects.filter(entry => entry.quality)" :key="entry.id" :value="entry.id">{{ entry.name || t('Selected project') }}</option>
+      </UiSelect>
+      <template v-if="project?.quality">
           <div class="tables">
             <div class="scroll" tabindex="0" :aria-label="t('Request outcomes')">
               <table><caption>{{ t('Request outcomes') }}</caption><thead><tr><th scope="col">{{ t('Result') }}</th><th scope="col">{{ t('Requests') }}</th><th scope="col">{{ t('Observed attempts') }}</th><th scope="col">{{ t('Requests with attempt data') }}</th></tr></thead>
@@ -41,8 +41,7 @@
               </table>
             </div>
           </div>
-        </template>
-      </details>
+      </template>
     </details>
   </section>
 </template>
@@ -57,6 +56,9 @@ const scopedProjects = computed(() => props.projects.map(project => {
   const periodData = project.usage?.requestQualityByPeriod?.[props.period]
   return { ...project, periodData, quality: periodData ?? (props.period === 'total' ? project.usage?.requestQuality : undefined) }
 }))
+const detailSelection = ref('')
+const project = computed(() => scopedProjects.value.find(row => row.quality && row.id === detailSelection.value) ?? scopedProjects.value.find(row => row.quality))
+const detailProject = computed({ get: () => project.value?.id ?? '', set: value => { detailSelection.value = value } })
 const charts = [{ key: 'outcomes', title: 'Request outcomes' }, { key: 'latency', title: 'Request latency' }, { key: 'speed', title: 'Estimated output speed' }] as const
 const dimensions = [{ key: 'project', label: 'Project' }, { key: 'model', label: 'Model' }, { key: 'provider', label: 'Provider' }] as const
 type Chart = typeof charts[number]['key']
@@ -121,7 +123,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 600; }
 p, details { font-size: 12px; color: var(--c-text-secondary); }
 details { border-top: 1px solid var(--c-border); padding: 10px 0; }
 summary { cursor: pointer; margin-bottom: 6px; overflow-wrap: anywhere; }
-.quality-charts { display: grid; gap: 24px; margin-block: 14px; }
+.quality-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 410px), 1fr)); gap: 16px; margin-block: 14px; }
 .tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 .scroll { overflow: auto; }
 table { width: 100%; text-align: end; border-collapse: collapse; font-variant-numeric: tabular-nums; }

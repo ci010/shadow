@@ -20,16 +20,21 @@
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
       <div class="activity-grid">
-        <UsageBreakdown v-if="allProjects && projectRows.length" :title="t('Usage by project')" :category="t('Project')"
-          :rows="projectRows" initial-metric="tokens" :scope="activityScope">
-          <template #entry="{ row }"><button class="btn btn-sm project-link" type="button" @click="filter = row.id; filterControl?.focus()">{{ row.name }}</button></template>
+        <UsageBreakdown :title="t('Usage summary')" :category="t(usageGroup === 'project' ? 'Project' : 'Model')"
+          initial-metric="tokens" :rows="usageGroup === 'project' ? projectRows : modelRows" :scope="`${activityScope}:${usageGroup}`" allow-column>
+          <template #controls>
+            <UiSelect v-model="usageGroup" :aria-label="t('Group by')">
+              <option value="project">{{ t('Project') }}</option>
+              <option value="model">{{ t('Model') }}</option>
+            </UiSelect>
+          </template>
+          <template #entry="{ row, table }">
+            <UsageModelLabel v-if="usageGroup === 'model'" :name="row.name" :full="table" />
+            <button v-else-if="allProjects" class="btn btn-sm project-link" type="button" @click="filter = row.id; filterControl?.focus()">{{ row.name }}</button>
+            <template v-else>{{ row.name }}</template>
+          </template>
+          <template #coverage><p v-if="usageGroup === 'model' && unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
         </UsageBreakdown>
-        <UsageBreakdown :title="t('Model usage')" :category="t('Model')" initial-metric="calls" :rows="modelRows" :scope="activityScope">
-          <template #entry="{ row, table }"><UsageModelLabel :name="row.name" :full="table" /></template>
-          <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
-        </UsageBreakdown>
-      </div>
-      <div class="tool-recall-grid">
         <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope" />
         <UsageRecall :projects="diagnosticProjects" />
       </div>
@@ -142,7 +147,8 @@ const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
 const selectedActivity = computed(() => data.value!.activity[selectedPeriod.value])
 const activityScope = computed(() => `${selectedProjectId.value}:${selectedPeriod.value}`)
-const projectRows = computed(() => (rows.value ?? []).map(({ project, usage }) => ({ id: project.id, name: project.name, usage: usage?.[selectedPeriod.value] })))
+const usageGroup = ref<'project' | 'model'>(globalMode.value ? 'project' : 'model')
+const projectRows = computed(() => diagnosticProjects.value.map(({ id, name, usage }) => ({ id, name: name || t('Selected project'), usage: usage?.[selectedPeriod.value] })))
 const modelRows = computed(() => selectedActivity.value.models.map(row => ({ id: row.name, ...row })))
 const unnamedCalls = computed(() => Math.max(0, selectedUsage.value.calls - modelRows.value.reduce((sum, row) => sum + row.calls, 0)))
 const toolRows = computed(() => selectedActivity.value.tools.map(row => ({ id: row.name, ...row })))
@@ -244,9 +250,9 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .unavailable { color: var(--c-text-secondary); font-size: 20px; font-weight: 500; }
 .partial { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
 .metric-card > .partial { display: block; margin-top: 6px; }
-.activity-grid, .tool-recall-grid { display: grid; gap: 18px; margin: 20px 0; align-items: start; }
+.activity-grid { display: grid; gap: 18px; margin: 20px 0; align-items: start; }
 @container usage (min-width: 800px) {
-  .tool-recall-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+  .activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 }
 .project-link { min-height: 24px; padding-block: 2px; max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
 @media (pointer: coarse) { .project-link { min-height: 44px; } }

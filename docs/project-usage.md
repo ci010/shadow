@@ -76,6 +76,9 @@ percentiles and samples, not averages of percentiles. `v:stats/model-requests` r
 counts, cache-token coverage, and P50/P95/sample counts for first text, retry
 queue and total elapsed times. Both the usage page and `v:stats/model-requests`
 report estimated output speed (`tokens/s`) and its sample count per Project.
+The usage breakdown switches between Project and model in one chart. Skill and
+Memory reads switch between entry and Project in one chart; Project read counts
+sum only the entries returned by the capped recall index.
 The usage page charts request outcomes, P50/P95 latency and estimated output
 speed by Project, model or provider. Rates across buckets use summed output
 tokens and elapsed time, not an average of rates. Latency groups stay separate

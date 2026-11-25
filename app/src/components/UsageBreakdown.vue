@@ -109,12 +109,12 @@ const ring = computed(() => {
     mask-image: conic-gradient(#000 0deg var(--usage-ring-fill, 360deg), transparent var(--usage-ring-fill, 360deg) 360deg);
   }
 }
-.activity-section { min-width: 0; }
+.activity-section { min-width: 0; border: 1px solid var(--c-border); padding: 14px 16px; }
 .activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
 .activity-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 h3 { margin: 0; font-size: 13px; font-weight: 600; }
 p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-secondary); }
-.ranking-chart { list-style: none; margin: 0; padding: 0; }
+.ranking-chart { list-style: none; margin: 10px 0 0; padding: 0; }
 .ranking-row { display: grid; grid-template-columns: minmax(0, 42%) minmax(0, 1fr) minmax(0, auto); align-items: center; gap: 3px 12px; min-height: 27px; padding: 3px 0; font-size: 12px; }
 .ranking-row.ring-row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
 .ranking-name, th { overflow-wrap: anywhere; min-width: 0; }
@@ -131,10 +131,10 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-nu
 th, td { padding: 5px 8px; border-bottom: 1px solid var(--c-border-soft); font-weight: 400; }
 th { text-align: start; }
 td, thead th:not(:first-child) { text-align: end; }
-@container usage (max-width: 550px) {
-  .activity-section:not(.tool-shares) .ranking-row:not(.ring-row) { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
-  .activity-section:not(.tool-shares) .ranking-row:not(.ring-row) .ranking-name { grid-column: 1 / -1; }
-}
+.fills-bars .ranking-row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 4px 10px; padding-block: 4px; }
+.fills-bars .ranking-name { grid-column: 1; grid-row: 1; }
+.fills-bars .ranking-count { grid-column: 2; grid-row: 1; color: var(--c-text); font-weight: 600; }
+.fills-bars .ranking-track { grid-column: 1 / -1; grid-row: 2; }
 .ranking-bar { width: var(--bar-size); }
 .column-chart { display: flex; overflow-x: auto; gap: 12px; align-items: start; }
 .column-chart .ranking-row { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 7rem auto auto; flex: 1 0 7rem; max-width: 13rem; gap: 4px; text-align: center; }
