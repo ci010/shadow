@@ -66,19 +66,29 @@ const loadScript = ts.transpileModule(loadDeclaration.getText(source), {
 function loadFixture(status = 200) {
   const calls: string[] = []
   const data = { history: ['history'], commandResults: ['command'], decisionRecords: ['decision'],
-    systemPrompt: 'prompt', tools: ['tool'], previousPhysicalId: 'prior' }
+    currentPhysicalId: 'current', previousPhysicalId: 'prior', historyStart: 2 }
   const state = {
     deferActiveHistory: false, requestBusy: { value: false }, messages: { value: [] as unknown[] },
     viewingPhysicalId: { value: 'old' as string | null }, historyRequest: undefined as AbortController | undefined,
-    AbortController, activeSessionId: { value: 'web:fixture' }, directRefreshPending: false,
+    AbortController, AbortSignal, activeSessionId: { value: 'web:fixture' }, directRefreshPending: false,
+    currentTimelinePhysicalId: undefined, olderDirectRead: undefined, timelinePrefixLength: { value: 0 },
     loadingHistory: { value: false }, messagesContainer: { value: null },
-    fetch: async (url: string) => { calls.push(url); return { status, ok: status === 200, json: async () => data } },
-    buildUrl: (path: string) => path, mergeCommandResults: (history: unknown[], commands: unknown[]) => [...history, ...commands],
+    historyWindowQuery: () => ({ historyWindow: 'recent' }), chatReadScope: () => ({}),
+    chatResources: { readDirect: async (url: string) => { calls.push(url); return { status, ok: status === 200, data } } },
+    fetch: async (url: string) => { calls.push(url); return Response.json([]) },
+    buildUrl: (path: string, query?: Record<string, string>) => query ? `${path}?${new URLSearchParams(query)}` : path,
+    isChatInputDelivery: () => true,
+    mergeInputDelivery: (history: unknown[]) => history, mergeCommandResults: (history: unknown[], commands: unknown[]) => [...history, ...commands],
     collapseHistory: (history: unknown[]) => history, parseDecisionRecords: (records: unknown[]) => records,
     decisionRecords: { value: [] }, decisionRecordError: { value: '' }, sendRequest: undefined,
     streaming: { value: false }, resetStreamPresentation() {}, streamPhase: { value: undefined },
-    streamingToolCallData: { value: null }, systemPrompt: { value: '' }, tools: { value: [] },
+    streamingToolCallData: { value: null }, historyStart: -1,
     previousPhysicalId: { value: null }, physicalIdStack: { value: ['old'] },
+    applyCurrentTimeline(history: unknown[], records: unknown[], _previous: string, _physical: string, start: number) {
+      state.messages.value = history
+      state.decisionRecords.value = records
+      state.historyStart = start
+    },
     composerError: { value: '' }, props: { embedded: false }, t: (s: string) => s,
     emit: (...args: unknown[]) => events.push(args), createNewWebChat: () => { drafts++ },
     scrollToBottom() {}, refreshDirectHistory() {}, historySnapshot: undefined as { getPromise(): Promise<void> } | undefined, connectEventStream: () => { streams++ }, disconnectEventStream: () => { streams-- },
@@ -92,11 +102,11 @@ function loadFixture(status = 200) {
 test('direct history loads content and navigation from one request', async () => {
   const f = loadFixture()
   await f.load()
-  assert.deepEqual(f.calls, ['/api/chat/session'])
+  assert.deepEqual(f.calls, ['/api/chat/session?chatId=fixture&historyWindow=recent', '/api/sessions/web%3Afixture/input-delivery'])
   assert.deepEqual(f.state.messages.value, ['history', 'command'])
   assert.deepEqual(f.state.decisionRecords.value, ['decision'])
-  assert.equal(f.state.systemPrompt.value, 'prompt')
-  assert.deepEqual(f.state.tools.value, ['tool'])
+  assert.equal(f.state.historyStart, 2)
+  assert.ok(!f.calls.some(path => path.endsWith('/context')))
   assert.equal(f.state.previousPhysicalId.value, 'prior')
   assert.equal(f.state.viewingPhysicalId.value, null)
   assert.equal(f.state.physicalIdStack.value.length, 0)
@@ -135,5 +145,5 @@ test('direct initial load subscribes before GET and waits for the bounded readin
   assert.equal(f.calls.length, 0, 'HTTP does not race the initial subscription snapshot')
   ready()
   await pending
-  assert.deepEqual(f.calls, ['/api/chat/session'])
+  assert.deepEqual(f.calls, ['/api/chat/session?chatId=fixture&historyWindow=recent', '/api/sessions/web%3Afixture/input-delivery'])
 })

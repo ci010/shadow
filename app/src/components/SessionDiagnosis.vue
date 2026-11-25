@@ -6,7 +6,7 @@
           :aria-selected="section === view.id" :aria-controls="domId(`diagnosis-${view.id}`)"
           :tabindex="section === view.id ? 0 : -1" :class="{ selected: section === view.id }"
           @click="section = view.id" @keydown="navigateViews($event, view.id)">
-          {{ view.label }}<span v-if="view.id === 'tools'" class="view-count">{{ tools.length }}</span>
+          {{ view.label }}<span v-if="view.id === 'tools' && inspectedContext" class="view-count">{{ inspectedContext.tools.length }}</span>
         </button>
       </div>
       <span v-if="section !== 'stats'" class="diagnosis-status" :class="{ working: working && !physicalId && !error }">
@@ -164,11 +164,13 @@
       <p v-if="promptLoading" role="status">{{ t('Loading') }}…</p>
       <p v-if="promptError" role="alert">{{ promptError }}</p>
       <SystemPromptCard :prompt="inspectedPrompt" :sections="inspectedSections" empty-message="No system prompt loaded for this session." />
-      <SystemPromptCard :show-provenance="false" v-if="compactionSummary" :title="t('Compaction Summary')" :prompt="compactionSummary" :show-token-estimate="true" />
+      <SystemPromptCard :show-provenance="false" v-if="inspectedSummary" :title="t('Compaction Summary')" :prompt="inspectedSummary" :show-token-estimate="true" />
     </div>
     <div v-show="section === 'tools'" :id="domId('diagnosis-tools')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-tools-tab')" tabindex="0">
       <p class="context-note">{{ t('Currently available tool definitions. Actual calls, arguments and results are in Trace.') }}</p>
-      <ToolsCard :tools="tools" />
+      <p v-if="promptLoading" role="status">{{ t('Loading') }}…</p>
+      <p v-if="promptError" role="alert">{{ promptError }}</p>
+      <ToolsCard :tools="inspectedContext?.tools ?? []" />
     </div>
     <div v-show="section === 'stats'" :id="domId('diagnosis-stats')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-stats-tab')" tabindex="0">
       <SessionProfile :api-base="apiBase" :session-id="sessionId" :active="active && section === 'stats'" />
@@ -204,37 +206,34 @@ const props = defineProps<{
   active: boolean
   canReadTrace: boolean
   working: boolean
-  systemPrompt: string
-  promptSections?: unknown
-  promptSource?: string
   projectId?: string
   compactionSummary: string
-  tools: ToolDef[]
   idPrefix?: string
 }>()
 const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
 const promptDocuments = inject(PromptDocumentsKey, undefined)
-// Direct-chat snapshots intentionally keep their fixed metadata protocol. Read
-// provenance only while inspecting the prompt, rather than enlarging every delta.
-const inspectedContext = ref<{ systemPrompt: string; sections?: unknown; source?: string; promptIdentity?: PromptIdentity }>()
+// Context belongs to the prompt/tools inspector, not conversation history.
+const inspectedContext = ref<{ systemPrompt: string; tools: ToolDef[]; compactionSummary?: string; sections?: unknown; source?: string; promptIdentity?: PromptIdentity }>()
+const wantsContext = computed(() => section.value === 'prompt' || section.value === 'tools')
 const promptError = ref('')
 const promptLoading = ref(false)
 let promptRequest: AbortController | undefined
-const inspectedPrompt = computed(() => props.physicalId ? '' : inspectedContext.value?.systemPrompt ?? props.systemPrompt)
-const inspectedSections = computed(() => inspectedContext.value?.sections ?? props.promptSections)
-const inspectedSource = computed(() => inspectedContext.value?.source ?? props.promptSource)
-watch(() => [props.apiBase, props.sessionId, props.physicalId, props.active, section.value, props.working], async () => {
+const inspectedPrompt = computed(() => inspectedContext.value?.systemPrompt ?? '')
+const inspectedSections = computed(() => inspectedContext.value?.sections)
+const inspectedSource = computed(() => inspectedContext.value?.source)
+const inspectedSummary = computed(() => inspectedContext.value?.compactionSummary ?? props.compactionSummary)
+watch([() => props.apiBase, () => props.sessionId, () => props.physicalId, () => props.active, wantsContext, () => props.working], async () => {
   promptRequest?.abort()
   inspectedContext.value = undefined; promptError.value = ''; promptLoading.value = false
-  if (!props.active || section.value !== 'prompt' || props.physicalId || !props.sessionId) return
+  if (!props.active || !wantsContext.value || props.physicalId || !props.sessionId) return
   const request = promptRequest = new AbortController()
   promptLoading.value = true
   try {
-    const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/context`), { signal: request.signal })
-    if (!response.ok) throw new Error(t('Could not load execution context. Reopen it to retry.'))
+    const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/context`, { includeCompactionSummary: 'true' }), { signal: request.signal })
     const data = await response.json()
     if (request.signal.aborted) return
-    if (!data || typeof data.systemPrompt !== 'string' || !['active-history', 'preview'].includes(data.source)) {
+    if (response.status === 409 && data?.error === 'archived_context_unavailable') return
+    if (!response.ok || !data || typeof data.systemPrompt !== 'string' || !Array.isArray(data.tools) || !['active-history', 'preview'].includes(data.source)) {
       throw new Error(t('Could not load execution context. Reopen it to retry.'))
     }
     inspectedContext.value = { ...data, promptIdentity: parsePromptIdentity(data.promptIdentity) }

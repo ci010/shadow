@@ -25,7 +25,7 @@ const graph = () => ({ nodes: [], sessions: [
 ] })
 
 function fixture(t: TestContext, canWrite = false) {
-  const subscriptions: Array<{ projectId: string; observer: LiveObserver; closed: boolean }> = []
+  const subscriptions: Array<{ projectId: string; kind: string; observer: LiveObserver; closed: boolean }> = []
   const requests: Array<{ path: string; body: RequestInit['body']; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
     requests.push({ path: new URL(url).pathname, body: init.body, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
@@ -36,7 +36,7 @@ function fixture(t: TestContext, canWrite = false) {
     client: (): Pick<LiveClient, 'subscribe'> => ({
     subscribe: (topic, observer) => {
       assert.notEqual(topic.kind, 'projects')
-      const subscription = { projectId: topic.projectId!, observer, closed: false }
+      const subscription = { projectId: topic.projectId!, kind: topic.kind, observer, closed: false }
       subscriptions.push(subscription)
       return { ready: async () => {}, close: () => { subscription.closed = true } }
     },
@@ -621,23 +621,58 @@ test('first history load ignores layout scroll events and opens at the latest me
   assert.ok(history)
   history.finish({ revision: 'a'.repeat(64), historyRevision: 'b'.repeat(64),
     metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
-    data: { chatId: root.slice(4), currentPhysicalId: 'current-segment', segmentIndex: 0,
+    data: { chatId: root.slice(4), currentPhysicalId: 'current-segment', segmentIndex: 0, historyStart: 0,
       history: [{ role: 'assistant', content: 'Latest message' }], previousPhysicalId: 'previous-segment',
       systemPrompt: '', tools: [], commandResults: [], decisionRecords: [] } })
   await settle()
-  // Recent compacted history is seeded through its explicit physical ID.
-  const seed = await requestAt('/projects/a/api/sessions/previous-segment')
-  assert.ok(seed)
-  seed.finish({ messages: [], previousPhysicalId: null })
-  await settle()
-  // Inline navigation metadata must not require another session GET.
+  const delivery = await requestAt(`/projects/a/api/sessions/${encodeURIComponent(root)}/input-delivery`)
+  assert.ok(delivery)
+  // Layout scroll events during the initial read must not eagerly fetch an archive.
   state.trackHistoryScroll()
+  delivery.finish([])
+  await loading
+  assert.ok(!f.requests.some(request => request.path.endsWith('/previous-segment')))
+  assert.ok(!f.requests.some(request => request.path.endsWith('/context')))
+  // Inline navigation metadata must not require another session GET.
   const segment = f.requests.find(request => request.path === `/projects/a/api/sessions/${encodeURIComponent(root)}`)!
   assert.equal(segment, undefined)
   assert.equal(state.previousPhysicalId, 'previous-segment')
   await loading
   await Vue.nextTick()
   assert.equal(container.scrollTop, 2400)
+})
+
+test('paging older history while a live tool finishes keeps one call and one result', async t => {
+  const f = fixture(t)
+  const state = f.mount('a').state()
+  const metadataVersions = Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)]))
+  const call = { role: 'assistant', tool_calls: [{ id: 'tool-paging', type: 'function', function: { name: 'read', arguments: '{}' } }] }
+  const body = (historyStart: number, history: unknown[]) => ({ revision: (historyStart ? 'a' : 'd').repeat(64), historyRevision: 'b'.repeat(64), metadataVersions,
+    data: { chatId: root.slice(4), currentPhysicalId: 'current-segment', previousPhysicalId: null, segmentIndex: 0, historyStart, history,
+      systemPrompt: '', tools: [], commandResults: [], decisionRecords: [] } })
+  const findRead = async (suffix: string, count: number) => {
+    const deadline = Date.now() + 2000
+    const matching = () => f.requests.filter(request => request.path.endsWith(suffix))
+    while (matching().length < count && Date.now() < deadline) await settle()
+    const request = matching()[count - 1]
+    assert.ok(request, suffix)
+    return request
+  }
+  const load = state.loadDirectChat()
+  ;(await findRead('/chat/session', 1)).finish(body(1, [call]))
+  ;(await findRead('/input-delivery', 1)).finish([])
+  await load
+  const prepend = state.prependOlderSegment()
+  ;(await findRead('/chat/session', 2)).finish(body(0, [{ role: 'user', content: 'Earlier page' }, call]))
+  const delivery = await findRead('/input-delivery', 2)
+  const subscription = f.subscriptions.find(item => item.kind === 'chat' && !item.closed)!
+  subscription.observer.event({ type: 'event', version: 1, cursor: 'fixture:1', topic: { kind: 'chat', projectId: 'a', sessionId: root },
+    payload: { event: 'tool_result', toolCallId: 'tool-paging', toolName: 'read', content: 'Live result' } })
+  delivery.finish([])
+  await prepend
+  assert.deepEqual(state.messages.map((message: { event?: string; content: string }) => message.event ?? message.content),
+    ['Earlier page', 'tool_call', 'tool_result'])
+  assert.equal(state.messages.at(-1)?.content, 'Live result')
 })
 
 test('history loaded in a hidden conversation follows the bottom when opened without resetting a browsing position', async t => {
