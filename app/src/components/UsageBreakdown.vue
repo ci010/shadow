@@ -18,7 +18,7 @@
       <ol v-else :key="entranceKey" class="ranking-chart" :class="{ 'fills-bars': view === 'bar', 'column-chart': view === 'column' }" :aria-label="title">
         <li v-for="(row, index) in visible" :key="'aggregate' in row ? 'other' : `entry:${row.id}`" class="ranking-row" :class="{ 'ring-row': view === 'ring' }">
           <span class="ranking-name"><i v-if="view === 'ring' && row.value" class="swatch" :style="{ backgroundColor: color(index) }" aria-hidden="true" /><slot name="entry" :row="row" :table="false">{{ row.name }}</slot></span>
-          <span v-if="view === 'bar' || view === 'column'" class="ranking-track" aria-hidden="true"><span v-if="row.value !== null" class="ranking-bar" :style="{ '--bar-size': `${ratio(row.value, toolShares ? total : maximum) * 100}%` }" /></span>
+          <span v-if="view === 'bar' || view === 'column'" class="ranking-track" aria-hidden="true"><span v-if="row.value !== null" class="ranking-bar" :style="{ '--bar-color': color(index), '--bar-size': `${ratio(row.value, toolShares ? total : maximum) * 100}%` }" /></span>
           <span class="ranking-count">{{ valueLabel(row) }}<span v-if="toolShares" class="ranking-share"> · {{ shareLabel(row) }}</span></span>
         </li>
       </ol>
@@ -73,7 +73,8 @@ function valueLabel(row: { value: number | null; partial: boolean }) {
   const label = metric.value === 'cost' ? `${value} ${unit.value}` : metric.value === 'time' ? t('{seconds} s', { seconds: value }) : value
   return row.partial ? `${label} · ${t('Partial telemetry')}` : label
 }
-function color(index: number) { return index === 0 ? 'var(--c-primary)' : `hsl(${Math.round((220 + 137.5 * index) % 360)} 50% 49%)` }
+const chartColors = ['var(--c-primary)', 'var(--c-success)', 'var(--c-amber)', '#a788db', '#4bafb7', '#cf82a8']
+function color(index: number) { return chartColors[index % chartColors.length]! }
 const ring = computed(() => {
   const denominator = props.toolShares ? total.value : sumValues(visible.value)
   if (!denominator) return ''
@@ -119,7 +120,7 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .ranking-row.ring-row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
 .ranking-name, th { overflow-wrap: anywhere; min-width: 0; }
 .ranking-track { height: 6px; background: var(--c-bg-muted); }
-.ranking-bar { display: block; height: 100%; background: var(--c-primary); }
+.ranking-bar { display: block; height: 100%; background: var(--bar-color, var(--c-primary)); }
 .ranking-count { overflow-wrap: anywhere; max-width: 20ch; text-align: right; font-variant-numeric: tabular-nums; }
 .ranking-share { color: var(--c-text-secondary); }
 .ranking-toggle { margin-top: 10px; }
