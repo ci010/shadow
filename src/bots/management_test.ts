@@ -269,3 +269,51 @@ test('Discord source address projections reuse ids and supply strict subscriptio
   assert.deepEqual(thread.parent!.subscription, first.subscription)
   assert.match(thread.parent!.requires, /Explicit inheritThreads:true/)
 })
+
+// Stored bytes can be authentic yet no longer satisfy today's configuration schema.
+async function retiredReadFolders(t: TestContext) {
+  const f = fixture(t), old = files('Retired deployment')
+  const config = JSON.parse(old['bot.json'])
+  config.bindings[0].readFolders = ['must-not-be-inherited']
+  old['bot.json'] = JSON.stringify(config)
+  const deployment = await f.deployments.deploy({ id: 'support', source: { folderId: 'folder', directory: '' }, ...f.deployments.freeze(old) })
+  return { f, deployment }
+}
+
+test('reload replaces authentic obsolete readFolders deployment without inventing a permission baseline', async t => {
+  const { f, deployment } = await retiredReadFolders(t)
+  const result = JSON.parse(await f.reload() as string)
+  assert.equal(result.status, 'deployed')
+  assert.equal(result.changes.previousContent, deployment.revision)
+  assert.equal(result.changes.permissionBaseline, 'unknown')
+  assert.equal(result.changes.addedPermissions, null)
+  assert.equal(result.changes.removedPermissions, null)
+  assert.equal(result.changes.repair.activeInvalid, true)
+  assert.ok(result.changes.candidatePermissions.length)
+  assert.doesNotMatch(JSON.stringify(result), /must-not-be-inherited/)
+  assert.deepEqual(result.changes.readResources, null)
+  assert.deepEqual(f.deployments.read('support')!.files, f.deployments.freeze(files()).files)
+})
+
+test('obsolete active schema does not relax candidate schema, Project or live permission checks', async t => {
+  const { f, deployment } = await retiredReadFolders(t)
+  const config = JSON.parse(files()['bot.json'])
+  config.bindings[0].readFolders = ['forbidden']
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  await assert.rejects(() => f.reload(), /readFolders/)
+  f.save()
+  await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'Replace' }, { ...f.context, projectId: 'foreign' }), /authenticated owner/)
+  f.options.publish = async (_id, change) => { f.fail(); return change() }
+  await assert.rejects(() => f.reload(), /live authority changed/)
+  assert.equal(f.deployments.read('support')!.deployment.revision, deployment.revision)
+})
+
+test('obsolete schema never hides damaged deployment bytes or storage read failures', async t => {
+  const { f } = await retiredReadFolders(t)
+  writeFileSync(join(f.deployments.runtimeDirectory('support'), 'BOT.md'), '# Tampered')
+  await assert.rejects(() => f.reload(), /integrity|revision|hash|mismatch/i)
+  assert.throws(() => new BotDeployments({ directory: join(f.root, 'internal'), projectId: 'foreign' }), /Project ownership mismatch/)
+  const error = Object.assign(new Error('storage permission denied'), { code: 'EACCES' })
+  f.deployments.read = () => { throw error }
+  await assert.rejects(() => f.reload(), caught => caught === error)
+})

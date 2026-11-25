@@ -4,7 +4,7 @@ import { channelSourceAddresses } from './channel-assignment.ts'
 import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
 import { lstatSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { z } from 'zod'
+import { z, ZodError } from 'zod'
 import type { Hono } from 'hono'
 import type { Tool, ToolResult } from '../tools/tool.ts'
 import type { FolderRegistry } from '../folders/registry.ts'
@@ -146,13 +146,29 @@ export function botPackageTool(options: Options): Tool {
       const current = options.deployments.read(bot.id)?.deployment
       await options.validate(frozen.files,context.signal)
       const active = options.deployments.read(bot.id)
-      const baseline = active ? botProposalBaseline(active.files) : undefined
+      // Storage/project/hash verification happens in read(), outside this catch.
+      // An obsolete schema is unusable as a permission baseline, not a reason to
+      // execute or migrate the old package, or block a strictly valid replacement.
+      let baseline: ReturnType<typeof botProposalBaseline> | undefined
+      let unknownBaseline = false
+      if (active) {
+        try { baseline = botProposalBaseline(active.files) }
+        catch (error) {
+          if (!(error instanceof ZodError)) throw error
+          unknownBaseline = true
+        }
+      }
       const before = baseline?.bot
       if (before && before.id !== bot.id) throw new Error('BOT active identity mismatch.')
       const oldAuthority=authorities(before),newAuthority=authorities(bot)
       if (baseline?.removedProposalGrants?.length) for (const operation of before?.hostCapabilities ?? []) oldAuthority.delete(`BOT host capability ${operation} (invoking binding only)`)
       for (const grant of baseline?.removedProposalGrants ?? []) oldAuthority.add(`Retired proposal-inbox grant ${grant.id}: ${grant.repository}/${grant.inbox} (inactive; no Work authority)`)
-      const repair = baseline && (baseline.removedBindingSkills.length || baseline.removedProposalGrants?.length) ? {
+      const repair = unknownBaseline ? {
+        activeInvalid: true, baseline: 'unknown',
+        reason: 'Active package fails the current configuration schema; previous permissions cannot be determined. No legacy fields are inherited or converted into authority.',
+        effect: 'Only the strictly validated candidate is published; the invalid active package is not executed.',
+        candidatePermissions: [...newAuthority], previousContent: current!.revision, exactContent: frozen.revision,
+      } : baseline && (baseline.removedBindingSkills.length || baseline.removedProposalGrants?.length) ? {
         activeInvalid: true, reason: 'Retired binding.skills selectors or proposal-inbox grants; the active package fails the current strict schema. Removed proposal grants never grant Work authority.',
         removedBindingSkills: baseline.removedBindingSkills, removedProposalGrants: baseline.removedProposalGrants ?? [],
         effect: 'Deployment restores a valid BOT definition and its enabled input subscriptions/runtime; it is not only a format change.',
@@ -162,7 +178,8 @@ export function botPackageTool(options: Options): Tool {
       const affected=[...new Set([...(before?.bindings ?? []),...bot.bindings].map(location))]
       const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,repair,
         previousContent:current?.revision ?? null,exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
-        affected,addedPermissions:added,removedPermissions:removed,candidatePermissions:[...newAuthority],
+        affected,permissionBaseline:unknownBaseline ? 'unknown' : 'known',
+        addedPermissions:unknownBaseline ? null : added,removedPermissions:unknownBaseline ? null : removed,candidatePermissions:[...newAuthority],
         credentialDisclosure:'Credential configuration is represented only by its presence; private references and header values are withheld. Origins, routes and body restrictions remain visible.',
         mode:bot.mode,agent:bot.agent,bindings:disclosedBindings(bot),subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
         hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],readResources:botReadResources(bot) ?? null,discordHistory:bot.discordHistory ?? null,

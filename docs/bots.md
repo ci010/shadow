@@ -461,6 +461,13 @@ In an authenticated owner Web conversation, the Agent calls `bot_package`:
    and publishes exactly those files. Edits made after that read are excluded;
    reload again to apply them. There is no separate approval/pending stage.
    Validation, authorization and storage failures do not report success.
+   An integrity-verified active deployment with an obsolete configuration schema
+   (for example binding-level `readFolders`) does not block a valid replacement.
+   If its permissions cannot be parsed, the receipt marks the permission baseline
+   unknown, reports no added/removed comparison, and discloses all candidate
+   permissions explicitly. Legacy fields are not inherited, authorized or executed;
+   the candidate still passes strict validation. Storage, Project identity and
+   deployment-integrity failures remain blocking.
 5. `create` makes a new source directory without overwriting existing files and
    applies it with no subscriptions. Optional `source` inspects identity, config
    path, inherited read grants and trusted channel origin, returning exact
