@@ -8,7 +8,7 @@ import { MainDeviceUi, DEVICE_UI_REQUEST } from './device-ui.ts'
 import type { MainCluster } from './main-cluster.ts'
 import { encodeDeviceChallengeProtocol } from './device-challenge.ts'
 
-test('usage recall requires an approved UI request and stays scoped to the usage summary', async t => {
+test('Project usage authorization covers recall for owner, mobile and approved Child UI', async t => {
   const authentication = { deviceId: 'device', credentialId: 'credential', nodeId: 'node' }
   let revoked = false
   const cluster = {
@@ -34,12 +34,8 @@ test('usage recall requires an approved UI request and stays scoped to the usage
     getProjectUsagePage: async (page: number) => ({ projectId: 'p1', page }),
   } as unknown as SessionManager, {
     authorizeContext: request => owner(request) || mobile(request) || bridge.authorize(request),
-    recall: {
-      authorize: request => owner(request) || bridge.authorizeUsageRecall(request),
-      read: () => ({ coverage: 'complete', skills: [{ entry: 'skill', reads: 4 }], memory: [] }),
-    },
+    recall: () => ({ coverage: 'complete', skills: [{ entry: 'skill', reads: 4 }], memory: [] }),
   })(project)
-  project.get('/api/recall-auth-probe', c => c.json(bridge.authorizeUsageRecall(c.req.raw)))
   const throughChild = (path: string) => ingress.request(DEVICE_UI_REQUEST, { method: 'POST', headers: {
     'X-Shadow-Device-Proof': encodeDeviceChallengeProtocol({ ...authentication, version: 1, challengeId: 'challenge', signature: 'stub' }),
     'X-Shadow-Ui-Path': '/projects/p1' + path, 'X-Shadow-Ui-Method': 'GET',
@@ -53,10 +49,15 @@ test('usage recall requires an approved UI request and stays scoped to the usage
     const payload = await child.json()
     assert.deepEqual(payload, await main.json())
     if (!suffix) assert.equal(payload.recall.skills[0].reads, 4)
-    else assert.equal(payload.page, 2)
+    else {
+      assert.equal(payload.page, 2)
+      assert.equal('recall' in payload, false)
+    }
   }
-  assert.equal(await (await throughChild('/api/recall-auth-probe')).json(), false)
-  assert.deepEqual(await (await project.request(usage, { headers: { Authorization: 'Bearer mobile-private' } })).json(), { projectId: 'p1' })
+  const mobileUsage = await project.request(usage, { headers: { Authorization: 'Bearer mobile-private' } })
+  assert.equal(mobileUsage.status, 200)
+  assert.equal((await mobileUsage.json()).recall.skills[0].reads, 4)
+  assert.equal((await project.request(usage)).status, 401)
   assert.equal((await project.request(usage, { headers: { Authorization: 'Bearer child-private' } })).status, 401)
   revoked = true
   assert.equal((await throughChild(usage)).status, 401)

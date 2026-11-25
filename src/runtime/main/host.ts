@@ -169,8 +169,6 @@ export async function startProjectHost(
   let deviceUi: MainDeviceUi | undefined
   const authorizeOwner = (request: Request) => browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
-  // An approved Child renderer can read usage recall without becoming a general owner.
-  const authorizeRecall = (request: Request) => authorizeOwner(request) || !!deviceUi?.authorizeUsageRecall(request)
   const authorizeViewerCapture = createGltfCaptureOwner({ browser: browserAuth, clientAddresses, launchCredential,
     developmentUrl: process.env.VITE_DEV_URL,
     deviceViewer: request => deviceUi?.viewerCaptureOwner(request),
@@ -290,7 +288,7 @@ export async function startProjectHost(
           debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeRecall, authorizeViewerCapture, realtimeHub,
+          mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeViewerCapture, realtimeHub,
           webClientDeviceName: request => deviceUi?.clientDeviceName(request),
           localExecutor: options.localExecutor !== false,
         }))

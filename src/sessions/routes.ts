@@ -202,7 +202,7 @@ export function sessionsApiPlugin(
   options: {
     cron?: Pick<CronService, 'listJobs'> & Partial<Pick<CronService, 'nextJobRun'>>
     backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
-    recall?: { authorize(request: Request): boolean | Promise<boolean>; read(): NonNullable<ProjectUsage['recall']> }
+    recall?: () => NonNullable<ProjectUsage['recall']>
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
@@ -530,9 +530,9 @@ export function sessionsApiPlugin(
       if (!sessions?.projectId) return c.json({ error: 'project_not_found' }, 404)
       const usage = await sessions.getProjectUsage(c.req.raw.signal)
       const recall = options.recall
-      if (!recall || !await recall.authorize(c.req.raw)) return c.json(usage)
+      if (!recall) return c.json(usage)
       c.req.raw.signal.throwIfAborted()
-      return c.json({ ...usage, recall: recall.read() })
+      return c.json({ ...usage, recall: recall() })
     })
 
     app.get('/api/sessions/:key/profile', async c => {

@@ -148,6 +148,7 @@
   "Other tools": "Other tools",
   "Shares are based on all recorded tool calls.": "Shares are based on all recorded tool calls.",
   "Full model identifier: {name}": "Full model identifier: {name}",
+  "Group by": "Group by",
   "Request quality details": "Request quality details",
   "Read statistics not available with current access": "Read statistics not available with current access",
   "Usage unavailable": "Usage unavailable",

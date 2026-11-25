@@ -1,24 +1,24 @@
 <template>
   <section class="activity-section" :class="{ 'tool-shares': toolShares }" :aria-label="title">
     <div class="activity-heading"><h3>{{ title }}</h3>
-      <UsageViewControls v-model:metric="metric" v-model:unit="unit" v-model:view="view" :show-metric="initialMetric !== undefined" :views="allowRing ? ['bar', 'ring', 'table'] : ['bar', 'table']" />
+      <div class="activity-controls"><slot name="controls" /><UsageViewControls v-model:metric="metric" v-model:unit="unit" v-model:view="view" :show-metric="initialMetric !== undefined" :views="allowColumn ? (allowRing ? ['bar', 'column', 'ring', 'table'] : ['bar', 'column', 'table']) : (allowRing ? ['bar', 'ring', 'table'] : ['bar', 'table'])" /></div>
     </div>
-    <p>{{ description }}</p>
+    <p v-if="description">{{ description }}</p>
     <slot name="coverage" />
     <p v-if="!ranked.length">{{ t('No recorded entries in this scope.') }}</p>
     <template v-else>
       <div v-if="view === 'ring' && ring" :key="entranceKey" class="usage-ring" :style="{ background: ring }" aria-hidden="true"></div>
       <p v-else-if="view === 'ring'">{{ t('No positive values to plot.') }}</p>
-      <p v-if="toolShares || (view === 'ring' && ring)">{{ t(toolShares ? 'Shares are based on all recorded tool calls.' : 'Ring shows shares of displayed known values only.') }}</p>
+      <p v-if="!toolShares && view === 'ring' && ring">{{ t('Ring shows shares of displayed known values only.') }}</p>
       <div v-if="view === 'table'" class="table-scroll" tabindex="0" :aria-label="title">
         <table><thead><tr><th scope="col">{{ category }}</th><th scope="col">{{ metricLabel }}</th><th v-if="toolShares" scope="col">{{ t('Share') }}</th></tr></thead>
           <tbody><tr v-for="row in tableRows" :key="row.id"><th scope="row"><slot name="entry" :row="row" :table="true">{{ row.name }}</slot></th><td>{{ valueLabel(row) }}</td><td v-if="toolShares">{{ shareLabel(row) }}</td></tr></tbody>
         </table>
       </div>
-      <ol v-else :key="entranceKey" class="ranking-chart" :class="{ 'fills-bars': view === 'bar' }" :aria-label="title">
+      <ol v-else :key="entranceKey" class="ranking-chart" :class="{ 'fills-bars': view === 'bar', 'column-chart': view === 'column' }" :aria-label="title">
         <li v-for="(row, index) in visible" :key="'aggregate' in row ? 'other' : `entry:${row.id}`" class="ranking-row" :class="{ 'ring-row': view === 'ring' }">
           <span class="ranking-name"><i v-if="view === 'ring' && row.value" class="swatch" :style="{ backgroundColor: color(index) }" aria-hidden="true" /><slot name="entry" :row="row" :table="false">{{ row.name }}</slot></span>
-          <span v-if="view === 'bar'" class="ranking-track" aria-hidden="true"><span v-if="row.value !== null" class="ranking-bar" :style="{ width: `${ratio(row.value, toolShares ? total : maximum) * 100}%` }" /></span>
+          <span v-if="view === 'bar' || view === 'column'" class="ranking-track" aria-hidden="true"><span v-if="row.value !== null" class="ranking-bar" :style="{ '--bar-size': `${ratio(row.value, toolShares ? total : maximum) * 100}%` }" /></span>
           <span class="ranking-count">{{ valueLabel(row) }}<span v-if="toolShares" class="ranking-share"> · {{ shareLabel(row) }}</span></span>
         </li>
       </ol>
@@ -32,7 +32,7 @@ import { formatNumber, t } from '../i18n.ts'
 import { displayCosts, type CostUnit } from '../project-usage-charts.ts'
 import { rankBreakdown, usageMetrics, type BreakdownRow, type UsageMetric } from '../usage-breakdown.ts'
 import UsageViewControls from './UsageViewControls.vue'
-const props = withDefaults(defineProps<{ title: string; category: string; description: string; countLabel?: string; rows: BreakdownRow[]; initialMetric?: UsageMetric; allowRing?: boolean; toolShares?: boolean; scope: string }>(), { allowRing: true })
+const props = withDefaults(defineProps<{ title: string; category: string; description?: string; formatValue?: (value: number) => string; countLabel?: string; rows: BreakdownRow[]; initialMetric?: UsageMetric; allowRing?: boolean; allowColumn?: boolean; toolShares?: boolean; scope: string }>(), { allowRing: true })
 const metric = ref<UsageMetric>(props.initialMetric ?? 'calls')
 const currency = ref<CostUnit>('USD')
 const currencyChosen = ref(false)
@@ -68,6 +68,7 @@ function shareLabel(row: { value: number | null }) {
 const maximum = computed(() => ranked.value[0]?.value ?? 0)
 function valueLabel(row: { value: number | null; partial: boolean }) {
   if (row.value === null) return t('Unavailable')
+  if (props.formatValue) return props.formatValue(row.value)
   const value = formatNumber(row.value, { maximumSignificantDigits: 15 })
   const label = metric.value === 'cost' ? `${value} ${unit.value}` : metric.value === 'time' ? t('{seconds} s', { seconds: value }) : value
   return row.partial ? `${label} · ${t('Partial telemetry')}` : label
@@ -110,6 +111,7 @@ const ring = computed(() => {
 }
 .activity-section { min-width: 0; }
 .activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.activity-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 h3 { margin: 0; font-size: 13px; font-weight: 600; }
 p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-secondary); }
 .ranking-chart { list-style: none; margin: 0; padding: 0; }
@@ -133,4 +135,10 @@ td, thead th:not(:first-child) { text-align: end; }
   .activity-section:not(.tool-shares) .ranking-row:not(.ring-row) { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
   .activity-section:not(.tool-shares) .ranking-row:not(.ring-row) .ranking-name { grid-column: 1 / -1; }
 }
+.ranking-bar { width: var(--bar-size); }
+.column-chart { display: flex; overflow-x: auto; gap: 12px; align-items: start; }
+.column-chart .ranking-row { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 7rem auto auto; flex: 1 0 7rem; max-width: 13rem; gap: 4px; text-align: center; }
+.column-chart .ranking-track { grid-row: 1; align-self: stretch; justify-self: center; width: min(45%, 36px); height: auto; display: flex; align-items: end; }
+.column-chart .ranking-bar { width: 100%; height: var(--bar-size); }
+.column-chart .ranking-count { text-align: center; }
 </style>

@@ -174,9 +174,13 @@ export async function readProjectUsage(store: SessionStore, states: SessionState
   const value = await snapshot(store, states, projectId, asOf, signal, true)
   const from = new Date(Math.floor(asOf / DAY) * DAY - (USAGE_TREND_HISTORY_DAYS - 1) * DAY).toISOString().slice(0, 10)
   signal?.throwIfAborted()
-  const requestQuality = statsIndex(store)?.requestSummary(asOf)
-  return { ...value, ...(requestQuality ? { firstText: requestQuality.firstText, requestQuality } : {}),
-    daily: value.daily.filter(day => day.date >= from) }
+  const today = Math.floor(asOf / DAY) * DAY
+  const month = Date.UTC(new Date(asOf).getUTCFullYear(), new Date(asOf).getUTCMonth(), 1)
+  const requestQualityByPeriod = statsIndex(store)?.requestProjections(asOf, today, today - 6 * DAY, month, signal)
+  const daily = value.daily.filter(day => day.date >= from)
+  if (!requestQualityByPeriod) return { ...value, daily }
+  const { models: _models, providers: _providers, ...requestQuality } = requestQualityByPeriod.total
+  return { ...value, daily, firstText: requestQuality.firstText, requestQuality, requestQualityByPeriod }
 }
 export async function readProjectUsagePage(store: SessionStore, states: SessionState[], projectId: string, asOf: number, page: number, signal?: AbortSignal) {
   if (!Number.isSafeInteger(page) || page < 1 || page > 100000) throw new Error('Invalid usage page')
