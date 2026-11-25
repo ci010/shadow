@@ -46,6 +46,7 @@ export interface BusTopics {
   /** Pure metadata/config edits do not change activity, work, or task lists.
    * Omitted hints retain broad invalidation for lifecycle/structural changes. */
   'session.changed': { sessionId: string; metadataOnly?: true }
+  'session.follow-up.changed': { sessionId: string }
   'session.deleted': { sessionId: string; projectId?: string; automationJobId?: string }
   'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' }
 }

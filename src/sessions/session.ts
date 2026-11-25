@@ -115,6 +115,11 @@ export class Session extends BaseSession {
   prepareSessionFollowUp?: (input: SessionInput) => Promise<boolean>
   settleFollowUpTurn?: (fact: SessionTurnFact) => void
   isFollowUpSettled?: () => boolean
+  supersedeFollowUpForWorkNotice?: (input: SessionMessageInput) => Promise<SessionMessageInput | undefined> | undefined
+
+  protected override beforeWorkNotificationPersisted(input: SessionMessageInput): Promise<SessionMessageInput | undefined> | undefined {
+    return this.supersedeFollowUpForWorkNotice?.(input)
+  }
 
   protected override followUpFinalAllowed(): boolean { return this.isFollowUpSettled?.() ?? false }
 

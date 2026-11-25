@@ -11,16 +11,18 @@ test('real lifecycle and worker metadata bus facts preserve scoped hints and cle
   bus.emit('session.ended', { sessionId: 'web:worker', agentType: 'general' })
   bus.emit('session.changed', { sessionId: 'web:worker' }) // Task lifecycle/review persistence.
   bus.emit('session.changed', { sessionId: 'web:worker', metadataOnly: true })
+  bus.emit('session.follow-up.changed', { sessionId: 'web:worker' })
   bus.emit('background.task.changed', { sessionId: 'web:worker', taskId: 'task-1', status: 'completed' })
   assert.deepEqual(calls, [
     ['web:worker', undefined, undefined],
-    ['web:worker', undefined, ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks']],
-    ['web:worker', undefined, ['metadata']],
+    ['web:worker', undefined, ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks', 'follow-up']],
+    ['web:worker', undefined, ['metadata', 'follow-up']],
+    ['web:worker', undefined, ['follow-up']],
     ['web:worker', undefined, ['background-tasks']],
   ])
   stop()
   bus.emit('session.ended', { sessionId: 'web:worker' })
-  assert.equal(calls.length, 4)
+  assert.equal(calls.length, 5)
   bus.stopAll()
 })
 
