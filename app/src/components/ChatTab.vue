@@ -1208,6 +1208,7 @@ function startData(value: Record<string, unknown>, sessionId: string): Conversat
   return data
 }
 let firstSocketSnapshot: { chat: Record<string, unknown>; inputDelivery: ChatInputDelivery[] } | undefined
+let socketHistoryFallback = false
 let historySnapshot: ReturnType<typeof createInitialLiveSnapshot> | undefined
 let eventStreamKey = ''
 let bgStreamState: StreamState = { accumulated: '' }
@@ -1233,6 +1234,25 @@ function refreshDirectHistory(): void {
   }, 50)
 }
 
+function drainSocketHistory(): boolean {
+  if ((!firstSocketSnapshot && !socketHistoryFallback) || disposed || !paneActive.value || historyRequest || viewingPhysicalId.value) return false
+  if (isDirectChat.value) void loadDirectChat(true)
+  else void loadReadonlySession(true)
+  return true
+}
+
+function takeSocketHistory(from?: number): typeof firstSocketSnapshot {
+  if (from !== undefined) return undefined
+  const snapshot = firstSocketSnapshot
+  firstSocketSnapshot = undefined
+  socketHistoryFallback = false
+  // Socket snapshots use the recent window. If paging has expanded the same
+  // segment, request that expanded window rather than replacing it with a tail.
+  if (snapshot && currentTimelinePhysicalId && snapshot.chat.currentPhysicalId === currentTimelinePhysicalId
+    && typeof snapshot.chat.historyStart === 'number' && snapshot.chat.historyStart > currentHistoryStart.value) return undefined
+  return snapshot
+}
+
 function connectEventStream(chatId: string, loadingCurrent = false, readonlySessionId?: string): void {
   const projectId = props.projectId ?? liveProjectId(props.apiBase)
   const sessionId = readonlySessionId ?? `web:${chatId}`
@@ -1251,7 +1271,7 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
     initial = false
     // An initial load already waiting on readiness owns this snapshot.
     if (!first || !historyRequest) {
-      if (firstSocketSnapshot || eventStream?.refreshConversation?.()) return
+      if ((first && firstSocketSnapshot) || eventStream?.refreshConversation?.()) return
       if (readonlySessionId) { if (!historyRequest && paneActive.value) void loadReadonlySession(true) }
       else refreshDirectHistory()
     }
@@ -1268,10 +1288,12 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
         || !Array.isArray(data.inputDelivery) || !data.inputDelivery.every(isChatInputDelivery)) return
       firstSocketSnapshot = { chat: data.chat, inputDelivery: data.inputDelivery }
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'socket', data: startData(data, sessionId) }
-      if (!historyRequest && paneActive.value) {
-        if (readonlySessionId) void loadReadonlySession(true)
-        else void loadDirectChat(true)
-      }
+      drainSocketHistory()
+    },
+    conversationRefreshFailed() {
+      if (eventStream !== subscription || activeSessionId.value !== sessionId) return
+      socketHistoryFallback = true
+      drainSocketHistory()
     },
     reset() {
       if (eventStream !== subscription || activeSessionId.value !== sessionId) return
@@ -1376,6 +1398,7 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
 
 function closeEventStream(): void {
   firstSocketSnapshot = undefined
+  socketHistoryFallback = false
   conversationStart.value = undefined
   historySnapshot?.dispose()
   historySnapshot = undefined
@@ -1596,7 +1619,7 @@ async function prependOlderSegment(): Promise<void> {
   } catch (cause) {
     if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
-    if (historyRequest === controller) { historyRequest = undefined; loadingHistory.value = false; if (directRefreshPending) refreshDirectHistory() }
+    if (historyRequest === controller) { historyRequest = undefined; loadingHistory.value = false; if (!drainSocketHistory() && directRefreshPending) refreshDirectHistory() }
   }
 }
 function pruneFollowingTimeline(): void {
@@ -2532,8 +2555,7 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const initial = from === undefined ? firstSocketSnapshot : undefined
-    firstSocketSnapshot = undefined
+    const initial = takeSocketHistory(from)
     if (!initial && !background && from === undefined && conversationStart.value?.phase !== 'socket') {
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'http' }
     }
@@ -2607,7 +2629,7 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
       historyRequest = undefined
       loadingHistory.value = false
       if (!background || followBottom) scrollToBottom()
-      if (directRefreshPending) refreshDirectHistory()
+      if (!drainSocketHistory() && directRefreshPending) refreshDirectHistory()
     }
   }
 }
@@ -2631,8 +2653,7 @@ async function loadReadonlySession(background = false, from?: number, signal?: A
       await historySnapshot?.getPromise()
       if (controller.signal.aborted) return
     }
-    const initial = from === undefined ? firstSocketSnapshot : undefined
-    firstSocketSnapshot = undefined
+    const initial = takeSocketHistory(from)
     if (!initial && !background && from === undefined && conversationStart.value?.phase !== 'socket') {
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'http' }
     }
@@ -2659,6 +2680,7 @@ async function loadReadonlySession(background = false, from?: number, signal?: A
       historyRequest = undefined
       loadingHistory.value = false
       if (!background || followBottom) scrollToBottom()
+      drainSocketHistory()
     }
   }
 }

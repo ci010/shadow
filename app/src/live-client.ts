@@ -17,6 +17,7 @@ export interface LiveObserver {
   reset: (reason: LiveResetReason) => void
   reconnected?: () => void
   conversationSnapshot?: (data: unknown) => void
+  conversationRefreshFailed?: () => void
 }
 export interface LiveSubscription {
   ready: (signal?: AbortSignal) => Promise<void>
@@ -30,7 +31,7 @@ export function installMobileLiveSource(factory: (url: string) => Source) {
   mobileSource = factory
   return () => { if (mobileSource === factory) mobileSource = undefined }
 }
-type Subscriber = { topic: RealtimeTopic; observer: LiveObserver; closed: boolean; initialized: boolean; opened?: boolean }
+type Subscriber = { topic: RealtimeTopic; observer: LiveObserver; closed: boolean; initialized: boolean; opened?: boolean; refreshRequested?: boolean }
 type Waiter = { owner: Subscriber; resolve: () => void; reject: (error: unknown) => void }
 
 export function createLiveClient(base: string, options: {
@@ -99,6 +100,10 @@ export function createLiveClient(base: string, options: {
     socketOpened = false
     supportsConversationOpen = false
     socketPresence = false
+    // A disconnected socket cannot acknowledge the refresh it took.
+    for (const group of pending?.opening.values() ?? []) for (const subscriber of group) {
+      if (!subscriber.closed && subscriber.opened) subscriber.refreshRequested = true
+    }
     pending = undefined
     clearTimeout(acknowledgementTimer)
     acknowledgementTimer = undefined
@@ -211,9 +216,12 @@ export function createLiveClient(base: string, options: {
     const acknowledged = new Set([...connectedTopics, ...rejectedTopics])
     const opening = new Map<string, Subscriber[]>()
     if (supportsConversationOpen) for (const subscriber of subscribers) {
-      if (subscriber.closed || subscriber.initialized || !subscriber.observer.conversationSnapshot || subscriber.topic.kind !== 'chat') continue
+      if (subscriber.closed || (subscriber.initialized && !subscriber.refreshRequested) || !subscriber.observer.conversationSnapshot || subscriber.topic.kind !== 'chat') continue
       const key = realtimeTopicKey(subscriber.topic)
       opening.set(key, [...opening.get(key) ?? [], subscriber])
+      // Consume at dispatch, not acknowledgement: a later invalidation may
+      // already be queued when the current snapshot arrives.
+      subscriber.refreshRequested = false
     }
     if (!opening.size && desired.size === acknowledged.size && [...desired].every(key => acknowledged.has(key)) && ready) return
     pending = { id: ++requestId, desired, opening, capabilitiesKnown: supportsConversationOpen }
@@ -310,7 +318,12 @@ export function createLiveClient(base: string, options: {
           continue
         }
         if (receivedSnapshots.has(subscriber) && subscriber.opened) subscriber.initialized = true
-        else if (reset || !subscriber.initialized) initialize(subscriber, reset ?? 'subscription')
+        else if (openingSubscriber && subscriber.opened) {
+          // A failed refresh is not a subscription reset. Remain live and
+          // let the observer recover once without reissuing this WS request.
+          subscriber.initialized = true
+          subscriber.observer.conversationRefreshFailed?.()
+        } else if (reset || !subscriber.initialized) initialize(subscriber, reset ?? 'subscription')
         else if (recovering && !(supportsConversationOpen && subscriber.observer.conversationSnapshot)) subscriber.observer.reconnected?.()
       }
       recovering = false
@@ -483,7 +496,8 @@ export function createLiveClient(base: string, options: {
     return {
       refreshConversation() {
         if (subscriber.closed || !subscriber.opened || !supportsConversationOpen || !ready) return false
-        subscriber.initialized = false
+        // The current topic remains live while its replacement snapshot is read.
+        subscriber.refreshRequested = true
         changed()
         return true
       },
