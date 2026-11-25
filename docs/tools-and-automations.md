@@ -1407,17 +1407,26 @@ result. It uses the existing `write` tool and `v:sessions/self.json`:
 ```json
 {
   "followUp": {
-    "next": "Check eval run #8421 and report the comparison against baseline",
-    "after": 1800
+    "next": "Run the remaining verification and report the result",
+    "after": 5
   }
 }
 ```
 
 `after` is an integer number of seconds (5–86400), counted from the end of the
-successful turn. Follow-up is independent of Work, Task review, and cron. At the
+successful turn. Use 5 if the next step can start now; use a longer delay only
+when there is an actual wait, such as a still-running eval or CI job. Follow-up
+is independent of Work, Task review, and cron. At the
 due time the host delivers `next` to the same Session as a system-origin queue
 input; it neither checks the external system itself nor grants new authority.
-Keeping the same record schedules another check at the same interval.
+Keeping the same record schedules another check at the same interval. A new
+admitted conversation message (from the user, another Session, or a delivered
+event) invalidates an unclaimed follow-up. A system marker records this just
+before the replacement message; it does not cancel external work. The next
+turn can save a fresh plan if needed.
+
+The read-only **Follow-up** chip above the composer shows the saved next
+action, interval, and next scheduled check in local time when available.
 
 If a direct user turn ends naturally without completion, a follow-up, or a
 pending question, the host delivers one self-check at the next idle boundary.
