@@ -260,3 +260,78 @@ test('openConversation keeps parallel panes isolated and reopens after journal e
     client.dispose(); hub.close(); await server.shutdown(); await server.finished
   }
 })
+
+test('active conversation keeps append and completion while a refresh snapshot is in flight', { timeout: 5000 }, async () => {
+  const app = new Hono()
+  const hub = new RealtimeHub()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let reads = 0
+  let saved: string[] = []
+  const publisher = hub.registerProject('default', undefined, async () => {
+    const data = [...saved]
+    if (++reads === 2) { entered.resolve(); await release.promise }
+    if (reads === 5) return { error: 'conversation_unavailable' }
+    return { data }
+  })
+  registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: () => true })
+  const server = serveGateway(app, { host: '127.0.0.1', port: 0 })
+  await server.ready
+  let wire!: WebSocket
+  const client = createLiveClient(`http://127.0.0.1:${server.addr.port}/projects/default`, {
+    ticket: async () => [],
+    socket: url => {
+      const socket = wire = new WebSocket(url)
+      return { addEventListener(type, receive) { (socket as unknown as globalThis.WebSocket).addEventListener(type, receive) },
+        send: data => socket.send(data), close: () => socket.close() }
+    },
+  })
+  try {
+    await client.subscribe({ kind: 'projects' }, observe().observer).ready()
+    const pane = observe()
+    const refreshed = Promise.withResolvers<unknown>()
+    const refreshedAgain = Promise.withResolvers<unknown>()
+    const failed = Promise.withResolvers<void>()
+    const recovered = Promise.withResolvers<unknown>()
+    let snapshots = 0
+    const active = client.subscribe(chat('web:active'), { ...pane.observer,
+      conversationRefreshFailed: () => failed.resolve(), conversationSnapshot(data) {
+      if (++snapshots === 2) refreshed.resolve(data)
+      if (snapshots === 3) refreshedAgain.resolve(data)
+      if (snapshots === 4) recovered.resolve(data)
+    } })
+    await active.ready()
+    assert.equal(active.refreshConversation?.(), true)
+    await entered.promise
+    // A refresh requested after dispatch must survive the older ACK.
+    assert.equal(active.refreshConversation?.(), true)
+    saved = ['synthetic answer']
+    const delivered = once(wire, 'message')
+    publisher.chat('web:active', { event: 'session_message' }, 'request')
+    await delivered
+    const completed = once(wire, 'message')
+    publisher.chat('web:active', { event: 'turn_finished' }, 'request')
+    await completed
+    assert.deepEqual(pane.events, [{ event: 'session_message' }, { event: 'turn_finished' }])
+    release.resolve()
+    assert.deepEqual(await refreshed.promise, saved)
+    assert.deepEqual(await refreshedAgain.promise, saved)
+    assert.equal(reads, 4)
+    assert.equal(active.refreshConversation?.(), true)
+    await failed.promise
+    // An ordinary subscription round trip proves there is no queued retry.
+    await client.subscribe(chat('web:barrier'), observe().observer).ready()
+    assert.equal(reads, 5)
+    assert.deepEqual(pane.resets, [])
+    const stillLive = once(wire, 'message')
+    publisher.chat('web:active', { event: 'response', content: 'still live' })
+    await stillLive
+    assert.deepEqual(pane.events.at(-1), { event: 'response', content: 'still live' })
+    assert.equal(active.refreshConversation?.(), true)
+    assert.deepEqual(await recovered.promise, saved)
+    assert.equal(reads, 6)
+  } finally {
+    release.resolve()
+    client.dispose(); hub.close(); await server.shutdown(); await server.finished
+  }
+})
