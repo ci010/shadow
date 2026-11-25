@@ -67,8 +67,8 @@ chunks; Shadow can buffer the complete response before displaying it. The
 successful logical request's last attempt supplies the sample. Nonstreaming,
 tool-only, unsupported and historical requests without observations do not use
 total elapsed time as a substitute. Project first-text summaries use nearest-rank
-P50/P95 and a sample count. **Request quality** uses all dated indexed requests
-up to each Project snapshot, independent of the selected usage period. It
+P50/P95 and a sample count. **Request quality** uses dated indexed requests
+up to each Project snapshot within the selected UTC usage period. It
 includes outcome counts, observed attempts and the count of requests supplying
 attempt data, text-observation categories, input/output/cache tokens and
 reporting counts, and sampled latency. Global usage displays per-Project
@@ -76,9 +76,11 @@ percentiles and samples, not averages of percentiles. `v:stats/model-requests` r
 counts, cache-token coverage, and P50/P95/sample counts for first text, retry
 queue and total elapsed times. Both the usage page and `v:stats/model-requests`
 report estimated output speed (`tokens/s`) and its sample count per Project.
-The usage page highlights this rate above request-outcome and P50/P95 latency
-charts. Expand **Request quality details** to inspect the underlying counts,
-text observations, latency and token telemetry.
+The usage page charts request outcomes, P50/P95 latency and estimated output
+speed by Project, model or provider. Rates across buckets use summed output
+tokens and elapsed time, not an average of rates. Latency groups stay separate
+per Project; percentiles are not averaged. Expand **Request quality details**
+for the underlying counts, observations, latency and token telemetry.
 The estimate divides the sum of provider-reported output tokens by the sum of
 seconds from the first observed streamed answer text to the end of the successful
 attempt. Requests with unknown or zero output tokens, missing stream timing, or a
@@ -93,14 +95,14 @@ or tool output, and the measured interval can include stream finalization.
 `state/skill-recall.sqlite` is read-only as a legacy baseline during migration;
 old counts have no historical day attribution. New recalls are indexed in
 `stats.sqlite`. **Skill & Memory reads** appears beside Tool usage (below it on narrow panels).
-The Main owner and approved Child workspace UI can read the same Main Project
-usage and recall statistics. Recall returns at most 100 Skill entries or Memory
+The Main owner, approved Child workspace UI, and mobile clients can read the
+same Main Project usage and recall statistics when authorized for Project usage. Recall returns at most 100 Skill entries or Memory
 entry/source pairs per Project. It is cumulative since tracking began, independent
 of the selected usage period. It uses the Project-local index, not source logs or
-document bodies. Child recall access requires proof through the workspace UI
-connection and applies only to the usage summary route. Mobile credentials and
-standalone Child bearers do not grant recall access on Main. The page distinguishes unavailable
-read statistics from authorized statistics with no entries. `v:stats/memory-recall` remains an
+document bodies. Recall is included in the usage summary, not the daily history
+endpoint. Child workspace UI requests still require device proof; standalone
+Child bearers and unauthenticated requests cannot read Main Project usage. The
+page distinguishes unavailable read statistics from available statistics with no entries. `v:stats/memory-recall` remains an
 administrator view of the top 100
 entry/source pairs. The active source counts successful initial Wiki body reads
 under `v:memory`; listing, searches and continuation pages are excluded. The

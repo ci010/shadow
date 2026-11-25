@@ -1,3 +1,4 @@
+import { parseModelSpec } from '../providers/aggregated.ts'
 import { RecallIndex } from './recall-index.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -5,8 +6,20 @@ import { DatabaseSync } from 'node:sqlite'
 import { setImmediate } from 'node:timers/promises'
 import { physicalSessionId } from './session-identity.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
-import type { ProjectUsageMetrics, RequestQuality } from '../projects/usage-contract.ts'
+import type { ProjectUsageMetrics, RequestQuality, RequestQualityByPeriod } from '../projects/usage-contract.ts'
 import { parseTokenUsage } from './usage.ts'
+
+type QualityScope = { provider: string | null; model?: string | null }
+function qualityFilter(asOf: number, from: number, scope?: QualityScope) {
+  const args: (number | string | null)[] = [from, asOf]
+  let where = 'WHERE at >= ? AND at < ?'
+  if (scope) {
+    where += ' AND provider IS ?'; args.push(scope.provider)
+    if (scope.model !== undefined) { where += ' AND quality_model IS ?'; args.push(scope.model) }
+  }
+  return { where, args }
+}
+const MIN_AT = Number.MIN_SAFE_INTEGER
 
 type Row = Record<string, unknown>
 const indexes = new WeakMap<SessionStore, StatsIndex>()
@@ -29,7 +42,7 @@ export class StatsIndex {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS segment (physical TEXT PRIMARY KEY, session TEXT NOT NULL, checkpoint INTEGER);
       CREATE TABLE IF NOT EXISTS model (session TEXT NOT NULL, physical TEXT NOT NULL, id TEXT NOT NULL, at INTEGER, model TEXT, usage TEXT, duration REAL,
-        outcome TEXT, first_text REAL, first_dispatch REAL, queue REAL, attempts TEXT, text_observation TEXT, PRIMARY KEY(session,id));
+        outcome TEXT, first_text REAL, first_dispatch REAL, queue REAL, attempts TEXT, text_observation TEXT, provider TEXT, quality_model TEXT, PRIMARY KEY(session,id));
       CREATE INDEX IF NOT EXISTS model_at ON model(at);
       CREATE INDEX IF NOT EXISTS model_session_at ON model(session,at);
       CREATE INDEX IF NOT EXISTS model_first ON model(first_text) WHERE first_text IS NOT NULL;
@@ -72,6 +85,19 @@ export class StatsIndex {
           WHERE v.session=new.session AND v.id=new.id AND v.at IS NOT NULL GROUP BY j.value
           ON CONFLICT(physical,day,name) DO UPDATE SET calls=calls+excluded.calls;
       END;`)
+    // Replay source records once to recover provider identity without reinserting usage or firing daily totals.
+    if (!this.db.prepare('PRAGMA table_info(model)').all().some(row => row.name === 'provider')) {
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        this.db.exec(`ALTER TABLE model ADD COLUMN provider TEXT;
+          ALTER TABLE model ADD COLUMN quality_model TEXT;
+          UPDATE model SET quality_model=model;
+          UPDATE segment SET checkpoint=NULL;`)
+        this.db.exec('COMMIT')
+      } catch (error) { this.db.exec('ROLLBACK'); throw error }
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS model_quality_scope ON model(provider,quality_model,at);
+      CREATE INDEX IF NOT EXISTS model_quality_provider ON model(provider,at);`)
     this.recall = new RecallIndex(this.db, path === ':memory:' ? undefined : join(dirname(path), 'recall-source.jsonl'))
   }
   async close() {
@@ -109,13 +135,18 @@ export class StatsIndex {
       if (session) for (const row of rows) {
         if (row.sessionId !== undefined && row.sessionId !== session) continue
         if (row.type === 'model_usage' && row.sessionId === session && typeof row.id === 'string') {
-          this.db.prepare('INSERT OR IGNORE INTO model VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(session, physical, row.id, time(row.timestamp), text(row.model),
+          const model = text(row.model)
+          const parsed = model ? parseModelSpec(model) : undefined
+          const provider = text(row.provider) || parsed?.provider || null
+          this.db.prepare(`INSERT INTO model (session,physical,id,at,model,usage,duration,outcome,first_text,first_dispatch,queue,attempts,text_observation,provider,quality_model)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session,id) DO UPDATE SET
+            provider=excluded.provider, quality_model=excluded.quality_model WHERE model.physical=excluded.physical AND model.provider IS NULL AND excluded.provider IS NOT NULL`).run(session, physical, row.id, time(row.timestamp), model,
             JSON.stringify(parseTokenUsage(row.usage)), ms(row.durationMs), text(row.outcome), ms(row.firstTextMs), ms(row.firstDispatchMs), ms(row.queueMs),
             Array.isArray(row.attempts) ? JSON.stringify(row.attempts.flatMap(attempt => {
               const durationMs = ms(attempt?.durationMs)
               return durationMs === null || !['success', 'failure', 'cancelled'].includes(attempt?.outcome) ? []
                 : [{ outcome: attempt.outcome, durationMs, firstTextMs: ms(attempt.firstTextMs), mode: ['stream', 'nonstream'].includes(attempt.mode) ? attempt.mode : null }]
-            })) : null, text(row.textObservation))
+            })) : null, text(row.textObservation), provider, parsed?.provider && parsed.provider === provider ? parsed.model : model)
         } else if (row.role === 'assistant' && Array.isArray(row.tool_calls)) {
           for (const call of row.tool_calls) if (typeof call?.id === 'string') {
             this.db.prepare('INSERT OR IGNORE INTO tool_names VALUES (?,?,?,?)').run(session, physical, call.id,
@@ -221,10 +252,10 @@ export class StatsIndex {
     for (const row of this.db.prepare(sql).iterate(today, today, asOf)) yield { day: Number(row.day), name: String(row.name), calls: Number(row.calls) }
   }
   trackedSessions() { return new Set(this.db.prepare('SELECT DISTINCT session FROM model').all().map(row => String(row.session))) }
-  latency(asOf: number, field: 'first_text' | 'queue' | 'duration' = 'first_text') {
-    const where = `WHERE ${field} IS NOT NULL AND at < ?`
-    const samples = Number(this.db.prepare(`SELECT count(*) AS n FROM model ${where}`).get(asOf)?.n)
-    const quantile = (q: number) => samples ? Number(this.db.prepare(`SELECT ${field} AS ms FROM model ${where} ORDER BY ${field} LIMIT 1 OFFSET ?`).get(asOf, Math.ceil(samples * q) - 1)?.ms) : null
+  latency(asOf: number, field: 'first_text' | 'queue' | 'duration' = 'first_text', from = MIN_AT, scope?: QualityScope) {
+    const { where, args } = qualityFilter(asOf, from, scope)
+    const samples = Number(this.db.prepare(`SELECT count(*) AS n FROM model ${where} AND ${field} IS NOT NULL`).get(...args)?.n)
+    const quantile = (q: number) => samples ? Number(this.db.prepare(`SELECT ${field} AS ms FROM model ${where} AND ${field} IS NOT NULL ORDER BY ${field} LIMIT 1 OFFSET ?`).get(...args, Math.ceil(samples * q) - 1)?.ms) : null
     return { samples, p50Ms: quantile(.50), p95Ms: quantile(.95) }
   }
   profile(session: string, from: number, asOf: number) {
@@ -238,38 +269,63 @@ export class StatsIndex {
       output: row.output as number | null, total: row.total as number | null, tools: Number(tools.calls),
       tracked: !!this.db.prepare('SELECT 1 FROM model WHERE session=? LIMIT 1').get(session) }
   }
-  private outputRate(asOf: number) {
+  private outputRate(asOf: number, from: number, scope?: QualityScope) {
+    const { where, args } = qualityFilter(asOf, from, scope)
     // Use the successful attempt's own clock, not the logical duration (which can include retries).
     const row = this.db.prepare(`WITH streams AS (
       SELECT json_extract(usage,'$.completionTokens') AS tokens,
         json_extract(attempts,'$[#-1].durationMs') - json_extract(attempts,'$[#-1].firstTextMs') AS generationMs
-      FROM model WHERE at < ? AND outcome='success' AND text_observation='stream_text'
+      FROM model ${where} AND outcome='success' AND text_observation='stream_text'
         AND json_extract(attempts,'$[#-1].outcome')='success'
     ) SELECT count(*) AS samples, total(tokens) AS tokens, total(generationMs) AS generationMs
-      FROM streams WHERE tokens > 0 AND generationMs > 0`).get(asOf)!
+      FROM streams WHERE tokens > 0 AND generationMs > 0`).get(...args)!
     const samples = Number(row.samples)
-    const rate = Number(row.tokens) / (Number(row.generationMs) / 1000)
-    return { samples, tokensPerSecond: samples && Number.isFinite(rate) ? rate : null }
+    const outputTokens = Number(row.tokens), activeDurationMs = Number(row.generationMs)
+    const rate = outputTokens / (activeDurationMs / 1000)
+    return { samples, outputTokens, activeDurationMs, tokensPerSecond: samples && Number.isFinite(rate) ? rate : null }
   }
-  requestSummary(asOf: number): RequestQuality {
+  requestSummary(asOf: number, from = MIN_AT, scope?: QualityScope): RequestQuality {
+    const { where, args } = qualityFilter(asOf, from, scope)
     const outcomes = this.db.prepare(`SELECT coalesce(outcome,'unknown') AS outcome,count(*) AS requests,
       sum(json_array_length(attempts)) AS observedAttempts, count(attempts) AS requestsWithAttempts
-      FROM model WHERE at < ? GROUP BY outcome`).all(asOf).map(row => ({ outcome: String(row.outcome), requests: Number(row.requests),
+      FROM model ${where} GROUP BY 1 ORDER BY 1`).all(...args).map(row => ({ outcome: String(row.outcome), requests: Number(row.requests),
       observedAttempts: row.observedAttempts === null ? null : Number(row.observedAttempts), requestsWithAttempts: Number(row.requestsWithAttempts) }))
     const textObservations = this.db.prepare(`SELECT coalesce(text_observation,'unknown') AS observation,count(*) AS requests
-      FROM model WHERE at < ? GROUP BY observation`).all(asOf).map(row => ({ observation: String(row.observation), requests: Number(row.requests) }))
+      FROM model ${where} GROUP BY 1 ORDER BY 1`).all(...args).map(row => ({ observation: String(row.observation), requests: Number(row.requests) }))
     const cacheRow = this.db.prepare(`SELECT sum(json_extract(usage,'$.cachedTokens')) AS readTokens,
       sum(json_extract(usage,'$.promptTokens')) AS inputTokens, count(json_extract(usage,'$.promptTokens')) AS requestsWithInputTokens,
       sum(json_extract(usage,'$.completionTokens')) AS outputTokens, count(json_extract(usage,'$.completionTokens')) AS requestsWithOutputTokens,
       count(json_extract(usage,'$.cachedTokens')) AS requestsWithReadTokens,
       sum(json_extract(usage,'$.cacheWriteTokens')) AS writeTokens,
-      count(json_extract(usage,'$.cacheWriteTokens')) AS requestsWithWriteTokens FROM model WHERE at < ?`).get(asOf)!
+      count(json_extract(usage,'$.cacheWriteTokens')) AS requestsWithWriteTokens FROM model ${where}`).get(...args)!
     const known = (key: string) => typeof cacheRow[key] === 'number' ? cacheRow[key] : null
     const cache = { readTokens: known('readTokens'), writeTokens: known('writeTokens'), inputTokens: known('inputTokens'), outputTokens: known('outputTokens'),
       requestsWithReadTokens: Number(cacheRow.requestsWithReadTokens), requestsWithWriteTokens: Number(cacheRow.requestsWithWriteTokens),
       requestsWithInputTokens: Number(cacheRow.requestsWithInputTokens), requestsWithOutputTokens: Number(cacheRow.requestsWithOutputTokens) }
     return { asOf: new Date(asOf).toISOString(), coverage: this.complete ? 'complete' : 'partial', outcomes, textObservations, cache,
-      firstText: this.latency(asOf), queue: this.latency(asOf, 'queue'), duration: this.latency(asOf, 'duration'), outputRate: this.outputRate(asOf) }
+      firstText: this.latency(asOf, 'first_text', from, scope), queue: this.latency(asOf, 'queue', from, scope),
+      duration: this.latency(asOf, 'duration', from, scope), outputRate: this.outputRate(asOf, from, scope) }
+  }
+  requestProjections(asOf: number, today: number, past7Days: number, month: number, signal?: AbortSignal): RequestQualityByPeriod {
+    const period = (from: number) => {
+      const { where, args } = qualityFilter(asOf, from)
+      const summary = (scope?: QualityScope) => {
+        signal?.throwIfAborted()
+        return this.requestSummary(asOf, from, scope)
+      }
+      const models = this.db.prepare(`SELECT provider,quality_model FROM model ${where}
+        GROUP BY provider,quality_model ORDER BY count(*) DESC,provider,quality_model`).all(...args).map(row => {
+        const scope = { provider: text(row.provider), model: text(row.quality_model) }
+        return { ...scope, quality: summary(scope) }
+      })
+      const providers = this.db.prepare(`SELECT provider FROM model ${where}
+        GROUP BY provider ORDER BY count(*) DESC,provider`).all(...args).map(row => {
+        const scope = { provider: text(row.provider) }
+        return { ...scope, quality: summary(scope) }
+      })
+      return { ...summary(), models, providers }
+    }
+    return { total: period(MIN_AT), today: period(today), past7Days: period(past7Days), month: period(month) }
   }
   *records(session?: string, modelFrom?: number): Iterable<Row> {
     const filter = session === undefined ? '' : ' WHERE session=?'
