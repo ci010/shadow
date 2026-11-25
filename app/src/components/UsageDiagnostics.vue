@@ -60,12 +60,12 @@ const detailSelection = ref('')
 const project = computed(() => scopedProjects.value.find(row => row.quality && row.id === detailSelection.value) ?? scopedProjects.value.find(row => row.quality))
 const detailProject = computed({ get: () => project.value?.id ?? '', set: value => { detailSelection.value = value } })
 const charts = [{ key: 'outcomes', title: 'Request outcomes' }, { key: 'latency', title: 'Request latency' }, { key: 'speed', title: 'Estimated output speed' }] as const
-const dimensions = [{ key: 'project', label: 'Project' }, { key: 'model', label: 'Model' }, { key: 'provider', label: 'Provider' }] as const
+const dimensions = [{ key: 'model', label: 'Model' }, { key: 'provider', label: 'Provider' }] as const
 type Chart = typeof charts[number]['key']
 type Dimension = typeof dimensions[number]['key']
 type Quality = NonNullable<ProjectUsage['requestQuality']>
 type QualityRow = { id: string; name: string; calls?: number; rate?: Quality['outputRate'] }
-const groups = reactive<Record<Chart, Dimension>>({ outcomes: 'project', latency: 'project', speed: 'model' })
+const groups = reactive<Record<Chart, Dimension>>({ outcomes: 'model', latency: 'model', speed: 'model' })
 const latency = [{ key: 'firstText', label: 'First streamed text' }, { key: 'queue', label: 'Queue latency' }, { key: 'duration', label: 'Request duration' }] as const
 const latencyOptions = latency.flatMap(item => (['p50Ms', 'p95Ms'] as const).map(field => ({ ...item, field, percentile: field === 'p50Ms' ? 'P50' : 'P95' })))
   .map(item => ({ ...item, measurement: item.key, key: `${item.key}:${item.field}` }))
@@ -76,13 +76,11 @@ function chartRows(chart: Chart) {
   const measurement = latencyOptions.find(item => item.key === latencyMetric.value) ?? latencyOptions[0]!
   const rows = scopedProjects.value.flatMap(project => {
     const projectName = project.name || t('Selected project')
-    const groups: { id: string; name: string; quality: Quality }[] = dimension === 'project'
-      ? project.quality ? [{ id: project.id, name: projectName, quality: project.quality }] : []
-      : dimension === 'model'
+    const groups: { id: string; name: string; quality: Quality }[] = dimension === 'model'
         ? (project.periodData?.models ?? []).map(row => ({ id: JSON.stringify(['model', row.model, ...(chart === 'latency' ? [row.provider] : [])]), name: chart === 'latency' && row.provider ? `${row.model ?? t('Unknown')} · ${row.provider}` : row.model ?? t('Unknown'), quality: row.quality }))
         : (project.periodData?.providers ?? []).map(row => ({ id: JSON.stringify(['provider', row.provider]), name: row.provider ?? t('Unknown'), quality: row.quality }))
     return groups.flatMap<QualityRow>(row => {
-      const splitByProject = chart === 'latency' && dimension !== 'project'
+      const splitByProject = chart === 'latency'
       const name = splitByProject && scopedProjects.value.length > 1 ? `${row.name} · ${projectName}` : row.name
       const id = splitByProject ? JSON.stringify([project.id, row.id]) : row.id
       if (chart === 'outcomes') return row.quality.outcomes.map(entry => ({ id: `${id}:${entry.outcome}`, name: `${name} · ${outcome(entry.outcome)}`, calls: entry.requests }))
@@ -90,7 +88,7 @@ function chartRows(chart: Chart) {
       return [{ id, name, calls: value ?? undefined, rate: row.quality.outputRate }]
     })
   })
-  if (dimension === 'project' || chart === 'latency') return rows
+  if (chart === 'latency') return rows
   const totals = new Map<string, { id: string; name: string; calls?: number; tokens: number; durationMs: number }>()
   for (const row of rows) {
     const total = totals.get(row.id) ?? { id: row.id, name: row.name, tokens: 0, durationMs: 0 }

@@ -49,6 +49,8 @@ export const usageRecallSchema = z.object({
 /** Latest UTC dates included in the overview response, including the snapshot day. */
 export const USAGE_TREND_HISTORY_DAYS = 31
 
+const dailyUsageSchema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), usage: projectUsageMetricsSchema })
+
 export const projectUsageSchema = z.object({
   requestQuality: requestQualitySchema.optional(),
   requestQualityByPeriod: requestQualityByPeriodSchema.optional(),
@@ -60,7 +62,9 @@ export const projectUsageSchema = z.object({
   projectId: z.string(), asOf: z.string().datetime(), timeZone: z.literal('UTC'),
   total: projectUsageMetricsSchema, today: projectUsageMetricsSchema,
   past7Days: projectUsageMetricsSchema, month: projectUsageMetricsSchema,
-  daily: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), usage: projectUsageMetricsSchema })),
+  daily: z.array(dailyUsageSchema.extend({
+    models: z.array(z.object({ name: z.string(), usage: projectUsageMetricsSchema })).optional(),
+  })),
   firstText: latency.optional(),
   coverage: z.enum(['complete', 'partial']).optional(),
   scanLimitReached: z.boolean(), untrackedSessions: z.number().int().nonnegative(),
@@ -77,6 +81,6 @@ export const projectUsagePageSchema = z.object({
   projectId: z.string(), asOf: z.string().datetime(),
   page: z.number().int().positive(), pageSize: z.literal(10),
   total: z.number().int().nonnegative(), hasMore: z.boolean(),
-  daily: projectUsageSchema.shape.daily.max(10),
+  daily: z.array(dailyUsageSchema).max(10),
 })
 export type ProjectUsagePage = z.infer<typeof projectUsagePageSchema>

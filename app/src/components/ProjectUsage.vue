@@ -2,7 +2,7 @@
   <section class="project-usage" :aria-label="t(globalMode ? 'Usage' : 'Project usage')">
     <header><h2>{{ t(globalMode ? 'Usage' : 'Project usage') }}</h2><button class="btn btn-sm" type="button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button></header>
     <div v-if="globalMode" class="project-filter"><span aria-hidden="true">{{ t('Project') }}</span>
-      <UiSelect ref="filterControl" v-model="filter" :aria-label="t('Project')" :disabled="!rows?.length">
+      <UiSelect v-model="filter" :aria-label="t('Project')" :disabled="!rows?.length">
         <option value="">{{ t('All projects') }}</option>
         <option v-for="row in rows" :key="row.project.id" :value="row.project.id">{{ row.project.name }}</option>
       </UiSelect>
@@ -19,33 +19,16 @@
         <article class="metric-card"><h3>{{ t('Model call time') }}</h3><div class="metric-value" :title="duration(selectedUsage)">{{ compactDuration(selectedUsage.durationMs) }}</div></article>
         <article class="metric-card"><h3>{{ t('Provider calls') }}</h3><div class="metric-value" :title="formatNumber(selectedUsage.calls)">{{ compactNumber(selectedUsage.calls) }}</div></article>
       </div>
-      <div class="activity-grid">
-        <UsageBreakdown :title="t('Usage summary')" :category="t(usageGroup === 'project' ? 'Project' : 'Model')"
-          initial-metric="tokens" :rows="usageGroup === 'project' ? projectRows : modelRows" :scope="`${activityScope}:${usageGroup}`" allow-column>
-          <template #controls>
-            <UiSelect v-model="usageGroup" :aria-label="t('Group by')">
-              <option value="project">{{ t('Project') }}</option>
-              <option value="model">{{ t('Model') }}</option>
-            </UiSelect>
-          </template>
-          <template #entry="{ row, table }">
-            <UsageModelLabel v-if="usageGroup === 'model'" :name="row.name" :full="table" />
-            <button v-else-if="allProjects" class="btn btn-sm project-link" type="button" @click="filter = row.id; filterControl?.focus()">{{ row.name }}</button>
-            <template v-else>{{ row.name }}</template>
-          </template>
-          <template #coverage><p v-if="usageGroup === 'model' && unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
-        </UsageBreakdown>
-        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope" />
-        <UsageRecall kind="skills" :projects="diagnosticProjects" />
-        <UsageRecall kind="memory" :projects="diagnosticProjects" />
-      </div>
-      <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
-      <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
       <div class="chart-toolbar"><h3>{{ t('Usage trends') }}</h3></div>
       <p v-if="mixedSnapshotDates" class="trend-range">{{ t('Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.') }}</p>
       <p v-else class="trend-range"><template v-if="selectedPeriod === 'total'">{{ t('All-time trends show only the latest {days} UTC dates.', { days: windowDays }) }} · </template>{{ points[0]?.date }}<template v-if="points.length > 1"> — {{ points.at(-1)?.date }}</template> · UTC</p>
       <article v-if="!mixedSnapshotDates" class="chart-card" :aria-label="t('Usage trends')">
         <div class="cost-heading"><h3>{{ trendTitle }}</h3>
+          <UiSelect v-if="trendView !== 'table'" v-model="trendStack" :aria-label="t('Stack')">
+            <option value="none">{{ t('No stacking') }}</option>
+            <option value="project">{{ t('Stack by project') }}</option>
+            <option value="model" :disabled="!modelStackAvailable">{{ t('Stack by model') }}</option>
+          </UiSelect>
           <UsageViewControls v-model:metric="trendMetric" v-model:unit="costUnit" v-model:view="trendView" :views="['line', 'column', 'table']" />
         </div>
         <p>{{ t(trendMetric === 'time' ? 'Cumulative call time, not work duration; gaps are not interpolated.' : trendMetric === 'cost' ? 'Includes converted AI credits in USD.' : 'Missing telemetry is unavailable, not zero.') }}</p>
@@ -55,8 +38,20 @@
           </table>
         </div>
         <p v-else-if="!trendSeries.some(p => p.value !== null)" class="empty-chart">{{ t('No known values in this window.') }}</p>
-        <UsageTrendChart v-else :title="trendTitle" :kind="trendView === 'column' ? 'bar' : 'line'" :points="trendSeries" :entrance-key="`${activityScope}:${trendMetric}:${trendMetric === 'cost' && currencyChosen ? costUnit : ''}`" :format-axis="axisFormat" :min-interval="['tokens', 'calls'].includes(trendMetric) ? 1 : 0" />
+        <UsageTrendChart v-else :title="trendTitle" :kind="trendView === 'column' ? 'bar' : 'line'" :points="trendSeries" :stacks="trendStacks" :entrance-key="`${activityScope}:${trendStack}:${trendMetric}:${trendMetric === 'cost' && currencyChosen ? costUnit : ''}`" :format-axis="axisFormat" :min-interval="['tokens', 'calls'].includes(trendMetric) ? 1 : 0" />
       </article>
+      <div class="activity-grid">
+        <UsageBreakdown :title="t('Model usage')" :category="t('Model')"
+          initial-metric="tokens" :rows="modelRows" :scope="activityScope" allow-column>
+          <template #entry="{ row, table }"><UsageModelLabel :name="row.name" :full="table" /></template>
+          <template #coverage><p v-if="unnamedCalls">{{ t('{count} calls without a recorded model are excluded.', { count: formatNumber(unnamedCalls) }) }}</p></template>
+        </UsageBreakdown>
+        <UsageBreakdown tool-shares :title="t('Tool usage')" :category="t('Tool')" :rows="toolRows" :scope="activityScope" />
+        <UsageRecall kind="skills" :projects="diagnosticProjects" />
+        <UsageRecall kind="memory" :projects="diagnosticProjects" />
+      </div>
+      <p class="conversion-note">{{ t('100 AI credits = 1 USD · CNY shown separately') }}</p>
+      <p class="scope-brief">{{ t('UTC dates · estimated costs · cumulative model call time') }}</p>
       <UsageDiagnostics :projects="diagnosticProjects" :period="selectedPeriod" />
 
       <p v-if="allProjects">{{ t('Select a project to browse its daily history.') }}</p>
@@ -106,6 +101,7 @@ import UsageTrendChart from './UsageTrendChart.vue'
 import UsageBreakdown from './UsageBreakdown.vue'
 import UsageDiagnostics from './UsageDiagnostics.vue'
 import UsageViewControls from './UsageViewControls.vue'
+import { buildUsageStacks } from '../usage-trend-stacks.ts'
 import { measure, type UsageMetric } from '../usage-breakdown.ts'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { compactUsageNumber, compactUsageCost, durationParts, usageTrendDays, usageWindow, displayCosts, type CostUnit } from '../project-usage-charts.ts'
@@ -120,7 +116,6 @@ const owner = useCatalogResourceStore(requireResourcePinia()).owner
 const enabled = useCatalogVisibility(() => props.active)
 const globalMode = computed(() => props.projectId === undefined)
 const filter = ref('')
-const filterControl = ref<InstanceType<typeof UiSelect>>()
 const selectedProjectId = computed(() => props.projectId ?? filter.value)
 const allProjects = computed(() => globalMode.value && !filter.value)
 const scopedBase = computed(() => globalMode.value && filter.value ? projectBase(props.apiBase, filter.value) : props.apiBase)
@@ -148,8 +143,6 @@ const selectedPeriod = ref<typeof periods[number]['key']>('past7Days')
 const selectedUsage = computed(() => data.value![selectedPeriod.value])
 const selectedActivity = computed(() => data.value!.activity[selectedPeriod.value])
 const activityScope = computed(() => `${selectedProjectId.value}:${selectedPeriod.value}`)
-const usageGroup = ref<'project' | 'model'>(globalMode.value ? 'project' : 'model')
-const projectRows = computed(() => diagnosticProjects.value.map(({ id, name, usage }) => ({ id, name: name || t('Selected project'), usage: usage?.[selectedPeriod.value] })))
 const modelRows = computed(() => selectedActivity.value.models.map(row => ({ id: row.name, ...row })))
 const unnamedCalls = computed(() => Math.max(0, selectedUsage.value.calls - modelRows.value.reduce((sum, row) => sum + row.calls, 0)))
 const toolRows = computed(() => selectedActivity.value.tools.map(row => ({ id: row.name, ...row })))
@@ -193,6 +186,14 @@ const trendSeries = computed<UsageChartDatum[]>(() => points.value.map(p => {
   const label = known === null ? exact : metric === 'cost' ? `${exact} ${costUnit.value}` : metric === 'time' ? t('{seconds} s', { seconds: exact }) : exact
   return { date: p.date, value: known, partial, label: `${p.date}: ${label}${partial && known !== null ? ` · ${t('Partial telemetry')}` : ''}` }
 }))
+const trendStack = ref<'none' | 'project' | 'model'>('none')
+const modelStackAvailable = computed(() => diagnosticProjects.value.some(project => project.usage?.daily.some(day => day.models !== undefined)))
+watch(modelStackAvailable, available => { if (!available && trendStack.value === 'model') trendStack.value = 'none' })
+const trendStacks = computed(() => {
+  if (trendStack.value === 'none') return []
+  return buildUsageStacks(diagnosticProjects.value, trendSeries.value.map(point => point.date), trendStack.value,
+    trendMetric.value, costUnit.value, { project: t('Selected project'), unnamed: t('Unattributed usage') })
+})
 function axisFormat(value: number) {
   return trendMetric.value === 'cost' ? compactCost(value) : trendMetric.value === 'time' ? compactDuration(value * 1000) : compactNumber(value)
 }
@@ -255,8 +256,6 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 @container usage (min-width: 800px) {
   .activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 }
-.project-link { min-height: 24px; padding-block: 2px; max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
-@media (pointer: coarse) { .project-link { min-height: 44px; } }
 .conversion-note { margin-top: 12px; }
 .scope-brief { margin: 4px 0; }
 .chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }

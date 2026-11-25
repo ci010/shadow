@@ -1,4 +1,8 @@
 {
+  "No stacking": "No stacking",
+  "Stack by project": "Stack by project",
+  "Stack by model": "Stack by model",
+  "Unattributed usage": "Unattributed usage",
   "Three.js Playground": "Three.js Playground",
   "3D model": "3D model",
   "Camera": "Camera",

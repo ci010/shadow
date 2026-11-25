@@ -4,11 +4,12 @@
       @keydown="onKey" @focus="select(points.length - 1)" @blur="dismiss">
       <div ref="host" class="echart-plot" aria-hidden="true" />
     </div>
+    <ul v-if="stacks?.length" class="stack-key"><li v-for="(stack, index) in stacks" :key="stack.id"><i :style="{ backgroundColor: usageStackColors[index % usageStackColors.length] }" />{{ stack.name }}</li></ul>
     <p :id="hintId" class="chart-readout" role="status" aria-live="polite">{{ selectedLabel || t('Hover or tap a date; use left and right arrow keys when focused.') }}</p>
     <p v-if="failed" role="alert">{{ t('Chart unavailable. Use the data table below.') }}</p>
     <details class="chart-data" :open="failed || undefined">
       <summary>{{ t('View chart data') }}</summary>
-      <table :aria-label="title"><tbody><tr v-for="point in points" :key="point.date"><th scope="row">{{ point.date }}</th><td>{{ point.label.slice(point.date.length + 2) }}</td></tr></tbody></table>
+      <table :aria-label="title"><tbody><tr v-for="(point, index) in points" :key="point.date"><th scope="row">{{ point.date }}</th><td>{{ point.label.slice(point.date.length + 2) }}</td><td v-for="stack in stacks" :key="stack.id">{{ stack.name }}: {{ stack.values[index] == null ? t('Unavailable') : formatAxis(stack.values[index]!) }}</td></tr></tbody></table>
     </details>
   </div>
 </template>
@@ -16,13 +17,17 @@
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import type { EChartsType } from 'echarts/core'
 import { t } from '../i18n.ts'
-import { usageChartOption, type UsageChartDatum } from '../usage-chart-options.ts'
+import type { UsageStack } from '../usage-trend-stacks.ts'
+import { usageChartOption, usageStackColors, type UsageChartDatum } from '../usage-chart-options.ts'
 
-const props = defineProps<{ title: string; entranceKey: string; kind: 'bar' | 'line'; points: UsageChartDatum[]; formatAxis: (value: number) => string; minInterval?: number }>()
+const props = defineProps<{ title: string; entranceKey: string; kind: 'bar' | 'line'; points: UsageChartDatum[]; stacks?: UsageStack[]; formatAxis: (value: number) => string; minInterval?: number }>()
 const host = ref<HTMLDivElement>()
 const hintId = useId()
 const selected = ref<number | null>(null)
-const selectedLabel = computed(() => selected.value === null ? '' : props.points[selected.value]?.label ?? '')
+const selectedLabel = computed(() => selected.value === null ? '' : [props.points[selected.value]?.label, ...(props.stacks ?? []).flatMap(stack => {
+  const value = stack.values[selected.value!]
+  return value == null ? [] : [`${stack.name}: ${props.formatAxis(value)}`]
+})].filter(Boolean).join(' · '))
 const failed = ref(false)
 let chart: EChartsType | undefined
 let resize: ResizeObserver | undefined
@@ -37,7 +42,7 @@ function render(entrance = false) {
   chart.setOption(usageChartOption(props.title, props.kind, props.points, {
     primary: color('primary'), text: color('text'), muted: color('text-secondary'),
     border: color('border'), surface: color('bg-card'), selection: color('selection-bg'),
-  }, props.formatAxis, props.minInterval, entrance && motion?.matches === false), { notMerge: true })
+  }, props.formatAxis, props.minInterval, entrance && motion?.matches === false, props.stacks), { notMerge: true })
 }
 function select(index: number) {
   if (!props.points.length) return
@@ -64,7 +69,7 @@ function onKey(event: KeyboardEvent) {
   event.preventDefault()
 }
 // Reloaded data, locale changes, and theme changes refresh the plot without replaying its entrance.
-watch([() => props.entranceKey, () => props.kind, () => props.title, () => props.points, () => props.formatAxis, () => props.minInterval],
+watch([() => props.entranceKey, () => props.kind, () => props.title, () => props.points, () => props.stacks, () => props.formatAxis, () => props.minInterval],
   ([key, kind], [oldKey, oldKind]) => { dismiss(); render(key !== oldKey || kind !== oldKind) })
 function onPreferenceChange(event: MediaQueryListEvent) {
   if (event.matches) render()
@@ -111,4 +116,7 @@ table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nu
 th, td { padding: 8px 0; border-top: 1px solid var(--c-border-soft); text-align: left; vertical-align: top; }
 th { font-weight: 400; white-space: nowrap; padding-right: 12px; }
 td { overflow-wrap: anywhere; }
+.stack-key { display: flex; flex-wrap: wrap; gap: 6px 12px; list-style: none; padding: 0; font-size: 12px; overflow-wrap: anywhere; }
+.stack-key i { display: inline-block; width: 9px; height: 9px; margin-inline-end: 5px; }
+.chart-data { overflow-x: auto; }
 </style>
