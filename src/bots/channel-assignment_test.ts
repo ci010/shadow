@@ -28,13 +28,28 @@ test('referenced parent channel resolves an exact stable rule; direct thread and
   assert.deepEqual(JSON.parse(assignChannelSource(again.files, parentSource, { ...policy, enabled: false }).content).subscriptions, [])
 })
 
-test('policy JSON cannot forge target, connection, platform or implicitly choose participants', () => {
+test('policy JSON cannot forge target identity; Assign defaults to admitting the conversation', () => {
   for (const key of ['target', 'conversationId', 'botInstanceId', 'platform', 'botUserId', 'id']) assert.throws(() => assignChannelSource(files, parentSource, { ...policy, [key]: 'forged' }), /targets/)
-  assert.throws(() => assignChannelSource(files, parentSource, { ...policy, participants: undefined }), /participants/)
+  const { participants: _legacy, ...publicRules } = policy
+  const discord = assignChannelSource(files, parentSource, publicRules).binding
+  assert.deepEqual(discord.platform === 'discord' && discord.participants, { everyone: true, userIds: [], roleIds: [] })
   const qq = { version: 1, projectId: 'p', platform: 'qq', connectionId: 'qq', conversationId: 'group:one', kind: 'group' } as const
-  assert.throws(() => assignChannelSource(files, qq, { enabled: true, trigger: 'all', tools: [] }), /allowed senders/)
-  const personal = { ...files, 'BOT.md': files['BOT.md'].replace('mode: service', 'mode: personal\nagent: general'), 'nested/bot.json': JSON.stringify({ connection: '00000000-0000-4000-a000-000000000001', allowedModules: [], tools: [], bindings: [] }) }
+  const binding = assignChannelSource(files, qq, { enabled: true, trigger: 'all', tools: [] }).binding
+  assert.equal(binding.platform === 'qq' && binding.allowFrom, undefined)
+  const personal = { ...files, 'BOT.md': files['BOT.md'].replace('mode: service', 'mode: personal\nagent: general'), 'nested/bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [] }) }
   assert.throws(() => assignChannelSource(personal, qq, { enabled: true, trigger: 'mention', tools: [], allowFrom: [] }), /Personal BOT/)
+})
+
+test('QQ and Feishu private assignments select only the exact inbox without a sender list', () => {
+  for (const platform of ['qq', 'feishu'] as const) {
+    const dm = { version: 1, projectId: 'p', platform, connectionId: 'connection', conversationId: platform === 'qq' ? 'c2c:one' : 'oc_private', kind: 'direct' } as const
+    const rules = { enabled: true, trigger: 'mention', tools: [] }
+    const next = assignChannelSource(files, dm, rules)
+    assert.equal(next.binding.platform !== 'discord' && next.binding.allowFrom, undefined)
+    assert.deepEqual(botInputListeners(parseBot(next.files)), [{ target: { kind: 'bot', id: 'support' }, source: { type: platform, id: 'connection' }, kind: 'message', topic: dm.conversationId }])
+    const disabled = assignChannelSource(next.files, dm, { ...rules, enabled: false })
+    assert.deepEqual(botInputListeners(parseBot(disabled.files)), [])
+  }
 })
 
 test('origin validation rejects cross-Project, false identity, missing thread ancestry and malformed durable metadata', () => {
@@ -94,14 +109,14 @@ test('prepared source revision preserves CRLF for the ordinary exact write path'
 })
 
 
-test('shared production assignment validation rejects another Project, personal connection and duplicate BOT ownership', async () => {
+test('shared production assignment validation rejects another Project, mismatched platform and duplicate BOT ownership', async () => {
   const { withTempWorkspace } = await import('../testing/workspace.ts')
   const { BotInstanceStore } = await import('../channels/bot-store.ts')
   const { validateServiceAssignments } = await import('./assignment-validation.ts')
   const { join } = await import('node:path')
   await withTempWorkspace(async root => {
     const bots = new BotInstanceStore({ projectId: 'p', path: join(root, 'connections.json') })
-    const service = bots.create('qq', 'Service', { enabled: false }, undefined, 'service')
+    const service = bots.create('qq', 'Service', { enabled: false })
     const origin = { version: 1, projectId: 'p', platform: 'qq', connectionId: service.id, conversationId: 'group:one', kind: 'group' } as const
     const candidate = parseBot(assignChannelSource(files, origin, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
     const folder = async () => { throw new Error('No read grants expected') }
@@ -114,8 +129,12 @@ test('shared production assignment validation rejects another Project, personal 
     await assert.rejects(() => validateServiceAssignments('p', bots, withGrant, [], folder), /No read grants expected/)
     await assert.rejects(() => validateServiceAssignments('other', bots, candidate, [], folder), /Project mismatch/)
     await assert.rejects(() => validateServiceAssignments('p', bots, candidate, [{ ...candidate, id: 'other' }], folder), /another BOT/)
-    const personal = bots.create('qq', 'Personal', { enabled: false }, undefined, 'personal')
-    const invalid = parseBot(assignChannelSource(files, { ...origin, connectionId: personal.id }, { enabled: true, trigger: 'mention', tools: [], allowFrom: ['owner'] }).files)
-    await assert.rejects(() => validateServiceAssignments('p', bots, invalid, [], folder), /matching service connection/)
+    const personal = { ...files, 'BOT.md': files['BOT.md'].replace('mode: service', 'mode: personal\nagent: general') }
+    const exact = parseBot(assignChannelSource(personal, { ...origin, conversationId: 'group:two' }, { enabled: true, trigger: 'mention', tools: [] }).files)
+    await validateServiceAssignments('p', bots, exact, [candidate], folder)
+    const overlap = parseBot(assignChannelSource(personal, origin, { enabled: true, trigger: 'mention', tools: [] }).files)
+    await assert.rejects(() => validateServiceAssignments('p', bots, overlap, [candidate], folder), /another BOT/)
+    const invalid = parseBot(assignChannelSource(files, { ...origin, platform: 'feishu' }, { enabled: true, trigger: 'mention', tools: [] }).files)
+    await assert.rejects(() => validateServiceAssignments('p', bots, invalid, [], folder), /matching connection platform/)
   })
 })

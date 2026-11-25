@@ -392,7 +392,7 @@ In the **Knowledge** explorer, published Bot runtime roles are not Agent
 source documents. Open the **Bots** folder for the deployed `BOT.md` and any
 companion Markdown, including nested files. `BOT.md` has an overview, Tools,
 System prompt, and Original Markdown. Tools and prompt belong to the selected
-published binding (or the verified owner session for a Personal Bot), not to
+published exact inbox binding, not to
 all bindings combined. The view identifies in-memory session context separately
 from a rebuilt binding preview. Previews never admit input, reproduce
 per-message permissions, or capture model requests. If no eligible scope or

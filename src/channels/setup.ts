@@ -116,7 +116,7 @@ export function channelSetupPlugin(options: {
       c.json({ channels: CHANNEL_IDS.map((id) => options.runtime.status(id)) }))
     app.patch('/api/channels/:id', async (c) => {
       const id = c.req.param('id')
-      if (id === 'wechat') return c.json({ error: 'wechat_personal_bot_required' }, 400)
+      if (id === 'wechat') return c.json({ error: 'wechat_connection_setup_required' }, 400)
       if (!isChannelId(id)) return c.json({ error: 'unknown_channel' }, 404)
       let body: unknown
       try {

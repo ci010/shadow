@@ -22,7 +22,7 @@ test('node category tints render independently of state in both themes', { timeo
     name:'tint-fixture', resolveId:id=>id==='/tints.ts'?'\0tints':undefined,
     load(id) { if(id!=='\0tints')return; return `
       import 'uno.css';import '/src/styles.css';import {createApp,h} from 'vue';import {createRouter,createMemoryHistory} from 'vue-router';import Graph from '/src/components/WorkflowGraph.vue';import {botCanvas} from '/src/bot-workflows.ts';
-      const connection=(id,enabled=true)=>({id,displayName:id,platform:'telegram',purpose:'fixture',enabled,health:enabled?'connected':'disabled'});
+      const connection=(id,enabled=true)=>({id,displayName:id,platform:'telegram',enabled,health:enabled?'connected':'disabled'});
       const bots={connections:[connection('Isolated platform connector'),connection('Bound connector')],deployments:[{id:'Isolated published agent',state:'quarantined'},{id:'Bound deployment',state:'valid',agent:'general'}],bindings:[{id:'binding',connectionId:'Bound connector',deploymentId:'Bound deployment',platform:'telegram',topic:'Complete binding chain',enabled:true,subscribed:true,listener:true,kind:'topic',sessionIds:['web:fixture']}],warnings:[],routing:'not-probed',processingSuccess:'unknown'};
       const definition={id:'fixture',name:'Workflow states',enabled:false,revision:1,source:{kind:'external',id:'fixture'},gate:{kind:'revision-dedupe',first:'emit'},nodes:[{kind:'host-action',handler:'fixture'}]};
       const run={id:'run',workflow:'fixture',definition,timestamp:'2026-11-12',status:'blocked',cursor:0,attempts:1,nextAt:0,started:true};

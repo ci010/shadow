@@ -144,7 +144,7 @@ test('folder registries and bot records accept only current documents without co
     await writeFile(path, JSON.stringify({ version: 1, bots: [bot] }))
     assert.throws(() => new BotInstanceStore({ path, projectId: 'owner' }))
     assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 1)
-    await writeFile(path, JSON.stringify({ version: 2, bots: [bot] }))
+    await writeFile(path, JSON.stringify({ version: 4, bots: [bot] }))
     assert.throws(() => new BotInstanceStore({ path, projectId: 'foreign' }), /ownership/)
     assert.equal(new BotInstanceStore({ path, projectId: 'owner' }).get('bot').projectId, 'owner')
   })

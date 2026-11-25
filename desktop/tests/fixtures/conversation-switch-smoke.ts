@@ -26,7 +26,18 @@ async function main() {
     await mark()
     for (const id of ['web:chat-two', 'bot:fixture:readonly']) {
       await navigate(id)
-      await verify(`${process.env.CONVERSATION_SMOKE_TRANSPORT} snapshot ${id}`)
+      const transport = process.env.CONVERSATION_SMOKE_TRANSPORT
+      await verify(`${transport} snapshot ${id}`)
+      if (id === 'web:chat-two') {
+        const trigger = '[data-session-work="follow-up"]'
+        await wait(`!!document.querySelector(${JSON.stringify(trigger)})`)
+        await run(`document.querySelector(${JSON.stringify(trigger)}).click()`)
+        await wait('document.querySelector(".follow-up-instruction")?.textContent === "Review the fixture after the timer"')
+        if (transport === 'Socket') {
+          await run(`fetch('/__follow-up-clear').then(response => response.text())`)
+          await wait(`!document.querySelector(${JSON.stringify(trigger)})`)
+        }
+      }
       await mark()
     }
     assert.deepEqual(errors, [], 'No renderer console errors')

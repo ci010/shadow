@@ -92,12 +92,19 @@ test('link edits and publishes only the existing BOT companion; group receiver i
   assert.equal(bot.bindings[1]?.platform === 'qq' && bot.bindings[1].conversationId, 'group:two')
   await assert.rejects(() => tool.execute(input, f.context), /source changed|revision changed/)
 })
-test('link never creates exact thread or DM assignment and never trusts target keys from policy JSON', async t => {
+test('link publishes an exact QQ private assignment and never trusts target keys from policy JSON', async t => {
   const f = fixture(t), first = JSON.parse(await f.propose() as string).deployment.revision
   const { passiveChannelId } = await import('../channels/passive-contract.ts')
-  const base = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'dm:one', kind: 'direct' as const }
+  const base = { version: 1 as const, projectId: 'p', connectionId: 'bot', platform: 'qq' as const, conversationId: 'c2c:one', kind: 'direct' as const }
   const tool = botPackageTool({ ...f.options, channelSource: () => base })
-  await assert.rejects(() => tool.execute({ action: 'link', folderId: 'folder', summary: 'Link', channelSessionId: passiveChannelId(base), expectedRevision: first, sourceRevision: f.deployments.freezeDirectory(f.source).revision, bindingJson: JSON.stringify({ enabled: true, trigger: 'all', allowFrom: [], tools: [] }) }, f.context), /top-level/)
+  const input = { action: 'link', folderId: 'folder', summary: 'Link', channelSessionId: passiveChannelId(base), expectedRevision: first, sourceRevision: f.deployments.freezeDirectory(f.source).revision, bindingJson: JSON.stringify({ enabled: true, trigger: 'mention', allowFrom: ['one'], tools: [] }) }
+  await assert.rejects(() => tool.execute({ ...input, channelSessionId: passiveChannelId({ ...base, conversationId: 'c2c:other' }) }, f.context), /origin mismatch/)
+  const result = JSON.parse(await tool.execute(input, f.context) as string)
+  assert.equal(result.status, 'deployed')
+  const { parseBot } = await import('./sdk.ts')
+  const binding = parseBot(f.deployments.read('support')!.files).bindings.at(-1)
+  assert.equal(binding?.platform === 'qq' && binding.conversationId, base.conversationId)
+  assert.deepEqual(binding?.platform === 'qq' && binding.allowFrom, ['one'])
   const { assignChannelSource } = await import('./channel-assignment.ts')
   assert.throws(() => assignChannelSource(f.deployments.read('support')!.files, { ...base, kind: 'group' }, { platform: 'qq' }), /targets/)
 })

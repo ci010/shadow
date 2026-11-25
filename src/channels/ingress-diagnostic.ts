@@ -12,9 +12,9 @@ const systemCodes = new Set(['EACCES','EPERM','ENOENT','EEXIST','ENOSPC','EIO','
 const admissionReasons = new Map([
   ['No input listener subscription; input not delivered', 'listener_missing'],
   ['No input listener subscription; policy not executed', 'listener_missing'],
-  ['Explicit service assignment required; configure this Bot in Web', 'assignment_required'],
+  ['Explicit BOT assignment and platform proof required', 'assignment_required'],
+  ['Arrival assignment changed; retained in inbox only', 'assignment_changed'],
   ['Selected BOT receive configuration required', 'receive_configuration_required'],
-  ['Verified owner direct messages only', 'owner_required'],
   ['The source bot connection is unavailable', 'connection_unavailable'],
   ['Verified Discord location required', 'location_required'],
   ['Connection changed', 'connection_changed'],

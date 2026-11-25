@@ -8,7 +8,7 @@ export interface RealtimeSessionActivityPayload {
   activity?: SessionActivityReadModel
 }
 
-export type RealtimeSessionChange = 'history' | 'metadata' | 'activity' | 'work' | 'background-tasks' | 'scheduled-tasks'
+export type RealtimeSessionChange = 'history' | 'metadata' | 'activity' | 'work' | 'background-tasks' | 'scheduled-tasks' | 'follow-up'
 
 export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'organization' | 'config' | 'folders' | 'nodes' | 'channels'
 

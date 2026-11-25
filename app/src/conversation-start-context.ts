@@ -18,7 +18,7 @@ export interface ConversationStartData {
   backgroundTasks?: ActiveBackgroundTasks
   scheduledTasks?: ConversationScheduleSummary[]
   botSetup?: { pending: boolean }
-  followUp?: { scheduled: boolean }
+  followUp?: { next: string; after: number; nextRun: string | null } | null
 }
 
 /** Scoped by pane, API base and logical session. An omitted resource is not an empty result. */

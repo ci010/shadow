@@ -4,12 +4,12 @@ import test from 'node:test'
 import { mountBotUi, settleBotUi } from './bot-ui-test-helpers.ts'
 
 const props = { apiBase: 'http://localhost/projects/p', projectId: 'p', active: true, available: true }
-const bot = { id: 'qq-service', projectId: 'p', platform: 'qq', displayName: 'Shared QQ', purpose: 'service', label: 'QQ', enabled: false, configured: true, state: 'disabled', config: { appId: 'saved-app-id' }, secrets: { secret: true } }
+const bot = { id: 'qq-service', projectId: 'p', platform: 'qq', displayName: 'Shared QQ', label: 'QQ', enabled: false, configured: true, state: 'disabled', config: { appId: 'saved-app-id' }, secrets: { secret: true } }
 
 test('Connections is a separate Project route and navigation; legacy channels goes to connections', () => {
   const router = readFileSync(new URL('./router.ts', import.meta.url), 'utf8')
   const settings = readFileSync(new URL('./components/ProjectSettings.vue', import.meta.url), 'utf8')
-  assert.match(router, /section\(general\|models\|connections\|bots\|agents\)/)
+  assert.match(router, /section\(general\|models\|connections\|bots\)/)
   assert.match(router, /path: '\/settings\/channels', redirect: '\/projects\/default\/settings\/connections'/)
   assert.match(settings, /id: 'connections', get label\(\) \{ return t\('Connections'\)/)
   assert.match(settings, /:section="section === 'connections' \? 'connections' : 'bots'"/)
@@ -46,16 +46,16 @@ test('switching Connections to BOT inventory destroys private drafts and never w
   })
   const view = mountBotUi(t, 'ChannelsView.vue', { ...props, section: 'connections' })
   await settleBotUi()
-  assert.match(view.text(), /Multiple BOTs can reuse one service connection/)
+  assert.match(view.text(), /Multiple BOTs can reuse one connection/)
   assert.match(view.text(), /QQ and Discord chats cannot open this private card/)
   assert.ok(!requests.some(path => path.endsWith('/api/bot-package')))
-  await view.select(0, 'qq'); await view.select(1, 'connection:qq-service')
+  await view.click('Configure')
   await view.click('Update private credentials')
   view.input('secret', 'synthetic-unsaved')
   view.state.section = 'bots'; await settleBotUi()
   assert.equal(view.nodes().filter(node => node.tag === 'input').length, 0)
   view.state.section = 'connections'; await settleBotUi()
-  await view.select(0, 'qq'); await view.select(1, 'connection:qq-service')
+  await view.click('Configure')
   await view.click('Update private credentials')
   assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.name === 'secret')?.props.inputValue, '')
 })

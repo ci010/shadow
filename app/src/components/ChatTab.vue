@@ -1186,7 +1186,13 @@ function startData(value: Record<string, unknown>, sessionId: string): Conversat
   try { if (value.details !== undefined) data.details = parseSessionDetails(value.details, sessionId) } catch { /* optional resource */ }
   try { if (value.work !== undefined) data.work = parseWorkView(value.work) } catch { /* optional resource */ }
   if (isRecord(value.botSetup) && typeof value.botSetup.pending === 'boolean') data.botSetup = { pending: value.botSetup.pending }
-  if (isRecord(value.followUp) && typeof value.followUp.scheduled === 'boolean') data.followUp = { scheduled: value.followUp.scheduled }
+  const followUp = value.followUp
+  if (followUp === null) data.followUp = null
+  else if (isRecord(followUp) && typeof followUp.next === 'string' && typeof followUp.after === 'number'
+    && Number.isFinite(followUp.after)
+    && (followUp.nextRun === null || typeof followUp.nextRun === 'string' && Number.isFinite(Date.parse(followUp.nextRun)))) {
+    data.followUp = { next: followUp.next, after: followUp.after, nextRun: followUp.nextRun }
+  }
   if (Array.isArray(value.scheduledTasks) && value.scheduledTasks.every(task => isRecord(task) && typeof task.id === 'string'
     && typeof task.name === 'string' && typeof task.task === 'string' && typeof task.schedule === 'string' && typeof task.enabled === 'boolean'
     && (task.nextRun === null || typeof task.nextRun === 'string' && Number.isFinite(Date.parse(task.nextRun))))) {

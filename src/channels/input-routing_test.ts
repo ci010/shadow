@@ -66,7 +66,7 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   } })
   const bus = new Bus(), adapter = new DiscordChannel(bus, { token: 'synthetic', workspace, reactionEmoji: '' })
   Object.assign(adapter, { botUserId: '900' })
-  t.mock.method(adapter, 'inspectPassiveConversation', async (chatId: string, senderId: string) => ({ botUserId: '900', location: { id: chatId, name: chatId, type: 0, guildId: '100', guildName: 'guild', parentId: null, parentName: null, recipientId: null }, actor: { id: senderId, name: senderId, roleIds: [] }, canView: true, canSend: true, canReadHistory: true }))
+  t.mock.method(adapter, 'inspectReceipt', async (chatId: string) => ({ botUserId: '900', location: { id: chatId, name: chatId, type: 0, guildId: '100', guildName: 'guild', parentId: null, parentName: null, recipientId: null }, canView: true }))
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions, inputs.receive, {
     projectId, instanceStore: bots, factory: () => adapter, discordIntegration: integration,
     routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { trace.push('handler:ordinary'); await run(configuration) }),
@@ -140,19 +140,19 @@ test('real observation ingress selects BOT before receive rules, processor and c
 })
 
 
-for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory BOTs share one QQ connection but own independent triggers (legacy connection=${connectionTrigger})`, async t => {
+test('two directory BOTs share one QQ connection but own independent triggers', async t => {
   const { QQChannel } = await import('./qq.ts')
   await withTempWorkspace(async workspace => {
     const projectId = 'qq-trigger', bus = new Bus()
     const bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
-    const connection = bots.create('qq', 'shared', { enabled: true, appId: 'synthetic', secret: 'synthetic', triggerMode: connectionTrigger })
+    const connection = bots.create('qq', 'shared', { enabled: true, appId: 'synthetic', secret: 'synthetic' })
     const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } })
     for (const trigger of ['mention', 'all'] as const) {
       const id = `reply-${trigger}`
       const frozen = deployments.freeze({ 'BOT.md': `---\nid: ${id}\nconfig: bot.json\n---\nSupport`, 'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [],
         bindings: [{ platform: 'qq', botInstanceId: connection.id, conversationId: `group:${trigger}`,
-          // Exercise an old package with no trigger while its connection is all.
-          ...(trigger === 'mention' && connectionTrigger === 'all' ? {} : { trigger }), tools: [] }] }) })
+          // The default BOT trigger is mention; the Connection owns no trigger.
+          ...(trigger === 'mention' ? {} : { trigger }), tools: [] }] }) })
       await deployments.deploy({ id, source: { folderId: 'fixture', directory: '' }, ...frozen })
     }
     const directory = new DirectoryBots(deployments), delivered: string[] = [], silent: string[] = [], configured: string[] = []
@@ -163,7 +163,7 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, { recordPassiveChannel: async (_source: unknown, message: { messageId: string }) => ({ status: 'accepted', sessionId: 'inbox', inputId: message.messageId }) } as unknown as SessionManager, inputs.receive, {
-      projectId, instanceStore: bots, serviceAssigned: directory.serviceAssigned,
+      projectId, instanceStore: bots, serviceAssigned: directory.serviceAssigned, serviceGeneration: address => { const policy = directory.resolve(address); return policy?.generation ?? policy?.revision },
       routeInputPolicy: (message, run) => inputs.policy(message, async configuration => {
         assert.ok(configuration?.platform === 'qq' && Object.isFrozen(configuration))
         configured.push(`${message.chatId}:${configuration.trigger}`)
@@ -186,9 +186,7 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
       await send('mention', true)
       assert.deepEqual(delivered, ['group:mention', 'group:all', 'group:mention'])
       assert.deepEqual(silent, ['group:mention'])
-      const saved = bots.get(connection.id).config
-      assert.ok('triggerMode' in saved)
-      assert.equal(saved.triggerMode, connectionTrigger, 'Compatibility configuration is not rewritten or used as Service policy')
+      assert.equal(Object.hasOwn(bots.get(connection.id).config, 'triggerMode'), false)
     } finally { await manager.stopAll(); bus.stopAll() }
   })
 })

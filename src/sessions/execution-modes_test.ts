@@ -1,7 +1,8 @@
 import { createSelfSessionHandler } from '../vfs/session.ts'
 import { WriteTool } from '../tools/filesystem.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
-import { FOLLOW_UP_SOURCE } from './session-follow-up.ts'
+import { FOLLOW_UP_SOURCE, followUpPhase } from './session-follow-up.ts'
+import { Session } from './session.ts'
 import { TaskTool } from '../tools/task.ts'
 import { ReplyTool } from '../tools/reply.ts'
 import { requireToolText } from '../tools/tool.ts'
@@ -2395,7 +2396,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.deliver('web:root', followUpUserTurn('Start eval 8421, then report the result'))
         ;(await f.next('web:root')).resolve(done('Eval started'))
         const check = await f.next('web:root')
-        assert.match(JSON.stringify(check.messages), /Session self-check/)
+        assert.match(JSON.stringify(check.messages), /Use 5 \(the minimum\) when the next action can start immediately/)
+        assert.doesNotMatch(JSON.stringify(check.messages), /1800/)
         assert.deepEqual(check.names.sort(), ['ask', 'read', 'write'])
         check.resolve(invoke('dangerous', {}, 'forged-self-check-exec'))
         const denied = await f.next('web:root')
@@ -2527,6 +2529,103 @@ test('an already due follow-up stays dormant while a linked cron exists and wake
       ;(await f.next('web:root')).resolve(done('Follow-up finished'))
       await waitFor(() => f.facts.length === 1)
       assert.equal(f.facts[0]!.inputId, 'blocked-wake')
+      assert.equal((await store.getState('web:root'))!.sessionFollowUp, undefined)
+    } finally { await f.sessions.stop(); await store.close() }
+  })
+})
+
+function inputText(content: unknown): string {
+  return Array.isArray(content) ? content.map(part => part?.text ?? '').join('\n') : String(content ?? '')
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const kind of ['user', 'session', 'event'] as const) {
+    test(`${Store.name}: ${kind} input clears an unclaimed follow-up and logs its stale marker immediately before the input`, async () => {
+      await withTempWorkspace(async workspace => {
+        const store = new Store(join(workspace, 'sessions'))
+        await store.init()
+        const f = fixture(workspace, store, { projectId: 'follow-up-fixture' })
+        registerFollowUpWriter(workspace, f)
+        try {
+          const now = Date.now(), dueAt = now + 30_000
+          await store.saveState('web:root', { sessionId: 'web:root', segmentIndex: 0, mode: 'session', projectId: 'follow-up-fixture',
+            followUp: { next: 'Old operation', after: 30 }, sessionFollowUp: { inputId: 'old-wake', phase: 'follow_up', wakes: 0, startedAt: now, dueAt } })
+          await f.sessions.start()
+          f.sessions.startSessionFollowUps()
+          if (kind === 'session') await f.sessions.buildSession('web:peer')
+          const app = new Hono()
+          sessionsApiPlugin(f.sessions)(app)
+          const endpoint = '/api/sessions/web%3Aroot/follow-up'
+          const before = await app.request(endpoint)
+          assert.equal(before.headers.get('Cache-Control'), 'no-store')
+          assert.deepEqual(await before.json(), { sessionId: 'web:root', followUp: { next: 'Old operation', after: 30, nextRun: new Date(dueAt).toISOString() } })
+          const replacement = kind === 'user' ? followUpUserTurn('New context') : input('New context')
+          if (kind === 'session') replacement.source = { kind: 'session', sessionId: 'web:peer' }
+          await f.sessions.deliver('web:root', replacement)
+          const request = await f.next('web:root')
+          const marker = /<event type="follow_up_stale" source="session-follow-up"/
+          assert.match(inputText(request.messages.at(-2)?.content), marker)
+          assert.match(JSON.stringify(request.messages.at(-2)), /Old operation/)
+          assert.match(JSON.stringify(request.messages.at(-1)), /New context/)
+          assert.doesNotMatch(inputText(request.messages.at(-1)?.content), marker)
+          assert.deepEqual(await (await app.request(endpoint)).json(), { sessionId: 'web:root', followUp: null })
+          const fresh = kind === 'event'
+          request.resolve(writeSelf(fresh ? { followUp: { next: 'Different operation', after: 60 } } : { completed: true }))
+          ;(await f.next('web:root')).resolve(done('Fresh decision'))
+          await waitFor(() => f.facts.length === 1)
+          const saved = (await store.getState('web:root'))!
+          if (fresh) {
+            assert.notEqual(saved.sessionFollowUp?.inputId, 'old-wake')
+            assert.equal(saved.followUp?.next, 'Different operation')
+          } else {
+            assert.equal(saved.followUp, undefined)
+            assert.equal(saved.sessionFollowUp, undefined)
+          }
+          const records = []
+          for await (const row of store.readSessionLog(physicalSessionId(saved))) records.push(row)
+          const markerIndex = records.findIndex(row => marker.test(inputText(row.content)))
+          assert.ok(markerIndex >= 0)
+          assert.match(JSON.stringify(records[markerIndex + 1]?.content), /New context/)
+          assert.equal(f.facts[0]!.source.kind, kind)
+        } finally { await f.sessions.stop(); await store.close?.() }
+      })
+    })
+  }
+}
+
+test('a stale follow-up already admitted to the mailbox cannot wake inference after a replacement input', async () => {
+  await withTempWorkspace(async workspace => {
+    const store = new JsonlSessionStore(join(workspace, 'sessions'))
+    await store.init()
+    const f = fixture(workspace, store, { projectId: 'follow-up-fixture' })
+    registerFollowUpWriter(workspace, f)
+    try {
+      await f.sessions.start()
+      f.sessions.startSessionFollowUps()
+      await f.sessions.deliver('web:root', input('Plan an external check'))
+      ;(await f.next('web:root')).resolve(writeSelf({ followUp: { next: 'Old operation', after: 5 } }))
+      const final = await f.next('web:root')
+      const session = f.sessions.getActiveSession('web:root')
+      assert.ok(session instanceof Session)
+      const dispatch = session.dispatch.bind(session)
+      let releaseWake: (() => void) | undefined
+      session.dispatch = (msg, llm) => {
+        if (followUpPhase(msg.source) === 'follow_up') releaseWake = () => dispatch(msg, llm)
+        else dispatch(msg, llm)
+      }
+      final.resolve(done('Plan recorded'))
+      await waitFor(() => !!releaseWake, 8500)
+      await assert.rejects(f.sessions.deliver('web:root', { ...followUpUserTurn('Invalid input'),
+        source: { kind: 'session', sessionId: 'web:unknown' } }), /belong to this project/)
+      assert.equal((await store.getState('web:root'))!.followUp?.next, 'Old operation')
+      await f.sessions.deliver('web:root', followUpUserTurn('Replace the old plan'))
+      releaseWake!()
+      const replacement = await f.next('web:root')
+      assert.match(inputText(replacement.messages.at(-1)?.content), /Replace the old plan/)
+      replacement.resolve(writeSelf({ completed: true }))
+      ;(await f.next('web:root')).resolve(done('Finished'))
+      await waitFor(() => f.facts.length === 2 && session.quiescent)
+      assert.equal(f.requests.length, 4, 'the obsolete wake was dropped before inference')
       assert.equal((await store.getState('web:root'))!.sessionFollowUp, undefined)
     } finally { await f.sessions.stop(); await store.close() }
   })

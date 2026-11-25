@@ -170,11 +170,22 @@ export abstract class BaseSession {
     await this.persistMessages(llm, ...messages)
   }
 
+  protected beforeWorkNotificationPersisted(_input: SessionMessageInput): Promise<SessionMessageInput | undefined> | undefined { return undefined }
+
   protected onUserMessageWrite(_message: ChatMessage, _saved: boolean): void {}
   protected onInferenceDispatched(_messages: readonly ChatMessage[]): void {}
 
+  private readonly staleFollowUpNotices = new WeakMap<SessionMessageInput, SessionMessageInput>()
+  private readonly inputPrefixes = new WeakMap<ChatMessage, ChatMessage>()
+
+  markStaleFollowUp(input: SessionMessageInput, notice: SessionMessageInput): void {
+    this.staleFollowUpNotices.set(input, notice)
+  }
+
   protected async buildInputMessage(input: SessionMessageInput, cwd: string): Promise<ChatMessage> {
     const message = await buildUserChatMessage(input, this.workspace, cwd)
+    const notice = this.staleFollowUpNotices.get(input)
+    if (notice) this.inputPrefixes.set(message, buildTextInputMessage(notice))
     if (this.isManagedWorkNotification(input)) this.workNotificationInputs.set(message, input)
     if (input.source.kind === 'user' && input.content.trim()) {
       const { channel, senderId, channelAddress, isGroup } = input.source.sender
@@ -207,18 +218,32 @@ export abstract class BaseSession {
     const now = new Date().toISOString()
     const inputs: ChatMessage[] = []
     const guarded = new Map<ChatMessage, [SessionMessageInput, SessionMessageInput]>()
-    const stampedMessages = prepared.flatMap((message, index) => {
+    const stampedMessages: ChatMessage[] = []
+    for (const [index, preparedMessage] of prepared.entries()) {
+      let message = preparedMessage
       const original = messages[index]!
       const notification = this.workNotificationInputs.get(original)
       if (notification) {
-        const current = this.revalidateWorkNotification?.(notification, this.physicalSessionId)
-        if (!current) return []
+        let current = this.revalidateWorkNotification?.(notification, this.physicalSessionId)
+        if (!current) continue
+        const supersede = this.beforeWorkNotificationPersisted(current)
+        if (supersede) {
+          const notice = await supersede
+          current = this.revalidateWorkNotification?.(notification, this.physicalSessionId)
+          if (!current) continue
+          if (notice) this.inputPrefixes.set(original, buildTextInputMessage(notice))
+        }
         message = buildTextInputMessage(current) // Host notifications are text-only.
         guarded.set(original, [notification, current])
       }
+      const prefix = this.inputPrefixes.get(original)
+      if (prefix) {
+        inputs.push(prefix)
+        stampedMessages.push({ ...prefix, timestamp: now })
+      }
       inputs.push(original)
-      return [{ ...message, timestamp: now }]
-    })
+      stampedMessages.push({ ...message, timestamp: now })
+    }
     if (!stampedMessages.length) return
     this.messages.push(...stampedMessages)
     let savedCount = 0
@@ -890,7 +915,9 @@ export abstract class BaseSession {
     if (input.kind === 'control' && input.command.type !== 'retry' && input.command.type !== 'resume') return
     if (input.kind === 'message' && input.source.kind === 'session' && input.source.workStamps?.length
       && this.tools.getWorkGuard()?.current(input.source.workStamps) === false) {
+      const notice = this.staleFollowUpNotices.get(input)
       input = { ...input, policy: 'silent', content: `[Historical input from an obsolete work revision; archive only, not new authority.]\n${input.content}` }
+      if (notice) this.markStaleFollowUp(input, notice)
     }
     this.suppressWakeOutput = input.source.kind === 'event' && input.source.source === 'bot-wake' && input.source.type === 'bot-wake'
     const silent = input.kind === 'message' && input.policy === 'silent'

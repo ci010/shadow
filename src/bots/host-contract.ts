@@ -5,7 +5,7 @@ export const BotHostScopeSchema = z.object({
   projectId: z.string().min(1).max(512), botId: z.string().min(1).max(128),
   revision: z.string().min(1).max(512), bindingKey: z.string().min(1).max(2048),
   sessionId: z.string().min(1).max(512),
-  address: z.object({ projectId: z.string(), botInstanceId: z.string(), platform: z.enum(['discord', 'qq', 'feishu']), conversationId: z.string().min(1).max(512), legacySessionId: z.literal(true).optional() }).strict(),
+  address: z.object({ projectId: z.string(), botInstanceId: z.string(), platform: z.enum(['discord', 'qq', 'feishu']), conversationId: z.string().min(1).max(512) }).strict(),
 }).strict()
 export type BotHostScope = z.infer<typeof BotHostScopeSchema>
 export type BotHostCapability = z.infer<typeof BotHostCapabilities>[number]

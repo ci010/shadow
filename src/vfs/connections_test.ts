@@ -18,8 +18,8 @@ const context = { projectId: 'p', channel: 'web', sessionId: 'web:owner', admin:
 test('canonical Connection mount is bounded read-only inspection with receiver paths', async () => {
   const calls: string[] = []
   const handler = createConnectionsHandler({ projectId: 'p', observation: () => ({ connections: [], deployments: [], bindings: [], sinks: [], warnings: [], routing: 'not-probed', processingSuccess: 'unknown' }), assertSession: id => { assert.equal(id, 'web:owner') },
-    index: () => ({ ids: ['conn'] }), overview: id => ({ id, displayName: 'Connection', platform: 'qq', purpose: 'service',
-      enabled: true, health: 'connected', ownerVerified: true, config: 'PRIVATE' }),
+    index: () => ({ ids: ['conn'] }), overview: id => ({ id, displayName: 'Connection', platform: 'qq',
+      enabled: true, health: 'connected', config: 'PRIVATE' }),
     sink: id => { calls.push(id); assert.equal(id, 'conn'); return projection() } })
   const vfs = new VirtualFs(); vfs.mount('v:connections', 'Connections', handler.read, handler.list, undefined, handler.directory)
   const overview = await vfs.resolve('v:connections/conn/overview.json', context)
