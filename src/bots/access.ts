@@ -1,16 +1,15 @@
 import type { ExecutionContext } from '../tools/context.ts'
 
-/** Bot control-plane reads have the same boundary as connection management.
- * A generic read/search grant (or an inherited admin bit) is not sufficient.
- * assertSession must check the live, runtime-owned durable/root Web session.
+/** Host-recorded Web execution ownership is shared by BOT reads and tools.
+ * The callback must resolve live same-Project structural lineage, not model bits.
+ * File/device routing remains a separate authorization boundary.
  */
 export function assertBotManagementAccess(projectId: string, context: ExecutionContext, assertSession: (id: string) => void): void {
   context.signal.throwIfAborted()
-  if (context.projectId !== projectId || context.admin !== true || context.isGroup ||
-    !context.sessionId.startsWith('web:') || !['web', 'virtual'].includes(context.channel) ||
-    context.channelAddress || context.memoryAccess || context.scriptInvocation || context.remoteWorkdir ||
-    context.tools.executionMode !== 'session') {
-    throw new Error('Bot management requires the owning Project authenticated durable Web administrator chat.')
+  if (context.projectId !== projectId || context.isGroup ||
+    !['web', 'virtual'].includes(context.channel) || context.channelAddress ||
+    context.memoryAccess || context.scriptInvocation || context.remoteWorkdir) {
+    throw new Error('Bot management requires an owning Project Web execution.')
   }
   assertSession(context.sessionId)
 }

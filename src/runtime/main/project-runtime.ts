@@ -48,7 +48,7 @@ import { BotSend } from '../../bots/send.ts'
 import { BotMessages } from '../../bots/messages.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService, publishedBotIntegrationId } from '../../bots/runtime.ts'
-import { isDirectOwnerTurn, isOwnerSession } from '../../sessions/owner-policy.ts'
+import { botWebExecutionOwner, isDirectOwnerTurn, isOwnerSession } from '../../sessions/owner-policy.ts'
 import { GltfCaptureBridge } from '../../gateway/gltf-capture.ts'
 import { CaptureViewTool } from '../../tools/capture-view.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
@@ -1991,9 +1991,12 @@ export async function createProjectRuntime(
   cleanup.push(() => botChatSetup.stop())
   botChatSetupPlugin(botChatSetup, dependencies.authorize)(app)
   const assertBotSession = (sessionId: string) => {
-    const state = sessions.getSessionState(sessionId)
-    if (!isOwnerSession(state, project.id) || !canAuthor(sessionId)) throw new Error('Bot management requires a user-owned Web conversation.')
+    const owner = botWebExecutionOwner(sessionId, project.id, id => sessions.isManagedConversation(id) ? undefined : sessions.getSessionState(id))
+    if (!owner || sessions.isManagedConversation(sessionId) || !canAuthor(owner)) throw new Error('Bot management requires a user-owned Web execution.')
     sessions.assertFolderAccess(sessionId)
+  }
+  const canAuthorBot = (id: string): boolean => {
+    try { assertBotSession(id); return true } catch { return false }
   }
   importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, assertBotSession))
   function connectionSink(connectionId: string) {
@@ -2088,7 +2091,7 @@ export async function createProjectRuntime(
   })
   const botPackageOptions = {
     projectId:project.id,deployments:botDeployments,runtime:directoryBots,folders:folderRegistry,
-    ask:tools.get('ask')!,canAuthor,inventory:botInventory,pending:new Map<string,unknown>(),
+    ask:tools.get('ask')!,canAuthor:canAuthorBot,inventory:botInventory,pending:new Map<string,unknown>(),
     channelSource: (sessionId: string) => {
       const state = sessions.getSessionState(sessionId)
       if (!state || state.projectId !== project.id) throw new Error('Channel session must belong to this Project')

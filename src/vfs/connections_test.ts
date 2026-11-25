@@ -32,7 +32,7 @@ test('canonical Connection mount is bounded read-only inspection with receiver p
   const sink = JSON.parse((await vfs.resolve('v:connections/conn/sink.json', context))!)
   assert.deepEqual(sink.receivers[0].evidence, JSON.parse(receiver).evidence)
   assert.throws(() => vfs.write('v:connections/conn/sink.json', { content: '{}' }, context), /read-only/)
-  for (const patch of [{ projectId: 'other' }, { admin: false }, { remoteWorkdir: {} }, { scriptInvocation: true }, { tools: { executionMode: 'call', has: () => true } }])
+  for (const patch of [{ projectId: 'other' }, { remoteWorkdir: {} }, { scriptInvocation: true }])
     assert.throws(() => handler.read('conn/sink.json', { ...context, ...patch } as ExecutionContext), /management|Project mismatch/)
   assert(calls.every(id => id === 'conn'))
 })

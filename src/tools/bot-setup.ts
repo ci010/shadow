@@ -28,8 +28,6 @@ export class BotSetupTool implements Tool {
     if (this.channels.projectId !== this.setup.projectId) throw new Error('Bot runtime ownership mismatch.')
     const input = argsSchema.parse(args)
     if (input.action === 'status') return JSON.stringify({ bots: this.channels.botStatuses() })
-    // Continuations retain read authority, not a direct human management turn.
-    if (context.inputSource !== 'user') throw new Error('Bot setup changes require a direct administrator human turn.')
     if (input.action === 'open') return this.setup.request(context.sessionId, context.signal)
     if (input.action === 'create') {
       return JSON.stringify({ bot: await this.channels.createBot({ platform: input.platform, displayName: input.displayName, config: { enabled: false } }, context.signal) })

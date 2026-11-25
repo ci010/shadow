@@ -34,8 +34,9 @@ Invalid/quarantined and integrity-failed deployments remain visible with safe er
 categories, not unchecked source. No status read repairs or relaxes validation.
 Operations remain `bot_setup`, `bot_package` and `credential_request` with their
 existing private-entry and exact-content owner confirmations. The VFS has the same
-owner durable Web management boundary; it is not available to Service/channel,
-child, script or remote-workdir callers just because they can read/search.
+host-recorded Web execution management boundary, including resumed Web turns and
+same-Project delegated session/task/call children; it is not available to
+Service/channel, script or remote-workdir callers just because they can read/search.
 Reopen the private card for required credential changes. Invitations expire after ten
 minutes and stop with cancellation/shutdown. They are session/Project scoped. Switching
 chats/Projects unmounts private inputs; the old invitation can be cancelled or expires.

@@ -43,8 +43,8 @@ test('authenticated publication deploys exact frozen files with zero native asks
 })
 test('owner-only publication, cancellation and live fence failure preserve active deployment', async t => {
   const f = fixture(t)
-  for (const patch of [{ projectId: 'foreign' }, { channel: 'discord' }, { admin: false }, { inputSource: 'session' }, { sessionId: 'virtual:child' }, { remoteWorkdir: {} }, { isGroup: true }])
-    await assert.rejects(() => f.tool.execute({ action: 'status' }, { ...f.context, ...patch } as ExecutionContext), /authenticated owner/)
+  for (const patch of [{ projectId: 'foreign' }, { channel: 'discord' }, { sessionId: 'virtual:child' }, { remoteWorkdir: {} }, { isGroup: true }])
+    await assert.rejects(() => f.tool.execute({ action: 'status' }, { ...f.context, ...patch } as ExecutionContext), /Web execution/)
   const first = JSON.parse(await f.reload() as string).deployment.revision
   f.save('Candidate')
   const signal = AbortSignal.abort(); await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'Update' }, { ...f.context, signal }))
@@ -86,6 +86,8 @@ test('source resolves trusted addresses read-only; ordinary source edits reload 
   const request = { action: 'source', folderId: 'folder', channelSessionId: passiveChannelId(source) }
   const result = JSON.parse(await tool.execute(request, f.context) as string)
   assert.equal(f.deployments.list().length, 0)
+  const hostOnly = JSON.parse(await tool.execute({action:'source',channelSessionId:passiveChannelId(source)}, f.context) as string)
+  assert.deepEqual(hostOnly.addresses, result.addresses)
   assert.equal(result.sourceRevision, undefined)
   assert.deepEqual(result.addresses.conversation.binding, { platform: 'qq', botInstanceId: 'bot', conversationId: 'group:two' })
   await assert.rejects(() => tool.execute({ ...request, channelSessionId: passiveChannelId({ ...source, projectId: 'foreign' }) }, f.context), /origin mismatch/)
@@ -302,7 +304,7 @@ test('obsolete active schema does not relax candidate schema, Project or live pe
   writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
   await assert.rejects(() => f.reload(), /readFolders/)
   f.save()
-  await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'Replace' }, { ...f.context, projectId: 'foreign' }), /authenticated owner/)
+  await assert.rejects(() => f.tool.execute({ action: 'reload', folderId: 'folder', summary: 'Replace' }, { ...f.context, projectId: 'foreign' }), /Web execution/)
   f.options.publish = async (_id, change) => { f.fail(); return change() }
   await assert.rejects(() => f.reload(), /live authority changed/)
   assert.equal(f.deployments.read('support')!.deployment.revision, deployment.revision)
@@ -316,4 +318,25 @@ test('obsolete schema never hides damaged deployment bytes or storage read failu
   const error = Object.assign(new Error('storage permission denied'), { code: 'EACCES' })
   f.deployments.read = () => { throw error }
   await assert.rejects(() => f.reload(), caught => caught === error)
+})
+
+test('BOT entry accepts Web continuations and host-owned delegated execution, not forged context authority', async t => {
+  const { botWebExecutionOwner } = await import('../sessions/owner-policy.ts')
+  const f = fixture(t)
+  const root = {sessionId:'web:owner',projectId:'p',segmentIndex:0}
+  const states = new Map<string, import('../sessions/session-store.ts').SessionState>([[root.sessionId, root]])
+  f.options.canAuthor = id => !!botWebExecutionOwner(id, 'p', key => states.get(key))
+  for (const inputSource of ['user','session','event'] as const) {
+    assert.ok(await f.tool.execute({action:'status'}, {...f.context,inputSource,admin:false}))
+  }
+  for (const mode of ['session','task','call'] as const) {
+    const id = `virtual:${mode}`
+    states.set(id, {...root,sessionId:id,mode,parentSessionId:root.sessionId})
+    assert.ok(await f.tool.execute({action:'status'}, {...f.context,sessionId:id,channel:'virtual',inputSource:'event',admin:false}))
+  }
+  for (const patch of [{projectId:'foreign'}, {sessionId:'qq:service'}, {serviceGeneration:'service'}, {parentSessionId:'missing'}]) {
+    const state = {...root,sessionId:'virtual:bad',mode:'task' as const,parentSessionId:root.sessionId,...patch}
+    states.set(state.sessionId,state)
+    await assert.rejects(() => f.tool.execute({action:'status'}, {...f.context,sessionId:state.sessionId}))
+  }
 })

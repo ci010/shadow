@@ -1,4 +1,5 @@
 import { type ReadResources } from './read-scope.ts'
+import { assertBotManagementAccess } from './access.ts'
 import { stringify } from 'yaml'
 import { channelSourceAddresses } from './channel-assignment.ts'
 import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
@@ -29,6 +30,7 @@ type Options = {
 }
 const reloadRequest = z.object({action:z.literal('reload'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),summary:z.string().trim().min(1).max(800)}).strict()
 const sourceRequest = z.object({action:z.literal('source'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),channelSessionId:z.string().max(8192).optional()}).strict()
+const channelSourceRequest = z.object({action:z.literal('source'),channelSessionId:z.string().min(1).max(8192)}).strict()
 const createRequest = z.object({ action: z.literal('create'), folderId: z.string().min(1).max(128), directory: z.string().min(1).max(1024), id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/), prompt: z.string().trim().min(1).max(128000), summary: z.string().trim().min(1).max(800) }).strict()
 
 function location(binding: ReturnType<typeof parseBot>['bindings'][number]): string {
@@ -88,11 +90,13 @@ function disclosedBindings(bot: BotDefinition): unknown[] {
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'Manage directory BOT source and deployment from authenticated owner Web Chat. create creates and publishes a new Service BOT with zero subscriptions. Edit BOT.md and its companion JSON using ordinary write, preserving other bindings/subscriptions, then reload to validate and publish one frozen snapshot. reload centrally checks current Project/Connection identity, permissions and conflicts again inside publication; source inspection is not a prerequisite and no revision argument is required. source optionally resolves a trusted host-recorded channelSessionId and returns binding/subscription addresses, not permissions or authorization. Choose permissions explicitly in source, subject to BOT ceilings; readResources belongs at BOT level. status is compatibility inventory. Source edits alone never activate; reload does not restart the host or replay old inbox messages.',
+    description:'Manage directory BOT source and deployment from authenticated owner Web Chat. create creates and publishes a new Service BOT with zero subscriptions. Edit BOT.md and its companion JSON using ordinary write, preserving other bindings/subscriptions, then reload to validate and publish one frozen snapshot. reload centrally checks current Project/Connection identity, permissions and conflicts again inside publication; source inspection is not a prerequisite and no revision argument is required. source resolves a trusted host-recorded channelSessionId without folderId when only origin addresses are needed; optionally supply folderId/directory to inspect existing BOT source too. Returns binding/subscription addresses, not permissions or authorization. Choose permissions explicitly in source, subject to BOT ceilings; readResources belongs at BOT level. status is compatibility inventory. Source edits alone never activate; reload does not restart the host or replay old inbox messages.',
     parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','create','reload']},id:{type:'string'},prompt:{type:'string'},folderId:{type:'string'},directory:{type:'string'},summary:{type:'string'},channelSessionId:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()
-      if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
+      assertBotManagementAccess(options.projectId, context, id => {
+        if (!options.canAuthor(id)) throw new Error('Use an owning Web execution in this Project.')
+      })
       if (raw.action === 'status') {
         z.object({action:z.literal('status')}).strict().parse(raw)
         return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json, mode, Service model/temperature/maxTokens/thinking/reasoningEffort OR Personal agent} + JSON subscriptions/bindings/tools/allowedModules/skills/read scopes + tool modules; whole legacy JSON behavior supported temporarily, mixed/duplicate fields rejected',receivePolicy:'Service QQ/Feishu bindings own trigger: mention (default) or all. Connection triggerMode is not inherited. Existing Service packages without trigger narrow to mention; explicitly configure all if that behavior is intended.'})
@@ -120,6 +124,13 @@ export function botPackageTool(options: Options): Tool {
         // existing user files and active deployments have not been overwritten.
         return botPackageTool(options).execute({ action: 'reload', folderId: input.folderId, directory: input.directory,
           summary: input.summary }, context)
+      }
+      if (raw.action === 'source' && raw.folderId === undefined) {
+        const input = channelSourceRequest.parse(raw)
+        const target = options.channelSource?.(input.channelSessionId)
+        if (!target) throw new Error('Referenced passive channel session is unavailable in this Project')
+        parseChannelSource(target, input.channelSessionId, options.projectId)
+        return JSON.stringify({channelSource:target,addresses:channelSourceAddresses(target, []),note:'Read-only host origin evidence, not permissions. Edit BOT source with write, then reload.'})
       }
       const input = raw.action === 'source' ? sourceRequest.parse(raw) : reloadRequest.parse(raw)
       const target = 'channelSessionId' in input && input.channelSessionId ? options.channelSource?.(input.channelSessionId) : undefined

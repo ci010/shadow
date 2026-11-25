@@ -49,8 +49,13 @@ show an explicit notice. Shift+2 fits the selected block, accounting for an
 overlaid inspector where space permits; very narrow panes retain the existing
 single-active-editor/inspector layout.
 
-Connection/BOT **management VFS** remains restricted to the owning Project's live,
-user-owned durable Web administrator session. Redacted observation uses the existing
+Connection/BOT **management VFS and tools** use the owning Project's live,
+host-recorded Web execution lineage: direct Web chats, continued/resumed turns,
+and same-Project delegated session/task/call executions have the same BOT management
+access. Model-provided admin/parent fields, historical fork snapshots and channel
+references do not grant ownership. External channel/Service executions, cross-Project
+lineage, scripts and remote-workdir access remain excluded. File/device execution
+authorization and other direct-human-only capability policies are unchanged. Redacted observation uses the existing
 read/search VFS, not a separate tool. `read({ path: 'v:connections/overview' })`
 describes the paths. `read({ path: 'v:connections/observation.json' })` returns the
 current Project inventory. `read({ path: 'v:connections', flag: 'l' })` or

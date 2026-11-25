@@ -49,6 +49,6 @@ test('Bot state guidance prefers owner-only VFS reads without activating operati
   assert.doesNotMatch(setup.body, /owner challenge|ownerVerified|explicit purpose/)
   for (const rule of [/v:bots\/overview/, /v:bots\/connections\/index/, /v:bots\/deployments\/<id>\/status/,
     /v:bots\/deployments\/<id>\/listeners/, /processing success is unknown/, /old `bot_setup` \/ `bot_package`/,
-    /owner durable Web management boundary/, /do not start connections/, /No status read repairs/]) assert.match(setup.body, rule)
+    /host-recorded Web execution management boundary/, /do not start connections/, /No status read repairs/]) assert.match(setup.body, rule)
   for (const name of ['project-administration', 'tool-operations']) assert.match(skills.get(name)!.body, /v:bots\/overview/)
 })

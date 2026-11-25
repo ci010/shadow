@@ -18,7 +18,7 @@ function harness() {
 }
 test('Bot tool enforces Web admin and Project ownership independent of external channel admin', async () => {
   const { tool, context } = harness()
-  for (const patch of [{ admin: false }, { projectId: 'other' }, { channel: 'wechat' }, { sessionId: 'wechat:owner' }, { sessionId: 'web:child' }, { isGroup: true }, { scriptInvocation: true }]) {
+  for (const patch of [{ projectId: 'other' }, { channel: 'wechat' }, { sessionId: 'wechat:owner' }, { sessionId: 'web:child' }, { isGroup: true }, { scriptInvocation: true }]) {
     await assert.rejects(tool.execute({ action: 'status' }, { ...context, ...patch }))
   }
   assert.deepEqual(JSON.parse(await tool.execute({ action: 'status' }, context)), { bots: [] })
@@ -86,16 +86,14 @@ test('Setup API requires HTTP authorization and real UI closure', async () => {
   setup.stop()
 })
 
-test('continuation execution identity allows status but never human setup changes', async () => {
+test('continuation execution identity has the same BOT setup management access', async () => {
   const { setup, tool, context, calls } = harness()
   for (const inputSource of ['session', 'event', undefined] as const) {
-    const continuation = { ...context, inputSource }
+    const continuation = { ...context, inputSource, admin: false }
     assert.deepEqual(JSON.parse(await tool.execute({ action: 'status' }, continuation)), { bots: [] })
-    for (const args of [{ action: 'open' }, { action: 'create', platform: 'qq', displayName: 'Denied' }, { action: 'connection', id: 'b', enabled: false }]) {
-      await assert.rejects(tool.execute(args, continuation), /direct administrator human turn/)
-    }
+    await tool.execute({action:'create',platform:'qq',displayName:'Created'},continuation)
+    await tool.execute({action:'connection',id:'b',enabled:false},continuation)
   }
-  assert.equal(calls.length, 0)
-  assert.equal(setup.get(context.sessionId), null)
+  assert.equal(calls.length, 3)
   setup.stop()
 })
