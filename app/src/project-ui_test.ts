@@ -790,37 +790,104 @@ test('folder ownership confirmation preserves the source scope, blocks duplicate
   assert.equal(state().error, '')
 })
 
+test('model selector only loads when opened and refreshes invalidated choices while open', async t => {
+  const revision = ref(0)
+  const options = ref<string[]>([])
+  let reads = 0
+  let failure = false
+  const selection: ModelSelection = {
+    current: ref('current-model'), options, disabled: ref(false), loading: ref(false), error: ref(''),
+    catalogRevision: revision,
+    async loadCatalog() {
+      reads++
+      if (failure) throw new Error('Unavailable')
+      options.value = ['available-model']
+    },
+    async select() {},
+  }
+  const state = mountScript(t, 'ModelSelector.vue', { settings: {} }, undefined,
+    { '../model-selection.ts': { ...modelSelectionModule, useModelSelection: () => selection } })
+  revision.value++
+  await nextTick()
+  assert.equal(reads, 0)
+  assert.deepEqual(state().allOptions, ['current-model'])
+  state().resetMenu()
+  await settle()
+  assert.equal(reads, 1)
+  assert.deepEqual(state().allOptions, ['available-model', 'current-model'])
+  failure = true
+  revision.value++
+  await settle()
+  assert.equal(state().catalogError, 'Unavailable')
+  assert.equal(selection.error.value, '', 'Catalog errors do not become conversation defaults errors')
+  failure = false
+  state().catalogRetry++
+  await settle()
+  assert.equal(reads, 3)
+  assert.equal(state().catalogError, '')
+})
+
 test('concurrent model providers retain their immutable org base and ignore another org late load or choices', async t => {
   const requests: Array<{ path: string; resolve: (body: unknown) => void }> = []
+  const requested = new EventTarget()
   t.mock.method(globalThis, 'fetch', (input: URL) => new Promise<Response>(resolve => {
     requests.push({ path: input.pathname, resolve: body => resolve(Response.json(body)) })
+    requested.dispatchEvent(new Event(input.pathname))
   }))
+  const pool = { client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }),
+    onDispose: (dispose: () => void) => { t.after(dispose); return () => {} },
+  }
+  const mocks = { '../composables/useLiveClient.ts': { useLiveClientPool: () => pool } }
   let a!: ModelSelection, b!: ModelSelection
   const probe = (capture: (selection: ModelSelection) => void) => defineComponent({
     setup() { const selection = useModelSelection(); assert.ok(selection); capture(selection); return () => null },
   })
   const stateA = mountScript(t, 'ProjectConversation.vue',
     { apiBase: 'http://fixture/projects/a/', projectId: 'a', projectName: 'Same', sessionId: '', visible: true },
-    probe(selection => { a = selection }))
-  mountScript(t, 'ProjectConversation.vue',
+    probe(selection => { a = selection }), mocks)
+  const stateB = mountScript(t, 'ProjectConversation.vue',
     { apiBase: 'http://fixture/projects/b/', projectId: 'b', projectName: 'Same', sessionId: '', visible: true },
-    probe(selection => { b = selection }))
-  const finish = (path: string, body: unknown) => { const request = requests.find(item => item.path === path); assert.ok(request); request.resolve(body) }
-  finish('/projects/b/api/config', config('b-default'))
-  finish('/projects/b/api/models', { models: ['b-default', 'b-choice'] })
-  await settle()
+    probe(selection => { b = selection }), mocks)
+  async function finish(path: string, body: unknown) {
+    if (!requests.some(item => item.path === path)) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          requested.removeEventListener(path, received)
+          reject(new Error(`No request for ${path}; saw ${requests.map(item => item.path).join(', ')}`))
+        }, 2000)
+        function received() { clearTimeout(timeout); resolve() }
+        requested.addEventListener(path, received, { once: true })
+      })
+    }
+    const request = requests.find(item => item.path === path)
+    assert.ok(request)
+    request.resolve(body)
+  }
+  const defaultsA = stateA().load()
+  const defaultsB = stateB().load()
+  await finish('/projects/b/api/config', config('b-default'))
+  await defaultsB
   assert.equal(b.current.value, 'b-default')
+  assert.equal(requests.some(item => item.path.endsWith('/api/models')), false)
+  const bCatalog = b.loadCatalog!()
+  await finish('/projects/b/api/models', { models: ['b-default', 'b-choice'] })
+  await bCatalog
+  assert.deepEqual(b.options.value, ['b-default', 'b-choice'])
   await b.select('b-choice')
-  finish('/projects/a/api/config', config('a-default'))
-  finish('/projects/a/api/models', { models: ['a-default', 'a-choice'] })
-  await settle()
+  await finish('/projects/a/api/config', config('a-default'))
+  await defaultsA
   assert.equal(a.current.value, 'a-default')
+  assert.deepEqual(a.options.value, [])
+  const aCatalog = a.loadCatalog!()
+  await finish('/projects/a/api/models', { models: ['a-default', 'a-choice'] })
+  await aCatalog
+  assert.deepEqual(a.options.value, ['a-default', 'a-choice'])
   assert.equal(b.current.value, 'b-choice')
   await a.select('a-choice')
   requests.length = 0
+  stateA().defaultsChanged(new Event('shadow:config-changed'))
   const retry = stateA().load()
-  finish('/projects/a/api/config', config('a-new-default'))
-  finish('/projects/a/api/models', { models: ['a-new-default', 'a-choice'] })
+  await finish('/projects/a/api/config', config('a-new-default'))
   await retry
   assert.equal(a.current.value, 'a-choice', 'Reload must not overwrite a pending conversation model choice')
   assert.equal(b.current.value, 'b-choice')

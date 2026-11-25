@@ -15,6 +15,8 @@ export interface ModelSelection {
   disabled: Readonly<Ref<boolean>>
   loading: Readonly<Ref<boolean>>
   error: Readonly<Ref<string>>
+  catalogRevision?: Readonly<Ref<number>>
+  loadCatalog?(signal?: AbortSignal): Promise<void>
   select(model: string): Promise<void>
 }
 
