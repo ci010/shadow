@@ -3,7 +3,7 @@ import { hasInjectionContext, inject, markRaw, onScopeDispose, type InjectionKey
 import { hostBase } from '../api-url.ts'
 import { createLiveClient, type LiveClient, type LiveStatus } from '../live-client.ts'
 
-export function createLiveClientPool() {
+export function createLiveClientPool(createClient = createLiveClient) {
   const clients = new Map<string, LiveClient>()
   const statuses = new Map<string, LiveStatus>()
   const observers = new Set<(statuses: readonly LiveStatus[]) => void>()
@@ -20,7 +20,7 @@ export function createLiveClientPool() {
       const host = hostBase(base)
       let client = clients.get(host)
       if (!client) {
-        client = createLiveClient(host, { status: status => {
+        client = createClient(host, { status: status => {
           statuses.set(host, status)
           for (const observer of hostObservers.get(host) ?? []) observer(status)
           notify()

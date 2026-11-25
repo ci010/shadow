@@ -26,14 +26,16 @@
       </button>
     </div>
     <Teleport to="body">
-      <OverlayTransition @after-leave="shownPanel = null">
+      <OverlayTransition @after-leave="forgetClosedPanel">
       <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" :class="{ 'subagent-panel': shownPanel === 'subagents', 'work-chip-active work-popup-active': shownPanel === 'subagents' && subagentStatus.running > 0 }" role="dialog" tabindex="-1"
         :aria-labelledby="`${id}-${shownPanel || 'background'}`" :style="position" @keydown="popupKeydown">
         <div v-show="shownPanel === 'background'">
-          <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
+          <BackgroundTasks v-if="legacy || shownPanel === 'background'" :api-base="apiBase" :session-id="sessionId"
+            :active="active !== false && (legacy || phase === 'socket' && expanded === 'background')" embedded @status="httpBackgroundStatus = $event" />
         </div>
         <div v-show="shownPanel === 'scheduled'">
-          <ScheduledTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" @status="scheduledStatus = $event" />
+          <ScheduledTasks v-if="legacy || shownPanel === 'scheduled'" :api-base="apiBase" :session-id="sessionId"
+            :active="active !== false && (legacy || phase === 'socket' && expanded === 'scheduled')" @status="httpScheduledStatus = $event" />
         </div>
         <div v-show="shownPanel === 'subagents'" class="subagent-list" :aria-label="t('Active subagents')">
           <p v-if="!subagents?.length">{{ t('No subagents active.') }}</p>
@@ -53,7 +55,8 @@
 <script setup lang="ts">
 import { isSelectPopupEventInside } from '../select-control.ts'
 import { t } from '../i18n.ts'
-import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import { computed, inject, nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import { conversationStartKey } from '../conversation-start-context.ts'
 import ScheduledTasks from './ScheduledTasks.vue'
 import BackgroundTasks from './BackgroundTasks.vue'
 import SessionActivity from './SessionActivity.vue'
@@ -67,9 +70,23 @@ const id = useId()
 type Panel = 'background' | 'subagents' | 'scheduled'
 const expanded = ref<Panel | null>(null)
 const shownPanel = ref<Panel | null>(null)
-const scheduledStatus = ref({ total: 0, error: '' })
+const httpScheduledStatus = ref({ total: 0, error: '' })
 const scheduledTrigger = ref<HTMLButtonElement>()
-const backgroundStatus = ref({ total: 0, loading: false, error: '' })
+const httpBackgroundStatus = ref({ total: 0, loading: false, error: '' })
+const start = inject(conversationStartKey, undefined)
+const scopedStart = computed(() => {
+  const state = start?.value
+  return state?.apiBase === props.apiBase && state.sessionId === props.sessionId ? state : undefined
+})
+const phase = computed(() => scopedStart.value?.phase ?? (start ? 'pending' : 'http'))
+const legacy = computed(() => phase.value === 'http')
+const pushed = computed(() => scopedStart.value?.phase === 'socket' ? scopedStart.value.data : undefined)
+const scheduledStatus = computed(() => legacy.value ? httpScheduledStatus.value : {
+  total: pushed.value?.scheduledTasks?.length, error: '',
+})
+const backgroundStatus = computed(() => legacy.value ? httpBackgroundStatus.value : {
+  total: pushed.value?.backgroundTasks?.total, error: '',
+})
 const subagentStatus = computed(() => summarizeSubagents(props.subagents ?? [], props.stages ?? {}))
 const backgroundTrigger = ref<HTMLButtonElement>()
 const subagentsTrigger = ref<HTMLButtonElement>()
@@ -77,6 +94,9 @@ const root = ref<HTMLElement>()
 const popup = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
 
+function forgetClosedPanel() {
+  if (!expanded.value) shownPanel.value = null
+}
 function trigger(panel: Panel) {
   return ({ background: backgroundTrigger, subagents: subagentsTrigger, scheduled: scheduledTrigger })[panel].value
 }
@@ -151,8 +171,8 @@ watch(expanded, async (panel, _previous, onCleanup) => {
 }, { flush: 'post' })
 watch(() => [props.apiBase, props.sessionId], () => {
   expanded.value = null
-  scheduledStatus.value = { total: 0, error: '' }
-  backgroundStatus.value = { total: 0, loading: false, error: '' }
+  httpScheduledStatus.value = { total: 0, error: '' }
+  httpBackgroundStatus.value = { total: 0, loading: false, error: '' }
 })
 watch(() => props.active, active => { if (active === false) expanded.value = null })
 onDeactivated(() => { expanded.value = null })

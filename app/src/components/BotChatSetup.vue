@@ -7,8 +7,9 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
+import { conversationStartKey } from '../conversation-start-context.ts'
 import { acquireInteractionRead } from '../interaction-resource.ts'
 import { isRecord } from '../folders-sidebar.ts'
 import { apiUrl } from '../api-url.ts'
@@ -17,12 +18,24 @@ import BotConnectionSetup from './BotConnectionSetup.vue'
 import { t } from '../i18n.ts'
 const props = defineProps<{ apiBase: string; projectId: string; sessionId: string; active: boolean; canSubmit: boolean }>()
 const enabled = computed(() => props.active && props.canSubmit && props.sessionId.startsWith('web:') && privateCredentialTransport(props.apiBase))
+const start = inject(conversationStartKey, undefined)
+const scopedStart = computed(() => {
+  const state = start?.value
+  return state?.apiBase === props.apiBase && state.sessionId === props.sessionId ? state : undefined
+})
+const phase = computed(() => scopedStart.value?.phase ?? (start ? 'pending' : 'http'))
+const invited = computed(() => scopedStart.value?.phase === 'socket' && scopedStart.value.data.botSetup?.pending === true)
+const canRead = computed(() => enabled.value && (phase.value === 'http' || invited.value))
 const request = ref<{ id: string; expiresAt: number } | null>(null)
 const error = ref(''), closeError = ref('')
 let expiry: ReturnType<typeof setTimeout> | undefined
 watch(request, value => {
   clearTimeout(expiry)
-  if (value) expiry = setTimeout(() => { request.value = null; closeError.value = ''; shared?.invalidate(); void refresh(true) }, Math.max(0, value.expiresAt - Date.now()))
+  if (value) expiry = setTimeout(() => {
+    request.value = null
+    closeError.value = ''
+    if (shared) { shared.invalidate(); void refresh(true) }
+  }, Math.max(0, value.expiresAt - Date.now()))
 })
 const busy = ref(false)
 let controller: AbortController | undefined
@@ -32,14 +45,24 @@ let queued = false
 let generation = 0
 function stop() { generation++; clearTimeout(expiry); controller?.abort(); controller = undefined; shared?.dispose(); shared = undefined; queued = false; request.value = null; error.value = ''; closeError.value = ''; busy.value = false }
 function endpoint() { return apiUrl(props.apiBase, '/api/bot-chat-setup/request') }
+function readEndpoint() { const url = endpoint(); url.searchParams.set('sessionId', props.sessionId); return url }
+// A positive socket marker permits a scoped read. The invitation itself stays
+// behind the authorized HTTP endpoint; no project-wide refresh is needed.
+async function readInvitation(signal: AbortSignal): Promise<unknown> {
+  const response = await fetch(readEndpoint(), {
+    cache: 'no-store', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
+  })
+  if (!response.ok) throw new Error()
+  return response.json()
+}
 async function refresh(fresh = false) {
-  if (!enabled.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+  if (!canRead.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
   if (controller || busy.value) { queued = true; return }
   const version = generation
   const read = new AbortController()
   controller = read
   try {
-    const body = await shared!.load(fresh)
+    const body = shared ? await shared.load(fresh) : await readInvitation(read.signal)
     if (!isRecord(body)) throw new Error()
     if (version !== generation || read.signal.aborted) return
     error.value = ''
@@ -63,13 +86,18 @@ async function close(status: 'closed' | 'cancelled') {
     if (!isRecord(result) || result.closed !== true) throw new Error()
     if (version === generation) request.value = null
   } catch { if (version === generation && !write.signal.aborted) closeError.value = t('Could not close setup. Refresh status before retrying.') }
-  finally { if (version === generation) { busy.value = false; controller = undefined; queued = false; shared?.invalidate(); void refresh() } }
+  finally { if (version === generation) { busy.value = false; controller = undefined; queued = false; if (shared) { shared.invalidate(); void refresh() } } }
 }
-watch([() => props.apiBase, () => props.projectId, () => props.sessionId, enabled], () => {
+watch([() => props.apiBase, () => props.projectId, () => props.sessionId, phase, canRead], (_next, _old, onCleanup) => {
   stop()
-  if (!enabled.value) return
-  const url = endpoint(); url.searchParams.set('sessionId', props.sessionId)
-  shared = acquireInteractionRead(pool, props.apiBase, props.projectId, url.toString(), () => { void refresh() })
+  if (!canRead.value) return
+  if (phase.value === 'http') {
+    shared = acquireInteractionRead(pool, props.apiBase, props.projectId, readEndpoint().toString(), () => { void refresh() })
+  } else if (typeof document !== 'undefined') {
+    const resume = () => { if (!request.value && !controller && !busy.value) void refresh() }
+    document.addEventListener('visibilitychange', resume)
+    onCleanup(() => document.removeEventListener('visibilitychange', resume))
+  }
   void refresh()
 }, { immediate: true, flush: 'sync' })
 onBeforeUnmount(stop)

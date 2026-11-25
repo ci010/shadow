@@ -7,6 +7,11 @@ import { createRenderer, defineComponent, h, nextTick, reactive, type Component 
 import * as Vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
+import type { ConversationStartState } from './conversation-start-context.ts'
+import { parseWorkView } from './work-alignment.ts'
+
+// The mounted SFC fixture also loads dependencies through CommonJS.
+const { conversationStartKey } = createRequire(import.meta.url)('./conversation-start-context.ts') as typeof import('./conversation-start-context.ts')
 
 interface ElementNode {
   tag: string
@@ -56,9 +61,13 @@ test('rendered chat task status stays absent for ordinary conversation, refreshe
   assert.equal(requests.length, 4)
 })
 
-function mount(t: TestContext, filename: string, props: Record<string, unknown>, pool?: unknown) {
+function mount(t: TestContext, filename: string, props: Record<string, unknown>, pool?: unknown, start?: Vue.Ref<ConversationStartState>) {
   const popover = defineComponent({
-    setup: (_, { slots }) => () => h('div', [slots.trigger?.(), slots.default?.({ triggerProps: {} })]),
+    emits: ['opened'],
+    setup: (_, { emit, slots }) => () => h('div', [
+      filename === 'SessionHeading.vue' ? h('button', { onClick: () => emit('opened') }, slots.trigger?.()) : slots.trigger?.(),
+      slots.default?.({ triggerProps: {} }),
+    ]),
   })
   function load(filename: string): Component {
     const url = new URL(`./components/${filename}`, import.meta.url)
@@ -101,6 +110,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>,
   const app = renderer.createApp(defineComponent({ setup: () => () => h(component, state) }))
   app.component('RouterLink', defineComponent({ setup: (_, { slots }) => () => h('a', slots.default?.()) }))
   app.use(createResourceStores())
+  if (start) app.provide(conversationStartKey, start)
   if (pool) app.provide(Symbol.for('shadow.live-client-pool'), pool)
   app.mount(root)
   t.after(() => app.unmount())
@@ -128,4 +138,63 @@ test('rendered heading separates Session identity from legacy work definitions',
   await nextTick()
   assert.match(view.text(), /Alpha \/ Release discussion/)
   assert.doesNotMatch(view.text(), /Ship installer|Windows only|Out of scope/)
+})
+
+test('heading renders pushed details, loads omitted details on open, and scopes snapshots', async t => {
+  const scope = { apiBase: 'http://fixture/projects/a', sessionId: 'web:one' }
+  const start = Vue.shallowRef<ConversationStartState>({ ...scope, phase: 'pending' })
+  const details = { sessionId: scope.sessionId, name: 'Pushed heading', workdir: { kind: 'local' as const, displayPath: '/fixture/pushed' },
+    usage: null, usageScope: 'session' as const, context: { usedTokens: 10, windowTokens: 100 } }
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ...details, name: 'HTTP heading' }))
+  const view = mount(t, 'SessionHeading.vue', { ...scope, name: 'Catalog heading', physicalId: null, revision: 0, active: true }, undefined, start)
+  await settle()
+  assert.equal(fetch.mock.callCount(), 0)
+  assert.match(view.text(), /Catalog heading/)
+  start.value = { ...scope, phase: 'socket', data: { details } }
+  await settle()
+  assert.match(view.text(), /Pushed heading/)
+  assert.match(view.text(), /pushed/)
+  start.value = { ...scope, phase: 'socket', data: { details: { ...details, name: 'Updated heading' } } }
+  view.state.revision = 1
+  await settle()
+  assert.match(view.text(), /Updated heading/)
+  assert.equal(fetch.mock.callCount(), 0)
+  start.value = { ...scope, phase: 'socket', data: {} }
+  await settle()
+  assert.equal(fetch.mock.callCount(), 0)
+  await view.button().click(); await settle()
+  assert.match(view.text(), /HTTP heading/)
+  assert.equal(fetch.mock.callCount(), 1)
+  view.state.sessionId = 'web:other'
+  await settle()
+  assert.doesNotMatch(view.text(), /HTTP heading|Updated heading/)
+  assert.equal(fetch.mock.callCount(), 1)
+})
+
+test('Work chip uses pushed records and opens the original Work panel; HTTP only on legacy fallback', async t => {
+  const scope = { apiBase: 'http://fixture/projects/a', sessionId: 'web:one' }
+  const start = Vue.shallowRef<ConversationStartState>({ ...scope, phase: 'pending' })
+  const key = 'work:2b847a97-437e-5ca3-aabf-85522c8a29c4'
+  const work = parseWorkView({ records: [{ sequence: 1, changedBy: 'human', changedAt: '2026-09-19T01:00:00.000Z', key, revision: 1,
+    definition: 'Pushed assignment', origin: 'human', title: 'Pushed assignment', manager: scope.sessionId, assignee: scope.sessionId,
+    assignmentRevision: 1, status: 'pending', dependencies: [], authority: { manager: scope.sessionId, executor: scope.sessionId, active: true }, history: [] }], effects: [] })
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(work))
+  const pool = { client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }) }
+  const opened: string[] = []
+  const view = mount(t, 'SessionWorkStatus.vue', { ...scope, active: true, revision: 0, onOpen: (key: string) => opened.push(key) }, pool, start)
+  await settle()
+  assert.equal(fetch.mock.callCount(), 0)
+  start.value = { ...scope, phase: 'socket', data: { work } }
+  await settle()
+  assert.match(view.text(), /Pushed assignment/)
+  await view.button().click()
+  assert.deepEqual(opened, [key])
+  start.value = { ...scope, phase: 'socket', data: { work: { records: [], effects: [] } } }
+  await settle()
+  assert.doesNotMatch(view.text(), /Pushed assignment/)
+  assert.equal(fetch.mock.callCount(), 0)
+  start.value = { ...scope, phase: 'http' }
+  await new Promise(resolve => setTimeout(resolve, 70)); await settle()
+  assert.equal(fetch.mock.callCount(), 1)
+  assert.match(view.text(), /Pushed assignment/)
 })

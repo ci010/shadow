@@ -7,6 +7,34 @@ import { childWorkspacePlugin } from './child-workspace.ts'
 import { DeviceApprovalUnavailableError, DeviceChallengeRequestError, requestDeviceChallengeProtocol } from '../cluster/device-challenge-client.ts'
 import { DeviceCredentialProof } from '../cluster/device-credentials.ts'
 import { ChildLocalControlService } from './child-local-control.ts'
+import { DEVICE_UI_CHALLENGE, DEVICE_UI_LIVE_CHALLENGE } from '../cluster/device-ui.ts'
+
+test('new Child keeps SSE available when paired with Main without device live support', async t => {
+  const child = new ChildLocalControlService({
+    port: 0, launchCredential: 'fixture-child-admission', requestShutdown() {},
+    workspace: childWorkspacePlugin({
+      endpoint: 'http://fixture.invalid',
+      async proof(_signal, path) {
+        if (path === DEVICE_UI_LIVE_CHALLENGE) throw new DeviceChallengeRequestError(404)
+        assert.equal(path, DEVICE_UI_CHALLENGE)
+        return 'fixture-proof'
+      },
+      fetch: async (_input, init) => {
+        assert.match(new Headers(init?.headers).get('X-Shadow-Ui-Path') ?? '', /^\/api\/live\?/)
+        return new Response('event: realtime\ndata: {"type":"ready"}\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
+      },
+    }),
+  })
+  t.after(() => child.shutdown())
+  await child.start(new AbortController().signal)
+  const base = `http://127.0.0.1:${child.address!.port}`
+  const headers = { Authorization: 'Bearer fixture-child-admission' }
+  assert.equal((await fetch(base + '/api/live/ws', { method: 'POST', headers })).status, 503)
+  const stream = await fetch(base + '/api/live?topics=%5B%7B%22kind%22%3A%22projects%22%7D%5D', { headers })
+  assert.equal(stream.status, 200)
+  assert.equal(stream.headers.get('content-type'), 'text/event-stream')
+  assert.match(await stream.text(), /event: realtime/)
+})
 
 test('workspace HTTP proxy preserves upstream responses while adding local CORS headers', async t => {
   const upstream = createServer((request, response) => {

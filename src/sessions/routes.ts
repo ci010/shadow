@@ -8,7 +8,8 @@ import { navigationSummary } from './summary-navigation.ts'
 import { createSummaryResponder } from './summary-delta.ts'
 import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
-import { projectHistoryMessages, recentHistoryWindow } from '../shared/history-wire.ts'
+import { readLogicalConversationHistory } from './conversation-history.ts'
+import { projectHistoryMessages } from '../shared/history-wire.ts'
 import { projectUsagePageQuerySchema, type ProjectUsage } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
@@ -1205,46 +1206,12 @@ export function sessionsApiPlugin(
       const isLogicalKey = chain.some((s) => s.sessionId === key)
 
       if (isLogicalKey) {
-        const beforeState = await sessions.readSessionState(key)
-        const { messages, total } = await sessions.getHistory(
-          key,
-          { offset, pageSize, shallow },
-        )
-        // Include segment info so the UI can navigate to previous segments
-        const state = await sessions.readSessionState(key)
-        const segmentIndex = state?.segmentIndex ?? 0
-        const currentPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex })
-        let previousPhysicalId: string | null = null
-        if (segmentIndex > 0) {
-          previousPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex }, segmentIndex - 1)
-        }
-        const window = shallow && pageSize === undefined && url.searchParams.get('historyWindow') === 'recent'
-          ? recentHistoryWindow(messages, url.searchParams, currentPhysicalId) : undefined
-        const data = {
-          key,
-          total,
-          offset,
-          pageSize,
-          ...(window ? { historyStart: window.start } : {}),
-          messages: window?.messages ?? projectHistoryMessages(messages, url.searchParams.get('display') === 'true'),
-          commandResults: await sessions.getCommandResults(key),
-          decisionRecords: await sessions.getYieldRecords(key),
-          segmentIndex,
-          currentPhysicalId,
-          previousPhysicalId,
-        }
-        if (shallow && pageSize === undefined && (window || url.searchParams.has('snapshot'))) {
-          // Do not label a history read with a segment that rolled over while
-          // messages/receipts were being fetched. The next read starts fresh.
-          const afterState = await sessions.readSessionState(key)
-          if (!beforeState || !afterState || physicalSessionId(beforeState) !== currentPhysicalId
-            || physicalSessionId(afterState) !== currentPhysicalId) {
-            return c.json({ error: 'history_conflict', message: 'Session segment changed during history read. Retry.' }, 409)
-          }
-          if (url.searchParams.has('snapshot')) {
-            c.header('Cache-Control', 'no-store')
-            return c.json(readonlyHistorySnapshot(data, url.searchParams))
-          }
+        const result = await readLogicalConversationHistory(sessions, key, url.searchParams, { offset, pageSize, shallow })
+        if (!result.data) return c.json({ error: result.error, message: 'Session segment changed during history read. Retry.' }, 409)
+        const { data } = result
+        if (shallow && pageSize === undefined && url.searchParams.has('snapshot')) {
+          c.header('Cache-Control', 'no-store')
+          return c.json(readonlyHistorySnapshot(data, url.searchParams))
         }
         return c.json(data)
       }
