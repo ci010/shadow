@@ -38,7 +38,7 @@ import { reserveRemoteSessionWorkdirs, type StartupOwnershipStates } from '../..
 import { OtelStore } from '../../otel/store.ts'
 import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
-import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
+import { RealtimeHub, registerRealtimeRoute, REALTIME_SOCKET_PATH } from '../../realtime/hub.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { privateLanAddresses } from '../../gateway/lan-browser.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
@@ -323,9 +323,20 @@ export async function startProjectHost(
       return projectId && !deletions.has(projectId) && !catalog.isDeleting(projectId)
         ? runtimes.get(projectId)?.authorizeA2a?.(request) ?? false : false
     },
-    launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
+    // The exact GET route checks either the owner credential or a one-use
+    // upgrade ticket issued by the non-exempt POST route.
+    localLiveSocketPath: REALTIME_SOCKET_PATH,
+    launchCredentialExemptions: [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, { method: 'GET', path: REALTIME_SOCKET_PATH }],
   })
-  registerRealtimeRoute(app, realtimeHub, authorize)
+  registerRealtimeRoute(app, realtimeHub, authorize, {
+    // Only the Main owner principal can upgrade. Its Project grants must be
+    // checked at update time; browser-session revocation is bound to the socket.
+    // Delegated mobile/device requests retain their existing SSE authorization.
+    authorize: authorizeOwner,
+    ownerSignal: request => browserAuth.session(request)?.controller.signal,
+    authorizeTopic: (_request, topic) => topic.kind === 'projects' ||
+      (!!catalog.get(topic.projectId) && !deletions.has(topic.projectId) && !catalog.isDeleting(topic.projectId)),
+  })
   const hostDiagnostics = new Hono()
   otelPlugin(hostOtelStore)(hostDiagnostics)
   app.route('/host', hostDiagnostics)

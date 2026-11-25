@@ -3263,6 +3263,7 @@
   "Undo": "撤销",
   "Undo last stroke": "撤销上一笔",
   "Unexpected trace in query response.": "查询响应中包含意外的追踪。",
+  "This live topic is not available to the current connection.": "当前连接无权订阅此实时主题。",
   "Unexpected unavailable live topic": "意外出现不可用的实时主题",
   "Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation.": "已加载执行跨度的时间并集，不包含轮次间的空档。不是会话存在的时长。",
   "Unknown error": "未知错误",

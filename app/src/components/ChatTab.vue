@@ -102,7 +102,7 @@
           <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && chatRouteActive" />
           <ChannelInboxNotice v-if="activeSession?.channelSource" :source="activeSession.channelSource" />
           <div class="chat-message-list">
-          <div v-if="!viewingPhysicalId && oldestPhysicalId" class="timeline-older">
+          <div v-if="!viewingPhysicalId && (currentHistoryStart > 0 || oldestPhysicalId)" class="timeline-older">
             <button v-if="canLoadOlder || loadingHistory" type="button" :disabled="loadingHistory" @click="prependOlderSegment">{{ loadingHistory ? t('Loading older messages…') : t('Load older messages') }}</button>
             <p v-else class="timeline-limit">{{ t('History window limit reached. Use history navigation to read earlier segments.') }}</p>
             <span v-if="loadingHistory" class="sr-only" role="status">{{ t('Loading older messages…') }}</span>
@@ -112,7 +112,6 @@
           <div v-else-if="!loadingHistory && messages.length === 0 && !runResult && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
-          <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
           <details v-if="unlinkedExecutions.length" class="unlinked-executions history-disclosure">
             <summary><span class="history-chevron i-lucide-chevron-right" aria-hidden="true" /><span>{{ t('Other execution traces') }}</span><span class="history-count">{{ unlinkedExecutions.length }}</span></summary>
             <div class="history-executions">
@@ -264,8 +263,8 @@
       <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" :aria-label="t('Session diagnosis')" :id-prefix="embedded || managed ? paneId : undefined"
         :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-        :active="visible && (editorGroups ? diagnosisDocumentVisible : activePanel === 'diagnosis') && chatRouteActive" :can-read-trace="true"
-        :working="sessionWorking" :system-prompt="systemPrompt" :prompt-sections="promptSections" :prompt-source="promptSource" :project-id="projectId" :compaction-summary="compactionSummary" :tools="tools" />
+        :active="sessionReadable && visible && (editorGroups ? diagnosisDocumentVisible : activePanel === 'diagnosis') && chatRouteActive" :can-read-trace="true"
+        :working="sessionWorking" :project-id="projectId" :compaction-summary="compactionSummary" />
     </template>
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible, 'mobile-chat': mobileLayout }">
@@ -551,6 +550,7 @@ import { mergeInputDelivery } from '../chat-input-delivery.ts'
 import { isChatInputDelivery, webInputRequestId, type ChatInputDelivery } from '../../../src/shared/chat-input-delivery.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUpdated, onUnmounted, useId, watch } from 'vue'
 import { captureHistoryScroll, historyPresentationRows, historyRevealRow, useProgressiveHistory } from '../progressive-history'
+import { HISTORY_WINDOW_SIZE } from '../../../src/shared/history-wire.ts'
 import { createCommitBottomScroll, firstSessionIndex } from '../chat-render-hotspots'
 import { useRoute, useRouter } from 'vue-router'
 import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
@@ -581,7 +581,6 @@ import { useDiagnosisNavigation } from '../composables/useDiagnosisNavigation.ts
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
-import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReferenceComposer from './ReferenceComposer.vue'
@@ -642,7 +641,7 @@ import { automationResult } from '../automation-result.ts'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
-import { timelineCanPrepend, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
+import { timelineCanPrepend, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, mergeLiveHistoryAppend, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
 import { useChatResourceStore } from '../stores/chat.ts'
 import { requireResourcePinia } from '../stores/app.ts'
 import type { LiveSubscription } from '../live-client.ts'
@@ -798,8 +797,12 @@ const modelSelection = useModelSelection()
 const modelOverride = ref<string>()
 const explicitModel = computed(() => modelOverride.value ?? activeSession.value?.config?.model ?? '')
 const channelConversation = computed(() => isChannelConversation(activeSession.value))
-const inheritedModel = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults?.model ?? '' : modelSelection?.current.value ?? '')
-const inheritedReasoning = computed(() => ({ ...(channelConversation.value ? activeSession.value?.inferenceDefaults ?? {} : modelSelection?.defaultReasoning?.value ?? {}), contextWindow: activeSession.value?.inferenceDefaults?.contextWindow ?? modelSelection?.defaultReasoning?.value.contextWindow }))
+const inheritedModel = computed(() => activeSession.value?.inferenceDefaults?.model ?? (channelConversation.value ? '' : modelSelection?.current.value ?? ''))
+const inheritedReasoning = computed(() => ({
+  ...(channelConversation.value ? {} : modelSelection?.defaultReasoning?.value ?? {}),
+  ...activeSession.value?.inferenceDefaults,
+  contextWindow: activeSession.value?.inferenceDefaults?.contextWindow ?? modelSelection?.defaultReasoning?.value.contextWindow,
+}))
 const conversationModel = computed(() => explicitModel.value || inheritedModel.value)
 const providerReadiness = useProviderReadiness()
 const providerNotice = computed(() => providerReadiness?.enabled.value
@@ -834,7 +837,6 @@ const imageEditsBusy = ref(new Set<string>())
 const attachmentDropTarget = ref(false)
 const composerError = ref('')
 const deletion = ref<SessionDeletionTarget>()
-const readonlyContextError = ref('')
 const preparingSend = ref(false)
 const submittingMessage = ref(false)
 const pickingContext = ref(false)
@@ -858,6 +860,7 @@ const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.lo
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
+let olderDirectRead: AbortController | undefined
 const { activeSessionId, selectedMode, requestSession, selectSession, inspectExecution, restoreSession } = useConversationNavigation({
   props, router, emit, sessions: () => allSessions.value,
   reset: resetConversation,
@@ -1280,7 +1283,8 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
         void refreshSessionActivity()
         return
       }
-      if (!paneActive.value || historyRequest || directRefreshPending) {
+      const readingOlder = historyRequest !== undefined && historyRequest === olderDirectRead
+      if (!paneActive.value || !readingOlder && (historyRequest || directRefreshPending)) {
         if (paneActive.value && (payload.event === 'response' || payload.event === undefined)) {
           streaming.value = true
           if (applyStreamPayload(payload, bgStreamState)) streaming.value = false
@@ -1289,6 +1293,7 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
         return
       }
       if (payload.event !== 'session_message') streaming.value = true
+      else if (readingOlder) snapshot.invalidate()
       if (applyStreamPayload(payload, bgStreamState)) {
         streaming.value = false
         snapshot.invalidate()
@@ -1329,10 +1334,6 @@ function autoResize() {
   el.style.height = 'auto'
   el.style.height = el.scrollHeight + 'px'
 }
-const systemPrompt = ref('')
-const promptSections = ref<unknown>()
-const promptSource = ref('')
-const tools = ref<ToolDef[]>([])
 
 /**
  * Latest compaction summary for the current segment, if any.
@@ -1417,6 +1418,7 @@ interface ChatMsg {
   eventMeta?: ChatEventMeta
   /** View-local identity remains stable when older segments are prepended. */
   timelineKey?: string
+  liveHistoryOverlay?: boolean
   /** True for compaction summary messages — the first message after a session compact. */
   isSummary?: boolean
   /** True when this bubble is a failed-request notice that can be retried. */
@@ -1432,7 +1434,13 @@ let timelineKeySequence = 0
 const oldestPhysicalId = computed(() => olderSegments.value[0]?.previousId ?? (olderSegments.value.length ? null : previousPhysicalId.value))
 const timelinePrefixLength = computed(() => olderSegments.value.reduce((count, segment) => count + segment.messages.length, 0))
 const timelineBoundaries = computed(() => timelineBoundaryPositions(olderSegments.value, previousPhysicalId.value))
-const canLoadOlder = computed(() => !viewingPhysicalId.value && !!oldestPhysicalId.value && timelineCanPrepend(olderSegments.value, messages.value.length))
+const currentHistoryStart = ref(0)
+const canLoadOlder = computed(() => !viewingPhysicalId.value && (currentHistoryStart.value > 0 || !!oldestPhysicalId.value)
+  && timelineCanPrepend(olderSegments.value, messages.value.length))
+function historyWindowQuery(from = currentHistoryStart.value): Record<string, string> {
+  return currentTimelinePhysicalId ? { historyWindow: 'recent', historyPhysicalId: currentTimelinePhysicalId, historyFrom: String(from) }
+    : { historyWindow: 'recent' }
+}
 function tagTimelineMessages(items: ChatMsg[]): ChatMsg[] {
   return items.map(msg => ({ ...msg, timelineKey: msg.timelineKey ?? `timeline-${++timelineKeySequence}` }))
 }
@@ -1441,8 +1449,9 @@ function resetTimeline(): void {
   currentTimelinePrevious = undefined
   currentTimelineDecisions = []
   currentTimelinePhysicalId = undefined
+  currentHistoryStart.value = 0
 }
-function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], previousId: string | null, physicalId?: string): void {
+function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], previousId: string | null, physicalId?: string, start = 0): void {
   const container = messagesContainer.value
   const anchor = historyBrowsing.value && container
     ? [...container.querySelectorAll<HTMLElement>('[data-timeline-key]')].find(element => element.getBoundingClientRect().bottom > container.getBoundingClientRect().top)
@@ -1452,14 +1461,23 @@ function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], 
   const prefixLength = olderSegments.value.reduce((count, segment) => count + segment.messages.length, 0)
   const current = messages.value.slice(prefixLength)
   // A changed previous ID identifies a closed physical segment, not its transition reason.
-  if (!viewingPhysicalId.value) olderSegments.value = retainTimelineRollover(olderSegments.value, tagTimelineMessages(current.filter(message => !message.delivery)), currentTimelineDecisions, currentTimelinePrevious, previousId, currentTimelinePhysicalId ?? previousId)
+  if (!viewingPhysicalId.value) {
+    // A partial segment must not masquerade as a complete archived segment,
+    // otherwise older navigation would skip its unseen prefix after rollover.
+    if (currentHistoryStart.value > 0 && currentTimelinePhysicalId !== physicalId) olderSegments.value = []
+    else olderSegments.value = retainTimelineRollover(olderSegments.value, tagTimelineMessages(current.filter(message => !message.delivery)), currentTimelineDecisions, currentTimelinePrevious, previousId, currentTimelinePhysicalId ?? previousId)
+  }
   if (viewingPhysicalId.value) resetTimeline()
-  const tagged = currentTimelinePrevious === previousId ? reconcileTimelineKeys(items, current) : items
+  const tagged = currentTimelinePhysicalId === physicalId ? reconcileTimelineKeys(items, current) : items
+  const expandedKeys = new Set([...expandedThinking].map(index => messages.value[index]?.timelineKey).filter(Boolean))
   messages.value = [...olderSegments.value.flatMap(segment => segment.messages), ...tagTimelineMessages(tagged)]
+  expandedThinking.clear()
+  messages.value.forEach((message, index) => { if (expandedKeys.has(message.timelineKey)) expandedThinking.add(index) })
   decisionRecords.value = [...new Map([...olderSegments.value.flatMap(segment => segment.decisions), ...records].map(record => [record.request.id, record])).values()]
   currentTimelinePrevious = previousId
   currentTimelineDecisions = records
   currentTimelinePhysicalId = physicalId
+  currentHistoryStart.value = start
   if (!historyBrowsing.value) pruneFollowingTimeline()
   const anchorContext = `${activeSessionId.value}:${viewingPhysicalId.value ?? ''}:${route.fullPath}`
   const anchorVersion = historyScrollVersion
@@ -1470,30 +1488,24 @@ function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], 
     if (container && retained && historyBrowsing.value) container.scrollTop += retained.getBoundingClientRect().top - anchorTop
   })
 }
-// A freshly reopened compacted session may contain only its handoff. Seed one
-// recent segment before the initial bottom-follow, without entering history mode.
-async function seedRecentTimeline(controller: AbortController): Promise<void> {
-  const id = previousPhysicalId.value
-  if (!id || olderSegments.value.length || messages.value.filter(msg => !msg.isSummary && !msg.event && !msg.isSystemEvent).length >= 20) return
-  const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]), 'physical-history-v1')
-  if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
-  const data = await res.json()
-  if (controller.signal.aborted) return
-  const segment = { id, previousId: data.previousPhysicalId ?? null, messages: tagTimelineMessages(mergeCommandResults(collapseHistory(data.messages ?? []), data.commandResults)), decisions: parseDecisionRecords(data.decisionRecords ?? []) }
-  olderSegments.value = [segment]
-  messages.value = [...segment.messages, ...messages.value]
-  decisionRecords.value = [...new Map([...segment.decisions, ...decisionRecords.value].map(record => [record.request.id, record])).values()]
-}
 async function prependOlderSegment(): Promise<void> {
+  if (!canLoadOlder.value || loadingHistory.value || historyRequest) return
+  if (currentHistoryStart.value > 0) {
+    browseHistory()
+    const from = Math.max(0, currentHistoryStart.value - HISTORY_WINDOW_SIZE)
+    if (isDirectChat.value) await loadDirectChat(true, from)
+    else await loadReadonlySession(true, from)
+    return
+  }
   const id = oldestPhysicalId.value
-  if (!id || !canLoadOlder.value || loadingHistory.value || historyRequest || olderSegments.value.some(segment => segment.id === id)) return
+  if (!id || olderSegments.value.some(segment => segment.id === id)) return
   const controller = new AbortController()
   historyRequest = controller
   loadingHistory.value = true
   const container = messagesContainer.value
   browseHistory()
   try {
-    const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]), 'physical-history-v1')
+    const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(id)}`, { display: 'true' }), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]), 'physical-history-v1')
     if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return
@@ -2303,7 +2315,6 @@ function resetConversation(): void {
   clearPendingAttachments()
   contextItems.value = []
   composerError.value = ''
-  readonlyContextError.value = ''
   clearSelection()
   disconnectEventStream()
   messages.value = []
@@ -2314,8 +2325,6 @@ function resetConversation(): void {
   historyLeftBottom = false
   resetStreamPresentation()
   streamingToolCallData.value = null
-  systemPrompt.value = ''; promptSections.value = undefined; promptSource.value = ''
-  tools.value = []
   resetTimeline()
   previousPhysicalId.value = null
   viewingPhysicalId.value = null
@@ -2428,29 +2437,34 @@ defineExpose({ canReplaceSidebarTab, restoreSession, focusConversation, requestS
 
 // ── History ───────────────────────────────────────────────────────────────────
 
-async function loadCurrentSession(): Promise<void> {
-  if (!activeSessionId.value) return
+async function loadCurrentSession(signal?: AbortSignal): Promise<void> {
+  if (!activeSessionId.value || signal?.aborted) return
   if (isDirectChat.value) {
-    await loadDirectChat()
+    await loadDirectChat(false, undefined, signal)
   } else {
-    await loadReadonlySession()
+    await loadReadonlySession(false, undefined, signal)
   }
 }
 
-async function loadDirectChat(background = false): Promise<void> {
+async function loadDirectChat(background = false, from?: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return
   historyRequest?.abort()
   const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
   historyRequest = controller
   const chatId = activeSessionId.value.replace('web:', '')
   const sessionId = activeSessionId.value
+  const physicalIdBefore = currentTimelinePhysicalId
+  if (from !== undefined) olderDirectRead = controller
   directRefreshPending = false
   let followBottom = false
-  if (!background) loadingHistory.value = true
+  if (!background || from !== undefined) loadingHistory.value = true
   try {
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const res = await chatResources.readDirect(buildUrl('/api/chat/session', { chatId }), chatReadScope(), controller.signal)
+    const res = await chatResources.readDirect(buildUrl('/api/chat/session', { chatId, ...historyWindowQuery(from) }), chatReadScope(), controller.signal)
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
       disconnectEventStream()
@@ -2479,20 +2493,27 @@ async function loadDirectChat(background = false): Promise<void> {
     const data = res.data as {
       history?: RawMessage[]; commandResults?: unknown; decisionRecords?: unknown
       previousPhysicalId?: string | null; currentPhysicalId?: string
-      systemPrompt?: string; tools?: ToolDef[]
+      historyStart?: number
     }
     if (controller.signal.aborted) return
-    const initialTimeline = currentTimelinePrevious === undefined
     const container = messagesContainer.value
-    followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
+    followBottom = from === undefined && (!container || container.scrollHeight - container.scrollTop - container.clientHeight < 32)
     const pending = delivery?.map(({ status, ...entry }): ChatMsg => ({ role: 'user', ...entry, delivery: status }))
-    const history = mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults)
-    const previousDelivery = new Set(messages.value.filter(message => message.delivery).map(message => message.requestId))
+    const previous = viewingPhysicalId.value ? [] : messages.value.slice(timelinePrefixLength.value)
+    let history = mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults)
+    if (physicalIdBefore && data.currentPhysicalId === physicalIdBefore) {
+      // An older-page read must not discard live rows delivered after the
+      // server built its snapshot. Retain only stable IDs absent from history.
+      history = mergeLiveHistoryAppend(history, previous.filter(message => !message.delivery
+        && (from !== undefined && !message.timelineKey || streaming.value && message.liveHistoryOverlay))
+        .map(message => ({ ...message, liveHistoryOverlay: true })))
+    }
+    const previousDelivery = new Set(previous.filter(message => message.delivery).map(message => message.requestId))
     const timeline = mergeInputDelivery<ChatMsg>(history.map((message): ChatMsg => {
       if (delivery !== undefined || !('requestId' in message) || !message.requestId || previousDelivery.has(message.requestId)) return message
       return { ...message, delivery: 'unconfirmed' }
-    }), pending, messages.value)
-    applyCurrentTimeline(timeline, parseDecisionRecords(data.decisionRecords ?? []), data.previousPhysicalId ?? null, data.currentPhysicalId)
+    }), pending, previous)
+    applyCurrentTimeline(timeline, parseDecisionRecords(data.decisionRecords ?? []), data.previousPhysicalId ?? null, data.currentPhysicalId, data.historyStart)
     decisionRecordError.value = ''
     if (!sendRequest && !streaming.value) {
       streaming.value = false
@@ -2500,15 +2521,14 @@ async function loadDirectChat(background = false): Promise<void> {
       streamPhase.value = undefined
       streamingToolCallData.value = null
     }
-    systemPrompt.value = data.systemPrompt ?? ''; promptSections.value = undefined; promptSource.value = ''
-    tools.value = data.tools ?? []
     previousPhysicalId.value = data.previousPhysicalId ?? null
     viewingPhysicalId.value = null
     physicalIdStack.value = []
-    if (initialTimeline) await seedRecentTimeline(controller)
   } catch (error) {
     if (!controller.signal.aborted) composerError.value = error instanceof Error ? error.message : t('Could not load conversation. Refresh to retry.')
   } finally {
+    signal?.removeEventListener('abort', abort)
+    if (olderDirectRead === controller) olderDirectRead = undefined
     if (historyRequest === controller) {
       historyRequest = undefined
       loadingHistory.value = false
@@ -2518,50 +2538,30 @@ async function loadDirectChat(background = false): Promise<void> {
   }
 }
 
-async function loadReadonlySession(background = false): Promise<void> {
+async function loadReadonlySession(background = false, from?: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return
   historyRequest?.abort()
   const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
   historyRequest = controller
   const sessionId = activeSessionId.value
 
   // Read-only sessions have no live web input; ensure any event stream is closed.
   disconnectEventStream()
   let followBottom = false
-  if (!background) loadingHistory.value = true
+  if (!background || from !== undefined) loadingHistory.value = true
   lastReadonlyRefresh = Date.now()
-  if (!background) {
-    readonlyContextError.value = ''
-    systemPrompt.value = ''; promptSections.value = undefined; promptSource.value = ''
-    tools.value = []
-  }
   try {
-    // Fetch all history + context in parallel
-    const [histRes, context] = await Promise.all([
-      chatResources.readReadonly(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])),
-      background ? Promise.resolve(null) : (async () => {
-        try {
-          const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), chatReadScope(), controller.signal, 'context-v1')
-          const data = await res.json()
-          // Archived runs still have readable history, but no live context to show.
-          // Do not rebuild today's prompt as if it were the historical execution.
-          if (res.status === 409 && data?.error === 'archived_context_unavailable') return { data: null, failed: false }
-          if (!res.ok) return { data: null, failed: true }
-          return { data, failed: false }
-        } catch {
-          // A context/network/JSON failure must not discard readable history.
-          return { data: null, failed: true }
-        }
-      })(),
-    ])
+    const histRes = await chatResources.readReadonly(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true', ...historyWindowQuery(from) }), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]))
 
     if (!histRes.ok) throw new Error(t('Could not update this conversation. Reopen it to retry.'))
     const histData = await histRes.json()
     if (controller.signal.aborted) return
-    const initialTimeline = currentTimelinePrevious === undefined
     const container = messagesContainer.value
-    followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
+    followBottom = from === undefined && (!container || container.scrollHeight - container.scrollTop - container.clientHeight < 32)
     const rawMessages: RawMessage[] = histData.messages ?? []
-    applyCurrentTimeline(mergeCommandResults(collapseHistory(rawMessages), histData.commandResults), parseDecisionRecords(histData.decisionRecords ?? []), histData.previousPhysicalId ?? null, histData.currentPhysicalId)
+    applyCurrentTimeline(mergeCommandResults(collapseHistory(rawMessages), histData.commandResults), parseDecisionRecords(histData.decisionRecords ?? []), histData.previousPhysicalId ?? null, histData.currentPhysicalId, histData.historyStart)
     decisionRecordError.value = ''
     previousPhysicalId.value = histData.previousPhysicalId ?? null
     if (!background) {
@@ -2569,16 +2569,10 @@ async function loadReadonlySession(background = false): Promise<void> {
       physicalIdStack.value = []
     }
     composerError.value = ''
-    if (initialTimeline) await seedRecentTimeline(controller)
-
-    if (context) {
-      readonlyContextError.value = context.failed ? t('Could not load execution context. Reopen it to retry.') : ''
-      systemPrompt.value = context.data?.systemPrompt ?? ''; promptSections.value = context.data?.sections; promptSource.value = context.data?.source ?? ''
-      tools.value = context.data?.tools ?? []
-    }
   } catch (cause) {
     if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : t('Could not update this conversation. Reopen it to retry.')
   } finally {
+    signal?.removeEventListener('abort', abort)
     if (historyRequest === controller) {
       historyRequest = undefined
       loadingHistory.value = false
@@ -2617,7 +2611,7 @@ async function loadHistoricalSegment(physId: string, direction: 'previous' | 'ne
   historyRequest = controller
   loadingHistory.value = true
   try {
-    const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`), chatReadScope(), controller.signal, 'physical-history-v1')
+    const res = await chatResources.readDocument(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`, { display: 'true' }), chatReadScope(), controller.signal, 'physical-history-v1')
     if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return
@@ -2664,11 +2658,13 @@ watch(() => [fileContextKey.value, paneActive.value, conversationDocumentVisible
 interface SearchSegment {
   id: string | null
   previousId: string | null
+  physicalId?: string
   messages: ChatMsg[]
   decisions: YieldDecisionRecord[]
 }
+const searchMessages = new WeakMap<ConversationSearchEntry, ChatMsg>()
 let searchSegments: SearchSegment[] = []
-let searchTarget: { match: ConversationSearchMatch; query: string } | undefined
+let searchTarget: { match: ConversationSearchMatch; query: string; timelineKey?: string } | undefined
 let searchObserver: MutationObserver | undefined
 let searchFrame: number | undefined
 function clearSearchHighlights() {
@@ -2691,11 +2687,13 @@ function searchEntries(segment: SearchSegment): ConversationSearchEntry[] {
     const content = executions.entries.has(messageIndex) ? executions.entries.get(messageIndex)!.output ?? ''
       : actions.entries.get(messageIndex)?.content ?? msg.attachmentBody.text
     const document = new DOMParser().parseFromString(renderMarkdown([msg.reasoningContent || msg.reasoningText, content].filter(Boolean).join('\n\n')), 'text/html')
-    return [{ segmentId: segment.id, messageIndex, blocks: searchTextBlocks(document.body).map(block => block.text) }]
+    const entry = { segmentId: segment.id, messageIndex, blocks: searchTextBlocks(document.body).map(block => block.text) }
+    searchMessages.set(entry, segment.messages[messageIndex]!)
+    return [entry]
   })
 }
 const currentSearchEntries = computed(() => {
-  if (!searchOpen.value || viewingPhysicalId.value) return undefined
+  if (!searchOpen.value || viewingPhysicalId.value || currentHistoryStart.value > 0) return undefined
   return searchEntries({ id: null, previousId: previousPhysicalId.value, messages: messages.value.slice(timelinePrefixLength.value), decisions: decisionRecords.value })
 })
 const liveSearchEntries = computed(() => {
@@ -2711,11 +2709,12 @@ async function loadSearchEntries(signal: AbortSignal): Promise<ConversationSearc
     if (!segment.data.messages.every(isSearchHistoryMessage)) throw new Error(t('Invalid messages in conversation search history. Reopen the conversation and retry.'))
     return {
       id: segment.id, previousId: segment.previousId,
+      physicalId: typeof segment.data.currentPhysicalId === 'string' ? segment.data.currentPhysicalId : undefined,
       messages: mergeCommandResults(collapseHistory(segment.data.messages), segment.data.commandResults),
       decisions: parseDecisionRecords(segment.data.decisionRecords ?? []),
     }
   })
-  if (!viewingPhysicalId.value && !loadingHistory.value) {
+  if (!viewingPhysicalId.value && !loadingHistory.value && currentHistoryStart.value === 0) {
     const current = segments.at(-1)!
     current.messages = messages.value.slice(timelinePrefixLength.value)
     current.decisions = decisionRecords.value
@@ -2744,28 +2743,46 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   browseHistory()
   const segment = searchSegments.find(item => item.id === match.entry.segmentId)
   if (!segment) throw new Error(t('This search result is no longer available. Retry search.'))
-  if (viewingPhysicalId.value !== segment.id) {
+  if (segment.id === null) {
+    if (viewingPhysicalId.value || !currentTimelinePhysicalId) await loadCurrentSession(signal)
+    signal.throwIfAborted()
+    if (currentHistoryStart.value > 0) {
+      if (isDirectChat.value) await loadDirectChat(true, 0, signal)
+      else await loadReadonlySession(true, 0, signal)
+    }
+    signal.throwIfAborted()
+    if (viewingPhysicalId.value || currentHistoryStart.value > 0 || (segment.physicalId && segment.physicalId !== currentTimelinePhysicalId)) {
+      throw new Error(t('This message changed while searching. Retry search.'))
+    }
+  } else if (viewingPhysicalId.value !== segment.id) {
     historyRequest?.abort()
     historyRequest = undefined
     loadingHistory.value = false
-    if (segment.id === null) {
-      await loadCurrentSession()
-      signal.throwIfAborted()
-      if (composerError.value) throw new Error(composerError.value)
-    } else {
-      resetTimeline()
-      messages.value = [...segment.messages]
-      decisionRecords.value = segment.decisions
-      decisionRecordError.value = ''
-      viewingPhysicalId.value = segment.id
-      previousPhysicalId.value = segment.previousId
-      const newer = searchSegments.slice(searchSegments.indexOf(segment) + 1)
-      physicalIdStack.value = newer.reverse().map(item => item.id ?? '')
-    }
+    resetTimeline()
+    messages.value = tagTimelineMessages(segment.messages)
+    decisionRecords.value = segment.decisions
+    decisionRecordError.value = ''
+    viewingPhysicalId.value = segment.id
+    previousPhysicalId.value = segment.previousId
+    const newer = searchSegments.slice(searchSegments.indexOf(segment) + 1)
+    physicalIdStack.value = newer.reverse().map(item => item.id ?? '')
   }
   await nextTick()
   signal.throwIfAborted()
-  const renderedIndex = match.entry.messageIndex + (match.entry.segmentId === null ? timelinePrefixLength.value : 0)
+  const prefix = match.entry.segmentId === null ? timelinePrefixLength.value : 0
+  let renderedIndex = match.entry.messageIndex + prefix
+  const target = searchMessages.get(match.entry)
+  if (target) {
+    const same = (message?: ChatMsg) => message && (target.timelineKey ? message.timelineKey === target.timelineKey
+      : message.role === target.role && message.content === target.content && message.timestamp === target.timestamp
+        && message.event === target.event && message.requestId === target.requestId && message.toolCallId === target.toolCallId
+        && message.responseContext?.responseId === target.responseContext?.responseId)
+    if (!same(messages.value[renderedIndex])) {
+      const candidates = messages.value.flatMap((message, index) => index >= prefix && same(message) ? [index] : [])
+      if (candidates.length !== 1) throw new Error(t('This message changed while searching. Retry search.'))
+      renderedIndex = candidates[0]!
+    }
+  }
   if (!await revealHistoryIndex(renderedIndex, signal)) {
     signal.throwIfAborted()
     throw new Error(t('This message changed while searching. Retry search.'))
@@ -2796,7 +2813,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   if (!range || !range.getClientRects().length) throw new Error(t('The matching message text is not visible. Expand the message or retry search.'))
   clearSearchHighlights()
   paintSearchHighlights(query, range)
-  searchTarget = { match, query }
+  searchTarget = { match, query, timelineKey: messages.value[renderedIndex]?.timelineKey }
   const container = messagesContainer.value!
   const rect = range.getBoundingClientRect()
   const bounds = container.getBoundingClientRect()
@@ -2827,8 +2844,10 @@ watch([messagesContainer, searchOpen], ([container, open]) => {
     searchFrame = requestAnimationFrame(() => {
       searchFrame = undefined
       if (!searchTarget) return
-      const { match, query } = searchTarget
-      const wrapper = container.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex + (match.entry.segmentId === null ? timelinePrefixLength.value : 0)}"]`)
+      const { match, query, timelineKey } = searchTarget
+      const index = timelineKey ? messages.value.findIndex(message => message.timelineKey === timelineKey)
+        : match.entry.messageIndex + (match.entry.segmentId === null ? timelinePrefixLength.value : 0)
+      const wrapper = container.querySelector<HTMLElement>(`[data-search-message-idx="${index}"]`)
       const block = wrapper && visibleSearchBlocks(wrapper)[match.blockIndex]
       const range = block && searchRange(block, match.start, match.end)
       const hit = range && textMatches(range.toString(), query)[0]
@@ -3274,7 +3293,7 @@ async function sendMessage(overrideContent?: string, opts?: {
         streamingToolCallData.value = null
       }
       scrollToBottom()
-      if (directRefreshPending || accepted && (!!optimisticMessage || !systemPrompt.value)) refreshDirectHistory()
+      if (directRefreshPending || accepted && (!!optimisticMessage || startingDraft)) refreshDirectHistory()
       if (followUp) void refreshSessionActivity()
     }
   }

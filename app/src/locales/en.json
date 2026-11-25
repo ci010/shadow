@@ -3234,6 +3234,7 @@
   "Undo": "Undo",
   "Undo last stroke": "Undo last stroke",
   "Unexpected trace in query response.": "Unexpected trace in query response.",
+  "This live topic is not available to the current connection.": "This live topic is not available to the current connection.",
   "Unexpected unavailable live topic": "Unexpected unavailable live topic",
   "Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation.": "Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation.",
   "Unknown error": "Unknown error",

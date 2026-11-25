@@ -42,14 +42,37 @@ interface TimelineMessageIdentity {
   toolCallId?: string
   requestId?: string
   responseContext?: { responseId?: string }
+  eventMeta?: { attrs: Record<string, string> }
   timelineKey?: string
+}
+
+/** Stable IDs shared by realtime delivery and persisted history. Never guess
+ * based on text: separate tool responses can legitimately have identical output. */
+function liveHistoryIdentity(message: TimelineMessageIdentity): string | undefined {
+  const eventId = message.eventMeta?.attrs['event-id']
+  if (eventId) return JSON.stringify(['event', eventId])
+  if (message.toolCallId && message.event) return JSON.stringify([message.event, message.toolCallId])
+  const responseId = message.responseContext?.responseId
+  if (responseId) return JSON.stringify(['response', responseId])
+  return undefined
+}
+
+export function mergeLiveHistoryAppend<M extends TimelineMessageIdentity>(history: M[], appended: M[]): M[] {
+  const observed = new Set(history.map(liveHistoryIdentity))
+  const pending = appended.filter(message => {
+    const id = liveHistoryIdentity(message)
+    if (!id || observed.has(id)) return false
+    observed.add(id)
+    return true
+  })
+  return pending.length ? [...history, ...pending] : history
 }
 
 /** Match persisted identities, not flattened indices, including snapshots with leading rows. */
 export function reconcileTimelineKeys<M extends TimelineMessageIdentity>(items: M[], previous: M[]): M[] {
-  const identity = (message: M) => message.requestId ? `web-input:${message.requestId}` : JSON.stringify([message.role, message.event, message.toolCallId,
-    message.responseContext?.responseId, message.timestamp,
-    message.toolCallId || message.responseContext?.responseId ? undefined : message.content])
+  const identity = (message: M) => message.requestId ? `web-input:${message.requestId}` : liveHistoryIdentity(message)
+    ?? JSON.stringify([message.role, message.event, message.toolCallId, message.timestamp,
+      message.toolCallId ? undefined : message.content])
   const keys = new Map<string, (string | undefined)[]>()
   for (const message of previous) {
     const id = identity(message)

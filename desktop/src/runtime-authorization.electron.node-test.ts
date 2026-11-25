@@ -24,6 +24,9 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
     import {app,BrowserWindow,session} from 'electron';
     import {createServer} from 'node:http';
     import {ChildLocalControlService} from './src/runtime/child-local-control.ts';
+    import {RealtimeHub,registerRealtimeRoute,REALTIME_SOCKET_PATH} from './src/realtime/hub.ts';
+    import {registerGatewayRoutes,serveGateway,validateLaunchCredential} from './src/gateway/server.ts';
+    import {Hono} from 'hono';
     import {installRuntimeRequestAuthorization} from './desktop/src/runtime-authorization.ts';
     import {resolveChildRendererTarget,resolveRendererTarget} from './desktop/src/renderer-target.ts';
     app.setPath('userData',${JSON.stringify(join(directory, 'profile'))});
@@ -34,7 +37,8 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
       if(req.url==='/entry.js'){res.setHeader('Content-Type','text/javascript');res.end('window.localEntryReady=true');return;}
       res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Vite-like fixture</title><script src="/entry.js"></script>');
     });
-    let child; let win;
+    let child; let win; let liveGateway;
+    const liveHub=new RealtimeHub();
     (async()=>{try {
       await new Promise(resolve=>page.listen(0,'127.0.0.1',resolve));
       const pageBase='http://127.0.0.1:'+page.address().port;
@@ -42,9 +46,18 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
       child=new ChildLocalControlService({port:0,launchCredential:'synthetic-isolated-token',requestShutdown(){},workspace:app=>{
         app.get('/',c=>{remoteUiRequests++;return c.json({error:'main_ui_unavailable'},503)});
         app.get('/api/projects',c=>apiAvailable?c.json({projects:[]}):c.json({error:'main_workspace_unavailable'},503));
+
       }});
       await child.start(new AbortController().signal);
       const apiBase='http://127.0.0.1:'+child.address.port;
+      const launchToken='synthetic-isolated-token';
+      const liveApp=new Hono();
+      const authorize=request=>validateLaunchCredential(request.headers.get('Authorization')??undefined,launchToken);
+      registerGatewayRoutes(liveApp,[],{launchCredential:launchToken,localLiveSocketPath:REALTIME_SOCKET_PATH,launchCredentialExemptions:[{method:'GET',path:REALTIME_SOCKET_PATH}]});
+      registerRealtimeRoute(liveApp,liveHub,authorize,{authorize,authorizeTopic:()=>true});
+      liveGateway=serveGateway(liveApp,{host:'127.0.0.1',port:0});
+      await liveGateway.ready;
+      const liveBase='http://127.0.0.1:'+liveGateway.addr.port;
       await app.whenReady();
       win=new BrowserWindow({show:false,webPreferences:{contextIsolation:true,sandbox:true}});
       const update=installRuntimeRequestAuthorization(session.defaultSession,d=>d.webContentsId===win.webContents.id);
@@ -54,6 +67,13 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
         const result=await win.webContents.executeJavaScript('fetch('+JSON.stringify(apiBase+'/api/projects')+').then(async r=>({status:r.status,body:await r.json()}))');
         assert.equal(result.status,200,source+' main frame');
         assert.deepEqual(result.body,{projects:[]});
+        update({apiBase:liveBase,launchToken});
+        const liveUrl=liveBase+REALTIME_SOCKET_PATH;
+        const live=await win.webContents.executeJavaScript('fetch('+JSON.stringify(liveUrl)+',{method:"POST",credentials:"same-origin"}).then(async r=>{if(!r.ok)throw new Error("ticket denied "+r.status);const {protocol,proof}=await r.json();return new Promise((resolve,reject)=>{const s=new WebSocket('+JSON.stringify(liveUrl.replace('http:','ws:'))+',[protocol,proof]);s.onopen=()=>s.send(JSON.stringify({type:"subscribe",id:1,subscriptions:[{topic:{kind:"projects"}}]}));s.onmessage=e=>{s.close();resolve(JSON.parse(e.data))};s.onerror=()=>reject(new Error("live upgrade failed"));setTimeout(()=>reject(new Error("live upgrade timed out")),3000)})})');
+        assert.equal(live.type,'subscribed',source+' main frame live authorization');
+        const iframeTicket=await win.webContents.executeJavaScript('new Promise(resolve=>{const f=document.createElement("iframe");window.addEventListener("message",e=>resolve(e.data),{once:true});f.srcdoc='+JSON.stringify('<script>fetch('+JSON.stringify(liveUrl)+',{method:"POST"}).then(r=>parent.postMessage(r.status,"*")).catch(()=>parent.postMessage("blocked","*"))<\/script>')+';document.body.append(f)})');
+        assert.ok(iframeTicket===401||iframeTicket==='blocked',source+' iframe must not receive a live ticket');
+        update({apiBase,launchToken});
         const denied=await win.webContents.executeJavaScript('new Promise(resolve=>{const f=document.createElement("iframe");window.addEventListener("message",e=>resolve(e.data),{once:true});f.srcdoc='+JSON.stringify('<script>fetch('+JSON.stringify(apiBase+'/api/projects')+').then(r=>parent.postMessage(r.status,"*")).catch(()=>parent.postMessage("blocked","*"))<\\/script>')+';document.body.append(f)})');
         assert.ok(denied===401||denied==='blocked',source+' iframe must not inherit launch credential: '+denied);
         console.log('Child admission verified: '+source+' main-frame=200 iframe='+denied);
@@ -72,8 +92,8 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
       const unavailable=await win.webContents.executeJavaScript('fetch('+JSON.stringify(apiBase+'/api/projects')+').then(async r=>({status:r.status,body:await r.json()}))');
       assert.deepEqual(unavailable,{status:503,body:{error:'main_workspace_unavailable'}});
       assert.equal(win.webContents.getURL(),selected.url,'Main API failure must leave the local renderer loaded');
-      win.destroy();await child.shutdown();page.close();app.exit(0);
-    }catch(error){console.error(error);win?.destroy();await child?.shutdown();page.close();app.exit(1)}})();
+      win.destroy();liveHub.close();await liveGateway.shutdown();await child.shutdown();page.close();app.exit(0);
+    }catch(error){console.error(error);win?.destroy();liveHub.close();await liveGateway?.shutdown();await child?.shutdown();page.close();app.exit(1)}})();
   ` }, outfile: join(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'], logLevel: 'silent' })
   const env = { ...process.env }
   delete env.ELECTRON_RUN_AS_NODE

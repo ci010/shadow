@@ -47,6 +47,7 @@ export interface GatewayRouteOptions {
   browserAuth?: BrowserAuth
   authorizeClient?: (request: Request) => boolean
   clientAddresses?: GatewayClientAddressRegistry
+  localLiveSocketPath?: string
   launchCredentialExemptions?: readonly {
     readonly method: string
     readonly path: string
@@ -193,7 +194,17 @@ function registerGatewayRoutes(
     const requestOrigin = c.req.header('Origin')
     let normalizedRequestOrigin: string | undefined
     if (requestOrigin) {
-      if (requestOrigin === 'null' && launchCredential) {
+      const url = new URL(c.req.url)
+      // Chromium sends file:// on a packaged Electron WebSocket even though its
+      // authenticated HTTP ticket request carries no Origin. Limit that spelling
+      // to the exact ticket-validated loopback live route, never ordinary APIs.
+      const localLiveUpgrade = requestOrigin === 'file://' && launchCredential &&
+        c.req.method === 'GET' && url.pathname === opts.localLiveSocketPath &&
+        c.req.header('Upgrade')?.toLowerCase() === 'websocket' &&
+        c.req.header('Sec-WebSocket-Protocol')?.split(',').some(value => /^ticket\.[a-f0-9-]{36}$/.test(value.trim())) &&
+        ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && incoming instanceof IncomingMessage &&
+        ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(incoming.socket.remoteAddress ?? '')
+      if ((requestOrigin === 'null' && launchCredential) || localLiveUpgrade) {
         normalizedRequestOrigin = 'null'
       } else {
         try {

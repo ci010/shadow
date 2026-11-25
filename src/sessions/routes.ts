@@ -8,7 +8,7 @@ import { navigationSummary } from './summary-navigation.ts'
 import { createSummaryResponder } from './summary-delta.ts'
 import { SummaryRowCache } from './summary-read-model.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
-import { projectHistoryMessages } from '../shared/history-wire.ts'
+import { projectHistoryMessages, recentHistoryWindow } from '../shared/history-wire.ts'
 import { projectUsagePageQuerySchema, type ProjectUsage } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
@@ -887,11 +887,15 @@ export function sessionsApiPlugin(
         if (!result) {
           return c.json({ error: 'session_not_found', key }, 404)
         }
+        const includeSummary = c.req.query('includeCompactionSummary') === 'true'
+        const summary = includeSummary
+          ? (await sessions.getHistory(key, { shallow: true, offset: 0, pageSize: 1 })).messages[0] : undefined
         return c.json({
           key,
           source: result.source,
           systemPrompt: result.systemPrompt,
           tools: result.tools,
+          ...(includeSummary ? { compactionSummary: summary?.name === '__compaction_summary__' && typeof summary.content === 'string' ? summary.content : '' } : {}),
           ...(result.sections ? { sections: result.sections } : {}),
           ...(result.promptIdentity ? { promptIdentity: result.promptIdentity } : {}),
           note: result.source === 'preview'
@@ -1221,19 +1225,22 @@ export function sessionsApiPlugin(
         if (segmentIndex > 0) {
           previousPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex }, segmentIndex - 1)
         }
+        const window = shallow && pageSize === undefined && url.searchParams.get('historyWindow') === 'recent'
+          ? recentHistoryWindow(messages, url.searchParams, currentPhysicalId) : undefined
         const data = {
           key,
           total,
           offset,
           pageSize,
-          messages: projectHistoryMessages(messages),
+          ...(window ? { historyStart: window.start } : {}),
+          messages: window?.messages ?? projectHistoryMessages(messages, url.searchParams.get('display') === 'true'),
           commandResults: await sessions.getCommandResults(key),
           decisionRecords: await sessions.getYieldRecords(key),
           segmentIndex,
           currentPhysicalId,
           previousPhysicalId,
         }
-        if (shallow && pageSize === undefined && url.searchParams.has('snapshot')) {
+        if (shallow && pageSize === undefined && (window || url.searchParams.has('snapshot'))) {
           // Do not label a history read with a segment that rolled over while
           // messages/receipts were being fetched. The next read starts fresh.
           const afterState = await sessions.readSessionState(key)
@@ -1241,8 +1248,10 @@ export function sessionsApiPlugin(
             || physicalSessionId(afterState) !== currentPhysicalId) {
             return c.json({ error: 'history_conflict', message: 'Session segment changed during history read. Retry.' }, 409)
           }
-          c.header('Cache-Control', 'no-store')
-          return c.json(readonlyHistorySnapshot(data, url.searchParams))
+          if (url.searchParams.has('snapshot')) {
+            c.header('Cache-Control', 'no-store')
+            return c.json(readonlyHistorySnapshot(data, url.searchParams))
+          }
         }
         return c.json(data)
       }
@@ -1267,7 +1276,7 @@ export function sessionsApiPlugin(
           total,
           offset,
           pageSize,
-          messages: projectHistoryMessages(messages),
+          messages: projectHistoryMessages(messages, url.searchParams.get('display') === 'true'),
           commandResults: await sessions.getCommandResults(key, key),
           decisionRecords: owner ? await sessions.getYieldRecords(owner.sessionId, key) : [],
           previousPhysicalId,

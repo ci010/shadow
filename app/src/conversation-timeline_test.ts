@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { limitFollowingTimeline, prependScrollTop, reconcileTimelineKeys, retainTimelineRollover, timelineBoundaryPositions, timelineCanPrepend, type TimelineSegment } from './conversation-timeline.ts'
+import { limitFollowingTimeline, mergeLiveHistoryAppend, prependScrollTop, reconcileTimelineKeys, retainTimelineRollover, timelineBoundaryPositions, timelineCanPrepend, type TimelineSegment } from './conversation-timeline.ts'
 
 test('preloaded segments survive live rollover and repeated snapshots retain each boundary once', () => {
   const oldest: TimelineSegment<string, string> = { id: 'old', previousId: 'older', messages: ['old summary', 'old tool'], decisions: ['old decision'] }
@@ -32,6 +32,20 @@ test('persisted identity survives leading rows and distinguishes duplicate messa
   const previous = [{role:'assistant', content:'A', timelineKey:'a'}, {role:'assistant', content:'A', timelineKey:'b'}, {role:'assistant', content:'tool()',toolCallId:'tool-one',timelineKey:'tool'}]
   const incoming = [{role:'user',content:'Leading summary'}, {role:'assistant',content:'A'}, {role:'assistant',content:'A'}, {role:'assistant',content:'updated tool()',toolCallId:'tool-one'}]
   assert.deepEqual(reconcileTimelineKeys(incoming, previous).map(message => message.timelineKey), [undefined,'a','b','tool'])
+})
+
+test('older page commits retain a concurrently delivered live row until persistence without duplicate tool events', () => {
+  const older = { role: 'user', content: 'older' }
+  const persisted = { role: 'assistant', event: 'tool_call', toolCallId: 'call', content: 'read()', timestamp: 'persisted' }
+  const liveCall = { ...persisted, timestamp: 'realtime', timelineKey: 'live-call' }
+  const liveResult = { role: 'assistant', event: 'tool_result', toolCallId: 'call', content: 'result', timelineKey: 'live-result' }
+  const page = [older, persisted]
+  const live = [liveCall, liveResult, liveResult]
+  assert.deepEqual(mergeLiveHistoryAppend(page, live), [...page, liveResult])
+  assert.deepEqual(reconcileTimelineKeys(mergeLiveHistoryAppend(page, live), live).map(message => message.timelineKey),
+    [undefined, 'live-call', 'live-result'])
+  const complete = [...page, { ...liveResult, timestamp: 'now persisted' }]
+  assert.equal(mergeLiveHistoryAppend(complete, live), complete)
 })
 
 test('following latest prunes excess oldest segments without changing their retained identity', () => {

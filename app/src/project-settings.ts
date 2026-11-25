@@ -65,15 +65,23 @@ export function createProjectSettingsClient(base: string, request: typeof fetch 
     },
     async catalog(signal?: AbortSignal): Promise<{ models: string[]; providers: ProviderInstanceLabel[] }> {
       const result = await coalescedRead(request, apiUrl(base, '/api/models').toString(), signal => projectJson(base, '/api/models', { signal }, request), signal)
-      if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')
-        || (result.providers !== undefined && (!Array.isArray(result.providers) || !result.providers.every(item =>
-          isRecord(item) && typeof item.id === 'string' && typeof item.type === 'string' && (item.name === undefined || typeof item.name === 'string'))))) {
-        throw new Error(t('Main returned invalid models. Check App provider connections and retry.'))
-      }
-      return { models: result.models, providers: (result.providers ?? []) as ProviderInstanceLabel[] }
+      return parseModelCatalog(result)
     },
     async models(signal?: AbortSignal): Promise<string[]> {
       return (await this.catalog(signal)).models
     },
   }
+}
+
+export async function fetchModelCatalog(base: string, request: typeof fetch, signal: AbortSignal) {
+  return parseModelCatalog(await projectJson(base, '/api/models', { signal }, request))
+}
+
+function parseModelCatalog(result: unknown): { models: string[]; providers: ProviderInstanceLabel[] } {
+  if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')
+    || (result.providers !== undefined && (!Array.isArray(result.providers) || !result.providers.every(item =>
+      isRecord(item) && typeof item.id === 'string' && typeof item.type === 'string' && (item.name === undefined || typeof item.name === 'string'))))) {
+    throw new Error(t('Main returned invalid models. Check App provider connections and retry.'))
+  }
+  return { models: result.models, providers: (result.providers ?? []) as ProviderInstanceLabel[] }
 }
