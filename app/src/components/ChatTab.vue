@@ -542,6 +542,9 @@
 </template>
 
 <script setup lang="ts">
+import { conversationStartKey, type ConversationStartState, type ConversationStartData } from '../conversation-start-context.ts'
+import { parseSessionDetails } from '../session-details.ts'
+import { parseWorkView } from '../work-alignment.ts'
 import { createInitialLiveSnapshot } from '../initial-live-snapshot'
 import { createMarkdown } from '../markdown.ts'
 import { t, formatNumber } from '../i18n.ts'
@@ -1169,6 +1172,42 @@ function applySessionActivity(
 
 // Commands and cached panes share the application's one realtime connection.
 let eventStream: LiveSubscription | null = null
+const conversationStart = shallowRef<ConversationStartState>()
+provide(conversationStartKey, computed(() => {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return undefined
+  const scope = { apiBase: props.apiBase, sessionId }
+  if (viewingPhysicalId.value) return { ...scope, phase: 'http' }
+  const state = conversationStart.value
+  return state?.apiBase === scope.apiBase && state.sessionId === sessionId ? state : { ...scope, phase: 'pending' }
+}))
+function startData(value: Record<string, unknown>, sessionId: string): ConversationStartData {
+  const data: ConversationStartData = {}
+  try { if (value.details !== undefined) data.details = parseSessionDetails(value.details, sessionId) } catch { /* optional resource */ }
+  try { if (value.work !== undefined) data.work = parseWorkView(value.work) } catch { /* optional resource */ }
+  if (isRecord(value.botSetup) && typeof value.botSetup.pending === 'boolean') data.botSetup = { pending: value.botSetup.pending }
+  const followUp = value.followUp
+  if (followUp === null) data.followUp = null
+  else if (isRecord(followUp) && typeof followUp.next === 'string' && typeof followUp.after === 'number'
+    && Number.isFinite(followUp.after)
+    && (followUp.nextRun === null || typeof followUp.nextRun === 'string' && Number.isFinite(Date.parse(followUp.nextRun)))) {
+    data.followUp = { next: followUp.next, after: followUp.after, nextRun: followUp.nextRun }
+  }
+  if (Array.isArray(value.scheduledTasks) && value.scheduledTasks.every(task => isRecord(task) && typeof task.id === 'string'
+    && typeof task.name === 'string' && typeof task.task === 'string' && typeof task.schedule === 'string' && typeof task.enabled === 'boolean'
+    && (task.nextRun === null || typeof task.nextRun === 'string' && Number.isFinite(Date.parse(task.nextRun))))) {
+    data.scheduledTasks = value.scheduledTasks as NonNullable<ConversationStartData['scheduledTasks']>
+  }
+  const bg = value.backgroundTasks
+  if (isRecord(bg) && bg.sessionId === sessionId && Number.isSafeInteger(bg.total) && typeof bg.total === 'number' && bg.total >= 0
+    && Array.isArray(bg.tasks) && bg.tasks.length === Math.min(bg.total, 100) && bg.tasks.every(task => isRecord(task)
+      && task.sessionId === sessionId && typeof task.id === 'string' && typeof task.title === 'string' && typeof task.createdAt === 'string'
+      && ['process', 'tool', 'subagent'].includes(String(task.kind)) && ['running', 'cancelling'].includes(String(task.status)))) {
+    data.backgroundTasks = bg as unknown as NonNullable<ConversationStartData['backgroundTasks']>
+  }
+  return data
+}
+let firstSocketSnapshot: { chat: Record<string, unknown>; inputDelivery: ChatInputDelivery[] } | undefined
 let historySnapshot: ReturnType<typeof createInitialLiveSnapshot> | undefined
 let eventStreamKey = ''
 let bgStreamState: StreamState = { accumulated: '' }
@@ -1194,29 +1233,48 @@ function refreshDirectHistory(): void {
   }, 50)
 }
 
-function connectEventStream(chatId: string, loadingCurrent = false): void {
+function connectEventStream(chatId: string, loadingCurrent = false, readonlySessionId?: string): void {
   const projectId = props.projectId ?? liveProjectId(props.apiBase)
-  const key = JSON.stringify([props.apiBase, projectId, chatId])
+  const sessionId = readonlySessionId ?? `web:${chatId}`
+  const key = JSON.stringify([props.apiBase, projectId, sessionId])
+  const live = livePool.client(props.apiBase)
   if (eventStream && eventStreamKey === key) return
+  const canOpenConversation = live.canOpenConversation?.() === true
+  if (readonlySessionId && !canOpenConversation) { closeEventStream(); return }
   closeEventStream()
   if (!wantsLiveChat() || disposed || viewingPhysicalId.value && !loadingCurrent) return
   bgStreamState = { accumulated: '' }
   streamRequestId = undefined
   let initial = true
-  const snapshot = createInitialLiveSnapshot({ refresh() {
+  const snapshot = createInitialLiveSnapshot({ fallbackMs: canOpenConversation ? 10_000 : undefined, refresh() {
     const first = initial
     initial = false
     // An initial load already waiting on readiness owns this snapshot.
-    if (!first || !historyRequest) refreshDirectHistory()
+    if (!first || !historyRequest) {
+      if (firstSocketSnapshot || eventStream?.refreshConversation?.()) return
+      if (readonlySessionId) { if (!historyRequest && paneActive.value) void loadReadonlySession(true) }
+      else refreshDirectHistory()
+    }
   } })
   // Project sessions-topic owns inventory recovery. Keep the readiness read,
   // but do not force a second HTTP inventory refresh from the chat topic.
   const activitySnapshot = createInitialLiveSnapshot({ refresh() {
     void projectLease?.activity.read()
   } })
-  const subscription = livePool.client(props.apiBase).subscribe({ kind: 'chat', projectId, sessionId: `web:${chatId}` }, {
+  const subscription = live.subscribe({ kind: 'chat', projectId, sessionId }, {
+    conversationSnapshot(data) {
+      if (eventStream !== subscription || activeSessionId.value !== sessionId) return
+      if (!isRecord(data) || !isRecord(data.chat) || data.chat.chatId !== chatId || !Array.isArray(data.chat.history)
+        || !Array.isArray(data.inputDelivery) || !data.inputDelivery.every(isChatInputDelivery)) return
+      firstSocketSnapshot = { chat: data.chat, inputDelivery: data.inputDelivery }
+      conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'socket', data: startData(data, sessionId) }
+      if (!historyRequest && paneActive.value) {
+        if (readonlySessionId) void loadReadonlySession(true)
+        else void loadDirectChat(true)
+      }
+    },
     reset() {
-      if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}`) return
+      if (eventStream !== subscription || activeSessionId.value !== sessionId) return
       bgStreamState = { accumulated: '' }
       streamRequestId = undefined
       resetStreamPresentation()
@@ -1225,8 +1283,16 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
     },
     reconnected() { snapshot.reconnected(); activitySnapshot.reconnected() },
     event(envelope) {
-      if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
+      if (eventStream !== subscription || activeSessionId.value !== sessionId || viewingPhysicalId.value) return
       const payload = envelope.payload
+      if (isRecord(payload) && payload.event === 'conversation_summary') {
+        const state = conversationStart.value
+        if (state?.phase === 'socket' && isRecord(payload.data)) {
+          conversationStart.value = { ...state, data: { ...state.data, ...startData(payload.data, state.sessionId) } }
+        }
+        return
+      }
+      if (readonlySessionId || isRecord(payload) && payload.event === 'conversation_history_changed') { snapshot.invalidate(); return }
       if (isRecord(payload) && payload.event === 'input_delivery_changed') {
         snapshot.invalidate()
         return
@@ -1309,6 +1375,8 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
 }
 
 function closeEventStream(): void {
+  firstSocketSnapshot = undefined
+  conversationStart.value = undefined
   historySnapshot?.dispose()
   historySnapshot = undefined
   if (eventStream) {
@@ -2464,7 +2532,13 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const res = await chatResources.readDirect(buildUrl('/api/chat/session', { chatId, ...historyWindowQuery(from) }), chatReadScope(), controller.signal)
+    const initial = from === undefined ? firstSocketSnapshot : undefined
+    firstSocketSnapshot = undefined
+    if (!initial && !background && from === undefined && conversationStart.value?.phase !== 'socket') {
+      conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'http' }
+    }
+    const res = initial ? { ok: true, status: 200, data: initial.chat }
+      : await chatResources.readDirect(buildUrl('/api/chat/session', { chatId, ...historyWindowQuery(from) }), chatReadScope(), controller.signal)
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
       disconnectEventStream()
@@ -2481,7 +2555,7 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
     if (!res.ok) throw new Error(t('Could not load conversation. Refresh to retry.'))
     // Read scheduling after history so a saved row cannot race ahead of
     // its pending state. Overlapping rows reconcile by request ID.
-    const delivery = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
+    const delivery = initial?.inputDelivery ?? await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
     }).then(async response => {
       const entries: unknown = response.ok ? await response.json() : undefined
@@ -2547,16 +2621,24 @@ async function loadReadonlySession(background = false, from?: number, signal?: A
   historyRequest = controller
   const sessionId = activeSessionId.value
 
-  // Read-only sessions have no live web input; ensure any event stream is closed.
-  disconnectEventStream()
+  const chatId = sessionId.startsWith('web:') ? sessionId.slice(4) : sessionId
   let followBottom = false
   if (!background || from !== undefined) loadingHistory.value = true
   lastReadonlyRefresh = Date.now()
   try {
-    const histRes = await chatResources.readReadonly(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true', ...historyWindowQuery(from) }), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]))
-
-    if (!histRes.ok) throw new Error(t('Could not update this conversation. Reopen it to retry.'))
-    const histData = await histRes.json()
+    if (!background && from === undefined) {
+      connectEventStream(chatId, true, sessionId)
+      await historySnapshot?.getPromise()
+      if (controller.signal.aborted) return
+    }
+    const initial = from === undefined ? firstSocketSnapshot : undefined
+    firstSocketSnapshot = undefined
+    if (!initial && !background && from === undefined && conversationStart.value?.phase !== 'socket') {
+      conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'http' }
+    }
+    const histRes = initial ? undefined : await chatResources.readReadonly(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true', ...historyWindowQuery(from) }), chatReadScope(), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]))
+    if (histRes && !histRes.ok) throw new Error(t('Could not update this conversation. Reopen it to retry.'))
+    const histData = initial ? { ...initial.chat, messages: initial.chat.history } : await histRes!.json()
     if (controller.signal.aborted) return
     const container = messagesContainer.value
     followBottom = from === undefined && (!container || container.scrollHeight - container.scrollTop - container.clientHeight < 32)
@@ -3594,8 +3676,10 @@ watch(paneActive, visible => {
 }, { flush: 'sync' })
 watch(() => [wantsLiveChat(), activeSessionId.value, viewingPhysicalId.value, props.apiBase], () => {
   if (!mounted || disposed) return
-  if (wantsLiveChat() && isDirectChat.value && !viewingPhysicalId.value) connectEventStream(activeSessionId.value.replace('web:', ''))
-  else closeEventStream()
+  const id = activeSessionId.value
+  if (wantsLiveChat() && id && !viewingPhysicalId.value) {
+    connectEventStream(id.startsWith('web:') ? id.slice(4) : id, false, isDirectChat.value ? undefined : id)
+  } else closeEventStream()
 }, { flush: 'sync' })
 watch(composerDock, element => {
   dockObserver?.disconnect()

@@ -91,3 +91,22 @@ for (const status of [200, 401]) {
     } finally { stop() }
   })
 }
+
+test('focus and visibility reports use the available socket without HTTP', async () => {
+  const window = target()
+  let focused = true
+  const document = { ...target(), visibilityState: 'visible', hasFocus: () => focused }
+  const reports: Array<{ focused: boolean; visible: boolean }> = []
+  let http = 0
+  const stop = startPresence('http://localhost', window as unknown as Window, document as unknown as Document, undefined,
+    async () => { http++; return new Response(null, { status: 204 }) }, report => { reports.push(report); return true })
+  try {
+    await setImmediate()
+    document.visibilityState = 'hidden'
+    focused = false
+    document.listeners.get('visibilitychange')!(new Event('visibilitychange'))
+    await setImmediate()
+    assert.deepEqual(reports.map(({ focused, visible }) => [focused, visible]), [[true, true], [false, false]])
+    assert.equal(http, 0)
+  } finally { stop() }
+})

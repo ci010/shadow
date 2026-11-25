@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import test, { type TestContext } from 'node:test'
+import { shallowRef, type Ref } from 'vue'
 import { privateCredentialTransport } from './credential-requests.ts'
 import { mountBotUi, settleBotUi } from './bot-ui-test-helpers.ts'
+import type { ConversationStartState } from './conversation-start-context.ts'
 import type { LiveObserver } from './live-client.ts'
+
+// The mounted SFC fixture also loads dependencies through CommonJS.
+const { conversationStartKey } = createRequire(import.meta.url)('./conversation-start-context.ts') as typeof import('./conversation-start-context.ts')
+
 const card = readFileSync(new URL('./components/BotChatSetup.vue', import.meta.url), 'utf8')
 const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
 const editor = readFileSync(new URL('./components/BotConnectionSetup.vue', import.meta.url), 'utf8')
@@ -29,7 +36,7 @@ test('Private setup rejects nonloopback cleartext and credential-bearing URLs', 
 
 const invitation = (patch: Record<string, unknown> = {}) => ({ id: 'setup-p', projectId: 'p', sessionId: 'web:topic', expiresAt: Date.now() + 60_000, ...patch })
 const bot = { id: 'qq-bot', projectId: 'p', platform: 'qq', displayName: 'Existing connection', label: 'QQ', enabled: false, configured: false, state: 'disabled', config: {}, secrets: {} }
-function harness(t: TestContext, initial: unknown = null) {
+function harness(t: TestContext, initial: unknown = null, start?: Ref<ConversationStartState>) {
   let pending = initial, closes = 0, failClose = false
   const observers: LiveObserver[] = [], disposers: Array<() => void> = []
   const calls: Array<{ path: string; method: string; body?: unknown; signal?: AbortSignal | null }> = []
@@ -48,7 +55,7 @@ function harness(t: TestContext, initial: unknown = null) {
     }
     return Response.json({ request: pending })
   })
-  const view = mountBotUi(t, 'BotChatSetup.vue', { apiBase: 'http://127.0.0.1/projects/p', projectId: 'p', sessionId: 'web:topic', active: true, canSubmit: true }, { provide: new Map([[Symbol.for('shadow.live-client-pool'), pool]]) })
+  const view = mountBotUi(t, 'BotChatSetup.vue', { apiBase: 'http://127.0.0.1/projects/p', projectId: 'p', sessionId: 'web:topic', active: true, canSubmit: true }, { provide: new Map<symbol, unknown>([[Symbol.for('shadow.live-client-pool'), pool], ...(start ? [[conversationStartKey, start] as const] : [])]) })
   // Release invalidation caches as well as mounted components; no timers survive tests.
   t.after(() => { view.unmount(); for (const dispose of disposers) dispose() })
   return { view, calls, setPending: (value: unknown) => { pending = value }, failClose: (value: boolean) => { failClose = value }, closes: () => closes,
@@ -115,4 +122,33 @@ test('foreign, malformed or already expired invitation never mounts a connection
   fixture.setPending(invitation()); await fixture.invalidate(); assert.equal(view.nodes().filter(node => node.tag === 'select').length, 1)
   view.state.projectId = 'other'; view.state.apiBase = 'http://127.0.0.1/projects/other'; await settleBotUi()
   assert.equal(view.nodes().filter(node => node.tag === 'select').length, 0)
+})
+
+test('socket opens and restores the private card only for a matching invitation marker', async t => {
+  const scope = { apiBase: 'http://127.0.0.1/projects/p', sessionId: 'web:topic' }
+  const start = shallowRef<ConversationStartState>({ ...scope, phase: 'pending' })
+  const { view, calls, setPending } = harness(t, invitation(), start)
+  const reads = () => calls.filter(call => call.method === 'GET' && call.path.includes('bot-chat-setup')).length
+  await settleBotUi(); assert.equal(reads(), 0)
+  start.value = { ...scope, phase: 'socket', data: { botSetup: { pending: false } } }
+  await settleBotUi(); assert.equal(reads(), 0)
+  start.value = { ...scope, phase: 'socket', data: { botSetup: { pending: true } } }
+  await settleBotUi(); assert.equal(reads(), 1)
+  assert.match(view.text(), /Private Bot connection/)
+  view.state.sessionId = 'web:other'
+  await settleBotUi(); assert.equal(reads(), 1)
+  assert.doesNotMatch(view.text(), /Private Bot connection/)
+  start.value = { ...scope, sessionId: 'web:other', phase: 'socket', data: {} }
+  view.state.sessionId = scope.sessionId
+  await settleBotUi(); assert.equal(reads(), 1)
+  start.value = { ...scope, phase: 'socket', data: { botSetup: { pending: true } } }
+  await settleBotUi(); assert.equal(reads(), 2)
+  assert.match(view.text(), /Private Bot connection/)
+  await view.click('Done')
+  assert.equal(reads(), 2)
+  assert.doesNotMatch(view.text(), /Private Bot connection/)
+  setPending(invitation())
+  start.value = { ...scope, phase: 'http' }
+  await settleBotUi(); assert.equal(reads(), 3)
+  assert.match(view.text(), /Private Bot connection/)
 })

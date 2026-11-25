@@ -1,9 +1,11 @@
+import { presenceReportSchema, type PresenceReport } from '../sessions/presence.ts'
 import { randomUUID } from 'node:crypto'
 import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../sessions/activity-read-model.ts'
 import type { Hono } from 'hono'
 import type { WebSocket, RawData } from 'ws'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
-import { parseRealtimeSubscription, REALTIME_SUBSCRIBE_BYTES, type RealtimeSubscriptionAck } from './subscription.ts'
+import { registerRealtimeSocketTicket } from './socket-ticket.ts'
+import { parseRealtimeSocketCommand, REALTIME_SUBSCRIBE_BYTES, type RealtimeSubscriptionAck } from './subscription.ts'
 import { isRealtimeCursor, isRealtimeTopic, parseRealtimeTopics, realtimeTopicKey, type RealtimeEnvelope, type RealtimeTopic, type RealtimeResource, type RealtimeSessionChange, type RealtimeSessionActivityPayload } from './protocol.ts'
 
 type EventEnvelope = Extract<RealtimeEnvelope, { type: 'event' }>
@@ -14,6 +16,7 @@ export interface RealtimeTelemetry {
   query(kind: TelemetryKind, afterId: number, limit: number): { id: number }[]
 }
 export interface RealtimePublisher {
+  activeChatSessions?(): string[]
   chat(sessionId: string, payload: unknown, requestId?: string): void
   invalidateSessions(sessionId?: string, completedTurnId?: string, changes?: readonly RealtimeSessionChange[]): void
   invalidateActivity(sessionId: string, activity?: SessionActivityReadModel): void
@@ -23,18 +26,21 @@ export interface RealtimePublisher {
   close(): void
 }
 interface Project {
+  presence?: (report: PresenceReport) => void
+  conversation?: (sessionId: string) => Promise<{ data?: unknown; error?: string }>
   telemetry?: RealtimeTelemetry
   tails: Map<TelemetryKind, { startedAt: number; count: number; timer: ReturnType<typeof setInterval> }>
 }
 interface Client {
   topics: RealtimeTopic[]
+  conversationTopics?: Set<string>
   keys: Set<string>
   send(frame: Uint8Array): boolean
   close(error?: Error): void
   refresh(reason: ResetReason, projectId: string): void
   removeProject?(projectId: string): void
 }
-interface JournalEntry { sequence: number; projectId?: string; key: string; frame: Uint8Array }
+interface JournalEntry { sequence: number; projectId?: string; key: string; frame: Uint8Array; conversationOnly: boolean }
 
 /** One host-owned feed. Publishers are leased to trusted runtime instances;
  * closing a lease invalidates even callbacks already queued by that runtime. */
@@ -75,17 +81,20 @@ export class RealtimeHub {
     }
   }
 
-  registerProject(projectId: string, telemetry?: RealtimeTelemetry): RealtimePublisher {
+  registerProject(projectId: string, telemetry?: RealtimeTelemetry, conversation?: Project['conversation'], presence?: Project['presence']): RealtimePublisher {
     if (this.closed || !isRealtimeTopic({ kind: 'sessions', projectId }) || this.projects.has(projectId)) {
       throw new TypeError('Invalid or duplicate realtime project')
     }
-    const project: Project = { telemetry, tails: new Map() }
+    const project: Project = { telemetry, conversation, presence, tails: new Map() }
     this.projects.set(projectId, project)
     for (const client of this.clients) {
       if (client.topics.some(topic => topic.projectId === projectId)) client.refresh('project-restored', projectId)
     }
     const active = () => !this.closed && this.projects.get(projectId) === project
     return {
+      activeChatSessions: () => active() ? [...new Set([...this.clients].flatMap(client =>
+        client.topics.flatMap(topic => topic.kind === 'chat' && topic.projectId === projectId &&
+          client.conversationTopics?.has(realtimeTopicKey(topic)) ? [topic.sessionId] : [])))] : [],
       chat: (sessionId, payload, requestId) => {
         if (active()) this.publish({ kind: 'chat', projectId, sessionId }, payload, requestId)
       },
@@ -137,14 +146,15 @@ export class RealtimeHub {
     const event: EventEnvelope = { type: 'event', cursor: `${this.epoch}:${++this.sequence}`, topic, payload, ...(requestId ? { requestId } : {}) }
     const frame = this.frame(event)
     const key = realtimeTopicKey(topic)
-    this.journal.push({ sequence: this.sequence, projectId: topic.projectId, key, frame })
+    const conversationOnly = !!payload && typeof payload === 'object' && 'event' in payload && (payload.event === 'conversation_summary' || payload.event === 'conversation_history_changed')
+    this.journal.push({ sequence: this.sequence, projectId: topic.projectId, key, frame, conversationOnly })
     this.journalBytes += frame.byteLength
     while (this.journal.length > this.options.journalCount || this.journalBytes > this.options.journalBytes) {
       const removed = this.journal.shift()!
       this.journalBytes -= removed.frame.byteLength
       this.replayFloor = Math.max(this.replayFloor, removed.sequence)
     }
-    for (const client of this.clients) if (client.keys.has(key)) client.send(frame)
+    for (const client of this.clients) if (client.keys.has(key) && (!conversationOnly || client.conversationTopics?.has(key))) client.send(frame)
   }
 
   private subscribeTelemetry(topic: RealtimeTopic): () => void {
@@ -229,6 +239,7 @@ export class RealtimeHub {
       active.get(key)?.release()
       active.delete(key)
       client.keys.delete(key)
+      client.conversationTopics?.delete(key)
     }
     const availability = (projectId: string, reason: ResetReason, removed: boolean) => {
       const topics = [...active.values()].map(entry => entry.topic).filter(topic => topic.projectId === projectId)
@@ -254,7 +265,7 @@ export class RealtimeHub {
       for (const key of active.keys()) remove(key)
     }
     const client: Client = {
-      topics: [], keys: new Set(),
+      topics: [], keys: new Set(), conversationTopics: new Set(),
       // Clients share the journal's serialized events; unwrap the SSE framing.
       send: frame => {
         const text = decoder.decode(frame)
@@ -271,11 +282,23 @@ export class RealtimeHub {
       },
       removeProject: projectId => availability(projectId, 'project-removed', true),
     }
-    const onMessage = (data: RawData, binary: boolean) => {
-      let command: ReturnType<typeof parseRealtimeSubscription>
+    let updating = false
+    const onMessage = async (data: RawData, binary: boolean) => {
+      let command: ReturnType<typeof parseRealtimeSocketCommand>
       try {
         if (binary || !Buffer.isBuffer(data) || data.byteLength > REALTIME_SUBSCRIBE_BYTES) throw new TypeError('Invalid realtime frame')
-        command = parseRealtimeSubscription(data.toString('utf8'))
+        const text = data.toString('utf8')
+        const message = JSON.parse(text)
+        if (message?.type === 'presence') {
+          const topic = { kind: 'sessions', projectId: message.projectId }
+          const report = presenceReportSchema.safeParse(message.report)
+          if (isRealtimeTopic(topic) && report.success && authorizeTopic(topic)) {
+            this.projects.get(topic.projectId)?.presence?.(report.data)
+          }
+          return
+        }
+        if (updating) throw new TypeError('Concurrent subscription command')
+        command = parseRealtimeSocketCommand(text)
         if (command.id <= lastId) throw new TypeError('Non-monotonic subscription ID')
       } catch {
         cleanup()
@@ -284,7 +307,12 @@ export class RealtimeHub {
       }
       try {
         lastId = command.id
-        const ack: RealtimeSubscriptionAck = { type: 'subscribed', id: lastId, cursor: this.cursor, added: [], removed: [], rejected: [] }
+        const projects = [...this.projects.values()]
+        const ack: RealtimeSubscriptionAck = {
+          type: 'subscribed', id: lastId, cursor: this.cursor, added: [], removed: [], rejected: [],
+          ...(projects.some(project => project.conversation) ? { conversationOpen: true } : {}),
+          ...(projects.some(project => project.presence) ? { socketPresence: true } : {}),
+        }
         const desired = new Map<string, typeof command.subscriptions[number]>()
         for (const entry of command.subscriptions) {
           const { topic } = entry
@@ -292,24 +320,58 @@ export class RealtimeHub {
             ack.rejected.push(topic)
           } else desired.set(realtimeTopicKey(topic), entry)
         }
+        const opening = new Set<string>()
+        if ('conversations' in command && command.conversations) {
+          updating = true
+          const topics = command.conversations
+          // A stable journal interval avoids publishing an async snapshot on
+          // the wrong side of an append, rollover, or activity notification.
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const before = this.sequence
+            const reads = await Promise.all(topics.map(async topic => {
+              const key = realtimeTopicKey(topic)
+              const project = desired.has(key) ? this.projects.get(topic.projectId) : undefined
+              try {
+                const result = await project?.conversation?.(topic.sessionId)
+                return { topic, project, result: result ?? { error: 'conversation_unavailable' } }
+              } catch { return { topic, project, result: { error: 'conversation_unavailable' } } }
+            }))
+            if (ended) return
+            if (before < this.replayFloor || this.journal.some(event => event.sequence > before && topics.some(topic =>
+              event.key === realtimeTopicKey(topic) || event.key === realtimeTopicKey({ kind: 'sessions', projectId: topic.projectId })))) continue
+            ack.conversations = reads.map(({ topic, project, result }) => {
+              const key = realtimeTopicKey(topic)
+              if (!project || project !== this.projects.get(topic.projectId) || !authorizeTopic(topic)) {
+                return { topic, error: 'conversation_unavailable' }
+              }
+              if ('data' in result && result.data !== undefined) opening.add(key)
+              return { topic, ...result }
+            })
+            break
+          }
+          ack.conversations ??= topics.map(topic => ({ topic, error: 'conversation_changed' }))
+          updating = false
+        }
         for (const [key, entry] of active) if (!desired.has(key)) {
           ack.removed.push(entry.topic)
           remove(key)
         }
         const replayAfter = new Map<string, number>()
-        for (const [key, { topic, cursor }] of desired) {
+        for (const [key, { topic, cursor, conversation }] of desired) {
+          if (conversation) client.conversationTopics!.add(key)
           if (active.has(key)) continue
-          const { reason, after } = this.resume([topic], cursor)
+          const { reason, after } = this.resume([topic], opening.has(key) ? this.cursor : cursor)
           const unavailable = topic.kind !== 'projects' && !this.projects.has(topic.projectId)
           active.set(key, { topic, release: this.subscribeTelemetry(topic) })
           client.keys.add(key)
           ack.added.push({ topic, ...(reason ? { reason } : {}), ...(unavailable ? { unavailable: true } : {}) })
           if (!reason && !unavailable) replayAfter.set(key, after)
         }
+        for (const key of opening) client.conversationTopics!.add(key)
         client.topics = [...active.values()].map(entry => entry.topic)
         if (replayAfter.size) for (const event of this.journal) {
           const after = replayAfter.get(event.key)
-          if (after !== undefined && event.sequence > after && !client.send(event.frame)) return
+          if (after !== undefined && event.sequence > after && (!event.conversationOnly || client.conversationTopics?.has(event.key)) && !client.send(event.frame)) return
         }
         ack.cursor = this.cursor
         send(JSON.stringify(ack))
@@ -384,7 +446,7 @@ export class RealtimeHub {
           subscribe()
           if (reason) client.send(this.frame({ type: 'reset', cursor: this.cursor, reason }))
           else for (const entry of this.journal) {
-            if (entry.sequence > after && client.keys.has(entry.key)) client.send(entry.frame)
+            if (entry.sequence > after && client.keys.has(entry.key) && !entry.conversationOnly) client.send(entry.frame)
           }
           sendAvailability()
           if (!ended) {
@@ -424,7 +486,7 @@ export interface RealtimeHubOptions {
   diagnostic?: (reason: string) => void
 }
 
-export const REALTIME_SOCKET_PATH = '/api/live/ws'
+export { REALTIME_SOCKET_PATH } from './socket-ticket.ts'
 
 export function registerRealtimeRoute(
   app: Hono, hub: RealtimeHub, authorize: (request: Request) => boolean | Promise<boolean>,
@@ -434,55 +496,20 @@ export function registerRealtimeRoute(
     ownerSignal?(request: Request): AbortSignal | undefined
   },
 ): void {
-  if (socketAccess) {
-    const path = REALTIME_SOCKET_PATH
-    const protocol = 'shadow.live.v1'
-    const ticketLifetime = 15_000
-    const tickets = new Map<string, { origin: string | null; audience: string; expires: number; request: Request; signal?: AbortSignal }>()
-    const now = () => performance.now()
-    app.post(path, async c => {
-      const request = c.req.raw
-      if (!await socketAccess.authorize(request)) return c.json({ error: 'unauthorized' }, 401)
-      for (const [key, ticket] of tickets) if (ticket.expires <= now() || ticket.signal?.aborted) tickets.delete(key)
-      if (tickets.size >= 256) return c.json({ error: 'live_ticket_capacity' }, 429)
-      const proof = `ticket.${randomUUID()}`
-      tickets.set(proof, { origin: request.headers.get('Origin'), audience: new URL(request.url).origin,
-        expires: now() + ticketLifetime, request, signal: socketAccess.ownerSignal?.(request) })
-      return c.json({ protocol, proof }, 200, { 'Cache-Control': 'no-store' })
-    })
-    app.get(path, async c => {
-      const request = c.req.raw
-      const upgrade = c.req.header('Upgrade')?.toLowerCase() === 'websocket'
-      const offered = (c.req.header('Sec-WebSocket-Protocol') ?? '').split(',').map(value => value.trim())
-      const proof = offered.find(value => value.startsWith('ticket.'))
-      let ownerRequest = request
-      let selected: string | undefined
-      let lifetimeSignal: AbortSignal | undefined = request.signal
-      if (upgrade && proof) {
-        const ticket = tickets.get(proof)
-        const origin = request.headers.get('Origin')
-        const sameOrigin = ticket && (ticket.origin === origin || (ticket.origin === null && origin === 'file://'))
-        if (!ticket || ticket.expires <= now() || ticket.signal?.aborted || !offered.includes(protocol) ||
-          !sameOrigin || ticket.audience !== new URL(request.url).origin) {
-          return c.json({ error: 'unauthorized' }, 401)
-        }
-        tickets.delete(proof)
-        ownerRequest = ticket.request
-        lifetimeSignal = ticket.signal
-        selected = protocol
-      } else if (!await socketAccess.authorize(request)) return c.json({ error: 'unauthorized' }, 401)
-      if (!upgrade) return c.json({ error: 'websocket_required' }, 426)
-      return upgradeGatewayWebSocket(app, c, socket => {
-        // Electron's WebSocket request has no verified main frame. Bind its
-        // separately authorized HTTP ticket to the original owner's lifetime.
-        const revoke = () => socket.close(1008, 'Session ended')
-        if (lifetimeSignal?.aborted) { revoke(); return }
-        lifetimeSignal?.addEventListener('abort', revoke, { once: true })
-        socket.once('close', () => lifetimeSignal?.removeEventListener('abort', revoke))
-        hub.connectSocket(socket, topic => !lifetimeSignal?.aborted && socketAccess.authorizeTopic(ownerRequest, topic))
-      }, selected)
-    })
-  }
+  if (socketAccess) registerRealtimeSocketTicket(app, {
+    authorize: socketAccess.authorize,
+    allowDirect: true,
+    ownerSignal: socketAccess.ownerSignal,
+    upgrade: (c, ownerRequest, lifetimeSignal, protocol) => upgradeGatewayWebSocket(app, c, socket => {
+      // Electron's upgrade has no verified frame. Bind the socket to the
+      // separately authenticated HTTP principal's lifetime instead.
+      const revoke = () => socket.close(1008, 'Session ended')
+      if (lifetimeSignal?.aborted) { revoke(); return }
+      lifetimeSignal?.addEventListener('abort', revoke, { once: true })
+      socket.once('close', () => lifetimeSignal?.removeEventListener('abort', revoke))
+      hub.connectSocket(socket, topic => !lifetimeSignal?.aborted && socketAccess.authorizeTopic(ownerRequest, topic))
+    }, protocol),
+  })
   app.get('/api/live', async c => {
     if (!await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
     const query = c.req.queries()

@@ -5,12 +5,12 @@ import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import type { ChannelCapabilities } from './capabilities.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { chatMetadataFields, type ChatMetadataVersions } from '../shared/chat-snapshot.ts'
-import { HISTORY_DELTA_PREPEND_LIMIT, parseHistoryOffset, projectHistoryMessages, recentHistoryWindow } from '../shared/history-wire.ts'
+import { HISTORY_DELTA_PREPEND_LIMIT, parseHistoryOffset } from '../shared/history-wire.ts'
 import { realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
-import { physicalSessionId } from '../sessions/session-identity.ts'
+import { readConversationHistory } from '../sessions/conversation-history.ts'
 import type { Hono } from 'hono'
 import { compress } from 'hono/compress'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
@@ -530,39 +530,10 @@ export class WebChannel extends AbstractChannel {
       if (!chatId) return c.json({ error: 'chatId is required' }, 400)
 
       try {
-        const sessionId = `${this.name}:${chatId}`
-        // A draft has no session until prepare/send. Never preview a missing,
-        // deleted or other-Project ID as though it were a real conversation.
-        const initialState = this.sessionManager!.getSessionState(sessionId)
-        if (!initialState) {
-          return c.json({ error: 'session_not_found' }, 404)
-        }
-        const initialPhysicalId = physicalSessionId(initialState)
-        const recent = c.req.query('historyWindow') === 'recent'
-        // Legacy readers retain the full context contract; the conversation tab
-        // requests context separately only when opening Diagnosis.
-        const { systemPrompt, tools } = recent ? { systemPrompt: '', tools: [] }
-          : await this.sessionManager!.getContext({ sessionId, channel: this.name })
-        // Keep offsets stable within a physical segment even when its logical
-        // history grows beyond the legacy endpoint's rolling message cap.
-        const { messages: history } = await this.sessionManager!.getHistory(
-          sessionId, recent ? { maxMessages: Number.MAX_SAFE_INTEGER } : undefined,
-        )
-        const commandResults = await this.sessionManager!.getCommandResults(sessionId)
-        const decisionRecords = this.sessionManager!.getSessionState(sessionId)
-          ? await this.sessionManager!.getYieldRecords(sessionId) : []
-        const state = this.sessionManager!.getSessionState(sessionId)
-        const segmentIndex = state?.segmentIndex ?? 0
-        const identity = state ?? { sessionId, segmentIndex }
-        if (!state) return c.json({ error: 'session_not_found' }, 404)
-        // Do not label context read before an awaited rollover with the new segment.
-        if (physicalSessionId(state) !== initialPhysicalId) return c.json({ error: 'session_segment_changed' }, 409)
-        const window = recent ? recentHistoryWindow(history || [], new URL(c.req.url).searchParams, initialPhysicalId) : undefined
-        const data = { chatId, systemPrompt, history: window?.messages ?? projectHistoryMessages(history || []), commandResults, decisionRecords, tools,
-          ...(window ? { historyStart: window.start } : {}),
-          segmentIndex, currentPhysicalId: physicalSessionId(identity),
-          previousPhysicalId: segmentIndex > 0 ? physicalSessionId(identity, segmentIndex - 1) : null,
-        }
+        const result = await readConversationHistory(this.sessionManager!, this.name, chatId, new URL(c.req.url).searchParams)
+        if (!result.data) return c.json({ error: result.error }, result.status)
+        const { data, historyStart } = result
+        const { segmentIndex } = data
         const body = JSON.stringify(data)
         // Validate the complete representation, not just message count: context,
         // decisions, command receipts and segment navigation can change alone.
@@ -576,8 +547,8 @@ export class WebChannel extends AbstractChannel {
           // mutable context/tools/receipts. Hash the exact serialized prefix.
           const { history: messages } = data
           const snapshotIdentity = { chatId, segmentIndex, currentPhysicalId: data.currentPhysicalId, previousPhysicalId: data.previousPhysicalId }
-          const identity = { ...snapshotIdentity, ...(window ? { historyStart: window.start } : {}) }
-          const historyHash = (prefix: typeof messages, start = window?.start) => createHash('sha256').update(JSON.stringify({
+          const identity = { ...snapshotIdentity, ...(historyStart !== undefined ? { historyStart } : {}) }
+          const historyHash = (prefix: typeof messages, start = historyStart) => createHash('sha256').update(JSON.stringify({
             chatId, currentPhysicalId: data.currentPhysicalId, segmentIndex, historyStart: start, history: prefix,
           })).digest('hex')
           const historyRevision = historyHash(messages)
@@ -602,11 +573,11 @@ export class WebChannel extends AbstractChannel {
             && Number.isSafeInteger(count) && count >= 0 && count <= messages.length) {
             // Recent reads pin the base position; only legacy reads scan for
             // small prepends. A rewritten middle block always forces a snapshot.
-            const baseStart = window ? parseHistoryOffset(c.req.query('baseHistoryStart')) : undefined
-            const leading = window && baseStart !== undefined ? baseStart - window.start : 0
-            const maxOffset = window ? Math.min(leading, HISTORY_DELTA_PREPEND_LIMIT, messages.length - count) : Math.min(16, messages.length - count)
+            const baseStart = historyStart !== undefined ? parseHistoryOffset(c.req.query('baseHistoryStart')) : undefined
+            const leading = historyStart !== undefined && baseStart !== undefined ? baseStart - historyStart : 0
+            const maxOffset = historyStart !== undefined ? Math.min(leading, HISTORY_DELTA_PREPEND_LIMIT, messages.length - count) : Math.min(16, messages.length - count)
             for (let offset = leading; offset >= 0 && offset <= maxOffset; offset++) {
-              if (historyHash(messages.slice(offset, offset + count), baseStart ?? window?.start) !== baseHistoryRevision) continue
+              if (historyHash(messages.slice(offset, offset + count), baseStart ?? historyStart) !== baseHistoryRevision) continue
               return c.json({ revision, historyRevision, metadataVersions, delta: {
                 baseRevision: baseSnapshot, baseHistoryRevision, baseCount: count,
                 historyOffset: offset, leadingHistory: messages.slice(0, offset),

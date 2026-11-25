@@ -8,12 +8,12 @@ import { liveProjectId, useLiveClientPool } from './useLiveClient.ts'
 
 interface FollowUp { next: string; after: number; nextRun: string | null }
 
-export function useSessionFollowUp(props: { apiBase: string; sessionId: string; active?: boolean }) {
+export function useSessionFollowUp(props: { apiBase: string; sessionId: string; active?: boolean }, httpEnabled = () => true) {
   const pool = useLiveClientPool()
   const followUp = ref<FollowUp | null>(null)
-  watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, sessionId, active], _old, onCleanup) => {
+  watch(() => [props.apiBase, props.sessionId, props.active, httpEnabled()] as const, ([base, sessionId, active, readHttp], _old, onCleanup) => {
     followUp.value = null
-    if (active === false || !sessionId) return
+    if (active === false || !sessionId || !readHttp) return
     const snapshot = createLiveRefresh({
       load: async signal => {
         const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(sessionId)}/follow-up`), { signal, cache: 'no-store' })

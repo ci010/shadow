@@ -1,3 +1,4 @@
+import type { PresenceReport } from '../../src/sessions/presence.ts'
 import { t } from './i18n.ts'
 import {
   isRealtimeCursor, isRealtimeEnvelope, isRealtimeTopic, realtimeTopicKey, REALTIME_MAX_TOPICS, REALTIME_MAX_TOPICS_BYTES,
@@ -15,10 +16,12 @@ export interface LiveObserver {
   event: (event: LiveEvent) => void
   reset: (reason: LiveResetReason) => void
   reconnected?: () => void
+  conversationSnapshot?: (data: unknown) => void
 }
 export interface LiveSubscription {
   ready: (signal?: AbortSignal) => Promise<void>
   close: () => void
+  refreshConversation?: () => boolean
 }
 type Socket = { addEventListener(type: string, listener: EventListener): void; send(data: string): void; close(): void }
 type Source = { addEventListener: (type: string, listener: EventListener) => void; close: () => void }
@@ -27,7 +30,7 @@ export function installMobileLiveSource(factory: (url: string) => Source) {
   mobileSource = factory
   return () => { if (mobileSource === factory) mobileSource = undefined }
 }
-type Subscriber = { topic: RealtimeTopic; observer: LiveObserver; closed: boolean; initialized: boolean }
+type Subscriber = { topic: RealtimeTopic; observer: LiveObserver; closed: boolean; initialized: boolean; opened?: boolean }
 type Waiter = { owner: Subscriber; resolve: () => void; reject: (error: unknown) => void }
 
 export function createLiveClient(base: string, options: {
@@ -62,7 +65,10 @@ export function createLiveClient(base: string, options: {
   let socket: Socket | undefined
   let socketOpened = false
   let requestId = 0
-  let pending: { id: number; desired: Set<string> } | undefined
+  let supportsConversationOpen = false
+  let socketPresence = false
+  let everSocketPresence = false
+  let pending: { id: number; desired: Set<string>; opening: Map<string, Subscriber[]>; capabilitiesKnown: boolean } | undefined
   let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined
   let rejectedTopics = new Set<string>()
   const topicCursors = new Map<string, string>()
@@ -91,6 +97,8 @@ export function createLiveClient(base: string, options: {
     const previousSocket = socket
     socket = undefined
     socketOpened = false
+    supportsConversationOpen = false
+    socketPresence = false
     pending = undefined
     clearTimeout(acknowledgementTimer)
     acknowledgementTimer = undefined
@@ -191,7 +199,7 @@ export function createLiveClient(base: string, options: {
       const key = realtimeTopicKey(waiter.owner.topic)
       if (rejectedTopics.has(key)) waiter.reject(denied())
       else if (unavailableTopics.has(key)) waiter.reject(projectUnavailable())
-      else if (connectedTopics.has(key)) waiter.resolve()
+      else if (connectedTopics.has(key) && waiter.owner.initialized) waiter.resolve()
     }
   }
   let needsUpdate = false
@@ -201,12 +209,21 @@ export function createLiveClient(base: string, options: {
     const selected = topics()
     const desired = new Set(selected.map(realtimeTopicKey))
     const acknowledged = new Set([...connectedTopics, ...rejectedTopics])
-    if (desired.size === acknowledged.size && [...desired].every(key => acknowledged.has(key)) && ready) return
-    pending = { id: ++requestId, desired }
+    const opening = new Map<string, Subscriber[]>()
+    if (supportsConversationOpen) for (const subscriber of subscribers) {
+      if (subscriber.closed || subscriber.initialized || !subscriber.observer.conversationSnapshot || subscriber.topic.kind !== 'chat') continue
+      const key = realtimeTopicKey(subscriber.topic)
+      opening.set(key, [...opening.get(key) ?? [], subscriber])
+    }
+    if (!opening.size && desired.size === acknowledged.size && [...desired].every(key => acknowledged.has(key)) && ready) return
+    pending = { id: ++requestId, desired, opening, capabilitiesKnown: supportsConversationOpen }
     acknowledgementTimer = setTimeout(reconnect, options.readyTimeoutMs ?? 10_000)
     try {
-      socket.send(JSON.stringify({ type: 'subscribe', id: requestId,
-        subscriptions: selected.map(topic => ({ topic, cursor: topicCursors.get(realtimeTopicKey(topic)) })) }))
+      socket.send(JSON.stringify({ type: opening.size ? 'openConversation' : 'subscribe', id: requestId,
+        ...(opening.size ? { conversations: selected.filter(topic => opening.has(realtimeTopicKey(topic))) } : {}),
+        subscriptions: selected.map(topic => ({ topic, cursor: topicCursors.get(realtimeTopicKey(topic)),
+          ...([...subscribers].some(subscriber => subscriber.opened && realtimeTopicKey(subscriber.topic) === realtimeTopicKey(topic)) ? { conversation: true } : {}),
+        })) }))
     } catch { reconnect() }
   }
   const topicArray = (value: unknown): RealtimeTopic[] => {
@@ -238,7 +255,10 @@ export function createLiveClient(base: string, options: {
     }
     if (frame.type === 'subscribed') {
       if (!pending || pending.id !== frame.id) throw new Error('Unexpected live acknowledgement')
-      const { desired } = pending
+      const { desired, opening, capabilitiesKnown } = pending
+      supportsConversationOpen = frame.conversationOpen === true
+      socketPresence = frame.socketPresence === true
+      everSocketPresence ||= socketPresence
       const removed = topicArray(frame.removed).map(realtimeTopicKey)
       const rejected = new Set(topicArray(frame.rejected).map(realtimeTopicKey))
       if ([...rejected].some(key => !desired.has(key))) throw new Error('Unexpected rejected topic')
@@ -267,12 +287,31 @@ export function createLiveClient(base: string, options: {
       ready = true
       attempt = 0
       if (status.phase !== 'live') update({ phase: 'live' })
+      const receivedSnapshots = new Set<Subscriber>()
+      if (Array.isArray(frame.conversations) && frame.conversations.length <= opening.size) {
+        for (const entry of frame.conversations as unknown[]) {
+          if (!entry || typeof entry !== 'object') continue
+          const { topic, data } = entry as Record<string, unknown>
+          if (!isRealtimeTopic(topic) || data === undefined) continue
+          for (const subscriber of opening.get(realtimeTopicKey(topic)) ?? []) {
+            if (!subscriber.closed) { receivedSnapshots.add(subscriber); subscriber.opened = true; subscriber.observer.conversationSnapshot?.(data) }
+          }
+        }
+      }
       for (const subscriber of [...subscribers]) {
         const key = realtimeTopicKey(subscriber.topic)
         if (subscriber.closed || !connectedTopics.has(key) || unavailableTopics.has(key)) continue
         const reset = resets.get(key)
-        if (reset || !subscriber.initialized) initialize(subscriber, reset ?? 'subscription')
-        else if (recovering) subscriber.observer.reconnected?.()
+        const openingSubscriber = opening.get(key)?.includes(subscriber)
+        const needsSnapshot = !subscriber.initialized && capabilitiesKnown || recovering && !!reset
+        if (supportsConversationOpen && subscriber.observer.conversationSnapshot && needsSnapshot && !openingSubscriber) {
+          subscriber.initialized = false
+          needsUpdate = true
+          continue
+        }
+        if (receivedSnapshots.has(subscriber) && subscriber.opened) subscriber.initialized = true
+        else if (reset || !subscriber.initialized) initialize(subscriber, reset ?? 'subscription')
+        else if (recovering && !(supportsConversationOpen && subscriber.observer.conversationSnapshot)) subscriber.observer.reconnected?.()
       }
       recovering = false
       settleSocketTopics()
@@ -288,9 +327,14 @@ export function createLiveClient(base: string, options: {
         else { unavailableTopics.delete(key); topicCursors.set(key, watermark) }
       }
       for (const subscriber of [...subscribers]) {
-        if (!subscriber.closed && affected.has(realtimeTopicKey(subscriber.topic))) initialize(subscriber, frame.reason)
+        if (subscriber.closed || !affected.has(realtimeTopicKey(subscriber.topic))) continue
+        if (frame.reason === 'project-restored' && supportsConversationOpen && subscriber.observer.conversationSnapshot) {
+          subscriber.initialized = false
+          needsUpdate = true
+        } else initialize(subscriber, frame.reason)
       }
       settleSocketTopics()
+      sendSubscriptions()
       return
     }
     throw new Error('Invalid live envelope')
@@ -301,6 +345,8 @@ export function createLiveClient(base: string, options: {
     const current = (options.socket ?? ((url, offered) => new WebSocket(url, offered)))(url.toString(), protocols)
     socket = current
     socketOpened = false
+    supportsConversationOpen = false
+    socketPresence = false
     requestId = 0
     connectedTopics.clear()
     rejectedTopics.clear()
@@ -426,7 +472,7 @@ export function createLiveClient(base: string, options: {
     forget(realtimeTopicKey(topic))
     subscribers.add(subscriber)
     changed()
-    if (ready && connectedTopics.has(realtimeTopicKey(topic)) && !unavailableTopics.has(realtimeTopicKey(topic)) &&
+    if (!(supportsConversationOpen && observer.conversationSnapshot) && ready && connectedTopics.has(realtimeTopicKey(topic)) && !unavailableTopics.has(realtimeTopicKey(topic)) &&
       (!pending || pending.desired.has(realtimeTopicKey(topic)))) {
       queueMicrotask(() => {
         if (subscriber.closed) return
@@ -435,12 +481,18 @@ export function createLiveClient(base: string, options: {
       })
     }
     return {
+      refreshConversation() {
+        if (subscriber.closed || !subscriber.opened || !supportsConversationOpen || !ready) return false
+        subscriber.initialized = false
+        changed()
+        return true
+      },
       ready(signal) {
         if (subscriber.closed) return Promise.reject(new DOMException(t('Live subscription closed'), 'AbortError'))
         if (signal?.aborted) return Promise.reject(signal.reason)
         if (ready && rejectedTopics.has(realtimeTopicKey(topic))) return Promise.reject(denied())
         if (ready && unavailableTopics.has(realtimeTopicKey(topic))) return Promise.reject(projectUnavailable())
-        if (ready && connectedTopics.has(realtimeTopicKey(topic)) && (!pending || pending.desired.has(realtimeTopicKey(topic)))) return Promise.resolve()
+        if (!(supportsConversationOpen && observer.conversationSnapshot && !subscriber.initialized) && ready && connectedTopics.has(realtimeTopicKey(topic)) && (!pending || pending.desired.has(realtimeTopicKey(topic)))) return Promise.resolve()
         if (status.phase === 'error') return Promise.reject(new Error(status.error))
         return new Promise<void>((resolve, reject) => {
           const deadline = AbortSignal.timeout(options.readyTimeoutMs ?? 10_000)
@@ -481,6 +533,16 @@ export function createLiveClient(base: string, options: {
   }
   return {
     subscribe,
+    canOpenConversation: () => supportsConversationOpen && ready,
+    reportPresence(projectId: string, report: PresenceReport) {
+      if (!everSocketPresence || useSocket === false) return false
+      // Don't replay presence measured during a disconnect: receipt time is
+      // evidence freshness. The next local heartbeat samples the device anew.
+      if (socketPresence && socket && socketOpened) {
+        try { socket.send(JSON.stringify({ type: 'presence', projectId, report })) } catch { reconnect() }
+      }
+      return true
+    },
     isLive: () => ready,
     retry() {
       if (disposed) return

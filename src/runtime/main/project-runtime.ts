@@ -1,3 +1,4 @@
+import { readConversationSnapshot } from '../../sessions/conversation-snapshot.ts'
 import { StatsIndex } from '../../sessions/stats-index.ts'
 import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR } from '../../execution/device-home.ts'
 import { SkillRecallStore } from '../../skills/recall.ts'
@@ -225,7 +226,7 @@ import { SignalProviderRuntime } from '../../signals/providers/runtime.ts'
 import { SignalProviderTool } from '../../tools/signal-provider.ts'
 import { registerSignalTools } from '../../tools/signal-tools.ts'
 import { watchAutomationSessions } from '../../cron/notifications.ts'
-import { CronService } from '../../cron/service.ts'
+import { CronService, cronContextMode } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
 import { registerAutomationRoutes } from '../../cron/routes.ts'
 import { systemAutomationRef } from '../../cron/contracts.ts'
@@ -344,12 +345,23 @@ export async function createProjectRuntime(
   // Reuse UI telemetry, but never export historical rows from an earlier runtime.
   const runtimeLogStartId = otelStore.getLatestLogId()
   const realtimeHub = dependencies.realtimeHub ?? new RealtimeHub()
+  let activitySource: SessionManager | undefined
+  let readConversationSummary: ((sessionId: string) => object) | undefined
+  let publishActiveConversationSummaries: (sessionId?: string, details?: boolean) => void = () => {}
   const realtime = realtimeHub.registerProject(project.id, {
     latest: kind => kind === 'spans' ? otelStore.getLatestSpanId() : otelStore.getLatestLogId(),
     query: (kind, afterId, limit) => (kind === 'spans'
       ? otelStore.querySpans({ afterId, limit, ascending: true })
       : otelStore.queryLogs({ afterId, limit, ascending: true }))
       .filter((row): row is { id: number } => typeof row === 'object' && row !== null && 'id' in row && Number.isSafeInteger(row.id)),
+  }, async sessionId => {
+    if (!activitySource) return { error: 'conversation_unavailable' }
+    const result = await readConversationSnapshot(activitySource, sessionId)
+    if (!result.data || !('chat' in result.data)) return result
+    return { data: { ...result.data, ...readConversationSummary?.(sessionId) } }
+  }, report => {
+    const allowed = config.channels.web?.allowFrom
+    if (!allowed?.length || allowed.includes('web-user')) activitySource?.presence.report('web:web-user', report)
   })
   const closeRealtime = () => {
     realtime.close()
@@ -363,7 +375,6 @@ export async function createProjectRuntime(
     realtime.chat(sessionId, { event: 'input_delivery_changed' })
   })
   cleanup.push(() => bus.off(deliverySubscription))
-  let activitySource: SessionManager | undefined
   const activityInvalidator = createActivityInvalidator(id => {
     if (!activitySource) throw new Error('Session activity source is initializing')
     return sessionActivityFingerprint(activitySource, id)
@@ -1076,6 +1087,7 @@ export async function createProjectRuntime(
     state: id => sessions.getSessionState(id),
     changed: async (record, previous) => {
       realtime.invalidateSessions()
+      publishActiveConversationSummaries()
       await sessions.notifyWorkChange(record, previous)
     },
   })
@@ -1089,7 +1101,7 @@ export async function createProjectRuntime(
     // Presentation commits do not mutate source sessions or their lineage.
     // Keep Work readers notified, but probe only the owning run's graph row;
     // unknown/new runs still recover the complete inventory in the reader.
-    changed:id=>realtime.invalidateSessions(id, undefined, ['work'])})
+    changed:id=>{ realtime.invalidateSessions(id, undefined, ['work']); publishActiveConversationSummaries(id) }})
   for(const tool of workOrganizer.tools()) { tools.register(tool); coordinator?.allow(tool) }
   // Build admission and execution from the same current store view. Session topic
   // sequences already fingerprint metadata/completion; no new metadata log is needed.
@@ -1654,7 +1666,7 @@ export async function createProjectRuntime(
         if (resolve(isolated.path) !== resolve(verified.path) || execution.path !== verified.path || execution.branch !== verified.branch) throw new Error('Isolated Workspace/branch receipt mismatch')
       }
     },
-    changed: async (record, previous) => { realtime.invalidateSessions(); await sessions.notifyWorkChange(record, previous) },
+    changed: async (record, previous) => { realtime.invalidateSessions(); publishActiveConversationSummaries(); await sessions.notifyWorkChange(record, previous) },
   })
   const workBootstrap = new WorkBootstrapTool(project.id, workDispatcher,
     (nodeId, path, signal) => topics.registerFolder(path, signal, undefined, nodeId))
@@ -1721,7 +1733,7 @@ export async function createProjectRuntime(
         schedule: job.schedule,
       },
     })
-  }, sessionId => realtime.invalidateSessions(sessionId))
+  }, sessionId => { realtime.invalidateSessions(sessionId); publishActiveConversationSummaries(sessionId) })
   const workDispatchAgent = new WorkDispatchAgent(workDispatcher, sessions, cronDispatcher,
     dispatchFiles, () => cronService.listJobs().find(job => job.id === WORK_DISPATCH_ID), new WorkDispatchRoundState(workspace))
   tools.register(workDispatchAgent)
@@ -1740,7 +1752,7 @@ export async function createProjectRuntime(
     return { sessionId: await cronDispatcher.dispatch(job, signal) }
   })
   cronService.setOnChanged(reason => {
-    if (reason === 'inventory') realtime.invalidateSessions()
+    if (reason === 'inventory') { realtime.invalidateSessions(); publishActiveConversationSummaries() }
     realtime.invalidateResource?.('automations')
     sessions.wakeSessionFollowUps()
   })
@@ -1911,7 +1923,71 @@ export async function createProjectRuntime(
       return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined
     },
   })
-  const botChatSetup = new BotChatSetup(project.id, () => realtime.invalidateResource?.('interactions'))
+  const botChatSetup = new BotChatSetup(project.id, sessionId => {
+    realtime.invalidateResource?.('interactions')
+    realtime.chat(sessionId, { event: 'conversation_summary', data: { botSetup: { pending: !!botChatSetup.get(sessionId) } } })
+  })
+  function conversationSummary(sessionId: string) {
+    const active = backgroundTasks.listTasks(sessionId).filter(task => task.status === 'running' || task.status === 'cancelling')
+    return {
+      work: sessions.getSessionState(sessionId) ? sessions.alignment?.context(sessionId) : undefined,
+      backgroundTasks: { sessionId, total: active.length, tasks: active.slice(0, 100).map(task => ({
+        id: task.id, sessionId, kind: task.kind, title: task.title.slice(0, 512), status: task.status, createdAt: task.createdAt,
+      })) },
+      scheduledTasks: cronService.listJobs().filter(job => cronContextMode(job) === 'existing' && job.target?.sessionId === sessionId)
+        .map(job => ({ id: job.id, name: job.name ?? job.task ?? job.id, task: job.task ?? '', schedule: job.schedule,
+          enabled: job.enabled !== false, nextRun: job.enabled === false ? null : cronService.nextJobRun(job.id),
+        })),
+      followUp: sessions.sessionFollowUpView(sessionId),
+      botSetup: { pending: !!botChatSetup.get(sessionId) },
+    }
+  }
+  readConversationSummary = conversationSummary
+  const dirtyConversationSummaries = new Map<string, boolean>()
+  let flushingConversationSummaries = false
+  publishActiveConversationSummaries = (only, details = false) => {
+    for (const id of realtime.activeChatSessions?.() ?? []) {
+      if (!only || id === only) {
+        dirtyConversationSummaries.set(id, details || dirtyConversationSummaries.get(id) === true)
+      }
+    }
+    if (flushingConversationSummaries || !dirtyConversationSummaries.size) return
+    flushingConversationSummaries = true
+    queueMicrotask(() => { void flushConversationSummaries() })
+  }
+  async function flushConversationSummaries() {
+    try {
+      while (dirtyConversationSummaries.size && activitySource) {
+        const entries = [...dirtyConversationSummaries]
+        dirtyConversationSummaries.clear()
+        for (const [id, details] of entries) {
+          try {
+            await sessions.assertHistoricalFolderAccess(id)
+            if (!sessions.getSessionState(id)) continue
+            const detail = details ? await sessions.getSessionDetails(id) : undefined
+            if (dirtyConversationSummaries.has(id)) {
+              if (details) dirtyConversationSummaries.set(id, true)
+              continue
+            }
+            realtime.chat(id, { event: 'conversation_summary', data: { ...conversationSummary(id), ...(detail ? { details: detail } : {}) } })
+          } catch { /* Missing or revoked session: never publish its summary. */ }
+        }
+      }
+    } finally { flushingConversationSummaries = false }
+  }
+  for (const kind of ['background.task.changed', 'session.changed', 'session.renamed', 'session.turn.finished', 'session.follow-up.changed'] as const) {
+    const subscription = bus.on(kind, ({ sessionId }) => publishActiveConversationSummaries(sessionId,
+      kind !== 'background.task.changed' && kind !== 'session.follow-up.changed'))
+    cleanup.push(() => bus.off(subscription))
+  }
+  for (const kind of ['session.message.appended', 'session.handoff'] as const) {
+    const subscription = bus.on(kind, ({ sessionId }) => {
+      if (!sessionId.startsWith('web:chat-') || kind === 'session.handoff') {
+        realtime.chat(sessionId, { event: 'conversation_history_changed' })
+      }
+    })
+    cleanup.push(() => bus.off(subscription))
+  }
   cleanup.push(() => botChatSetup.stop())
   botChatSetupPlugin(botChatSetup, dependencies.authorize)(app)
   const assertBotSession = (sessionId: string) => {
