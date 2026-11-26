@@ -34,7 +34,7 @@
         </div>
       </div>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
-      <div class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat || ((isOtio || isModel) && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
+      <div ref="previewBody" class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat || ((isOtio || isModel) && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="loadText" />
         <div v-else-if="entry.archive && (!loaded || error)" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || t('Reading archive entry...') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
@@ -107,7 +107,7 @@ import { vMarkdownLinkHints } from '../../markdown-link-hints'
 import { readAttachmentBytes } from '../../attachment-preview.ts'
 import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
-import { computed, defineAsyncComponent, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { isGltfFile, isPlaygroundFile } from '../../gltf-file-source.ts'
 const GltfFilePreview = defineAsyncComponent(() => import('./GltfFilePreview.vue'))
 import { isOtioFile } from '../../otio-review.ts'
@@ -186,8 +186,20 @@ async function reloadPreview(): Promise<void> {
     reloadFrame()
     return
   }
+  const body = previewBody.value
+  const position = body && { top: body.scrollTop, left: body.scrollLeft }
   if (props.entry.archive) releaseArchive()
-  await loadText()
+  const pending = loadText()
+  const refresh = loadVersion
+  await pending
+  await nextTick()
+  // The loading placeholder collapses the scroll range. Restore only after
+  // the refreshed content renders, and never apply it to a newer preview.
+  if (body && position && body === previewBody.value && refresh === loadVersion
+    && props.active && textMode.value && loaded.value && !binary.value) {
+    body.scrollTop = position.top
+    body.scrollLeft = position.left
+  }
 }
 const rawSource = computed(() => props.attachmentUrl ?? (props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value)))
 const raw = computed(() => resources.resolve(rawSource.value))
@@ -260,9 +272,12 @@ function sanitizeMarkdown(html: string): string {
   container.append(fragment)
   return resources.html(container.innerHTML)
 }
+const previewBody = ref<HTMLElement>()
 let request: AbortController | undefined
+let loadVersion = 0
 
 async function loadText(): Promise<void> {
+  loadVersion++
   request?.abort()
   request = undefined
   loading.value = false
