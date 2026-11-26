@@ -39,7 +39,10 @@ const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; pr
 const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string] }>()
 const primary = ref<InstanceType<typeof ChatTab>>()
 defineExpose({ canReplaceSidebarTab: () => primary.value?.canReplaceSidebarTab() ?? false, appendInputReference: (item: LabeledInputReference): AttachReferenceResult => primary.value?.appendInputReference(item) ?? 'unavailable',
-  requestSession: (id: string) => primary.value?.requestSession(id),
+  requestSession: (id: string) => {
+    if (primary.value) primary.value.requestSession(id)
+    else emit('navigate', id)
+  },
   appendDraft: (text: string) => {
     primary.value?.appendDraft(text)
   },
