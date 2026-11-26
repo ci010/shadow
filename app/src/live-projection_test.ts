@@ -132,7 +132,11 @@ test('scoped summary/stages and shared explorer/picker catalogs consume authoriz
     sockets++; const socket = new WebSocket(url, protocols)
     return { addEventListener(type, receive) { (socket as unknown as globalThis.WebSocket).addEventListener(type, receive) }, send(text) { socket.send(text) }, close() { socket.close() } }
   } })
-  const pool = { client: () => client }
+  let folderSubscriptions = 0
+  const pool = { client: () => ({ subscribe(...args: Parameters<typeof client.subscribe>) {
+    if (args[0].kind === 'folders') folderSubscriptions++
+    return client.subscribe(...args)
+  } }) }
   const request = async () => { requests++; throw new Error('Unexpected HTTP inventory read') }
   const state = createProjectLiveState(pool, { request })
   const catalog = createCatalogResources(request)
@@ -143,7 +147,10 @@ test('scoped summary/stages and shared explorer/picker catalogs consume authoriz
   try {
     await Promise.all([navigation.read(), full.read(), first.read(), second.read(), picker.read()])
     assert.equal(requests, 0); assert.equal(sockets, 1)
-    assert.equal(first.state.value, second.state.value)
+    // Leases publish independent state snapshots but retain one owner/value/subscription.
+    assert.equal(folderSubscriptions, 1)
+    assert.equal(first.state.value.value, second.state.value.value)
+    assert.equal(first.state.value.value?.[0]?.id, 'one')
     assert.equal(navigation.sessions.state.value?.[0]?.label, 'One')
     assert.equal(navigation.activity.state.value?.stages['web:one'], 'inactive')
     sessions = [{ sessionId: 'web:two', title: 'Two' }]; publisher.invalidateSessions()
@@ -153,8 +160,14 @@ test('scoped summary/stages and shared explorer/picker catalogs consume authoriz
     folders = []; devices = []; publisher.invalidateResource!('folders'); publisher.invalidateResource!('nodes')
     await until(() => first.state.value.value?.length === 0 && picker.state.value.value?.length === 0)
     assert.equal(requests, 0)
+    assert.equal(first.state.value.value, second.state.value.value)
+    assert.equal(folderSubscriptions, 1)
     first.release()
-    assert.equal(second.state.value.value?.length, 0)
+    folders = [{ id: 'two', name: 'Two', path: '/synthetic-two', createdAt: '' }]
+    publisher.invalidateResource!('folders')
+    await until(() => second.state.value.value?.[0]?.id === 'two')
+    assert.equal(folderSubscriptions, 1, 'releasing one lease keeps the shared owner subscribed')
+    assert.equal(requests, 0)
   } finally { first.release(); second.release(); picker.release(); navigation.release(); full.release(); catalog.dispose(); state.dispose(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
 })
 

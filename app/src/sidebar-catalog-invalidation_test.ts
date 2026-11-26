@@ -31,9 +31,9 @@ async function component(name: string, fixture: any, t: any) {
     'useProjectLiveState.ts': `export const useProjectLiveState = () => f.live`,
     'useLiveClient.ts': `export const useLiveClientPool = () => f.pool; export const liveProjectId = base => new URL(base).pathname.split('/').filter(Boolean).at(-1) || 'default'`,
     'service-groups.ts': `export const useServiceGroups = () => ({groups:{value:[]}}); export const projectGroupConversations = x => x; export const observedGroupId = () => ''`,
-    'bot-settings.ts': `export const createBotSettingsClient = () => ({catalog:async () => {f.channels++; if(f.failCatalog) throw Error('unavailable'); return f.bots || []}})`,
-    'folders-client.ts': `export const createFoldersClient = base => ({list:async signal => {f.folders++; return f.records || []}})`,
-    'node-inventory.ts': `export const fetchNodeInventory = async () => {f.nodes++;return {nodes:[]}}`,
+    'bot-settings.ts': `export const parseBotCatalog = value => value.channels; export const createBotSettingsClient = () => ({catalog:async () => {f.channels++; if(f.failCatalog) throw Error('unavailable'); return f.bots || []}})`,
+    'folders-client.ts': `export const parseFolder = value => value; export const createFoldersClient = base => ({list:async signal => {f.folders++; return f.records || []}})`,
+    'node-inventory.ts': `export const parseNodeInventory = value => value; export const fetchNodeInventory = async () => {f.nodes++;return {nodes:[]}}`,
     'useComposerDraft.ts': `export const composerDraftRevision={value:0}; export const composerDraftKey=()=>''; export const composerDraftEditedAt=()=>0`,
   }
   await build({ stdin: { contents: script, loader: 'ts', resolveDir: resolve('app/src/components') },
@@ -61,7 +61,7 @@ function fixture() {
         return { ready: async () => {}, close: () => observers.delete(entry) }
       } }) },
     invalidate(projectId: string, resource: string) {
-      for (const {topic, observer} of observers) if (topic.projectId === projectId)
+      for (const {topic, observer} of observers) if (topic.projectId === projectId && topic.kind === 'resources')
         observer.event({ payload: {event: 'invalidate', resource} })
     },
   }
@@ -103,7 +103,7 @@ test('FoldersSidebar folder and node resources refresh independently and release
   const app = renderer.createApp({render: () => h(definition, {apiBase:'http://localhost/projects/a',projectId:'a',
     sessions,activeSessionId:'',collapsed:new Set(),stages:{},sessionsLoading:false,sessionsError:''})})
   app.use(createResourceStores())
-  app.mount({}); await settle()
+  app.mount({}); t.after(() => app.unmount()); await settle()
   assert.deepEqual([f.folders,f.nodes], [1,1])
   sessions.push({sessionId:'web:new'}); await settle()
   assert.deepEqual([f.folders,f.nodes], [1,1])

@@ -29,7 +29,8 @@ export function createBotResources(request: typeof fetch = fetch) {
     current.users++
     const owner = current.owner as ReturnType<typeof createLiveProjection<T>>
     let released = false
-    return { state: computed(() => owner.state), read: owner.read, refresh: owner.refresh, invalidate: owner.invalidate,
+    // Lease consumers watch the ref, so track fields and publish a new state identity.
+    return { state: computed(() => ({ ...owner.state })), read: owner.read, refresh: owner.refresh, invalidate: owner.invalidate,
       release() { if (released) return; released = true; if (--current.users === 0) { owner.dispose(); projected.delete(id) } } }
   }
   function live<T>(base: string, projectId: string, projection: string, pool: ResourceLivePool,

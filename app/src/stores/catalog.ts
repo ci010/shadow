@@ -44,7 +44,8 @@ export function createCatalogResources(request: typeof fetch = fetch) {
     current.users++
     const owner = current.owner as ReturnType<typeof createLiveProjection<T>>
     let released = false
-    return { state: computed(() => owner.state), read: owner.read, refresh: owner.refresh, invalidate: owner.invalidate,
+    // Lease consumers watch the ref, so track fields and publish a new state identity.
+    return { state: computed(() => ({ ...owner.state })), read: owner.read, refresh: owner.refresh, invalidate: owner.invalidate,
       commit(transform: (value: T) => T) { return !released && owner.update(transform) },
       release() { if (released) return; released = true; if (--current.users === 0) { owner.dispose(); projected.delete(id) } },
     }
