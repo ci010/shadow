@@ -166,7 +166,7 @@ export class BootstrapCoordinator {
         return { ok: false, code: 'invalid-state', state: current }
       }
       await this.childBootstrap.pair(input)
-      await this.launchProfiles.save({ version: 1, role: 'child', port: 43124 })
+      await this.launchProfiles.save({ version: 1, role: 'child' })
       const next: WizardState = { ...current, step: 'complete', revision: current.revision + 1 }
       await this.storage.save(next)
       return { ok: true, state: next }
@@ -297,7 +297,7 @@ export class BootstrapCoordinator {
         : await this.configReader.readMain()
       if (!config) return { ok: false, code: 'runtime-unavailable' }
       if (current.mode === 'main') await this.validateMainDirectory?.([config.dataDir])
-      const status = await this.runtimeHost.start(profile)
+      const status = await this.runtimeHost.start(profile.role === 'child' ? { role: 'child', port: 0 } : profile)
       if (status.phase !== 'ready' || status.apiBase === undefined) {
         const failure = startupFailure(status)
         return { ok: false, code: 'runtime-unavailable', ...(failure ? { failure } : {}) }

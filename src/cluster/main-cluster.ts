@@ -50,6 +50,7 @@ export interface MainClusterOptions {
     request: Request,
   ) => boolean | Promise<boolean>
   readonly now?: () => Date
+  readonly acceptsConnection?: () => boolean
 }
 
 export interface MainCluster {
@@ -63,6 +64,7 @@ export interface MainCluster {
   getNodeInventory(): NodeInventoryResponse
   approve(approval: ApprovalV1, now?: Date): Promise<DeviceAuthenticationV1>
   revoke(nodeId: string, now?: Date): Promise<void>
+  disconnectNodeConnections(reason: string): Promise<void>
   closeNodeConnections(reason?: string): Promise<void>
   save(now?: Date): Promise<void>
 }
@@ -96,6 +98,7 @@ export async function createMainCluster(
   })
   const nodeApi: NodeWebSocketApi = createNodeWebSocketApi({
     registry,
+    acceptsConnection: options.acceptsConnection,
     localHello: options.localHello,
     authorizeUpgrade: (request) => authority.verifyWebSocketRequest(request),
     session: {
@@ -224,6 +227,7 @@ export async function createMainCluster(
     },
     approve,
     revoke,
+    disconnectNodeConnections: reason => nodeApi.disconnectAll(reason),
     closeNodeConnections: (reason) => {
       stopping = true
       return nodeApi.closeAll(reason)

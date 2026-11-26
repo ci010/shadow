@@ -134,8 +134,7 @@ export default defineConfig({
     strictPort: true,
     proxy: routing.proxy,
     fs: {
-      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin', '**/bot.config.json', `${privateWorkspace}/**`,
-        ...(process.env.SHADOW_BROWSER_PIN_FILE ? [normalizePath(resolve(process.env.SHADOW_BROWSER_PIN_FILE))] : [])],
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin', '**/bot.config.json', `${privateWorkspace}/**`],
     },
   },
 })

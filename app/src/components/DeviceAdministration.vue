@@ -47,7 +47,10 @@
         <p class="device-hint">{{ t('This setting is saved and restored when Main restarts. Turn it off here when testing is finished.') }}</p>
       </form>
 
-      <div v-if="network.state === 'listening' && network.host !== '127.0.0.1'" class="network-state">
+      <div v-if="network.sharedEndpoint && network.sharedEndpoint !== network.endpoint" class="network-state">
+        <span>{{ t('Dev Tunnel endpoint') }}</span><code>{{ network.sharedEndpoint }}</code>
+      </div>
+      <div v-if="network.state === 'listening' && network.host !== '127.0.0.1' && network.sharedEndpoint !== `http://127.0.0.1:${network.port}`" class="network-state">
         <button type="button" class="device-button" :disabled="!!action || !!loadError" @click="setLoopback(!network.enableLoopbackListener)">{{ network.enableLoopbackListener ? t('Turn off tunnel listener') : t('Enable tunnel listener') }}</button>
         <code v-if="network.loopbackEndpoint">{{ network.loopbackEndpoint }}</code>
         <template v-else-if="network.enableLoopbackListener">

@@ -56,6 +56,12 @@ for (const role of ['main', 'child'] as const) {
       const child = Object.assign(new EventEmitter(), {
         pid: 12345, stdout: new PassThrough(), stderr: new PassThrough(),
         kill: () => { queueMicrotask(() => child.emit('exit', 0)); return true },
+        postMessage(message: { type: string; id: number; operation: string }) {
+          queueMicrotask(() => {
+            if (message.operation === 'shutdown') child.emit('exit', 0)
+            else child.emit('message', { type: message.type, id: message.id, result: { ready: true, endpoint: 'https://paired.test' } })
+          })
+        },
       })
       const entryPath = join(process.cwd(), 'synthetic backend', 'index.js')
       let forks = 0

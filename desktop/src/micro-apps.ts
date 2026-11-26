@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Task } from 'electron'
-import { normalizeLoopbackOrigin, type RuntimeAuthorization } from './runtime-authorization.js'
-import { isRecord, microAppArgument, parseMicroAppIdentity, parseMicroAppLaunch, parseNativeMicroApp,
+import { normalizeLoopbackOrigin, normalizePairedEndpoint, runtimeAuthorizationHeaders, runtimeUrl, type RuntimeAuthorization } from './runtime-authorization.js'
+import { CHILD_MICRO_APP_SCHEME, isRecord, microAppArgument, parseMicroAppIdentity, parseMicroAppLaunch, parseNativeMicroApp,
   type MicroAppIdentity, type NativeMicroApp } from './micro-app-contract.js'
 import { projectIds } from './project-catalog.js'
 
@@ -14,6 +14,7 @@ export interface MicroAppWindowInput {
   iconPath: string
   partition: string
   signal: AbortSignal
+  relay?: (request: Request) => Promise<Response>
   onClosed(): void
 }
 interface NativeAppOptions {
@@ -72,6 +73,7 @@ export class DesktopMicroApps {
   private timer: ReturnType<typeof setTimeout> | undefined
   private refreshing: Promise<void> | undefined
   private readonly windows = new Map<string, WindowEntry>()
+  private childRelayRequests = 0
   private readonly openings = new Map<string, Promise<void>>()
   private readonly stops = new Map<string, Promise<void>>()
   private readonly icons = new Map<string, Promise<{ window: string; task: string }>>()
@@ -85,10 +87,10 @@ export class DesktopMicroApps {
 
   setAuthorization(value: RuntimeAuthorization | null): void {
     if (this.disposed) return
-    if (value && (normalizeLoopbackOrigin(value.apiBase) !== value.apiBase || !value.launchToken)) {
+    if (value && (value.deviceGrant ? normalizePairedEndpoint(value.apiBase) !== value.apiBase : normalizeLoopbackOrigin(value.apiBase) !== value.apiBase || !value.launchToken)) {
       throw new TypeError('Micro Apps require an authenticated loopback Main')
     }
-    if (value?.apiBase === this.authorization?.apiBase && value?.launchToken === this.authorization?.launchToken) return
+    if (value?.apiBase === this.authorization?.apiBase && value?.launchToken === this.authorization?.launchToken && value?.deviceGrant === this.authorization?.deviceGrant) return
     clearTimeout(this.timer)
     for (const entry of this.windows.values()) entry.stopOnClose = false
     this.epoch.abort()
@@ -103,12 +105,12 @@ export class DesktopMicroApps {
     if (value) void this.refresh()
   }
 
-  private async read(authorization: RuntimeAuthorization, path: string, body?: unknown, signal = this.epoch.signal): Promise<Response> {
-    const response = await (this.options.fetch ?? globalThis.fetch)(new URL(path, authorization.apiBase), {
+  private async read(authorization: RuntimeAuthorization, path: string, body?: unknown, signal = this.epoch.signal, timeoutMs = body === undefined ? 10_000 : 30_000): Promise<Response> {
+    const response = await (this.options.fetch ?? globalThis.fetch)(runtimeUrl(authorization.apiBase, path), {
       method: body === undefined ? 'GET' : 'POST', redirect: 'error', cache: 'no-store',
-      headers: { Authorization: `Bearer ${authorization.launchToken}`, 'Content-Type': 'application/json' },
+      headers: { ...await runtimeAuthorizationHeaders(authorization), 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(body === undefined ? 10_000 : 30_000)]),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
     })
     if (!response.ok) {
       if (response.status === 503 && response.headers.get('content-type')?.startsWith('application/json')) {
@@ -168,6 +170,9 @@ export class DesktopMicroApps {
     const identity = parseMicroAppIdentity(rawIdentity), key = keyOf(identity)
     const pending = this.openings.get(key)
     if (pending) return pending
+    if (this.authorization?.deviceGrant && !this.windows.has(key) && new Set([...this.windows.keys(), ...this.openings.keys()]).size >= 16) {
+      return Promise.reject(new Error('Child Micro App window limit reached; close an app before opening another'))
+    }
     const operation = this.openWindow(identity).finally(() => { if (this.openings.get(key) === operation) this.openings.delete(key) })
     this.openings.set(key, operation)
     return operation
@@ -189,13 +194,17 @@ export class DesktopMicroApps {
     const icon = await this.asset(authorization, identity, app, signal)
     const entry: WindowEntry = { identity, revision: app.revision, authorization, closed: false, stopOnClose: true, abort: new AbortController() }
     try {
-      const url = parseMicroAppLaunch(await this.json(authorization, `${pathOf(identity)}/open`, { revision: app.revision }, signal))
+      const result = await this.json(authorization, `${pathOf(identity)}/open`, { revision: app.revision }, signal)
+      const launch = parseMicroAppLaunch(result)
+      const appSignal = AbortSignal.any([signal, entry.abort.signal])
+      const childRelay = authorization.deviceGrant ? this.childRelay(authorization, identity, app.revision, launch, result, appSignal) : undefined
       signal.throwIfAborted()
       this.windows.set(keyOf(identity), entry)
       entry.handle = await this.options.createWindow({
-        name: nativeTitle(app.name), url, iconPath: icon.window,
+        name: nativeTitle(app.name), url: childRelay?.url ?? launch, iconPath: icon.window,
+        ...(childRelay ? { relay: childRelay.relay } : {}),
         partition: `shadow-microapp-${identity.projectId}-${identity.appId}-${randomUUID()}`,
-        signal: AbortSignal.any([signal, entry.abort.signal]),
+        signal: appSignal,
         onClosed: () => this.closed(entry),
       })
       if (entry.closed || signal.aborted || this.disposed) {
@@ -208,6 +217,49 @@ export class DesktopMicroApps {
       await this.stops.get(keyOf(identity))
       throw error
     }
+  }
+
+  private childRelay(authorization: RuntimeAuthorization, identity: MicroAppIdentity, revision: string, launch: string, result: unknown, signal: AbortSignal) {
+    if (!isRecord(result) || result.revision !== revision || typeof result.runId !== 'string' ||
+      !/^[a-f0-9-]{36}$/i.test(result.runId) || typeof result.expiresAt !== 'string') throw new Error('Invalid paired Micro App launch')
+    const expiresAt = Date.parse(result.expiresAt)
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('Expired paired Micro App launch')
+    const origin = `${CHILD_MICRO_APP_SCHEME}://${randomUUID()}`
+    const runId = result.runId
+    return { url: origin + '/' + new URL(launch).hash, relay: async (request: Request) => {
+      const url = new URL(request.url)
+      const source = request.headers.get('origin')
+      if (`${url.protocol}//${url.host}` !== origin || (source && source !== origin) || !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+        return Response.json({ error: 'origin_not_allowed' }, { status: 403 })
+      }
+      if (signal.aborted || Date.now() >= expiresAt) return Response.json({ error: 'app_run_ended' }, { status: 410 })
+      if (this.childRelayRequests >= 16) return Response.json({ error: 'app_relay_busy' }, { status: 429 })
+      this.childRelayRequests++
+      try {
+        let bytes: Buffer | null = null
+        if (request.body) {
+          try { bytes = await limitedBytes(request, 16 * 1024 * 1024) }
+          catch { return Response.json({ error: 'body_too_large' }, { status: 413 }) }
+        }
+        const token = /^Bearer ([A-Za-z0-9_-]{1,256})$/.exec(request.headers.get('authorization') ?? '')?.[1]
+        const response = await this.read(authorization, `${pathOf(identity)}/relay`, { revision, runId,
+          path: (url.pathname || '/') + url.search, method: request.method, token,
+          contentType: request.headers.get('content-type') ?? undefined,
+          ...(bytes?.length ? { body: bytes.toString('base64') } : {}),
+        }, AbortSignal.any([request.signal, signal]), 185_000)
+        const output: unknown = JSON.parse((await limitedBytes(response, 24 * 1024 * 1024)).toString('utf8'))
+        if (!isRecord(output) || !Number.isInteger(output.status) || (output.status as number) < 200 || (output.status as number) > 599 ||
+          !isRecord(output.headers) || typeof output.body !== 'string') throw new Error('Invalid Micro App relay response')
+        const status = output.status as number
+        const headers = new Headers({ 'Cache-Control': 'no-store' })
+        for (const key of ['content-type', 'content-security-policy', 'referrer-policy', 'x-content-type-options']) {
+          const value = output.headers[key]
+          if (typeof value === 'string') headers.set(key, value)
+        }
+        return new Response(request.method === 'HEAD' || [204, 205, 304].includes(status) ? null : Buffer.from(output.body, 'base64'), { status, headers })
+      } catch { return Response.json({ error: 'app_relay_unavailable' }, { status: 503 }) }
+      finally { this.childRelayRequests-- }
+    } }
   }
 
   private closeWindow(entry: WindowEntry): void {
@@ -327,7 +379,7 @@ export class DesktopMicroApps {
   }
 }
 
-async function limitedBytes(response: Response, limit: number): Promise<Buffer> {
+async function limitedBytes(response: Pick<Response, 'body'>, limit: number): Promise<Buffer> {
   if (!response.body) throw new Error('Empty Micro App response')
   const reader = response.body.getReader(), chunks: Uint8Array[] = []
   let bytes = 0

@@ -10,12 +10,11 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { Hono } from 'hono'
 import { registerGatewayRoutes, serveGateway } from '../../src/gateway/server.ts'
-import { MainDeviceUi } from '../../src/cluster/device-ui.ts'
+import { DirectDeviceUi, DIRECT_DEVICE_UI_ROUTES, DEVICE_UI_SESSION, DEVICE_UI_SESSION_CHALLENGE, directDeviceUiPath } from '../../src/cluster/direct-device-ui.ts'
 import { DeviceChallengeAuthority, devicePublicKeyFingerprint, encodeBase64Url } from '../../src/cluster/device-challenge.ts'
 import { InMemoryPairingNodeRegistry } from '../../src/cluster/registry.ts'
 import { DeviceCredentialProof } from '../../src/cluster/device-credentials.ts'
 import { requestDeviceChallengeProtocol } from '../../src/cluster/device-challenge-client.ts'
-import { childWorkspacePlugin } from '../../src/runtime/child-workspace.ts'
 import { GatewayClientAddressRegistry } from '../../src/gateway/server.ts'
 import type { MainCluster } from '../../src/cluster/main-cluster.ts'
 import { FrontendLog, registerFrontendLogRoutes } from '../../src/runtime/frontend-log.ts'
@@ -24,7 +23,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('production-built Electron Child renderer sends logs through authenticated Child→Main device tunnel', {
+test('production-built Electron Child renderer sends logs directly to the authenticated paired endpoint', {
   timeout: 60_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -40,7 +39,6 @@ test('production-built Electron Child renderer sends logs through authenticated 
   const address = renderer.address()
   assert.ok(address && typeof address !== 'string')
   const rendererOrigin = `http://127.0.0.1:${address.port}`
-  const credential = 'synthetic-frontend-log-credential'
   const log = new FrontendLog('development')
   const otherLog = new FrontendLog('development')
   const gateway = new Hono()
@@ -50,7 +48,7 @@ test('production-built Electron Child renderer sends logs through authenticated 
     responses.push({ method: c.req.method, origin: c.req.header('Origin'), allowOrigin: c.res.headers.get('Access-Control-Allow-Origin'),
       allowCredentials: c.res.headers.get('Access-Control-Allow-Credentials'), cookie: c.req.header('Cookie'), status: c.res.status })
   })
-  // Distinct Main and Child applications: native renderer admission is NOT a Main credential.
+  // The trusted renderer presents a device grant directly to Main, not an owner credential.
   const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])
   const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey))
   const fingerprint = await devicePublicKeyFingerprint(publicKey)
@@ -63,11 +61,9 @@ test('production-built Electron Child renderer sends logs through authenticated 
   const authority = new DeviceChallengeAuthority(registry)
   await authority.registerCredential(identity, encodeBase64Url(publicKey))
   const addresses = new GatewayClientAddressRegistry()
-  const main = new Hono(), ingress = new Hono()
-  const bridge = new MainDeviceUi({ registry, authority } as MainCluster, addresses, request => Promise.resolve(main.fetch(request)))
+  const bridge = new DirectDeviceUi({ registry, authority, observeInventory: () => () => {} } as unknown as MainCluster, () => true)
   t.after(() => bridge.close())
-  bridge.plugin()(ingress)
-  registerGatewayRoutes(main, [app => {
+  registerGatewayRoutes(gateway, [bridge.plugin(), app => {
     app.get('/api/live', () => new Response(new ReadableStream({ start(controller) {
       controller.enqueue(new TextEncoder().encode(': connected\n\n'))
       setTimeout(() => controller.error(new Error('synthetic interrupted stream')), 40)
@@ -79,20 +75,23 @@ test('production-built Electron Child renderer sends logs through authenticated 
     const other = new Hono()
     registerFrontendLogRoutes(other, otherLog, request => bridge.authorize(request))
     app.route('/projects/other', other)
-  }], { launchCredential: 'main-only', clientAddresses: addresses, authorizeClient: request => bridge.authorize(request) })
-  const networkFetch = ((input: string | URL | Request, init?: RequestInit) => ingress.fetch(new Request(input, init))) as typeof fetch
-  const proof = (signal: AbortSignal, path: string) => requestDeviceChallengeProtocol('http://main.test', { deviceId: identity.deviceId, nodeId: identity.nodeId, credentialId: identity.credentialId },
-    new DeviceCredentialProof(async bytes => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(bytes)))), networkFetch, signal, path)
-  registerGatewayRoutes(gateway, [], { allowedOrigins: [rendererOrigin], launchCredential: credential })
-  childWorkspacePlugin({ endpoint: 'http://main.test', proof, fetch: networkFetch })(gateway)
+  }], { launchCredential: 'main-only', clientAddresses: addresses, authorizeClient: bridge.authorize,
+    launchCredentialExemptions: DIRECT_DEVICE_UI_ROUTES, delegatedViewer: { authorize: bridge.authorize,
+      ownerSignal: bridge.ownerSignal, hasCredential: request => bridge.hasCredential(request), allowsCrossOrigin: directDeviceUiPath } })
   const server = serveGateway(gateway, { host: '127.0.0.1', port: 0 })
   await server.ready
   t.after(() => server.shutdown())
   const apiBase = `http://127.0.0.1:${server.addr.port}`
+  const proof = await requestDeviceChallengeProtocol(apiBase, { deviceId: identity.deviceId, nodeId: identity.nodeId, credentialId: identity.credentialId },
+    new DeviceCredentialProof(async bytes => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(bytes)))), fetch,
+    AbortSignal.timeout(5000), DEVICE_UI_SESSION_CHALLENGE)
+  const session = await fetch(apiBase + DEVICE_UI_SESSION, { method: 'POST', headers: { 'X-Shadow-Device-Proof': proof } })
+  assert.equal(session.status, 200)
+  const { token } = await session.json() as { token: string }
   const endpoint = `${apiBase}/projects/fixture/api/runtime/frontend-logs`
   assert.notEqual(apiBase, rendererOrigin)
   assert.equal((await fetch(endpoint)).status, 401, 'The real gateway still requires authentication')
-  const forbidden = await fetch(endpoint, { headers: { Origin: 'https://untrusted.example', Authorization: `Bearer ${credential}` } })
+  const forbidden = await fetch(endpoint, { headers: { Origin: 'https://untrusted.example', Authorization: `ShadowDevice ${token}` } })
   assert.equal(forbidden.status, 403)
   assert.equal(forbidden.headers.get('Access-Control-Allow-Origin'), null)
   const bundle = await build({ stdin: {
@@ -121,7 +120,7 @@ test('production-built Electron Child renderer sends logs through authenticated 
     app.whenReady().then(async () => {
       const win = new BrowserWindow({show:false, webPreferences:{contextIsolation:true, nodeIntegration:false}});
       const update = installRuntimeRequestAuthorization(session.defaultSession, details => details.webContentsId === win.webContents.id);
-      update({apiBase:${JSON.stringify(apiBase)}, launchToken:${JSON.stringify(credential)}});
+      update({apiBase:${JSON.stringify(apiBase)}, launchToken:'',deviceGrant:async()=>${JSON.stringify(token)}});
       try {
         await session.defaultSession.cookies.set({url:${JSON.stringify(apiBase)},name:'synthetic_cookie',value:'must-not-cross-ports'});
         await win.loadURL(${JSON.stringify(rendererOrigin)});
@@ -147,7 +146,7 @@ test('production-built Electron Child renderer sends logs through authenticated 
   assert.match(output, /FRONTEND_LOG_CORS_OK/)
   assert.match(log.read(), /synthetic frontend transport regression/)
   assert.match(log.read(), /"renderer":"built"/)
-  assert.equal((await main.request('/projects/fixture/api/runtime/frontend-logs', { headers: { Authorization: `Bearer ${credential}` } })).status, 401, 'Child launch token never authorizes Main directly')
+  assert.equal((await fetch(endpoint, { headers: { Authorization: 'Bearer legacy-child-control-token' } })).status, 401, 'Child legacy control credentials never authorize Main')
   assert.match(log.read(), /Failed to load agent types/)
   assert.match(log.read(), /synthetic window error/)
   assert.match(otherLog.read(), /No retained frontend events/)

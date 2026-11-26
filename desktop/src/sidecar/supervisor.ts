@@ -1,3 +1,4 @@
+import { ChildControlClient, type ChildIpcProcess } from './child-control.js'
 import { desktopMediaKey } from '../media-reveal-key.js'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -36,9 +37,10 @@ export interface SidecarSupervisor {
   readonly status: SidecarStatus
   start(request: SidecarStartRequest): Promise<SidecarStatus>
   stop(): Promise<void>
+  requestChildControl?(operation: 'status' | 'inventory' | 'grant' | 'invalidateGrant'): Promise<unknown>
 }
 
-export interface SidecarChildProcess {
+export interface SidecarChildProcess extends ChildIpcProcess {
   readonly stdout: { on(event: 'data', listener: (chunk: unknown) => void): unknown } | null
   readonly stderr: { on(event: 'data', listener: (chunk: unknown) => void): unknown } | null
   once(event: 'error', listener: (error: Error) => void): unknown
@@ -54,6 +56,7 @@ export type SidecarSpawn = (
 
 export interface SidecarReadinessResult {
   readonly ready: boolean
+  readonly endpoint?: string
   readonly failure?: {
     readonly kind: Extract<SidecarFailureKind, 'configuration-error' | 'port-conflict' | 'main-unreachable'>
     readonly message: string
@@ -113,6 +116,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   private readonly shutdownGraceTimeoutMs: number
   private readonly stopTimeoutMs: number
   private child: SidecarChildProcess | undefined
+  private childControl: ChildControlClient | undefined
   private startPromise: Promise<SidecarStatus> | undefined
   private stopPromise: Promise<void> | undefined
   private exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }> | undefined
@@ -154,6 +158,11 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     return this.stopPromise
   }
 
+  requestChildControl(operation: 'status' | 'inventory' | 'grant' | 'invalidateGrant'): Promise<unknown> {
+    return this.status.phase === 'ready' && this.status.role === 'child'
+      ? this.childControl?.request(operation) ?? Promise.resolve(null) : Promise.resolve(null)
+  }
+
   private async startProcess(request: SidecarStartRequest): Promise<SidecarStatus> {
     this.startedAt = this.clock.now()
     this.role = request.role
@@ -171,7 +180,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     this.status = { phase: 'starting', role: request.role }
     this.stopping = false
     this.recentOutput = ''
-    const occupied = this.options.isPortOccupied && await this.options.isPortOccupied(request.port)
+    const occupied = request.role === 'main' && this.options.isPortOccupied && await this.options.isPortOccupied(request.port)
     // stop() may complete while preflight is pending, before a child exists.
     // Never reset its cancellation or spawn after shutdown has completed.
     if (this.stopping) return this.status
@@ -196,12 +205,15 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
           ...this.environment,
           ELECTRON_RUN_AS_NODE: '1',
           SHADOW_DESKTOP_MEDIA_KEY: request.role === 'main' ? desktopMediaKey : undefined,
-          GATEWAY_PORT: String(request.port),
-          WINDOWS_USE_LAUNCH_TOKEN: request.launchToken,
+          GATEWAY_PORT: request.role === 'main' ? String(request.port) : undefined,
+          GATEWAY_HOST: request.role === 'main' ? '127.0.0.1' : undefined,
+          WINDOWS_USE_LAUNCH_TOKEN: request.role === 'main' ? request.launchToken : undefined,
+          GATEWAY_LAUNCH_CREDENTIAL: request.role === 'main' ? this.environment.GATEWAY_LAUNCH_CREDENTIAL : undefined,
+          WINDOWS_USE_LAUNCH_TOKEN_FILE: undefined,
         },
         shell: false,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: request.role === 'child' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
       })
     } catch {
       return this.fail(request.role, 'spawn-error', 'The runtime process could not be launched')
@@ -210,6 +222,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     this.exitPromise = new Promise((resolve) => {
       this.resolveExit = resolve
     })
+    if (request.role === 'child') this.childControl = new ChildControlClient(this.child)
     this.captureLogs(this.child)
     this.diagnostic('spawned')
     this.child.once('error', (error) => {
@@ -217,6 +230,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
       this.resolveExit?.({ code: null, signal: null, error })
     })
     this.child.once('exit', (code, signal) => {
+      this.childControl?.close()
       this.launchContext = undefined
       this.resolveExit?.({ code, signal })
       if (!this.stopping && this.status.phase === 'ready') {
@@ -228,8 +242,12 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     const apiBase = `http://127.0.0.1:${request.port}`
     while (this.clock.now() < deadline) {
       const outcome = await this.waitForReadinessOutcome(
-        apiBase,
-        request.launchToken,
+        async () => {
+          if (request.role === 'main') return this.options.readinessProbe(apiBase, request.launchToken)
+          const response = await this.childControl?.request('readiness', 500) as { ready?: unknown; endpoint?: unknown } | null
+          return response?.ready === true && typeof response.endpoint === 'string'
+            ? { ready: true, endpoint: response.endpoint } : { ready: false }
+        },
         this.exitPromise,
         deadline - this.clock.now(),
       )
@@ -251,8 +269,8 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
       }
       if (outcome.type === 'probe' && outcome.result.ready) {
         if (this.stopping) return this.status
-        this.launchContext = { apiBase, launchToken: request.launchToken }
-        this.status = { phase: 'ready', role: request.role, apiBase }
+        if (request.role === 'main') this.launchContext = { apiBase, launchToken: request.launchToken }
+        this.status = { phase: 'ready', role: request.role, apiBase: outcome.result.endpoint ?? apiBase }
         this.recentOutput = ''
         this.backendDiagnostics = undefined
         this.diagnostic('ready')
@@ -271,8 +289,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   }
 
   private async waitForReadinessOutcome(
-    apiBase: string,
-    launchToken: string,
+    probe: () => Promise<SidecarReadinessResult>,
     exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>,
     remainingMs: number,
   ): Promise<
@@ -290,7 +307,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     })
     try {
       return await Promise.race([
-        this.options.readinessProbe(apiBase, launchToken).then(
+        probe().then(
           (result) => ({ type: 'probe' as const, result }),
           (error: unknown) => ({ type: 'probe-error' as const, error }),
         ),
@@ -320,6 +337,10 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     const exitPromise = this.exitPromise
     if (!child || !exitPromise) return
 
+    if (this.childControl) {
+      this.childControl.stop()
+      if (await this.waitForExit(exitPromise, this.shutdownGraceTimeoutMs)) { this.clearChild(child); return }
+    }
     const launchContext = this.launchContext
     if (launchContext && this.options.authenticatedShutdownRequest) {
       const graceDeadline = this.clock.now() + this.shutdownGraceTimeoutMs
@@ -390,6 +411,8 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
 
   private clearChild(child: SidecarChildProcess): void {
     if (this.child !== child) return
+    this.childControl?.close()
+    this.childControl = undefined
     this.child = undefined
     this.exitPromise = undefined
     this.resolveExit = undefined
@@ -423,8 +446,8 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     if (!request.executablePath.trim()) return 'Executable path is required'
     if (!request.entryPath.trim()) return 'Backend entry path is required'
     if (!request.configPath.trim()) return 'Config path is required'
-    if (!request.launchToken) return 'Launch token is required'
-    if (!Number.isInteger(request.port) || request.port < 1 || request.port > 65_535) return 'Port must be an integer from 1 to 65535'
+    if (request.role === 'main' && !request.launchToken) return 'Launch token is required'
+    if (request.role === 'main' && (!Number.isInteger(request.port) || request.port < 1 || request.port > 65_535)) return 'Port must be an integer from 1 to 65535'
     if (request.role === 'child' && request.localExecutor) return 'Local executor is only valid for main sidecars'
     return undefined
   }

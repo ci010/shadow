@@ -9,21 +9,17 @@ import {
   parseBackendCliArguments,
 } from '../backend-cli.ts'
 import { type ProcessEntryResult, runProcessEntry } from '../process-entry.ts'
+import { desktopChildChannel } from '../child-desktop-ipc.ts'
 import { startProductionChildRuntime } from '../production-child.ts'
 import { startMainRuntime } from './start.ts'
 import { resolveServiceEnvironment } from '../service-mode.ts'
-import { runWebPair } from '../web-pairing-cli.ts'
-import { loadBrowserPinHash } from '../../gateway/browser-pin.ts'
 import type { MainRuntimeOptions } from './contracts.ts'
 import type { Config } from '../../config/schema.ts'
 import { childPairingFailureCode } from '../child-pairing-diagnostics.ts'
 import { runChildPairingCli } from '../child-pairing-cli.ts'
 
 async function startLocalMainRuntime(config: Config, options: MainRuntimeOptions) {
-  const browserPinHash = await loadBrowserPinHash(resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'))
-  return startMainRuntime(config, {
-    ...options, gateway: { ...options.gateway, ...(browserPinHash ? { browserPinHash } : {}) },
-  })
+  return startMainRuntime(config, options)
 }
 
 export async function runBackendCli(
@@ -44,8 +40,8 @@ export async function runBackendCli(
 
 export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
-): Promise<ProcessEntryResult | { readonly route: 'web-pair' | 'child-pair' | 'project-audio' }> {
-  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' || hooks.argv[1] === 'project-audio' ? 1 : 2)
+): Promise<ProcessEntryResult | { readonly route: 'child-pair' | 'project-audio' }> {
+  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'project-audio' ? 1 : 2)
   if (runtimeArgs[0] === 'project-audio') {
     const { runProjectAudioCli } = await import('../../audio-cpp/host-cli.ts')
     process.stdout.write(JSON.stringify(await runProjectAudioCli(runtimeArgs.slice(1)), null, 2) + '\n')
@@ -59,11 +55,7 @@ export async function runRootProcessEntry(
     }
     return { route: 'child-pair' }
   }
-  if (runtimeArgs[0] === 'web') {
-    if (runtimeArgs[1] !== 'pair') throw new Error('Use web pair --connection <absolute descriptor> or web pair --url <loopback origin> --credential-file <absolute file>')
-    await runWebPair(runtimeArgs.slice(2))
-    return { route: 'web-pair' }
-  }
+  if (runtimeArgs[0] === 'web' || hooks.argv[1] === 'web') throw new Error('Standalone browser access is no longer supported')
   const environment = await resolveServiceEnvironment(runtimeArgs, {
     GATEWAY_PORT: process.env.GATEWAY_PORT,
     GATEWAY_HOST: process.env.GATEWAY_HOST,
@@ -75,23 +67,9 @@ export async function runRootProcessEntry(
   return runProcessEntry(hooks.argv, {
     loadConfig,
     startMainRuntime: startLocalMainRuntime,
-    startChildRuntime: (config, paths, context) => {
-      if (
-        context.loopbackPort !== undefined &&
-        context.launchCredential === undefined
-      ) {
-        throw new TypeError(
-          'Child local control requires WINDOWS_USE_LAUNCH_TOKEN',
-        )
-      }
-      return startProductionChildRuntime(config, paths, {
-        ...(context.loopbackPort === undefined ? {} : {
-          localControl: {
-            port: context.loopbackPort,
-            launchCredential: context.launchCredential!,
-          },
-        }),
-      })
+    startChildRuntime: (config, paths) => {
+      const desktopChannel = desktopChildChannel()
+      return startProductionChildRuntime(config, paths, desktopChannel ? { desktopChannel } : {})
     },
     runLegacy: () => runBackendCli(hooks),
     runtime: {

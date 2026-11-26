@@ -1,7 +1,6 @@
 import { t } from './i18n.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
 import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
-import type { DesktopWebPairingApi } from '../../desktop/src/web-pairing-contract.ts'
 import type { ChildPairInput, ChildSetupInfo } from '../../desktop/src/bootstrap/child.ts'
 import type { DesktopMicroAppsApi } from '../../desktop/src/micro-app-contract.ts'
 import type { DesktopTaskNotificationsApi } from '../../desktop/src/task-notifications-contract.ts'
@@ -68,7 +67,7 @@ export interface ShadowDesktopApi {
 		readFiles(): Promise<Array<{ name: string; bytes: Uint8Array; lastModified: number }>>
 	}
 	readonly microApps?: DesktopMicroAppsApi
-	readonly webPairing?: DesktopWebPairingApi
+	readonly childLocal?: { status(): Promise<unknown>; inventory(): Promise<unknown> }
 	readonly diagnostics?: {
 		revealStartupLog(): Promise<void>
 	}
@@ -121,7 +120,7 @@ declare global {
 	}
 }
 
-export const MAIN_LAUNCH_PORT = 43_123
+export const MAIN_LAUNCH_PORT = 3124
 
 export async function loadMainDirectorySelection(
 	api: ShadowDesktopApi,

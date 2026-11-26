@@ -46,16 +46,10 @@ then configure your provider credentials through the environment or `.env`.
 pnpm start
 ```
 
-To serve the built web UI:
-
-```sh
-pnpm desktop:prepare-agent-desktop
-pnpm build:all
-node --env-file-if-exists=.env dist/src/index.js
-```
-
-The example gateway serves `http://localhost:3123`. See
-[browser access](docs/browser-access.md) for login and pairing.
+The headless Main gateway defaults to `http://127.0.0.1:3124`; it is not a
+standalone web app. Use Electron for the Main or Child workspace, or the
+[native mobile app](docs/mobile.md) for phone access. Protected management APIs
+on a headless installation require an explicitly configured launch credential.
 Local configuration, `.env`, and `workspace/` are private data, not repository content.
 
 ## Commands

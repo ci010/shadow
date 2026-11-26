@@ -18,7 +18,7 @@ export type MicroAppReview = z.infer<typeof microAppReview>
 
 export function nativeAppIdentity(base: string, id: string) {
   const path = new URL(base).pathname
-  const match = /^\/projects\/([a-zA-Z0-9_-]{1,128})\/?$/.exec(path)
+  const match = /\/projects\/([a-zA-Z0-9_-]{1,128})\/?$/.exec(path)
   if (!match) throw new Error(t('A Project-scoped app is required'))
   return parseMicroAppIdentity({ projectId: match[1], appId: id })
 }

@@ -15,9 +15,7 @@
     </template>
     <template #actions>
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
-          <DesktopBrowserAccess v-if="isMain && !installationContext.mainWorkspace && desktopWebPairing" :api="desktopWebPairing" />
           <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
-          <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">{{ t('Sign out') }}</button>
           <button v-if="browserNotifications" class="theme-toggle" :disabled="browserNotifications.requesting.value"
             :aria-pressed="browserNotifications.active.value"
             :aria-label="browserNotifications.active.value ? t('Disable system notifications') : t('Enable system notifications')"
@@ -82,7 +80,6 @@ import { t } from './i18n.ts'
 import { installRevealBorder } from './reveal-border.ts'
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
 import { startPresence } from './presence.ts'
-import { browserSessionKey } from './web-auth.ts'
 import { mobileSessionKey } from './mobile-client.ts'
 import MobileConnection from './MobileConnection.vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -95,7 +92,6 @@ import { createProviderSetupClient, type ProviderSetupStatus } from './provider-
 import DesktopFrame from './DesktopFrame.vue'
 import MobileChrome from './components/MobileChrome.vue'
 import { provideMobileChrome } from './composables/useMobileChrome.ts'
-import DesktopBrowserAccess from './components/DesktopBrowserAccess.vue'
 import SettingsView from './components/SettingsView.vue'
 import ConnectionStatus from './components/ConnectionStatus.vue'
 import IoHost from './components/io/IoHost.vue'
@@ -131,15 +127,9 @@ const { sounds, monitoringError, toggle: toggleSounds, browserNotifications } = 
 }))
 const livePool = useLiveClientPool()
 const liveStatuses = ref<readonly LiveStatus[]>([])
-const browserSession = inject(browserSessionKey, null)
 const mobileSession = inject(mobileSessionKey, null)
-const desktopWebPairing = window.shadowDesktop?.webPairing
-let liveInterrupted = false
 const stopLiveStatus = livePool.observe(statuses => {
   liveStatuses.value = statuses
-  const interrupted = statuses.some(status => status.phase === 'error' || status.phase === 'reconnecting')
-  if (interrupted && !liveInterrupted) void browserSession?.refresh()
-  liveInterrupted = interrupted
 })
 const liveError = computed(() => liveStatuses.value.find(status => status.error)?.error ?? '')
 
@@ -181,7 +171,7 @@ const providerStatus = ref<ProviderSetupStatus | null>(null)
 const checkingProvider = ref(true)
 const providerError = ref('')
 provideProviderReadiness({ status: providerStatus, checking: checkingProvider, error: providerError, enabled: isMain,
-  canConfigure: isMain,
+  canConfigure: computed(() => isMain.value && installationContext.value.mode !== 'child'),
   retry: () => { void refreshProvider(true) },
 })
 const providerViewProps = computed(() => ({
@@ -189,7 +179,7 @@ const providerViewProps = computed(() => ({
   status: providerStatus.value,
   error: providerError.value,
   checking: checkingProvider.value,
-  available: isMain.value,
+  available: isMain.value && installationContext.value.mode !== 'child',
 }))
 let providerGeneration = 0
 let providerRequest: AbortController | undefined

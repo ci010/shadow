@@ -3,6 +3,7 @@
     <header class="settings-heading"><h1>{{ t('App settings') }}</h1><p>{{ t('Provider connections and web search settings are shared across Projects. Model defaults can be overridden by Projects and conversations.') }}</p></header>
     <p v-if="!sections.length" role="status">{{ t('Settings are managed by Main administrators.') }}</p>
     <div v-else class="settings-layout">
+      <p v-if="context.mode === 'child'" class="settings-owner-hint">{{ t('Settings are managed by Main administrators.') }}</p>
       <nav class="settings-navigation" :aria-label="t('Settings sections')">
         <RouterLink v-for="item in sections" :key="item.id" :to="{ name: 'settings', params: { section: item.id } }"
           :aria-current="section === item.id ? 'page' : undefined" :class="{ selected: section === item.id }">
@@ -57,9 +58,11 @@ const sections = computed(() => [
   { id: 'proxy', get label() { return t('Proxy') }, icon: 'i-lucide-network' },
   { id: 'sounds', get label() { return t('Sounds') }, icon: 'i-lucide-volume-2' },
   { id: 'language', get label() { return t('Language') }, icon: 'i-lucide-languages' },
-].filter(item => item.id === 'nodes'
-  ? context.value.mode !== 'client'
-  : props.available))
+].filter(item => {
+  if (item.id === 'nodes') return context.value.mode !== 'client'
+  if (item.id === 'sounds' || item.id === 'language') return props.available || context.value.mode === 'child'
+  return props.available
+}))
 const section = computed(() => sections.value.find(item => item.id === (props.editorSection ?? route.params.section))?.id
   ?? (props.available ? 'providers' : sections.value[0]?.id))
 </script>
@@ -70,6 +73,7 @@ const section = computed(() => sections.value.find(item => item.id === (props.ed
 .settings-heading h1 { margin: 0 0 8px; font-size: 24px; }
 .settings-heading p { margin: 0; color: var(--c-text-secondary); font-size: 14px; }
 .settings-layout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 32px; }
+.settings-owner-hint { grid-column: 1 / -1; margin: 0; color: var(--c-text-secondary); }
 .settings-navigation { display: flex; flex-direction: column; gap: 4px; align-self: start; }
 .settings-navigation a { display: flex; align-items: center; gap: 10px; padding: 12px; color: var(--c-text-secondary); text-decoration: none; font-size: 14px; }
 .settings-navigation span { display: inline-block; width: 16px; height: 16px; }

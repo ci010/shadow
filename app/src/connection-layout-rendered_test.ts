@@ -16,7 +16,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('browser connection actions stay ordered and recovery popovers never resize or scroll route content', {
+test('desktop recovery popovers never resize or scroll route content', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -36,17 +36,11 @@ test('browser connection actions stay ordered and recovery popovers never resize
         return `
           import '/src/styles.css'; import '/app-shell.css';
           import { createApp, h, reactive } from 'vue';
-          import BrowserAuth from '/src/BrowserAuth.vue';
           import DesktopFrame from '/src/DesktopFrame.vue';
           import ConnectionStatus from '/src/components/ConnectionStatus.vue';
-          import { createBrowserSession } from '/src/web-auth.ts';
-          const state = reactive({ mode:'auth', childTitle:'', liveError:'', notificationError:'', retries:0, managed:0 });
-          const session = createBrowserSession(location.origin, { fetch: async () =>
-            Response.json({ version:1, required:true, authenticated:false, pinAvailable:true }) });
-          await session.refresh();
+          const state = reactive({ childTitle:'', liveError:'', notificationError:'', retries:0, managed:0 });
           window.fixture = state;
-          createApp({ render: () => state.mode === 'auth' ? h(BrowserAuth, { session })
-            : h(DesktopFrame, {}, { default: () => h('div', { class:'app-shell' }, [
+            createApp({ render: () => h(DesktopFrame, {}, { default: () => h('div', { class:'app-shell' }, [
               h('main', { class:'app-main' }, [
                 h(ConnectionStatus, { childTitle:state.childTitle, liveError:state.liveError, notificationError:state.notificationError,
                   onRetry:() => state.retries++, onManageNode:() => state.managed++ }),

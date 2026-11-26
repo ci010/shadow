@@ -37,22 +37,17 @@ test('desktop and mobile language controls update real screens, retain drafts, a
           import {createResourceApp as createApp} from '/src/stores/app.ts'; import {h, ref, nextTick} from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import { i18n, initializeI18n, t } from '/src/i18n.ts';
-          import BrowserAuth from '/src/BrowserAuth.vue';
           import DesktopFrame from '/src/DesktopFrame.vue';
           import FirstRunWizard from '/src/FirstRunWizard.vue';
           import MobileConnection from '/src/MobileConnection.vue';
           import SettingsView from '/src/components/SettingsView.vue';
           import SystemPromptCard from '/src/components/SystemPromptCard.vue';
           import ToolsCard from '/src/components/ToolsCard.vue';
-          import { createBrowserSession } from '/src/web-auth.ts';
           import { createMobileSession } from '/src/mobile-client.ts';
           const stop = initializeI18n(window);
           const errors = [];
           addEventListener('error', event => errors.push(event.message));
           addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
-          const session = createBrowserSession(location.origin, { fetch: async () =>
-            Response.json({ version: 1, required: true, authenticated: false }) });
-          await session.refresh();
           const mobile = createMobileSession({ get: async () => ({ value: null }), set: async () => {}, remove: async () => {} },
             async () => { throw new Error('No real mobile requests are allowed'); });
           await mobile.load();
@@ -60,10 +55,9 @@ test('desktop and mobile language controls update real screens, retain drafts, a
             { name: 'settings', path: '/settings/:section?', component: {} }
           ] });
           await router.push('/settings/language');
-          const view = ref('auth');
+          const view = ref('mobile');
           const raw = '# Original English prompt\\nRetry stays user-authored.';
           const app = createApp({ setup: () => () => {
-            if (view.value === 'auth') return h(BrowserAuth, { session });
             if (view.value === 'mobile') return h(MobileConnection, { session: mobile });
             return h(DesktopFrame, null, { default: () =>
               view.value === 'settings' ? h(SettingsView, { apiBase: location.origin, status: null, error: '', checking: true, available: true }) :
@@ -75,7 +69,7 @@ test('desktop and mobile language controls update real screens, retain drafts, a
           } });
           app.use(i18n).use(router).mount('#app');
           window.__localization = { show: name => { view.value = name; return nextTick(); }, errors, t };
-          addEventListener('pagehide', () => { app.unmount(); stop(); session.dispose(); mobile.dispose(); }, { once: true });`
+          addEventListener('pagehide', () => { app.unmount(); stop(); mobile.dispose(); }, { once: true });`
       },
       configureServer(vite) {
         vite.middlewares.use((request, response, next) => {

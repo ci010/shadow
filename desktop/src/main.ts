@@ -11,6 +11,7 @@ import {
   dialog,
   ipcMain,
   powerMonitor,
+  protocol,
   Menu,
   nativeImage,
   Notification,
@@ -56,17 +57,14 @@ import {
 import {
   type RendererTarget,
   resolveRendererTarget,
-  resolveChildRendererTarget,
-  rendererTargetController,
 } from './renderer-target.js'
-import { RendererReadiness } from './renderer-readiness.js'
-import { isAllowedExternalUrl } from './security-policy.js'
+import { createNavigationPolicy, isAllowedExternalUrl } from './security-policy.js'
 import { installNavigationPolicy } from './navigation.js'
 import {
   createProductionRuntimeHost,
   registerRuntimeHostQuitLifecycle,
 } from './sidecar/runtime-host.js'
-import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from './runtime-authorization.js'
+import { installRuntimeRequestAuthorization, isPairedApiUrl, type RuntimeAuthorization } from './runtime-authorization.js'
 import { parseWizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, MAIN_WINDOW_MAX_LISTENERS, removeNativeMenus } from './window-controls.js'
@@ -79,20 +77,21 @@ import { installFileExplorer } from './file-explorer.js'
 import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
 import { installMediaPermissions } from './media-permissions.js'
+import { startupLogPath } from './sidecar/startup-diagnostics.js'
 import { installStartupDiagnostics } from './startup-diagnostics-ipc.js'
-import { StartupDiagnosticsLog, startupLogPath, type StartupDiagnosticEntry } from './sidecar/startup-diagnostics.js'
 import { TaskbarActivity } from './taskbar-activity.js'
 import { DesktopConnectionStore, RuntimeConnectionPublication } from './control/publication.js'
 import type { RuntimeEndpointMessage } from './control/runtime-endpoint.js'
-import { installWebPairing } from './web-pairing.js'
 import { DesktopMicroApps } from './micro-apps.js'
 import { createMicroAppWindow } from './micro-app-window.js'
-import { parseMicroAppArguments, type MicroAppIdentity } from './micro-app-contract.js'
+import { CHILD_MICRO_APP_SCHEME, parseMicroAppArguments, type MicroAppIdentity } from './micro-app-contract.js'
 import { installMicroAppIpc } from './micro-app-ipc.js'
 import { desktopReleaseReadiness } from './release-readiness.js'
 import { readManagedDeploymentProfile, type ManagedDeploymentProfile } from './deployment-profile.js'
 import { installTaskNotifications } from './task-notifications.js'
 import { installClipboardFiles, readClipboardFiles, readClipboardPaths } from './clipboard-files.js'
+
+protocol.registerSchemesAsPrivileged([{ scheme: CHILD_MICRO_APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -290,7 +289,7 @@ async function start(): Promise<void> {
   const initialApp = parseMicroAppArguments(process.argv)
   const userDataPath = app.getPath('userData')
   if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
-    throw new Error('Desktop service attachment is no longer supported. Use browser pairing for independent services, or configure this desktop as Main or Child.')
+    throw new Error('Desktop service attachment is no longer supported. Configure this desktop as Main or Child.')
   }
   const roles = await DesktopRoleProfiles.load(userDataPath)
   const roleUserDataPath = roles.userDataPath
@@ -306,7 +305,8 @@ async function start(): Promise<void> {
   }
   const onAuthorizationChanged = installRuntimeRequestAuthorization(
     session.defaultSession,
-    (details) => details.webContentsId === mainWindow?.webContents.id,
+    (details) => mainWindow !== null && details.webContentsId === mainWindow.webContents.id &&
+      createNavigationPolicy(target).isAllowed(mainWindow.webContents.getURL()),
   )
   let taskbarActivity: TaskbarActivity | undefined
   let microApps: DesktopMicroApps | undefined
@@ -321,14 +321,8 @@ async function start(): Promise<void> {
     store: new DesktopConnectionStore(userDataPath),
     isReady: (authorization) => runtimeHost.status.phase === 'ready'
       && runtimeHost.status.role === 'main' && runtimeHost.apiBase === authorization.apiBase,
-    onPublished: (path) => {
-      const quote = (value: string) => `'${value.replace(/'/gu, process.platform === 'win32' ? "''" : "'\\''")}'`
-      if (app.isPackaged) {
-        console.info('[desktop] Web access: with ELECTRON_RUN_AS_NODE=1, run:')
-        console.info(`& ${quote(process.execPath)} ${quote(join(process.resourcesPath, 'backend', 'dist', 'src', 'index.js'))} web pair --connection ${quote(path)}`)
-      }
-    },
-    onError: () => console.error('[desktop] Web pairing connection publication failed; desktop runtime status is unchanged.'),
+    onPublished: () => {}, // The protected descriptor remains available to native mobile management CLI.
+    onError: () => console.error('[desktop] Local management connection could not be published.'),
     onUnavailable: () => sendRuntimeEndpoint({ type: 'shadow:runtime-stopped' }),
   })
   const restart = createDevelopmentRestart(app.isPackaged, process, () => app.quit(),
@@ -345,7 +339,6 @@ async function start(): Promise<void> {
     const status = runtimeHost.status
     activityAuthorization = status.phase === 'ready' && status.role === 'main' ? authorization : null
     taskbarActivity?.setAuthorization(activityAuthorization)
-    // Child authorization is its loopback control credential; business requests use the paired Main proof tunnel.
     microApps?.setAuthorization(authorization)
     sendRuntimeEndpoint(activityAuthorization
       ? { type: 'shadow:runtime-ready', apiBase: activityAuthorization.apiBase }
@@ -442,78 +435,23 @@ async function start(): Promise<void> {
       : join(app.getAppPath(), '..', 'app', 'dist'),
     ...(developmentUrl ? { developmentUrl } : {}),
   })
-  const renderer = rendererTargetController(localTarget)
-  const target = renderer.target
-  const rendererLog = new StartupDiagnosticsLog(startupLogPath(roleUserDataPath))
-  const rendererStartedAt = Date.now()
-  const reportRenderer = (
-    event: StartupDiagnosticEntry['event'],
-    detail: Pick<StartupDiagnosticEntry, 'httpStatus' | 'netError' | 'resourceType'> = {},
-  ): void => rendererLog.write({
-    timestamp: new Date().toISOString(), role: 'child', event,
-    elapsedMs: Math.max(0, Date.now() - rendererStartedAt), ...detail,
+  const target = localTarget
+  session.defaultSession.webRequest.onCompleted({ urls: ['<all_urls>'] }, details => {
+    if (!rendererAuthorization?.deviceGrant || details.statusCode !== 401 ||
+      details.webContentsId !== mainWindow?.webContents.id ||
+      !isPairedApiUrl(details.url, details.method, rendererAuthorization)) return
+    const invalid = Object.entries(details.responseHeaders ?? {}).some(([key, values]) =>
+      key.toLowerCase() === 'x-shadow-device-session' && values.includes('invalid'))
+    if (invalid) runtimeHost.invalidateChildGrant()
   })
-  const childRendererReadiness = new RendererReadiness(
-    () => { reportRenderer('renderer-timeout'); restoreLocalRenderer() },
-  )
-  registerIpcHandlers(coordinator, startup, async (result, retry) => {
-    if (!result.ok || result.context.mode !== 'child' || !mainWindow) return result
-    const window = mainWindow
-    const remoteTarget = resolveChildRendererTarget(localTarget, result.context.apiBase, app.isPackaged)
-    if (remoteTarget === localTarget) {
-      reportRenderer('renderer-ready')
-      return result
-    }
-    if (retry) childRendererReadiness.retry()
-    if (childRendererReadiness.failed) return { ok: false, code: 'runtime-unavailable' }
-    if (remoteTarget.kind !== 'url') return result
-    if (mainWindow.webContents.getURL().startsWith(`${remoteTarget.origin}/`)) {
-      childRendererReadiness.ready()
-      reportRenderer('renderer-ready')
-      return result
-    }
-    // A retry can call bootstrap again before the first navigation commits.
-    if (target.origin === remoteTarget.origin) return result
-    // Probe before leaving local recovery. The token never enters URLs or renderer JavaScript.
-    if (!rendererAuthorization || rendererAuthorization.apiBase !== result.context.apiBase) return { ok: false, code: 'runtime-unavailable' }
-    try {
-      const response = await fetch(remoteTarget.url, {
-        headers: { Authorization: `Bearer ${rendererAuthorization.launchToken}` },
-        signal: AbortSignal.timeout(15000), redirect: 'error',
-      })
-      await response.body?.cancel()
-      reportRenderer('renderer-probe', { httpStatus: response.status })
-      if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) return { ok: false, code: 'runtime-unavailable' }
-    } catch {
-      reportRenderer('renderer-probe')
-      return { ok: false, code: 'runtime-unavailable' }
-    }
-    if (window !== mainWindow) return result
-    renderer.select(remoteTarget)
-    setTimeout(() => {
-      if (window !== mainWindow) return
-      void window.loadURL(remoteTarget.url).catch(error => {
-        if (window !== mainWindow) return
-        const netError = rendererLoadErrorCode(error)
-        if (netError === -3) return
-        reportRenderer('renderer-load-failed', netError === undefined ? {} : { netError })
-        restoreLocalRenderer()
-      })
-    }, 0)
-    return result
-  })
-  const restoreLocalRenderer = (): void => {
-    const window = mainWindow
-    if (!window || target.origin === localTarget.origin) return
-    childRendererReadiness.fail()
-    renderer.select(localTarget)
-    void (localTarget.kind === 'url' ? window.loadURL(localTarget.url) : window.loadFile(localTarget.filePath))
-      .catch(error => {
-        if (window !== mainWindow) return
-        const netError = rendererLoadErrorCode(error)
-        if (netError === -3) return
-        reportRenderer('renderer-load-failed', netError === undefined ? {} : { netError })
-      })
+  registerIpcHandlers(coordinator, startup)
+  for (const [channel, operation] of [[IPC_CHANNELS.childLocalStatus, 'status'], [IPC_CHANNELS.childLocalInventory, 'inventory']] as const) {
+    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+      parseNoArguments(args)
+      if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame ||
+        !createNavigationPolicy(target).isAllowed(event.senderFrame.url)) throw new Error('Child control requires the trusted desktop main frame')
+      return runtimeHost.requestChildLocal(operation)
+    })
   }
   microApps = new DesktopMicroApps({
     userDataPath, executablePath: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged,
@@ -539,50 +477,7 @@ async function start(): Promise<void> {
     await microApps!.open(identity)
   }
   const openWindow = (showOnReady: boolean) => {
-    renderer.select(localTarget)
-    childRendererReadiness.retry()
     const window = mainWindow = createMainWindow(target, showOnReady, roleUserDataPath)
-    // A document 200 is not readiness: entry scripts may still fail. The remote
-    // renderer must reach bootstrap.ensureRuntime, otherwise restore local recovery.
-    window.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
-      if (isMainFrame && !inPlace && target.origin !== localTarget.origin) {
-        reportRenderer('renderer-navigation')
-        childRendererReadiness.wait()
-      }
-    })
-    window.once('closed', () => childRendererReadiness.ready())
-    window.webContents.on('did-navigate', (_event, _url, status) => {
-      if (status >= 400 && target.origin !== localTarget.origin) {
-        reportRenderer('renderer-load-failed', { httpStatus: status })
-        restoreLocalRenderer()
-      }
-    })
-    window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
-      if (isMainFrame && code !== -3 && target.origin !== localTarget.origin) {
-        reportRenderer('renderer-load-failed', { netError: code })
-        restoreLocalRenderer()
-      } // ERR_ABORTED is an intentional replacement.
-    })
-    const contentsId = window.webContents.id
-    const isChildRendererRequest = (details: Electron.OnCompletedListenerDetails | Electron.OnErrorOccurredListenerDetails) =>
-      details.webContentsId === contentsId
-      && target.origin !== localTarget.origin
-      && new URL(details.url).origin === target.origin
-    session.defaultSession.webRequest.onCompleted({ urls: ['http://127.0.0.1/*'] }, details => {
-      if (isChildRendererRequest(details) && details.statusCode >= 400) {
-        reportRenderer('renderer-resource-failed', { httpStatus: details.statusCode, resourceType: details.resourceType })
-      }
-    })
-    session.defaultSession.webRequest.onErrorOccurred({ urls: ['http://127.0.0.1/*'] }, details => {
-      if (isChildRendererRequest(details) && details.error !== 'net::ERR_ABORTED') {
-        reportRenderer('renderer-resource-failed', { resourceType: details.resourceType })
-      }
-    })
-    window.once('closed', () => {
-      session.defaultSession.webRequest.onCompleted(null)
-      session.defaultSession.webRequest.onErrorOccurred(null)
-    })
-
     installTaskNotifications(ipcMain, window, target, {
       supported: () => Notification.isSupported(),
       create: message => new Notification({ ...message, icon: desktopIconPath(), silent: true }),
@@ -590,7 +485,6 @@ async function start(): Promise<void> {
     })
     installBackgroundWindow(app, window)
     installPresence(ipcMain, window, powerMonitor)
-    installWebPairing(ipcMain, window, () => activityAuthorization)
     taskbarActivity = new TaskbarActivity(window)
     taskbarActivity.setAuthorization(activityAuthorization)
     window.once('closed', () => {
@@ -672,7 +566,7 @@ if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
       console.error('[desktop] Failed to start', error)
       dialog.showErrorBox('Shadow startup failed',
         app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined
-          ? 'Desktop service attachment is no longer supported. Remove --service-connection and SHADOW_SERVICE_CONNECTION; use browser pairing for independent services or configure this desktop as Main or Child.'
+          ? 'Desktop service attachment is no longer supported. Remove --service-connection and SHADOW_SERVICE_CONNECTION; configure this desktop as Main or Child.'
           : 'Desktop initialization failed. Check the startup diagnostics before retrying.')
       app.quit()
     })

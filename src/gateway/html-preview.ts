@@ -10,30 +10,25 @@ const TTL = 5 * 60_000
 const MAX_LEASES = 128
 const MAX_FILE = 32 * 1024 * 1024
 interface LeaseLifetime {
-  origin: string; expires: number
+  origin: string; publicBase: string; expires: number
   owner?: AbortSignal; cleanup: () => void
 }
 interface LocalLease extends LeaseLifetime {
   root: string; base: string
   validate: () => Promise<string | undefined>
 }
-interface RelayLease extends LeaseLifetime {
-  relay: (path: string, method: string, signal: AbortSignal) => Promise<Response>
-  upstreamPrefix: string
-}
-type Lease = LocalLease | RelayLease
 export const previewContext = new AsyncLocalStorage<{ store: HtmlPreviewLeases; origin: string; owner?: AbortSignal }>()
 
 /** Dedicated bounded capabilities, never business API credentials. In-memory only. */
 export class HtmlPreviewLeases {
   private active = 0
-  private leases = new Map<string, Lease>()
+  private leases = new Map<string, LocalLease>()
   constructor(private now = Date.now) {}
   private prune() {
     for (const [key, lease] of this.leases) if (lease.expires <= this.now() || lease.owner?.aborted) this.revoke(key)
   }
   revoke(token: string) { const lease = this.leases.get(token); this.leases.delete(token); lease?.cleanup() }
-  async create(base: string, path: string, origin: string, validate: LocalLease['validate'], owner?: AbortSignal) {
+  async create(base: string, path: string, origin: string, validate: LocalLease['validate'], owner?: AbortSignal, publicBase = origin) {
     this.prune()
     if (this.leases.size >= MAX_LEASES) throw new Error('preview_capacity')
     const parts = safePath(path)
@@ -51,36 +46,9 @@ export class HtmlPreviewLeases {
     const timer = setTimeout(revoke, TTL)
     timer.unref()
     owner?.addEventListener('abort', revoke, { once: true })
-    this.leases.set(token, { base, root: dirname(target), origin, validate, owner, expires,
+    this.leases.set(token, { base, root: dirname(target), origin, publicBase, validate, owner, expires,
       cleanup: () => { clearTimeout(timer); owner?.removeEventListener('abort', revoke) } })
     return { url: `/api/html-preview/${token}/${encodeURIComponent(basename(target))}`, revokeUrl: `/api/html-preview-leases/${token}`, expiresAt: expires }
-  }
-  /** Import only a lease returned by an authenticated device-UI create request.
-   * The upstream token stays server-side; the local token cannot select another
-   * upstream capability, API path, host, or filesystem resource.
-   */
-  importRelay(value: unknown, origin: string, relay: RelayLease['relay'], revoke: () => Promise<void>, owner?: AbortSignal) {
-    if (!value || typeof value !== 'object') throw new Error('invalid_preview_lease')
-    const { url, revokeUrl, expiresAt } = value as Record<string, unknown>
-    const match = typeof url === 'string' && /^\/api\/html-preview\/([\w-]{43})\/([^/]+)$/.exec(url)
-    if (!match || revokeUrl !== `/api/html-preview-leases/${match[1]}` || typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= this.now()) throw new Error('invalid_preview_lease')
-    if (!safePath(decodeURIComponent(match[2]!))) throw new Error('invalid_preview_lease')
-    this.prune()
-    if (this.leases.size >= MAX_LEASES || owner?.aborted) throw new Error('preview_capacity')
-    const token = randomBytes(32).toString('base64url')
-    const expires = Math.min(expiresAt, this.now() + TTL)
-    const stop = () => this.revoke(token)
-    const timer = setTimeout(stop, expires - this.now())
-    timer.unref()
-    owner?.addEventListener('abort', stop, { once: true })
-    this.leases.set(token, { origin, expires, owner, relay,
-      upstreamPrefix: `http://workspace.internal/api/html-preview/${match[1]}/`,
-      cleanup: () => {
-        clearTimeout(timer); owner?.removeEventListener('abort', stop)
-        void revoke().catch(() => {})
-      },
-    })
-    return { url: `/api/html-preview/${token}/${match[2]}`, revokeUrl: `/api/html-preview-leases/${token}`, expiresAt: expires }
   }
   async serve(request: Request): Promise<Response | undefined> {
     const url = new URL(request.url)
@@ -94,24 +62,6 @@ export class HtmlPreviewLeases {
     if (this.active >= 8) return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
     this.active++
     try {
-      if ('relay' in lease) {
-        const parts = safePath(decodeURIComponent(match[2]!))
-        if (!parts) return deny()
-        const response = await lease.relay(parts.map(encodeURIComponent).join('/'), request.method, request.signal)
-        if (this.leases.get(match[1]!) !== lease || lease.owner?.aborted || lease.expires <= this.now()) {
-          await response.body?.cancel(); return deny()
-        }
-        const headers = new Headers(response.headers)
-        // Main binds the upstream lease to its synthetic device-UI origin.
-        // Rebase only that exact capability source, never arbitrary URLs.
-        const csp = headers.get('Content-Security-Policy')
-        if (response.ok && !csp) { await response.body?.cancel(); return deny() }
-        if (csp) headers.set('Content-Security-Policy', csp.replaceAll(lease.upstreamPrefix, `${url.origin}/api/html-preview/${match[1]}/`))
-        headers.delete('set-cookie')
-        headers.set('Cache-Control', 'no-store')
-        headers.set('Access-Control-Allow-Origin', '*')
-        return new Response(response.body, { status: response.status, headers })
-      }
       let base: string | undefined
       try {
         // Registry spelling may differ from realpath on Windows (slashes,
@@ -143,7 +93,7 @@ export class HtmlPreviewLeases {
           bytes = bytes.subarray(0, offset)
         }
         if (this.leases.get(match[1]!) !== lease || lease.owner?.aborted || lease.expires <= this.now()) return deny()
-        const assets = `${url.origin}/api/html-preview/${match[1]}/`
+        const assets = `${lease.publicBase}/api/html-preview/${match[1]}/`
         return new Response(bytes, { headers: {
           'Content-Type': MIME_BY_EXT[extname(target).toLowerCase()] ?? 'application/octet-stream',
           'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
@@ -177,6 +127,26 @@ async function checkedPath(root: string, parts: string[]) {
   return await realpath(target)
 }
 
+export const HTML_PREVIEW_BASE_HEADER = 'X-Shadow-Preview-Base'
+
+/** This affects CSP presentation only, never request admission, lease ownership,
+ * target file selection, or upstream fetch. A non-root paired mount can differ
+ * from Main's received URL when a trusted transport strips the path/authority. */
+function publicPreviewBase(request: Request, origin: string, owner?: AbortSignal): string {
+  const value = request.headers.get(HTML_PREVIEW_BASE_HEADER)
+  if (!owner || !value || value.length > 1024) return origin
+  try {
+    const url = new URL(value)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return origin
+    const path = url.pathname.replace(/\/+$/, '')
+    if (!path) return url.origin
+    // This is a CSP source expression, not arbitrary header text.
+    const escaped = path.replace(/[!$&'()*+,;=:@\[\]]/g, ch => `%${ch.charCodeAt(0).toString(16).padStart(2, '0')}`)
+    if (!/^\/[A-Za-z0-9._~%/-]+$/.test(escaped) || /%(?![0-9a-f]{2})/i.test(escaped)) return origin
+    return url.origin + escaped
+  } catch { return origin }
+}
+
 /** Called only by authenticated, Project-scoped file routes. Closure revalidates ownership on every read. */
 export async function createHtmlPreview(c: Context, validate: () => Promise<string | undefined>): Promise<Response> {
   const context = previewContext.getStore()
@@ -185,7 +155,7 @@ export async function createHtmlPreview(c: Context, validate: () => Promise<stri
   try {
     const base = await validate()
     if (!base) return c.json({ error: 'html_preview_requires_local_folder', message: 'Interactive HTML preview is unavailable for this resource. Remote folders are not supported.' }, 501)
-    return c.json(await context.store.create(base, path, context.origin, validate, context.owner))
+    return c.json(await context.store.create(base, path, context.origin, validate, context.owner, publicPreviewBase(c.req.raw, context.origin, context.owner)))
   } catch (error) {
     return c.json({ error: error instanceof Error && error.message === 'preview_capacity' ? 'preview_capacity' : 'invalid_preview_path' }, 400)
   }

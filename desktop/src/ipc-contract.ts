@@ -2,7 +2,6 @@ import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import type { BootstrapCommandResult } from './bootstrap/coordinator.js'
 import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
 import type { DesktopMediaCaptureApi } from './media-capture-contract.js'
-import type { DesktopWebPairingApi } from './web-pairing-contract.js'
 import type { ChildPairInput, ChildSetupInfo } from './bootstrap/child.js'
 import type { DesktopMicroAppsApi } from './micro-app-contract.js'
 import type { DesktopClipboardFilesApi } from './clipboard-files-contract.js'
@@ -31,7 +30,8 @@ export const IPC_CHANNELS = {
   openExternal: 'shadow:native:open-external',
   openCopilotLogin: 'shadow:native:open-copilot-login',
   revealStartupLog: 'shadow:diagnostics:reveal-startup-log',
-  createWebPairing: 'shadow:web-pairing:create',
+  childLocalStatus: 'shadow:child-local:status',
+  childLocalInventory: 'shadow:child-local:inventory',
   windowGetState: 'shadow:window:get-state',
   windowMinimize: 'shadow:window:minimize',
   windowToggleMaximize: 'shadow:window:toggle-maximize',
@@ -68,7 +68,7 @@ export interface ShadowDesktopApi {
   readonly taskNotifications: DesktopTaskNotificationsApi
   readonly clipboardFiles: DesktopClipboardFilesApi
   readonly microApps: DesktopMicroAppsApi
-  readonly webPairing: DesktopWebPairingApi
+  readonly childLocal: { status(): Promise<unknown>; inventory(): Promise<unknown> }
   readonly diagnostics: {
     revealStartupLog(): Promise<void>
   }

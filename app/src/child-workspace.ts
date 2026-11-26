@@ -1,4 +1,5 @@
 import { readonly, ref } from 'vue'
+import { apiUrl } from './api-url.ts'
 import type { LiveStatus } from './live-client.ts'
 
 export function createChildWorkspaceConnection(apiBase: string, options: {
@@ -44,7 +45,7 @@ export function createChildWorkspaceConnection(apiBase: string, options: {
     if (!available.value) checking.value = true
     const current = new AbortController(); controller = current
     try {
-      const response = await request(new URL('/api/projects', apiBase), {
+      const response = await request(apiUrl(apiBase, '/api/projects'), {
         signal: AbortSignal.any([current.signal, AbortSignal.timeout(10_000)]), cache: 'no-store',
       })
       if (!response.ok) {

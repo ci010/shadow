@@ -2742,62 +2742,32 @@ it is not an embedded universal speech backend.
 
 ### Hono gateway
 
-The default host is `127.0.0.1`, port `3123`; environment/options can override
-them. Plugins expose:
+Main's desktop and Dev Tunnel gateway share `127.0.0.1:3124`. Business
+requests require a credential. Main desktop injects a launch credential for its
+trusted renderer; native mobile and A2A retain their own authorized ingress.
+Ordinary browser pages, login/PIN exchange, cookies, and LAN browser listeners
+are not served. Electron loads bundled assets or a local Vite server; Vite is a
+dev asset source, not a browser access mode. CORS is not authentication.
 
-- chat input/activity, uploads/media, and provider authentication;
-- session/history/configuration/agent management;
-- provider discovery and runtime control;
-- OTLP JSON ingest at `/v1/traces`, `/v1/logs`, `/v1/metrics`;
-- telemetry queries at `/v1/query/*`, with live logs/spans on `/api/live`;
-- WIP pairing/node protocol endpoints.
+When device networking is enabled, the shared gateway additionally accepts the
+existing pairing and authenticated execution protocol routes. A configured
+LAN binding is limited to device ingress, including authorized device workspace
+APIs; it cannot serve owner controls. The approved Child obtains a short-lived,
+revocable, audience-bound workspace grant using a dedicated one-use challenge
+with the already paired protected OS signing key. The key stays in the backend;
+a privileged Electron handler injects the grant only on scoped Main requests.
+The renderer sends business HTTP, including project catalog, history and chat,
+and its separately ticketed `/api/live/ws` directly to the paired Main endpoint.
+The execution socket remains independent at `/cluster/v1/node`. Device-network
+disable invalidates grants and shuts down active device connections without
+stopping Main desktop access. Registry revocation also terminates that device's
+live and execution streams.
 
-An explicit launch bearer can protect gateway requests; some pairing/challenge/
-node paths use their own protocol checks instead. Origin policy accepts the
-same origin or configured origins and handles authenticated opaque Electron
-origins. **CORS is not authentication**: non-browser callers need not send an
-Origin header, and ordinary local startup may have no launch credential.
-Provider OAuth endpoints are not a general login/authorization system for all
-gateway data.
-
-Main additionally owns browser authentication in `src/gateway/web-auth.ts`;
-Electron is not an authentication dependency. Public frontend pages/assets and
-`/api/web-auth/*` are reachable before login, while ordinary APIs remain protected.
-An authorized local CLI issues a five-minute, single-use code through the
-management-only `POST /local/v1/web-pairing` endpoint. The browser exchanges it at
-`POST /api/web-auth/pair` for a twelve-hour HttpOnly/SameSite=Strict cookie.
-Only hashes of random codes/session secrets are retained in bounded in-memory
-stores. Failed exchanges are rate-limited. Restart drops all browser sessions;
-logout and expiry abort associated live feeds and WebSocket connections.
-Browser authorization is carried through scoped Project requests as well as the
-shared API gateway. Browser cookies never authorize `/local`, device-pairing or
-cluster-control routes; those retain their management/protocol checks.
-
-The browser flow requires a loopback target and the TCP peer captured at the
-server boundary, not forwarded client-address headers. Mutations require a
-same-origin request (or the explicitly configured development Vite origin);
-opaque Electron origins do not authorize browser cookies. Cookie names include
-the backend port to avoid collisions between local runtimes. This is a local
-browser session, not a remote deployment, per-user permissions model, or OS
-sandbox. Legacy local startup without a launch credential remains unprotected.
-
-Frontend serving is registered last: use a Vite development proxy if configured,
-otherwise an available built UI, otherwise expose APIs without a frontend.
-The development UI normally runs on `5273`; static UI can share the gateway.
-The reverse development proxy strips management authorization and browser
-cookies before forwarding frontend assets to Vite.
-`OtelStore` persists telemetry separately from conversations. Traces can contain
-tool arguments or other sensitive operational context.
-
-Node tracing is initialized explicitly by `src/otel/runtime.ts`. The
-OpenTelemetry Node SDK sends application spans directly to the local store;
-console records are stored with their active trace/span IDs. Shutdown restores
-the console and releases the provider. This replaces Deno's implicit telemetry
-integration; the OTLP endpoints remain available for external ingestion.
-
-Node's built-in `WebSocket` is used for outbound connections, including the
-development proxy. Inbound HTTP upgrades use Hono's Node adapter and `ws` because
-Node does not provide a native WebSocket server.
+Child has no backend HTTP listener. Readiness, status, inventory and shutdown
+use inherited process IPC, with only read-only scoped status/inventory exposed
+to the trusted renderer. Micro App windows use a per-run isolated Electron
+protocol (no Child TCP listener); only the existing app-scoped relay reaches
+Main. HTML previews use short-lived Main capabilities in a sandboxed iframe.
 
 ### Vue application
 
@@ -3226,20 +3196,13 @@ requires a compatible authenticated connection and fresh workdir/operation
 support from that connection, not persisted `online` flags. Inventory reports
 workdirs, lightweight node/workdir support and `executionProtocol`; advertisements
 do not bypass existing Project/Folder access checks. Remote versions and last-seen times
-are not currently reported. The route requires the launch credential when
-configured; credentialless development permits only a verified loopback TCP
-peer with a loopback request hostname, under the gateway's origin policy.
-Device pairing and network administration require the launch credential;
-browser-login cookies do not grant these permissions.
+are not currently reported. Device pairing and network administration require the
+Main launch credential; a Child workspace grant cannot administer devices.
 
-Child's authenticated `GET /local/v1/nodes` reports only its local executor
-capabilities and configured workdir paths. Its connection state now follows the
-actual authenticated Main transport; a locally ready runtime can still be
-offline or waiting for approval. Local workdir availability also reflects the
-current directory state. The separate authenticated `/local/v1/child` status
-supports the Child-only desktop shell and fingerprint comparison without
-pretending Main chat/API proxying exists. Inventory endpoints remain read-only
-and expose no device credentials or public keys; operation support is not authorization.
+Child queries only its local executor inventory and status through scoped native
+IPC. Its status follows the authenticated Main execution transport; local
+readiness does not mean that the workspace or required workdir is available.
+Inventory exposes no device credentials or signing keys.
 
 The application no longer installs approval fixtures or displays an Approvals
 tab. The legacy `/approvals` route redirects to Nodes. Paired nodes are trusted

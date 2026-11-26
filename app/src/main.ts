@@ -6,34 +6,20 @@ import './styles.css'
 import App from './App.vue'
 import router from './router.ts'
 import { createInstallationContextProvider } from './composables/useInstallationContext.ts'
-import { createLocalMainAdminContext } from './installation-context.ts'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
 import ChildWorkspace from './ChildWorkspace.vue'
-import BrowserAuth from './BrowserAuth.vue'
-import { browserSessionKey, createBrowserSession, mountBrowserSession } from './web-auth.ts'
 import {
 	resolveDesktopBootstrap,
 	type RendererBootstrapOutcome,
 	type ShadowDesktopApi,
 } from './desktop-bootstrap.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
-import { registerBrowserPwa } from './pwa.ts'
 import { i18n, initializeI18n } from './i18n.ts'
 
 const stopLocalization = initializeI18n(window)
 if (import.meta.hot) import.meta.hot.dispose(stopLocalization)
-
-if (import.meta.env.MODE !== 'mobile') void registerBrowserPwa({
-	production: import.meta.env.PROD,
-	desktop: !!window.shadowDesktop,
-	secureContext: window.isSecureContext,
-	protocol: window.location.protocol,
-	serviceWorker: import.meta.env.PROD && !window.shadowDesktop ? navigator.serviceWorker : undefined,
-}).catch(error => console.error('[pwa] Could not enable the installed web app.', error))
-
-const apiBase = import.meta.env.VITE_API_BASE?.trim() || globalThis.location.origin
 
 function desktopRoot(component: Component, props?: Record<string, unknown>) {
 	return defineComponent({
@@ -119,26 +105,7 @@ if (import.meta.env.MODE === 'mobile') {
 } else if (desktopApi) {
 	await startDesktopApp(desktopApi)
 } else {
-	const session = createBrowserSession(apiBase)
-	const stopMounting = mountBrowserSession(session, {
-		authenticated: () => {
-			const app = createApp(App).use(i18n).use(router)
-				.use(createInstallationContextProvider(createLocalMainAdminContext(apiBase)))
-				.provide(browserSessionKey, session)
-			app.mount('#app')
-			return () => app.unmount()
-		},
-		unauthenticated: () => {
-			const auth = createApp(BrowserAuth, { session }).use(i18n)
-			auth.mount('#app')
-			return () => auth.unmount()
-		},
-	})
-	const stopListening = session.listen(window, document)
-	void session.refresh()
-	if (import.meta.hot) import.meta.hot.dispose(() => {
-		stopMounting()
-		stopListening()
-		session.dispose()
-	})
+	// The desktop bundle is not a standalone browser application (including Vite dev).
+	const root = document.getElementById('app')
+	if (root) root.textContent = 'Open Shadow in the desktop app.'
 }

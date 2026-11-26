@@ -23,6 +23,7 @@ export function installNavigationPolicy(
     event.preventDefault()
     void openOutside(url)
   })
+  webContents.on('will-redirect', (event, url) => { if (!policy.isAllowed(url)) event.preventDefault() })
   webContents.setWindowOpenHandler(({ url }) => {
     void openOutside(url)
     return { action: 'deny' }

@@ -1,3 +1,5 @@
+export const CHILD_MICRO_APP_SCHEME = 'shadow-child-app'
+
 export interface MicroAppIdentity {
   readonly projectId: string
   readonly appId: string

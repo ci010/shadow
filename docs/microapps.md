@@ -4,7 +4,7 @@ Micro Apps are reusable Web tools owned by a Project, not temporary conversation
 cards or another agent loop. Open the Project workbench's **Apps** workspace.
 Ask the agent to build a tool, then **Refresh** Apps to see its publication.
 Published apps, including changed revisions, can be opened immediately with
-**Open window** on Electron or **Open app** in a Web browser. There is no separate
+**Open window** in Electron. There is no separate
 owner approval step. Publication alone does not run code. Source, backend behavior
 and model limits remain inspectable in **Review details**. **Ask author to test
 this version** separately asks whether the author may continue runtime testing;
@@ -17,41 +17,24 @@ mobile/LAN app hosting, or browser microphone/device permission broker.
 
 ## Native windows on a paired Child
 
-A ready Electron Child uses its own authenticated loopback control endpoint,
-then the existing paired-device MainDeviceUi challenge/proof channel for app
-catalog, revision-bound open and stop. It does not start a second local
-Main. The app backend and persistent state remain on the connected Main; this
-is not remote-workdir app publication or public LAN app hosting.
+Child requests the catalog, revision-bound open and stop directly from its
+paired Main using the device workspace grant. Main runs the app and stores its
+state. Child does not run another Main or publish from a remote workdir.
 
-Main's isolated loopback app URL is not usable on another machine. Child replaces
-it with a separate ephemeral loopback origin for that app run. Requests relay
-only to the selected Project/app, exact published revision and current run ID;
-the caller cannot supply a target host or port. Each request obtains fresh device
-proof. Only app-specific one-use tickets and app tokens reach the app renderer;
-Main/Child control credentials never do. Requests from another Origin are rejected.
-The ordinary independent BrowserWindow, nonpersistent partition and focus reuse
-remain unchanged. Closing the window stops the runtime on the connected Main and
-closes the Child relay; Child shutdown also closes its relay listeners. Revocation,
-revision changes, device-proof failure and expired/stopped runs fail closed.
+Main's isolated loopback URL is not usable on another machine. The Electron
+host gives each Child app run a distinct `shadow-child-app://` origin in a
+nonpersistent sandboxed partition. A scoped in-process protocol handler relays
+only that Project, app, exact revision and current run ID to Main. There is no
+Child HTTP listener or selectable target host/port. The renderer gets only the
+app's one-use ticket and app token, never the device workspace grant. Repeated
+opens focus the existing window; closing it stops Main's run and removes the
+protocol handler. Stale or revoked access fails closed.
 
-The integration fixture runs real loopback Main device ingress and Child control.
-On a desktop with a display it also launches the installed Electron using a
-throwaway profile: the message bridge opens a real independent BrowserWindow,
-loads the app/SDK through Child, saves and reloads state, focuses on repeat open,
-stops Main on close, reopens on a new origin, and rejects access after revocation.
-It is not a Windows native UI/taskbar or separate-machine acceptance claim.
-
-Child adds its own shared limits: at most 16 app relay listeners (including
-reserved opening slots), 16 in-flight app relay requests across all its apps,
-16 MiB decoded request/response bodies, and 24 MiB transport JSON envelopes.
-A saturated request queue returns 429; oversized app input returns 413 before
-forwarding. HTTP header/request receipt timeouts are 15/30 seconds. Listeners
-close on stop/shutdown or run expiry (at most eight hours). These are additional
-Child limits, not inherited Main listener quotas. The existing MainDeviceUi
-128 active requests and 600 challenges/minute limits, exact-revision checks,
-32 outstanding tickets/run and two concurrent model calls/app remain in force.
-Main relay also bounds decoded request/response bodies to 16 MiB; this does not
-introduce a new global cap on owner-started Main app runtimes.
+Child bounds its windows and opening slots at 16, concurrent app requests at
+16, request bodies at 16 MiB and response envelopes at 24 MiB. Main's app token,
+revision and relay validation remain in force. The Electron fixture checks
+real SDK state, save/reopen, stop and origin isolation against disposable Main
+data; it is not separate-machine acceptance.
 
 ## Guided construction from a short request
 

@@ -24,7 +24,7 @@ export class DesktopConnectionStore implements ConnectionStore {
     const apiBase = requireLoopbackOrigin(authorization.apiBase)
     const token = requireLaunchToken(authorization.launchToken)
     const control = join(this.userDataPath, 'control')
-    const directory = join(control, 'web-access')
+    const directory = join(control, 'mobile-management')
     await mkdir(control, { recursive: true, mode: 0o700 })
     if (!(await lstat(control)).isDirectory() || (await lstat(control)).isSymbolicLink()) throw new Error('Invalid control directory')
     await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -75,7 +75,7 @@ export class DesktopConnectionStore implements ConnectionStore {
       return { path, renew, remove }
     } catch {
       await remove()
-      throw new Error('Desktop Web connection could not be published')
+      throw new Error('Desktop mobile management connection could not be published')
     }
   }
 }

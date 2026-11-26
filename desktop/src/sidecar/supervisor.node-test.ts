@@ -15,7 +15,7 @@ import {
 } from './supervisor.js'
 
 const request: SidecarStartRequest = {
-  role: 'child',
+  role: 'main',
   executablePath: 'C:\\Shadow\\Shadow.exe',
   entryPath: 'C:\\Shadow\\resources\\backend\\dist\\src\\index.js',
   configPath: 'C:\\Users\\test\\bootstrap.json',
@@ -27,7 +27,7 @@ test('fake sidecar records explicit startup inputs and reaches readiness', async
   const supervisor = new FakeSidecarSupervisor()
   assert.deepEqual(await supervisor.start(request), {
     phase: 'ready',
-    role: 'child',
+    role: 'main',
     apiBase: 'http://127.0.0.1:43123',
   })
   assert.deepEqual(supervisor.starts, [request])
@@ -39,7 +39,7 @@ test('fake sidecar records explicit startup inputs and reaches readiness', async
 test('fake sidecar exposes classified startup failures', async () => {
   const supervisor = new FakeSidecarSupervisor({
     phase: 'failed',
-    role: 'child',
+    role: 'main',
     kind: 'main-unreachable',
     message: 'Main did not answer readiness probe',
   })
@@ -137,24 +137,31 @@ function harness(probeResults: SidecarReadinessResult[] = [{ ready: true }]) {
   return { child, calls, supervisor }
 }
 
-test('production child sidecar uses the exact child startup contract', async () => {
-  const { calls, supervisor } = harness()
-  assert.deepEqual(await supervisor.start(request), {
-    phase: 'ready',
-    role: 'child',
-    apiBase: 'http://127.0.0.1:43123',
-  })
+test('production Child starts and stops through inherited IPC without inspecting or reserving a port', async () => {
+  const { child, calls, supervisor } = harness()
+  const endpoint = 'https://paired-main.example.test'
+  const received: string[] = []
+  Object.assign(child, { send: (msg: { type: string; id: number; operation: string }, callback: (error: Error | null) => void) => {
+    received.push(msg.operation)
+    callback(null)
+    queueMicrotask(() => {
+      if (msg.operation === 'shutdown') child.exit(0)
+      else child.emit('message', { type: msg.type, id: msg.id, result: { ready: true, endpoint } })
+    })
+    return true
+  } })
+  assert.deepEqual(await supervisor.start({ ...request, role: 'child' }), { phase: 'ready', role: 'child', apiBase: endpoint })
   assert.equal(calls[0]?.executablePath, request.executablePath)
   assert.deepEqual(calls[0]?.args, [request.entryPath, 'child', 'start', '--config', request.configPath])
-  assert.deepEqual(calls[0]?.options.env, {
-    EXISTING_ENV: 'preserved',
-    ELECTRON_RUN_AS_NODE: '1',
-    SHADOW_DESKTOP_MEDIA_KEY: undefined,
-    GATEWAY_PORT: '43123',
-    WINDOWS_USE_LAUNCH_TOKEN: request.launchToken,
-  })
+  assert.equal(calls[0]?.options.env?.GATEWAY_PORT, undefined)
+  assert.equal(calls[0]?.options.env?.WINDOWS_USE_LAUNCH_TOKEN, undefined)
+  assert.equal(calls[0]?.options.env?.SHADOW_DESKTOP_MEDIA_KEY, undefined)
+  assert.deepEqual(calls[0]?.options.stdio, ['ignore', 'pipe', 'pipe', 'ipc'])
   assert.equal(calls[0]?.options.shell, false)
   assert.equal(calls[0]?.options.windowsHide, true)
+  await supervisor.stop()
+  assert.deepEqual(received, ['readiness', 'shutdown'])
+  assert.deepEqual(child.signals, [])
 })
 
 test('production main sidecar uses the exact server startup contract with local executor', async () => {
@@ -179,7 +186,10 @@ test('production main sidecar uses the exact server startup contract with local 
     ELECTRON_RUN_AS_NODE: '1',
     SHADOW_DESKTOP_MEDIA_KEY: desktopMediaKey,
     GATEWAY_PORT: '43123',
+    GATEWAY_HOST: '127.0.0.1',
     WINDOWS_USE_LAUNCH_TOKEN: mainRequest.launchToken,
+    GATEWAY_LAUNCH_CREDENTIAL: undefined,
+    WINDOWS_USE_LAUNCH_TOKEN_FILE: undefined,
   })
   assert.equal(calls[0]?.options.shell, false)
 })
@@ -187,7 +197,7 @@ test('production main sidecar uses the exact server startup contract with local 
 test('production child sidecar rejects local executor as configuration error', async () => {
   const { calls, supervisor } = harness()
 
-  assert.partialDeepStrictEqual(await supervisor.start({ ...request, localExecutor: true }), {
+  assert.partialDeepStrictEqual(await supervisor.start({ ...request, role: 'child', localExecutor: true }), {
     phase: 'failed',
     role: 'child',
     kind: 'configuration-error',
@@ -201,7 +211,7 @@ test('production sidecar requires a backend module before spawning Electron', as
   const { calls, supervisor } = harness()
   assert.partialDeepStrictEqual(await supervisor.start({ ...request, entryPath: '' }), {
     phase: 'failed',
-    role: 'child',
+    role: 'main',
     kind: 'configuration-error',
     message: 'Backend entry path is required',
   })
@@ -218,7 +228,7 @@ test('production sidecar classifies exit before readiness', async () => {
   child.exit(12)
   assert.partialDeepStrictEqual(await starting, {
     phase: 'failed',
-    role: 'child',
+    role: 'main',
     kind: 'early-exit',
     message: 'Sidecar exited before readiness with code 12',
   })
@@ -258,7 +268,7 @@ test('production sidecar enforces its deadline when a readiness probe hangs', as
 
   assert.deepEqual(await starting, {
     phase: 'failed',
-    role: 'child',
+    role: 'main',
     kind: 'readiness-timeout',
     message: 'Sidecar was not ready within 25ms',
     elapsedMs: 25,
@@ -417,7 +427,7 @@ test('diagnostics distinguish timeout from early exit with safe role, duration a
     assert.deepEqual(entries.map(entry => entry.event), ['starting', 'spawned', 'failed'])
     assert.deepEqual(entries.at(-1), {
       timestamp: kind === 'early-exit' ? '1970-01-01T00:00:00.007Z' : '1970-01-01T00:00:00.025Z',
-      role: 'child', event: 'failed', elapsedMs: kind === 'early-exit' ? 7 : 25, kind,
+      role: 'main', event: 'failed', elapsedMs: kind === 'early-exit' ? 7 : 25, kind,
       ...(kind === 'early-exit' ? { exitCode: 12 } : {}),
     })
     assert.doesNotMatch(JSON.stringify([entries, logs, result]), /test-token|private chat|secret-config|provider-key/)

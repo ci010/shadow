@@ -7,11 +7,10 @@ import { GltfCaptureBridge } from '../gateway/gltf-capture.ts'
 import { createGltfCaptureOwner } from '../gateway/gltf-capture-auth.ts'
 import { GatewayClientAddressRegistry, registerGatewayRoutes } from '../gateway/server.ts'
 import { GLTF_CAPTURE_HEADER, GLTF_CAPTURE_PATH } from '../gltf-capture-contract.ts'
-import { childWorkspacePlugin } from '../runtime/child-workspace.ts'
 import { DeviceChallengeAuthority, devicePublicKeyFingerprint, encodeBase64Url } from './device-challenge.ts'
 import { requestDeviceChallengeProtocol } from './device-challenge-client.ts'
 import { DeviceCredentialProof } from './device-credentials.ts'
-import { MainDeviceUi, DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST } from './device-ui.ts'
+import { DirectDeviceUi, DEVICE_UI_SESSION, DEVICE_UI_SESSION_CHALLENGE, DIRECT_DEVICE_UI_ROUTES, directDeviceUiPath, directDeviceCapturePath } from './direct-device-ui.ts'
 import type { MainCluster } from './main-cluster.ts'
 import { InMemoryPairingNodeRegistry } from './registry.ts'
 
@@ -19,17 +18,17 @@ const scope = { projectId: 'capture', sessionId: 'web:main', assetId: 'asset', v
 const image = { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAIAAAUAAen63NgAAAAASUVORK5CYII=',
   camera: { position: [1, 2, 3], target: [0, 0, 0] }, objectIds: ['mesh'] }
 
-test('real Child UI proofs bind only that credential to its Viewer across the project proxy', async t => {
+test('direct paired workspace grants bind only a single device to its Viewer across Project routing', async t => {
   const endpoint = 'http://main.test:3124'
   const registry = new InMemoryPairingNodeRegistry(), authority = new DeviceChallengeAuthority(registry)
-  const ingress = new Hono(), main = new Hono(), project = new Hono()
+  const main = new Hono(), project = new Hono()
   const clientAddresses = new GatewayClientAddressRegistry()
-  const ui = new MainDeviceUi({ registry, authority } as MainCluster, clientAddresses, req => Promise.resolve(main.fetch(req)))
+  const ui = new DirectDeviceUi({ registry, authority, observeInventory: () => () => {} } as unknown as MainCluster, () => true)
   t.after(() => ui.close())
-  ui.plugin()(ingress)
-  registerGatewayRoutes(main, [], { launchCredential: 'main-token', clientAddresses, authorizeClient: req => ui.authorize(req) })
-  const bridge = new GltfCaptureBridge(scope.projectId, createGltfCaptureOwner({ browser: { required: true, session: () => undefined },
-    clientAddresses, launchCredential: 'main-token', deviceViewer: request => ui.viewerCaptureOwner(request), delegated: request => ui.authorize(request),
+  registerGatewayRoutes(main, [ui.plugin()], { launchCredential: 'main-token', clientAddresses, authorizeClient: ui.authorize,
+    launchCredentialExemptions: DIRECT_DEVICE_UI_ROUTES, delegatedViewer: { authorize: ui.authorize, ownerSignal: ui.ownerSignal,
+      hasCredential: request => ui.hasCredential(request), allowsCrossOrigin: directDeviceUiPath, allowsCaptureBinding: directDeviceCapturePath } })
+  const bridge = new GltfCaptureBridge(scope.projectId, createGltfCaptureOwner({ clientAddresses, launchCredential: 'main-token', deviceViewer: ui.captureSignal, delegated: ui.authorize,
   }), id => id === scope.sessionId)
   t.after(() => bridge.close())
   bridge.mount(project)
@@ -40,7 +39,7 @@ test('real Child UI proofs bind only that credential to its Viewer across the pr
   })
   await web.start(project)
   t.after(() => web.stop())
-  project.post('/api/echo-header', c => c.json({ binding: c.req.header(GLTF_CAPTURE_HEADER) ?? null, principal: !!ui.viewerCaptureOwner(c.req.raw) }))
+  project.post('/api/echo-header', c => c.json({ binding: c.req.header(GLTF_CAPTURE_HEADER) ?? null, principal: !!ui.captureSignal(c.req.raw) }))
   main.all('/projects/capture/*', c => {
     const url = new URL(c.req.url)
     url.pathname = url.pathname.slice('/projects/capture'.length)
@@ -48,7 +47,7 @@ test('real Child UI proofs bind only that credential to its Viewer across the pr
     clientAddresses.inherit(c.req.raw, inner)
     return project.fetch(inner)
   })
-  const networkFetch: typeof fetch = async (input, init) => ingress.fetch(new Request(input, init))
+  const networkFetch: typeof fetch = async (input, init) => main.fetch(new Request(input, init))
   async function child(n: number) {
     const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])
     const raw = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey))
@@ -62,14 +61,16 @@ test('real Child UI proofs bind only that credential to its Viewer across the pr
     const identity = { deviceId: approved.deviceId, nodeId: approved.nodeId, credentialId: approved.credentialId }
     await authority.registerCredential(identity, encodeBase64Url(raw))
     const signer = new DeviceCredentialProof(async data => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(data))))
-    const proof = (signal: AbortSignal, path: string) => requestDeviceChallengeProtocol(endpoint, identity, signer, networkFetch, signal, path)
-    const renderer = new Hono()
-    registerGatewayRoutes(renderer, [], { launchCredential: 'child-token' })
-    const client = childWorkspacePlugin({ endpoint, proof, fetch: networkFetch })
-    client(renderer)
-    t.after(() => client.close())
-    const post = (path: string, data?: unknown, binding?: string) => renderer.request(`/projects/capture${path}`, {
-      method: 'POST', headers: { authorization: 'Bearer child-token', 'Content-Type': 'application/json', ...(binding ? { [GLTF_CAPTURE_HEADER]: binding } : {}) },
+    const issue = async () => {
+      const proof = await requestDeviceChallengeProtocol(endpoint, identity, signer, networkFetch,
+        AbortSignal.timeout(5000), DEVICE_UI_SESSION_CHALLENGE)
+      const result = await main.request(endpoint + DEVICE_UI_SESSION, { method: 'POST', headers: { 'X-Shadow-Device-Proof': proof } })
+      assert.equal(result.status, 200)
+      return (await result.json()).token
+    }
+    let token = await issue()
+    const post = (path: string, data?: unknown, binding?: string) => main.request(endpoint + `/projects/capture${path}`, {
+      method: 'POST', headers: { authorization: `ShadowDevice ${token}`, 'Content-Type': 'application/json', ...(binding ? { [GLTF_CAPTURE_HEADER]: binding } : {}) },
       body: data === undefined ? undefined : JSON.stringify(data),
     })
     const reapprove = async () => {
@@ -79,8 +80,9 @@ test('real Child UI proofs bind only that credential to its Viewer across the pr
       registry.presentOffer({ ...presentation, offerId, pendingId }, fresh)
       registry.approve({ pendingId, expectedDeviceIdentityFingerprint: fingerprint, credentialId: identity.credentialId }, fresh)
       await authority.registerCredential(identity)
+      token = await issue()
     }
-    return { identity, post, proof, reapprove }
+    return { identity, post, reapprove }
   }
   const a = await child(1), b = await child(2)
   const forged = await main.request('/projects/capture' + GLTF_CAPTURE_PATH + '/register', {
@@ -103,12 +105,6 @@ test('real Child UI proofs bind only that credential to its Viewer across the pr
   assert.equal((await a.post(`${GLTF_CAPTURE_PATH}/result`, { id: job.id, result: image }, binding)).status, 204)
   assert.deepEqual(await pending, { ...image, version: 'v1' })
   assert.deepEqual(await (await a.post('/api/echo-header', undefined, binding)).json(), { binding: null, principal: false })
-  // The Main hop also strips it, even if a proof holder bypasses the Child filter.
-  const proof = await a.proof(AbortSignal.timeout(2000), DEVICE_UI_CHALLENGE)
-  const mainHop = await ingress.request(endpoint + DEVICE_UI_REQUEST, { method: 'POST', headers: {
-    'X-Shadow-Device-Proof': proof, 'X-Shadow-Ui-Path': '/projects/capture/api/echo-header', 'X-Shadow-Ui-Method': 'POST', [GLTF_CAPTURE_HEADER]: binding,
-  } })
-  assert.deepEqual(await mainHop.json(), { binding: null, principal: false })
   const revokedJob = bridge.capture(scope, aTurn, { mode: 'top' }, AbortSignal.timeout(3000))
   const rejected = assert.rejects(revokedJob, /cancelled/)
   await a.post(`${GLTF_CAPTURE_PATH}/poll`, undefined, binding)
